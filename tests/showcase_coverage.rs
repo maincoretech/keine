@@ -189,7 +189,7 @@ fn checked_in_showcase_exercises_every_native_effect_family() {
 }
 
 #[test]
-fn letsgal_1_8_showcase_exercises_every_timeline_property_and_event() {
+fn letsgal_1_9_showcase_exercises_every_timeline_property_and_event() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("projects/test-project");
     let project = crabgal_loader::LoaderRegistry::default()
         .open_project(&root)
@@ -236,6 +236,7 @@ fn letsgal_1_8_showcase_exercises_every_timeline_property_and_event() {
                             StageEventKind::CameraPatch { .. } => "camera-patch",
                             StageEventKind::Particle { .. } => "particle",
                             StageEventKind::Scene(_) => "scene",
+                            StageEventKind::Audio(_) => "audio",
                         });
                     }
                 }
@@ -252,7 +253,7 @@ fn letsgal_1_8_showcase_exercises_every_timeline_property_and_event() {
     );
     assert_eq!(
         events,
-        BTreeSet::from(["camera-patch", "camera-shake", "particle", "scene"])
+        BTreeSet::from(["audio", "camera-patch", "camera-shake", "particle", "scene",])
     );
     assert_eq!(
         properties,
@@ -492,10 +493,12 @@ fn action_name(action: &Action) -> &'static str {
         Action::HostCommand { .. } => "host-command",
         Action::Vocal { .. } => "vocal",
         Action::RequestInput { .. } => "request-input",
-        // LetsGal 1.8 owns this adapter-native fixture; the WebGAL showcase
+        // LetsGal owns this adapter-native fixture; the WebGAL showcase
         // intentionally does not need to manufacture Studio timeline JSON.
         Action::StageAnimation { .. } => "stage-animation",
         Action::RetractDialogue { .. } => "retract-dialogue",
+        Action::WaitForAdvance => "wait-for-advance",
+        Action::SelectSpriteImage { .. } => "select-sprite-image",
     }
 }
 

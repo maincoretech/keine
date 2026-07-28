@@ -96,6 +96,8 @@ pub struct State {
     // ── Presentation state ──
     pub wait_remaining: f32,
     pub wait_blocking: bool,
+    #[serde(skip, default)]
+    pub waiting_for_advance: bool,
     pub intro: Option<IntroState>,
     pub film_mode: bool,
     #[serde(skip, default)]
@@ -826,6 +828,7 @@ impl State {
         self.menu = None;
         self.wait_remaining = 0.0;
         self.wait_blocking = false;
+        self.waiting_for_advance = false;
         self.intro = None;
         self.film_mode = snapshot.film_mode;
         self.particle_effects = snapshot.particle_effects;
@@ -838,6 +841,7 @@ impl State {
     pub fn presentation_blocked(&self) -> bool {
         self.dialogue_retraction.is_some()
             || (self.wait_blocking && self.wait_remaining > 0.0)
+            || self.waiting_for_advance
             || self.intro.as_ref().is_some_and(|intro| intro.blocking)
             || self.curtain.blocking
             || self

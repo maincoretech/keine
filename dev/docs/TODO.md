@@ -64,7 +64,7 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 
 ## Phase 2 — 控制栏 (DONE)
 
-- [x] Auto / Skip / Hide / Lock toggle + 快捷键
+- [x] Auto / Skip / Hide / Lock toggle；常用操作统一为 Ctrl 组合键，Esc 统一返回
 - [x] Q·SAVE / Q·LOAD（Postcard 版本化存档、确认 Dialog、原版比例 hover 舞台快照）
 - [x] Q·SAVE / Q·LOAD 紧凑 hover 浮窗、独立增强模糊与快速淡入淡出
 - [x] Hide 自动隐藏动画（内容/按钮/单图标）
@@ -197,7 +197,7 @@ Flowchart 仍保留为可选适配工作，不能用静态占位或实验依赖�
 - Steam 集成与 Flowchart 内容页
 - SafeArea、横竖屏、响应式断点及 Android / iOS / Web 设备验收
 
-## LetsGal Studio 1.8.0 adapter（DONE — 待用户验收）
+## LetsGal Studio 1.9.0 adapter（DONE — 待用户验收）
 
 - [x] 原生 `project.json`、章节、角色、场景与 `assets/.manifest.json` 多文件读取
 - [x] 34 种已知内置 block 穷举编译；未知字段保留，未知 block 明确报错
@@ -214,6 +214,10 @@ Flowchart 仍保留为可选适配工作，不能用静态占位或实验依赖�
   easing、有限/无限循环、播放倍率、阻塞规则及 camera/particle/scene 事件进入 typed core
 - [x] 1.8.0 新增相机后处理字段进入稀疏 boxed patch、运行状态插值和单通道 GPU 材质，
   不把大型参数表复制进每一条 Action
+- [x] 1.9.0 `waitForInput`、时间轴 audio cue、立绘视口相对高度、表情级覆盖与角色皮肤选择
+  全部降级为 adapter-neutral core 状态；跨章节 fragment 继续使用原生 call stack
+- [x] 1.9.0 SDK 变更完成边界复核：crabgal 仍不执行扩展；Backspace 1.3.0 提升 SDK/宿主
+  版本声明并保留官方兼容的统一 method 实现
 - [x] 视频和完整相机后处理进入 typed core、原生运行状态与 Bevy backend；内置 block
   不得经 `HostCommand` 降级，流式视频由项目特征按需启用
 - [x] Godray 八字段进入稀疏 IR、状态插值和单通道 GPU 材质；动态 `callFragment`

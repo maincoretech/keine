@@ -1,6 +1,6 @@
-# LetsGal Studio 1.8.0 扩展 API 历史参考
+# LetsGal Studio 1.9.0 扩展 API 历史参考
 
-> 状态：2026-07-21 本机 1.8.0 复核；公开 `SDK_VERSION` 仍为 1.0.0。crabgal 明确不加载或执行
+> 状态：2026-07-29 本机 1.9.0 复核；公开 `SDK_VERSION` 为 `1.9.0-beta.1`。crabgal 明确不加载或执行
 > Studio 扩展，本文只作为外部格式与历史 ABI 的证据记录，具体实现边界见
 > [`08-letsgal-studio.md`](../architecture/08-letsgal-studio.md)。
 
@@ -14,12 +14,23 @@ Studio 内置工程内容，不加载扩展 bundle、不实现 `@avg-studio/sdk`
 
 ## 0. 结论先行
 
-工程 adapter 当前以 **LetsGal Studio 1.8.0 原生工程格式**为兼容基线；本章的扩展 ABI
+工程 adapter 当前以 **LetsGal Studio 1.9.0 原生工程格式**为兼容基线；本章的扩展 ABI
 仅用于历史研究，不是 crabgal 的实现目标。
 
-1.8.0 仍未提供 crabgal 所需的“当前选中剧情块”（editor cursor）、run interception 或 preview backend API。当前公开
+1.9.0 仍未提供 crabgal 所需的“当前选中剧情块”（editor cursor）、run interception 或 preview backend API。当前公开
 `ExtensionContext` 保持运行时取向；`FlowAPI` 提供 `signal` 与 `callFragment()`，但它们不能
 替代编辑器调试合同。crabgal 不再把 `getHost()`、DOM 或 Electron 能力当作 SDK。
+
+1.9.0 SDK 的确认变化：
+
+- 新 `BlockExtension` 静态块模型，提供 `run`、`runImmediately` 与 `skip`；
+- settings 新增 `color`、`array`、`character`；
+- `ctx.dialogue.useStyle` 可注册对话样式 hook；
+- `FlowAPI.callFragment` / `unsafe_goToFragment` 增加可选 `chapterId`，剧本 API 可异步读取章节；
+- 兼容器明确允许旧扩展继续声明 `>=1.0.0`；只有使用新 API 的扩展才应声明 `>=1.9.0`。
+
+Backspace 1.3.0 不需要新块模型，因此继续使用公开且兼容的 `Extension` / `method()` 接口，
+只把清单基线提升到 `sdkVersion >=1.9.0` 与 Studio 1.9.0，避免无收益地重写稳定运行逻辑。
 
 如果未来另立一个独立扩展宿主，最小兼容层至少要实现（当前 crabgal 不实现）：
 
@@ -51,11 +62,11 @@ flowchart LR
 
 | 对象 | 版本/提交 | 结论 |
 |---|---|---|
-| 本机当前安装 | Studio 1.8.0 | 原生工程格式主基线；扩展不兼容 |
+| 本机当前安装 | Studio 1.9.0 | 原生工程格式主基线；crabgal 不执行扩展 |
 | 前一实测稳定版 | Studio 1.6.3 | 用于宿主行为差异对照 |
 | 本机旧对照包 | Studio 1.6.2 | 用于 SDK 字节级差异 |
 | 已校验的历史包 | `Studio-1.6.3-mac.zip` | 保留历史 SHA-256 证据 |
-| 扩展 SDK | `SDK_VERSION = "1.0.0"` | Studio 版本与 SDK 主版本不是同一个版本号 |
+| 扩展 SDK | `SDK_VERSION = "1.9.0-beta.1"` | 新 API 使用者声明 `>=1.9.0` |
 | `avg.renderer` | `d69d1681fe07e6273f99ed329fb01503cb3f3394`，2020-08-31 | 仅作历史语义参考 |
 | `avgplus-asarmor` | `3a95e627831268207b5da81310c5e9f4e4e1829b`，2025-01-26 | 仅用于判断 ASAR 保护方式 |
 
@@ -67,10 +78,10 @@ flowchart LR
 1f8ca44870142f222e25034297f436477d12cc202e229840251ab7402ca3c661
 ```
 
-本机 1.8.0 的 `dist/sdk/constants.ts` 仍声明 `SDK_VERSION = "1.0.0"`。当前
-`FlowAPI` 含 `signal`、`callFragment()`、`goToFragment()` 和 `restart()`；
+本机 1.9.0 的 `dist/sdk/constants.ts` 声明 `SDK_VERSION = "1.9.0-beta.1"`。当前
+`FlowAPI` 含 `signal`、跨章节 `callFragment()`、`unsafe_goToFragment()` 和 `restart()`；
 `ExtensionContext` 仍没有编辑器/preview backend 命名空间。因此不应制造
-`SDK 1.7.0` 这个不存在的版本号，也不能把宿主私有对象当作新增 SDK。
+未发布的 SDK 版本号，也不能把宿主私有对象当作新增 SDK。
 
 ### 1.2 证据标记
 
@@ -78,8 +89,8 @@ flowchart LR
 
 | 标记 | 来源 | 可信度 |
 |---|---|---|
-| **T** | 1.8.0 本机发行包内未压缩的 SDK TypeScript 源码 | 当前公开类型合同 |
-| **R** | 1.8.0 renderer/player 实际加载器和 runtime bundle | 当前实际行为 |
+| **T** | 1.9.0 本机发行包内未压缩的 SDK TypeScript 源码 | 当前公开类型合同 |
+| **R** | 1.9.0 renderer/player 实际加载器和 runtime bundle | 当前实际行为 |
 | **B** | 用 Studio 自己的发行链生成并运行探针扩展 | 端到端行为 |
 | **D** | [官方扩展文档](https://docs.avg-engine.com/extensions/api-context) | 设计意图；有少量滞后/矛盾 |
 | **H** | 旧 `avg.renderer` 与相关仓库 | 历史背景，不是当前合同 |

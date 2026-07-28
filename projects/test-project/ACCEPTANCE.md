@@ -1,14 +1,15 @@
-# LetsGal 1.8 默认工程分步验收
+# LetsGal 1.9 默认工程分步验收
 
 ## 0. 启动
 
 1. 运行 `cargo validate projects/test-project`，应报告工程有效且无错误。
-2. 运行 `cargo dev projects/test-project`，应进入 `crabgal LetsGal 1.8 Timeline Lab` 标题页。
+2. 运行 `cargo dev projects/test-project`，应进入 `crabgal LetsGal 1.9 Timeline Lab` 标题页。
 3. 点击 `START`。日景、绫、textbox 与左侧姓名框应同步出现，不得先闪黑、闪 blur 或漏出视口。
 
 ## 1. 时间轴
 
-1. `10-00`：正常显示日景和角色，姓名框靠左；旁白时姓名框消失。
+1. `10-00`：正常显示日景和角色，姓名框靠左；旁白时姓名框消失。角色高度约占视口 80%，
+   skin 属性切至 winter 时换成思考图，再恢复 summer 笑脸图。
 2. `10-01`：镜头、人物、背景层共用一个时钟。三者同时运动，人物同时缩放、旋转、改变透明度
    与显式尺寸，结尾恢复稳定基态。
 3. `10-02`：景深、畸变、暗角、调色、旧胶片、冲击、体积光与 LUT 强度连续增强再还原，不能
@@ -18,10 +19,10 @@
 6. `10-05`：漏光、镜头光斑、颗粒、热浪、水波与雾具有不同方向、中心、速度和尺度，最后全部
    归零。
 7. `10-06`：VHS、半色调、抖色、轮廓与眼睑遮罩逐渐增强再完全消失；眼睑从上下闭合。
-8. `10-07`：镜头震动、camera patch、萤火虫以及日景到夕景的 scene cue 各触发一次，结束后
-   镜头重置。
-9. `10-08`：角色只进行两轮快速呼吸缩放；muted 的大幅横移不能生效，blocking 结束后才进入
-   下一句。
+8. `10-07`：镜头震动、camera patch、萤火虫、Opus 提示音以及日景到夕景的 scene cue 各
+   触发一次，muted 音频不播放，结束后镜头重置。
+9. `10-08`：玩家确认等待不会按一秒计时自动继续；点击后角色只进行两轮快速呼吸缩放，
+   muted 的大幅横移不能生效。随后跨章节显示一句话并返回原调用点。
 10. `10-09`：完整句子先逐字退格至“我当然”，停住并等待一次新点击；再逐字退格至“我”，
     再次等待一次新点击。动画期间点击不能被复用，连续动作不能吞掉原文或直接跳过。
 11. `10-10`：继续后平滑返回标题页，不残留粒子、镜头效果、材质效果或时间轴状态。
@@ -33,9 +34,19 @@
 3. 完整播放过程中不得再出现 `transparent_mesh2d_pipeline`、材质 binding 超限或无效 pipeline。
 4. 退出后不得出现未释放视频、音频、粒子或 `CommandQueue` 连带警告。
 
-## 3. 自动化边界
+## 3. 快捷键
 
-`tests/showcase_coverage.rs` 会检查默认工程是否覆盖全部 StageProperty、三类目标、四类事件和
+1. 在舞台依次验证 `Ctrl+A/K/B/R/H`：Auto、Skip、Backlog、语音重播和 Textbox 显隐均只
+   触发一次；单独按 `A/K/B/R/H` 不产生全局操作。
+2. 验证 `Ctrl+Q/L` 弹出 Q·SAVE/Q·LOAD 确认，确认或取消时不得推进剧情。
+3. 验证 `Ctrl+S/O` 打开 SAVE/LOAD，`Ctrl+,` 打开 CONFIG；三者之间可直接切换。
+4. 验证 `Ctrl+T` 弹出返回标题确认；`Esc` 依次关闭 Dialog、Backlog、Extra 和全屏菜单。
+5. 按住并松开单独的 `Ctrl`，应只在按住期间快进；Ctrl 组合键不能额外推进一句。
+6. 选择菜单仍可使用方向、数字与确认键操作；这些是控件导航，不触发任何全局动作。
+
+## 4. 自动化边界
+
+`tests/showcase_coverage.rs` 会检查默认工程是否覆盖全部 StageProperty、三类目标、五类事件和
 播放控制。WebGAL adapter 的命令与原生 Action 覆盖由 `tests/fixtures/webgal-showcase/` 独立
 验证；fixture 不构成第二个可运行项目。
 

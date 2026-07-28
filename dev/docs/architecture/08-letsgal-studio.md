@@ -1,4 +1,4 @@
-# LetsGal Studio 1.8.0 原生同步
+# LetsGal Studio 1.9.0 原生同步
 
 crabgal 把 LetsGal 当作一种开放的编辑器工程格式，而不是运行宿主。Studio 与 crabgal 是两个
 独立进程；同步只通过工程目录中的开放 JSON 完成，不安装扩展、不注入 DOM、不修改 ASAR，
@@ -10,7 +10,7 @@ crabgal 把 LetsGal 当作一种开放的编辑器工程格式，而不是运行
 > 始终使用操作系统默认鼠标指针。
 
 ```text
-LetsGal Studio 1.8
+LetsGal Studio 1.9
   ├─ project.json
   ├─ chapters/*.json
   ├─ characters.json / scenes.json / project.variables.json
@@ -68,10 +68,16 @@ runtime 以所有 `line <= selected_step` 的 Action 为目标，因此不会把
 
 ## 完整性与边界
 
-- 1.8.0 当前 34 种内置 runtime block 必须全部编译为 typed core Action；未知内置类型报错；
+- 1.9.0 当前内置 runtime block 必须全部编译为 typed core Action；未知内置类型报错；
 - 新增 `stageAnimation` 编译为 adapter-neutral 共享舞台时间轴：camera、character、scene layer
-  共用真实时间时钟，支持关键帧、循环、倍率、等待，以及 camera/scene/particle/shake 事件；
-- 1.8.0 新增的相机时间轴属性全部进入 core `PostProcessEffect` 并由 GPU 材质直接采样，adapter
+  共用真实时间时钟，支持关键帧、循环、倍率、等待，以及 camera/scene/particle/shake/audio
+  事件；
+- 1.9.0 的 `waitForInput` 降级为 core 的显式玩家确认等待，不借用定时器，也不在低帧率下自动
+  越过；
+- 角色全局/表情级 `heightRatio` 进入通用 `SpriteLayout::ViewportHeight`；皮肤表和角色属性
+  降级为通用变量驱动的图片选择，不把 Studio 角色对象带进渲染器；
+- 跨章节 `callFragment` 继续使用 core scene call stack；adapter 仅负责解析稳定 fragment id；
+- 1.8.0 起新增的相机时间轴属性全部进入 core `PostProcessEffect` 并由 GPU 材质直接采样，adapter
   不保留 Studio 私有运行对象；
 - 第三方游戏扩展 block 默认只能保留为通用 host capability，不能伪装为已原生实现；
 - 已明确建模的 `shiftz.backspace/backspace-to`（兼容旧

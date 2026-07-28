@@ -85,6 +85,24 @@ fn sprite_geometry(
                 ),
             )
         }
+        SpriteLayout::ViewportHeight(ratio) => {
+            let height = crabgal_core::DESIGN_HEIGHT * ratio.max(f32::EPSILON);
+            let size = Vec2::new(height * texture_aspect, height);
+            let center_x = match position.x {
+                Anchor::Left(offset) => offset.max(anchor_offset) + size.x * 0.5,
+                Anchor::Center(offset) => crabgal_core::DESIGN_WIDTH * 0.5 + offset,
+                Anchor::Right(offset) => {
+                    crabgal_core::DESIGN_WIDTH - offset.max(anchor_offset) - size.x * 0.5
+                }
+            };
+            (
+                size,
+                Vec2::new(
+                    center_x,
+                    sprite_center_y(position.y, height, figure_offset_y, 0.0),
+                ),
+            )
+        }
         SpriteLayout::Scene(layout) => {
             let size = scene_layer_size(layout, texture_aspect, texture_size);
             // Studio positions are top-left-origin. crabgal's scene world is

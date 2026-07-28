@@ -10,7 +10,7 @@ use bevy::ui::FocusPolicy;
 
 use crate::render::blur::{DialogCamera, UiBlurCamera};
 use crate::runtime::resources::ProjectRoot;
-use crate::ui::control_bar::{BlurStrength, ButtonAction, UiBlurSource};
+use crate::ui::control_bar::{BlurStrength, ButtonAction, ControlInput, UiBlurSource};
 use crate::ui::dialog::{DialogAction, DialogRequest};
 use crate::ui::foundation::{
     UiFonts, UiSoundStyle, ease_in_out_cubic, exp_lerp, fill_node, smoothstep, text, text_weight,
@@ -322,17 +322,17 @@ pub(crate) struct SaveDeleteContext<'w, 's> {
 
 pub fn toggle_save_load(
     keys: Res<ButtonInput<KeyCode>>,
-    controls: Query<(&Interaction, &ButtonAction), Changed<Interaction>>,
+    input: ControlInput,
     back: Query<&Interaction, (With<MenuBack>, Changed<Interaction>)>,
     mut ui: ResMut<SaveLoadUi>,
     mut settings: ResMut<crate::ui::settings_panel::SettingsUi>,
     mut transition: ResMut<SaveLoadPageTransition>,
     mut route_transition: ResMut<MenuRouteTransition>,
 ) {
-    for (interaction, action) in &controls {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
+    let requested = [ButtonAction::Save, ButtonAction::Load]
+        .into_iter()
+        .find(|action| input.pressed(*action));
+    if let Some(action) = requested {
         let previous_route = active_route(&ui, &settings);
         ui.mode = match action {
             ButtonAction::Save => {

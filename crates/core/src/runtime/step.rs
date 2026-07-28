@@ -333,6 +333,32 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>) -> StepResult {
                     return StepResult::AwaitPresentation;
                 }
             }
+            Action::SelectSpriteImage {
+                id,
+                variable,
+                default_image,
+                variants,
+            } => {
+                let id = interpolate(id, &state.vars, &state.global_vars);
+                let variable = interpolate(variable, &state.vars, &state.global_vars);
+                let selected = state
+                    .vars
+                    .get(&variable)
+                    .or_else(|| state.global_vars.get(&variable))
+                    .map(crate::Value::display);
+                let image = selected
+                    .as_deref()
+                    .and_then(|selected| {
+                        variants
+                            .iter()
+                            .find(|(name, _)| name == selected)
+                            .map(|(_, image)| image)
+                    })
+                    .unwrap_or(default_image);
+                if let Some(sprite) = state.sprites.get_mut(&id) {
+                    sprite.image = interpolate(image, &state.vars, &state.global_vars);
+                }
+            }
             Action::HideSprite { id, transition } => {
                 let transition = *transition;
                 let id = interpolate(id, &state.vars, &state.global_vars);
@@ -760,6 +786,12 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>) -> StepResult {
                 state.wait_remaining = seconds.max(0.0);
                 state.wait_blocking = !next;
                 if !next && state.wait_remaining > 0.0 {
+                    return StepResult::AwaitPresentation;
+                }
+            }
+            Action::WaitForAdvance => {
+                if !next {
+                    state.waiting_for_advance = true;
                     return StepResult::AwaitPresentation;
                 }
             }
@@ -1459,6 +1491,7 @@ pub fn end_game(state: &mut State) {
     state.user_input = None;
     state.wait_remaining = 0.0;
     state.wait_blocking = false;
+    state.waiting_for_advance = false;
     state.intro = None;
     state.film_mode = false;
     state.curtain = Default::default();
@@ -2695,6 +2728,74 @@ mod tests {
         assert_eq!(state.cursor, 1);
         assert!(state.vars.contains_key("first"));
         assert!(!state.vars.contains_key("second"));
+    }
+
+    #[test]
+    fn explicit_advance_wait_does_not_fall_back_to_a_timer() {
+        let mut state = state_with(vec![
+            Action::WaitForAdvance,
+            Action::Say {
+                speaker: String::new(),
+                text: "continued".into(),
+                options: SayOptions::default(),
+            },
+        ]);
+
+        assert_eq!(step(&mut state), StepResult::AwaitPresentation);
+        assert!(state.waiting_for_advance);
+        assert_eq!(state.cursor, 1);
+        assert_eq!(step(&mut state), StepResult::AwaitPresentation);
+        assert_eq!(state.cursor, 1);
+
+        state.waiting_for_advance = false;
+        assert_eq!(step(&mut state), StepResult::AwaitClick);
+        assert_eq!(
+            state
+                .dialogue
+                .as_ref()
+                .map(|dialogue| dialogue.text.as_str()),
+            Some("continued")
+        );
+    }
+
+    #[test]
+    fn sprite_image_can_follow_an_adapter_neutral_runtime_variable() {
+        let mut state = state_with(vec![
+            Action::ShowSprite {
+                id: "aya".into(),
+                image: "summer.webp".into(),
+                position: Position::center(0.0),
+                layout: crate::SpriteLayout::ViewportHeight(0.8),
+                transition: Transition::Instant,
+                transform: SpriteTransform::default(),
+                z_index: 0,
+                blend: BlendMode::Alpha,
+            },
+            Action::SelectSpriteImage {
+                id: "aya".into(),
+                variable: "aya.skin".into(),
+                default_image: "summer.webp".into(),
+                variants: vec![
+                    ("summer".into(), "summer.webp".into()),
+                    ("winter".into(), "winter.webp".into()),
+                ],
+            },
+            Action::Say {
+                speaker: "Aya".into(),
+                text: "ready".into(),
+                options: SayOptions::default(),
+            },
+        ]);
+        state
+            .vars
+            .insert("aya.skin".into(), Value::Str("winter".into()));
+
+        assert_eq!(step(&mut state), StepResult::AwaitClick);
+        assert_eq!(state.sprites["aya"].image, "winter.webp");
+        assert_eq!(
+            state.sprites["aya"].layout,
+            crate::SpriteLayout::ViewportHeight(0.8)
+        );
     }
 
     #[test]

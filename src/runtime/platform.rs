@@ -22,7 +22,7 @@ use crate::render::blur::{DialogCamera, SceneBlurCamera, UiBlurCamera};
 use crate::runtime::resources::{AssetLoadingGate, EditorSyncSession, GameState, HotReloadSession};
 use crate::scene::audio::AudioAnimationActivity;
 use crate::ui::activity::UiAnimationActivity;
-use crate::ui::control_bar::{AutoHideTiming, QuickPreviewSurface, ToggleStates};
+use crate::ui::control_bar::{AutoHideTiming, ButtonAction, QuickPreviewSurface, ToggleStates};
 use crate::ui::textbox::{ContentRoot, QuickPreviewLayer};
 use crate::ui::user_input::UserInputCaretBlink;
 
@@ -31,9 +31,9 @@ use crate::ui::user_input::UserInputCaretBlink;
 pub(crate) struct InputActions {
     pub advance: bool,
     pub pointer_advance: bool,
+    pub shortcut: Option<ButtonAction>,
     pub toggle_auto: bool,
     pub toggle_skip: bool,
-    pub toggle_skip_mode: bool,
     pub skip_pressed: bool,
     pub skip_released: bool,
     pub skip_video: bool,
@@ -83,8 +83,10 @@ pub(crate) fn collect_input(
         .iter()
         .any(|pad| pad.just_pressed(GamepadButton::RightTrigger2));
     let pointer_pressed = mouse.just_pressed(MouseButton::Left) || touches.any_just_pressed();
+    let control_pressed = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    actions.shortcut = keyboard_shortcut(&keys);
     actions.pointer_advance = pointer_pressed;
-    actions.advance = keys.any_just_pressed([KeyCode::Space, KeyCode::Enter])
+    actions.advance = (!control_pressed && keys.any_just_pressed([KeyCode::Space, KeyCode::Enter]))
         || pointer_pressed
         || gamepad_advance;
     actions.skip_video = false;
@@ -95,16 +97,36 @@ pub(crate) fn collect_input(
             .is_some_and(|last| now - last <= 0.35);
         click_history.last_click = Some(now);
     }
-    actions.toggle_auto = keys.just_pressed(KeyCode::KeyA)
+    actions.toggle_auto = actions.shortcut == Some(ButtonAction::Auto)
         || gamepads
             .iter()
             .any(|pad| pad.just_pressed(GamepadButton::West));
-    actions.toggle_skip_mode = keys.just_pressed(KeyCode::KeyS)
-        && keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
-    actions.toggle_skip =
-        (keys.just_pressed(KeyCode::KeyS) && !actions.toggle_skip_mode) || gamepad_skip;
-    actions.skip_pressed = keys.any_just_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
-    actions.skip_released = keys.any_just_released([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    actions.toggle_skip = actions.shortcut == Some(ButtonAction::Skip) || gamepad_skip;
+    actions.skip_pressed = actions.shortcut.is_none()
+        && keys.any_just_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    actions.skip_released = actions.shortcut.is_some()
+        || keys.any_just_released([KeyCode::ControlLeft, KeyCode::ControlRight]);
+}
+
+fn keyboard_shortcut(keys: &ButtonInput<KeyCode>) -> Option<ButtonAction> {
+    if !keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]) {
+        return None;
+    }
+    [
+        (KeyCode::KeyA, ButtonAction::Auto),
+        (KeyCode::KeyK, ButtonAction::Skip),
+        (KeyCode::KeyB, ButtonAction::Backlog),
+        (KeyCode::KeyR, ButtonAction::Replay),
+        (KeyCode::KeyH, ButtonAction::Hide),
+        (KeyCode::KeyQ, ButtonAction::QuickSave),
+        (KeyCode::KeyL, ButtonAction::QuickLoad),
+        (KeyCode::KeyS, ButtonAction::Save),
+        (KeyCode::KeyO, ButtonAction::Load),
+        (KeyCode::Comma, ButtonAction::System),
+        (KeyCode::KeyT, ButtonAction::Title),
+    ]
+    .into_iter()
+    .find_map(|(key, action)| keys.just_pressed(key).then_some(action))
 }
 
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -493,6 +515,39 @@ fn log_renderer(adapter: Res<RenderAdapterInfo>, preprocessing: Res<GpuPreproces
 mod tests {
     use super::*;
     use bevy::window::WindowResolution;
+
+    #[test]
+    fn application_shortcuts_require_control() {
+        let mut keys = ButtonInput::default();
+        keys.press(KeyCode::KeyA);
+        assert_eq!(keyboard_shortcut(&keys), None);
+
+        keys.press(KeyCode::ControlLeft);
+        assert_eq!(keyboard_shortcut(&keys), Some(ButtonAction::Auto));
+    }
+
+    #[test]
+    fn common_shortcuts_have_one_central_mapping() {
+        let expected = [
+            (KeyCode::KeyA, ButtonAction::Auto),
+            (KeyCode::KeyK, ButtonAction::Skip),
+            (KeyCode::KeyB, ButtonAction::Backlog),
+            (KeyCode::KeyR, ButtonAction::Replay),
+            (KeyCode::KeyH, ButtonAction::Hide),
+            (KeyCode::KeyQ, ButtonAction::QuickSave),
+            (KeyCode::KeyL, ButtonAction::QuickLoad),
+            (KeyCode::KeyS, ButtonAction::Save),
+            (KeyCode::KeyO, ButtonAction::Load),
+            (KeyCode::Comma, ButtonAction::System),
+            (KeyCode::KeyT, ButtonAction::Title),
+        ];
+        for (key, action) in expected {
+            let mut keys = ButtonInput::default();
+            keys.press(KeyCode::ControlLeft);
+            keys.press(key);
+            assert_eq!(keyboard_shortcut(&keys), Some(action));
+        }
+    }
 
     #[test]
     fn close_requests_emit_one_exit_and_leave_window_alive_for_flushing() {

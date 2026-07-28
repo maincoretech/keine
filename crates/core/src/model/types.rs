@@ -65,6 +65,8 @@ impl Position {
 pub enum SpriteLayout {
     #[default]
     Natural,
+    /// Height as a fraction of the fixed design viewport.
+    ViewportHeight(f32),
     Scene(SceneLayerLayout),
 }
 

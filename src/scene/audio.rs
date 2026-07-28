@@ -8,7 +8,7 @@ use crabgal_core::{BgmState, EffectEvent, EffectState};
 use crate::runtime::audio::insert_player;
 use crate::runtime::resources::{GameConfigResource, GameState};
 use crate::storage::settings::RuntimeSettings;
-use crate::ui::control_bar::ButtonAction;
+use crate::ui::control_bar::{ButtonAction, ControlInput};
 
 #[derive(Component)]
 pub struct VocalPlayer;
@@ -373,7 +373,7 @@ pub fn sync_vocal(
 }
 
 pub fn replay_vocal(
-    controls: Query<(&Interaction, &ButtonAction), Changed<Interaction>>,
+    input: ControlInput,
     state: Res<GameState>,
     config: Res<GameConfigResource>,
     settings: Res<RuntimeSettings>,
@@ -381,9 +381,7 @@ pub fn replay_vocal(
     players: Query<Entity, With<VocalPlayer>>,
     mut commands: Commands,
 ) {
-    if !controls.iter().any(|(interaction, action)| {
-        *interaction == Interaction::Pressed && *action == ButtonAction::Replay
-    }) {
+    if !input.pressed_on_stage(ButtonAction::Replay) {
         return;
     }
     let Some(dialogue) = state.dialogue.as_ref() else {

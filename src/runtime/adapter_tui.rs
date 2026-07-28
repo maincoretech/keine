@@ -60,7 +60,7 @@ pub(crate) fn configure(registry: &LoaderRegistry) -> Result<()> {
                 write_selection(&path, &rows)?;
                 break;
             }
-            KeyCode::Esc | KeyCode::Char('q') => return Ok(()),
+            KeyCode::Esc => return Ok(()),
             _ => {}
         }
     }

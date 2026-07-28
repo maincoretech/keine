@@ -1,7 +1,8 @@
-# crabgal LetsGal 1.8 Feature Lab
+# crabgal LetsGal 1.9 Feature Lab
 
-默认验收工程现已收敛为一个原生 LetsGal 1.8 项目，直接覆盖 crabgal 已接入的完整时间轴
-属性、目标、事件与播放控制。它不依赖 LetsGal Studio、扩展、注入或 `studio-sync`。
+默认验收工程现已收敛为一个原生 LetsGal 1.9 项目，直接覆盖 crabgal 已接入的完整时间轴、
+立绘皮肤、视口相对高度、玩家确认等待、跨章节调用与播放控制。它不依赖 LetsGal Studio、
+扩展、注入或 `studio-sync`。
 
 ```bash
 cargo validate projects/test-project
@@ -15,7 +16,11 @@ cargo dev projects/test-project
 
 - 79 个已接入 StageProperty；
 - camera、character、sceneLayer 三类目标；
-- camera shake、camera patch、particle、scene 四类时间事件；
+- camera shake、camera patch、particle、scene、audio 五类时间事件；
+- BGM/SE/VOCAL 时间轴路由、muted、持续时间与淡入淡出；
+- `waitForInput` 的显式玩家确认等待；
+- 角色皮肤属性、block 锁定皮肤和全局/表情级视口高度；
+- 跨章节 fragment 调用与返回；
 - muted、repeat、playbackRate、blocking；
 - 原生句尾退格、连续退格和删完后等待一次新点击；
 - linear、ease-in、ease-out、ease-in-out 四种插值；
@@ -28,5 +33,6 @@ WebGAL 命令覆盖脚本已移至 `tests/fixtures/webgal-showcase/`，仅作为
 
 ## 资源
 
-项目只保留时间轴验收实际引用的四个校准资源：两张 1920×1080 背景与同一角色的两张透明
-立绘。资源逻辑名统一记录于 `assets/.manifest.json`，没有 WebGAL 示例资源或生成存档。
+项目只保留时间轴验收实际引用的校准资源：两张 1920×1080 背景、同一角色的两张透明立绘
+与一条 Opus 时间轴提示音。资源逻辑名统一记录于 `assets/.manifest.json`，没有 WebGAL
+示例资源或生成存档。

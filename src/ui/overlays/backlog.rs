@@ -170,6 +170,7 @@ pub(crate) struct BacklogActionContext<'w, 's> {
 pub fn toggle_backlog(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
+    actions: Res<crate::runtime::platform::InputActions>,
     controls: Query<(&Interaction, &ButtonAction), Changed<Interaction>>,
     close: Query<&Interaction, (With<BacklogClose>, Changed<Interaction>)>,
     mut ui: ResMut<BacklogUiState>,
@@ -180,7 +181,7 @@ pub fn toggle_backlog(
     let close_pressed = close
         .iter()
         .any(|interaction| *interaction == Interaction::Pressed);
-    if control_pressed || keys.just_pressed(KeyCode::KeyB) {
+    if control_pressed || actions.shortcut == Some(ButtonAction::Backlog) {
         ui.open = !ui.open;
     } else if ui.open
         && (close_pressed
@@ -621,12 +622,6 @@ pub fn scroll_backlog(mut context: BacklogScrollContext) {
         context.motion.current = position.y;
         context.motion.target = position.y;
         context.motion.initialized = true;
-    }
-    if context.keys.just_pressed(KeyCode::PageUp) {
-        delta += computed.size().y * 0.8;
-    }
-    if context.keys.just_pressed(KeyCode::PageDown) {
-        delta -= computed.size().y * 0.8;
     }
     let max =
         (computed.content_size().y - computed.size().y).max(0.0) * computed.inverse_scale_factor();

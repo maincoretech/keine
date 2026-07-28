@@ -180,6 +180,26 @@ pub struct StageSceneCue {
     pub layers: Vec<StageSceneLayer>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StageAudioKind {
+    Bgm,
+    Effect,
+    Vocal,
+}
+
+/// Adapter-neutral audio event driven by the shared stage clock.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StageAudioCue {
+    pub id: String,
+    pub kind: StageAudioKind,
+    pub file: String,
+    pub volume: f32,
+    pub looped: bool,
+    pub duration: f32,
+    pub fade_in: f32,
+    pub fade_out: f32,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum StageEventKind {
     CameraShake(CameraShakeSpec),
@@ -194,6 +214,7 @@ pub enum StageEventKind {
         fade_out: f32,
     },
     Scene(StageSceneCue),
+    Audio(StageAudioCue),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -507,6 +528,15 @@ pub enum Action {
     RetractDialogue {
         source: String,
         keep: String,
+    },
+    /// Wait until the player explicitly requests the next presentation step.
+    WaitForAdvance,
+    /// Resolve a sprite image from a runtime variable.
+    SelectSpriteImage {
+        id: String,
+        variable: String,
+        default_image: String,
+        variants: Vec<(String, String)>,
     },
 }
 

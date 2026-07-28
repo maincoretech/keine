@@ -1,4 +1,4 @@
-# LetsGal Studio 1.8.0 完全同步验收
+# LetsGal Studio 1.9.0 完全同步验收
 
 本轮只验收原生工程同步，不安装或启用任何 Studio 扩展。Studio 原版 Player 可以关闭；
 画面以独立 crabgal 窗口为准。
@@ -44,7 +44,7 @@
 18. 快速连续保存 chapter 和 `.studio/state.json`。预期没有永久停留在旧画面；短暂 JSON 读取
     冲突会自动跨帧恢复；即使文件通知被系统合并，200 ms 调试位置轮询也会兜底。
 
-## D. 34 种规定动作覆盖
+## D. 规定动作与 1.9.0 新语义覆盖
 
 19. 逐项覆盖：`dialogue`、`narration`、`storyParagraph`、`showCharacter`、
     `removeCharacter`、`switchDialogueStyle`、`portraitStyleRule`、`floatingText`、`scene`、
@@ -61,17 +61,25 @@
 21. 为 `stageAnimation` 建立 camera、character、scene layer 三类 track，分别覆盖首关键帧插值、
     相邻关键帧 easing、hold-last、倍率、有限循环、无限循环和 muted track；预期三类目标共用一个
     时钟，低帧率下也不发生相互漂移。
-22. 在同一时间轴加入 camera patch、camera shake、particle cue 与 scene cue。预期事件只在越过
-    时间点时触发；有限循环逐轮重复，下一轮开始时上一轮 patch 不泄漏；blocking 仅在有限且
-    `waitForComplete=true` 时阻塞剧情。
+22. 在同一时间轴加入 camera patch、camera shake、particle cue、scene cue 与 audio cue。
+    预期事件只在越过时间点时触发；有限循环逐轮重复，下一轮开始时上一轮 patch 不泄漏；
+    audio 的 BGM/SE/VOCAL、音量、循环、持续时间和淡入淡出由同一时钟驱动；muted event 不播放；
+    blocking 仅在有限且 `waitForComplete=true` 时阻塞剧情。
+23. 添加 `wait` 并启用 `waitForInput`。预期持续时间被忽略，停留任意时间都不会自动继续；
+    明确点击一次后才进入下一 block。
+24. 给角色配置全局 `graphics.heightRatio`、表情级 `graphicsOverride.heightRatio`、
+    `portraitSkinConfig` 与 `skinAssets`。预期表情级高度优先；未锁定皮肤时按角色属性选图，
+    block 明确指定 `skin` 时固定使用该皮肤。
+25. 从一个章节调用另一个章节的 fragment。预期按稳定 fragment id 进入并在结束后返回原调用点，
+    不依赖当前文件名或 Studio 的运行对象。
 
 ## E. 同步控制权与窗口
 
-23. 在 crabgal 窗口单击、滚轮、按 Enter/Space。预期打字和动画可以继续，但剧情执行位置不会
+26. 在 crabgal 窗口单击、滚轮、按 Enter/Space。预期打字和动画可以继续，但剧情执行位置不会
     脱离 Studio 当前 block；推进必须在 Studio 选择新 block。
-24. 调整 crabgal 窗口大小并移动到另一显示器。预期 1920×1080 逻辑视口等比居中，背景、
+27. 调整 crabgal 窗口大小并移动到另一显示器。预期 1920×1080 逻辑视口等比居中，背景、
     scene layer、角色、粒子、textbox 使用同一裁切区。
-25. 打开/关闭 SAVE、LOAD、CONFIG、BACKLOG。预期不改变 Studio block；返回后画面仍是同一
+28. 打开/关闭 SAVE、LOAD、CONFIG、BACKLOG。预期不改变 Studio block；返回后画面仍是同一
     确定性预览状态；确认存档/清除/设置等持久化操作不应在工程中产生新文件。
 
 ## F. 自动回归

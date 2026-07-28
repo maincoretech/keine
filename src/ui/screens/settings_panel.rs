@@ -10,7 +10,9 @@ use bevy::window::{MonitorSelection, WindowMode};
 use crate::render::blur::{DialogCamera, UiBlurCamera};
 use crate::runtime::resources::{ContentProjectResource, GameConfigResource, ProjectRoot};
 use crate::storage::settings::{RuntimeSettings, UiLocale};
-use crate::ui::control_bar::{BlurStrength, ButtonAction, SkipMode, ToggleStates, UiBlurSource};
+use crate::ui::control_bar::{
+    BlurStrength, ButtonAction, ControlInput, SkipMode, ToggleStates, UiBlurSource,
+};
 use crate::ui::foundation::{
     UiFonts, UiSoundStyle, ease_in_out_cubic, exp_lerp, fill_node, smoothstep, text_weight,
 };
@@ -564,7 +566,7 @@ pub(crate) struct SettingsSyncContext<'w, 's> {
 
 pub fn toggle_settings(
     keys: Res<ButtonInput<KeyCode>>,
-    controls: Query<(&Interaction, &ButtonAction), Changed<Interaction>>,
+    input: ControlInput,
     back: Query<&Interaction, (With<MenuBack>, Changed<Interaction>)>,
     mut ui: ResMut<SettingsUi>,
     mut save_load: ResMut<SaveLoadUi>,
@@ -572,9 +574,7 @@ pub fn toggle_settings(
     mut page_transition: ResMut<SettingsPageTransition>,
 ) {
     let previous_route = active_route(&save_load, &ui);
-    if controls.iter().any(|(interaction, action)| {
-        *interaction == Interaction::Pressed && *action == ButtonAction::System
-    }) {
+    if input.pressed(ButtonAction::System) {
         ui.open = !ui.open;
         if ui.open {
             save_load.mode = None;

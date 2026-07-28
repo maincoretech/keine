@@ -169,6 +169,15 @@ pub(super) struct CharacterGlobalSettings {
     pub positions: Vec<CharacterPosition>,
     #[serde(default)]
     pub default_position_id: String,
+    #[serde(default)]
+    pub graphics: CharacterGraphics,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct CharacterGraphics {
+    #[serde(default)]
+    pub height_ratio: Option<f32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -191,8 +200,21 @@ pub(super) struct CharacterDefinition {
     pub default_position: String,
     #[serde(default)]
     pub attribute_values: HashMap<String, Value>,
+    #[serde(default)]
+    pub portrait_skin_config: Option<PortraitSkinConfig>,
     #[serde(flatten)]
     pub extras: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PortraitSkinConfig {
+    #[serde(default)]
+    pub skins: Vec<String>,
+    #[serde(default)]
+    pub default_skin: String,
+    #[serde(default)]
+    pub attribute_name: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -201,6 +223,10 @@ pub(super) struct CharacterExpression {
     pub name: String,
     #[serde(default)]
     pub asset_path: String,
+    #[serde(default)]
+    pub skin_assets: HashMap<String, String>,
+    #[serde(default)]
+    pub graphics_override: CharacterGraphics,
     #[serde(flatten)]
     pub extras: Map<String, Value>,
 }

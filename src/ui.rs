@@ -217,11 +217,6 @@ fn add_overlay_systems(app: &mut App) {
             )
                 .chain()
                 .run_if(extra::active),
-            (
-                performance::toggle_performance_overlay.run_if(loading::assets_ready),
-                performance::update_performance_overlay,
-            )
-                .chain(),
         )
             .in_set(GameSystemSet::Ui),
     );

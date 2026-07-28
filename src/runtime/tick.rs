@@ -7,7 +7,7 @@ use crabgal_loader::DiagnosticLevel;
 use crate::runtime::platform::InputActions;
 use crate::runtime::resources::{
     AssetLoadingGate, ContentProjectResource, EditorSyncSession, GameState, LocalAssetManifest,
-    LocalSceneAssets, ProjectRoot, ScriptLanguages, ScriptWatcherResource,
+    LocalSceneAssets, ScriptLanguages, ScriptWatcherResource,
 };
 use crate::storage::settings::RuntimeSettings;
 use crate::ui::control_bar::{ButtonAction, SkipMode, ToggleStates};
@@ -58,7 +58,6 @@ pub struct TickContext<'w, 's> {
     time: Res<'w, Time>,
     state: ResMut<'w, GameState>,
     settings: ResMut<'w, RuntimeSettings>,
-    project_root: Res<'w, ProjectRoot>,
     content: Res<'w, ContentProjectResource>,
     config: ResMut<'w, crate::runtime::resources::GameConfigResource>,
     languages: Res<'w, ScriptLanguages>,
@@ -95,17 +94,12 @@ pub fn tick(mut context: TickContext) {
         }
         return;
     }
-    if context.editor_sync.is_none()
-        && update_toggle_shortcuts(
+    if context.editor_sync.is_none() {
+        update_toggle_shortcuts(
             &context.actions,
             &mut context.toggles,
-            &mut context.settings,
             &mut context.auto_timer,
-        )
-        && let Err(error) =
-            crate::storage::settings::persist(&context.settings, &context.project_root)
-    {
-        log::error!("failed to persist skip mode: {error:#}");
+        );
     }
     let presentation_was_blocked = context.state.presentation_blocked();
     if context.editor_sync.is_none() && context.actions.skip_video {
@@ -234,10 +228,8 @@ fn update_notend(state: &mut State) -> TickProgress {
 fn update_toggle_shortcuts(
     actions: &InputActions,
     toggles: &mut ToggleStates,
-    settings: &mut RuntimeSettings,
     auto_timer: &mut f64,
-) -> bool {
-    let mut settings_changed = false;
+) {
     if actions.skip_pressed {
         toggles.skip = true;
     }
@@ -248,21 +240,9 @@ fn update_toggle_shortcuts(
         toggles.auto = !toggles.auto;
         *auto_timer = 0.0;
     }
-    if actions.toggle_skip || actions.toggle_skip_mode {
-        if actions.toggle_skip_mode {
-            toggles.skip_mode = match toggles.skip_mode {
-                SkipMode::Read => SkipMode::All,
-                SkipMode::All => SkipMode::Read,
-            };
-            settings.skip_all = toggles.skip_mode == SkipMode::All;
-            settings_changed = true;
-            toggles.skip = false;
-            log::info!("skip mode: {:?}", toggles.skip_mode);
-        } else {
-            toggles.skip = !toggles.skip;
-        }
+    if actions.toggle_skip {
+        toggles.skip = !toggles.skip;
     }
-    settings_changed
 }
 
 fn reload_scripts_if_changed(context: &mut TickContext<'_, '_>, delta_seconds: f32) -> bool {
@@ -865,6 +845,10 @@ fn finish_step(state: &mut State, snapshot: State) -> TickProgress {
 
 fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool) -> bool {
     let mut changed = false;
+    if state.waiting_for_advance && advance_intro {
+        state.waiting_for_advance = false;
+        changed = true;
+    }
     if state.wait_remaining > 0.0 {
         state.wait_remaining = (state.wait_remaining - delta_seconds).max(0.0);
         changed = true;
@@ -1541,6 +1525,15 @@ fn trigger_stage_events(state: &mut State, runtime: &crabgal_core::StageAnimatio
                 crabgal_core::StageEventKind::Scene(cue) if crossed(from, to, at) => {
                     apply_stage_scene_cue(state, cue);
                 }
+                crabgal_core::StageEventKind::Audio(cue) => {
+                    let runtime_id = format!("{}:audio:{}", runtime.animation.id, cue.id);
+                    if crossed(from, to, at) {
+                        start_stage_audio(state, cue, &runtime_id);
+                    }
+                    if cue.duration > 0.0 && crossed(from, to, at + cue.duration) {
+                        stop_stage_audio(state, cue, &runtime_id);
+                    }
+                }
                 _ => {}
             }
         }
@@ -1549,6 +1542,66 @@ fn trigger_stage_events(state: &mut State, runtime: &crabgal_core::StageAnimatio
 
 fn crossed(from: f32, to: f32, event: f32) -> bool {
     event > from && event <= to
+}
+
+fn start_stage_audio(state: &mut State, cue: &crabgal_core::StageAudioCue, runtime_id: &str) {
+    use crabgal_core::StageAudioKind;
+
+    match cue.kind {
+        StageAudioKind::Bgm => {
+            state.bgm.file = (!cue.file.is_empty()).then(|| cue.file.clone());
+            state.bgm.volume = cue.volume.clamp(0.0, 1.0);
+            state.bgm.fade_seconds = cue.fade_in.max(0.0);
+            state.bgm.revision = state.bgm.revision.wrapping_add(1);
+        }
+        StageAudioKind::Effect if cue.looped => {
+            state.looping_effects.insert(
+                runtime_id.to_owned(),
+                crabgal_core::EffectState {
+                    file: cue.file.clone(),
+                    volume: cue.volume.clamp(0.0, 1.0),
+                },
+            );
+        }
+        StageAudioKind::Effect => {
+            state
+                .effect_queue
+                .push(crabgal_core::EffectEvent::Play(crabgal_core::EffectCue {
+                    file: cue.file.clone(),
+                    volume: cue.volume.clamp(0.0, 1.0),
+                }));
+        }
+        StageAudioKind::Vocal => {
+            state.vocal_event = Some(crabgal_core::VocalCue {
+                file: (!cue.file.is_empty()).then(|| cue.file.clone()),
+                volume: cue.volume.clamp(0.0, 1.0),
+            });
+        }
+    }
+}
+
+fn stop_stage_audio(state: &mut State, cue: &crabgal_core::StageAudioCue, runtime_id: &str) {
+    use crabgal_core::StageAudioKind;
+
+    match cue.kind {
+        StageAudioKind::Bgm => {
+            if state.bgm.file.as_deref() == Some(cue.file.as_str()) {
+                state.bgm.file = None;
+                state.bgm.fade_seconds = cue.fade_out.max(0.0);
+                state.bgm.revision = state.bgm.revision.wrapping_add(1);
+            }
+        }
+        StageAudioKind::Effect if cue.looped => {
+            state.looping_effects.remove(runtime_id);
+        }
+        StageAudioKind::Effect => {}
+        StageAudioKind::Vocal => {
+            state.vocal_event = Some(crabgal_core::VocalCue {
+                file: None,
+                volume: 0.0,
+            });
+        }
+    }
 }
 
 fn apply_stage_scene_cue(state: &mut State, cue: &crabgal_core::StageSceneCue) {
@@ -1723,8 +1776,8 @@ mod tests {
     use crabgal_core::state::{Dialogue, KeyframeAnimation, TransformAnimation};
     use crabgal_core::{
         Action, AnimationPreset, BlendMode, DialoguePause, Easing, Position, PostProcessPatch,
-        SpriteTransform, StageAnimation, StageEvent, StageEventKind, StageKeyframe, StageProperty,
-        StageTarget, StageTrack, Transition, Value,
+        SpriteTransform, StageAnimation, StageAudioCue, StageAudioKind, StageEvent, StageEventKind,
+        StageKeyframe, StageProperty, StageTarget, StageTrack, Transition, Value,
     };
 
     use super::*;
@@ -2187,6 +2240,46 @@ mod tests {
         advance_stage_animation(&mut state, 0.95);
         assert_eq!(state.camera_transform.scale_x, 2.0);
         assert!(state.stage_animation.is_none());
+    }
+
+    #[test]
+    fn stage_timeline_audio_uses_the_shared_clock_and_authored_duration() {
+        let mut state = State::new();
+        let animation = StageAnimation {
+            id: "audio-fixture".into(),
+            duration: 0.6,
+            tracks: Vec::new(),
+            events: vec![StageEvent {
+                time: 0.1,
+                kind: StageEventKind::Audio(StageAudioCue {
+                    id: "rain".into(),
+                    kind: StageAudioKind::Effect,
+                    file: "audio/rain.opus".into(),
+                    volume: 0.35,
+                    looped: true,
+                    duration: 0.3,
+                    fade_in: 0.0,
+                    fade_out: 0.0,
+                }),
+            }],
+            repeat: 0,
+            infinite: false,
+            playback_rate: 1.0,
+            blocking: true,
+        };
+        state.stage_animation = Some(crabgal_core::StageAnimationState::new(animation, &state));
+
+        advance_stage_animation(&mut state, 0.2);
+        assert_eq!(
+            state.looping_effects["audio-fixture:audio:rain"].file,
+            "audio/rain.opus"
+        );
+        advance_stage_animation(&mut state, 0.25);
+        assert!(
+            !state
+                .looping_effects
+                .contains_key("audio-fixture:audio:rain")
+        );
     }
 
     #[test]

@@ -496,9 +496,16 @@ fn spawn_disabled_button(menu: &mut ChildSpawnerCommands, label: &str, font: &Ha
 }
 
 pub fn handle_title_input(mut context: TitleInputContext) {
-    let action = context.buttons.iter().find_map(|(interaction, action)| {
-        (*interaction == Interaction::Pressed).then_some(*action)
-    });
+    let action = context
+        .buttons
+        .iter()
+        .find_map(|(interaction, action)| (*interaction == Interaction::Pressed).then_some(*action))
+        .or(match context.actions.shortcut {
+            Some(crate::ui::control_bar::ButtonAction::QuickLoad) => Some(TitleAction::Continue),
+            Some(crate::ui::control_bar::ButtonAction::Load) => Some(TitleAction::Load),
+            Some(crate::ui::control_bar::ButtonAction::System) => Some(TitleAction::Options),
+            _ => None,
+        });
     if !context.state.ended {
         context.commands.remove_resource::<PendingTitleAction>();
         return;

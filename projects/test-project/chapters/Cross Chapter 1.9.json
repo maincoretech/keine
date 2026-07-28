@@ -1,0 +1,24 @@
+{
+  "id": "chapter-cross-19",
+  "name": "Cross Chapter 1.9",
+  "disabled": false,
+  "fragments": [
+    {
+      "id": "fragment-cross-chapter-19",
+      "name": "Cross-chapter call target",
+      "blocks": [
+        {
+          "id": "10-08-cross-chapter-target",
+          "type": "narration",
+          "content": [
+            {
+              "type": "text",
+              "text": "10-08 已进入另一章节；继续一次应返回原章节的下一条。"
+            }
+          ],
+          "props": {}
+        }
+      ]
+    }
+  ]
+}

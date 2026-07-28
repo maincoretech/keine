@@ -1,11 +1,11 @@
 {
   "id": "chapter-stage-18",
-  "name": "Stage 1.8",
+  "name": "Stage 1.9",
   "disabled": false,
   "fragments": [
     {
       "id": "fragment-stage-18",
-      "name": "Every LetsGal 1.8 timeline feature",
+      "name": "Every LetsGal 1.9 runtime feature",
       "blocks": [
         {
           "id": "10-00-scene",
@@ -22,8 +22,38 @@
         {
           "id": "10-00-intro",
           "type": "dialogue",
-          "content": [{ "type": "text", "text": "10-00 LetsGal 1.8 时间轴验收开始。每段动画结束后应自然回到基态。" }],
+          "content": [{ "type": "text", "text": "10-00 LetsGal 1.9 时间轴验收开始。立绘使用视口相对高度与皮肤选择。" }],
           "props": { "characterId": "aya", "expression": "smile", "position": "center", "showCharacter": "false", "keepCharacter": "true" }
+        },
+        {
+          "id": "10-00-skin-winter",
+          "type": "setver",
+          "content": null,
+          "props": { "key": "aya.skin", "op": "=", "aKind": "lit", "aLit": "winter", "bKind": "none" }
+        },
+        {
+          "id": "10-00-character-winter",
+          "type": "showCharacter",
+          "content": null,
+          "props": { "characterId": "aya", "expression": "smile", "position": "center", "animated": "false" }
+        },
+        {
+          "id": "10-00-skin-note",
+          "type": "narration",
+          "content": [{ "type": "text", "text": "10-00 角色属性切换到 winter 后，立绘应换成思考图；下一步恢复 summer。" }],
+          "props": {}
+        },
+        {
+          "id": "10-00-skin-summer",
+          "type": "setver",
+          "content": null,
+          "props": { "key": "aya.skin", "op": "=", "aKind": "lit", "aLit": "summer", "bKind": "none" }
+        },
+        {
+          "id": "10-00-character-summer",
+          "type": "showCharacter",
+          "content": null,
+          "props": { "characterId": "aya", "expression": "smile", "position": "center", "animated": "false" }
         },
         {
           "id": "10-01-note",
@@ -253,7 +283,7 @@
         {
           "id": "10-07-note",
           "type": "narration",
-          "content": [{ "type": "text", "text": "10-07 事件轨：依次触发镜头震动、镜头补丁、粒子提示和场景切换；事件应只触发一次。" }],
+          "content": [{ "type": "text", "text": "10-07 事件轨：镜头、粒子、场景与音频事件共用时钟，均只触发一次。" }],
           "props": {}
         },
         {
@@ -273,6 +303,7 @@
                 { "type": "cameraShake", "time": 400, "data": { "amplitude": 16, "frequency": 22, "duration": 650, "axis": "both", "falloff": "expo" } },
                 { "type": "cameraPatch", "time": 1400, "data": { "targets": ["scene", "characters"], "patch": { "bloomIntensity": 0.45, "vignetteIntensity": 0.32, "colorSaturation": 0.75 } } },
                 { "type": "particleCue", "time": 2400, "data": { "id": "timeline-firefly", "preset": "FIREFLY", "duration": 1500, "fadeInDuration": 180, "fadeOutDuration": 400, "options": { "count": 48, "wind": 0.18, "gravity": -0.04 } } },
+                { "type": "audioCue", "time": 3000, "duration": 400, "soundType": "SE", "uri": "audio/timeline-click.opus", "volume": 0.45, "loop": false, "fadeInDuration": 0, "fadeOutDuration": 0, "soundId": "timeline-click" },
                 { "type": "sceneCue", "time": 3400, "data": { "sceneId": "scene-sunset", "resetCamera": true, "transition": "crossfade", "transitionDuration": 550 } }
               ]
             }
@@ -283,6 +314,18 @@
           "type": "resetCamera",
           "content": null,
           "props": { "resetMode": "animated", "duration": "240", "easing": "easeOut", "waitForComplete": "true" }
+        },
+        {
+          "id": "10-08-input-wait-note",
+          "type": "narration",
+          "content": [{ "type": "text", "text": "10-08 点击后进入玩家等待；无论等待多久都不会按计时自动继续。" }],
+          "props": {}
+        },
+        {
+          "id": "10-08-input-wait",
+          "type": "wait",
+          "content": null,
+          "props": { "duration": 1000, "waitForInput": true }
         },
         {
           "id": "10-08-note",
@@ -309,6 +352,24 @@
               "events": []
             }
           }
+        },
+        {
+          "id": "10-08-cross-chapter-note",
+          "type": "narration",
+          "content": [{ "type": "text", "text": "10-08 下一步跨章节调用另一个 fragment，显示一句话后应返回这里继续。" }],
+          "props": {}
+        },
+        {
+          "id": "10-08-cross-chapter-call",
+          "type": "callFragment",
+          "content": null,
+          "props": { "fragmentId": "fragment-cross-chapter-19", "chapterId": "chapter-cross-19" }
+        },
+        {
+          "id": "10-08-cross-chapter-returned",
+          "type": "narration",
+          "content": [{ "type": "text", "text": "10-08 已从跨章节 fragment 返回，调用栈顺序正确。" }],
+          "props": {}
         },
         {
           "id": "10-09-backspace-source",

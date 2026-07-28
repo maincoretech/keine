@@ -4,6 +4,7 @@
     "showcase-day": { "path": "backgrounds/calibration_day.webp" },
     "showcase-sunset": { "path": "backgrounds/calibration_sunset.webp" },
     "showcase-aya-smile": { "path": "characters/aya_smile.webp" },
-    "showcase-aya-thinking": { "path": "characters/aya_thinking.webp" }
+    "showcase-aya-thinking": { "path": "characters/aya_thinking.webp" },
+    "showcase-timeline-click": { "path": "audio/timeline-click.opus" }
   }
 }

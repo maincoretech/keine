@@ -5,18 +5,35 @@
       { "id": "center", "left": 50, "top": 0 },
       { "id": "right", "left": 75, "top": 0 }
     ],
-    "defaultPositionId": "center"
+    "defaultPositionId": "center",
+    "graphics": { "heightRatio": 0.82 }
   },
+  "attributeTemplate": [
+    { "name": "skin", "defaultValue": "summer" }
+  ],
   "characters": [
     {
       "id": "aya",
       "name": "绫",
       "defaultPosition": "center",
       "expressions": [
-        { "name": "smile", "assetPath": "characters/aya_smile.webp" },
+        {
+          "name": "smile",
+          "assetPath": "characters/aya_smile.webp",
+          "skinAssets": {
+            "summer": "characters/aya_smile.webp",
+            "winter": "characters/aya_thinking.webp"
+          },
+          "graphicsOverride": { "heightRatio": 0.8 }
+        },
         { "name": "thinking", "assetPath": "characters/aya_thinking.webp" }
       ],
-      "attributeValues": {}
+      "portraitSkinConfig": {
+        "skins": ["summer", "winter"],
+        "defaultSkin": "summer",
+        "attributeName": "skin"
+      },
+      "attributeValues": { "skin": "summer" }
     }
   ]
 }

@@ -8,6 +8,7 @@ use crate::runtime::resources::ProjectRoot;
 use crate::storage::save::QUICK_SAVE_SLOT;
 use crate::ui::dialog::{DialogAction, DialogRequest};
 use crate::ui::foundation::exp_lerp;
+use crate::ui::input_scope::UiInputScope;
 use crate::ui::textbox::ContentRoot;
 
 const QSAVE_LABEL: &str = "Q\u{00b7}SAVE";
@@ -35,6 +36,26 @@ pub(crate) enum ButtonAction {
     Load,
     System,
     Title,
+}
+
+#[derive(SystemParam)]
+pub(crate) struct ControlInput<'w, 's> {
+    controls: Query<'w, 's, (&'static Interaction, &'static ButtonAction), Changed<Interaction>>,
+    actions: Res<'w, crate::runtime::platform::InputActions>,
+    scope: Res<'w, UiInputScope>,
+}
+
+impl ControlInput<'_, '_> {
+    pub(crate) fn pressed(&self, action: ButtonAction) -> bool {
+        self.actions.shortcut == Some(action)
+            || self.controls.iter().any(|(interaction, candidate)| {
+                *interaction == Interaction::Pressed && *candidate == action
+            })
+    }
+
+    pub(crate) fn pressed_on_stage(&self, action: ButtonAction) -> bool {
+        *self.scope == UiInputScope::Stage && self.pressed(action)
+    }
 }
 
 #[derive(Resource, Default)]
@@ -319,10 +340,26 @@ pub fn animate_hover(time: Res<Time>, mut q: Query<(&mut HoverAlpha, &mut Backgr
 /// save/load for bottom row, log for the rest.
 pub fn handle_button_click(
     mut q: Query<(&Interaction, &ButtonAction, &mut HoverAlpha), Changed<Interaction>>,
+    actions: Res<crate::runtime::platform::InputActions>,
+    scope: Res<UiInputScope>,
     mut toggles: ResMut<ToggleStates>,
     mut commands: Commands,
     settings: Res<crate::storage::settings::RuntimeSettings>,
 ) {
+    let shortcut = match (actions.shortcut, *scope) {
+        (
+            Some(action @ (ButtonAction::Hide | ButtonAction::QuickSave | ButtonAction::QuickLoad)),
+            UiInputScope::Stage,
+        ) => Some(action),
+        (Some(ButtonAction::Title), UiInputScope::Stage | UiInputScope::Menu) => {
+            Some(ButtonAction::Title)
+        }
+        _ => None,
+    };
+    if let Some(action) = shortcut {
+        perform_button_action(action, &mut toggles, &mut commands, &settings, None);
+    }
+
     for (interaction, action, mut ha) in q.iter_mut() {
         if !matches!(interaction, Interaction::Pressed) {
             continue;
@@ -331,53 +368,78 @@ pub fn handle_button_click(
         if toggles.hide && !matches!(action, ButtonAction::Hide) {
             continue;
         }
-        match action {
-            ButtonAction::Auto => {
-                toggles.auto = !toggles.auto;
-                ha.active = toggles.auto;
-                ha.target = if toggles.auto { ha.active_alpha } else { 0.0 };
-            }
-            ButtonAction::Skip => {
-                toggles.skip = !toggles.skip;
-                ha.active = toggles.skip;
-                ha.target = if toggles.skip { ha.active_alpha } else { 0.0 };
-            }
-            ButtonAction::Hide => {
-                toggles.hide = !toggles.hide;
-            }
-            ButtonAction::Lock => {
-                toggles.lock = !toggles.lock;
-            }
+        perform_button_action(
+            *action,
+            &mut toggles,
+            &mut commands,
+            &settings,
+            Some(&mut ha),
+        );
+    }
+}
 
-            ButtonAction::QuickSave => {
-                commands.insert_resource(DialogRequest::confirmation(
-                    crate::ui::support::i18n::tr(
-                        settings.locale,
-                        crate::ui::support::i18n::UiText::ConfirmQuickSave,
-                    ),
-                    DialogAction::QuickSave,
-                ));
+fn perform_button_action(
+    action: ButtonAction,
+    toggles: &mut ToggleStates,
+    commands: &mut Commands,
+    settings: &crate::storage::settings::RuntimeSettings,
+    hover: Option<&mut HoverAlpha>,
+) {
+    match action {
+        ButtonAction::Auto => {
+            toggles.auto = !toggles.auto;
+            if let Some(hover) = hover {
+                hover.active = toggles.auto;
+                hover.target = if toggles.auto {
+                    hover.active_alpha
+                } else {
+                    0.0
+                };
             }
-            ButtonAction::QuickLoad => {
-                commands.insert_resource(DialogRequest::confirmation(
-                    crate::ui::support::i18n::tr(
-                        settings.locale,
-                        crate::ui::support::i18n::UiText::ConfirmQuickLoad,
-                    ),
-                    DialogAction::QuickLoad,
-                ));
+        }
+        ButtonAction::Skip => {
+            toggles.skip = !toggles.skip;
+            if let Some(hover) = hover {
+                hover.active = toggles.skip;
+                hover.target = if toggles.skip {
+                    hover.active_alpha
+                } else {
+                    0.0
+                };
             }
-            ButtonAction::Save | ButtonAction::Load => {}
-            ButtonAction::Title => {
-                commands.insert_resource(DialogRequest::confirmation(
-                    crate::ui::support::i18n::tr(
-                        settings.locale,
-                        crate::ui::support::i18n::UiText::ConfirmReturnTitle,
-                    ),
-                    DialogAction::BackToTitle,
-                ));
-            }
-            _ => log::info!("[click] {:?}", action),
+        }
+        ButtonAction::Hide => toggles.hide = !toggles.hide,
+        ButtonAction::Lock => toggles.lock = !toggles.lock,
+        ButtonAction::QuickSave => {
+            commands.insert_resource(DialogRequest::confirmation(
+                crate::ui::support::i18n::tr(
+                    settings.locale,
+                    crate::ui::support::i18n::UiText::ConfirmQuickSave,
+                ),
+                DialogAction::QuickSave,
+            ));
+        }
+        ButtonAction::QuickLoad => {
+            commands.insert_resource(DialogRequest::confirmation(
+                crate::ui::support::i18n::tr(
+                    settings.locale,
+                    crate::ui::support::i18n::UiText::ConfirmQuickLoad,
+                ),
+                DialogAction::QuickLoad,
+            ));
+        }
+        ButtonAction::Title => {
+            commands.insert_resource(DialogRequest::confirmation(
+                crate::ui::support::i18n::tr(
+                    settings.locale,
+                    crate::ui::support::i18n::UiText::ConfirmReturnTitle,
+                ),
+                DialogAction::BackToTitle,
+            ));
+        }
+        ButtonAction::Save | ButtonAction::Load | ButtonAction::System => {}
+        ButtonAction::Backlog | ButtonAction::Replay => {
+            log::info!("[click] {action:?}");
         }
     }
 }

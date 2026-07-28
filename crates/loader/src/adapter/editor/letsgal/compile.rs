@@ -9,9 +9,10 @@ use crabgal_core::{
     Action, Anchor, BlendMode, CameraShakeAxis, CameraShakeFalloff, CameraShakeSpec, CameraTargets,
     ChoiceTarget, ColorToneMode, Easing, InputValueType, PortraitStyle, Position,
     PostProcessEffect, PostProcessPatch, SayOptions, SceneFit, SceneLayerLayout, SpriteLayout,
-    SpriteTransform, StageAnimation, StageEvent, StageEventKind, StageKeyframe, StageProperty,
-    StageSceneCue, StageSceneLayer, StageTarget, StageTrack, SystemUiSlot, TransformKeyframe,
-    TransformPatch, Transition, UserInputSpec, VideoMode, VideoSpec,
+    SpriteTransform, StageAnimation, StageAudioCue, StageAudioKind, StageEvent, StageEventKind,
+    StageKeyframe, StageProperty, StageSceneCue, StageSceneLayer, StageTarget, StageTrack,
+    SystemUiSlot, TransformKeyframe, TransformPatch, Transition, UserInputSpec, VideoMode,
+    VideoSpec,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -90,7 +91,7 @@ fn core_value(value: &Value) -> Option<crabgal_core::Value> {
     }
 }
 
-/// Runtime-facing block registry observed in LetsGal Studio 1.8.0's bundled
+/// Runtime-facing block registry observed in LetsGal Studio 1.9.0's bundled
 /// editor schema. `cmdDraft` is editor-only and therefore intentionally not in
 /// this compatibility contract.
 pub(super) const BUILTIN_BLOCK_TYPES: &[&str] = &[
@@ -340,6 +341,7 @@ pub(super) fn compile_project(
         scenes: &scene_map,
         voices: &voice_map,
         positions: &positions,
+        portrait_height_ratio: characters.global_settings.graphics.height_ratio,
     };
 
     let mut loaded = Vec::new();
@@ -382,6 +384,7 @@ struct CompileContext<'a> {
     scenes: &'a HashMap<&'a str, &'a SceneDefinition>,
     voices: &'a HashMap<&'a str, &'a str>,
     positions: &'a HashMap<&'a str, (f32, f32)>,
+    portrait_height_ratio: Option<f32>,
 }
 
 fn compile_fragment(
@@ -461,8 +464,12 @@ fn compile_block(
         "sound" => compile_sound(block, span, report),
         "stopSound" => compile_stop_sound(block, span, report),
         "wait" => report.push(
-            Action::Wait {
-                seconds: prop_f32(&block.props, "duration", 0.0) / 1000.0,
+            if prop_bool(&block.props, "waitForInput", false) {
+                Action::WaitForAdvance
+            } else {
+                Action::Wait {
+                    seconds: prop_f32(&block.props, "duration", 0.0) / 1000.0,
+                }
             },
             span,
         ),
@@ -533,7 +540,7 @@ fn compile_block(
         "floatingText" => compile_floating_text(block, span, report),
         "enterAutoPlay" => report.push(Action::SetAutoplay { enabled: true }, span),
         "exitAutoPlay" => report.push(Action::SetAutoplay { enabled: false }, span),
-        _ => unreachable!("the 1.8.0 block registry is exhaustively matched"),
+        _ => unreachable!("the 1.9.0 block registry is exhaustively matched"),
     }
 }
 
@@ -623,13 +630,34 @@ fn show_character(
         return;
     };
     let expression = prop_string(&block.props, "expression");
-    let image = character
+    let expression = character
         .expressions
         .iter()
         .find(|candidate| candidate.name == expression)
-        .or_else(|| character.expressions.first())
-        .map(|expression| expression.asset_path.clone())
+        .or_else(|| character.expressions.first());
+    let Some(expression) = expression else {
+        return;
+    };
+    let locked_skin = prop_string(&block.props, "skin");
+    let skin_config = character.portrait_skin_config.as_ref();
+    let default_skin = skin_config
+        .map(|config| config.default_skin.as_str())
         .unwrap_or_default();
+    let image = if !locked_skin.is_empty() {
+        expression
+            .skin_assets
+            .get(&locked_skin)
+            .cloned()
+            .unwrap_or_else(|| expression.asset_path.clone())
+    } else if !default_skin.is_empty() {
+        expression
+            .skin_assets
+            .get(default_skin)
+            .cloned()
+            .unwrap_or_else(|| expression.asset_path.clone())
+    } else {
+        expression.asset_path.clone()
+    };
     if image.is_empty() {
         return;
     }
@@ -645,9 +673,15 @@ fn show_character(
     report.push(
         Action::ShowSprite {
             id: character.id.clone(),
-            image,
+            image: image.clone(),
             position: studio_position(&position_id, context),
-            layout: SpriteLayout::Natural,
+            layout: expression
+                .graphics_override
+                .height_ratio
+                .or(context.portrait_height_ratio)
+                .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
+                .map(SpriteLayout::ViewportHeight)
+                .unwrap_or(SpriteLayout::Natural),
             transition: fade(block, "animated", 0.2),
             transform: SpriteTransform::default(),
             z_index: 100,
@@ -655,6 +689,25 @@ fn show_character(
         },
         span,
     );
+    if locked_skin.is_empty()
+        && let Some(config) = skin_config
+        && !config.attribute_name.is_empty()
+        && !expression.skin_assets.is_empty()
+    {
+        report.push(
+            Action::SelectSpriteImage {
+                id: character.id.clone(),
+                variable: format!("{}.{}", character.id, config.attribute_name),
+                default_image: image,
+                variants: expression
+                    .skin_assets
+                    .iter()
+                    .map(|(skin, image)| (skin.clone(), image.clone()))
+                    .collect(),
+            },
+            span,
+        );
+    }
     if prop_bool(&block.props, "cameraBound", false) {
         report.push(
             Action::SetCameraBinding {
@@ -1714,7 +1767,7 @@ fn compile_stage_animation(
         report.diagnostics.push(Diagnostic {
             level: DiagnosticLevel::Error,
             span,
-            message: "LetsGal stageAnimation clipJson has an invalid 1.8.0 timeline schema".into(),
+            message: "LetsGal stageAnimation clipJson has an invalid 1.9.0 timeline schema".into(),
         });
         return;
     };
@@ -1928,6 +1981,14 @@ fn compile_stage_event(event: &Value, context: &CompileContext<'_>) -> Option<St
         .and_then(Value::as_object)
         .or_else(|| object.get("payload").and_then(Value::as_object))
         .unwrap_or(object);
+    if object
+        .get("muted")
+        .or_else(|| payload.get("muted"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return None;
+    }
     let event_type = object
         .get("type")
         .or_else(|| object.get("kind"))
@@ -1994,6 +2055,27 @@ fn compile_stage_event(event: &Value, context: &CompileContext<'_>) -> Option<St
             }
         }
         "sceneCue" => StageEventKind::Scene(compile_stage_scene_cue(payload, context)?),
+        "audioCue" => StageEventKind::Audio(StageAudioCue {
+            id: non_empty_value(payload, &["id", "soundId"])
+                .unwrap_or("audio")
+                .to_owned(),
+            kind: match value_str(payload.get("soundType")) {
+                "BGM" => StageAudioKind::Bgm,
+                "VOCAL" => StageAudioKind::Vocal,
+                _ => StageAudioKind::Effect,
+            },
+            file: non_empty_value(payload, &["uri", "file"])
+                .unwrap_or_default()
+                .to_owned(),
+            volume: value_f32(payload.get("volume"), 1.0).clamp(0.0, 1.0),
+            looped: payload
+                .get("loop")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            duration: value_f32(payload.get("duration"), 0.0).max(0.0) / 1000.0,
+            fade_in: value_f32(payload.get("fadeInDuration"), 0.0).max(0.0) / 1000.0,
+            fade_out: value_f32(payload.get("fadeOutDuration"), 0.0).max(0.0) / 1000.0,
+        }),
         _ => return None,
     };
     Some(StageEvent { time, kind })
@@ -2741,6 +2823,7 @@ mod tests {
             scenes: &scenes,
             voices: &voices,
             positions: &positions,
+            portrait_height_ratio: None,
         };
         let chapter: ChapterDocument = serde_json::from_value(json!({
             "id":"chapter", "name":"Chapter", "fragments":[]
@@ -2894,7 +2977,7 @@ mod tests {
     }
 
     #[test]
-    fn studio_180_stage_animation_compiles_targets_events_and_playback_contract() {
+    fn studio_190_stage_animation_compiles_targets_audio_and_playback_contract() {
         let character: CharacterDefinition = serde_json::from_value(json!({
             "id": "hero",
             "name": "Hero",
@@ -2913,6 +2996,7 @@ mod tests {
             scenes: &scenes,
             voices: &voices,
             positions: &positions,
+            portrait_height_ratio: None,
         };
         let block = StoryBlock {
             id: Some("timeline-block".into()),
@@ -2937,7 +3021,9 @@ mod tests {
                             {"type":"cameraShake","time":100,"data":{"amplitude":7,"frequency":15,"duration":250,"axis":"x","falloff":"expo"}},
                             {"type":"cameraPatch","time":200,"data":{"targets":["scene"],"patch":{"fogIntensity":0.4}}},
                             {"type":"particleCue","time":300,"data":{"id":"snow","preset":"LIGHT_SNOW","duration":600,"fadeOutDuration":100,"options":{"count":24,"wind":2,"gravity":3}}},
-                            {"type":"sceneCue","time":400,"data":{"sceneId":"winter","resetCamera":true,"layers":[{"id":"fog","assetPath":"background/fog.png","distance":2,"offset":"(12,24)"}]}}
+                            {"type":"sceneCue","time":400,"data":{"sceneId":"winter","resetCamera":true,"layers":[{"id":"fog","assetPath":"background/fog.png","distance":2,"offset":"(12,24)"}]}},
+                            {"type":"audioCue","time":500,"duration":750,"soundType":"SE","uri":"audio/bell.opus","volume":0.4,"loop":false,"fadeInDuration":25,"fadeOutDuration":80,"soundId":"bell"},
+                            {"type":"audioCue","time":600,"muted":true,"soundType":"BGM","uri":"audio/muted.opus"}
                         ]
                     }),
                 ),
@@ -2976,7 +3062,7 @@ mod tests {
             StageTarget::SceneLayer { id } if id == "scene-layer:fog"
         ));
         assert!(animation.tracks[2].muted);
-        assert_eq!(animation.events.len(), 4);
+        assert_eq!(animation.events.len(), 5);
         assert!(matches!(
             animation.events[0].kind,
             StageEventKind::CameraShake(_)
@@ -2990,6 +3076,116 @@ mod tests {
             StageEventKind::Particle { .. }
         ));
         assert!(matches!(animation.events[3].kind, StageEventKind::Scene(_)));
+        assert!(matches!(
+            &animation.events[4].kind,
+            StageEventKind::Audio(cue)
+                if cue.id == "bell"
+                    && cue.kind == StageAudioKind::Effect
+                    && cue.file == "audio/bell.opus"
+                    && (cue.volume - 0.4).abs() <= f32::EPSILON
+                    && (cue.duration - 0.75).abs() <= f32::EPSILON
+        ));
+    }
+
+    #[test]
+    fn studio_190_wait_and_portrait_skin_compile_to_native_actions() {
+        let character: CharacterDefinition = serde_json::from_value(json!({
+            "id": "aya",
+            "name": "Aya",
+            "expressions": [{
+                "name": "smile",
+                "assetPath": "characters/default.webp",
+                "skinAssets": {
+                    "summer": "characters/summer.webp",
+                    "winter": "characters/winter.webp"
+                },
+                "graphicsOverride": {"heightRatio": 0.76}
+            }],
+            "portraitSkinConfig": {
+                "skins": ["summer", "winter"],
+                "defaultSkin": "summer",
+                "attributeName": "skin"
+            }
+        }))
+        .unwrap();
+        let characters = HashMap::from([("aya", &character)]);
+        let chapter_next = HashMap::new();
+        let scenes = HashMap::new();
+        let voices = HashMap::new();
+        let positions = HashMap::new();
+        let context = CompileContext {
+            entry: "entry",
+            chapter_next: &chapter_next,
+            characters: &characters,
+            scenes: &scenes,
+            voices: &voices,
+            positions: &positions,
+            portrait_height_ratio: Some(0.82),
+        };
+        let chapter: ChapterDocument = serde_json::from_value(json!({
+            "id":"chapter", "name":"Chapter", "fragments":[]
+        }))
+        .unwrap();
+        let show = StoryBlock {
+            id: None,
+            kind: "showCharacter".into(),
+            content: Value::Null,
+            props: Map::from_iter([
+                ("characterId".into(), json!("aya")),
+                ("expression".into(), json!("smile")),
+                ("position".into(), json!("center")),
+            ]),
+            children: Vec::new(),
+            extras: Map::new(),
+        };
+        let wait = StoryBlock {
+            id: None,
+            kind: "wait".into(),
+            content: Value::Null,
+            props: Map::from_iter([
+                ("duration".into(), json!(5000)),
+                ("waitForInput".into(), json!(true)),
+            ]),
+            children: Vec::new(),
+            extras: Map::new(),
+        };
+        let mut report = ParseReport::default();
+
+        compile_block(
+            &show,
+            &chapter,
+            &context,
+            SourceSpan { line: 1, column: 1 },
+            &mut report,
+        );
+        compile_block(
+            &wait,
+            &chapter,
+            &context,
+            SourceSpan { line: 2, column: 1 },
+            &mut report,
+        );
+
+        assert!(matches!(
+            &report.actions[0],
+            Action::ShowSprite {
+                image,
+                layout: SpriteLayout::ViewportHeight(ratio),
+                ..
+            } if image == "characters/summer.webp" && (*ratio - 0.76).abs() <= f32::EPSILON
+        ));
+        assert!(matches!(
+            &report.actions[1],
+            Action::SelectSpriteImage {
+                variable,
+                default_image,
+                variants,
+                ..
+            } if variable == "aya.skin"
+                && default_image == "characters/summer.webp"
+                && variants.len() == 2
+        ));
+        assert!(matches!(report.actions[2], Action::WaitForAdvance));
     }
 
     fn contains_host_command(action: &Action) -> bool {
@@ -3146,6 +3342,7 @@ mod tests {
             scenes: &scenes,
             voices: &voices,
             positions: &positions,
+            portrait_height_ratio: None,
         };
         let block = StoryBlock {
             id: None,
@@ -3212,6 +3409,7 @@ mod tests {
             scenes: &scenes,
             voices: &voices,
             positions: &positions,
+            portrait_height_ratio: None,
         };
         let block = StoryBlock {
             id: None,
@@ -3303,6 +3501,7 @@ mod tests {
             scenes: &scenes,
             voices: &voices,
             positions: &positions,
+            portrait_height_ratio: None,
         };
         let mut report = ParseReport::default();
 
@@ -3350,6 +3549,7 @@ mod tests {
             scenes: &scenes,
             voices: &voices,
             positions: &positions,
+            portrait_height_ratio: None,
         };
         let mut report = ParseReport::default();
 
@@ -3406,6 +3606,7 @@ mod tests {
             scenes: &scenes,
             voices: &voices,
             positions: &positions,
+            portrait_height_ratio: None,
         };
         let mut report = ParseReport::default();
 
@@ -3473,6 +3674,7 @@ mod tests {
             scenes: &scene_refs,
             voices: &voices,
             positions: &positions,
+            portrait_height_ratio: None,
         };
         let block = StoryBlock {
             id: None,
@@ -3570,6 +3772,7 @@ mod tests {
             scenes: &scenes,
             voices: &voices,
             positions: &positions,
+            portrait_height_ratio: None,
         };
         let mut report = ParseReport::default();
 
