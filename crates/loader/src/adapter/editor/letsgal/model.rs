@@ -16,6 +16,8 @@ pub(super) struct ProjectDocument {
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
+    pub crabgal: CrabgalProjectConfig,
+    #[serde(default)]
     pub chapter_order: Vec<String>,
     #[serde(default)]
     pub resolution: Resolution,
@@ -29,6 +31,13 @@ pub(super) struct ProjectDocument {
     pub action_bindings: BTreeMap<String, Vec<String>>,
     #[serde(flatten)]
     pub extras: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct CrabgalProjectConfig {
+    #[serde(default)]
+    pub features: crabgal_core::config::FeatureConfig,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]

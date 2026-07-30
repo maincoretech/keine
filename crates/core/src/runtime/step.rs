@@ -514,9 +514,9 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>) -> StepResult {
                 } else {
                     requested_source
                 };
-                if keep.is_empty() || source.is_empty() || !source.starts_with(&keep) {
+                if source.is_empty() || !source.starts_with(&keep) {
                     log::error!(
-                        "dialogue retraction target is not a non-empty source prefix: \
+                        "dialogue retraction target is not a source prefix: \
                          source={source:?}, keep={keep:?}"
                     );
                     state.dialogue = Some(dialogue);
@@ -1829,6 +1829,34 @@ mod tests {
         assert_eq!(state.dialogue.as_ref().unwrap().text, "我当然");
         update_dialogue_retraction(&mut state, 1.0, 60.0, false, false);
         assert_eq!(state.dialogue.as_ref().unwrap().text, "我");
+    }
+
+    #[test]
+    fn dialogue_retraction_can_remove_the_entire_line() {
+        let mut state = state_with(vec![
+            Action::Say {
+                speaker: "A".into(),
+                text: "整句话".into(),
+                options: SayOptions::default(),
+            },
+            Action::RetractDialogue {
+                source: "整句话".into(),
+                keep: String::new(),
+            },
+        ]);
+
+        assert_eq!(step(&mut state), StepResult::AwaitClick);
+        state.dialogue.as_mut().unwrap().visible_chars = 3;
+        advance(&mut state);
+        assert_eq!(step(&mut state), StepResult::AwaitPresentation);
+        update_dialogue_retraction(&mut state, 1.0, 60.0, false, false);
+        assert_eq!(state.dialogue.as_ref().unwrap().text, "");
+        assert!(
+            state
+                .dialogue_retraction
+                .as_ref()
+                .is_some_and(|retraction| retraction.awaiting_advance)
+        );
     }
 
     #[test]

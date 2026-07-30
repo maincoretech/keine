@@ -137,6 +137,7 @@ pub(super) fn game_config(project: &ProjectDocument, manifest: &AssetManifest) -
         project: ProjectMetadata {
             description: project.description.clone().unwrap_or_default(),
         },
+        features: project.crabgal.features.clone(),
         adapter: AdapterConfig {
             asset: vec![AssetSourceConfig {
                 path: "assets".into(),
@@ -2237,15 +2238,16 @@ fn compile_known_extension(block: &StoryBlock, span: SourceSpan, report: &mut Pa
             let keep = literal_extension_string(&params, "keep");
             match keep {
                 Some(keep)
-                    if !keep.is_empty() && (source.is_empty() || source.starts_with(&keep)) =>
+                    if (!source.is_empty() && source.starts_with(&keep))
+                        || (source.is_empty() && !keep.is_empty()) =>
                 {
                     report.push(Action::RetractDialogue { source, keep }, span);
                 }
                 _ => report.diagnostics.push(Diagnostic {
                     level: DiagnosticLevel::Error,
                     span,
-                    message: "invalid sentence-tail deletion: `keep` must be non-empty and, when \
-                              `source` is present, its prefix"
+                    message: "invalid sentence-tail deletion: `keep` must be a source prefix; an \
+                              empty prefix removes the whole line when a source snapshot exists"
                         .into(),
                 }),
             }
@@ -2768,6 +2770,42 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.level == DiagnosticLevel::Error)
         );
+    }
+
+    #[test]
+    fn sentence_tail_deletion_can_remove_the_entire_line() {
+        let block = StoryBlock {
+            id: Some("backspace-all".into()),
+            kind: "callExtensionFunction".into(),
+            content: Value::Null,
+            props: Map::from_iter([
+                ("target".into(), json!("shiftz.backspace/backspace-to")),
+                (
+                    "paramsJson".into(),
+                    json!({
+                        "source": {"kind":"lit","value":"整句话"},
+                        "keep": {"kind":"lit","value":""}
+                    }),
+                ),
+            ]),
+            children: Vec::new(),
+            extras: Map::new(),
+        };
+        let mut report = ParseReport::default();
+
+        assert!(compile_known_extension(
+            &block,
+            SourceSpan { line: 1, column: 1 },
+            &mut report
+        ));
+        assert_eq!(
+            report.actions,
+            vec![Action::RetractDialogue {
+                source: "整句话".into(),
+                keep: String::new(),
+            }]
+        );
+        assert!(report.diagnostics.is_empty());
     }
 
     #[test]
@@ -3911,6 +3949,25 @@ mod tests {
         assert_eq!(config.bg_path("hash"), "backgrounds/sea.png");
         assert_eq!(config.bg_path("backgrounds/sea.png"), "backgrounds/sea.png");
         assert_eq!(config.layout.anchor_offset, 0.0);
+    }
+
+    #[test]
+    fn maps_explicit_crabgal_feature_opt_ins() {
+        let project: ProjectDocument = serde_json::from_value(json!({
+            "id": "p",
+            "name": "n",
+            "engineVersion": "1",
+            "chapterOrder": [],
+            "crabgal": {
+                "features": {
+                    "extra": true
+                }
+            }
+        }))
+        .unwrap();
+        let manifest: AssetManifest = serde_json::from_value(json!({"entries": {}})).unwrap();
+
+        assert!(game_config(&project, &manifest).features.extra);
     }
 
     #[test]

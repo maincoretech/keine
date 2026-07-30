@@ -8,9 +8,11 @@ use crate::render::blur::{DialogCamera, UiBlurCamera};
 use crate::runtime::platform::DesignViewport;
 use crate::runtime::platform::InputActions;
 use crate::runtime::resources::{GameConfigResource, GameState, ProjectRoot};
-use crate::ui::control_bar::{BlurSource, BlurStrength, HoverAlpha, QuickSavePreview};
+use crate::ui::control_bar::{BlurSource, BlurStrength, QuickSavePreview};
 use crate::ui::dialog::{DialogAction, DialogRequest};
-use crate::ui::foundation::{UiFonts, exp_lerp, smoothstep, text};
+use crate::ui::foundation::{
+    SURFACE_HOVER_ALPHA, UiFonts, button_surface, dark_surface, exp_lerp, smoothstep, text,
+};
 use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
 const RETURN_COVER_SECONDS: f32 = 0.24;
@@ -150,6 +152,7 @@ pub struct TitleButtonMotion {
     width: f32,
     padding: f32,
     press: f32,
+    hover: f32,
 }
 
 impl TitleButtonMotion {
@@ -159,15 +162,23 @@ impl TitleButtonMotion {
             Interaction::Hovered => (96.25, 22.5),
             Interaction::Pressed => (92.0, 20.25),
         };
+        let target_hover = if interaction == Interaction::None {
+            0.0
+        } else {
+            SURFACE_HOVER_ALPHA
+        };
         (self.width - target_width).abs() > 0.001
             || (self.padding - target_padding).abs() > 0.001
             || self.press > 0.001
+            || (self.hover - target_hover).abs() > 0.001
     }
 }
 
-const CONTINUE_PREVIEW_SLIDE_PX: f32 = 36.0;
 const CONTINUE_PREVIEW_ALPHA: f32 = 0.78;
 const CONTINUE_PREVIEW_BLUR: f32 = 36.0;
+const CONTINUE_PREVIEW_GAP_PERCENT: f32 = 5.0;
+const DISABLED_BUTTON_SURFACE_ALPHA: f32 = 0.28;
+const DISABLED_BUTTON_TEXT_ALPHA: f32 = 0.36;
 
 #[derive(Component, Default)]
 pub struct TitleContinuePreview {
@@ -184,17 +195,29 @@ impl TitleContinuePreview {
 #[derive(Component)]
 pub(crate) struct TitleContinuePreviewAlpha(f32);
 
+#[derive(Component)]
+pub(crate) struct TitleButtonVisual;
+
 type TitleButtonAnimationQuery<'w, 's> = Query<
     'w,
     's,
     (
         &'static Interaction,
         &'static mut TitleButtonMotion,
-        &'static mut Node,
-        &'static mut UiTransform,
+        &'static Children,
         Option<&'static TitleAction>,
     ),
-    Without<TitleContinuePreview>,
+>;
+
+type TitleButtonVisualQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static mut Node,
+        &'static mut UiTransform,
+        &'static mut BackgroundColor,
+    ),
+    (With<TitleButtonVisual>, Without<TitleContinuePreview>),
 >;
 
 #[derive(SystemParam)]
@@ -217,6 +240,8 @@ pub struct TitleInputContext<'w, 's> {
     keys: ResMut<'w, ButtonInput<KeyCode>>,
     actions: ResMut<'w, InputActions>,
     state: ResMut<'w, GameState>,
+    config: Res<'w, GameConfigResource>,
+    preview: Res<'w, QuickSavePreview>,
     project_root: Res<'w, ProjectRoot>,
     store: Res<'w, crate::runtime::resources::StoreCodec>,
     time: Res<'w, Time>,
@@ -239,7 +264,10 @@ pub fn sync_title(state: Res<GameState>, mut context: TitleSyncContext) {
     for (_, mut sprite, mut transform) in &mut context.backgrounds {
         layout_title_background(&mut sprite, &mut transform, viewport);
     }
-    if state.ended != context.roots.is_empty() {
+    let title_present = !context.roots.is_empty();
+    let title_config_changed = state.ended && title_present && context.config.is_changed();
+    let continue_state_changed = state.ended && title_present && context.preview.is_changed();
+    if state.ended == title_present && !title_config_changed && !continue_state_changed {
         return;
     }
     for (entity, _) in &context.roots {
@@ -310,7 +338,7 @@ pub fn sync_title(state: Res<GameState>, mut context: TitleSyncContext) {
                 },))
                 .with_children(|menu| {
                     spawn_title_button(menu, "START", Some(TitleAction::Start), &font, None);
-                    if context.preview.is_compatible(state.program_fingerprint) {
+                    if context.preview.can_continue(state.program_fingerprint) {
                         spawn_title_button(
                             menu,
                             "CONTINUE",
@@ -322,11 +350,17 @@ pub fn sync_title(state: Res<GameState>, mut context: TitleSyncContext) {
                         spawn_disabled_button(menu, "CONTINUE", &font);
                     }
                     spawn_title_button(menu, "LOAD", Some(TitleAction::Load), &font, None);
-                    spawn_title_button(menu, "EXTRA", Some(TitleAction::Extra), &font, None);
+                    spawn_extra_button(menu, &font, context.config.features.extra);
                     spawn_title_button(menu, "OPTIONS", Some(TitleAction::Options), &font, None);
                     spawn_title_button(menu, "EXIT", Some(TitleAction::Exit), &font, None);
                 });
         });
+}
+
+fn spawn_extra_button(menu: &mut ChildSpawnerCommands, font: &Handle<Font>, extra_enabled: bool) {
+    if extra_enabled {
+        spawn_title_button(menu, "EXTRA", Some(TitleAction::Extra), font, None);
+    }
 }
 
 fn layout_title_root(node: &mut Node, _viewport: DesignViewport) {
@@ -352,9 +386,19 @@ fn spawn_title_button(
     font: &Handle<Font>,
     preview: Option<&QuickSavePreview>,
 ) {
-    // The parent only reserves layout space. The visible surface lives inside
-    // the animated button so press scaling affects the complete rectangle,
-    // rather than only its text and padding.
+    let hit_width = if preview.is_some() {
+        100.0 + CONTINUE_PREVIEW_GAP_PERCENT
+    } else {
+        100.0
+    };
+    let blur_strength = if matches!(action, Some(TitleAction::Continue)) {
+        CONTINUE_PREVIEW_BLUR
+    } else {
+        7.5
+    };
+    // Continue's fixed hit area also covers the intentional visual gap before
+    // its preview. Only the inner surface animates, so hover never falls into
+    // an uncovered seam.
     menu.spawn((
         Node {
             position_type: PositionType::Relative,
@@ -367,27 +411,39 @@ fn spawn_title_button(
     .with_children(|surface| {
         let mut entity = surface.spawn((
             Button,
-            HoverAlpha {
-                active_alpha: 0.035,
-                hover_alpha: 0.035,
-                ..default()
-            },
             TitleButtonMotion {
                 width: 100.0,
                 padding: 22.5,
                 press: 0.0,
+                hover: 0.0,
             },
+            Node {
+                position_type: PositionType::Absolute,
+                right: Val::ZERO,
+                top: Val::ZERO,
+                width: Val::Percent(hit_width),
+                height: Val::Percent(100.0),
+                ..default()
+            },
+            BackgroundColor(Color::NONE),
+        ));
+        if let Some(action) = action {
+            entity.insert(action);
+        }
+        entity.with_child((
+            TitleButtonVisual,
             UiTransform::default(),
             BlurSource,
-            BlurStrength(7.5),
+            BlurStrength(blur_strength),
             Node {
-                width: Val::Percent(100.0),
+                width: Val::Percent(100.0 / hit_width * 100.0),
                 height: Val::Percent(100.0),
+                margin: UiRect::left(Val::Auto),
                 padding: UiRect::left(Val::Px(22.5)),
                 align_items: AlignItems::Center,
                 ..default()
             },
-            BackgroundColor(Color::NONE),
+            BackgroundColor(button_surface(0.0)),
             children![
                 (
                     Node {
@@ -398,15 +454,12 @@ fn spawn_title_button(
                         height: Val::Percent(100.0),
                         ..default()
                     },
-                    BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.64)),
+                    BackgroundColor(dark_surface(0.64)),
                     FocusPolicy::Pass,
                 ),
                 text(label, font, 37.5, 0.9)
             ],
         ));
-        if let Some(action) = action {
-            entity.insert(action);
-        }
         if let Some(preview) = preview {
             spawn_continue_preview(surface, preview, font);
         }
@@ -423,7 +476,7 @@ fn spawn_continue_preview(
             TitleContinuePreview::default(),
             Node {
                 position_type: PositionType::Absolute,
-                right: Val::Percent(105.0),
+                right: Val::Percent(100.0 + CONTINUE_PREVIEW_GAP_PERCENT),
                 top: Val::Px(0.0),
                 width: Val::Px(675.0),
                 height: Val::Px(172.5),
@@ -433,7 +486,6 @@ fn spawn_continue_preview(
                 overflow: Overflow::clip(),
                 ..default()
             },
-            UiTransform::from_translation(Val2::px(CONTINUE_PREVIEW_SLIDE_PX, 0.0)),
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
             BlurSource,
             BlurStrength(36.0),
@@ -490,22 +542,20 @@ fn spawn_disabled_button(menu: &mut ChildSpawnerCommands, label: &str, font: &Ha
             align_items: AlignItems::Center,
             ..default()
         },
-        BackgroundColor(Color::srgba(0.32, 0.32, 0.34, 0.2)),
-        children![text(label, font, 37.5, 0.36)],
+        BackgroundColor(dark_surface(DISABLED_BUTTON_SURFACE_ALPHA)),
+        children![text(label, font, 37.5, DISABLED_BUTTON_TEXT_ALPHA)],
     ));
 }
 
 pub fn handle_title_input(mut context: TitleInputContext) {
+    let can_continue = context
+        .preview
+        .can_continue(context.state.program_fingerprint);
     let action = context
         .buttons
         .iter()
         .find_map(|(interaction, action)| (*interaction == Interaction::Pressed).then_some(*action))
-        .or(match context.actions.shortcut {
-            Some(crate::ui::control_bar::ButtonAction::QuickLoad) => Some(TitleAction::Continue),
-            Some(crate::ui::control_bar::ButtonAction::Load) => Some(TitleAction::Load),
-            Some(crate::ui::control_bar::ButtonAction::System) => Some(TitleAction::Options),
-            _ => None,
-        });
+        .or_else(|| title_keyboard_action(&context.keys, &context.actions, can_continue));
     if !context.state.ended {
         context.commands.remove_resource::<PendingTitleAction>();
         return;
@@ -520,7 +570,12 @@ pub fn handle_title_input(mut context: TitleInputContext) {
         }
         let action = pending.action;
         context.commands.remove_resource::<PendingTitleAction>();
-        Some(action)
+        let allowed = match action {
+            TitleAction::Continue => can_continue,
+            TitleAction::Extra => context.config.features.extra,
+            _ => true,
+        };
+        allowed.then_some(action)
     } else if let Some(action) = action {
         context.commands.insert_resource(PendingTitleAction {
             action,
@@ -597,14 +652,32 @@ pub fn handle_title_input(mut context: TitleInputContext) {
     }
 }
 
+fn title_keyboard_action(
+    keys: &ButtonInput<KeyCode>,
+    actions: &InputActions,
+    can_continue: bool,
+) -> Option<TitleAction> {
+    if keys.just_pressed(KeyCode::Escape) {
+        return Some(TitleAction::Exit);
+    }
+    match actions.shortcut {
+        Some(crate::ui::control_bar::ButtonAction::QuickLoad) if can_continue => {
+            Some(TitleAction::Continue)
+        }
+        Some(crate::ui::control_bar::ButtonAction::Load) => Some(TitleAction::Load),
+        Some(crate::ui::control_bar::ButtonAction::System) => Some(TitleAction::Options),
+        _ => None,
+    }
+}
+
 pub fn animate_title_buttons(
     time: Res<Time>,
     mut buttons: TitleButtonAnimationQuery,
+    mut button_visuals: TitleButtonVisualQuery,
     mut previews: Query<
         (
             &mut TitleContinuePreview,
             &mut Node,
-            &mut UiTransform,
             &mut BackgroundColor,
             &mut BlurStrength,
         ),
@@ -616,7 +689,7 @@ pub fn animate_title_buttons(
     let delta = time.delta_secs();
     let amount = exp_lerp(delta, 12.0);
     let mut continue_visible = false;
-    for (interaction, mut motion, mut node, mut transform, action) in &mut buttons {
+    for (interaction, mut motion, children, action) in &mut buttons {
         if matches!(action, Some(TitleAction::Continue)) {
             continue_visible = matches!(interaction, Interaction::Hovered | Interaction::Pressed);
         }
@@ -633,23 +706,43 @@ pub fn animate_title_buttons(
             Interaction::Hovered => (96.25, 22.5),
             Interaction::Pressed => (92.0, 20.25),
         };
+        let target_hover = if *interaction == Interaction::None {
+            0.0
+        } else {
+            SURFACE_HOVER_ALPHA
+        };
         if (motion.width - target_width).abs() < 0.001
             && (motion.padding - target_padding).abs() < 0.001
             && motion.press == 0.0
+            && (motion.hover - target_hover).abs() < 0.001
         {
             continue;
         }
+        let visual = children
+            .iter()
+            .find(|child| button_visuals.contains(*child));
+        let Some(visual) = visual else {
+            continue;
+        };
+        let Ok((mut node, mut transform, mut background)) = button_visuals.get_mut(visual) else {
+            continue;
+        };
         motion.width += (target_width - motion.width) * amount;
         motion.padding += (target_padding - motion.padding) * amount;
-        node.width = Val::Percent(motion.width);
+        motion.hover += (target_hover - motion.hover) * amount;
+        let hit_width = if matches!(action, Some(TitleAction::Continue)) {
+            100.0 + CONTINUE_PREVIEW_GAP_PERCENT
+        } else {
+            100.0
+        };
+        node.width = Val::Percent(motion.width / hit_width * 100.0);
         node.margin.left = Val::Auto;
         node.padding.left = Val::Px(motion.padding);
         transform.scale = Vec2::splat(1.0 - 0.045 * motion.press);
+        background.0 = button_surface(motion.hover);
     }
 
-    let Ok((mut preview, mut node, mut transform, mut background, mut blur)) =
-        previews.single_mut()
-    else {
+    let Ok((mut preview, mut node, mut background, mut blur)) = previews.single_mut() else {
         return;
     };
     preview.target = f32::from(continue_visible);
@@ -668,7 +761,6 @@ pub fn animate_title_buttons(
     }
 
     let opacity = smoothstep(preview.progress);
-    transform.translation = Val2::px(CONTINUE_PREVIEW_SLIDE_PX * (1.0 - opacity), 0.0);
     background.0 = Color::srgba(0.0, 0.0, 0.0, CONTINUE_PREVIEW_ALPHA * opacity);
     blur.0 = CONTINUE_PREVIEW_BLUR * opacity;
     for (base, mut color) in &mut preview_texts {
@@ -685,15 +777,7 @@ pub fn animate_title_buttons(
 
 #[cfg(test)]
 mod continue_preview_tests {
-    use super::{CONTINUE_PREVIEW_SLIDE_PX, smoothstep};
-
-    #[test]
-    fn preview_moves_from_and_back_to_the_right() {
-        let hidden = smoothstep(0.0);
-        let visible = smoothstep(1.0);
-        assert_eq!(CONTINUE_PREVIEW_SLIDE_PX * (1.0 - hidden), 36.0);
-        assert_eq!(CONTINUE_PREVIEW_SLIDE_PX * (1.0 - visible), 0.0);
-    }
+    use super::smoothstep;
 
     #[test]
     fn preview_curve_is_not_linear() {
@@ -754,6 +838,46 @@ mod tests {
     use super::*;
     use crabgal_core::{Action, Program, State};
     use crabgal_loader::CrabgalStore;
+
+    #[test]
+    fn title_button_keeps_hover_surface_inside_scaled_visual() {
+        fn spawn(mut commands: Commands) {
+            let font = Handle::<Font>::default();
+            commands.spawn_empty().with_children(|root| {
+                spawn_title_button(root, "START", Some(TitleAction::Start), &font, None)
+            });
+        }
+        let mut app = App::new();
+        app.add_systems(Update, spawn);
+        app.update();
+        let world = app.world_mut();
+
+        let button = {
+            let mut buttons = world.query_filtered::<Entity, With<Button>>();
+            buttons.single(world).expect("one title button")
+        };
+        assert_eq!(
+            world
+                .get::<BackgroundColor>(button)
+                .expect("button background")
+                .0,
+            Color::NONE
+        );
+
+        let visual = world
+            .get::<Children>(button)
+            .expect("button children")
+            .iter()
+            .find(|child| world.get::<TitleButtonVisual>(*child).is_some())
+            .expect("scaled title-button visual");
+        assert_eq!(
+            world
+                .get::<BackgroundColor>(visual)
+                .expect("visual hover surface")
+                .0,
+            button_surface(0.0)
+        );
+    }
 
     #[test]
     fn return_to_title_fully_covers_before_it_reveals() {
@@ -824,6 +948,100 @@ mod tests {
             "a later Enter press must advance the intro"
         );
         assert_eq!(state.intro.as_ref().unwrap().page, 0);
+    }
+
+    #[test]
+    fn escape_requests_the_existing_title_exit_action() {
+        let mut keys = ButtonInput::default();
+        keys.press(KeyCode::Escape);
+
+        assert!(matches!(
+            title_keyboard_action(&keys, &InputActions::default(), false),
+            Some(TitleAction::Exit)
+        ));
+    }
+
+    #[test]
+    fn unavailable_continue_has_no_button_or_action() {
+        fn spawn(mut commands: Commands) {
+            let font = Handle::<Font>::default();
+            commands.spawn_empty().with_children(|root| {
+                spawn_disabled_button(root, "CONTINUE", &font);
+            });
+        }
+        let mut app = App::new();
+        app.add_systems(Update, spawn);
+        app.update();
+        let world = app.world_mut();
+
+        assert_eq!(
+            world
+                .query_filtered::<Entity, With<Button>>()
+                .iter(world)
+                .count(),
+            0
+        );
+        assert_eq!(
+            world
+                .query_filtered::<Entity, With<TitleAction>>()
+                .iter(world)
+                .count(),
+            0
+        );
+        assert_eq!(
+            world
+                .query_filtered::<&BackgroundColor, Without<Text>>()
+                .single(world)
+                .expect("disabled surface")
+                .0,
+            dark_surface(DISABLED_BUTTON_SURFACE_ALPHA)
+        );
+        assert_eq!(
+            world
+                .query_filtered::<&TextColor, With<Text>>()
+                .single(world)
+                .expect("disabled label")
+                .0,
+            Color::srgba(1.0, 1.0, 1.0, DISABLED_BUTTON_TEXT_ALPHA)
+        );
+    }
+
+    #[test]
+    fn quick_load_shortcut_cannot_bypass_unavailable_continue() {
+        let actions = InputActions {
+            shortcut: Some(crate::ui::control_bar::ButtonAction::QuickLoad),
+            ..Default::default()
+        };
+
+        assert!(title_keyboard_action(&ButtonInput::default(), &actions, false).is_none());
+        assert!(matches!(
+            title_keyboard_action(&ButtonInput::default(), &actions, true),
+            Some(TitleAction::Continue)
+        ));
+    }
+
+    #[test]
+    fn extra_title_action_only_exists_after_project_opt_in() {
+        fn spawn(mut commands: Commands) {
+            let font = Handle::<Font>::default();
+            commands.spawn_empty().with_children(|disabled| {
+                spawn_extra_button(disabled, &font, false);
+            });
+            commands.spawn_empty().with_children(|enabled| {
+                spawn_extra_button(enabled, &font, true);
+            });
+        }
+        let mut app = App::new();
+        app.add_systems(Update, spawn);
+        app.update();
+        let world = app.world_mut();
+
+        let actions = world
+            .query_filtered::<&TitleAction, With<Button>>()
+            .iter(world)
+            .filter(|action| matches!(action, TitleAction::Extra))
+            .count();
+        assert_eq!(actions, 1);
     }
 
     #[test]

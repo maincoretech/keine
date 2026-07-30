@@ -5,7 +5,10 @@ use crate::storage::save::QUICK_SAVE_SLOT;
 use crate::storage::settings::RuntimeSettings;
 use crate::ui::backlog::BacklogRoot;
 use crate::ui::control_bar::QuickSavePreview;
-use crate::ui::foundation::{UiFonts, exp_lerp};
+use crate::ui::foundation::{
+    SURFACE_ACTIVE_ALPHA, SURFACE_HOVER_ALPHA, UI_MOTION_RATE, UiFonts, UiSoundStyle,
+    button_surface, exp_lerp,
+};
 use crate::ui::save_load::SaveLoadRoot;
 use crate::ui::settings_panel::SettingsRoot;
 use crate::ui::support::i18n::{UiText, tr};
@@ -20,7 +23,6 @@ use bevy::window::{PrimaryWindow, WindowCloseRequested};
 const FADE_DURATION: f32 = 0.2;
 const OVERLAY_ALPHA: f32 = 0.16;
 const PANEL_ALPHA: f32 = 0.78;
-const BUTTON_HOVER_ALPHA: f32 = 0.0625;
 
 /// Which action to perform when the user confirms.
 #[derive(Clone, Copy, Debug)]
@@ -217,7 +219,7 @@ pub fn spawn_dialog(
                     flex_direction: FlexDirection::Column,
                     justify_content: JustifyContent::SpaceBetween,
                     align_items: AlignItems::Center,
-                    padding: UiRect::axes(Val::Px(60.0), Val::Px(18.0)),
+                    padding: UiRect::axes(Val::Px(60.0), Val::Px(24.0)),
                     ..default()
                 },
                 BackgroundColor(Color::NONE),
@@ -282,10 +284,13 @@ fn spawn_dialog_button(
 ) -> impl Bundle {
     (
         Button,
+        UiSoundStyle::Click,
         action,
         DialogButtonVisual::default(),
         Node {
+            min_width: Val::Px(112.5),
             padding: UiRect::axes(Val::Px(24.0), Val::Px(6.0)),
+            justify_content: JustifyContent::Center,
             ..default()
         },
         BackgroundColor(Color::NONE),
@@ -341,11 +346,12 @@ pub fn update_dialog_buttons(
     for (interaction, mut visual, mut color) in &mut buttons {
         visual.target = match interaction {
             Interaction::None => 0.0,
-            Interaction::Hovered => BUTTON_HOVER_ALPHA,
-            Interaction::Pressed => BUTTON_HOVER_ALPHA * 0.5,
+            Interaction::Hovered => SURFACE_HOVER_ALPHA,
+            Interaction::Pressed => SURFACE_ACTIVE_ALPHA,
         };
-        visual.current += (visual.target - visual.current) * exp_lerp(time.delta_secs(), 12.0);
-        color.0 = Color::srgba(1.0, 1.0, 1.0, visual.current);
+        visual.current +=
+            (visual.target - visual.current) * exp_lerp(time.delta_secs(), UI_MOTION_RATE);
+        color.0 = button_surface(visual.current);
     }
 }
 

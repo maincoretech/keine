@@ -19,7 +19,7 @@ use bevy::winit::{UpdateMode, WinitSettings};
 use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
 use crate::render::blur::{DialogCamera, SceneBlurCamera, UiBlurCamera};
-use crate::runtime::resources::{AssetLoadingGate, EditorSyncSession, GameState, HotReloadSession};
+use crate::runtime::resources::{AssetLoadingGate, EditorSyncSession, GameState};
 use crate::scene::audio::AudioAnimationActivity;
 use crate::ui::activity::UiAnimationActivity;
 use crate::ui::control_bar::{AutoHideTiming, ButtonAction, QuickPreviewSurface, ToggleStates};
@@ -191,7 +191,6 @@ pub(crate) struct LifecycleContext<'w, 's> {
     windows: Query<'w, 's, &'static Window>,
     benchmark: Option<Res<'w, crate::ui::performance::RuntimeCaptureConfig>>,
     editor_sync: Option<Res<'w, EditorSyncSession>>,
-    hot_reload: Option<Res<'w, HotReloadSession>>,
 }
 
 pub(crate) fn update_lifecycle(
@@ -201,8 +200,8 @@ pub(crate) fn update_lifecycle(
     mut virtual_time: ResMut<Time<Virtual>>,
 ) {
     let focused = context.windows.single().is_ok_and(|window| window.focused);
-    let development = context.editor_sync.is_some() || context.hot_reload.is_some();
-    let pause_for_background = should_pause_for_background(focused, development);
+    let studio_sync = context.editor_sync.is_some();
+    let pause_for_background = should_pause_for_background(focused, studio_sync);
     let auto_hide = context
         .auto_hide
         .lifecycle(context.real_time.elapsed_secs(), &context.toggles);
@@ -211,10 +210,10 @@ pub(crate) fn update_lifecycle(
             .input_caret
             .next_toggle_in(context.real_time.elapsed_secs()),
     );
-    let next = if context.benchmark.is_some() || (development && !focused) {
+    let next = if context.benchmark.is_some() || (studio_sync && !focused) {
         // A benchmark must keep measuring the render loop even when the
-        // current visual-novel frame itself is static. Development previews
-        // likewise remain fully live while the user works in another window.
+        // current visual-novel frame itself is static. Studio synchronization
+        // likewise remains fully live while the user works in another window.
         RuntimeActivity::Active
     } else if pause_for_background {
         RuntimeActivity::Background
@@ -248,9 +247,10 @@ pub(crate) fn update_lifecycle(
     }
     let unfocused_mode = if let Some(mode) = benchmark_mode {
         mode
-    } else if development {
-        // Development sessions keep rendering and observing source changes
-        // while the native preview is unfocused. Shipping runtimes sleep.
+    } else if studio_sync {
+        // Only Studio synchronization needs an unfocused live render loop.
+        // Ordinary `dev` hot reload is event-driven and follows release focus
+        // semantics, avoiding a permanent background CPU cost.
         UpdateMode::Continuous
     } else {
         UpdateMode::reactive_low_power(std::time::Duration::MAX)
@@ -268,14 +268,14 @@ pub(crate) fn update_lifecycle(
     }
 }
 
-const fn should_pause_for_background(focused: bool, development: bool) -> bool {
-    !focused && !development
+const fn should_pause_for_background(focused: bool, studio_sync: bool) -> bool {
+    !focused && !studio_sync
 }
 
 #[derive(Component)]
 pub(crate) struct BackgroundPausedAudio;
 
-/// Pause every Bevy/rodio sink when a shipping window loses focus.
+/// Pause every Bevy/rodio sink when a non-Studio window loses focus.
 ///
 /// The marker distinguishes lifecycle-paused audio from tracks the player or
 /// UI had already paused, so focus recovery never starts something it does not
@@ -306,7 +306,14 @@ fn core_is_animating(state: &GameState) -> bool {
         .dialogue
         .as_ref()
         .is_some_and(|dialogue| dialogue.visible_chars < dialogue.text.chars().count())
-        || state.presentation_blocked()
+        || state
+            .dialogue_retraction
+            .as_ref()
+            .is_some_and(|retraction| !retraction.awaiting_advance)
+        || state.wait_remaining > f32::EPSILON
+        || state.intro.is_some()
+        || (state.curtain.current - state.curtain.target).abs() > f32::EPSILON
+        || state.floating_text.is_some()
         || !state.videos.is_empty()
         || !state.particle_effects.is_empty()
         || !state.bg_films.is_empty()
@@ -315,6 +322,8 @@ fn core_is_animating(state: &GameState) -> bool {
         || state.bg_keyframe_animation.is_some()
         || state.bg_animation.is_some()
         || state.camera_effect_animation.is_some()
+        || state.camera_shake.is_some()
+        || state.stage_animation.is_some()
         || state.camera_effect.old_film_intensity > f32::EPSILON
         || (state.camera_effect.godray_intensity > f32::EPSILON
             && state.camera_effect.godray_speed.abs() > f32::EPSILON)
@@ -583,7 +592,7 @@ mod tests {
     }
 
     #[test]
-    fn every_development_session_keeps_running_without_focus() {
+    fn only_studio_sync_keeps_running_without_focus() {
         assert!(!should_pause_for_background(false, true));
         assert!(should_pause_for_background(false, false));
         assert!(!should_pause_for_background(true, false));
@@ -640,6 +649,29 @@ mod tests {
         state.bg_films.clear();
         state.camera_effect.godray_intensity = 0.8;
         state.camera_effect.godray_speed = 0.2;
+        assert!(core_is_animating(&state));
+    }
+
+    #[test]
+    fn input_waits_sleep_but_timed_presentation_work_stays_active() {
+        let mut state = GameState(crabgal_core::State::new());
+        state.waiting_for_advance = true;
+        assert!(
+            !core_is_animating(&state),
+            "waiting for a player input is script blocking, not an animation"
+        );
+
+        state.wait_remaining = 0.5;
+        assert!(core_is_animating(&state));
+        state.wait_remaining = 0.0;
+        state.dialogue_retraction = Some(crabgal_core::state::DialogueRetraction {
+            keep: "line".into(),
+            target_visible_chars: 4,
+            fractional_chars: 0.0,
+            awaiting_advance: true,
+        });
+        assert!(!core_is_animating(&state));
+        state.dialogue_retraction.as_mut().unwrap().awaiting_advance = false;
         assert!(core_is_animating(&state));
     }
 

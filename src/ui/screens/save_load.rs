@@ -10,14 +10,15 @@ use bevy::ui::FocusPolicy;
 
 use crate::render::blur::{DialogCamera, UiBlurCamera};
 use crate::runtime::resources::ProjectRoot;
-use crate::ui::control_bar::{BlurStrength, ButtonAction, ControlInput, UiBlurSource};
+use crate::ui::control_bar::{BlurStrength, ButtonAction, ControlInput, HoverAlpha, UiBlurSource};
 use crate::ui::dialog::{DialogAction, DialogRequest};
 use crate::ui::foundation::{
-    UiFonts, UiSoundStyle, ease_in_out_cubic, exp_lerp, fill_node, smoothstep, text, text_weight,
+    SURFACE_ACTIVE_ALPHA, SURFACE_HOVER_ALPHA, UiFonts, UiSoundStyle, button_surface,
+    ease_in_out_cubic, empty_slot_surface, exp_lerp, fill_node, smoothstep, text, text_weight,
 };
 use crate::ui::menu::{
-    MenuBack, MenuBlur, MenuFade, MenuHeaderActive, MenuRouteTransition, MenuSurface,
-    PersistentMenu, active_route, root_node, spawn_header, surface_transform,
+    MenuBack, MenuBlur, MenuFade, MenuRouteTransition, MenuSurface, MenuSurfaceState,
+    PersistentMenu, active_route, begin_route_change, root_node, spawn_header_slot,
 };
 
 pub(crate) const PAGE_COUNT: u32 = 20;
@@ -166,9 +167,18 @@ pub(crate) struct SaveLoadPage(pub(crate) u32);
 #[derive(Component)]
 pub(crate) struct SaveLoadPageVisual {
     selected: bool,
-    background: f32,
     text: f32,
     press: f32,
+}
+
+const PAGE_HIGHLIGHT_TEXT_ALPHA: f32 = 0.67;
+
+fn page_highlight_alpha(selected: bool, hovered: bool) -> f32 {
+    if selected || hovered {
+        SURFACE_ACTIVE_ALPHA
+    } else {
+        0.0
+    }
 }
 
 impl SaveLoadPageVisual {
@@ -180,17 +190,12 @@ impl SaveLoadPageVisual {
     ) -> bool {
         let selected = page == selected_page;
         let hovered = matches!(interaction, Interaction::Hovered | Interaction::Pressed);
-        let target_background = if selected || hovered { 0.24 } else { 0.0 };
-        let target_text = if selected {
-            0.62
-        } else if hovered {
-            0.67
+        let target_text = if selected || hovered {
+            PAGE_HIGHLIGHT_TEXT_ALPHA
         } else {
             0.2
         };
-        (self.background - target_background).abs() > 0.001
-            || (self.text - target_text).abs() > 0.001
-            || self.press > 0.001
+        (self.text - target_text).abs() > 0.001 || self.press > 0.001
     }
 }
 
@@ -356,11 +361,7 @@ pub fn toggle_save_load(
         transition.elapsed = 0.0;
         transition.direction = 0.0;
         let next_route = active_route(&ui, &settings);
-        if let (Some(from), Some(to)) = (previous_route, next_route)
-            && (from == MenuHeaderActive::Config || to == MenuHeaderActive::Config)
-        {
-            route_transition.begin(from, to);
-        }
+        begin_route_change(&mut route_transition, previous_route, next_route);
     }
     if ui.mode.is_some()
         && (keys.just_pressed(KeyCode::Escape)
@@ -430,6 +431,11 @@ pub fn sync_save_load(
             }
             if let Ok(mut fade) = context.fades.get_mut(entity) {
                 fade.target = f32::from(settings.open);
+            }
+        }
+        if !settings.open {
+            for (mut watermark, _) in &mut context.watermarks {
+                watermark.hide();
             }
         }
         return;
@@ -540,20 +546,13 @@ pub fn sync_save_load(
     for (mut watermark, mut label) in &mut context.watermarks {
         watermark.show_label(&mut label, mode.watermark());
     }
-    let icon_font = context.fonts.icons.clone();
     context
         .commands
         .spawn((
             Name::new("save_load"),
             SaveLoadRoot,
-            MenuSurface::standard(),
+            MenuSurfaceState::new(MenuSurface::standard(), switching),
             PersistentMenu,
-            if switching {
-                MenuFade::visible()
-            } else {
-                MenuFade::entering()
-            },
-            surface_transform(&MenuSurface::standard(), switching),
             root_node(),
             BackgroundColor(Color::NONE),
             FocusPolicy::Block,
@@ -562,15 +561,7 @@ pub fn sync_save_load(
             RenderLayers::layer(2),
         ))
         .with_children(|root| {
-            spawn_header(
-                root,
-                match mode {
-                    SaveLoadMode::Save => MenuHeaderActive::Save,
-                    SaveLoadMode::Load => MenuHeaderActive::Load,
-                },
-                &font,
-                &icon_font,
-            );
+            spawn_header_slot(root);
             spawn_save_content(
                 root,
                 &ui,
@@ -608,7 +599,13 @@ fn spawn_save_content(
             .spawn((Node {
                 width: Val::Percent(100.0),
                 height: Val::Percent(7.0),
-                margin: UiRect::bottom(Val::Px(33.0)),
+                // Match Config's 13.5 px content inset without moving the
+                // save-slot grid below it.
+                margin: UiRect {
+                    top: Val::Px(13.5),
+                    bottom: Val::Px(19.5),
+                    ..default()
+                },
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 ..default()
@@ -869,31 +866,30 @@ fn spawn_page_button(
             SaveLoadPage(page),
             SaveLoadPageVisual {
                 selected,
-                background: if selected { 0.24 } else { 0.0 },
-                text: if selected { 0.62 } else { 0.2 },
+                text: if selected {
+                    PAGE_HIGHLIGHT_TEXT_ALPHA
+                } else {
+                    0.2
+                },
                 press: 0.0,
+            },
+            HoverAlpha {
+                target: page_highlight_alpha(selected, false),
+                current: page_highlight_alpha(selected, false),
+                active: selected,
+                active_alpha: SURFACE_ACTIVE_ALPHA,
+                hover_alpha: SURFACE_HOVER_ALPHA,
+                ..default()
             },
             UiTransform::default(),
             Node {
                 width: Val::Px(60.0),
                 height: Val::Px(58.5),
-                border: UiRect::bottom(Val::Px(4.5)),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 ..default()
             },
-            BackgroundColor(Color::srgba(
-                1.0,
-                1.0,
-                1.0,
-                if selected { 0.24 } else { 0.0 },
-            )),
-            BorderColor::all(Color::srgba(
-                1.0,
-                1.0,
-                1.0,
-                if selected { 0.5 } else { 0.0 },
-            )),
+            BackgroundColor(button_surface(page_highlight_alpha(selected, false))),
         ))
         .with_child((
             SaveLoadPageLabel,
@@ -901,7 +897,11 @@ fn spawn_page_button(
                 page.to_string(),
                 font,
                 24.0,
-                if selected { 0.62 } else { 0.2 },
+                if selected {
+                    PAGE_HIGHLIGHT_TEXT_ALPHA
+                } else {
+                    0.2
+                },
                 if selected {
                     FontWeight::BOLD
                 } else {
@@ -944,18 +944,7 @@ fn spawn_slot(
     } else {
         0.24
     };
-    let base_rgb = if empty {
-        Vec3::new(0.82, 0.84, 0.88)
-    } else {
-        Vec3::ZERO
-    };
-    let base_alpha = if empty {
-        0.045
-    } else if enabled {
-        0.11
-    } else {
-        0.06
-    };
+    let base_alpha = if enabled { 0.11 } else { 0.06 };
     let detail = match &status {
         SlotStatus::Empty => String::new(),
         SlotStatus::Corrupt => "CORRUPT SLOT\nSave here to replace it".to_owned(),
@@ -982,7 +971,11 @@ fn spawn_slot(
             overflow: Overflow::clip(),
             ..default()
         },
-        BackgroundColor(Color::srgba(base_rgb.x, base_rgb.y, base_rgb.z, base_alpha)),
+        BackgroundColor(if empty {
+            empty_slot_surface()
+        } else {
+            Color::srgba(0.0, 0.0, 0.0, base_alpha)
+        }),
     ))
     .with_children(|slot_node| {
         slot_node.spawn((
@@ -1111,30 +1104,24 @@ pub fn animate_save_load_pages(
         &Interaction,
         &SaveLoadPage,
         &mut SaveLoadPageVisual,
-        &mut BackgroundColor,
-        &mut BorderColor,
+        &mut HoverAlpha,
         &mut UiTransform,
         &Children,
     )>,
     mut labels: Query<(&mut TextColor, &mut TextFont), With<SaveLoadPageLabel>>,
 ) {
     let amount = exp_lerp(time.delta_secs(), 10.0);
-    for (interaction, page, mut visual, mut background, mut border, mut transform, children) in
-        &mut pages
-    {
+    for (interaction, page, mut visual, mut hover, mut transform, children) in &mut pages {
         let selected = page.0 == ui.page;
         let selection_changed = visual.selected != selected;
         visual.selected = selected;
         let hovered = matches!(interaction, Interaction::Hovered | Interaction::Pressed);
-        let target_background = if visual.selected || hovered {
-            0.24
-        } else {
-            0.0
-        };
-        let target_text = if visual.selected {
-            0.62
-        } else if hovered {
-            0.67
+        hover.active = selected;
+        hover.active_alpha = SURFACE_ACTIVE_ALPHA;
+        hover.hover_alpha = SURFACE_HOVER_ALPHA;
+        hover.target = page_highlight_alpha(selected, hovered);
+        let target_text = if visual.selected || hovered {
+            PAGE_HIGHLIGHT_TEXT_ALPHA
         } else {
             0.2
         };
@@ -1147,29 +1134,12 @@ pub fn animate_save_load_pages(
             }
         }
         if selection_changed {
-            visual.background = target_background;
             visual.text = target_text;
         }
-        if !selection_changed
-            && (visual.background - target_background).abs() < 0.001
-            && (visual.text - target_text).abs() < 0.001
-            && visual.press == 0.0
-        {
+        if !selection_changed && (visual.text - target_text).abs() < 0.001 && visual.press == 0.0 {
             continue;
         }
-        visual.background += (target_background - visual.background) * amount;
         visual.text += (target_text - visual.text) * amount;
-        background.0 = Color::srgba(1.0, 1.0, 1.0, visual.background);
-        *border = BorderColor::all(Color::srgba(
-            1.0,
-            1.0,
-            1.0,
-            if visual.selected || hovered {
-                visual.text * 0.8
-            } else {
-                0.0
-            },
-        ));
         transform.scale = Vec2::splat(1.0 - 0.08 * visual.press);
         for child in children.iter() {
             if let Ok((mut color, mut font)) = labels.get_mut(child) {
@@ -1394,5 +1364,57 @@ mod tests {
         let mut app = App::new();
         app.add_systems(Update, visibility_query_contract);
         app.update();
+    }
+
+    #[test]
+    fn page_hover_and_selection_share_color_without_bottom_highlight() {
+        fn spawn(mut commands: Commands) {
+            let font = Handle::<Font>::default();
+            commands.spawn_empty().with_children(|pages| {
+                spawn_page_button(pages, 1, 1, &font);
+            });
+        }
+
+        assert_eq!(
+            page_highlight_alpha(true, false),
+            page_highlight_alpha(false, true)
+        );
+
+        let mut app = App::new();
+        app.add_systems(Update, spawn);
+        app.update();
+        let world = app.world_mut();
+        let page = {
+            let mut pages = world.query_filtered::<Entity, With<SaveLoadPage>>();
+            pages.single(world).expect("one page button")
+        };
+        assert_eq!(
+            world.get::<Node>(page).expect("page button node").border,
+            UiRect::ZERO
+        );
+        assert_eq!(
+            world
+                .get::<BackgroundColor>(page)
+                .expect("page button background")
+                .0,
+            button_surface(SURFACE_ACTIVE_ALPHA)
+        );
+        let hover = world
+            .get::<HoverAlpha>(page)
+            .expect("shared page hover surface");
+        assert_eq!(
+            (
+                hover.current,
+                hover.target,
+                hover.active_alpha,
+                hover.hover_alpha
+            ),
+            (
+                SURFACE_ACTIVE_ALPHA,
+                SURFACE_ACTIVE_ALPHA,
+                SURFACE_ACTIVE_ALPHA,
+                SURFACE_HOVER_ALPHA
+            )
+        );
     }
 }

@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use bevy::prelude::*;
 
-use crate::runtime::resources::GameState;
+use crate::runtime::resources::{GameConfigResource, GameState};
 use crate::ui::backlog::BacklogUiState;
 use crate::ui::control_bar::ToggleStates;
 use crate::ui::extra::ExtraUi;
@@ -19,6 +19,7 @@ pub(crate) fn dispatch_shell(
     mut settings: ResMut<SettingsUi>,
     mut backlog: ResMut<BacklogUiState>,
     mut extra: ResMut<ExtraUi>,
+    config: Res<GameConfigResource>,
 ) {
     for event in std::mem::take(&mut state.shell_events) {
         match event {
@@ -26,45 +27,49 @@ pub(crate) fn dispatch_shell(
             ShellEvent::SetSystemUi { slot, visible } => set_system_ui(
                 slot,
                 visible,
-                &mut state,
-                &mut save_load,
-                &mut settings,
-                &mut backlog,
-                &mut extra,
+                SystemUiContext {
+                    state: &mut state,
+                    save_load: &mut save_load,
+                    settings: &mut settings,
+                    backlog: &mut backlog,
+                    extra: &mut extra,
+                    extra_enabled: config.features.extra,
+                },
             ),
         }
     }
 }
 
-fn set_system_ui(
-    slot: SystemUiSlot,
-    visible: bool,
-    state: &mut crabgal_core::State,
-    save_load: &mut SaveLoadUi,
-    settings: &mut SettingsUi,
-    backlog: &mut BacklogUiState,
-    extra: &mut ExtraUi,
-) {
+struct SystemUiContext<'a> {
+    state: &'a mut crabgal_core::State,
+    save_load: &'a mut SaveLoadUi,
+    settings: &'a mut SettingsUi,
+    backlog: &'a mut BacklogUiState,
+    extra: &'a mut ExtraUi,
+    extra_enabled: bool,
+}
+
+fn set_system_ui(slot: SystemUiSlot, visible: bool, context: SystemUiContext<'_>) {
     match (slot, visible) {
-        (SystemUiSlot::Title, true) => crabgal_core::step::end_game(state),
+        (SystemUiSlot::Title, true) => crabgal_core::step::end_game(context.state),
         (SystemUiSlot::Save, true) => {
-            settings.open = false;
-            save_load.mode = Some(SaveLoadMode::Save);
+            context.settings.open = false;
+            context.save_load.mode = Some(SaveLoadMode::Save);
         }
         (SystemUiSlot::Load, true) => {
-            settings.open = false;
-            save_load.mode = Some(SaveLoadMode::Load);
+            context.settings.open = false;
+            context.save_load.mode = Some(SaveLoadMode::Load);
         }
         (SystemUiSlot::Settings, true) => {
-            save_load.mode = None;
-            settings.open = true;
+            context.save_load.mode = None;
+            context.settings.open = true;
         }
-        (SystemUiSlot::History, true) => backlog.open = true,
-        (SystemUiSlot::Gallery, true) => extra.open = true,
-        (SystemUiSlot::Save | SystemUiSlot::Load, false) => save_load.mode = None,
-        (SystemUiSlot::Settings, false) => settings.open = false,
-        (SystemUiSlot::History, false) => backlog.open = false,
-        (SystemUiSlot::Gallery, false) => extra.open = false,
+        (SystemUiSlot::History, true) => context.backlog.open = true,
+        (SystemUiSlot::Gallery, true) => context.extra.open = context.extra_enabled,
+        (SystemUiSlot::Save | SystemUiSlot::Load, false) => context.save_load.mode = None,
+        (SystemUiSlot::Settings, false) => context.settings.open = false,
+        (SystemUiSlot::History, false) => context.backlog.open = false,
+        (SystemUiSlot::Gallery, false) => context.extra.open = false,
         (SystemUiSlot::Input | SystemUiSlot::Title, false) | (SystemUiSlot::Input, true) => {}
     }
 }
@@ -138,27 +143,58 @@ mod tests {
         let mut backlog = BacklogUiState::default();
         let mut extra = ExtraUi::default();
 
-        set_system_ui(
-            SystemUiSlot::Load,
-            true,
-            &mut state,
-            &mut save_load,
-            &mut settings,
-            &mut backlog,
-            &mut extra,
-        );
+        let context = SystemUiContext {
+            state: &mut state,
+            save_load: &mut save_load,
+            settings: &mut settings,
+            backlog: &mut backlog,
+            extra: &mut extra,
+            extra_enabled: false,
+        };
+        set_system_ui(SystemUiSlot::Load, true, context);
         assert_eq!(save_load.mode, Some(SaveLoadMode::Load));
 
-        set_system_ui(
-            SystemUiSlot::Settings,
-            true,
-            &mut state,
-            &mut save_load,
-            &mut settings,
-            &mut backlog,
-            &mut extra,
-        );
+        let context = SystemUiContext {
+            state: &mut state,
+            save_load: &mut save_load,
+            settings: &mut settings,
+            backlog: &mut backlog,
+            extra: &mut extra,
+            extra_enabled: false,
+        };
+        set_system_ui(SystemUiSlot::Settings, true, context);
         assert!(settings.open);
         assert_eq!(save_load.mode, None);
+    }
+
+    #[test]
+    fn gallery_slot_respects_the_project_feature_gate() {
+        let mut state = crabgal_core::State::new();
+        let mut save_load = SaveLoadUi::default();
+        let mut settings = SettingsUi::default();
+        let mut backlog = BacklogUiState::default();
+        let mut extra = ExtraUi::default();
+
+        let context = SystemUiContext {
+            state: &mut state,
+            save_load: &mut save_load,
+            settings: &mut settings,
+            backlog: &mut backlog,
+            extra: &mut extra,
+            extra_enabled: false,
+        };
+        set_system_ui(SystemUiSlot::Gallery, true, context);
+        assert!(!extra.open);
+
+        let context = SystemUiContext {
+            state: &mut state,
+            save_load: &mut save_load,
+            settings: &mut settings,
+            backlog: &mut backlog,
+            extra: &mut extra,
+            extra_enabled: true,
+        };
+        set_system_ui(SystemUiSlot::Gallery, true, context);
+        assert!(extra.open);
     }
 }

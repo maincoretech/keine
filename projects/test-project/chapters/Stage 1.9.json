@@ -402,6 +402,18 @@
           }
         },
         {
+          "id": "10-09-backspace-all",
+          "type": "callExtensionFunction",
+          "content": null,
+          "props": {
+            "target": "shiftz.backspace/backspace-to",
+            "paramsJson": {
+              "source": { "kind": "lit", "value": "10-09 句尾退格：我" },
+              "keep": { "kind": "lit", "value": "" }
+            }
+          }
+        },
+        {
           "id": "10-10-end-note",
           "type": "dialogue",
           "content": [{ "type": "text", "text": "10-10 新增能力全部播放完毕。继续后应平滑返回标题页。" }],

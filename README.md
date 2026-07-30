@@ -63,6 +63,26 @@ Later sources override earlier files with the same logical path. LetsGal
 synchronization reads open project files and `.studio/state.json`; crabgal
 remains a separate native process and does not modify Studio.
 
+Optional shell features are disabled by default. A native `config.yaml` can
+enable the Extra CG/BGM gallery explicitly:
+
+```yaml
+features:
+  extra: true
+```
+
+LetsGal projects use the equivalent project-level object in `project.json`:
+
+```json
+{
+  "crabgal": {
+    "features": {
+      "extra": true
+    }
+  }
+}
+```
+
 Built-in adapters:
 
 | Capability | Implementations |

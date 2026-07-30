@@ -6,10 +6,9 @@ use crabgal_core::{MenuState, step};
 use crate::render::blur::UiBlurCamera;
 use crate::runtime::resources::GameState;
 use crate::ui::control_bar::{BlurSource, BlurStrength};
-use crate::ui::foundation::{UiFonts, exp_lerp, text};
+use crate::ui::foundation::{UiFonts, button_surface_over_dark, exp_lerp, text};
 
 const NORMAL_ALPHA: f32 = 0.44;
-const HOVER_ALPHA: f32 = 0.6;
 const BORDER_ALPHA: f32 = 0.14;
 
 #[derive(Component)]
@@ -264,9 +263,8 @@ pub fn animate_choice_buttons(
         };
         button.highlight += (target - button.highlight) * exp_lerp(time.delta_secs(), 10.0);
         let highlight = button.highlight;
-        let alpha = NORMAL_ALPHA + (HOVER_ALPHA - NORMAL_ALPHA) * highlight;
         background.0 = if button.enabled {
-            Color::srgba(0.0, 0.0, 0.0, alpha)
+            button_surface_over_dark(NORMAL_ALPHA, highlight)
         } else {
             Color::srgba(1.0, 1.0, 1.0, NORMAL_ALPHA)
         };

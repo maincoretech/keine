@@ -39,6 +39,7 @@ struct EditorCursorSync {
 }
 
 const EDITOR_CURSOR_POLL_SECONDS: f32 = 0.2;
+const DIALOGUE_RETRACTION_SPEED_SCALE: f64 = 0.85;
 
 type StageButtonQuery<'w, 's> = Query<
     'w,
@@ -120,7 +121,7 @@ pub fn tick(mut context: TickContext) {
     state_changed |= step::update_dialogue_retraction(
         context.state.bypass_change_detection(),
         delta_seconds,
-        context.settings.typewriter_speed,
+        context.settings.typewriter_speed * DIALOGUE_RETRACTION_SPEED_SCALE,
         presentation_advance,
         context.toggles.skip,
     );

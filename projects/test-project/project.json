@@ -5,6 +5,11 @@
   "engineVersion": "1.9.0",
   "chapterOrder": ["Stage 1.9", "Cross Chapter 1.9"],
   "resolution": { "width": 1920, "height": 1080 },
+  "crabgal": {
+    "features": {
+      "extra": true
+    }
+  },
   "extensions": {},
   "extensionSettings": {},
   "systemBindings": {},

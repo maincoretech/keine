@@ -246,7 +246,7 @@ fn letsgal_1_9_showcase_exercises_every_timeline_property_and_event() {
     }
 
     assert_eq!(animations, 8);
-    assert_eq!(retractions, 2);
+    assert_eq!(retractions, 3);
     assert_eq!(
         targets,
         BTreeSet::from(["camera", "character", "scene-layer"])

@@ -11,6 +11,46 @@ use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 pub(crate) const TEXT_FONT_PATH: &str = "embedded://crabgal/assets/fonts/MavenPro-CJK.ttf";
 pub(crate) const ICON_FONT_PATH: &str = "embedded://crabgal/assets/fonts/bootstrap-icons.ttf";
 
+// One compact visual vocabulary for the dedicated shell. Button highlights
+// deliberately reuse the empty Save/Load slot surface instead of approximating
+// its rendered color with a separate overlay.
+pub(crate) const SURFACE_PANEL_ALPHA: f32 = 0.18;
+pub(crate) const SURFACE_IDLE_ALPHA: f32 = 0.025;
+pub(crate) const SURFACE_ACTIVE_ALPHA: f32 = 0.045;
+pub(crate) const SURFACE_HOVER_ALPHA: f32 = SURFACE_ACTIVE_ALPHA;
+pub(crate) const UI_MOTION_RATE: f32 = 16.0;
+
+const BUTTON_HIGHLIGHT_RED: f32 = 0.82;
+const BUTTON_HIGHLIGHT_GREEN: f32 = 0.84;
+const BUTTON_HIGHLIGHT_BLUE: f32 = 0.88;
+
+pub(crate) fn dark_surface(alpha: f32) -> Color {
+    Color::srgba(0.0, 0.0, 0.0, alpha)
+}
+
+pub(crate) fn button_surface(alpha: f32) -> Color {
+    Color::srgba(
+        BUTTON_HIGHLIGHT_RED,
+        BUTTON_HIGHLIGHT_GREEN,
+        BUTTON_HIGHLIGHT_BLUE,
+        alpha.clamp(0.0, 1.0),
+    )
+}
+
+pub(crate) fn empty_slot_surface() -> Color {
+    button_surface(SURFACE_ACTIVE_ALPHA)
+}
+
+pub(crate) fn button_surface_over_dark(base_alpha: f32, progress: f32) -> Color {
+    let progress = progress.clamp(0.0, 1.0);
+    Color::srgba(
+        BUTTON_HIGHLIGHT_RED * progress,
+        BUTTON_HIGHLIGHT_GREEN * progress,
+        BUTTON_HIGHLIGHT_BLUE * progress,
+        base_alpha + (SURFACE_ACTIVE_ALPHA - base_alpha) * progress,
+    )
+}
+
 #[derive(Resource, Clone)]
 pub(crate) struct UiFonts {
     pub(crate) text: Handle<Font>,
@@ -160,5 +200,20 @@ mod tests {
         assert_eq!(ease_in_out_cubic(0.0), 0.0);
         assert_eq!(ease_in_out_cubic(1.0), 1.0);
         assert!((0.0..=1.0).contains(&exp_lerp(1.0 / 60.0, 12.0)));
+    }
+
+    #[test]
+    fn hover_and_selection_use_one_surface_luminance() {
+        assert_eq!(SURFACE_HOVER_ALPHA, SURFACE_ACTIVE_ALPHA);
+        assert_eq!(button_surface(SURFACE_ACTIVE_ALPHA), empty_slot_surface());
+        assert_eq!(
+            button_surface(SURFACE_HOVER_ALPHA),
+            Color::srgba(
+                BUTTON_HIGHLIGHT_RED,
+                BUTTON_HIGHLIGHT_GREEN,
+                BUTTON_HIGHLIGHT_BLUE,
+                SURFACE_ACTIVE_ALPHA
+            )
+        );
     }
 }

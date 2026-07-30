@@ -7,7 +7,7 @@ use std::time::Duration;
 use crate::runtime::resources::ProjectRoot;
 use crate::storage::save::QUICK_SAVE_SLOT;
 use crate::ui::dialog::{DialogAction, DialogRequest};
-use crate::ui::foundation::exp_lerp;
+use crate::ui::foundation::{SURFACE_HOVER_ALPHA, button_surface, exp_lerp};
 use crate::ui::input_scope::UiInputScope;
 use crate::ui::textbox::ContentRoot;
 
@@ -65,16 +65,17 @@ pub(crate) struct QuickSavePreview {
 }
 
 impl QuickSavePreview {
-    pub(crate) fn is_compatible(&self, program_fingerprint: u64) -> bool {
+    pub(crate) fn can_continue(&self, program_fingerprint: u64) -> bool {
         self.state
             .as_ref()
-            .is_some_and(|state| state.program_fingerprint == program_fingerprint)
+            .is_some_and(|state| state.playable && state.program_fingerprint == program_fingerprint)
     }
 }
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct QuickSaveSnapshot {
     program_fingerprint: u64,
+    playable: bool,
     pub(crate) background: Option<String>,
     pub(crate) speaker: String,
     pub(crate) dialogue: String,
@@ -88,6 +89,7 @@ impl From<&State> for QuickSaveSnapshot {
         );
         Self {
             program_fingerprint: state.program_fingerprint,
+            playable: !state.ended,
             background: state.bg.clone(),
             speaker,
             dialogue,
@@ -174,7 +176,9 @@ type PreviewAnimationQuery<'w, 's> = Query<
 pub(crate) struct HoverAlpha {
     pub(crate) target: f32,
     pub(crate) current: f32,
-    /// When true (toggle is on), target stays at 0.06 even when not hovering.
+    /// Resting fill for neutral cards and compact controls.
+    pub(crate) idle_alpha: f32,
+    /// When true (toggle is on), the surface rests at `active_alpha`.
     pub(crate) active: bool,
     pub(crate) active_alpha: f32,
     pub(crate) hover_alpha: f32,
@@ -185,9 +189,10 @@ impl Default for HoverAlpha {
         Self {
             target: 0.0,
             current: 0.0,
+            idle_alpha: 0.0,
             active: false,
-            active_alpha: 0.06,
-            hover_alpha: 0.06,
+            active_alpha: SURFACE_HOVER_ALPHA,
+            hover_alpha: SURFACE_HOVER_ALPHA,
         }
     }
 }
@@ -315,7 +320,7 @@ pub fn set_hover_target(
         } else if ha.active {
             ha.active_alpha
         } else {
-            0.0
+            ha.idle_alpha
         };
     }
 }
@@ -331,7 +336,7 @@ pub fn animate_hover(time: Res<Time>, mut q: Query<(&mut HoverAlpha, &mut Backgr
         if ha.current < 0.002 {
             bg.0 = Color::NONE;
         } else {
-            bg.0 = Color::srgba(1.0, 1.0, 1.0, ha.current);
+            bg.0 = button_surface(ha.current);
         }
     }
 }
@@ -455,7 +460,10 @@ pub fn load_quick_save_preview(
     preview.state =
         crate::storage::save::load_game(store.0.as_ref(), QUICK_SAVE_SLOT, &project_root)
             .ok()
-            .filter(|saved| Some(saved.snapshot().program_fingerprint) == current_fingerprint)
+            .filter(|saved| {
+                !saved.snapshot().ended
+                    && Some(saved.snapshot().program_fingerprint) == current_fingerprint
+            })
             .map(|saved| QuickSaveSnapshot::from(saved.snapshot()));
     preview.image = preview.state.as_ref().and_then(|_| {
         let path = crate::storage::save::preview_path(&project_root, QUICK_SAVE_SLOT);

@@ -9,15 +9,15 @@ use crate::ui::backlog::{
 use crate::ui::choice::{ChoiceButton, ChoiceRoot};
 use crate::ui::control_bar::{HoverAlpha, QuickPreviewFade};
 use crate::ui::dialog::{DialogButtonVisual, DialogFade};
-use crate::ui::extra::{ExtraBgmPlayer, ExtraBgmSeekBar, ExtraButtonVisual, ExtraMotion};
+use crate::ui::extra::{ExtraBgmPlayer, ExtraBgmSeekBar, ExtraMotion};
 use crate::ui::foundation::ButtonPressFeedback;
 use crate::ui::menu::{MenuFade, MenuRouteTransition};
 use crate::ui::save_load::{
     SaveLoadPage, SaveLoadPageTransition, SaveLoadPageVisual, SaveLoadSlotMotion, SaveLoadUi,
 };
 use crate::ui::settings_panel::{
-    AboutRepositoryLink, AboutRepositoryVisual, ActiveSettingSlider, LanguageDropdownAnimation,
-    PendingWindowMode, SettingChoice, SettingChoiceVisual, SettingSlider, SettingSliderThumb,
+    AboutRepositoryLink, AboutRepositoryVisual, ActiveSettingSlider, PendingWindowMode,
+    SettingChoice, SettingChoiceVisual, SettingSlider, SettingSliderThumb,
     SettingSliderThumbVisual, SettingsPageButton, SettingsPageButtonVisual, SettingsPageTransition,
     SettingsUi, SettingsWatermark,
 };
@@ -100,7 +100,6 @@ pub(crate) struct UiActivityContext<'w, 's> {
             &'static SettingSliderThumbVisual,
         ),
     >,
-    language_dropdowns: Query<'w, 's, &'static LanguageDropdownAnimation>,
     about_links: Query<
         'w,
         's,
@@ -108,7 +107,6 @@ pub(crate) struct UiActivityContext<'w, 's> {
         With<AboutRepositoryLink>,
     >,
     extra_motions: Query<'w, 's, &'static ExtraMotion>,
-    extra_buttons: Query<'w, 's, (&'static Interaction, &'static ExtraButtonVisual)>,
     extra_players: Query<'w, 's, Option<&'static AudioSink>, With<ExtraBgmPlayer>>,
     extra_seek: Query<'w, 's, &'static ExtraBgmSeekBar>,
     save_load_transition: Res<'w, SaveLoadPageTransition>,
@@ -170,10 +168,6 @@ pub(crate) fn update(context: UiActivityContext, mut activity: ResMut<UiAnimatio
         || context.return_to_title.is_some()
         || context.extra_motions.iter().any(ExtraMotion::is_animating)
         || context
-            .extra_buttons
-            .iter()
-            .any(|(interaction, visual)| visual.is_animating(*interaction))
-        || context
             .extra_players
             .iter()
             .any(|sink| sink.is_none_or(|sink| !sink.is_paused()))
@@ -203,10 +197,6 @@ fn menu_controls_are_animating(context: &UiActivityContext<'_, '_>) -> bool {
                 visual.is_animating(*interaction, page.0, context.settings_ui.page)
             })
         || context.settings_page_transition.is_animating()
-        || context
-            .language_dropdowns
-            .iter()
-            .any(LanguageDropdownAnimation::is_animating)
         || context
             .about_links
             .iter()

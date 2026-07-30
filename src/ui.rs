@@ -209,11 +209,11 @@ fn add_overlay_systems(app: &mut App) {
                 extra::handle_cg.run_if(input_scope::extra_allowed),
                 extra::handle_bgm.run_if(input_scope::extra_allowed),
                 extra::sync_bgm_selection,
+                extra::sync_bgm_play_icon,
                 extra::handle_bgm_seek.run_if(input_scope::extra_allowed),
                 extra::sync,
                 extra::update_bgm_progress,
                 extra::animate,
-                extra::animate_buttons,
             )
                 .chain()
                 .run_if(extra::active),
@@ -253,11 +253,6 @@ fn add_menu_systems(app: &mut App) {
                     .run_if(input_scope::menu_allowed)
                     .run_if(input_scope::writable_session)
                     .run_if(menu::route_settled),
-                settings_panel::handle_language_dropdown
-                    .run_if(loading::assets_ready)
-                    .run_if(input_scope::menu_allowed)
-                    .run_if(input_scope::writable_session)
-                    .run_if(menu::route_settled),
                 settings_panel::handle_about_repository_link
                     .run_if(loading::assets_ready)
                     .run_if(input_scope::menu_allowed)
@@ -278,13 +273,12 @@ fn add_menu_systems(app: &mut App) {
             (
                 save_load::poll_preview_tasks,
                 settings_panel::sync_settings,
-                settings_panel::begin_settings_entry,
+                menu::sync_header,
                 menu::sync_tabs,
                 settings_panel::update_setting_visuals.run_if(settings_panel::settings_open),
                 settings_panel::update_setting_bubbles.run_if(settings_panel::settings_open),
                 settings_panel::update_setting_preview.run_if(settings_panel::settings_open),
                 settings_panel::update_settings_pages.run_if(settings_panel::settings_open),
-                settings_panel::animate_language_dropdown.run_if(settings_panel::settings_open),
                 settings_panel::animate_about_repository_link.run_if(settings_panel::settings_open),
                 settings_panel::animate_watermark,
                 save_load::animate_save_load_grid_track.run_if(save_load::save_load_open),
@@ -292,6 +286,7 @@ fn add_menu_systems(app: &mut App) {
                 save_load::animate_save_load_slots.run_if(save_load::save_load_open),
                 save_load::animate_save_load_content,
                 menu::animate,
+                menu::fade_header_visuals,
                 settings_panel::fade_settings_visuals,
                 menu::animate_route_transition,
             )

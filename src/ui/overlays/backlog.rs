@@ -12,7 +12,9 @@ use crate::runtime::resources::{GameConfigResource, GameState};
 use crate::scene::audio::VocalPlayer;
 use crate::storage::settings::RuntimeSettings;
 use crate::ui::control_bar::{BlurStrength, ButtonAction, UiBlurSource};
-use crate::ui::foundation::{UiFonts, exp_lerp, smoothstep};
+use crate::ui::foundation::{
+    SURFACE_HOVER_ALPHA, SURFACE_IDLE_ALPHA, UiFonts, button_surface, exp_lerp, smoothstep,
+};
 use crate::ui::input_scope::UiInputScope;
 use crate::ui::{BACKLOG_BACKDROP_ALPHA, FULLSCREEN_BLUR_STRENGTH};
 
@@ -115,9 +117,9 @@ pub(crate) struct BacklogButtonVisual {
 
 impl BacklogButtonVisual {
     pub(crate) fn is_animating(&self, interaction: Interaction, close: bool) -> bool {
-        let base = if close { 0.0 } else { 0.063 };
+        let base = if close { 0.0 } else { SURFACE_IDLE_ALPHA };
         let target = if matches!(interaction, Interaction::Hovered | Interaction::Pressed) {
-            0.188
+            SURFACE_HOVER_ALPHA
         } else {
             base
         };
@@ -417,7 +419,7 @@ fn spawn_item_button(
                 align_items: AlignItems::Center,
                 ..default()
             },
-            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.063)),
+            BackgroundColor(button_surface(SURFACE_IDLE_ALPHA)),
         ))
         .with_child(item_text(icon, &assets.icons, 21.0, order, false));
 }
@@ -560,9 +562,13 @@ pub fn animate_backlog(
 pub fn animate_backlog_buttons(time: Res<Time>, mut buttons: BacklogButtonQuery) {
     let amount = exp_lerp(time.delta_secs(), 10.0);
     for (interaction, mut visual, mut background, close) in &mut buttons {
-        let base = if close.is_some() { 0.0 } else { 0.063 };
+        let base = if close.is_some() {
+            0.0
+        } else {
+            SURFACE_IDLE_ALPHA
+        };
         let target = if matches!(interaction, Interaction::Hovered | Interaction::Pressed) {
-            0.188
+            SURFACE_HOVER_ALPHA
         } else {
             base
         };
@@ -570,7 +576,7 @@ pub fn animate_backlog_buttons(time: Res<Time>, mut buttons: BacklogButtonQuery)
             continue;
         }
         visual.current += (target - visual.current) * amount;
-        background.0 = Color::srgba(1.0, 1.0, 1.0, visual.current);
+        background.0 = button_surface(visual.current);
     }
 }
 

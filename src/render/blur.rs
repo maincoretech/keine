@@ -27,6 +27,9 @@ use std::borrow::Cow;
 // Keep CPU scissor padding aligned with the shader clamp. Larger values used
 // to enlarge the processed area without producing a stronger visual result.
 const MAX_BLUR_STRENGTH: f32 = 48.0;
+// Give every UI surface a small, consistent lift without changing blur values
+// authored by scripts for backgrounds and sprites.
+const UI_BLUR_STRENGTH_SCALE: f32 = 1.125;
 
 // ── BlurCamera ──
 #[derive(Component, Clone, ExtractComponent, ShaderType)]
@@ -561,7 +564,7 @@ pub fn update_blur_regions(
                 max_x: max.x,
                 min_y: min.y,
                 max_y: max.y,
-                coc: clamp_blur(crate::ui::FULLSCREEN_BLUR_STRENGTH * blur_scale),
+                coc: clamp_ui_blur(crate::ui::FULLSCREEN_BLUR_STRENGTH, blur_scale),
                 _pad: Vec3::ZERO,
             };
             bc.count = 1;
@@ -584,7 +587,7 @@ pub fn update_blur_regions(
                 max_x: position.x + half.x,
                 min_y: position.y - half.y,
                 max_y: position.y + half.y,
-                coc: clamp_blur(strength * blur_scale),
+                coc: clamp_ui_blur(strength, blur_scale),
                 _pad: Vec3::ZERO,
             });
         }
@@ -655,7 +658,7 @@ pub fn update_blur_regions(
             max_x: pos.x + half.x,
             min_y: pos.y - half.y,
             max_y: pos.y + half.y,
-            coc: clamp_blur(strength * blur_scale),
+            coc: clamp_ui_blur(strength, blur_scale),
             _pad: Vec3::ZERO,
         });
     }
@@ -677,6 +680,10 @@ fn blur_node_alpha(
 
 fn clamp_blur(strength: f32) -> f32 {
     strength.clamp(0.0, MAX_BLUR_STRENGTH)
+}
+
+fn clamp_ui_blur(strength: f32, viewport_scale: f32) -> f32 {
+    clamp_blur(strength * viewport_scale * UI_BLUR_STRENGTH_SCALE)
 }
 
 fn write_regions(camera: &mut BlurCamera, regions: &mut Vec<BlurRect>) {
@@ -774,6 +781,12 @@ mod tests {
     fn non_textbox_blur_ignores_textbox_specific_fades() {
         assert_eq!(blur_node_alpha(false, 1.0, 0.0, 0.0), 1.0);
         assert_eq!(blur_node_alpha(false, 0.4, 0.0, 0.0), 0.4);
+    }
+
+    #[test]
+    fn ui_blur_receives_a_small_global_lift_and_stays_clamped() {
+        assert_eq!(clamp_ui_blur(36.0, 1.0), 40.5);
+        assert_eq!(clamp_ui_blur(48.0, 1.0), MAX_BLUR_STRENGTH);
     }
 
     #[test]

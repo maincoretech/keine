@@ -20,6 +20,11 @@ pub struct GameConfig {
     #[serde(default)]
     pub project: ProjectMetadata,
 
+    /// Optional native-shell features. Features stay off unless the project
+    /// explicitly opts in.
+    #[serde(default)]
+    pub features: FeatureConfig,
+
     /// Independently selected parser/codec categories.
     #[serde(default)]
     pub adapter: AdapterConfig,
@@ -49,6 +54,13 @@ pub struct ProjectMetadata {
     /// Short description of the currently loaded visual novel.
     #[serde(default)]
     pub description: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeatureConfig {
+    /// Enables the title-screen EXTRA entry and its CG/BGM gallery.
+    #[serde(default)]
+    pub extra: bool,
 }
 
 /// One resource source consumed through an asset adapter.
@@ -277,6 +289,7 @@ impl Default for GameConfig {
             title: default_title(),
             title_background: default_title_background(),
             project: ProjectMetadata::default(),
+            features: FeatureConfig::default(),
             adapter: AdapterConfig::default(),
             assets: AssetMap::default(),
             fonts: FontConfig::default(),
@@ -402,6 +415,7 @@ mod tests {
         let cfg = GameConfig::default();
         assert_eq!(cfg.title, "crabgal");
         assert_eq!(cfg.styles.typewriter_speed, 45.0);
+        assert!(!cfg.features.extra);
         assert_eq!(cfg.adapter, AdapterConfig::default());
         assert_eq!(cfg.layout.textbox_left, 0.0);
         assert_eq!(cfg.layout.textbox_dodge_left, 10.0);
@@ -417,6 +431,7 @@ styles:
         let cfg: GameConfig = noyalib::from_str(yaml).unwrap();
         assert_eq!(cfg.title, "Test Game");
         assert_eq!(cfg.styles.typewriter_speed, 60.0);
+        assert!(!cfg.features.extra);
         assert_eq!(cfg.adapter, AdapterConfig::default());
         assert_eq!(cfg.layout.sprite_y_offset, 0.0);
     }
@@ -443,6 +458,19 @@ project:
 "#;
         let cfg = GameConfig::from_yaml(yaml).unwrap();
         assert_eq!(cfg.project.description, "A short visual novel.");
+    }
+
+    #[test]
+    fn extra_requires_an_explicit_feature_opt_in() {
+        let cfg = GameConfig::from_yaml(
+            r#"
+features:
+  extra: true
+"#,
+        )
+        .unwrap();
+
+        assert!(cfg.features.extra);
     }
 
     #[test]
