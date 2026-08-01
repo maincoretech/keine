@@ -1,25 +1,25 @@
-# LetsGal Studio 1.9.0 扩展 API 历史参考
+# LetsGal Studio 1.9.x 扩展 API 历史参考
 
-> 状态：2026-07-29 本机 1.9.0 复核；公开 `SDK_VERSION` 为 `1.9.0-beta.1`。crabgal 明确不加载或执行
+> 状态：2026-08-01 本机 1.9.1 复核；公开 `SDK_VERSION` 仍为 `1.9.0`。keine 明确不加载或执行
 > Studio 扩展，本文只作为外部格式与历史 ABI 的证据记录，具体实现边界见
 > [`08-letsgal-studio.md`](../architecture/08-letsgal-studio.md)。
 
 > **同名概念：** 本文的 `editor cursor` 是编辑器当前选中的剧情 block，不是鼠标光标；配置
-> `cursor: { mode: ... }` 才表示鼠标指针外观。crabgal 只同步前者，后者明确不兼容并使用系统
+> `cursor: { mode: ... }` 才表示鼠标指针外观。keine 只同步前者，后者明确不兼容并使用系统
 > 默认指针。
 
-这份文档保留早期扩展 ABI 调研证据，供核对 Studio 工程格式演进。crabgal 当前只兼容
+这份文档保留早期扩展 ABI 调研证据，供核对 Studio 工程格式演进。keine 当前只兼容
 Studio 内置工程内容，不加载扩展 bundle、不实现 `@avg-studio/sdk` / `ExtensionContext`，也
 不把下文的假设宿主清单当作路线图。
 
 ## 0. 结论先行
 
-工程 adapter 当前以 **LetsGal Studio 1.9.0 原生工程格式**为兼容基线；本章的扩展 ABI
-仅用于历史研究，不是 crabgal 的实现目标。
+工程 adapter 当前以 **LetsGal Studio 1.9.1 原生工程格式**为兼容基线；本章的扩展 ABI
+仅用于历史研究，不是 keine 的实现目标。
 
-1.9.0 仍未提供 crabgal 所需的“当前选中剧情块”（editor cursor）、run interception 或 preview backend API。当前公开
+1.9.0 仍未提供 keine 所需的“当前选中剧情块”（editor cursor）、run interception 或 preview backend API。当前公开
 `ExtensionContext` 保持运行时取向；`FlowAPI` 提供 `signal` 与 `callFragment()`，但它们不能
-替代编辑器调试合同。crabgal 不再把 `getHost()`、DOM 或 Electron 能力当作 SDK。
+替代编辑器调试合同。keine 不再把 `getHost()`、DOM 或 Electron 能力当作 SDK。
 
 1.9.0 SDK 的确认变化：
 
@@ -32,7 +32,11 @@ Studio 内置工程内容，不加载扩展 bundle、不实现 `@avg-studio/sdk`
 Backspace 1.3.0 不需要新块模型，因此继续使用公开且兼容的 `Extension` / `method()` 接口，
 只把清单基线提升到 `sdkVersion >=1.9.0` 与 Studio 1.9.0，避免无收益地重写稳定运行逻辑。
 
-如果未来另立一个独立扩展宿主，最小兼容层至少要实现（当前 crabgal 不实现）：
+1.9.1 没有增加内置 runtime block，仍是同一组 34 种；工程层新增 `chapterFolders` 与
+`chapterTreeOrder`，默认壳 `dialogue-box.json` 新增 10 种 `text_reveal_effect` 及 reveal 参数。
+这些是 keine loader/UI 的格式兼容项，不改变“不执行 Studio 扩展 bundle”的边界。
+
+如果未来另立一个独立扩展宿主，最小兼容层至少要实现（当前 keine 不实现）：
 
 1. 读取 `extension.json`，按 `entry` 加载 ESM bundle；
 2. 给 bundle 提供单实例 `react`、`react-dom`、JSX runtime 和 `@avg-studio/sdk`；
@@ -51,7 +55,7 @@ flowchart LR
     A["extension.json + dist/index.js + ui/*.json"] --> B["Studio/兼容宿主加载器"]
     B --> C["Extension / BlockExtension 导出扫描"]
     C --> D["scoped ExtensionContext"]
-    D --> E["crabgal runtime / save / input / UI"]
+    D --> E["keine runtime / save / input / UI"]
     F["project.json"] --> B
     G["assets/manifest.json + chapters/*.json"] --> E
 ```
@@ -62,11 +66,11 @@ flowchart LR
 
 | 对象 | 版本/提交 | 结论 |
 |---|---|---|
-| 本机当前安装 | Studio 1.9.0 | 原生工程格式主基线；crabgal 不执行扩展 |
+| 本机当前安装 | Studio 1.9.1 | 原生工程格式主基线；keine 不执行扩展 |
 | 前一实测稳定版 | Studio 1.6.3 | 用于宿主行为差异对照 |
 | 本机旧对照包 | Studio 1.6.2 | 用于 SDK 字节级差异 |
 | 已校验的历史包 | `Studio-1.6.3-mac.zip` | 保留历史 SHA-256 证据 |
-| 扩展 SDK | `SDK_VERSION = "1.9.0-beta.1"` | 新 API 使用者声明 `>=1.9.0` |
+| 扩展 SDK | `SDK_VERSION = "1.9.0"` | 1.9.1 未提升 SDK 合同；新 API 使用者声明 `>=1.9.0` |
 | `avg.renderer` | `d69d1681fe07e6273f99ed329fb01503cb3f3394`，2020-08-31 | 仅作历史语义参考 |
 | `avgplus-asarmor` | `3a95e627831268207b5da81310c5e9f4e4e1829b`，2025-01-26 | 仅用于判断 ASAR 保护方式 |
 
@@ -78,7 +82,7 @@ flowchart LR
 1f8ca44870142f222e25034297f436477d12cc202e229840251ab7402ca3c661
 ```
 
-本机 1.9.0 的 `dist/sdk/constants.ts` 声明 `SDK_VERSION = "1.9.0-beta.1"`。当前
+本机 1.9.1 的 `dist/sdk/constants.ts` 声明 `SDK_VERSION = "1.9.0"`。当前
 `FlowAPI` 含 `signal`、跨章节 `callFragment()`、`unsafe_goToFragment()` 和 `restart()`；
 `ExtensionContext` 仍没有编辑器/preview backend 命名空间。因此不应制造
 未发布的 SDK 版本号，也不能把宿主私有对象当作新增 SDK。
@@ -89,8 +93,8 @@ flowchart LR
 
 | 标记 | 来源 | 可信度 |
 |---|---|---|
-| **T** | 1.9.0 本机发行包内未压缩的 SDK TypeScript 源码 | 当前公开类型合同 |
-| **R** | 1.9.0 renderer/player 实际加载器和 runtime bundle | 当前实际行为 |
+| **T** | 1.9.1 本机发行包内未压缩的 SDK TypeScript 源码 | 当前公开类型合同 |
+| **R** | 1.9.1 renderer/player 实际加载器和 runtime bundle | 当前实际行为 |
 | **B** | 用 Studio 自己的发行链生成并运行探针扩展 | 端到端行为 |
 | **D** | [官方扩展文档](https://docs.avg-engine.com/extensions/api-context) | 设计意图；有少量滞后/矛盾 |
 | **H** | 旧 `avg.renderer` 与相关仓库 | 历史背景，不是当前合同 |
@@ -527,7 +531,7 @@ interface VariablesAPI {
 - 无 story provider 时返回空目录、空数组、`null`；
 - Studio Preview 可包含 disabled 章；Player 只包含实际打包章。
 
-**1.6.1 Player 实测 id 陷阱：** `listChapters()[0].id` 是发行 manifest 的查找键 `"开始"`，但 `getChapter("开始")` 返回的对象内部 `id` 是源章节 UUID `0e1e8739-...`。再拿返回对象的 UUID 调 `getChapter()` 会得到 `null`。兼容消费者应把目录 id 当 lookup key，不要假设返回对象 `id` 相同；crabgal 若追求最大兼容，建议同时接受 lookup id 和原始 chapter id。
+**1.6.1 Player 实测 id 陷阱：** `listChapters()[0].id` 是发行 manifest 的查找键 `"开始"`，但 `getChapter("开始")` 返回的对象内部 `id` 是源章节 UUID `0e1e8739-...`。再拿返回对象的 UUID 调 `getChapter()` 会得到 `null`。兼容消费者应把目录 id 当 lookup key，不要假设返回对象 `id` 相同；keine 若追求最大兼容，建议同时接受 lookup id 和原始 chapter id。
 
 ### 6.3 存档、历史、配置
 
@@ -822,7 +826,7 @@ handler **没有参数**，必须回到对应 API 取最新状态。
 { application: /* internal engine object */, mode: "engine" }
 ```
 
-官方文档只承诺诊断时可能看到 `mode: "engine" | "preview"`。兼容宿主可以只返回 `{ mode: "engine" }`；不要为了兼容暴露 crabgal 内部对象。
+官方文档只承诺诊断时可能看到 `mode: "engine" | "preview"`。兼容宿主可以只返回 `{ mode: "engine" }`；不要为了兼容暴露 keine 内部对象。
 
 ## 7. 核心数据类型
 
@@ -1146,7 +1150,7 @@ const electron = require("electron");
 
 `index.html` 没有 `require` shim，所以普通浏览器在模块初始化阶段失败；同一产物在 Electron（`nodeIntegration: true`）中能运行并完成上述探针。
 
-这是 1.6.1 当前发行壳问题，不是扩展合同。crabgal 不应复刻；兼容层应保证浏览器/原生宿主各自使用合适的存储和截图 adapter。
+这是 1.6.1 当前发行壳问题，不是扩展合同。keine 不应复刻；兼容层应保证浏览器/原生宿主各自使用合适的存储和截图 adapter。
 
 ## 11. 当前实现中不应复刻的内部/安全行为
 
@@ -1159,7 +1163,7 @@ sandbox: false
 webSecurity: false
 ```
 
-因此当前扩展可能意外访问 DOM、`window`、Node `require` 或 Electron。这不是稳定 public API，也会扩大安全面。crabgal 兼容层应：
+因此当前扩展可能意外访问 DOM、`window`、Node `require` 或 Electron。这不是稳定 public API，也会扩大安全面。keine 兼容层应：
 
 - 明确支持浏览器 DOM/React 运行时所需能力；
 - 默认不暴露宿主文件系统、进程或任意 native API；
@@ -1189,7 +1193,7 @@ webSecurity: false
 - JS bundle 是可读文本；
 - macOS `ElectronAsarIntegrity` 只是 SHA-256 完整性校验，不是加密。
 
-所以本文所有 ABI 结论来自当前真实发行包，不依赖绕过 asarmor。若未来版本启用加密，优先从 Studio 同步到扩展目录的 SDK、发行产物和动态行为继续做 clean-room 兼容，不要把解密器纳入 crabgal。
+所以本文所有 ABI 结论来自当前真实发行包，不依赖绕过 asarmor。若未来版本启用加密，优先从 Studio 同步到扩展目录的 SDK、发行产物和动态行为继续做 clean-room 兼容，不要把解密器纳入 keine。
 
 ## 13. 旧 `avg.renderer` 的参考价值
 
@@ -1225,10 +1229,10 @@ particle, scene, util, widget, hotkey
 | manifest id | 文案偏向小写 `<author>.<name>` | 校验器允许 Unicode/点/下划线等 | 按正则兼容 |
 | `sdkVersion` | 写作 semver range | 只比较解析出的 major | 按 major 兼容，同时保留原字符串 |
 | Story chapter id | 类型暗示 list/get id 一致 | Player 实测 lookup id 与返回 raw id 可不同 | 不作相等假设 |
-| Web 发行 | UI 提供 Web target | 1.6.1 壳顶层 require Electron | crabgal 不复刻该 bug |
-| 权限声明 | manifest 有 permissions/network | 当前只校验形状，不执行权限控制 | crabgal 可更严格，但需清楚告知 |
+| Web 发行 | UI 提供 Web target | 1.6.1 壳顶层 require Electron | keine 不复刻该 bug |
+| 权限声明 | manifest 有 permissions/network | 当前只校验形状，不执行权限控制 | keine 可更严格，但需清楚告知 |
 
-## 15. 给 crabgal 后续实现者的顺序
+## 15. 给 keine 后续实现者的顺序
 
 本轮不写 adapter。后续推荐按以下顺序分 PR：
 
@@ -1240,7 +1244,7 @@ particle, scene, util, widget, hotkey
 6. **UI 桥**：React 程序 UI；再做可视化 UI JSON renderer；
 7. **系统与输入**：7 slots、5 internal actions、自定义 action/shortcut；
 8. **场景预览**：`sceneRender` 隔离实例；
-9. **差异测试**：同一个 probe extension 同时跑官方 1.6.1 Player 与 crabgal，比较 JSON 结果。
+9. **差异测试**：同一个 probe extension 同时跑官方 1.6.1 Player 与 keine，比较 JSON 结果。
 
 实现原则：
 
@@ -1286,4 +1290,4 @@ particle, scene, util, widget, hotkey
 
 LetsGal Studio 当前真正稳定的扩展边界是：**manifest + 单文件 ESM + SDK 1.x major + scoped `ExtensionContext` + Studio project/build manifests**。Renderer 内部对象、Electron/Node 能力和旧 AVGPlus sandbox 都不是必须兼容的公开合同。
 
-如果只做第一阶段 adapter，优先让“无 React UI 的程序扩展”能跑：`method()`、story/variables/settings/save/input/system。它覆盖了最多可自动验证的行为，且不会一开始就把 crabgal 绑定到 Studio 当前的 React/Pixi 渲染实现。
+如果只做第一阶段 adapter，优先让“无 React UI 的程序扩展”能跑：`method()`、story/variables/settings/save/input/system。它覆盖了最多可自动验证的行为，且不会一开始就把 keine 绑定到 Studio 当前的 React/Pixi 渲染实现。

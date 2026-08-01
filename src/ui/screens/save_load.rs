@@ -104,7 +104,7 @@ impl SavePreviewCache {
 struct SaveContentContext<'a> {
     font: &'a Handle<Font>,
     project_root: &'a ProjectRoot,
-    store: &'a dyn crabgal_loader::StoreAdapter,
+    store: &'a dyn keine_loader::StoreAdapter,
     program_fingerprint: u64,
     preview_cache: &'a mut SavePreviewCache,
 }

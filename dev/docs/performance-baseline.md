@@ -9,7 +9,7 @@ All runtime captures disable persistence, warm up for three seconds, use the
 - Machine: Apple M5 Pro, integrated GPU, Metal
 - Project: `projects/test-project` (2 scenes, 42 compiled actions, 5 assets,
   about 1 MiB on disk)
-- Build: `--release --features video-ffmpeg`
+- Build: macOS `--release --features video-native`；Windows/Linux `--release --features video-ffmpeg`
 - Each render result: 10 seconds after a 3-second warm-up
 - Frame rate: the benchmark-only lifecycle uses a 60 Hz reactive deadline so
   captures remain comparable whether the window is focused or on another

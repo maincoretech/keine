@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use bevy::app::AppExit;
 use bevy::prelude::*;
-use crabgal_core::Value;
+use keine_core::Value;
 use serde::{Deserialize, Serialize};
 
 use crate::runtime::resources::{EditorSyncSession, GameState, PersistenceDisabled, ProjectRoot};
@@ -88,7 +88,7 @@ pub(crate) fn flush_on_exit(
     }
 }
 
-pub(super) fn reset_memory(state: &mut crabgal_core::State, writer: &mut ProfileWriter) {
+pub(super) fn reset_memory(state: &mut keine_core::State, writer: &mut ProfileWriter) {
     state.global_vars.clear();
     writer.saved.clear();
     writer.dirty_seconds = 0.0;
@@ -136,7 +136,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("crabgal-profile-{nonce}"));
+        let root = std::env::temp_dir().join(format!("keine-profile-{nonce}"));
         let values = HashMap::from([
             ("ending".into(), Value::Int(2)),
             ("name".into(), Value::Str("Echo".into())),
@@ -145,7 +145,7 @@ mod tests {
         save(&values, &root).unwrap();
         assert_eq!(load(&root), values);
 
-        let mut state = crabgal_core::State::new();
+        let mut state = keine_core::State::new();
         state.global_vars = values.clone();
         let mut writer = ProfileWriter::loaded(&values);
         writer.dirty_seconds = WRITE_DELAY_SECONDS;

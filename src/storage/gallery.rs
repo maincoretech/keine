@@ -22,7 +22,7 @@ pub(crate) struct GallerySnapshot {
     pub(super) bgm: HashMap<String, String>,
 }
 
-pub(crate) fn load(state: &mut crabgal_core::State, project_root: &Path) {
+pub(crate) fn load(state: &mut keine_core::State, project_root: &Path) {
     let Ok(bytes) = fs::read(path(project_root)) else {
         return;
     };
@@ -74,7 +74,7 @@ pub(crate) fn persist(
     }
 }
 
-pub(super) fn reset_memory(state: &mut crabgal_core::State, snapshot: &mut GallerySnapshot) {
+pub(super) fn reset_memory(state: &mut keine_core::State, snapshot: &mut GallerySnapshot) {
     state.unlocked_cg.clear();
     state.unlocked_bgm.clear();
     snapshot.cg.clear();

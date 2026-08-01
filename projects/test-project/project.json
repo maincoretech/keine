@@ -1,11 +1,22 @@
 {
-  "id": "crabgal-letsgal-1.9-showcase",
-  "name": "crabgal LetsGal 1.9 Timeline Lab",
-  "description": "A runnable visual acceptance project for native LetsGal Studio 1.9 timeline, portrait and input-wait semantics supported by crabgal.",
-  "engineVersion": "1.9.0",
+  "id": "keine-letsgal-1.9-showcase",
+  "name": "Kēne LetsGal 1.9.1 Timeline Lab",
+  "description": "A runnable visual acceptance project for native LetsGal Studio 1.9.1 chapter-tree, dialogue-reveal, timeline, portrait and input-wait semantics supported by Kēne.",
+  "engineVersion": "1.9.1",
   "chapterOrder": ["Stage 1.9", "Cross Chapter 1.9"],
+  "chapterFolders": [
+    {
+      "id": "folder-cross-chapter",
+      "name": "Cross chapter",
+      "chapterIds": ["chapter-cross-19"]
+    }
+  ],
+  "chapterTreeOrder": [
+    { "type": "chapter", "id": "chapter-stage-18" },
+    { "type": "folder", "id": "folder-cross-chapter" }
+  ],
   "resolution": { "width": 1920, "height": 1080 },
-  "crabgal": {
+  "keine": {
     "features": {
       "extra": true
     }

@@ -2,7 +2,7 @@
 
 # Prints the smallest comma-separated Cargo feature set required by a project.
 # An opaque nested Hexz cannot be inspected safely here, so it deliberately
-# falls back to all codecs. CRABGAL_AUDIO_FEATURES is an explicit CI override.
+# falls back to all codecs. KEINE_AUDIO_FEATURES is an explicit CI override.
 require_project_directory() {
     local project="$1"
     if [[ ! -d "$project" ]]; then
@@ -17,9 +17,14 @@ require_project_directory() {
 
 detect_audio_features() {
     local project="$1"
-    if [[ -n "${CRABGAL_AUDIO_FEATURES:-}" ]]; then
-        printf '%s\n' "$CRABGAL_AUDIO_FEATURES"
+    if [[ -n "${KEINE_AUDIO_FEATURES:-}" ]]; then
+        printf '%s\n' "$KEINE_AUDIO_FEATURES"
         return
+    fi
+
+    local video_feature="video-ffmpeg"
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        video_feature="video-native"
     fi
 
     local wav=0 mp3=0 vorbis=0 flac=0 video=0 file lower
@@ -27,7 +32,7 @@ detect_audio_features() {
         lower="$(printf '%s' "$file" | tr '[:upper:]' '[:lower:]')"
         case "$lower" in
             *.hxz)
-                printf '%s\n' 'audio-all,ui-sounds,video-ffmpeg'
+                printf '%s\n' "audio-all,ui-sounds,$video_feature"
                 return
                 ;;
             *.opus) : ;;
@@ -48,7 +53,7 @@ detect_audio_features() {
     [[ "$mp3" -eq 1 ]] && features+=(audio-mp3)
     [[ "$vorbis" -eq 1 ]] && features+=(audio-vorbis)
     [[ "$flac" -eq 1 ]] && features+=(audio-flac)
-    [[ "$video" -eq 1 ]] && features+=(video-ffmpeg)
+    [[ "$video" -eq 1 ]] && features+=("$video_feature")
 
     local joined="" feature
     for feature in "${features[@]}"; do

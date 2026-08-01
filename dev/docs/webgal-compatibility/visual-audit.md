@@ -40,7 +40,7 @@
 1. 以 1920×1080 为首个像素基线，其他比例先做归一化几何断言。
 2. 固定时钟，在动画 0%、50%、100% 采样；等待资源就绪且 UI activity 稳定后截图。
 3. 字体区域允许小 tolerance 或 mask，舞台材质区域使用更严格阈值。
-4. 每个 artifact 记录 crabgal commit、OS、GPU/driver、逻辑/物理尺寸、DPI、脚本行和时间点。
+4. 每个 artifact 记录 keine commit、OS、GPU/driver、逻辑/物理尺寸、DPI、脚本行和时间点。
 5. 不同平台使用独立基线，不能相互覆盖。
 
 建议目录：

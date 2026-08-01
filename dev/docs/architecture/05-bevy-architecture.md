@@ -1,4 +1,4 @@
-# crabgal Bevy 架构设计
+# keine Bevy 架构设计
 
 ## 边界
 
@@ -8,13 +8,13 @@
 WebGAL .txt / future language adapters
         │
         ▼
-crabgal-loader   内容来源、格式识别、解析、notify 热重载
+keine-loader   内容来源、格式识别、解析、notify 热重载
         │ Vec<Action>
         ▼
-crabgal-core     可序列化 State、Action、step 状态机、配置与转场类型
+keine-core     可序列化 State、Action、step 状态机、配置与转场类型
         │ State
         ▼
-crabgal          输入、ECS 同步、Bevy UI、wgpu 后处理与存档 IO
+keine          输入、ECS 同步、Bevy UI、wgpu 后处理与存档 IO
 ```
 
 `core` 和 `loader` 不依赖 Bevy，可以独立测试。Bevy 主世界中的 `GameState`
@@ -24,7 +24,7 @@ crabgal          输入、ECS 同步、Bevy UI、wgpu 后处理与存档 IO
 
 - `main.rs` 仅调用库入口 `run()`。
 - `runtime/bootstrap.rs` 负责命令行项目路径、Bevy Plugin、三台相机和项目 bootstrap。
-- `crabgal-loader` 先按配置挂载有序内容来源，再通过语言注册表稳定合并 scene。
+- `keine-loader` 先按配置挂载有序内容来源，再通过语言注册表稳定合并 scene。
 - `runtime/asset_reader.rs` 将同一来源列表桥接成 Bevy 默认只读 overlay source。
 - `ScriptWatcher` 同时拥有 notify backend 和 channel，不泄漏后台对象。
 - 脚本创建、修改或删除后，`tick` 会合并事件并重新加载场景。

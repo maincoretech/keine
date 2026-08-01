@@ -1,14 +1,15 @@
 // GlobalDialog — WebGAL-style confirmation overlay with title + two buttons.
+use std::path::PathBuf;
+use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
+use std::thread;
+
 use crate::render::blur::DialogCamera;
 use crate::render::blur::UiBlurCamera;
 use crate::storage::save::QUICK_SAVE_SLOT;
 use crate::storage::settings::RuntimeSettings;
 use crate::ui::backlog::BacklogRoot;
 use crate::ui::control_bar::QuickSavePreview;
-use crate::ui::foundation::{
-    SURFACE_ACTIVE_ALPHA, SURFACE_HOVER_ALPHA, UI_MOTION_RATE, UiFonts, UiSoundStyle,
-    button_surface, exp_lerp,
-};
+use crate::ui::foundation::{HoverSweep, UiFonts, UiSoundStyle, hover_sweep_fill};
 use crate::ui::save_load::SaveLoadRoot;
 use crate::ui::settings_panel::SettingsRoot;
 use crate::ui::support::i18n::{UiText, tr};
@@ -88,18 +89,6 @@ pub(crate) struct DialogText {
     alpha: f32,
 }
 
-#[derive(Component, Default)]
-pub(crate) struct DialogButtonVisual {
-    current: f32,
-    target: f32,
-}
-
-impl DialogButtonVisual {
-    pub(crate) fn is_animating(&self) -> bool {
-        (self.current - self.target).abs() > 0.001
-    }
-}
-
 type ModalBackdropQuery<'w, 's> = Query<
     'w,
     's,
@@ -111,6 +100,81 @@ type ModalBackdropQuery<'w, 's> = Query<
 struct SavePreviewCapture {
     camera: Entity,
     slot: u32,
+}
+
+struct SavePreviewJob {
+    image: Image,
+    path: PathBuf,
+}
+
+#[derive(Resource)]
+pub(crate) struct SavePreviewWriter {
+    sender: Option<SyncSender<SavePreviewJob>>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl Default for SavePreviewWriter {
+    fn default() -> Self {
+        // Full-resolution screenshot buffers are large, so keep at most two
+        // waiting behind the image currently being encoded.
+        let (sender, receiver) = sync_channel::<SavePreviewJob>(2);
+        let worker = thread::Builder::new()
+            .name("keine-save-preview".into())
+            .spawn(move || {
+                for job in receiver {
+                    write_save_preview(job);
+                }
+            })
+            .map_err(|error| log::error!("failed to start save preview writer: {error}"))
+            .ok();
+        Self {
+            sender: Some(sender),
+            worker,
+        }
+    }
+}
+
+impl SavePreviewWriter {
+    fn enqueue(&self, image: Image, path: PathBuf) {
+        let Some(sender) = &self.sender else {
+            return;
+        };
+        match sender.try_send(SavePreviewJob { image, path }) {
+            Ok(()) => {}
+            Err(TrySendError::Full(job)) => {
+                log::warn!("save preview queue is full; skipped {}", job.path.display())
+            }
+            Err(TrySendError::Disconnected(job)) => log::error!(
+                "save preview writer stopped before writing {}",
+                job.path.display()
+            ),
+        }
+    }
+}
+
+impl Drop for SavePreviewWriter {
+    fn drop(&mut self) {
+        drop(self.sender.take());
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+fn write_save_preview(job: SavePreviewJob) {
+    let result = job
+        .image
+        .try_into_dynamic()
+        .map(|image| image.thumbnail(480, 270).to_rgb8())
+        .map_err(anyhow::Error::from)
+        .and_then(|image| {
+            crate::scene::images::encode_preview(image.as_raw(), image.width(), image.height())
+                .map_err(anyhow::Error::from)
+        })
+        .and_then(|bytes| std::fs::write(&job.path, bytes).map_err(anyhow::Error::from));
+    if let Err(error) = result {
+        log::error!("failed to save slot preview: {error:#}");
+    }
 }
 
 #[derive(SystemParam)]
@@ -144,6 +208,7 @@ struct SavePreviewContext<'w, 's> {
     save_previews: ResMut<'w, crate::ui::save_load::SavePreviewCache>,
     save_load: ResMut<'w, crate::ui::save_load::SaveLoadUi>,
     project_root: Res<'w, crate::runtime::resources::ProjectRoot>,
+    writer: Res<'w, SavePreviewWriter>,
 }
 
 /// Spawn the dialog overlay + centred box when DialogRequest is present.
@@ -286,7 +351,7 @@ fn spawn_dialog_button(
         Button,
         UiSoundStyle::Click,
         action,
-        DialogButtonVisual::default(),
+        HoverSweep::default(),
         Node {
             min_width: Val::Px(112.5),
             padding: UiRect::axes(Val::Px(24.0), Val::Px(6.0)),
@@ -294,7 +359,7 @@ fn spawn_dialog_button(
             ..default()
         },
         BackgroundColor(Color::NONE),
-        children![dialog_text(text, font, 31.5, 0.67)],
+        children![hover_sweep_fill(), dialog_text(text, font, 31.5, 0.67)],
     )
 }
 
@@ -336,22 +401,6 @@ pub fn animate_dialog(
     }
     for (visual, mut color) in &mut texts {
         color.0 = Color::srgba(1.0, 1.0, 1.0, visual.alpha * fade.0);
-    }
-}
-
-pub fn update_dialog_buttons(
-    time: Res<Time>,
-    mut buttons: Query<(&Interaction, &mut DialogButtonVisual, &mut BackgroundColor)>,
-) {
-    for (interaction, mut visual, mut color) in &mut buttons {
-        visual.target = match interaction {
-            Interaction::None => 0.0,
-            Interaction::Hovered => SURFACE_HOVER_ALPHA,
-            Interaction::Pressed => SURFACE_ACTIVE_ALPHA,
-        };
-        visual.current +=
-            (visual.target - visual.current) * exp_lerp(time.delta_secs(), UI_MOTION_RATE);
-        color.0 = button_surface(visual.current);
     }
 }
 
@@ -595,25 +644,5 @@ fn store_save_preview(capture: On<ScreenshotCaptured>, mut context: SavePreviewC
         context.save_load.set_changed();
     }
     let path = crate::storage::save::preview_path(&context.project_root, target.slot);
-    let image = capture.image.clone();
-    bevy::tasks::AsyncComputeTaskPool::get()
-        .spawn(async move {
-            let result = image
-                .try_into_dynamic()
-                .map(|image| image.thumbnail(480, 270).to_rgb8())
-                .map_err(anyhow::Error::from)
-                .and_then(|image| {
-                    crate::scene::images::encode_preview(
-                        image.as_raw(),
-                        image.width(),
-                        image.height(),
-                    )
-                    .map_err(anyhow::Error::from)
-                })
-                .and_then(|bytes| std::fs::write(&path, bytes).map_err(anyhow::Error::from));
-            if let Err(error) = result {
-                log::error!("failed to save slot preview: {error:#}");
-            }
-        })
-        .detach();
+    context.writer.enqueue(capture.image.clone(), path);
 }

@@ -1,6 +1,6 @@
 # WebGAL Script Reference
 
-> Extracted from https://docs.openwebgal.com/ — reference for crabgal script engine design.
+> Extracted from https://docs.openwebgal.com/ — reference for keine script engine design.
 
 ---
 
@@ -199,7 +199,7 @@ pixiInit:effect.json;
 pixiPerform:effect.json;
 ```
 
-crabgal maps these commands to a native, fixed-capacity Bevy effect layer. Names containing
+keine maps these commands to a native, fixed-capacity Bevy effect layer. Names containing
 `rain`, `snow`, `sakura`/`petal`, or `dust`/`light` select a preset; `pixiInit` clears the layer.
 
 ### wait — Delay

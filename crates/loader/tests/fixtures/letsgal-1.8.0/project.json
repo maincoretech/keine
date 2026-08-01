@@ -1,5 +1,5 @@
 {
-  "id": "crabgal-letsgal-compatibility",
+  "id": "keine-letsgal-compatibility",
   "name": "LetsGal 1.8.0 Compatibility Fixture",
   "description": "Compiler fixture containing every runtime block registered by LetsGal Studio 1.8.0.",
   "engineVersion": "1.0.0",

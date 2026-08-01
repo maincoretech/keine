@@ -1,25 +1,25 @@
-mod crabgal {
+mod keine {
     use std::io::Read;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use anyhow::{Context, Result, bail};
-    use crabgal_core::State;
+    use keine_core::State;
     use serde::{Deserialize, Serialize};
 
     use super::{SavedState, StoreAdapter, StoreMetadata, StoreStatus};
 
-    const MAGIC: [u8; 8] = *b"CRABGAL\0";
+    const MAGIC: [u8; 8] = *b"KEINE\0\0\0";
     const VERSION: u32 = 9;
     const HEADER_SIZE: usize = 28;
     const MAX_METADATA_SIZE: usize = 64 * 1024;
     const MAX_STATE_SIZE: usize = 64 * 1024 * 1024;
 
     #[derive(Clone, Copy, Debug, Default)]
-    pub struct CrabgalStore;
+    pub struct KeineStore;
 
-    impl StoreAdapter for CrabgalStore {
+    impl StoreAdapter for KeineStore {
         fn name(&self) -> &'static str {
-            "crabgal"
+            "keine"
         }
 
         fn extension(&self) -> &'static str {
@@ -238,11 +238,11 @@ mod crabgal {
         use super::*;
         use std::io::Cursor;
 
-        use crabgal_core::state::{Dialogue, DialogueKey, DialogueRetraction};
-        use crabgal_core::{Action, EffectCue, EffectEvent, Program, SayOptions, Value};
+        use keine_core::state::{Dialogue, DialogueKey, DialogueRetraction};
+        use keine_core::{Action, EffectCue, EffectEvent, Program, SayOptions, Value};
 
         fn inspect(bytes: &[u8]) -> StoreStatus {
-            CrabgalStore.inspect(&mut Cursor::new(bytes)).unwrap()
+            KeineStore.inspect(&mut Cursor::new(bytes)).unwrap()
         }
 
         #[test]
@@ -250,8 +250,8 @@ mod crabgal {
             let mut state = State::new();
             state.current_scene = "demo".into();
             state.cursor = 42;
-            let bytes = CrabgalStore.encode(&state).unwrap();
-            assert_eq!(CrabgalStore.decode(&bytes).unwrap().snapshot(), &state);
+            let bytes = KeineStore.encode(&state).unwrap();
+            assert_eq!(KeineStore.decode(&bytes).unwrap().snapshot(), &state);
             assert!(matches!(
                 inspect(&bytes),
                 StoreStatus::Ready(metadata) if metadata.scene == "demo"
@@ -271,8 +271,8 @@ mod crabgal {
             state.install_program(Program::from_scenes([("main".into(), actions)]));
             state.current_scene = "main".into();
 
-            let bytes = CrabgalStore.encode(&state).unwrap();
-            let decoded = CrabgalStore.decode(&bytes).unwrap();
+            let bytes = KeineStore.encode(&state).unwrap();
+            let decoded = KeineStore.decode(&bytes).unwrap();
 
             assert!(
                 bytes.len() < 1_024,
@@ -284,12 +284,12 @@ mod crabgal {
 
         #[test]
         fn inspection_reads_exactly_the_header_and_metadata() {
-            let bytes = CrabgalStore.encode(&State::new()).unwrap();
+            let bytes = KeineStore.encode(&State::new()).unwrap();
             let metadata_len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
             let mut reader = Cursor::new(&bytes);
 
             assert!(matches!(
-                CrabgalStore.inspect(&mut reader).unwrap(),
+                KeineStore.inspect(&mut reader).unwrap(),
                 StoreStatus::Ready(_)
             ));
             assert_eq!(reader.position() as usize, HEADER_SIZE + metadata_len);
@@ -298,21 +298,21 @@ mod crabgal {
 
         #[test]
         fn inspect_and_decode_reject_corrupt_metadata() {
-            let mut corrupt = CrabgalStore.encode(&State::new()).unwrap();
+            let mut corrupt = KeineStore.encode(&State::new()).unwrap();
             corrupt[HEADER_SIZE] ^= 0xff;
 
             assert_eq!(inspect(&corrupt), StoreStatus::Corrupt);
-            assert!(CrabgalStore.decode(&corrupt).is_err());
+            assert!(KeineStore.decode(&corrupt).is_err());
         }
 
         #[test]
         fn state_integrity_is_checked_only_when_the_state_is_loaded() {
-            let bytes = CrabgalStore.encode(&State::new()).unwrap();
+            let bytes = KeineStore.encode(&State::new()).unwrap();
             let mut corrupt = bytes.clone();
             *corrupt.last_mut().unwrap() ^= 0xff;
 
             assert!(matches!(inspect(&corrupt), StoreStatus::Ready(_)));
-            assert!(CrabgalStore.decode(&corrupt).is_err());
+            assert!(KeineStore.decode(&corrupt).is_err());
         }
 
         #[test]
@@ -322,11 +322,11 @@ mod crabgal {
             saved.install_program(program.clone());
             saved.current_scene = "main".into();
             saved.cursor = 1;
-            let bytes = CrabgalStore.encode(&saved).unwrap();
+            let bytes = KeineStore.encode(&saved).unwrap();
 
             let mut matching = State::new();
             matching.install_program(program);
-            CrabgalStore
+            KeineStore
                 .decode(&bytes)
                 .unwrap()
                 .restore_into(&mut matching)
@@ -341,7 +341,7 @@ mod crabgal {
                 vec![Action::Comment],
             )]));
             assert!(
-                CrabgalStore
+                KeineStore
                     .decode(&bytes)
                     .unwrap()
                     .restore_into(&mut different)
@@ -400,8 +400,8 @@ mod crabgal {
                 volume: 0.4,
             }));
 
-            let decoded = CrabgalStore
-                .decode(&CrabgalStore.encode(&state).unwrap())
+            let decoded = KeineStore
+                .decode(&KeineStore.encode(&state).unwrap())
                 .unwrap();
             let mut expected = state;
             expected.program = Default::default();
@@ -429,7 +429,7 @@ mod crabgal {
             state.current_scene = "main".into();
             state.cursor = 1;
             let bytes = encode_at(&state, 1_700_000_000).unwrap();
-            if std::env::var_os("CRABGAL_UPDATE_STORE_GOLDEN").is_some() {
+            if std::env::var_os("KEINE_UPDATE_STORE_GOLDEN").is_some() {
                 let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                     .join("tests/fixtures/store-v9.sav");
                 std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -446,9 +446,9 @@ mod crabgal {
 use std::io::Read;
 
 use anyhow::Result;
-use crabgal_core::{RestoreError, State};
+use keine_core::{RestoreError, State};
 
-pub use crabgal::CrabgalStore;
+pub use keine::KeineStore;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoreMetadata {

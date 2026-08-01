@@ -134,18 +134,18 @@ fn capture_runtime_performance(
         .and_then(|value| value.smoothed())
         .unwrap_or_default();
     log::info!(
-        target: "crabgal::performance",
+        target: "keine::performance",
         "CAPTURE  | {:.1}s · {frames} frames · {:.1} FPS avg · {:.1} FPS 1% low",
         config.sample_seconds,
         if average > 0.0 { 1_000.0 / average } else { 0.0 },
         if p99 > 0.0 { 1_000.0 / p99 } else { 0.0 },
     );
     log::info!(
-        target: "crabgal::performance",
+        target: "keine::performance",
         "FRAME    | avg {average:.2} ms · p50 {p50:.2} · p95 {p95:.2} · p99 {p99:.2} · max {maximum:.2}",
     );
     log::info!(
-        target: "crabgal::performance",
+        target: "keine::performance",
         "SCENE    | {entities:.0} entities · cameras {:?} · 3.0s warm-up excluded",
         config.cameras,
     );
@@ -155,7 +155,7 @@ fn capture_runtime_performance(
         .sum::<usize>();
     let font_bytes = fonts.iter().map(|(_, font)| font.data.len()).sum::<usize>();
     log::info!(
-        target: "crabgal::performance",
+        target: "keine::performance",
         "ASSETS   | {} images / {:.1} MiB CPU pixels · {} fonts / {:.1} MiB source data",
         images.len(),
         image_bytes as f64 / 1_048_576.0,
@@ -180,7 +180,7 @@ fn capture_runtime_performance(
     render_passes.sort_by(|left, right| right.1.total_cmp(&left.1));
     for (path, value, suffix) in render_passes.into_iter().take(8) {
         log::info!(
-            target: "crabgal::performance",
+            target: "keine::performance",
             "RENDER   | {path} {value:.3}{suffix}",
         );
     }

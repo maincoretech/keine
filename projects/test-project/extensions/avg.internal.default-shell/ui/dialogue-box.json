@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "name": "1.9.1 dialogue reveal fixture",
+  "dialogueBehavior": {
+    "text_speed": 30,
+    "char_fade_in_duration": 100,
+    "text_reveal_effect": "smooth-rise",
+    "text_reveal_parameters": {
+      "distance_px": 8,
+      "scale_percent": 82,
+      "rotation_degrees": 70,
+      "blur_px": 4
+    }
+  }
+}

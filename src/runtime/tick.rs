@@ -1,8 +1,8 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use crabgal_core::step;
-use crabgal_core::{Program, State};
-use crabgal_loader::DiagnosticLevel;
+use keine_core::step;
+use keine_core::{Program, State};
+use keine_loader::DiagnosticLevel;
 
 use crate::runtime::platform::InputActions;
 use crate::runtime::resources::{
@@ -34,12 +34,22 @@ enum TypewriterPause {
 struct EditorCursorSync {
     remaining_frames: u8,
     poll_elapsed: f32,
-    last: Option<crabgal_loader::ProjectDebugCursor>,
+    last: Option<keine_loader::ProjectDebugCursor>,
     force: bool,
 }
 
 const EDITOR_CURSOR_POLL_SECONDS: f32 = 0.2;
-const DIALOGUE_RETRACTION_SPEED_SCALE: f64 = 0.85;
+/// Backspace is deliberately more deliberate than forward text reveal.
+/// Preserve a response to the user's text-speed preference, but keep a hard
+/// visual range so a short suffix cannot disappear in one or two frames.
+const DIALOGUE_RETRACTION_SPEED_SCALE: f64 = 0.30;
+const DIALOGUE_RETRACTION_MIN_CPS: f64 = 6.0;
+const DIALOGUE_RETRACTION_MAX_CPS: f64 = 12.0;
+
+fn dialogue_retraction_speed(typewriter_speed: f64) -> f64 {
+    (typewriter_speed * DIALOGUE_RETRACTION_SPEED_SCALE)
+        .clamp(DIALOGUE_RETRACTION_MIN_CPS, DIALOGUE_RETRACTION_MAX_CPS)
+}
 
 type StageButtonQuery<'w, 's> = Query<
     'w,
@@ -121,7 +131,7 @@ pub fn tick(mut context: TickContext) {
     state_changed |= step::update_dialogue_retraction(
         context.state.bypass_change_detection(),
         delta_seconds,
-        context.settings.typewriter_speed * DIALOGUE_RETRACTION_SPEED_SCALE,
+        dialogue_retraction_speed(context.settings.typewriter_speed),
         presentation_advance,
         context.toggles.skip,
     );
@@ -131,7 +141,6 @@ pub fn tick(mut context: TickContext) {
         presentation_advance,
     );
     if presentation_was_blocked {
-        context.toggles.skip = false;
         if context.editor_sync.is_none() && !context.state.presentation_blocked() {
             let progress = step_once(context.state.bypass_change_detection());
             state_changed |= progress.changed;
@@ -231,7 +240,7 @@ fn update_toggle_shortcuts(
     toggles: &mut ToggleStates,
     auto_timer: &mut f64,
 ) {
-    if actions.skip_pressed {
+    if actions.skip_held {
         toggles.skip = true;
     }
     if actions.skip_released {
@@ -321,8 +330,8 @@ fn reload_scripts_if_changed(context: &mut TickContext<'_, '_>, delta_seconds: f
 }
 
 fn reload_project_sources(
-    content: &crabgal_loader::ContentProject,
-    languages: &crabgal_loader::ScriptLanguageRegistry,
+    content: &keine_loader::ContentProject,
+    languages: &keine_loader::ScriptLanguageRegistry,
     state: &mut State,
     asset_manifest: &mut LocalAssetManifest,
     config: &mut crate::runtime::resources::GameConfigResource,
@@ -334,7 +343,7 @@ fn reload_project_sources(
             return false;
         }
     };
-    let Ok(scenes) = crabgal_loader::load_scenes_with(content, languages) else {
+    let Ok(scenes) = keine_loader::load_scenes_with(content, languages) else {
         log::error!("failed to reload scripts from configured content sources");
         return false;
     };
@@ -372,7 +381,7 @@ fn reload_project_sources(
 }
 
 pub(crate) fn sync_editor_cursor(
-    content: &crabgal_loader::ContentProject,
+    content: &keine_loader::ContentProject,
     state: &mut State,
     asset_manifest: &LocalAssetManifest,
 ) -> bool {
@@ -387,10 +396,10 @@ pub(crate) fn sync_editor_cursor(
 }
 
 fn try_sync_editor_cursor(
-    content: &crabgal_loader::ContentProject,
+    content: &keine_loader::ContentProject,
     state: &mut State,
     asset_manifest: &LocalAssetManifest,
-    last: &mut Option<crabgal_loader::ProjectDebugCursor>,
+    last: &mut Option<keine_loader::ProjectDebugCursor>,
     force: bool,
 ) -> anyhow::Result<Option<bool>> {
     let Some(cursor) = content.debug_cursor()? else {
@@ -406,7 +415,7 @@ fn try_sync_editor_cursor(
 }
 
 fn read_and_sync_editor_cursor(
-    content: &crabgal_loader::ContentProject,
+    content: &keine_loader::ContentProject,
     state: &mut State,
     asset_manifest: &LocalAssetManifest,
 ) -> anyhow::Result<Option<bool>> {
@@ -422,10 +431,10 @@ fn read_and_sync_editor_cursor(
 }
 
 fn sync_editor_cursor_at(
-    content: &crabgal_loader::ContentProject,
+    content: &keine_loader::ContentProject,
     state: &mut State,
     asset_manifest: &LocalAssetManifest,
-    cursor: &crabgal_loader::ProjectDebugCursor,
+    cursor: &keine_loader::ProjectDebugCursor,
 ) -> anyhow::Result<bool> {
     let initial = content.initial_state()?;
     Ok(sync_editor_position(
@@ -442,7 +451,7 @@ fn sync_editor_position(
     asset_manifest: &LocalAssetManifest,
     scene_name: &str,
     source_step: usize,
-    initial: crabgal_loader::ProjectInitialState,
+    initial: keine_loader::ProjectInitialState,
 ) -> bool {
     let Some(scene) = asset_manifest.get(scene_name) else {
         log::warn!("editor selected unknown fragment {scene_name:?}");
@@ -475,7 +484,7 @@ fn sync_editor_position(
     // later chapters intermittently appeared to have missing resources.
     if !seek_editor_state(&mut preview, scene_name, selected_start, target) {
         // Some editor-only/title fragments are deliberately unreachable from
-        // crabgal's normal entry. They still need direct block inspection.
+        // keine's normal entry. They still need direct block inspection.
         preview = new_preview();
         preview.current_scene = scene_name.to_owned();
         preview.ended = false;
@@ -507,7 +516,7 @@ pub(crate) fn seek_editor_state(
         // (for example LetsGal's `keepDialogue: false` textbox hide). Studio
         // selecting that block previews the line before confirmation, so do
         // not synthesize the click merely to reach the block's final action.
-        if matches!(result, crabgal_core::StepResult::AwaitClick)
+        if matches!(result, keine_core::StepResult::AwaitClick)
             && preview.current_scene == target_scene
             && preview.cursor > selected_start
             && preview.cursor <= target
@@ -521,8 +530,8 @@ pub(crate) fn seek_editor_state(
             return true;
         }
         match result {
-            crabgal_core::StepResult::AwaitClick => step::advance(preview),
-            crabgal_core::StepResult::AwaitPresentation => {
+            keine_core::StepResult::AwaitClick => step::advance(preview),
+            keine_core::StepResult::AwaitPresentation => {
                 while preview.presentation_blocked() {
                     // Prior sentence-tail deletions are deterministic editor
                     // history, so finish them without manufacturing their
@@ -532,19 +541,19 @@ pub(crate) fn seek_editor_state(
                     update_transitions(preview, 86_400.0, true);
                 }
             }
-            crabgal_core::StepResult::AwaitInput => {
+            keine_core::StepResult::AwaitInput => {
                 let _ = step::submit_user_input(preview);
             }
-            crabgal_core::StepResult::AwaitChoice => {
+            keine_core::StepResult::AwaitChoice => {
                 let direct = preview.menu.as_ref().and_then(|menu| {
                     menu.choices.iter().position(|choice| {
                         choice.enabled
                             && match &choice.target {
-                                crabgal_core::ChoiceTarget::ChangeScene(scene)
-                                | crabgal_core::ChoiceTarget::CallScene(scene) => {
+                                keine_core::ChoiceTarget::ChangeScene(scene)
+                                | keine_core::ChoiceTarget::CallScene(scene) => {
                                     scene == target_scene
                                 }
-                                crabgal_core::ChoiceTarget::Label(_) => false,
+                                keine_core::ChoiceTarget::Label(_) => false,
                             }
                     })
                 });
@@ -557,10 +566,10 @@ pub(crate) fn seek_editor_state(
                 };
                 step::select_choice(preview, index);
             }
-            crabgal_core::StepResult::EndOfScene => {
+            keine_core::StepResult::EndOfScene => {
                 return preview.current_scene == target_scene && preview.cursor >= target;
             }
-            crabgal_core::StepResult::ExecutionLimit => return false,
+            keine_core::StepResult::ExecutionLimit => return false,
         }
     }
     log::warn!("editor seek exceeded the deterministic replay limit");
@@ -596,7 +605,7 @@ fn restart_after_program_reload(state: &mut State, program: Program) {
         crate::scene::entry_scene(&restarted)
     };
     restarted.ended = was_ended || restarted.current_scene.is_empty();
-    restarted.effect_queue.push(crabgal_core::EffectEvent::Stop);
+    restarted.effect_queue.push(keine_core::EffectEvent::Stop);
     if !restarted.ended {
         step::step(&mut restarted);
     }
@@ -724,7 +733,7 @@ fn update_typewriter(
     changed
 }
 
-fn start_inline_pause(dialogue: &crabgal_core::state::Dialogue, clock: &mut TypewriterClock) {
+fn start_inline_pause(dialogue: &keine_core::state::Dialogue, clock: &mut TypewriterClock) {
     clock.pause = match dialogue.pauses[clock.next_pause].duration {
         Some(seconds) => TypewriterPause::Timed(f64::from(seconds.max(0.0))),
         None => TypewriterPause::Input,
@@ -817,26 +826,24 @@ fn advance_once(state: &mut State) -> TickProgress {
             };
         }
     }
-    let snapshot = state.clone();
-    if state.dialogue.is_some() {
+    let advanced_dialogue = state.dialogue.is_some();
+    if advanced_dialogue {
         step::advance(state);
     }
-    finish_step(state, snapshot)
+    finish_step(state, advanced_dialogue)
 }
 
 fn step_once(state: &mut State) -> TickProgress {
-    let snapshot = state.clone();
-    finish_step(state, snapshot)
+    finish_step(state, false)
 }
 
-fn finish_step(state: &mut State, snapshot: State) -> TickProgress {
-    let result = step::step(state);
-    let return_to_title = matches!(result, crabgal_core::StepResult::EndOfScene);
-    if return_to_title {
-        // Keep the final authored frame intact while the UI covers it. The
-        // return-to-title transition performs the destructive end_game cleanup
-        // only after the screen is fully black.
-        *state = snapshot;
+fn finish_step(state: &mut State, restore_previous_dialogue: bool) -> TickProgress {
+    let result = step::step_preserving_presentation(state);
+    let return_to_title = matches!(result, keine_core::StepResult::EndOfScene);
+    if return_to_title && restore_previous_dialogue && state.dialogue.is_none() {
+        // `advance` moves the settled line here before stepping. Moving it
+        // back retains the final text without cloning the complete State.
+        state.dialogue = state.previous_dialogue.take();
     }
     TickProgress {
         changed: true,
@@ -931,7 +938,7 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
     }
 
     let shake_finished = if let Some(shake) = &mut state.camera_shake {
-        use crabgal_core::{CameraShakeAxis, CameraShakeFalloff};
+        use keine_core::{CameraShakeAxis, CameraShakeFalloff};
 
         changed = true;
         shake.elapsed = (shake.elapsed + delta_seconds).min(shake.spec.duration);
@@ -1147,7 +1154,7 @@ fn advance_stage_animation(state: &mut State, delta_seconds: f32) {
 
 fn apply_stage_tracks(
     state: &mut State,
-    runtime: &mut crabgal_core::StageAnimationState,
+    runtime: &mut keine_core::StageAnimationState,
     local_time: f32,
 ) {
     for index in 0..runtime.animation.tracks.len() {
@@ -1174,7 +1181,7 @@ fn apply_stage_tracks(
 }
 
 fn sample_stage_track(
-    track: &crabgal_core::StageTrack,
+    track: &keine_core::StageTrack,
     time: f32,
     initial: f32,
     start_time: f32,
@@ -1208,10 +1215,10 @@ fn sample_stage_track(
 
 fn read_stage_value(
     state: &State,
-    target: &crabgal_core::StageTarget,
-    property: crabgal_core::StageProperty,
+    target: &keine_core::StageTarget,
+    property: keine_core::StageProperty,
 ) -> Option<f32> {
-    use crabgal_core::{StageProperty as P, StageTarget};
+    use keine_core::{StageProperty as P, StageTarget};
     if matches!(target, StageTarget::Camera) {
         return Some(match property {
             P::X => state.camera_transform.offset_x,
@@ -1242,11 +1249,11 @@ fn read_stage_value(
 
 fn write_stage_value(
     state: &mut State,
-    target: &crabgal_core::StageTarget,
-    property: crabgal_core::StageProperty,
+    target: &keine_core::StageTarget,
+    property: keine_core::StageProperty,
     value: f32,
 ) {
-    use crabgal_core::{StageProperty as P, StageTarget};
+    use keine_core::{StageProperty as P, StageTarget};
     if matches!(target, StageTarget::Camera) {
         match property {
             P::X => state.camera_transform.offset_x = value,
@@ -1283,10 +1290,10 @@ fn write_stage_value(
 }
 
 fn read_stage_effect(
-    effect: &crabgal_core::PostProcessEffect,
-    property: crabgal_core::StageProperty,
+    effect: &keine_core::PostProcessEffect,
+    property: keine_core::StageProperty,
 ) -> Option<f32> {
-    use crabgal_core::StageProperty as P;
+    use keine_core::StageProperty as P;
     Some(match property {
         P::FocalDistance => effect.focal_distance.unwrap_or(0.0),
         P::BlurStrength => effect.blur_strength,
@@ -1363,11 +1370,11 @@ fn read_stage_effect(
 }
 
 fn write_stage_effect(
-    effect: &mut crabgal_core::PostProcessEffect,
-    property: crabgal_core::StageProperty,
+    effect: &mut keine_core::PostProcessEffect,
+    property: keine_core::StageProperty,
     value: f32,
 ) {
-    use crabgal_core::StageProperty as P;
+    use keine_core::StageProperty as P;
     match property {
         P::FocalDistance => effect.focal_distance = Some(value),
         P::BlurStrength => effect.blur_strength = value,
@@ -1445,10 +1452,10 @@ fn write_stage_effect(
 
 fn apply_stage_camera_patches(
     state: &mut State,
-    runtime: &crabgal_core::StageAnimationState,
+    runtime: &keine_core::StageAnimationState,
     local_time: f32,
 ) {
-    use crabgal_core::StageEventKind;
+    use keine_core::StageEventKind;
     let patches = runtime.animation.events.iter().filter_map(|event| {
         if let StageEventKind::CameraPatch { targets, effect } = &event.kind {
             Some((event.time, targets, effect))
@@ -1468,8 +1475,8 @@ fn apply_stage_camera_patches(
     }
 }
 
-fn reset_stage_camera_patches(state: &mut State, runtime: &crabgal_core::StageAnimationState) {
-    use crabgal_core::StageEventKind;
+fn reset_stage_camera_patches(state: &mut State, runtime: &keine_core::StageAnimationState) {
+    use keine_core::StageEventKind;
     for event in &runtime.animation.events {
         let StageEventKind::CameraPatch { targets, effect } = &event.kind else {
             continue;
@@ -1482,7 +1489,7 @@ fn reset_stage_camera_patches(state: &mut State, runtime: &crabgal_core::StageAn
     }
 }
 
-fn trigger_stage_events(state: &mut State, runtime: &crabgal_core::StageAnimationState) {
+fn trigger_stage_events(state: &mut State, runtime: &keine_core::StageAnimationState) {
     let duration = runtime.animation.duration.max(f32::EPSILON);
     let from = runtime.previous_elapsed;
     let to = runtime.elapsed;
@@ -1493,7 +1500,7 @@ fn trigger_stage_events(state: &mut State, runtime: &crabgal_core::StageAnimatio
         for event in &runtime.animation.events {
             let at = base + event.time.clamp(0.0, duration);
             match &event.kind {
-                crabgal_core::StageEventKind::Particle {
+                keine_core::StageEventKind::Particle {
                     id,
                     effect,
                     duration,
@@ -1503,7 +1510,7 @@ fn trigger_stage_events(state: &mut State, runtime: &crabgal_core::StageAnimatio
                     if crossed(from, to, at) {
                         state.particle_effects.insert(
                             runtime_id.clone(),
-                            crabgal_core::ActiveParticleEffect::new(effect.clone()),
+                            keine_core::ActiveParticleEffect::new(effect.clone()),
                         );
                     }
                     if crossed(from, to, at + duration.max(0.0)) {
@@ -1514,8 +1521,8 @@ fn trigger_stage_events(state: &mut State, runtime: &crabgal_core::StageAnimatio
                         }
                     }
                 }
-                crabgal_core::StageEventKind::CameraShake(shake) if crossed(from, to, at) => {
-                    state.camera_shake = Some(crabgal_core::CameraShakeState {
+                keine_core::StageEventKind::CameraShake(shake) if crossed(from, to, at) => {
+                    state.camera_shake = Some(keine_core::CameraShakeState {
                         spec: *shake,
                         elapsed: 0.0,
                         offset_x: 0.0,
@@ -1523,10 +1530,10 @@ fn trigger_stage_events(state: &mut State, runtime: &crabgal_core::StageAnimatio
                         blocking: false,
                     });
                 }
-                crabgal_core::StageEventKind::Scene(cue) if crossed(from, to, at) => {
+                keine_core::StageEventKind::Scene(cue) if crossed(from, to, at) => {
                     apply_stage_scene_cue(state, cue);
                 }
-                crabgal_core::StageEventKind::Audio(cue) => {
+                keine_core::StageEventKind::Audio(cue) => {
                     let runtime_id = format!("{}:audio:{}", runtime.animation.id, cue.id);
                     if crossed(from, to, at) {
                         start_stage_audio(state, cue, &runtime_id);
@@ -1545,8 +1552,8 @@ fn crossed(from: f32, to: f32, event: f32) -> bool {
     event > from && event <= to
 }
 
-fn start_stage_audio(state: &mut State, cue: &crabgal_core::StageAudioCue, runtime_id: &str) {
-    use crabgal_core::StageAudioKind;
+fn start_stage_audio(state: &mut State, cue: &keine_core::StageAudioCue, runtime_id: &str) {
+    use keine_core::StageAudioKind;
 
     match cue.kind {
         StageAudioKind::Bgm => {
@@ -1558,7 +1565,7 @@ fn start_stage_audio(state: &mut State, cue: &crabgal_core::StageAudioCue, runti
         StageAudioKind::Effect if cue.looped => {
             state.looping_effects.insert(
                 runtime_id.to_owned(),
-                crabgal_core::EffectState {
+                keine_core::EffectState {
                     file: cue.file.clone(),
                     volume: cue.volume.clamp(0.0, 1.0),
                 },
@@ -1567,13 +1574,13 @@ fn start_stage_audio(state: &mut State, cue: &crabgal_core::StageAudioCue, runti
         StageAudioKind::Effect => {
             state
                 .effect_queue
-                .push(crabgal_core::EffectEvent::Play(crabgal_core::EffectCue {
+                .push(keine_core::EffectEvent::Play(keine_core::EffectCue {
                     file: cue.file.clone(),
                     volume: cue.volume.clamp(0.0, 1.0),
                 }));
         }
         StageAudioKind::Vocal => {
-            state.vocal_event = Some(crabgal_core::VocalCue {
+            state.vocal_event = Some(keine_core::VocalCue {
                 file: (!cue.file.is_empty()).then(|| cue.file.clone()),
                 volume: cue.volume.clamp(0.0, 1.0),
             });
@@ -1581,8 +1588,8 @@ fn start_stage_audio(state: &mut State, cue: &crabgal_core::StageAudioCue, runti
     }
 }
 
-fn stop_stage_audio(state: &mut State, cue: &crabgal_core::StageAudioCue, runtime_id: &str) {
-    use crabgal_core::StageAudioKind;
+fn stop_stage_audio(state: &mut State, cue: &keine_core::StageAudioCue, runtime_id: &str) {
+    use keine_core::StageAudioKind;
 
     match cue.kind {
         StageAudioKind::Bgm => {
@@ -1597,7 +1604,7 @@ fn stop_stage_audio(state: &mut State, cue: &crabgal_core::StageAudioCue, runtim
         }
         StageAudioKind::Effect => {}
         StageAudioKind::Vocal => {
-            state.vocal_event = Some(crabgal_core::VocalCue {
+            state.vocal_event = Some(keine_core::VocalCue {
                 file: None,
                 volume: 0.0,
             });
@@ -1605,9 +1612,9 @@ fn stop_stage_audio(state: &mut State, cue: &crabgal_core::StageAudioCue, runtim
     }
 }
 
-fn apply_stage_scene_cue(state: &mut State, cue: &crabgal_core::StageSceneCue) {
-    use crabgal_core::state::Sprite;
-    use crabgal_core::{BlendMode, Position, SpriteLayout, SpriteTransform, Transition};
+fn apply_stage_scene_cue(state: &mut State, cue: &keine_core::StageSceneCue) {
+    use keine_core::state::Sprite;
+    use keine_core::{BlendMode, Position, SpriteLayout, SpriteTransform, Transition};
 
     state.bg = None;
     state.bg_transition = None;
@@ -1661,8 +1668,8 @@ fn apply_stage_scene_cue(state: &mut State, cue: &crabgal_core::StageSceneCue) {
 }
 
 fn advance_keyframes(
-    transform: &mut crabgal_core::SpriteTransform,
-    animation: &mut crabgal_core::state::KeyframeAnimation,
+    transform: &mut keine_core::SpriteTransform,
+    animation: &mut keine_core::state::KeyframeAnimation,
     delta_seconds: f32,
 ) -> bool {
     if animation.frames.is_empty() {
@@ -1708,11 +1715,11 @@ fn advance_keyframes(
 }
 
 fn sample_preset(
-    base: crabgal_core::SpriteTransform,
-    preset: &crabgal_core::AnimationPreset,
+    base: keine_core::SpriteTransform,
+    preset: &keine_core::AnimationPreset,
     progress: f32,
-) -> crabgal_core::SpriteTransform {
-    use crabgal_core::AnimationPreset;
+) -> keine_core::SpriteTransform {
+    use keine_core::AnimationPreset;
     let progress = progress.clamp(0.0, 1.0);
     let mut result = base;
     let eased = 1.0 - (1.0 - progress).powi(3);
@@ -1766,22 +1773,70 @@ fn sample_preset(
 }
 
 fn preset_final_transform(
-    base: crabgal_core::SpriteTransform,
-    _preset: &crabgal_core::AnimationPreset,
-) -> crabgal_core::SpriteTransform {
+    base: keine_core::SpriteTransform,
+    _preset: &keine_core::AnimationPreset,
+) -> keine_core::SpriteTransform {
     base
 }
 
 #[cfg(test)]
 mod tests {
-    use crabgal_core::state::{Dialogue, KeyframeAnimation, TransformAnimation};
-    use crabgal_core::{
+    use keine_core::state::{Dialogue, KeyframeAnimation, TransformAnimation};
+    use keine_core::{
         Action, AnimationPreset, BlendMode, DialoguePause, Easing, Position, PostProcessPatch,
         SpriteTransform, StageAnimation, StageAudioCue, StageAudioKind, StageEvent, StageEventKind,
         StageKeyframe, StageProperty, StageTarget, StageTrack, Transition, Value,
     };
 
     use super::*;
+
+    #[test]
+    fn held_control_reasserts_skip_until_release() {
+        let mut toggles = ToggleStates::default();
+        let held = InputActions {
+            skip_held: true,
+            ..default()
+        };
+
+        update_toggle_shortcuts(&held, &mut toggles, &mut 0.0);
+        assert!(toggles.skip);
+
+        // Any runtime boundary that clears the effective toggle cannot cancel
+        // a physical key that is still held on the next tick.
+        toggles.skip = false;
+        update_toggle_shortcuts(&held, &mut toggles, &mut 0.0);
+        assert!(toggles.skip);
+
+        let released = InputActions {
+            skip_released: true,
+            ..default()
+        };
+        update_toggle_shortcuts(&released, &mut toggles, &mut 0.0);
+        assert!(!toggles.skip);
+    }
+
+    #[test]
+    fn control_k_toggle_survives_the_modifier_release() {
+        let mut toggles = ToggleStates::default();
+        let chord = InputActions {
+            toggle_skip: true,
+            skip_released: true,
+            ..default()
+        };
+        update_toggle_shortcuts(&chord, &mut toggles, &mut 0.0);
+        assert!(toggles.skip);
+
+        update_toggle_shortcuts(&InputActions::default(), &mut toggles, &mut 0.0);
+        assert!(toggles.skip);
+    }
+
+    #[test]
+    fn dialogue_retraction_stays_in_a_visible_speed_range() {
+        assert_eq!(dialogue_retraction_speed(10.0), 6.0);
+        assert_eq!(dialogue_retraction_speed(30.0), 9.0);
+        assert_eq!(dialogue_retraction_speed(50.0), 12.0);
+        assert_eq!(dialogue_retraction_speed(120.0), 12.0);
+    }
 
     fn dialogue_state() -> State {
         let mut state = State::new();
@@ -1985,11 +2040,11 @@ mod tests {
         let manifest = LocalAssetManifest(std::collections::HashMap::from([(
             "start".into(),
             LocalSceneAssets {
-                action_spans: vec![crabgal_loader::SourceSpan { line: 1, column: 1 }],
+                action_spans: vec![keine_loader::SourceSpan { line: 1, column: 1 }],
                 ..default()
             },
         )]));
-        let initial = crabgal_loader::ProjectInitialState {
+        let initial = keine_loader::ProjectInitialState {
             variables: std::collections::HashMap::from([(
                 "route".into(),
                 Value::Str("fresh".into()),
@@ -2026,8 +2081,8 @@ mod tests {
             "main".into(),
             LocalSceneAssets {
                 action_spans: vec![
-                    crabgal_loader::SourceSpan { line: 1, column: 1 },
-                    crabgal_loader::SourceSpan { line: 1, column: 1 },
+                    keine_loader::SourceSpan { line: 1, column: 1 },
+                    keine_loader::SourceSpan { line: 1, column: 1 },
                 ],
                 ..default()
             },
@@ -2038,7 +2093,7 @@ mod tests {
             &manifest,
             "main",
             1,
-            crabgal_loader::ProjectInitialState::default(),
+            keine_loader::ProjectInitialState::default(),
         ));
         assert_eq!(
             state
@@ -2081,7 +2136,7 @@ mod tests {
         )]));
         state.current_scene = "main".into();
         state.ended = false;
-        assert_eq!(step::step(&mut state), crabgal_core::StepResult::AwaitClick);
+        assert_eq!(step::step(&mut state), keine_core::StepResult::AwaitClick);
         state.dialogue.as_mut().unwrap().visible_chars = 4;
 
         let progress = advance_once(&mut state);
@@ -2222,7 +2277,7 @@ mod tests {
             playback_rate: 1.0,
             blocking: true,
         };
-        state.stage_animation = Some(crabgal_core::StageAnimationState::new(animation, &state));
+        state.stage_animation = Some(keine_core::StageAnimationState::new(animation, &state));
 
         advance_stage_animation(&mut state, 0.25);
         assert!((state.camera_transform.scale_x - 1.25).abs() < 0.001);
@@ -2268,7 +2323,7 @@ mod tests {
             playback_rate: 1.0,
             blocking: true,
         };
-        state.stage_animation = Some(crabgal_core::StageAnimationState::new(animation, &state));
+        state.stage_animation = Some(keine_core::StageAnimationState::new(animation, &state));
 
         advance_stage_animation(&mut state, 0.2);
         assert_eq!(
@@ -2299,7 +2354,7 @@ mod tests {
                     id: "hero".into(),
                     image: "hero.webp".into(),
                     position: Position::center(0.0),
-                    layout: crabgal_core::SpriteLayout::Natural,
+                    layout: keine_core::SpriteLayout::Natural,
                     transition: Transition::Instant,
                     transform: SpriteTransform::default(),
                     z_index: 0,
@@ -2315,7 +2370,7 @@ mod tests {
 
         assert_eq!(
             step::step(&mut state),
-            crabgal_core::StepResult::AwaitPresentation
+            keine_core::StepResult::AwaitPresentation
         );
         assert!(state.sprites.contains_key("hero"));
 
@@ -2344,7 +2399,7 @@ mod tests {
         state.vars.insert("route".into(), Value::Str("kept".into()));
         state.global_vars.insert("chapter".into(), Value::Int(2));
         state.unlocked_cg.insert("old.webp".into(), "Old".into());
-        assert_eq!(step::step(&mut state), crabgal_core::StepResult::AwaitClick);
+        assert_eq!(step::step(&mut state), keine_core::StepResult::AwaitClick);
         state.record_dialogue(0);
         state.mark_current_dialogue_read();
 
@@ -2384,6 +2439,6 @@ mod tests {
             state.program_fingerprint
         );
         assert!(state.read_dialogues.is_empty());
-        assert_eq!(state.effect_queue, [crabgal_core::EffectEvent::Stop]);
+        assert_eq!(state.effect_queue, [keine_core::EffectEvent::Stop]);
     }
 }

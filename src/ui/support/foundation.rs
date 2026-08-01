@@ -1,4 +1,4 @@
-//! Fixed UI primitives for the dedicated crabgal shell.
+//! Fixed UI primitives for the dedicated keine shell.
 //!
 //! This is deliberately not a theme system: the engine has one visual
 //! language. Keeping the two fonts and tiny animation helpers here removes
@@ -6,10 +6,11 @@
 
 use bevy::prelude::*;
 use bevy::text::FontWeight;
-use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
+use bevy::ui::FocusPolicy;
+use keine_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
-pub(crate) const TEXT_FONT_PATH: &str = "embedded://crabgal/assets/fonts/MavenPro-CJK.ttf";
-pub(crate) const ICON_FONT_PATH: &str = "embedded://crabgal/assets/fonts/bootstrap-icons.ttf";
+pub(crate) const TEXT_FONT_PATH: &str = "embedded://keine/assets/fonts/MavenPro-CJK.ttf";
+pub(crate) const ICON_FONT_PATH: &str = "embedded://keine/assets/fonts/bootstrap-icons.ttf";
 
 // One compact visual vocabulary for the dedicated shell. Button highlights
 // deliberately reuse the empty Save/Load slot surface instead of approximating
@@ -101,6 +102,68 @@ pub(crate) fn fill_node() -> Node {
         width: Val::Px(DESIGN_WIDTH),
         height: Val::Px(DESIGN_HEIGHT),
         ..default()
+    }
+}
+
+/// Shared left-to-right hover fill used by compact shell buttons.
+#[derive(Component, Default)]
+pub(crate) struct HoverSweep {
+    fill: f32,
+}
+
+impl HoverSweep {
+    pub(crate) fn is_animating(&self, interaction: Interaction) -> bool {
+        (self.fill - hover_sweep_target(interaction)).abs() > 0.001
+    }
+}
+
+#[derive(Component)]
+pub(crate) struct HoverSweepFill;
+
+const HOVER_SWEEP_RATE: f32 = 18.0;
+
+pub(crate) fn hover_sweep_fill() -> impl Bundle {
+    (
+        HoverSweepFill,
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::ZERO,
+            top: Val::ZERO,
+            width: Val::Percent(0.0),
+            height: Val::Percent(100.0),
+            ..default()
+        },
+        BackgroundColor(button_surface(SURFACE_HOVER_ALPHA)),
+        FocusPolicy::Pass,
+    )
+}
+
+fn hover_sweep_target(interaction: Interaction) -> f32 {
+    if interaction == Interaction::None {
+        0.0
+    } else {
+        100.0
+    }
+}
+
+pub(crate) fn animate_hover_sweeps(
+    time: Res<Time>,
+    mut buttons: Query<(&Interaction, &mut HoverSweep, &Children)>,
+    mut fills: Query<&mut Node, With<HoverSweepFill>>,
+) {
+    let amount = exp_lerp(time.delta_secs(), HOVER_SWEEP_RATE);
+    for (interaction, mut sweep, children) in &mut buttons {
+        let target = hover_sweep_target(*interaction);
+        if (sweep.fill - target).abs() <= 0.001 {
+            sweep.fill = target;
+        } else {
+            sweep.fill += (target - sweep.fill) * amount;
+        }
+        for child in children.iter() {
+            if let Ok(mut node) = fills.get_mut(child) {
+                node.width = Val::Percent(sweep.fill);
+            }
+        }
     }
 }
 
@@ -215,5 +278,14 @@ mod tests {
                 SURFACE_ACTIVE_ALPHA
             )
         );
+    }
+
+    #[test]
+    fn hover_sweep_runs_from_zero_to_full_width() {
+        let idle = HoverSweep::default();
+        assert!(!idle.is_animating(Interaction::None));
+        assert!(idle.is_animating(Interaction::Hovered));
+        assert_eq!(hover_sweep_target(Interaction::None), 0.0);
+        assert_eq!(hover_sweep_target(Interaction::Pressed), 100.0);
     }
 }

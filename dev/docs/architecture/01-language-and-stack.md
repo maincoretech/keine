@@ -1,10 +1,10 @@
-# crabgal 语言与技术栈 (v2)
+# keine 语言与技术栈 (v2)
 
 ## 决策
 
 | 层 | 技术 | 理由 |
 |----|------|------|
-| 核心引擎 | Rust (crabgal-core, crabgal-loader) | 确定性执行、可序列化状态、零成本抽象 |
+| 核心引擎 | Rust (keine-core, keine-loader) | 确定性执行、可序列化状态、零成本抽象 |
 | 游戏引擎 | Bevy 0.19 | 成熟 ECS、跨平台渲染、Plugin 架构、bevy_ui |
 | GPU 渲染 | wgpu (via Bevy) | 跨平台 Vulkan/Metal/DX12 |
 | UI | bevy_ui | Node 布局、Interaction 系统、Bootstrap Icons 字体图标 |

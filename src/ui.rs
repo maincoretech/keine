@@ -69,6 +69,7 @@ fn init_resources(app: &mut App) {
         .init_resource::<control_bar::ToggleStates>()
         .init_resource::<control_bar::AutoHideTiming>()
         .init_resource::<control_bar::QuickSavePreview>()
+        .init_resource::<dialog::SavePreviewWriter>()
         .init_resource::<textbox::TextboxOverlayFade>()
         .init_resource::<textbox::InitialTextboxFade>()
         .init_resource::<textbox::TextboxLayoutMotion>()
@@ -112,6 +113,7 @@ fn add_stage_systems(app: &mut App) {
             (
                 textbox::sync_visibility,
                 textbox::update_textbox,
+                textbox::animate_glyph_reveals,
                 textbox::update_mini_avatar,
                 textbox::animate_overlay_fade,
                 textbox::animate_initial_fade,
@@ -122,6 +124,7 @@ fn add_stage_systems(app: &mut App) {
             control_bar::animate_hover,
             foundation::attach_button_feedback,
             foundation::animate_button_feedback,
+            foundation::animate_hover_sweeps,
             control_bar::handle_button_click.run_if(loading::assets_ready),
             (
                 control_bar::show_quick_preview,
@@ -186,7 +189,6 @@ fn add_overlay_systems(app: &mut App) {
                     .run_if(loading::assets_ready)
                     .run_if(input_scope::dialog_allowed),
                 dialog::animate_dialog,
-                dialog::update_dialog_buttons,
             )
                 .chain(),
             (

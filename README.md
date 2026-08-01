@@ -1,8 +1,17 @@
-# crabgal
+# Kēne
 
-crabgal is a native visual novel engine built with Rust, Bevy, and wgpu. It
+<p align="center">
+  <img src="assets/branding/keine-portrait.png" width="220" alt="Kēne character artwork">
+</p>
+
+**Kēne** (/keːne/) is a native visual novel engine built with Rust, Bevy, and wgpu. It
 uses a fixed 1920×1080 design space and translates external project formats
 through independent adapters.
+
+The product and executable are named Kēne/`keine`. Compatibility identifiers
+such as the `keine` project key, save adapter, file formats, environment
+variables, and internal crate names remain stable so existing games and saves
+continue to work.
 
 ## Highlights
 
@@ -43,7 +52,7 @@ Invalid project paths fail immediately.
 
 | Input | Entry |
 |---|---|
-| crabgal / WebGAL directory | `config.yaml` |
+| Native / WebGAL directory | `config.yaml` |
 | LetsGal project | `project.json` |
 | Packaged game | `game.hxz` |
 
@@ -56,11 +65,11 @@ adapter:
     - { path: "content/shared", format: fs }
     - { path: "packs/route.hxz", format: hexz }
   script: webgal
-  store: crabgal
+  store: keine
 ```
 
 Later sources override earlier files with the same logical path. LetsGal
-synchronization reads open project files and `.studio/state.json`; crabgal
+synchronization reads open project files and `.studio/state.json`; Kēne
 remains a separate native process and does not modify Studio.
 
 Optional shell features are disabled by default. A native `config.yaml` can
@@ -75,7 +84,7 @@ LetsGal projects use the equivalent project-level object in `project.json`:
 
 ```json
 {
-  "crabgal": {
+  "keine": {
     "features": {
       "extra": true
     }
@@ -91,7 +100,7 @@ Built-in adapters:
 | Scripts | `webgal` |
 | Editor projects | `letsgal` |
 | Packages | `hexz` |
-| Saves | `crabgal` |
+| Saves | `keine` |
 
 ## Architecture
 
@@ -112,8 +121,8 @@ logical resources.
 
 ```mermaid
 flowchart LR
-    R["crabgal<br/>src/"] --> L["crabgal-loader<br/>crates/loader/"]
-    R --> C["crabgal-core<br/>crates/core/"]
+    R["Kēne runtime<br/>src/"] --> L["keine-loader<br/>crates/loader/"]
+    R --> C["keine-core<br/>crates/core/"]
     L --> C
 ```
 
@@ -156,14 +165,14 @@ development libraries.
 Package an encrypted Hexz game:
 
 ```bash
-CRABGAL_HEXZ_PASSWORD='your-password' \
+KEINE_HEXZ_PASSWORD='your-password' \
   dev/scripts/package-release.sh projects/test-project target/release-package
 ```
 
 Create a macOS app bundle:
 
 ```bash
-dev/scripts/bundle-macos.sh projects/test-project crabgal
+dev/scripts/bundle-macos.sh projects/test-project
 ```
 
 ## Validate

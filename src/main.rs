@@ -1,3 +1,3 @@
 fn main() -> std::process::ExitCode {
-    crabgal::run_cli()
+    keine::run_cli()
 }

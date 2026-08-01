@@ -21,22 +21,22 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: crabgal-linux
+            artifact: keine-linux
           - os: macos-latest
-            artifact: crabgal-macos
+            artifact: keine-macos
           - os: windows-latest
-            artifact: crabgal-windows
+            artifact: keine-windows
     runs-on: ${{ matrix.os }}
     env:
-      CRABGAL_HEXZ_PASSWORD: ${{ secrets.CRABGAL_HEXZ_PASSWORD }}
+      KEINE_HEXZ_PASSWORD: ${{ secrets.KEINE_HEXZ_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Require encrypted-release secret
         shell: bash
         run: |
-          if [[ -z "$CRABGAL_HEXZ_PASSWORD" ]]; then
-            echo "Configure the CRABGAL_HEXZ_PASSWORD repository secret" >&2
+          if [[ -z "$KEINE_HEXZ_PASSWORD" ]]; then
+            echo "Configure the KEINE_HEXZ_PASSWORD repository secret" >&2
             exit 2
           fi
       - name: Detect project media features
@@ -44,10 +44,10 @@ jobs:
         run: |
           source dev/scripts/audio-features.sh
           features="$(detect_audio_features "${{ inputs.project || 'projects/test-project' }}")"
-          echo "CRABGAL_RELEASE_FEATURES=$features" >> "$GITHUB_ENV"
+          echo "KEINE_RELEASE_FEATURES=$features" >> "$GITHUB_ENV"
       - uses: ./.github/actions/setup-video
         with:
-          enabled: ${{ contains(env.CRABGAL_RELEASE_FEATURES, 'video-ffmpeg') }}
+          enabled: ${{ contains(env.KEINE_RELEASE_FEATURES, 'video-ffmpeg') }}
       - name: Install pinned Hexz CLI
         shell: bash
         run: >-

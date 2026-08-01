@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use crabgal_core::config::{AssetSourceConfig, GameConfig};
+use keine_core::config::{AssetSourceConfig, GameConfig};
 
 use crate::{LoaderRegistry, StructuredSceneLoader};
 
@@ -279,7 +279,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("crabgal-content-{nonce}"));
+        let root = std::env::temp_dir().join(format!("keine-content-{nonce}"));
         fs::create_dir_all(root.join("assets")).unwrap();
         fs::create_dir_all(root.join("scripts")).unwrap();
         fs::create_dir_all(root.join("packs/voices")).unwrap();

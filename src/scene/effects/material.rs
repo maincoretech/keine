@@ -7,7 +7,7 @@ use bevy::render::render_resource::{
 };
 use bevy::shader::ShaderRef;
 use bevy::sprite_render::{AlphaMode2d, Material2d, Material2dKey, Material2dPlugin};
-use crabgal_core::{BlendMode, CameraTargets, ColorToneMode, PostProcessEffect, VisualFilter};
+use keine_core::{BlendMode, CameraTargets, ColorToneMode, PostProcessEffect, VisualFilter};
 
 pub(crate) struct StageMaterialPlugin;
 
@@ -257,10 +257,10 @@ pub(crate) fn active_lut_preset(effect: &PostProcessEffect) -> Option<&str> {
 }
 
 pub(crate) fn animation_uniform(
-    films: crabgal_core::FilmEffects,
-    animation: Option<&crabgal_core::state::PresetAnimation>,
+    films: keine_core::FilmEffects,
+    animation: Option<&keine_core::state::PresetAnimation>,
 ) -> Vec4 {
-    use crabgal_core::AnimationPreset;
+    use keine_core::AnimationPreset;
     const SHOCKWAVE_IN: u8 = 1 << 6;
     const SHOCKWAVE_OUT: u8 = 1 << 7;
 
@@ -278,8 +278,8 @@ pub(crate) fn animation_uniform(
 
 #[cfg(test)]
 mod animation_tests {
-    use crabgal_core::state::PresetAnimation;
-    use crabgal_core::{AnimationPreset, FilmEffects, SpriteTransform};
+    use keine_core::state::PresetAnimation;
+    use keine_core::{AnimationPreset, FilmEffects, SpriteTransform};
 
     use super::animation_uniform;
 

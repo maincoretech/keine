@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
-use crabgal_core::Value;
-use crabgal_core::config::GameConfig;
+use keine_core::Value;
+use keine_core::config::GameConfig;
 
 use crate::{ContentProject, LoadedScene};
 

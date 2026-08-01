@@ -2,9 +2,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use bevy::prelude::*;
-use crabgal_core::State;
-use crabgal_core::config::GameConfig;
-use crabgal_loader::{
+use keine_core::State;
+use keine_core::config::GameConfig;
+use keine_loader::{
     ContentProject, ResourceRef, SceneRef, ScriptLanguageRegistry, ScriptWatcher, StoreAdapter,
 };
 use std::collections::HashMap;
@@ -31,7 +31,7 @@ pub struct StoreCodec(pub Arc<dyn StoreAdapter>);
 pub struct ScriptWatcherResource(pub Mutex<ScriptWatcher>);
 
 /// Marks a read-only native-editor preview that follows the adapter's
-/// persisted selected-block position instead of entering crabgal's title screen.
+/// persisted selected-block position instead of entering keine's title screen.
 #[derive(Resource, Default)]
 pub struct EditorSyncSession;
 
@@ -39,6 +39,10 @@ pub struct EditorSyncSession;
 /// Shipping runtimes and deterministic benchmarks deliberately omit it.
 #[derive(Resource, Default)]
 pub struct HotReloadSession;
+
+/// Enables diagnostics intended for the `keine dev` and Studio sync UIs.
+#[derive(Resource, Default)]
+pub struct DevelopmentSession;
 
 /// Disables all project-owned persistence while keeping normal runtime input
 /// and scene semantics. Used by deterministic performance captures.
@@ -52,7 +56,7 @@ pub struct LocalAssetManifest(pub HashMap<String, LocalSceneAssets>);
 pub struct LocalSceneAssets {
     pub resources: Vec<ResourceRef>,
     pub sub_scenes: Vec<SceneRef>,
-    pub action_spans: Vec<crabgal_loader::SourceSpan>,
+    pub action_spans: Vec<keine_loader::SourceSpan>,
 }
 
 #[derive(Resource, Default)]

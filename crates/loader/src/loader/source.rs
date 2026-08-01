@@ -8,14 +8,14 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use hexz_k::{ResourceFile, ResourcePack, ResourcePackOptions};
 
-const DEFAULT_HEXZ_PASSWORD: &str = "crabgal-hexz-resource-v1";
+const DEFAULT_HEXZ_PASSWORD: &str = "keine-hexz-resource-v1";
 const HEXZ_READ_AHEAD_BYTES: usize = 64 * 1024;
 
 /// Compile-time resource key used for deliberately weak distribution
 /// protection. It deters casual extraction but is not DRM: a key embedded in
 /// a client executable can always be recovered by a determined user.
 pub fn hexz_password() -> &'static str {
-    option_env!("CRABGAL_HEXZ_PASSWORD").unwrap_or(DEFAULT_HEXZ_PASSWORD)
+    option_env!("KEINE_HEXZ_PASSWORD").unwrap_or(DEFAULT_HEXZ_PASSWORD)
 }
 
 /// One immutable physical content backend shared by scripts and Bevy assets.

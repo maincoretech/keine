@@ -9,7 +9,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use bevy::prelude::*;
-use crabgal_core::State;
+use keine_core::State;
 
 use crate::runtime::GameSystemSet;
 
@@ -55,8 +55,8 @@ mod tests {
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use crabgal_core::Value;
-    use crabgal_core::state::DialogueKey;
+    use keine_core::Value;
+    use keine_core::state::DialogueKey;
 
     use super::*;
 
@@ -66,11 +66,11 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("crabgal-reset-all-{nonce}"));
+        let root = std::env::temp_dir().join(format!("keine-reset-all-{nonce}"));
         let saves = root.join("saves");
         fs::create_dir_all(&saves).unwrap();
         for name in [
-            "slot_0.crabgal",
+            "slot_0.keine",
             "slot_0.webp",
             "slot_9.legacy-store",
             "settings.bin",

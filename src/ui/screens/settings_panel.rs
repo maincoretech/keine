@@ -8,7 +8,9 @@ use bevy::ui::FocusPolicy;
 use bevy::window::{MonitorSelection, WindowMode};
 
 use crate::render::blur::{DialogCamera, UiBlurCamera};
-use crate::runtime::resources::{ContentProjectResource, GameConfigResource, ProjectRoot};
+use crate::runtime::resources::{
+    ContentProjectResource, DevelopmentSession, GameConfigResource, ProjectRoot,
+};
 use crate::storage::settings::{RuntimeSettings, UiLocale};
 use crate::ui::control_bar::{
     BlurStrength, ButtonAction, ControlInput, SkipMode, ToggleStates, UiBlurSource,
@@ -511,6 +513,7 @@ pub(crate) struct SettingsSyncContext<'w, 's> {
     fonts: Res<'w, UiFonts>,
     config: Res<'w, GameConfigResource>,
     content: Res<'w, ContentProjectResource>,
+    development: Option<Res<'w, DevelopmentSession>>,
     fades: Query<'w, 's, &'static mut MenuFade>,
     watermarks: Query<'w, 's, (&'static mut SettingsWatermark, &'static mut Text)>,
     save_roots:
@@ -710,6 +713,7 @@ pub fn sync_settings(
                 &settings,
                 &context.config,
                 &context.content,
+                context.development.is_some(),
                 &font,
             );
         });
@@ -721,6 +725,7 @@ fn spawn_options_content(
     settings: &RuntimeSettings,
     config: &GameConfigResource,
     project: &ContentProjectResource,
+    development: bool,
     font: &Handle<Font>,
 ) {
     root.spawn((
@@ -805,6 +810,7 @@ fn spawn_options_content(
                                     config,
                                     content: project,
                                 },
+                                development,
                                 font,
                             );
                         }
@@ -1001,6 +1007,7 @@ fn spawn_settings_page(
     ui: &SettingsUi,
     settings: &RuntimeSettings,
     project: SettingsProjectContext<'_>,
+    development: bool,
     font: &Handle<Font>,
 ) {
     let active = ui.page == page;
@@ -1038,7 +1045,9 @@ fn spawn_settings_page(
                 spawn_text_preview(content, settings, font, SettingsGridCell::spanning(1, 3, 3));
             }
             SettingsPage::Audio => spawn_sliders(content, AUDIO_SLIDERS, settings, font, 0),
-            SettingsPage::About => spawn_about_page(content, project, settings.locale, font),
+            SettingsPage::About => {
+                spawn_about_page(content, project, development, settings.locale, font)
+            }
         });
 }
 
@@ -1097,6 +1106,7 @@ fn spawn_sliders(
 fn spawn_about_page(
     content: &mut ChildSpawnerCommands,
     project: SettingsProjectContext<'_>,
+    development: bool,
     locale: UiLocale,
     font: &Handle<Font>,
 ) {
@@ -1108,7 +1118,7 @@ fn spawn_about_page(
     };
     let loader_tree = loader_tree(project);
     let runtime = format!(
-        "crabgal {}  ·  {} / {}",
+        "Kēne {}  ·  {} / {}",
         env!("CARGO_PKG_VERSION"),
         std::env::consts::OS,
         std::env::consts::ARCH,
@@ -1131,7 +1141,7 @@ fn spawn_about_page(
                 ..default()
             },))
                 .with_children(|engine| {
-                    engine.spawn(about_title(tr(locale, UiText::AboutCrabgal), font, 48.0));
+                    engine.spawn(about_title(tr(locale, UiText::AboutKeine), font, 48.0));
                     engine.spawn(about_copy(
                         tr(locale, UiText::EngineDescription),
                         font,
@@ -1158,13 +1168,22 @@ fn spawn_about_page(
                     project.spawn(about_title(tr(locale, UiText::CurrentProject), font, 39.0));
                     project.spawn(about_title(config.title.clone(), font, 31.5));
                     project.spawn(about_copy(project_description, font, 22.5, 0.62));
-                    spawn_about_section(
-                        project,
-                        tr(locale, UiText::Loader),
-                        &loader_tree,
-                        font,
-                        Val::Px(36.0),
-                    );
+                    if development {
+                        spawn_about_section(
+                            project,
+                            tr(locale, UiText::BuildTime),
+                            env!("KEINE_BUILD_TIME"),
+                            font,
+                            Val::Px(30.0),
+                        );
+                        spawn_about_section(
+                            project,
+                            tr(locale, UiText::Loader),
+                            &loader_tree,
+                            font,
+                            Val::Px(27.0),
+                        );
+                    }
                 });
         });
 }
@@ -1242,7 +1261,7 @@ fn spawn_repository_link(parent: &mut ChildSpawnerCommands, locale: UiLocale, fo
                         AboutRepositoryLabel,
                         ZIndex(1),
                         text_weight(
-                            "github.com/shiftz300/crabgal",
+                            "github.com/maincoretech/keine",
                             font,
                             20.25,
                             0.58,
@@ -1258,8 +1277,8 @@ pub fn handle_about_repository_link(links: AboutRepositoryLinkQuery) {
         if *interaction == Interaction::Pressed {
             bevy::tasks::IoTaskPool::get()
                 .spawn(async {
-                    if let Err(error) = webbrowser::open("https://github.com/shiftz300/crabgal") {
-                        log::error!("failed to open crabgal repository: {error}");
+                    if let Err(error) = webbrowser::open("https://github.com/maincoretech/keine") {
+                        log::error!("failed to open Kēne repository: {error}");
                     }
                 })
                 .detach();
@@ -1959,8 +1978,8 @@ pub fn handle_setting_action(context: SettingActionContext) {
         }
         SettingAction::ExportData => {
             let Some(path) = rfd::FileDialog::new()
-                .add_filter("crabgal backup", &["crabgal-backup"])
-                .set_file_name("crabgal.crabgal-backup")
+                .add_filter("keine backup", &["keine-backup"])
+                .set_file_name("keine.keine-backup")
                 .save_file()
             else {
                 return;
@@ -1972,7 +1991,7 @@ pub fn handle_setting_action(context: SettingActionContext) {
         }
         SettingAction::ImportData => {
             let Some(path) = rfd::FileDialog::new()
-                .add_filter("crabgal backup", &["crabgal-backup"])
+                .add_filter("keine backup", &["keine-backup"])
                 .pick_file()
             else {
                 return;

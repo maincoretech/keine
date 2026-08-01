@@ -5,14 +5,13 @@ use bevy::ecs::system::SystemParam;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
-use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
+use keine_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
 use crate::render::blur::{DialogCamera, UiBlurCamera};
 use crate::runtime::resources::GameState;
 use crate::ui::FULLSCREEN_BLUR_STRENGTH;
 use crate::ui::control_bar::{BlurStrength, UiBlurSource};
-use crate::ui::dialog::DialogButtonVisual;
-use crate::ui::foundation::UiFonts;
+use crate::ui::foundation::{HoverSweep, UiFonts, hover_sweep_fill};
 
 const CARET_PERIOD_SECONDS: f32 = 1.0;
 const CARET_VISIBLE_SECONDS: f32 = 0.55;
@@ -230,7 +229,7 @@ pub(crate) fn ensure_spawned(
                 ));
                 panel.spawn((
                     UserInputConfirm,
-                    DialogButtonVisual::default(),
+                    HoverSweep::default(),
                     Button,
                     Node {
                         min_width: Val::Px(112.5),
@@ -239,15 +238,18 @@ pub(crate) fn ensure_spawned(
                         ..default()
                     },
                     BackgroundColor(Color::NONE),
-                    children![(
-                        Text::new("OK"),
-                        TextFont {
-                            font: fonts.text.clone().into(),
-                            font_size: FontSize::Px(30.0),
-                            ..default()
-                        },
-                        TextColor(Color::srgba(1.0, 1.0, 1.0, 0.8)),
-                    )],
+                    children![
+                        hover_sweep_fill(),
+                        (
+                            Text::new("OK"),
+                            TextFont {
+                                font: fonts.text.clone().into(),
+                                font_size: FontSize::Px(30.0),
+                                ..default()
+                            },
+                            TextColor(Color::srgba(1.0, 1.0, 1.0, 0.8)),
+                        )
+                    ],
                 ));
             });
         });
@@ -346,7 +348,7 @@ pub(crate) fn sync(mut context: UserInputSyncContext) {
         description.0.clone_from(&input.description);
     }
     let (display_value, placeholder) = match input.value_type {
-        crabgal_core::InputValueType::Bool => (
+        keine_core::InputValueType::Bool => (
             if input.value == "true" {
                 input.true_text.as_str()
             } else {
@@ -411,11 +413,11 @@ pub(crate) fn handle(
             }
             match &event.logical_key {
                 Key::Character(value)
-                    if input.value_type != crabgal_core::InputValueType::Bool
+                    if input.value_type != keine_core::InputValueType::Bool
                         && (input.max_length == 0
                             || input.value.chars().count() < input.max_length) =>
                 {
-                    let accepted = input.value_type == crabgal_core::InputValueType::String
+                    let accepted = input.value_type == keine_core::InputValueType::String
                         || value.chars().all(|character| {
                             character.is_ascii_digit() || ".-+".contains(character)
                         });
@@ -425,7 +427,7 @@ pub(crate) fn handle(
                         changed = true;
                     }
                 }
-                Key::Space if input.value_type == crabgal_core::InputValueType::Bool => {
+                Key::Space if input.value_type == keine_core::InputValueType::Bool => {
                     input.value = if input.value == "true" {
                         "false"
                     } else {
@@ -436,7 +438,7 @@ pub(crate) fn handle(
                     changed = true;
                 }
                 Key::Space
-                    if input.value_type == crabgal_core::InputValueType::String
+                    if input.value_type == keine_core::InputValueType::String
                         && (input.max_length == 0
                             || input.value.chars().count() < input.max_length) =>
                 {
@@ -453,8 +455,8 @@ pub(crate) fn handle(
             }
         }
         if submit {
-            if crabgal_core::step::submit_user_input(state_value) {
-                crabgal_core::step::step(state_value);
+            if keine_core::step::submit_user_input(state_value) {
+                keine_core::step::step(state_value);
             }
             changed = true;
         }

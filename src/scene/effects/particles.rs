@@ -14,7 +14,7 @@ use bevy::render::render_resource::{
 };
 use bevy::shader::ShaderRef;
 use bevy::sprite_render::{AlphaMode2d, Material2d, Material2dKey, Material2dPlugin};
-use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH, ParticleEffect};
+use keine_core::{DESIGN_HEIGHT, DESIGN_WIDTH, ParticleEffect};
 
 use crate::runtime::platform::DesignViewport;
 use crate::runtime::resources::GameState;

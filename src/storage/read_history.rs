@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use bevy::prelude::*;
-use crabgal_core::state::DialogueKey;
+use keine_core::state::DialogueKey;
 use serde::{Deserialize, Serialize};
 
 use crate::runtime::resources::{EditorSyncSession, GameState, PersistenceDisabled, ProjectRoot};
@@ -15,6 +15,12 @@ const VERSION: u32 = 1;
 struct HistoryFile {
     version: u32,
     entries: HashSet<DialogueKey>,
+}
+
+#[derive(Serialize)]
+struct HistoryFileRef<'a> {
+    version: u32,
+    entries: &'a HashSet<DialogueKey>,
 }
 
 #[derive(Resource, Default)]
@@ -76,7 +82,7 @@ pub(crate) fn persist_read_history(
     }
 }
 
-pub(super) fn reset_memory(state: &mut crabgal_core::State, writer: &mut ReadHistoryWriter) {
+pub(super) fn reset_memory(state: &mut keine_core::State, writer: &mut ReadHistoryWriter) {
     state.read_dialogues.clear();
     writer.saved_len = 0;
     writer.dirty_seconds = 0.0;
@@ -89,9 +95,9 @@ fn save(history: &HashSet<DialogueKey>, project_root: &Path) -> Result<()> {
     fs::create_dir_all(parent)?;
     fs::write(
         &temporary,
-        postcard::to_stdvec(&HistoryFile {
+        postcard::to_stdvec(&HistoryFileRef {
             version: VERSION,
-            entries: history.clone(),
+            entries: history,
         })?,
     )?;
     fs::rename(&temporary, &path)?;
@@ -114,7 +120,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("crabgal-read-history-{nonce}"));
+        let root = std::env::temp_dir().join(format!("keine-read-history-{nonce}"));
         let expected = HashSet::from([DialogueKey {
             scene: "main".into(),
             action_index: 7,

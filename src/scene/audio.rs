@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use bevy::audio::{AudioSinkPlayback, PlaybackMode, Volume};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use crabgal_core::{BgmState, EffectEvent, EffectState};
+use keine_core::{BgmState, EffectEvent, EffectState};
 
 use crate::runtime::audio::insert_player;
 use crate::runtime::resources::{GameConfigResource, GameState};

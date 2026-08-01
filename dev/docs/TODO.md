@@ -1,4 +1,4 @@
-# crabgal TODO
+# keine TODO
 
 > 对齐 WebGAL 脚本标准。当前事实以
 > [`webgal-compatibility/semantic-matrix.md`](webgal-compatibility/semantic-matrix.md) 为准；
@@ -8,7 +8,7 @@
 
 ## 当前优先级
 
-1. **延期 adapter** — Live2D 继续按用户决定暂缓，Steam/Spine 保持可选；视频进入跨平台打包验收
+1. **桌面视频后端** — macOS AVFoundation 已接入，继续 Windows Media Foundation 与 Hexz byte source；Linux 保留 FFmpeg
 2. **跨平台视觉基线** — 在 Linux/Windows、1× DPI、超宽/高窗口建立独立 screenshot/golden
 
 ## WebGAL 4.6.2 兼容性审计与内部格式 (DONE)
@@ -80,7 +80,7 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 - [x] 项目加载顺序稳定，并拒绝重复场景名
 - [x] ScriptWatcher 持有 watcher 生命周期，脚本修改后真实重载
 - [x] 三 crate 按稳定职责重组：core `model/runtime`、loader `adapter/loader`、Bevy `runtime/scene/storage/ui`
-- [x] 根 package 直接产出 `crabgal` 引擎二进制，内部库目录收敛为 `crates/core` 与 `crates/loader`
+- [x] 根 package 直接产出 `keine` 引擎二进制，内部库目录收敛为 `crates/core` 与 `crates/loader`
 - [x] 验收项目收敛为唯一、自包含的 `projects/test-project`，移除旧空壳、无效脚本、生成物和未使用配置/依赖
 - [x] WebGAL 语法、语言类型与解析实现集中到 `crates/loader/src/adapter/`
 - [x] 合并短生命周期模块：core transition math、loader watcher、Bevy plugin/runtime 注册
@@ -174,14 +174,14 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 - [x] Title EXTRA — WebGAL K 风格 CG/BGM 鉴赏、分页预览、全屏查看与播放器
 - [x] 本地资源清单、当前场景/子场景前看预取、标题页入口资源预热与加载状态
   （Bevy `AssetServer`）
-- [x] `crabgal-loader` adapter 按 asset/script/store 分类，并由配置分别选择 FS、WebGAL 与存档 codec
+- [x] `keine-loader` adapter 按 asset/script/store 分类，并由配置分别选择 FS、WebGAL 与存档 codec
 - [x] `config.yaml` 有序多来源、同名 scene/资产确定性覆盖与多目录热重载
 - [x] 统一 InputAction 层（鼠标、触控、键盘、手柄）
 - [x] `hexz_k` 标准加密 `.hxz`、受限缓存、配置/脚本直读与 seekable Bevy `AssetReader`
 - [x] macOS .app bundle 脚本
 - [x] Linux / macOS / Windows fmt、Clippy、测试与 release CI
 - [x] WebGAL_k 风格 CI 加密发布 — 通过 GitHub Actions Secret / 手动构建输入注入
-  `CRABGAL_HEXZ_PASSWORD`，让 Hexz 打包与引擎编译使用同一密钥，并确保日志、缓存与
+  `KEINE_HEXZ_PASSWORD`，让 Hexz 打包与引擎编译使用同一密钥，并确保日志、缓存与
   artifact 不泄露密钥
 
 Phase 7 已完成不依赖第三方专有 SDK 的工程主线。Live2D、Spine、Steam 和
@@ -191,20 +191,27 @@ Flowchart 仍保留为可选适配工作，不能用静态占位或实验依赖�
 ### 延期适配（不属于 Phase 7 完成条件）
 
 - GIF、Spine 与 Live2D（Live2D 已由用户决定暂缓）
-- Android / iOS 视频解码暂缓：桌面端继续按项目资源启用 `video-ffmpeg`；移动端不承诺
-  FFmpeg 交叉编译与分发，待统一 `VideoDecoder` 接口下接入平台硬件解码后端后再验收
+- [x] macOS AVFoundation 单播放器音画时钟、BGRA 帧输出、共享 Bevy 渲染生命周期与后台
+  Hexz 临时源准备；发行按内容启用 `video-native`
+- [ ] Windows Media Foundation frame-server 后端与 Hexz `IMFByteStream`；完成前 Windows/Linux
+  按项目资源启用 `video-ffmpeg`
+- [ ] 移除 Hexz 视频的明文临时文件：macOS `AVAssetResourceLoader` 与 Windows byte stream
+  共用稳定随机读取合同；具体 API、缓存、取消和 fixture 见
+  [`09-native-video.md`](architecture/09-native-video.md)
+- Android / iOS 视频解码暂缓：移动端不承诺 FFmpeg 交叉编译与分发，待桌面平台 byte
+  source 与硬件解码生命周期稳定后再验收
 - MainCore 固定 UI 的完整本地化（主题和运行时换肤明确不做）
 - Steam 集成与 Flowchart 内容页
 - SafeArea、横竖屏、响应式断点及 Android / iOS / Web 设备验收
 
-## LetsGal Studio 1.9.0 adapter（DONE — 待用户验收）
+## LetsGal Studio 1.9.1 adapter（DONE — 待用户验收）
 
 - [x] 原生 `project.json`、章节、角色、场景与 `assets/.manifest.json` 多文件读取
 - [x] 34 种已知内置 block 穷举编译；未知字段保留，未知 block 明确报错
 - [x] Studio 原生资源目录直接挂载，hash 与逻辑路径均可解析
 - [x] 内容/清单变化热重载；`.studio/state.json` 调试位置变化只做 fragment/block seek
 - [x] 多来源 FS 资源热重载、覆盖层删除 fallback、manifest alias 刷新与静态资源存在性校验
-- [x] crabgal 内建字体与外部工程解耦，不要求 Studio 工程复制引擎 UI 资源
+- [x] keine 内建字体与外部工程解耦，不要求 Studio 工程复制引擎 UI 资源
 - [x] 7 个系统 slot 映射到固定 MainCore UI，默认图库方法映射到 `Unlock`
 - [x] 全屏 curtain 与 letterbox curtain 使用原生、帧率无关的演出状态
 - [x] floatingText 的位置、颜色、字号、淡入/保持/淡出与阻塞语义
@@ -216,8 +223,10 @@ Flowchart 仍保留为可选适配工作，不能用静态占位或实验依赖�
   不把大型参数表复制进每一条 Action
 - [x] 1.9.0 `waitForInput`、时间轴 audio cue、立绘视口相对高度、表情级覆盖与角色皮肤选择
   全部降级为 adapter-neutral core 状态；跨章节 fragment 继续使用原生 call stack
-- [x] 1.9.0 SDK 变更完成边界复核：crabgal 仍不执行扩展；Backspace 1.3.0 提升 SDK/宿主
+- [x] 1.9.0 SDK 变更完成边界复核：keine 仍不执行扩展；Backspace 1.3.0 提升 SDK/宿主
   版本声明并保留官方兼容的统一 method 实现
+- [x] 1.9.1 `chapterFolders` / `chapterTreeOrder` 作为章节树执行顺序，缺失时回退旧
+  `chapterOrder`；默认壳对话框打字间隔、淡入时长、10 种出现效果及参数进入原生 config/UI
 - [x] 视频和完整相机后处理进入 typed core、原生运行状态与 Bevy backend；内置 block
   不得经 `HostCommand` 降级，流式视频由项目特征按需启用
 - [x] Godray 八字段进入稀疏 IR、状态插值和单通道 GPU 材质；动态 `callFragment`
@@ -228,14 +237,14 @@ Flowchart 仍保留为可选适配工作，不能用静态占位或实验依赖�
   重编译，再按最新选中剧情块从入口确定性重放
 - [x] 调试位置 watcher 加 200 ms 去重轮询兜底，系统事件被合并时仍能恢复同步
 - [x] 导入 slot/shared 变量声明默认值及角色属性默认值；调试重放不继承上一次预览的瞬态变量
-- [x] Studio 为调试控制面：同步窗口不接受独立剧情推进，避免 crabgal 与编辑器选中剧情块产生双状态
+- [x] Studio 为调试控制面：同步窗口不接受独立剧情推进，避免 keine 与编辑器选中剧情块产生双状态
 - [x] 明确区分剧情调试位置与鼠标指针；个性化鼠标指针不兼容，统一使用系统默认指针
 - [x] 同步会话禁止存档、设置、profile、已读和图鉴写回，保持 Studio 工程只读
 - [x] Studio adapter 保持只读且 loader-only；普通 dev、library embed 与发行运行不依赖该 adapter
 - [ ] （延期）视频和完整相机后处理的移动端逐像素/音画验收与平台解码后端分发
 
 明确不支持 Studio 扩展或注入。`reference/12` 只保留为 Studio 格式与历史 API 调研资料，
-不构成 crabgal 运行时依赖或后续实现清单。
+不构成 keine 运行时依赖或后续实现清单。
 
 实现和当前能力矩阵见
 [`08-letsgal-studio.md`](architecture/08-letsgal-studio.md)；API 反向工程证据见
@@ -256,10 +265,11 @@ Flowchart 仍保留为可选适配工作，不能用静态占位或实验依赖�
 | [06-hexz-packaging.md](architecture/06-hexz-packaging.md) | Hexz 标准打包、校验与挂载 |
 | [07-content-loader.md](architecture/07-content-loader.md) | 内容来源、adapter、多根覆盖与 Hexz 加载契约 |
 | [08-letsgal-studio.md](architecture/08-letsgal-studio.md) | LetsGal 原生工程、动作编译、资源与步进调试边界 |
+| [09-native-video.md](architecture/09-native-video.md) | 桌面原生视频后端、FFmpeg 回退与 Hexz byte source 待办 |
 | `crates/loader/src/lib.rs` | 可注册语言、诊断与资源引用合同 |
 | [07-references.md](reference/07-references.md) | 业界引擎参考 |
 | [09-webgal-script-reference.md](reference/09-webgal-script-reference.md) | WebGAL 脚本参考 |
-| [10-webgal-k-gap-analysis.md](reference/10-webgal-k-gap-analysis.md) | 本地 WebGAL_K 4.6.1 与 crabgal 0.2.0 的历史缺口快照 |
-| [11-engine-advantages.md](reference/11-engine-advantages.md) | crabgal 的差异化、优势支柱与量化验收标准 |
+| [10-webgal-k-gap-analysis.md](reference/10-webgal-k-gap-analysis.md) | 本地 WebGAL_K 4.6.1 与 keine 0.2.0 的历史缺口快照 |
+| [11-engine-advantages.md](reference/11-engine-advantages.md) | keine 的差异化、优势支柱与量化验收标准 |
 | [webgal-compatibility/README.md](webgal-compatibility/README.md) | WebGAL 4.6.2 当前语义矩阵、视觉证据、内部格式与综合示例 |
 | [phases.md](acceptance/phases.md) | Phase 1–7 桌面、状态 UI、音频、演出、文本及工程能力验收步骤 |

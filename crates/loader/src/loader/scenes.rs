@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use crabgal_core::Action;
+use keine_core::Action;
 
 use crate::{
     ContentMount, ContentProject, Diagnostic, DiagnosticLevel, ResourceRef, SceneRef,
@@ -147,7 +147,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
-    use crabgal_core::{Program, State, StepResult, step};
+    use keine_core::{Program, State, StepResult, step};
 
     fn project(root: &Path) -> ContentProject {
         ContentProject {
@@ -170,7 +170,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let project_root = std::env::temp_dir().join(format!("crabgal-scenes-{nonce}"));
+        let project_root = std::env::temp_dir().join(format!("keine-scenes-{nonce}"));
         let root = project_root.join("scripts");
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("b.txt"), "B:second;").unwrap();
@@ -195,7 +195,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let project_root = std::env::temp_dir().join(format!("crabgal-scene-flow-{nonce}"));
+        let project_root = std::env::temp_dir().join(format!("keine-scene-flow-{nonce}"));
         let root = project_root.join("scripts");
         fs::create_dir_all(&root).unwrap();
         fs::write(
@@ -232,7 +232,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let project_root = std::env::temp_dir().join(format!("crabgal-nested-scenes-{nonce}"));
+        let project_root = std::env::temp_dir().join(format!("keine-nested-scenes-{nonce}"));
         let root = project_root.join("scripts");
         let nested_scene = "chapter_01/act_02/branch_03/part_04";
         fs::create_dir_all(root.join("chapter_01/act_02/branch_03")).unwrap();
@@ -283,9 +283,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let project_root = std::env::temp_dir().join(format!("crabgal-scene-links-{nonce}"));
-        let outside_root =
-            std::env::temp_dir().join(format!("crabgal-scene-links-outside-{nonce}"));
+        let project_root = std::env::temp_dir().join(format!("keine-scene-links-{nonce}"));
+        let outside_root = std::env::temp_dir().join(format!("keine-scene-links-outside-{nonce}"));
         let scripts = project_root.join("scripts");
         let nested = scripts.join("chapter");
         fs::create_dir_all(&nested).unwrap();
@@ -321,7 +320,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let project_root = std::env::temp_dir().join(format!("crabgal-scene-stems-{nonce}"));
+        let project_root = std::env::temp_dir().join(format!("keine-scene-stems-{nonce}"));
         let root = project_root.join("scripts");
         fs::create_dir_all(root.join("chapter_a")).unwrap();
         fs::create_dir_all(root.join("chapter_b")).unwrap();
@@ -346,7 +345,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("crabgal-scene-layers-{nonce}"));
+        let root = std::env::temp_dir().join(format!("keine-scene-layers-{nonce}"));
         let base_project = root.join("base-project");
         let patch_project = root.join("patch-project");
         let base = base_project.join("scripts");
@@ -372,7 +371,7 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.message.contains("overrides"))
         );
-        let crabgal_core::Action::Say { text, .. } = &scenes[0].actions[0] else {
+        let keine_core::Action::Say { text, .. } = &scenes[0].actions[0] else {
             panic!("expected dialogue");
         };
         assert_eq!(text, "new");

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use bevy::camera::visibility::RenderLayers;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use crabgal_core::{Anchor, BlendMode, SceneFit, SceneLayerLayout, SpriteLayout};
+use keine_core::{Anchor, BlendMode, SceneFit, SceneLayerLayout, SpriteLayout};
 
 use crate::runtime::platform::DesignViewport;
 use crate::runtime::resources::{GameConfigResource, GameState};
@@ -19,12 +19,12 @@ pub(crate) struct SpriteNode(pub(crate) String);
 #[derive(Default)]
 pub(crate) struct SpriteRenderCache {
     initialized: bool,
-    sprites: HashMap<String, crabgal_core::state::Sprite>,
-    camera_transform: crabgal_core::SpriteTransform,
-    camera_targets: crabgal_core::CameraTargets,
-    camera_shake: Option<crabgal_core::state::CameraShakeState>,
-    camera_effect: crabgal_core::PostProcessEffect,
-    camera_effect_targets: crabgal_core::CameraTargets,
+    sprites: HashMap<String, keine_core::state::Sprite>,
+    camera_transform: keine_core::SpriteTransform,
+    camera_targets: keine_core::CameraTargets,
+    camera_shake: Option<keine_core::state::CameraShakeState>,
+    camera_effect: keine_core::PostProcessEffect,
+    camera_effect_targets: keine_core::CameraTargets,
 }
 
 impl SpriteRenderCache {
@@ -63,7 +63,7 @@ fn sprite_geometry(
     texture_aspect: f32,
     texture_size: Vec2,
     figure_height: f32,
-    position: crabgal_core::Position,
+    position: keine_core::Position,
     anchor_offset: f32,
     figure_offset_y: f32,
 ) -> (Vec2, Vec2) {
@@ -72,9 +72,9 @@ fn sprite_geometry(
             let size = Vec2::new(figure_height * texture_aspect, figure_height);
             let center_x = match position.x {
                 Anchor::Left(offset) => offset.max(anchor_offset) + size.x * 0.5,
-                Anchor::Center(offset) => crabgal_core::DESIGN_WIDTH * 0.5 + offset,
+                Anchor::Center(offset) => keine_core::DESIGN_WIDTH * 0.5 + offset,
                 Anchor::Right(offset) => {
-                    crabgal_core::DESIGN_WIDTH - offset.max(anchor_offset) - size.x * 0.5
+                    keine_core::DESIGN_WIDTH - offset.max(anchor_offset) - size.x * 0.5
                 }
             };
             (
@@ -86,13 +86,13 @@ fn sprite_geometry(
             )
         }
         SpriteLayout::ViewportHeight(ratio) => {
-            let height = crabgal_core::DESIGN_HEIGHT * ratio.max(f32::EPSILON);
+            let height = keine_core::DESIGN_HEIGHT * ratio.max(f32::EPSILON);
             let size = Vec2::new(height * texture_aspect, height);
             let center_x = match position.x {
                 Anchor::Left(offset) => offset.max(anchor_offset) + size.x * 0.5,
-                Anchor::Center(offset) => crabgal_core::DESIGN_WIDTH * 0.5 + offset,
+                Anchor::Center(offset) => keine_core::DESIGN_WIDTH * 0.5 + offset,
                 Anchor::Right(offset) => {
-                    crabgal_core::DESIGN_WIDTH - offset.max(anchor_offset) - size.x * 0.5
+                    keine_core::DESIGN_WIDTH - offset.max(anchor_offset) - size.x * 0.5
                 }
             };
             (
@@ -105,12 +105,11 @@ fn sprite_geometry(
         }
         SpriteLayout::Scene(layout) => {
             let size = scene_layer_size(layout, texture_aspect, texture_size);
-            // Studio positions are top-left-origin. crabgal's scene world is
+            // Studio positions are top-left-origin. keine's scene world is
             // bottom-left-origin, so the vertical anchor is mirrored here.
             let center = Vec2::new(
                 layout.position[0] + (0.5 - layout.anchor[0]) * size.x,
-                crabgal_core::DESIGN_HEIGHT - layout.position[1]
-                    + (layout.anchor[1] - 0.5) * size.y,
+                keine_core::DESIGN_HEIGHT - layout.position[1] + (layout.anchor[1] - 0.5) * size.y,
             );
             (size, center)
         }
@@ -122,7 +121,7 @@ fn scene_layer_size(layout: SceneLayerLayout, aspect: f32, texture_size: Vec2) -
         return Vec2::new(width, height).max(Vec2::ONE);
     }
     let aspect = aspect.max(f32::EPSILON);
-    let design = Vec2::new(crabgal_core::DESIGN_WIDTH, crabgal_core::DESIGN_HEIGHT);
+    let design = Vec2::new(keine_core::DESIGN_WIDTH, keine_core::DESIGN_HEIGHT);
     match layout.fit {
         SceneFit::Cover => {
             if aspect >= design.x / design.y {
@@ -272,8 +271,8 @@ pub(crate) fn sync_sprites(
         };
         let scene_center_adjustment = if matches!(data.layout, SpriteLayout::Scene(_)) {
             Vec2::new(
-                (base_center.x - crabgal_core::DESIGN_WIDTH * 0.5) * (camera_zoom.x - 1.0),
-                (base_center.y - crabgal_core::DESIGN_HEIGHT * 0.5) * (camera_zoom.y - 1.0),
+                (base_center.x - keine_core::DESIGN_WIDTH * 0.5) * (camera_zoom.x - 1.0),
+                (base_center.y - keine_core::DESIGN_HEIGHT * 0.5) * (camera_zoom.y - 1.0),
             )
         } else {
             Vec2::ZERO
@@ -379,7 +378,7 @@ pub(crate) fn sync_sprites(
 mod tests {
     use super::{scene_layer_size, sprite_center_y, sprite_geometry};
     use bevy::prelude::*;
-    use crabgal_core::{Position, SceneFit, SceneLayerLayout, SpriteLayout};
+    use keine_core::{Position, SceneFit, SceneLayerLayout, SpriteLayout};
 
     #[test]
     fn project_offset_moves_the_shared_sprite_baseline() {

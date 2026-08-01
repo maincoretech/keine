@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use crabgal_core::config::GameConfig;
+use keine_core::config::GameConfig;
 
 use crate::loader::{HexzArchive, SourceMount, load_hexz_project_from_archive};
 use crate::{AdaptedProject, ProjectAdapter};

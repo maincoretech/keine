@@ -114,11 +114,11 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("crabgal-backup-{nonce}"));
-        let export = root.join("backup.crabgal-backup");
+        let root = std::env::temp_dir().join(format!("keine-backup-{nonce}"));
+        let export = root.join("backup.keine-backup");
         fs::create_dir_all(root.join("saves")).unwrap();
         fs::write(root.join("saves/settings.bin"), b"settings").unwrap();
-        fs::write(root.join("saves/slot_1.crabgal"), b"save").unwrap();
+        fs::write(root.join("saves/slot_1.keine"), b"save").unwrap();
 
         super::export(&root, &export).unwrap();
         fs::remove_dir_all(root.join("saves")).unwrap();
@@ -128,10 +128,7 @@ mod tests {
             fs::read(root.join("saves/settings.bin")).unwrap(),
             b"settings"
         );
-        assert_eq!(
-            fs::read(root.join("saves/slot_1.crabgal")).unwrap(),
-            b"save"
-        );
+        assert_eq!(fs::read(root.join("saves/slot_1.keine")).unwrap(), b"save");
         let _ = fs::remove_dir_all(root);
     }
 }

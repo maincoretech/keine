@@ -1,5 +1,5 @@
-use crabgal_core::config::GameConfig;
-use crabgal_core::{Action, ChoiceTarget};
+use keine_core::config::GameConfig;
+use keine_core::{Action, ChoiceTarget};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SourceSpan {
@@ -122,8 +122,8 @@ fn collect_references(
         Action::Unlock { kind, file, .. } => resource(
             file,
             match kind {
-                crabgal_core::UnlockKind::Cg => ResourceKind::Background,
-                crabgal_core::UnlockKind::Bgm => ResourceKind::Bgm,
+                keine_core::UnlockKind::Cg => ResourceKind::Background,
+                keine_core::UnlockKind::Bgm => ResourceKind::Bgm,
             },
         ),
         Action::ChangeScene(scene) | Action::CallScene(scene) => {

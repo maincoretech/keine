@@ -2,7 +2,7 @@
 
 ## 边界
 
-crabgal 将四类生命周期不同的数据分开处理：
+keine 将四类生命周期不同的数据分开处理：
 
 | 数据域 | 当前表示 | 持久化位置 | 恢复规则 |
 |---|---|---|---|
@@ -53,7 +53,7 @@ fingerprint 是确定性的兼容身份，不是密码学签名，也不替代�
 
 ```text
 offset  size  field
-0       8     magic = "CRABGAL\0"
+0       8     magic = "KEINE\0\0\0"
 8       4     version = 9 (little-endian u32)
 12      4     metadata_len (little-endian u32)
 16      4     state_len (little-endian u32)

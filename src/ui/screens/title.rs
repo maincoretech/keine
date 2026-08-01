@@ -13,7 +13,7 @@ use crate::ui::dialog::{DialogAction, DialogRequest};
 use crate::ui::foundation::{
     SURFACE_HOVER_ALPHA, UiFonts, button_surface, dark_surface, exp_lerp, smoothstep, text,
 };
-use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
+use keine_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
 const RETURN_COVER_SECONDS: f32 = 0.24;
 const RETURN_REVEAL_SECONDS: f32 = 0.34;
@@ -116,7 +116,7 @@ pub(crate) fn animate_return_to_title(
                     )
             });
             if transition.elapsed >= RETURN_COVER_SECONDS && background_ready {
-                crabgal_core::step::end_game(&mut context.state);
+                keine_core::step::end_game(&mut context.state);
                 transition.phase = ReturnToTitlePhase::Reveal;
                 transition.elapsed = 0.0;
             }
@@ -787,7 +787,7 @@ mod continue_preview_tests {
 }
 
 fn restore_continuation(
-    saved: crabgal_loader::SavedState,
+    saved: keine_loader::SavedState,
     current: &mut GameState,
 ) -> anyhow::Result<()> {
     // Restore into a candidate first. A script change can reconcile a formerly
@@ -808,7 +808,7 @@ fn start_game(state: &mut GameState) {
     state.backlog.clear();
     state.current_scene = crate::scene::entry_scene(state);
     state.cursor = 0;
-    crabgal_core::step::step(state);
+    keine_core::step::step(state);
 }
 
 fn start_game_from_keyboard(
@@ -836,8 +836,8 @@ fn start_game_from_keyboard(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crabgal_core::{Action, Program, State};
-    use crabgal_loader::CrabgalStore;
+    use keine_core::{Action, Program, State};
+    use keine_loader::KeineStore;
 
     #[test]
     fn title_button_keeps_hover_surface_inside_scaled_visual() {
@@ -1065,18 +1065,18 @@ mod tests {
         saved.install_program(program.clone());
         saved.current_scene = "start".into();
         saved.ended = false;
-        crabgal_core::step::step(&mut saved);
-        crabgal_core::step::step(&mut saved);
+        keine_core::step::step(&mut saved);
+        keine_core::step::step(&mut saved);
 
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let root =
-            std::env::temp_dir().join(format!("crabgal-continue-{}-{nonce}", std::process::id()));
+            std::env::temp_dir().join(format!("keine-continue-{}-{nonce}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         crate::storage::save::save_game(
-            &CrabgalStore,
+            &KeineStore,
             &saved,
             crate::storage::save::QUICK_SAVE_SLOT,
             &root,
@@ -1084,7 +1084,7 @@ mod tests {
         .unwrap();
 
         let loaded = crate::storage::save::load_game(
-            &CrabgalStore,
+            &KeineStore,
             crate::storage::save::QUICK_SAVE_SLOT,
             &root,
         )

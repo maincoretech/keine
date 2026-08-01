@@ -1,11 +1,11 @@
 [package]
-name = "crabgal-loader"
+name = "keine-loader"
 version.workspace = true
 edition.workspace = true
 description = "Unified asset/source and script adapters with hot reload"
 
 [dependencies]
-crabgal-core = { workspace = true }
+keine-core = { workspace = true }
 anyhow = { workspace = true }
 log = { workspace = true }
 notify = { workspace = true }

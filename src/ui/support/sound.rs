@@ -5,9 +5,9 @@ use crate::runtime::audio::OpusAudio;
 use crate::storage::settings::RuntimeSettings;
 use crate::ui::foundation::UiSoundStyle;
 
-const CLICK_PATH: &str = "embedded://crabgal/assets/audio/click.opus";
-const HOVER_PATH: &str = "embedded://crabgal/assets/audio/mouse-enter.opus";
-const SWITCH_PATH: &str = "embedded://crabgal/assets/audio/switch.opus";
+const CLICK_PATH: &str = "embedded://keine/assets/audio/click.opus";
+const HOVER_PATH: &str = "embedded://keine/assets/audio/mouse-enter.opus";
+const SWITCH_PATH: &str = "embedded://keine/assets/audio/switch.opus";
 // perceived baseline while preserving the full user-facing slider range.
 const UI_CUE_GAIN: f32 = 0.1;
 

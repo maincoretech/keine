@@ -23,4 +23,7 @@ jobs:
       - name: Check typed video backend
         if: runner.os == 'Linux' || runner.os == 'Windows'
         run: cargo check --workspace --features video-ffmpeg
+      - name: Check AVFoundation video backend
+        if: runner.os == 'macOS'
+        run: cargo check --workspace --features video-native
       - run: cargo build --release

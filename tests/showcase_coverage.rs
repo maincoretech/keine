@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
-use crabgal_core::{
+use keine_core::{
     Action, Anchor, AnimationPreset, BlendMode, Easing, StageEventKind, StageProperty, StageTarget,
     Transition,
 };
@@ -38,7 +38,7 @@ fn checked_in_showcase_exercises_every_native_effect_family() {
         }
         let source = fs::read_to_string(&path).unwrap();
         record_command_spellings(&source, &mut coverage.commands);
-        let report = crabgal_loader::parse_webgal_report(&source);
+        let report = keine_loader::parse_webgal_report(&source);
         assert!(
             report.diagnostics.is_empty(),
             "{}: {:?}",
@@ -191,13 +191,13 @@ fn checked_in_showcase_exercises_every_native_effect_family() {
 #[test]
 fn letsgal_1_9_showcase_exercises_every_timeline_property_and_event() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("projects/test-project");
-    let project = crabgal_loader::LoaderRegistry::default()
+    let project = keine_loader::LoaderRegistry::default()
         .open_project(&root)
         .expect("the LetsGal showcase should be a valid project")
         .expect("the LetsGal adapter should detect its showcase");
     assert_eq!(project.format, "letsgal");
 
-    let scenes = crabgal_loader::load_scenes(&project.content)
+    let scenes = keine_loader::load_scenes(&project.content)
         .expect("the LetsGal showcase should compile through the public loader");
     let mut properties = BTreeSet::new();
     let mut targets = BTreeSet::new();

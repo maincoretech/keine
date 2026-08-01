@@ -8,8 +8,8 @@ source "$root/dev/scripts/audio-features.sh"
 
 cd "$root"
 require_project_directory "$project"
-if [[ -z "${CRABGAL_HEXZ_PASSWORD:-}" ]]; then
-    echo "CRABGAL_HEXZ_PASSWORD must be set" >&2
+if [[ -z "${KEINE_HEXZ_PASSWORD:-}" ]]; then
+    echo "KEINE_HEXZ_PASSWORD must be set" >&2
     exit 2
 fi
 if ! command -v hexz >/dev/null 2>&1; then
@@ -37,17 +37,17 @@ find "$staging/project" -type f \( -name '.DS_Store' -o -name '*.meta' \) -delet
 
 rm -rf "$output"
 mkdir -p "$output"
-cp "$root/assets/icons/crabgal-256.png" "$output/crabgal.png"
-HEXZ_PASSWORD="$CRABGAL_HEXZ_PASSWORD" \
+cp "$root/assets/icons/keine-256.png" "$output/keine.png"
+HEXZ_PASSWORD="$KEINE_HEXZ_PASSWORD" \
     hexz pack "$staging/project" "$output/game.hxz" \
     --compression zstd --encrypt --block-size 65536
 
 release_features="$(detect_audio_features "$staging/project")"
-CRABGAL_HEXZ_PASSWORD="$CRABGAL_HEXZ_PASSWORD" \
-    CRABGAL_AUDIO_FEATURES="$release_features" \
+KEINE_HEXZ_PASSWORD="$KEINE_HEXZ_PASSWORD" \
+    KEINE_AUDIO_FEATURES="$release_features" \
     build_engine_for_project "$staging/project" --release --locked
-if [[ -f target/release/crabgal.exe ]]; then
-    cp target/release/crabgal.exe "$output/crabgal.exe"
+if [[ -f target/release/keine.exe ]]; then
+    cp target/release/keine.exe "$output/keine.exe"
     if [[ ",$release_features," == *,video-ffmpeg,* ]]; then
         if [[ -z "${VCPKG_ROOT:-}" ]]; then
             echo "VCPKG_ROOT is required to bundle the Windows FFmpeg runtime" >&2
@@ -66,17 +66,17 @@ if [[ -f target/release/crabgal.exe ]]; then
     fi
     cat > "$output/run.bat" <<'BAT'
 @echo off
-"%~dp0crabgal.exe" "%~dp0game.hxz"
+"%~dp0keine.exe" "%~dp0game.hxz"
 BAT
 else
-    cp target/release/crabgal "$output/crabgal"
+    cp target/release/keine "$output/keine"
     cat > "$output/run.sh" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 root="$(cd "$(dirname "$0")" && pwd)"
-exec "$root/crabgal" "$root/game.hxz"
+exec "$root/keine" "$root/game.hxz"
 SH
-    chmod +x "$output/crabgal" "$output/run.sh"
+    chmod +x "$output/keine" "$output/run.sh"
 fi
 
 printf '%s\n' "$root/$output"

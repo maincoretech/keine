@@ -144,7 +144,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("crabgal-settings-{nonce}"));
+        let root = std::env::temp_dir().join(format!("keine-settings-{nonce}"));
         let expected = RuntimeSettings {
             locale: UiLocale::Ja,
             master_volume: 0.4,
@@ -183,7 +183,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("crabgal-legacy-settings-{nonce}"));
+        let root = std::env::temp_dir().join(format!("keine-legacy-settings-{nonce}"));
         fs::create_dir_all(root.join("saves")).unwrap();
         fs::write(
             path(&root),

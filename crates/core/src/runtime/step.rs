@@ -40,7 +40,16 @@ const MAX_FORWARD_ACTIONS: usize = 1024;
 /// Execute actions from the current cursor position until we hit
 /// an interactive point (Say or Menu) or end of scene.
 pub fn step(state: &mut State) -> StepResult {
-    step_inner(state, None)
+    step_inner(state, None, true)
+}
+
+/// Execute one runtime step while deferring destructive end-of-game cleanup.
+///
+/// Native frontends use this while fading back to the title screen so the
+/// final authored frame remains visible. The frontend must call [`end_game`]
+/// after its transition completes.
+pub fn step_preserving_presentation(state: &mut State) -> StepResult {
+    step_inner(state, None, false)
 }
 
 /// Execute like [`step`], but never cross the requested cursor in one scene.
@@ -50,10 +59,10 @@ pub fn step_until_cursor(
     target_scene: &str,
     target_cursor: usize,
 ) -> StepResult {
-    step_inner(state, Some((target_scene, target_cursor)))
+    step_inner(state, Some((target_scene, target_cursor)), true)
 }
 
-fn step_inner(state: &mut State, stop: Option<(&str, usize)>) -> StepResult {
+fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bool) -> StepResult {
     if state.menu.is_some() {
         return StepResult::AwaitChoice;
     }
@@ -601,7 +610,9 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>) -> StepResult {
             }
             Action::End => {
                 debug!("End");
-                end_game(state);
+                if cleanup_on_end {
+                    end_game(state);
+                }
                 return StepResult::EndOfScene;
             }
             Action::Bgm {
@@ -2368,6 +2379,29 @@ mod tests {
         assert!(state.dialogue.is_none());
         assert!(state.ended);
         assert_eq!(step(&mut state), StepResult::EndOfScene);
+    }
+
+    #[test]
+    fn transition_step_defers_destructive_end_cleanup() {
+        let mut state = state_with(vec![
+            Action::ShowBg {
+                image: "ending.webp".into(),
+                transition: Transition::Instant,
+                transform: SpriteTransform::default(),
+            },
+            Action::End,
+        ]);
+
+        assert_eq!(
+            step_preserving_presentation(&mut state),
+            StepResult::EndOfScene
+        );
+        assert_eq!(state.bg.as_deref(), Some("ending.webp"));
+        assert!(!state.ended);
+
+        end_game(&mut state);
+        assert!(state.bg.is_none());
+        assert!(state.ended);
     }
 
     #[test]

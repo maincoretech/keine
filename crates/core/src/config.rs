@@ -114,7 +114,7 @@ fn default_script_adapter() -> String {
 }
 
 fn default_store_adapter() -> String {
-    "crabgal".into()
+    "keine".into()
 }
 
 impl Default for AdapterConfig {
@@ -263,12 +263,62 @@ pub struct StyleConfig {
     /// Auto-play delay in seconds.
     #[serde(default = "default_auto_delay")]
     pub auto_delay: f64,
+    /// Per-glyph reveal animation used by editor-authored dialogue boxes.
+    #[serde(default)]
+    pub text_reveal: TextRevealConfig,
+}
+
+/// Adapter-neutral form of LetsGal Studio 1.9.1's dialogue reveal settings.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TextRevealConfig {
+    /// Time for a newly revealed glyph to settle, in seconds.
+    #[serde(default)]
+    pub duration: f32,
+    #[serde(default)]
+    pub effect: TextRevealEffect,
+    #[serde(default = "default_reveal_distance")]
+    pub distance: f32,
+    #[serde(default = "default_reveal_scale")]
+    pub scale: f32,
+    #[serde(default = "default_reveal_rotation")]
+    pub rotation: f32,
+    #[serde(default = "default_reveal_blur")]
+    pub blur: f32,
+}
+
+impl Default for TextRevealConfig {
+    fn default() -> Self {
+        Self {
+            duration: 0.0,
+            effect: TextRevealEffect::Instant,
+            distance: default_reveal_distance(),
+            scale: default_reveal_scale(),
+            rotation: default_reveal_rotation(),
+            blur: default_reveal_blur(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum TextRevealEffect {
+    SmoothRise,
+    Classic,
+    #[default]
+    Instant,
+    SmoothDrop,
+    SlideLeft,
+    SlideRight,
+    Pop,
+    Flip,
+    Swing,
+    Blur,
 }
 
 // ── Defaults ──
 
 fn default_title() -> String {
-    "crabgal".into()
+    "Kēne".into()
 }
 fn default_title_background() -> String {
     "bg".into()
@@ -281,6 +331,18 @@ fn default_typewriter_speed() -> f64 {
 }
 fn default_auto_delay() -> f64 {
     2.0
+}
+fn default_reveal_distance() -> f32 {
+    8.0
+}
+fn default_reveal_scale() -> f32 {
+    0.82
+}
+fn default_reveal_rotation() -> f32 {
+    70.0
+}
+fn default_reveal_blur() -> f32 {
+    4.0
 }
 
 impl Default for GameConfig {
@@ -316,6 +378,7 @@ impl Default for StyleConfig {
             textbox_alpha: default_textbox_alpha(),
             typewriter_speed: default_typewriter_speed(),
             auto_delay: default_auto_delay(),
+            text_reveal: TextRevealConfig::default(),
         }
     }
 }
@@ -413,7 +476,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let cfg = GameConfig::default();
-        assert_eq!(cfg.title, "crabgal");
+        assert_eq!(cfg.title, "Kēne");
         assert_eq!(cfg.styles.typewriter_speed, 45.0);
         assert!(!cfg.features.extra);
         assert_eq!(cfg.adapter, AdapterConfig::default());
@@ -485,13 +548,13 @@ adapter:
     - path: "packs/route.hxz"
       format: hexz
   script: webgal
-  store: crabgal
+  store: keine
 "#;
         let cfg: GameConfig = noyalib::from_str(yaml).unwrap();
         assert_eq!(cfg.adapter.asset.len(), 3);
         assert_eq!(cfg.adapter.asset[1].format, "fs");
         assert_eq!(cfg.adapter.asset[2].format, "hexz");
         assert_eq!(cfg.adapter.script, "webgal");
-        assert_eq!(cfg.adapter.store, "crabgal");
+        assert_eq!(cfg.adapter.store, "keine");
     }
 }

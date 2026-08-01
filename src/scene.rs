@@ -49,7 +49,7 @@ impl Plugin for ScenePlugin {
     }
 }
 
-use crabgal_core::State;
+use keine_core::State;
 
 /// Prefer WebGAL's conventional `start`, with `main` as a language-neutral fallback.
 pub fn entry_scene(state: &State) -> String {

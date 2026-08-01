@@ -8,9 +8,9 @@ use crate::ui::backlog::{
 };
 use crate::ui::choice::{ChoiceButton, ChoiceRoot};
 use crate::ui::control_bar::{HoverAlpha, QuickPreviewFade};
-use crate::ui::dialog::{DialogButtonVisual, DialogFade};
+use crate::ui::dialog::DialogFade;
 use crate::ui::extra::{ExtraBgmPlayer, ExtraBgmSeekBar, ExtraMotion};
-use crate::ui::foundation::ButtonPressFeedback;
+use crate::ui::foundation::{ButtonPressFeedback, HoverSweep};
 use crate::ui::menu::{MenuFade, MenuRouteTransition};
 use crate::ui::save_load::{
     SaveLoadPage, SaveLoadPageTransition, SaveLoadPageVisual, SaveLoadSlotMotion, SaveLoadUi,
@@ -21,7 +21,9 @@ use crate::ui::settings_panel::{
     SettingSliderThumbVisual, SettingsPageButton, SettingsPageButtonVisual, SettingsPageTransition,
     SettingsUi, SettingsWatermark,
 };
-use crate::ui::textbox::{InitialTextboxFade, TextboxLayoutMotion, TextboxOverlayFade};
+use crate::ui::textbox::{
+    DialogueGlyphReveal, InitialTextboxFade, TextboxLayoutMotion, TextboxOverlayFade,
+};
 use crate::ui::title::{
     PendingTitleAction, ReturnToTitleTransition, TitleButtonMotion, TitleContinuePreview,
 };
@@ -41,6 +43,7 @@ pub(crate) struct UiActivityContext<'w, 's> {
     textbox_fade: Res<'w, TextboxOverlayFade>,
     textbox_initial_fade: Res<'w, InitialTextboxFade>,
     textbox_layout: Res<'w, TextboxLayoutMotion>,
+    dialogue_reveals: Query<'w, 's, (&'static DialogueGlyphReveal, &'static Visibility)>,
     hovers: Query<'w, 's, &'static HoverAlpha>,
     previews: Query<'w, 's, &'static QuickPreviewFade>,
     menu_fades: Query<'w, 's, &'static MenuFade>,
@@ -60,7 +63,7 @@ pub(crate) struct UiActivityContext<'w, 's> {
         ),
     >,
     dialog_fades: Query<'w, 's, &'static DialogFade>,
-    dialog_buttons: Query<'w, 's, &'static DialogButtonVisual>,
+    hover_sweeps: Query<'w, 's, (&'static Interaction, &'static HoverSweep)>,
     watermarks: Query<'w, 's, &'static SettingsWatermark>,
     save_slots: Query<'w, 's, (&'static Interaction, &'static SaveLoadSlotMotion)>,
     save_pages: Query<
@@ -154,9 +157,9 @@ pub(crate) fn update(context: UiActivityContext, mut activity: ResMut<UiAnimatio
         || context.backlog_scroll.is_animating()
         || context.dialog_fades.iter().any(DialogFade::is_animating)
         || context
-            .dialog_buttons
+            .hover_sweeps
             .iter()
-            .any(DialogButtonVisual::is_animating)
+            .any(|(interaction, sweep)| sweep.is_animating(*interaction))
         || context
             .watermarks
             .iter()
@@ -176,6 +179,10 @@ pub(crate) fn update(context: UiActivityContext, mut activity: ResMut<UiAnimatio
         || context.active_slider.is_active()
         || context.textbox_initial_fade.is_animating()
         || context.textbox_layout.is_animating()
+        || context
+            .dialogue_reveals
+            .iter()
+            .any(|(reveal, visibility)| reveal.is_animating(*visibility))
         || !is_endpoint(context.textbox_fade.alpha);
 }
 

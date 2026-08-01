@@ -7,7 +7,7 @@ setVar:enableLocked=false
 
 changeBg:calibration_day.webp -fade -duration=450
 changeFigure:aya_smile.webp -left -id=hero -fade -duration=450 -zIndex=2
-{heroName}:欢迎来到 crabgal 0.{showcaseVersion} 全能力验收。姓名框应位于 textbox 左侧，姓名文字靠左。
+{heroName}:欢迎来到 Kēne 0.{showcaseVersion} 全能力验收。姓名框应位于 textbox 左侧，姓名文字靠左。
 
 label:showcase_menu
 choose:00 · 完整连续验收:callScene(full_showcase.txt)|01 · 对话、textbox 与输入:callScene(01_dialogue_textbox.txt)|02 · 流程、变量与选择:callScene(02_flow_variables.txt)|03 · 背景、立绘与变换:callScene(03_stage_transform.txt)|04 · 全部转场与遮幅:callScene(04_transitions.txt)|05 · 全部动画与滤镜:callScene(05_animation_filter.txt)|06 · 全部粒子效果:callScene(06_particles.txt)|07 · 音频与流式视频:callScene(07_audio_video.txt)|08 · UI、存档与工程能力:callScene(08_ui_persistence.txt)|09 · changeScene 与 End:09_end.txt

@@ -556,7 +556,7 @@ pub fn update_blur_regions(
         if let Ok(mut bc) = ui_blur_query.single_mut() {
             let min = ui_origin;
             let max = min
-                + Vec2::new(crabgal_core::DESIGN_WIDTH, crabgal_core::DESIGN_HEIGHT)
+                + Vec2::new(keine_core::DESIGN_WIDTH, keine_core::DESIGN_HEIGHT)
                     * design_viewport.scale
                     * sf;
             bc.rects[0] = BlurRect {

@@ -1,7 +1,7 @@
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
-use crabgal_core::{MenuState, step};
+use keine_core::{MenuState, step};
 
 use crate::render::blur::UiBlurCamera;
 use crate::runtime::resources::GameState;

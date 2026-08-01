@@ -1,4 +1,4 @@
-# crabgal ECS 架构（历史参考）
+# keine ECS 架构（历史参考）
 
 > **注意：本文件描述的是早期自研 ECS 方案，现已改为使用 Bevy 0.19 完整 ECS。**
 > 当前架构见 [05-bevy-architecture.md](05-bevy-architecture.md)。
@@ -57,22 +57,22 @@ Update 是事件驱动的 `step_until_interactive()`，Render 是固定的 vsync
 ## Crate 划分
 
 ```
-crabgal/
-├── core/               # package crabgal-core
-├── loader/             # package crabgal-loader；统一 asset/script/store adapter
+keine/
+├── core/               # package keine-core
+├── loader/             # package keine-loader；统一 asset/script/store adapter
 │   └── adapter/asset.rs # fs、auto、hexz_k 标准 Hexz 资源包
-├── crabgal-render/     # wgpu 渲染后端 + Displayable trait
-├── crabgal-audio/      # rodio 音频
-├── crabgal-rollback/   # 差分快照 + 回退
-├── crabgal-editor/     # Tauri + Svelte 编辑器
+├── keine-render/     # wgpu 渲染后端 + Displayable trait
+├── keine-audio/      # rodio 音频
+├── keine-rollback/   # 差分快照 + 回退
+├── keine-editor/     # Tauri + Svelte 编辑器
 │   ├── src-tauri/      # Rust: Tauri commands + EditorSync
 │   └── src/            # Svelte: 编辑器 UI + 调试面板
-└── crabgal-cli/        # CLI: build / pack / preview / check
+└── keine-cli/        # CLI: build / pack / preview / check
 ```
 
 ## 与传统 VM 架构的对比
 
-| 维度 | VM 方案 (nova) | ECS 方案 (crabgal) |
+| 维度 | VM 方案 (nova) | ECS 方案 (keine) |
 |------|---------------|-------------------|
 | 状态管理 | 单一 VmState | Component 分散在 Entity 上 |
 | 扩展性 | 改 OpCode enum | 加 Component + System |

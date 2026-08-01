@@ -1,17 +1,17 @@
-# crabgal project map
+# keine project map
 
-crabgal 是 Bevy 0.19 构建的专用视觉小说引擎，兼容 WebGAL 脚本。模块按依赖方向组织，
+keine 是 Bevy 0.19 构建的专用视觉小说引擎，兼容 WebGAL 脚本。模块按依赖方向组织，
 不是按平台或 UI 页面拆成大量 crate。
 
 ## Workspace
 
 ```text
-crabgal-core   <- crabgal-loader <- crabgal
+keine-core   <- keine-loader <- keine
 纯状态与执行      内容与语言适配        最终引擎、ECS、渲染、UI、存储
 ```
 
 ```text
-crabgal/
+keine/
 ├── Cargo.toml                     根 package、workspace 与公共依赖
 ├── build.rs                       Windows PE 图标资源嵌入
 ├── assets/icons/                  跨平台图标母版及 PNG、ICO、ICNS 发行资源
@@ -31,19 +31,19 @@ crabgal/
 │       ├── overlays.rs + overlays/ 覆盖层门面及 Backlog、Dialog
 │       └── screens.rs + screens/  页面门面及 Title、Save/Load、Config、菜单路由
 ├── crates/
-│   ├── core/                      package: crabgal-core
+│   ├── core/                      package: keine-core
 │   │   └── src/
 │   │       ├── lib.rs             公共 model/runtime 门面与转场数学
 │   │       ├── config.rs          游戏配置数据
 │   │       ├── model.rs + model/  model 门面及 Action、State、公共值与渲染参数
 │   │       └── runtime.rs + runtime/ runtime 门面及表达式、确定性 step 执行器
-│   └── loader/                    package: crabgal-loader
+│   └── loader/                    package: keine-loader
 │       └── src/
 │           ├── adapter.rs + adapter/ 可配置格式 registry 及四类 adapter 实现
 │           │   ├── asset.rs       fs、auto 与 hexz_k 统一资源适配
 │           │   ├── editor.rs + editor/ 完整编辑器工程门面与 LetsGal 实现
 │           │   ├── script.rs + script/ 脚本门面与 WebGAL 统一 IR 导出
-│           │   └── store.rs       存档状态格式接口与 crabgal codec
+│           │   └── store.rs       存档状态格式接口与 keine codec
 │           ├── loader.rs + loader/ 多来源挂载、场景发现和开发热重载
 │           └── lib.rs             通用语言注册表、span、资源与诊断合同
 ├── projects/
@@ -61,7 +61,7 @@ crabgal/
 ## Plugin ownership
 
 - `RuntimePlugin`: 游戏输入、脚本推进、窗口布局。
-- `crabgal-loader`: 按配置挂载内容来源、合并脚本、扫描资源并维护热重载；不依赖 Bevy。
+- `keine-loader`: 按配置挂载内容来源、合并脚本、扫描资源并维护热重载；不依赖 Bevy。
 - `ScenePlugin`: 资源预取、背景/立绘同步、vocal 与轻量演出层。
 - `StoragePlugin`: 已读历史与鉴赏解锁持久化；存档 API 位于同模块。
 - `GameUiPlugin`: Textbox、控制栏、Choice、Dialog、Backlog、Save/Load、Title。
@@ -85,7 +85,7 @@ crabgal/
 
 - 设计空间固定为 1920×1080，背景纹理解码上限与设计分辨率一致，由 viewport 和 letterbox 适配窗口。
 - 三相机职责固定：Scene、普通 UI、Dialog/Modal。
-- `crabgal-core` 不依赖 Bevy。
+- `keine-core` 不依赖 Bevy。
 - 内容来源按配置顺序分层，后声明来源覆盖前面的同路径资产和同名 scene。
 - adapter 顶层只按 `asset`、`editor`、`script`、`store` 能力类别组织。
 - 需要跨多个 JSON 建立引用关系的格式放入 `editor/<format>/`（如
@@ -111,7 +111,7 @@ crabgal/
 
 ## Application icon
 
-`assets/icons/crabgal.png` 是唯一高清透明母版。运行时嵌入 256 px PNG，供 Windows 与
+`assets/icons/keine.png` 是唯一高清透明母版。运行时嵌入 256 px PNG，供 Windows 与
 Linux/X11 窗口使用；macOS 裸二进制开发运行通过 AppKit 设置同一 PNG 的 Dock 图标；
 Windows 构建由 `build.rs` 将 ICO 嵌入可执行文件；macOS app bundle 仍由
 `bundle-macos.sh` 安装 ICNS。`package-release.sh` 只携带 256 px PNG，供 Linux

@@ -2,13 +2,13 @@
 
 ## 边界
 
-`crabgal-loader` 是所有外部内容进入引擎的唯一入口，且不依赖 Bevy：
+`keine-loader` 是所有外部内容进入引擎的唯一入口，且不依赖 Bevy：
 
 ```text
 config.yaml
     ├── adapter.asset[] ──> asset/{fs, auto, hexz...} ──> logical roots
     ├── adapter.script ───> script/{webgal...}          ──> State actions
-    └── adapter.store ────> store/{crabgal...}          ──> SavedState / StoreStatus
+    └── adapter.store ────> store/{keine...}          ──> SavedState / StoreStatus
 ```
 
 `adapter` 先按稳定能力分类，再在类别下加入具体格式：
@@ -30,7 +30,7 @@ adapter/
 顶层只表示稳定能力类别。asset/script/store 各有独立 registry 和 trait 边界；
 editor 负责一次读取 project、chapter、character、scene 与 manifest 的完整编辑器工程。
 具体格式仍由所属类别注册，例如 `editor/letsgal`、script 类别的 `webgal.rs` 和 store 类别的
-crabgal codec。类别拥有独立 trait 或 registry 时使用同名门面文件；紧密耦合且没有独立
+keine codec。类别拥有独立 trait 或 registry 时使用同名门面文件；紧密耦合且没有独立
 生命周期的实现（例如 asset 的 fs/auto/hexz 分派）保留在一个文件中，不为视觉上的对称制造目录。
 
 ### 职责不可越界
@@ -42,16 +42,16 @@ crabgal codec。类别拥有独立 trait 或 registry 时使用同名门面文�
 | loader | adapter registry、来源合并、`notify` 监控、临时编译完整 Program | 运行游戏状态、重放剧情、渲染 UI |
 | core/runtime | 消费统一 Action、原子替换 Program、保留持久状态并重建瞬态演出 | 理解 LetsGal JSON 字段或 UUID 模型 |
 
-Rust crate 依赖方向强制这一边界：`crabgal-loader -> crabgal-core`，loader 不依赖根引擎、
+Rust crate 依赖方向强制这一边界：`keine-loader -> keine-core`，loader 不依赖根引擎、
 Bevy、Winit 或 Electron。LetsGal adapter 的回归测试还会对 fixture 做调用前后逐文件快照，
 保证 detect/open/load/config/debug-position 全流程不修改源工程。
 
 根引擎只调用 `ProjectAdapter`、`StructuredSceneLoader` 和统一 `ContentProject`；它不导入任何
 LetsGal 类型。`studio` 命令只是给通用 runtime 加一个只读同步会话标记，不安装扩展、不启动
 localhost 服务，也不覆盖 Studio 原版 Player。因此移除或替换某个 editor adapter 不会改变
-VM、渲染器、UI 或原生 crabgal 工程的启动路径。
+VM、渲染器、UI 或原生 keine 工程的启动路径。
 library embedder 还可从 `LoaderRegistry::empty()` 开始只注册自己需要的 adapter；`Default`
-只是最终 crabgal 二进制采用的内置组合，并不是 runtime 的类型依赖。
+只是最终 keine 二进制采用的内置组合，并不是 runtime 的类型依赖。
 
 最终二进制可运行 `cargo adapters`，用方向键和空格启停默认 registry 中的具体实现，回车保存、
 Esc 取消。该选择保存在用户配置目录，只作用于默认 CLI 启动路径；项目内的 `config.yaml` 仍负责
@@ -70,13 +70,13 @@ adapter:
     - path: "packs/route.hxz"
       format: hexz
   script: webgal
-  store: crabgal
+  store: keine
 ```
 
 - 声明顺序即层顺序；越靠后优先级越高。
 - 资产使用逻辑相对路径覆盖，scene 使用不带扩展名的 scene name 覆盖。
 - 未声明 `adapter.asset` 时等价于 `[{ path: ".", format: "fs" }]`。
-- 未声明 `adapter` 时默认使用 `script: webgal` 与 `store: crabgal`。
+- 未声明 `adapter` 时默认使用 `script: webgal` 与 `store: keine`。
 - 所有相对路径都以 `config.yaml` 所在目录为基准，并在加载前规范化。
 
 ## 内置选项
@@ -87,7 +87,7 @@ adapter:
 | asset / `auto` | 本地目录或容器 | 根据路径委派 asset adapter |
 | asset / `hexz` | 标准 `.hxz` 包 | `hexz_k::ResourcePack` 校验、解密与随机读取 |
 | script / `webgal` | `.txt` scene | `ParseReport<Action>` |
-| store / `crabgal` | v9 原生 `.sav` bytes 或当前 `State` | 编码后的 bytes；解码后的 `SavedState`；可独立检查的 `StoreStatus`/metadata |
+| store / `keine` | v9 原生 `.sav` bytes 或当前 `State` | 编码后的 bytes；解码后的 `SavedState`；可独立检查的 `StoreStatus`/metadata |
 
 `LoaderRegistry` 按类别解析名称。asset source 可以有多个且保持后声明覆盖；script 和 store
 各选一个明确格式，未知名称在启动阶段直接报错，而不是静默回退。
@@ -102,11 +102,11 @@ adapter:
 
 `SavedState` 只允许通过 `snapshot()` 做只读预览投影，或通过 `restore_into(&mut current)` 合入当前项目。恢复时 core 会核对存档与当前 `Program` 的 fingerprint，重新附着当前 `Arc<Program>`，保留 profile/read-history/gallery 等槽外数据，并拒绝不同脚本布局的存档。UI 的 metadata 过滤只是提前反馈，不能替代 core 检查。
 
-当前 crabgal store 使用 v9、Postcard metadata/state 与双 CRC32；槽位列表只读取 header + metadata，Bevy storage 层另行维护独立 WebP preview sidecar。完整字节布局、版本策略与 Backlog 恢复合同见 [04-rollback-and-save.md](04-rollback-and-save.md)。
+当前 keine store 使用 v9、Postcard metadata/state 与双 CRC32；槽位列表只读取 header + metadata，Bevy storage 层另行维护独立 WebP preview sidecar。完整字节布局、版本策略与 Backlog 恢复合同见 [04-rollback-and-save.md](04-rollback-and-save.md)。
 
 ## 运行时规则
 
-- `crabgal-loader` 从统一 `ContentMount` 合并脚本并生成最终 scene/resource manifest。
+- `keine-loader` 从统一 `ContentMount` 合并脚本并生成最终 scene/resource manifest。
 - `OverlayAssetReader` 只做 Bevy 接口桥接，按相反顺序查找资产，只消费通用
   `ContentMount/ContentFile`；它不知道底层容器格式，也不会复制或落盘 archive entry。
 - 资源预取继续使用统一逻辑路径，因此来源数量不会增加业务层分支。
@@ -124,7 +124,7 @@ adapter:
 - adapter 必须返回只读、稳定、规范化的逻辑 mount。
 - editor adapter 只描述 `watch_roots/accepts_change` 这类格式规则；实际 watcher 生命周期由
   loader 持有，实际 reload/state rebuild 由 runtime 执行。
-- 不把 Bevy handle、ECS 类型或 UI 状态放入 `crabgal-loader`。
+- 不把 Bevy handle、ECS 类型或 UI 状态放入 `keine-loader`。
 - store adapter 不得把 decoded payload 暴露成可直接运行的 `State`；执行态恢复必须经过 `SavedState::restore_into`。
 - 不允许业务代码直接拼接某个 source 的物理路径。
 - 新容器格式必须先实现路径安全、完整性校验和流式读取，再进入 registry。

@@ -16,7 +16,7 @@ use bevy::render::{Render, RenderApp};
 use bevy::window::PrimaryWindow;
 use bevy::window::WindowCloseRequested;
 use bevy::winit::{UpdateMode, WinitSettings};
-use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
+use keine_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
 use crate::render::blur::{DialogCamera, SceneBlurCamera, UiBlurCamera};
 use crate::runtime::resources::{AssetLoadingGate, EditorSyncSession, GameState};
@@ -34,9 +34,10 @@ pub(crate) struct InputActions {
     pub shortcut: Option<ButtonAction>,
     pub toggle_auto: bool,
     pub toggle_skip: bool,
-    pub skip_pressed: bool,
+    pub skip_held: bool,
     pub skip_released: bool,
     pub skip_video: bool,
+    pub(crate) control_chord_used: bool,
 }
 
 #[derive(Resource, Default)]
@@ -85,6 +86,7 @@ pub(crate) fn collect_input(
     let pointer_pressed = mouse.just_pressed(MouseButton::Left) || touches.any_just_pressed();
     let control_pressed = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     actions.shortcut = keyboard_shortcut(&keys);
+    update_control_hold(&keys, &mut actions);
     actions.pointer_advance = pointer_pressed;
     actions.advance = (!control_pressed && keys.any_just_pressed([KeyCode::Space, KeyCode::Enter]))
         || pointer_pressed
@@ -102,10 +104,26 @@ pub(crate) fn collect_input(
             .iter()
             .any(|pad| pad.just_pressed(GamepadButton::West));
     actions.toggle_skip = actions.shortcut == Some(ButtonAction::Skip) || gamepad_skip;
-    actions.skip_pressed = actions.shortcut.is_none()
-        && keys.any_just_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
-    actions.skip_released = actions.shortcut.is_some()
-        || keys.any_just_released([KeyCode::ControlLeft, KeyCode::ControlRight]);
+}
+
+fn update_control_hold(keys: &ButtonInput<KeyCode>, actions: &mut InputActions) {
+    let was_held = actions.skip_held;
+    let control_pressed = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    let chord_key_pressed = keys
+        .get_pressed()
+        .any(|key| !matches!(key, KeyCode::ControlLeft | KeyCode::ControlRight));
+
+    if !control_pressed {
+        actions.control_chord_used = false;
+    } else if chord_key_pressed {
+        // Once Ctrl participates in any chord, suppress hold-to-skip until the
+        // modifier is released. Releasing the letter before Ctrl must not
+        // unexpectedly start fast-forwarding.
+        actions.control_chord_used = true;
+    }
+
+    actions.skip_held = control_pressed && !actions.control_chord_used;
+    actions.skip_released = was_held && !actions.skip_held;
 }
 
 fn keyboard_shortcut(keys: &ButtonInput<KeyCode>) -> Option<ButtonAction> {
@@ -425,9 +443,9 @@ pub(crate) fn resize_viewport(
 
 const DEFAULT_FILTER: &str = concat!(
     "warn,",
-    "crabgal=info,",
-    "crabgal_core=info,",
-    "crabgal_loader=info,",
+    "keine=info,",
+    "keine_core=info,",
+    "keine_loader=info,",
     "wgpu=error,",
     "naga=warn"
 );
@@ -474,7 +492,7 @@ impl tracing_subscriber::fmt::time::FormatTime for ShortUptime {
 }
 
 pub(super) fn startup_error(stage: &str, error: &Error) {
-    eprintln!("ERROR  crabgal::startup: {stage}");
+    eprintln!("ERROR  keine::startup: {stage}");
     for (index, cause) in error.chain().enumerate() {
         eprintln!("       {:>2}. {cause}", index + 1);
     }
@@ -490,7 +508,7 @@ fn log_window(window: Single<&Window, With<PrimaryWindow>>) {
         "fixed"
     };
     log::info!(
-        target: "crabgal::platform",
+        target: "keine::platform",
         "WINDOW   │ {} · {width}×{height} @{scale:.1}× · {resize}",
         window.title,
     );
@@ -503,7 +521,7 @@ fn log_renderer(adapter: Res<RenderAdapterInfo>, preprocessing: Res<GpuPreproces
         ""
     };
     log::info!(
-        target: "crabgal::platform",
+        target: "keine::platform",
         "GPU      │ {} · {:?} · {:?} · subgroup {}–{}{transient_memory}",
         adapter.name,
         adapter.device_type,
@@ -517,7 +535,7 @@ fn log_renderer(adapter: Res<RenderAdapterInfo>, preprocessing: Res<GpuPreproces
         GpuPreprocessingMode::PreprocessingOnly => "GPU preprocessing ✓",
         GpuPreprocessingMode::Culling => "GPU preprocessing + culling ✓",
     };
-    log::info!(target: "crabgal::platform", "PIPELINE │ {mode}");
+    log::info!(target: "keine::platform", "PIPELINE │ {mode}");
 }
 
 #[cfg(test)]
@@ -556,6 +574,41 @@ mod tests {
             keys.press(key);
             assert_eq!(keyboard_shortcut(&keys), Some(action));
         }
+    }
+
+    #[test]
+    fn standalone_control_is_a_level_trigger_and_chords_stay_suppressed() {
+        let mut keys = ButtonInput::default();
+        let mut actions = InputActions::default();
+
+        keys.press(KeyCode::ControlLeft);
+        update_control_hold(&keys, &mut actions);
+        assert!(actions.skip_held);
+        assert!(!actions.skip_released);
+
+        update_control_hold(&keys, &mut actions);
+        assert!(
+            actions.skip_held,
+            "holding Ctrl must remain active every frame"
+        );
+
+        keys.press(KeyCode::KeyA);
+        update_control_hold(&keys, &mut actions);
+        assert!(!actions.skip_held);
+        assert!(actions.skip_released);
+
+        keys.release(KeyCode::KeyA);
+        update_control_hold(&keys, &mut actions);
+        assert!(
+            !actions.skip_held,
+            "a completed chord stays suppressed until Ctrl is released"
+        );
+
+        keys.release(KeyCode::ControlLeft);
+        update_control_hold(&keys, &mut actions);
+        keys.press(KeyCode::ControlLeft);
+        update_control_hold(&keys, &mut actions);
+        assert!(actions.skip_held);
     }
 
     #[test]
@@ -638,13 +691,9 @@ mod tests {
 
     #[test]
     fn time_based_film_effects_keep_the_render_loop_active() {
-        let mut state = GameState(crabgal_core::State::new());
+        let mut state = GameState(keine_core::State::new());
         assert!(!core_is_animating(&state));
-        assert!(
-            state
-                .bg_films
-                .apply(&crabgal_core::AnimationPreset::OldFilm)
-        );
+        assert!(state.bg_films.apply(&keine_core::AnimationPreset::OldFilm));
         assert!(core_is_animating(&state));
         state.bg_films.clear();
         state.camera_effect.godray_intensity = 0.8;
@@ -654,7 +703,7 @@ mod tests {
 
     #[test]
     fn input_waits_sleep_but_timed_presentation_work_stays_active() {
-        let mut state = GameState(crabgal_core::State::new());
+        let mut state = GameState(keine_core::State::new());
         state.waiting_for_advance = true;
         assert!(
             !core_is_animating(&state),
@@ -664,7 +713,7 @@ mod tests {
         state.wait_remaining = 0.5;
         assert!(core_is_animating(&state));
         state.wait_remaining = 0.0;
-        state.dialogue_retraction = Some(crabgal_core::state::DialogueRetraction {
+        state.dialogue_retraction = Some(keine_core::state::DialogueRetraction {
             keep: "line".into(),
             target_visible_chars: 4,
             fractional_chars: 0.0,
@@ -677,11 +726,11 @@ mod tests {
 
     #[test]
     fn video_playback_keeps_the_render_loop_active() {
-        let mut state = GameState(crabgal_core::State::new());
+        let mut state = GameState(keine_core::State::new());
         state.videos.insert(
             "rain".into(),
-            crabgal_core::VideoState {
-                spec: crabgal_core::VideoSpec {
+            keine_core::VideoState {
+                spec: keine_core::VideoSpec {
                     id: "rain".into(),
                     file: "video/rain.mp4".into(),
                     looped: true,
@@ -689,7 +738,7 @@ mod tests {
                     alpha: 1.0,
                     skippable: false,
                     wait_for_finished: false,
-                    mode: crabgal_core::VideoMode::Mixed,
+                    mode: keine_core::VideoMode::Mixed,
                 },
                 revision: 1,
                 elapsed: 0.0,

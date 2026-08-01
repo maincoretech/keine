@@ -1,6 +1,6 @@
-# crabgal LetsGal 1.9 Feature Lab
+# Kēne LetsGal 1.9.1 Feature Lab
 
-默认验收工程现已收敛为一个原生 LetsGal 1.9 项目，直接覆盖 crabgal 已接入的完整时间轴、
+默认验收工程现已收敛为一个原生 LetsGal 1.9.1 项目，直接覆盖 Kēne 已接入的完整时间轴、
 立绘皮肤、视口相对高度、玩家确认等待、跨章节调用与播放控制。它不依赖 LetsGal Studio、
 扩展、注入或 `studio-sync`。
 
@@ -19,6 +19,8 @@ cargo dev projects/test-project
 - camera shake、camera patch、particle、scene、audio 五类时间事件；
 - BGM/SE/VOCAL 时间轴路由、muted、持续时间与淡入淡出；
 - `waitForInput` 的显式玩家确认等待；
+- `chapterFolders` / `chapterTreeOrder` 虚拟目录执行顺序；
+- 默认壳 `dialogueBehavior` 的打字间隔、字符淡入和文字出现效果；
 - 角色皮肤属性、block 锁定皮肤和全局/表情级视口高度；
 - 跨章节 fragment 调用与返回；
 - muted、repeat、playbackRate、blocking；

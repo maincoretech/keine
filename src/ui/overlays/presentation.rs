@@ -1,7 +1,7 @@
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
-use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
+use keine_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
 use crate::render::blur::DialogCamera;
 use crate::runtime::resources::GameState;

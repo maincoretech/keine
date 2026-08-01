@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::io::{Error, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::mpsc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::task::{Context, Poll};
 use std::thread;
 use std::time::Duration;
@@ -13,11 +13,75 @@ use bevy::asset::io::{
     AssetWatcher, PathStream, Reader, ReaderNotSeekableError, STACK_FUTURE_SIZE, SeekableReader,
     StackFuture,
 };
-use crabgal_loader::{ContentFile, ContentMount};
 use futures_lite::io::{AsyncRead, AsyncSeek};
+use keine_loader::{ContentFile, ContentMount};
 use notify::{EventKind, RecursiveMode, Watcher};
 
 const ASSET_WATCH_QUIET_PERIOD: Duration = Duration::from_millis(50);
+
+#[derive(Default)]
+struct PendingAssetChanges {
+    paths: HashSet<PathBuf>,
+    stopped: bool,
+}
+
+#[derive(Default)]
+struct AssetChangeSet {
+    pending: Mutex<PendingAssetChanges>,
+    wake: Condvar,
+}
+
+impl AssetChangeSet {
+    fn extend(&self, paths: impl IntoIterator<Item = PathBuf>) {
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if pending.stopped {
+            return;
+        }
+        pending.paths.extend(paths);
+        drop(pending);
+        self.wake.notify_one();
+    }
+
+    fn next_batch(&self) -> Option<HashSet<PathBuf>> {
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while pending.paths.is_empty() && !pending.stopped {
+            pending = self
+                .wake
+                .wait(pending)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        if pending.stopped && pending.paths.is_empty() {
+            return None;
+        }
+
+        loop {
+            let (next, timeout) = self
+                .wake
+                .wait_timeout(pending, ASSET_WATCH_QUIET_PERIOD)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            pending = next;
+            if timeout.timed_out() || pending.stopped {
+                return Some(std::mem::take(&mut pending.paths));
+            }
+        }
+    }
+
+    fn stop(&self) {
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        pending.stopped = true;
+        drop(pending);
+        self.wake.notify_one();
+    }
+}
 
 /// Creates Bevy's default source as a deterministic read-only overlay. Sources
 /// are configured from low to high priority; the final source wins. Filesystem
@@ -33,7 +97,8 @@ pub(crate) fn overlay_source(mounts: Vec<ContentMount>) -> AssetSourceBuilder {
             if roots.is_empty() {
                 return None;
             }
-            let (event_sender, event_receiver) = mpsc::channel::<PathBuf>();
+            let changes = Arc::new(AssetChangeSet::default());
+            let callback_changes = Arc::clone(&changes);
             let watcher =
                 notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
                     let event = match result {
@@ -49,9 +114,7 @@ pub(crate) fn overlay_source(mounts: Vec<ContentMount>) -> AssetSourceBuilder {
                     ) {
                         return;
                     }
-                    for path in event.paths {
-                        let _ = event_sender.send(path);
-                    }
+                    callback_changes.extend(event.paths);
                 });
             let mut watcher = match watcher {
                 Ok(watcher) => watcher,
@@ -70,12 +133,12 @@ pub(crate) fn overlay_source(mounts: Vec<ContentMount>) -> AssetSourceBuilder {
                 .iter()
                 .filter_map(ContentMount::filesystem_root)
                 .collect::<Vec<_>>();
+            let worker_changes = Arc::clone(&changes);
             let worker = thread::Builder::new()
-                .name("crabgal-asset-watch".into())
+                .name("keine-asset-watch".into())
                 .spawn(move || {
-                    let mut pending = HashSet::new();
-                    let flush = |pending: &mut HashSet<PathBuf>| {
-                        for path in pending.drain() {
+                    while let Some(paths) = worker_changes.next_batch() {
+                        for path in paths {
                             let Some((logical, is_meta)) = logical_asset_path(&path, &worker_roots)
                             else {
                                 continue;
@@ -93,19 +156,6 @@ pub(crate) fn overlay_source(mounts: Vec<ContentMount>) -> AssetSourceBuilder {
                             };
                             let _ = sender.try_send(event);
                         }
-                    };
-                    loop {
-                        match event_receiver.recv_timeout(ASSET_WATCH_QUIET_PERIOD) {
-                            Ok(path) => {
-                                pending.insert(path);
-                                continue;
-                            }
-                            Err(mpsc::RecvTimeoutError::Timeout) => flush(&mut pending),
-                            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                                flush(&mut pending);
-                                break;
-                            }
-                        }
                     }
                 });
             let worker = match worker {
@@ -118,6 +168,7 @@ pub(crate) fn overlay_source(mounts: Vec<ContentMount>) -> AssetSourceBuilder {
             Some(Box::new(OverlayAssetWatcher {
                 watcher: Some(watcher),
                 worker: Some(worker),
+                changes,
             }))
         },
     )
@@ -126,6 +177,7 @@ pub(crate) fn overlay_source(mounts: Vec<ContentMount>) -> AssetSourceBuilder {
 struct OverlayAssetWatcher {
     watcher: Option<notify::RecommendedWatcher>,
     worker: Option<thread::JoinHandle<()>>,
+    changes: Arc<AssetChangeSet>,
 }
 
 impl AssetWatcher for OverlayAssetWatcher {}
@@ -133,6 +185,7 @@ impl AssetWatcher for OverlayAssetWatcher {}
 impl Drop for OverlayAssetWatcher {
     fn drop(&mut self) {
         drop(self.watcher.take());
+        self.changes.stop();
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
@@ -399,7 +452,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("crabgal-overlay-{nonce}"));
+        let root = std::env::temp_dir().join(format!("keine-overlay-{nonce}"));
         let base = root.join("base");
         let patch = root.join("patch");
         fs::create_dir_all(&base).unwrap();
@@ -407,10 +460,10 @@ mod tests {
         fs::write(base.join("shared.txt"), "base").unwrap();
         fs::write(patch.join("shared.txt"), "patch").unwrap();
         let overlay = OverlayAssetReader::new(vec![
-            crabgal_loader::SourceMount::assets("test", "base", base)
+            keine_loader::SourceMount::assets("test", "base", base)
                 .asset
                 .unwrap(),
-            crabgal_loader::SourceMount::assets("test", "patch", patch)
+            keine_loader::SourceMount::assets("test", "patch", patch)
                 .asset
                 .unwrap(),
         ]);

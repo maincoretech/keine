@@ -4,7 +4,6 @@ use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use crabgal_loader::{AdapterCategory, AdapterDescriptor, LoaderRegistry};
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::execute;
@@ -12,8 +11,9 @@ use crossterm::style::{Attribute, Print, SetAttribute};
 use crossterm::terminal::{
     Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
+use keine_loader::{AdapterCategory, AdapterDescriptor, LoaderRegistry};
 
-const CONFIG_ENV: &str = "CRABGAL_ADAPTER_CONFIG";
+const CONFIG_ENV: &str = "KEINE_ADAPTER_CONFIG";
 
 #[derive(Clone)]
 struct AdapterRow {
@@ -120,7 +120,7 @@ fn toggle(rows: &mut [AdapterRow], selected: usize) -> bool {
 fn draw(rows: &[AdapterRow], selected: usize, message: &str, path: &Path) -> Result<()> {
     let mut stdout = io::stdout().lock();
     execute!(stdout, MoveTo(0, 0), Clear(ClearType::All))?;
-    write_line(&mut stdout, "crabgal adapters")?;
+    write_line(&mut stdout, "Kēne adapters")?;
     write_line(
         &mut stdout,
         "↑/↓ select   ←/→ or Space toggle   Enter save   Esc cancel",
@@ -212,7 +212,7 @@ fn write_selection(path: &Path, rows: &[AdapterRow]) -> Result<()> {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    let mut contents = String::from("# crabgal adapter selection v1\n");
+    let mut contents = String::from("# keine adapter selection v1\n");
     for row in rows {
         contents.push_str(&format!("{}={}\n", row.adapter.id(), row.enabled));
     }
@@ -245,17 +245,17 @@ fn config_path() -> Result<PathBuf> {
     }
     #[cfg(target_os = "windows")]
     if let Some(root) = std::env::var_os("APPDATA") {
-        return Ok(PathBuf::from(root).join("crabgal/adapters.conf"));
+        return Ok(PathBuf::from(root).join("keine/adapters.conf"));
     }
     #[cfg(target_os = "macos")]
     if let Some(home) = std::env::var_os("HOME") {
-        return Ok(PathBuf::from(home).join("Library/Application Support/crabgal/adapters.conf"));
+        return Ok(PathBuf::from(home).join("Library/Application Support/keine/adapters.conf"));
     }
     if let Some(root) = std::env::var_os("XDG_CONFIG_HOME") {
-        return Ok(PathBuf::from(root).join("crabgal/adapters.conf"));
+        return Ok(PathBuf::from(root).join("keine/adapters.conf"));
     }
     if let Some(home) = std::env::var_os("HOME") {
-        return Ok(PathBuf::from(home).join(".config/crabgal/adapters.conf"));
+        return Ok(PathBuf::from(home).join(".config/keine/adapters.conf"));
     }
     bail!("could not locate the user configuration directory")
 }

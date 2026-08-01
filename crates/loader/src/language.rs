@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::ParseReport;
 use crate::adapter::WebGalLanguage;
 
-/// Converts one authoring-language syntax into crabgal's language-neutral IR.
+/// Converts one authoring-language syntax into keine's language-neutral IR.
 ///
 /// Language integrations stop at `ParseReport`; the runtime only consumes the
 /// resulting `Action` list and never depends on source syntax.

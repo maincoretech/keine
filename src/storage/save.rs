@@ -5,15 +5,15 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use bevy::app::AppExit;
 use bevy::prelude::*;
-use crabgal_core::State;
-use crabgal_loader::{SavedState, StoreAdapter, StoreStatus};
+use keine_core::State;
+use keine_loader::{SavedState, StoreAdapter, StoreStatus};
 
 use crate::runtime::resources::{
     EditorSyncSession, GameState, PersistenceDisabled, ProjectRoot, StoreCodec,
 };
 
 pub const QUICK_SAVE_SLOT: u32 = 0;
-pub use crabgal_loader::StoreMetadata as SaveMetadata;
+pub use keine_loader::StoreMetadata as SaveMetadata;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SlotStatus {
@@ -188,7 +188,7 @@ fn slot_path(store: &dyn StoreAdapter, project_root: &Path, slot: u32) -> PathBu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crabgal_loader::CrabgalStore;
+    use keine_loader::KeineStore;
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -197,7 +197,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("crabgal-save-{label}-{nonce}"))
+        std::env::temp_dir().join(format!("keine-save-{label}-{nonce}"))
     }
 
     fn sample_state() -> State {
@@ -211,14 +211,11 @@ mod tests {
     fn round_trips_state_and_inspects_metadata() {
         let root = temp_root("round-trip");
         let state = sample_state();
-        save_game(&CrabgalStore, &state, 3, &root).unwrap();
+        save_game(&KeineStore, &state, 3, &root).unwrap();
 
-        assert_eq!(
-            load_game(&CrabgalStore, 3, &root).unwrap().snapshot(),
-            &state
-        );
+        assert_eq!(load_game(&KeineStore, 3, &root).unwrap().snapshot(), &state);
         assert!(
-            matches!(inspect_slot(&CrabgalStore, 3, &root), SlotStatus::Ready(meta) if meta.scene == "demo")
+            matches!(inspect_slot(&KeineStore, 3, &root), SlotStatus::Ready(meta) if meta.scene == "demo")
         );
         let _ = fs::remove_dir_all(root);
     }
@@ -228,34 +225,34 @@ mod tests {
         let root = temp_root("invalid");
         fs::create_dir_all(root.join("saves")).unwrap();
         fs::write(
-            slot_path(&CrabgalStore, &root, 1),
+            slot_path(&KeineStore, &root, 1),
             postcard::to_stdvec(&sample_state()).unwrap(),
         )
         .unwrap();
-        save_game(&CrabgalStore, &sample_state(), 2, &root).unwrap();
-        let mut bytes = fs::read(slot_path(&CrabgalStore, &root, 2)).unwrap();
+        save_game(&KeineStore, &sample_state(), 2, &root).unwrap();
+        let mut bytes = fs::read(slot_path(&KeineStore, &root, 2)).unwrap();
         *bytes.last_mut().unwrap() ^= 0xff;
-        fs::write(slot_path(&CrabgalStore, &root, 2), bytes).unwrap();
+        fs::write(slot_path(&KeineStore, &root, 2), bytes).unwrap();
 
-        assert_eq!(inspect_slot(&CrabgalStore, 1, &root), SlotStatus::Corrupt);
+        assert_eq!(inspect_slot(&KeineStore, 1, &root), SlotStatus::Corrupt);
         assert!(matches!(
-            inspect_slot(&CrabgalStore, 2, &root),
+            inspect_slot(&KeineStore, 2, &root),
             SlotStatus::Ready(_)
         ));
-        assert!(load_game(&CrabgalStore, 1, &root).is_err());
-        assert!(load_game(&CrabgalStore, 2, &root).is_err());
+        assert!(load_game(&KeineStore, 1, &root).is_err());
+        assert!(load_game(&KeineStore, 2, &root).is_err());
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn deletes_state_and_preview_together() {
         let root = temp_root("delete");
-        save_game(&CrabgalStore, &sample_state(), 4, &root).unwrap();
+        save_game(&KeineStore, &sample_state(), 4, &root).unwrap();
         fs::write(preview_path(&root, 4), b"preview").unwrap();
 
-        delete_game(&CrabgalStore, 4, &root).unwrap();
+        delete_game(&KeineStore, 4, &root).unwrap();
 
-        assert_eq!(inspect_slot(&CrabgalStore, 4, &root), SlotStatus::Empty);
+        assert_eq!(inspect_slot(&KeineStore, 4, &root), SlotStatus::Empty);
         assert!(!preview_path(&root, 4).exists());
         let _ = fs::remove_dir_all(root);
     }
@@ -263,18 +260,18 @@ mod tests {
     #[test]
     fn clears_slots_without_removing_settings_data() {
         let root = temp_root("clear");
-        save_game(&CrabgalStore, &sample_state(), QUICK_SAVE_SLOT, &root).unwrap();
-        save_game(&CrabgalStore, &sample_state(), 4, &root).unwrap();
+        save_game(&KeineStore, &sample_state(), QUICK_SAVE_SLOT, &root).unwrap();
+        save_game(&KeineStore, &sample_state(), 4, &root).unwrap();
         fs::write(preview_path(&root, 4), b"preview").unwrap();
         fs::write(root.join("saves/settings.bin"), b"settings").unwrap();
 
-        clear_games(&CrabgalStore, &root).unwrap();
+        clear_games(&KeineStore, &root).unwrap();
 
         assert_eq!(
-            inspect_slot(&CrabgalStore, QUICK_SAVE_SLOT, &root),
+            inspect_slot(&KeineStore, QUICK_SAVE_SLOT, &root),
             SlotStatus::Empty
         );
-        assert_eq!(inspect_slot(&CrabgalStore, 4, &root), SlotStatus::Empty);
+        assert_eq!(inspect_slot(&KeineStore, 4, &root), SlotStatus::Empty);
         assert!(root.join("saves/settings.bin").exists());
         let _ = fs::remove_dir_all(root);
     }
@@ -288,25 +285,25 @@ mod tests {
         app.add_message::<AppExit>()
             .insert_resource(GameState(state.clone()))
             .insert_resource(ProjectRoot(root.clone()))
-            .insert_resource(StoreCodec(Arc::new(CrabgalStore)))
+            .insert_resource(StoreCodec(Arc::new(KeineStore)))
             .add_systems(Last, quick_save_on_exit);
 
         app.world_mut().write_message(AppExit::Success);
         app.update();
 
         assert_eq!(
-            load_game(&CrabgalStore, QUICK_SAVE_SLOT, &root)
+            load_game(&KeineStore, QUICK_SAVE_SLOT, &root)
                 .unwrap()
                 .snapshot(),
             &state
         );
 
         app.world_mut().resource_mut::<GameState>().ended = true;
-        fs::remove_file(slot_path(&CrabgalStore, &root, QUICK_SAVE_SLOT)).unwrap();
+        fs::remove_file(slot_path(&KeineStore, &root, QUICK_SAVE_SLOT)).unwrap();
         app.world_mut().write_message(AppExit::Success);
         app.update();
         assert_eq!(
-            inspect_slot(&CrabgalStore, QUICK_SAVE_SLOT, &root),
+            inspect_slot(&KeineStore, QUICK_SAVE_SLOT, &root),
             SlotStatus::Empty
         );
         let _ = fs::remove_dir_all(root);
@@ -321,7 +318,7 @@ mod tests {
         app.add_message::<AppExit>()
             .insert_resource(GameState(state))
             .insert_resource(ProjectRoot(root.clone()))
-            .insert_resource(StoreCodec(Arc::new(CrabgalStore)))
+            .insert_resource(StoreCodec(Arc::new(KeineStore)))
             .init_resource::<EditorSyncSession>()
             .add_systems(Last, quick_save_on_exit);
 
@@ -329,7 +326,7 @@ mod tests {
         app.update();
 
         assert_eq!(
-            inspect_slot(&CrabgalStore, QUICK_SAVE_SLOT, &root),
+            inspect_slot(&KeineStore, QUICK_SAVE_SLOT, &root),
             SlotStatus::Empty
         );
         assert!(!root.join("saves").exists());

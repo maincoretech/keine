@@ -1,22 +1,58 @@
-#[cfg(feature = "video-ffmpeg")]
+#[cfg(all(
+    feature = "video-ffmpeg",
+    not(all(feature = "video-native", target_os = "macos"))
+))]
 use std::collections::HashMap;
 
-#[cfg(feature = "video-ffmpeg")]
+#[cfg(all(
+    feature = "video-ffmpeg",
+    not(all(feature = "video-native", target_os = "macos"))
+))]
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 
-#[cfg(not(feature = "video-ffmpeg"))]
+// When both desktop backends are enabled, macOS selects AVFoundation at
+// runtime while keeping FFmpeg available as the cross-platform build fallback.
+#[cfg(all(
+    feature = "video-ffmpeg",
+    feature = "video-native",
+    target_os = "macos"
+))]
+use video_rs as _;
+
+#[cfg(not(any(
+    feature = "video-ffmpeg",
+    all(feature = "video-native", target_os = "macos")
+)))]
 use crate::runtime::resources::GameState;
 
-#[cfg(feature = "video-ffmpeg")]
-#[derive(Component)]
-struct VideoNode;
+#[cfg(any(
+    feature = "video-ffmpeg",
+    all(feature = "video-native", target_os = "macos")
+))]
+#[path = "video/shared.rs"]
+mod shared;
+
+#[cfg(all(feature = "video-native", target_os = "macos"))]
+#[path = "video/avfoundation.rs"]
+mod avfoundation_backend;
 
 pub(crate) struct VideoPlugin;
 
 impl Plugin for VideoPlugin {
     fn build(&self, app: &mut App) {
-        #[cfg(feature = "video-ffmpeg")]
+        #[cfg(all(feature = "video-native", target_os = "macos"))]
+        app.init_non_send::<avfoundation_backend::VideoPlayback>()
+            .add_systems(
+                Update,
+                avfoundation_backend::sync_video_playback
+                    .in_set(crate::runtime::GameSystemSet::Sync),
+            );
+
+        #[cfg(all(
+            feature = "video-ffmpeg",
+            not(all(feature = "video-native", target_os = "macos"))
+        ))]
         {
             use bevy::audio::AddAudioSource;
 
@@ -31,7 +67,10 @@ impl Plugin for VideoPlugin {
                     sync_video_playback.in_set(crate::runtime::GameSystemSet::Sync),
                 );
         }
-        #[cfg(not(feature = "video-ffmpeg"))]
+        #[cfg(not(any(
+            feature = "video-ffmpeg",
+            all(feature = "video-native", target_os = "macos")
+        )))]
         app.init_resource::<MissingVideoBackend>().add_systems(
             Update,
             reject_unavailable_video.in_set(crate::runtime::GameSystemSet::Sync),
@@ -39,11 +78,17 @@ impl Plugin for VideoPlugin {
     }
 }
 
-#[cfg(not(feature = "video-ffmpeg"))]
+#[cfg(not(any(
+    feature = "video-ffmpeg",
+    all(feature = "video-native", target_os = "macos")
+)))]
 #[derive(Resource, Default)]
 struct MissingVideoBackend(bool);
 
-#[cfg(not(feature = "video-ffmpeg"))]
+#[cfg(not(any(
+    feature = "video-ffmpeg",
+    all(feature = "video-native", target_os = "macos")
+)))]
 fn reject_unavailable_video(mut state: ResMut<GameState>, mut warned: ResMut<MissingVideoBackend>) {
     if state.videos.is_empty() {
         return;
@@ -51,34 +96,39 @@ fn reject_unavailable_video(mut state: ResMut<GameState>, mut warned: ResMut<Mis
     if !warned.0 {
         warned.0 = true;
         log::error!(
-            "video playback was requested, but this binary was built without `video-ffmpeg`"
+            "video playback was requested, but this binary has no video backend for this platform"
         );
     }
     state.videos.clear();
 }
 
-#[cfg(feature = "video-ffmpeg")]
+#[cfg(all(
+    feature = "video-ffmpeg",
+    not(all(feature = "video-native", target_os = "macos"))
+))]
 mod ffmpeg_backend {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel};
     use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
 
-    use bevy::asset::RenderAssetUsages;
     use bevy::audio::{AudioPlayer, Decodable, PlaybackMode, PlaybackSettings, Volume};
     use bevy::ecs::system::SystemParam;
     use bevy::prelude::*;
-    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-    use crabgal_core::{BlendMode, VideoMode, VisualFilter};
-    use crabgal_loader::ContentMount;
+    use bevy::render::render_resource::TextureFormat;
+    use keine_core::VideoMode;
+    use keine_loader::ContentMount;
     use rodio::{ChannelCount, SampleRate, Source};
-    use tempfile::NamedTempFile;
     use video_rs::ffmpeg;
     use video_rs::ffmpeg::software::scaling::{context::Context as VideoScaler, flag::Flags};
 
-    use super::{HashMap, RenderLayers, VideoNode};
+    use super::shared::{
+        PreparedSource, VideoFrame, VideoNode, VideoPresentation, VideoVisual, VisualResources,
+        cleanup_visual, prepare_source, present_frame, update_visual,
+    };
+    use super::{HashMap, RenderLayers};
     use crate::runtime::platform::DesignViewport;
     use crate::runtime::resources::{ContentProjectResource, GameConfigResource, GameState};
     use crate::scene::effects::material::{StageMaterial, StageQuad};
@@ -87,15 +137,15 @@ mod ffmpeg_backend {
     #[derive(Resource, Default)]
     pub(super) struct VideoPlayback {
         sessions: HashMap<String, VideoSession>,
+        retired_decoders: Vec<thread::JoinHandle<()>>,
     }
 
     struct VideoSession {
         receiver: Mutex<Receiver<DecoderEvent>>,
         cancelled: Arc<AtomicBool>,
+        decoder: Option<thread::JoinHandle<()>>,
         pending: Option<DecodedFrame>,
-        image: Option<Handle<Image>>,
-        material: Option<Handle<StageMaterial>>,
-        entity: Option<Entity>,
+        visual: VideoVisual,
         audio_entity: Option<Entity>,
         audio_asset: Option<Handle<FfmpegVideoAudio>>,
         source: Option<Arc<PreparedSource>>,
@@ -123,12 +173,6 @@ mod ffmpeg_backend {
         width: u32,
         height: u32,
         rgba: Vec<u8>,
-    }
-
-    #[derive(Debug)]
-    struct PreparedSource {
-        path: PathBuf,
-        _temporary: Option<NamedTempFile>,
     }
 
     #[derive(Asset, TypePath, Clone, Debug)]
@@ -177,6 +221,7 @@ mod ffmpeg_backend {
             return;
         };
         let viewport = DesignViewport::from_window(&window);
+        reap_decoders(&mut playback.retired_decoders);
 
         let removed = playback
             .sessions
@@ -192,14 +237,16 @@ mod ffmpeg_backend {
             .cloned()
             .collect::<Vec<_>>();
         for id in removed {
-            if let Some(session) = playback.sessions.remove(&id) {
-                cleanup_session(
+            if let Some(session) = playback.sessions.remove(&id)
+                && let Some(decoder) = cleanup_session(
                     session,
                     &mut commands,
                     &mut resources.images,
                     &mut resources.materials,
                     &mut resources.audio,
-                );
+                )
+            {
+                playback.retired_decoders.push(decoder);
             }
         }
 
@@ -292,104 +339,40 @@ mod ffmpeg_backend {
             if let Some(frame) = newest {
                 present_frame(
                     id,
-                    session,
-                    frame,
-                    video.opacity,
-                    viewport,
+                    &mut session.visual,
+                    VideoFrame {
+                        width: frame.width,
+                        height: frame.height,
+                        pixels: frame.rgba,
+                        format: TextureFormat::Rgba8UnormSrgb,
+                    },
+                    VideoPresentation {
+                        mode: session.mode,
+                        opacity: video.opacity,
+                        viewport,
+                    },
                     &mut commands,
-                    &mut resources,
+                    VisualResources {
+                        images: &mut resources.images,
+                        materials: &mut resources.materials,
+                        quad: &resources.quad,
+                    },
                 );
             }
-            if let Some(entity) = session.entity
-                && let Ok((material, mut transform, mut layers)) = nodes.get_mut(entity)
-            {
-                if let Some(mut material) = resources.materials.get_mut(&material.0) {
-                    material.tint.w = video.opacity;
-                }
-                transform.translation = viewport.content_center().extend(video_z(session.mode));
-                transform.scale = Vec3::new(
-                    crabgal_core::DESIGN_WIDTH * viewport.scale,
-                    crabgal_core::DESIGN_HEIGHT * viewport.scale,
-                    1.0,
-                );
-                *layers = RenderLayers::layer(video_layer(session.mode));
-            }
+            update_visual(
+                &session.visual,
+                VideoPresentation {
+                    mode: session.mode,
+                    opacity: video.opacity,
+                    viewport,
+                },
+                &mut resources.materials,
+                &mut nodes,
+            );
         }
         for id in ended {
             state.videos.remove(&id);
         }
-    }
-
-    fn present_frame(
-        id: &str,
-        session: &mut VideoSession,
-        frame: DecodedFrame,
-        opacity: f32,
-        viewport: DesignViewport,
-        commands: &mut Commands,
-        resources: &mut VideoResources,
-    ) {
-        let image = video_image(frame.width, frame.height, frame.rgba);
-        let handle = if let Some(handle) = &session.image {
-            if let Some(mut current) = resources.images.get_mut(handle) {
-                *current = image;
-            }
-            handle.clone()
-        } else {
-            let handle = resources.images.add(image);
-            session.image = Some(handle.clone());
-            handle
-        };
-        if session.entity.is_none() {
-            let blend = video_blend(session.mode);
-            let material = resources.materials.add(StageMaterial::new(
-                handle,
-                opacity,
-                VisualFilter::default(),
-                blend,
-                Vec4::ZERO,
-                &crabgal_core::PostProcessEffect::default(),
-                None,
-            ));
-            session.material = Some(material.clone());
-            session.entity = Some(
-                commands
-                    .spawn((
-                        Name::new(format!("video::{id}")),
-                        VideoNode,
-                        Mesh2d(resources.quad.0.clone()),
-                        MeshMaterial2d(material),
-                        Transform::from_translation(
-                            viewport.content_center().extend(video_z(session.mode)),
-                        )
-                        .with_scale(Vec3::new(
-                            crabgal_core::DESIGN_WIDTH * viewport.scale,
-                            crabgal_core::DESIGN_HEIGHT * viewport.scale,
-                            1.0,
-                        )),
-                        RenderLayers::layer(video_layer(session.mode)),
-                    ))
-                    .id(),
-            );
-        }
-    }
-
-    fn video_image(width: u32, height: u32, rgba: Vec<u8>) -> Image {
-        Image::new(
-            Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            TextureDimension::D2,
-            rgba,
-            TextureFormat::Rgba8UnormSrgb,
-            // Video frames are write-only CPU data. With RENDER_WORLD-only
-            // usage Bevy moves the allocation into extraction instead of
-            // cloning a full 1080p frame before every GPU upload. The stable
-            // asset handle and descriptor let GpuImage reuse its texture.
-            RenderAssetUsages::RENDER_WORLD,
-        )
     }
 
     fn cleanup_session(
@@ -398,42 +381,29 @@ mod ffmpeg_backend {
         images: &mut Assets<Image>,
         materials: &mut Assets<StageMaterial>,
         audio_assets: &mut Assets<FfmpegVideoAudio>,
-    ) {
-        if let Some(entity) = session.entity {
-            commands.entity(entity).try_despawn();
-        }
+    ) -> Option<thread::JoinHandle<()>> {
+        session.cancelled.store(true, Ordering::Release);
+        cleanup_visual(&mut session.visual, commands, images, materials);
         if let Some(entity) = session.audio_entity {
             commands.entity(entity).try_despawn();
-        }
-        if let Some(image) = session.image.take() {
-            images.remove(image.id());
-        }
-        if let Some(material) = session.material.take() {
-            materials.remove(material.id());
         }
         if let Some(audio) = session.audio_asset.take() {
             audio_assets.remove(audio.id());
         }
+        session.decoder.take()
     }
 
-    const fn video_layer(mode: VideoMode) -> usize {
-        match mode {
-            VideoMode::Fullscreen => 2,
-            VideoMode::Mixed => 0,
-        }
-    }
-
-    const fn video_blend(mode: VideoMode) -> BlendMode {
-        match mode {
-            VideoMode::Fullscreen => BlendMode::Alpha,
-            VideoMode::Mixed => BlendMode::Screen,
-        }
-    }
-
-    const fn video_z(mode: VideoMode) -> f32 {
-        match mode {
-            VideoMode::Fullscreen => 1_000.0,
-            VideoMode::Mixed => 50.0,
+    fn reap_decoders(decoders: &mut Vec<thread::JoinHandle<()>>) {
+        let mut index = 0;
+        while index < decoders.len() {
+            if decoders[index].is_finished() {
+                let decoder = decoders.swap_remove(index);
+                if decoder.join().is_err() {
+                    log::warn!("video decoder thread panicked during shutdown");
+                }
+            } else {
+                index += 1;
+            }
         }
     }
 
@@ -450,8 +420,8 @@ mod ffmpeg_backend {
         let (sender, receiver) = sync_channel(2);
         let cancelled = Arc::new(AtomicBool::new(false));
         let thread_cancelled = cancelled.clone();
-        thread::Builder::new()
-            .name(format!("crabgal-video-{path}"))
+        let decoder = thread::Builder::new()
+            .name(format!("keine-video-{path}"))
             .spawn(move || decode_video(mounts, &path, looped, thread_cancelled, sender))
             .unwrap_or_else(|error| {
                 log::error!("failed to start video decoder thread: {error}");
@@ -460,10 +430,9 @@ mod ffmpeg_backend {
         VideoSession {
             receiver: Mutex::new(receiver),
             cancelled,
+            decoder: Some(decoder),
             pending: None,
-            image: None,
-            material: None,
-            entity: None,
+            visual: VideoVisual::default(),
             audio_entity: None,
             audio_asset: None,
             source: None,
@@ -613,36 +582,6 @@ mod ffmpeg_backend {
                 Err(TrySendError::Disconnected(_)) => return false,
             }
         }
-    }
-
-    fn prepare_source(mounts: &[ContentMount], path: &Path) -> Result<PreparedSource, String> {
-        for mount in mounts.iter().rev() {
-            if !mount.contains_file(path) {
-                continue;
-            }
-            if let Some(root) = mount.filesystem_root() {
-                return Ok(PreparedSource {
-                    path: root.join(path),
-                    _temporary: None,
-                });
-            }
-            let bytes = mount.read(path).map_err(|error| error.to_string())?;
-            let suffix = path
-                .extension()
-                .and_then(|value| value.to_str())
-                .map_or(String::new(), |extension| format!(".{extension}"));
-            let mut file = tempfile::Builder::new()
-                .prefix("crabgal-video-")
-                .suffix(&suffix)
-                .tempfile()
-                .map_err(|error| error.to_string())?;
-            std::io::Write::write_all(&mut file, &bytes).map_err(|error| error.to_string())?;
-            return Ok(PreparedSource {
-                path: file.path().to_owned(),
-                _temporary: Some(file),
-            });
-        }
-        Err(format!("video asset does not exist: {}", path.display()))
     }
 
     pub(super) struct FfmpegAudioStream {
@@ -836,27 +775,17 @@ mod ffmpeg_backend {
 
     #[cfg(test)]
     mod tests {
+        use std::path::PathBuf;
+
         use super::*;
 
         #[test]
-        fn mixed_video_uses_the_authored_screen_blend() {
-            assert_eq!(video_blend(VideoMode::Mixed), BlendMode::Screen);
-            assert_eq!(video_blend(VideoMode::Fullscreen), BlendMode::Alpha);
-        }
-
-        #[test]
-        fn video_frames_do_not_keep_a_second_main_world_copy() {
-            let image = video_image(1, 1, vec![0, 0, 0, 255]);
-            assert_eq!(image.asset_usage, RenderAssetUsages::RENDER_WORLD);
-        }
-
-        #[test]
-        #[ignore = "set CRABGAL_TEST_VIDEO to a local video"]
+        #[ignore = "set KEINE_TEST_VIDEO to a local video"]
         fn decodes_video_frames_with_the_runtime_pipeline() {
             video_rs::init().unwrap();
-            let path = std::env::var_os("CRABGAL_TEST_VIDEO")
+            let path = std::env::var_os("KEINE_TEST_VIDEO")
                 .map(PathBuf::from)
-                .expect("CRABGAL_TEST_VIDEO is required");
+                .expect("KEINE_TEST_VIDEO is required");
             let mut decoder = open_decoder(path.as_path()).unwrap();
             let mut scaler = None;
             for _ in 0..60 {
@@ -870,15 +799,12 @@ mod ffmpeg_backend {
         }
 
         #[test]
-        #[ignore = "set CRABGAL_TEST_VIDEO to a local video with an audio track"]
+        #[ignore = "set KEINE_TEST_VIDEO to a local video with an audio track"]
         fn decodes_video_and_audio_incrementally() {
-            let path = std::env::var_os("CRABGAL_TEST_VIDEO")
+            let path = std::env::var_os("KEINE_TEST_VIDEO")
                 .map(PathBuf::from)
-                .expect("CRABGAL_TEST_VIDEO is required");
-            let source = Arc::new(PreparedSource {
-                path: path.clone(),
-                _temporary: None,
-            });
+                .expect("KEINE_TEST_VIDEO is required");
+            let source = Arc::new(PreparedSource::filesystem(path.clone()));
             let mut video = video_rs::Decoder::new(path.as_path()).unwrap();
             let frame = video.decode_raw().unwrap();
             assert!(frame.width() > 0 && frame.height() > 0);
@@ -889,5 +815,8 @@ mod ffmpeg_backend {
     }
 }
 
-#[cfg(feature = "video-ffmpeg")]
+#[cfg(all(
+    feature = "video-ffmpeg",
+    not(all(feature = "video-native", target_os = "macos"))
+))]
 use ffmpeg_backend::{VideoPlayback, sync_video_playback};

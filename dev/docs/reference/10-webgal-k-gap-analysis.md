@@ -1,12 +1,12 @@
 # WebGAL_K 对照审计
 
-> 审计基线：本地 WebGAL_K `4.6.1`（commit `b5a6fa08`）与 crabgal `0.2.0`
+> 审计基线：本地 WebGAL_K `4.6.1`（commit `b5a6fa08`）与 keine `0.2.0`
 >（commit `a044b5a`）。本文件记录代码层面的实际能力，不以界面上已有按钮或 parser
 > 能接受某个关键词作为“已完成”。
 
 ## 结论
 
-crabgal 已经完成 Phase 1 的 WebGAL 核心运行链：表达式/数组/全局变量、公共 flow 参数、
+keine 已经完成 Phase 1 的 WebGAL 核心运行链：表达式/数组/全局变量、公共 flow 参数、
 条件 Choice、跨场景调用、source span 诊断、本地资源扫描预取、vocal 和标题结束流程均已
 端到端接通。它仍是 **WebGAL 的明确子集**，下一阶段的主要缺口不是基础 parser，而是：
 
@@ -18,9 +18,9 @@ crabgal 已经完成 Phase 1 的 WebGAL 核心运行链：表达式/数组/全�
 
 ## 结构对照
 
-| WebGAL_K 结构 | 职责 | crabgal 当前对应 | 缺口 |
+| WebGAL_K 结构 | 职责 | keine 当前对应 | 缺口 |
 |---|---|---|---|
-| `packages/parser` | 命令、参数、资源和子场景扫描，保留行信息 | `crabgal-loader::ParseReport` | 已有 source span、明确诊断、资源/子场景引用；仍缺发布前独立 check CLI 与不可达分析 |
+| `packages/parser` | 命令、参数、资源和子场景扫描，保留行信息 | `keine-loader::ParseReport` | 已有 source span、明确诊断、资源/子场景引用；仍缺发布前独立 check CLI 与不可达分析 |
 | `Core/Modules/scene` | 当前场景、场景栈和恢复点 | `State.scenes/current_scene/cursor/scene_stack` | `changeScene/callScene/end`、自然返回、舞台清理与标题重开已接通；缺 rollback 恢复点 |
 | `scriptExecutor` | `-when`、变量插值、`-next`、`-notend`、执行上限 | `core::step` + `expression` | 公共 flow、表达式/数组/全局变量和 1024 action 上限已实现；高级命令仍待扩展 |
 | `stageStateManager` | 计算态、展示态、commit 与恢复 | 单个 `State` + ECS 同步 | 没有演出提交边界、阻塞演出、状态快照和回滚 |
@@ -101,5 +101,5 @@ crabgal 已经完成 Phase 1 的 WebGAL 核心运行链：表达式/数组/全�
 6. **演出控制器**：统一 animation/transition/filter/wait/blend 的生命周期和阻塞语义。
 7. **高级兼容**：富文本、视频、Live2D/Spine、鉴赏、Flowchart、Steam、编辑器同步。
 
-不建议直接照搬 WebGAL_K 的 Redux/React/Pixi 组织。应保留 crabgal 的
+不建议直接照搬 WebGAL_K 的 Redux/React/Pixi 组织。应保留 keine 的
 `core -> loader -> bevy` 边界，只借鉴它的职责划分和行为语义。

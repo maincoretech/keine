@@ -4,10 +4,10 @@
 
 这三个关键词在 loader 中作为 WebGAL 保留字单独识别。它们会产生带行列信息的 warning，然后被跳过；不会进入 core，也不会被未知命令回退策略误显示成普通对话。
 
-| 命令 | WebGAL 行为 | crabgal 当前行为 | 缺失能力 | 引入前置条件 |
+| 命令 | WebGAL 行为 | keine 当前行为 | 缺失能力 | 引入前置条件 |
 |---|---|---|---|---|
 | `showVars` | 在对话框输出本地/全局变量 | warning + skip | 调试展示 Action、稳定排序/格式、敏感值策略 | 定义仅开发模式还是发布版可用；编写确定性格式测试 |
-| `applyStyle` | 把 WebGAL UI 模板样式名运行时映射到新样式 | warning + skip | React/CSS class/template 等价层 | crabgal 使用 Bevy UI，需先设计 typed theme token 映射；不能直接执行项目 CSS |
+| `applyStyle` | 把 WebGAL UI 模板样式名运行时映射到新样式 | warning + skip | React/CSS class/template 等价层 | keine 使用 Bevy UI，需先设计 typed theme token 映射；不能直接执行项目 CSS |
 | `callSteam` | 通过 Electron/Steam 桥接解锁 achievementId | warning + skip | AppID 配置、Steam SDK/桥接、成就结果与平台错误处理 | feature-gated 后端、再分发许可、非 Steam 构建的确定性行为、真实客户端验收 |
 
 自动保护测试：`reports_reserved_unsupported_commands_without_dialogue_fallback`。
@@ -61,11 +61,11 @@
 
 ### `-next`
 
-多数无阻塞命令在 core 单步中自然继续，演出命令会用 `Flow.next` 取消等待。仍需专门对照：WebGAL 明确称 `wait -next` 不兼容，而 crabgal 的通用 flow 包装可能使它成为非阻塞等待。
+多数无阻塞命令在 core 单步中自然继续，演出命令会用 `Flow.next` 取消等待。仍需专门对照：WebGAL 明确称 `wait -next` 不兼容，而 keine 的通用 flow 包装可能使它成为非阻塞等待。
 
 ### `-when`
 
-crabgal 使用确定性的表达式 evaluator，支持常见算术、比较、布尔、数组和变量，但不执行任意 JavaScript。安全优先于表面上的“全 JS 兼容”；超出子集的脚本必须在发布前得到明确诊断。
+keine 使用确定性的表达式 evaluator，支持常见算术、比较、布尔、数组和变量，但不执行任意 JavaScript。安全优先于表面上的“全 JS 兼容”；超出子集的脚本必须在发布前得到明确诊断。
 
 ### `-continue`
 
@@ -73,7 +73,7 @@ crabgal 使用确定性的表达式 evaluator，支持常见算术、比较、�
 
 ### 参数覆盖顺序
 
-WebGAL parser 的参数查找通常取首次出现值；crabgal 当前存入 `HashMap`，后出现的同名参数覆盖先出现值。正常脚本不应重复参数，但兼容测试需要固定此差异。
+WebGAL parser 的参数查找通常取首次出现值；keine 当前存入 `HashMap`，后出现的同名参数覆盖先出现值。正常脚本不应重复参数，但兼容测试需要固定此差异。
 
 ## 文档外的上游行为
 
@@ -88,14 +88,14 @@ WebGAL 4.6.2 源码存在但当前脚本参考未公开的参数/路径包括：
 
 这些项目不计入“31 个文档化命令”覆盖率。若目标升级为源码级兼容，应为每项先建立上游行为 fixture，再决定实现或明确拒绝。
 
-## crabgal 扩展
+## keine 扩展
 
-以下行为可服务 crabgal 自身项目，但不能反向宣称为 WebGAL 官方语义：
+以下行为可服务 keine 自身项目，但不能反向宣称为 WebGAL 官方语义：
 
-- `setFilter`：crabgal 提供 blur/brightness/contrast/saturation 的原生子集；WebGAL 4.6.2 同名实现目前是 no-op。
+- `setFilter`：keine 提供 blur/brightness/contrast/saturation 的原生子集；WebGAL 4.6.2 同名实现目前是 no-op。
 - `stopBgm`：历史兼容别名；官方写法是 `bgm:none` 或 `bgm:`。
 - `comment:`：历史显式注释扩展；官方注释语法是从第一个未转义 `;` 开始。
-- Choice 的 `callScene(...)` 目标：crabgal 扩展；官方文档只列 scene 文件和当前场景 label。
+- Choice 的 `callScene(...)` 目标：keine 扩展；官方文档只列 scene 文件和当前场景 label。
 
 扩展必须保持命名明确、资源有界、无隐式网络/脚本执行，并且不能改变官方写法的解析优先级。
 

@@ -20,7 +20,7 @@
 
 ## 31 命令逐项结论
 
-| # | 命令 | WebGAL 4.6.2 文档合同 | crabgal 当前行为与证据 | 状态 | 主要差距 |
+| # | 命令 | WebGAL 4.6.2 文档合同 | keine 当前行为与证据 | 状态 | 主要差距 |
 |---:|---|---|---|---|---|
 | 1 | `say` | 对话/旁白、继承或清空 speaker、`vocal`、`notend`、`concat`、多行、`fontSize`、立绘嘴型驱动 | P+C+R+T：两种 speaker 写法、语音/音量、继承/clear、concat/notend、转义、多行、插值、富文本/ruby 子集、Backlog 与打字机已接通 | **部分支持** | 不支持持久 `fontSize` 与 `left/right/center/figureId` 嘴型同步；`-continue` 不等价；表达式/富文本并非 WebGAL 全集 |
 | 2 | `changeBg` | 入场/替换/退场；transform、enter/exit、分段时长、ease、CG 自动收录 | P+C+R+T+M：图片/none、若干 transition、基础 transform/filter、阻塞与材质转场可用 | **部分支持** | 默认 1500 ms 淡入淡出、`enterDuration/exitDuration`、完整 14 easing、完整 filter、`unlockname/series` 未等价；当前无参数时是 Instant |
@@ -32,10 +32,10 @@
 | 8 | `intro` | 多行全屏文字；字号/前景/背景色/背景图；五种动画；delay/hold/userForward | P+C+R+T+M：多页文字、黑底白字淡入、自动翻页与 hold 基础状态可用 | **部分支持** | 不支持颜色、字号、背景图、动画选择、`delayTime`、`userForward`；上游文档与源码默认字体色还存在漂移 |
 | 9 | `miniAvatar` | 显示、替换、隐藏文本框小头像 | P+C+R+T+M：路径/none 状态与淡入 UI 投影已接通 | **部分支持** | 替换、隐藏过渡与多 DPI 行为尚未证明等价 |
 | 10 | `changeScene` | 替换当前场景且不返回；保留未主动清理的舞台状态 | P+C+T：递归加载并保留嵌套相对路径；场景替换、无返回和缺失目标诊断有自动测试 | **已实现** | 无已知命令本地语义差距；视觉舞台保留仍在人工矩阵中回归 |
-| 11 | `choose` | 选项阻塞；label/scene 目标；条件显示与条件启用；无效目标继续 | P+C+R+T+M：条件过滤/禁用、键鼠选择、label/changeScene 以及额外的 callScene 目标可用；转义分隔符与 `[clues[2]]` 等嵌套数组条件已测试 | **部分支持** | `-when` 表达式是 crabgal 安全子集；预览专用 `defaultChoose` 未实现；hover/pressed/touch 与多尺寸仍无完整视觉证据 |
+| 11 | `choose` | 选项阻塞；label/scene 目标；条件显示与条件启用；无效目标继续 | P+C+R+T+M：条件过滤/禁用、键鼠选择、label/changeScene 以及额外的 callScene 目标可用；转义分隔符与 `[clues[2]]` 等嵌套数组条件已测试 | **部分支持** | `-when` 表达式是 keine 安全子集；预览专用 `defaultChoose` 未实现；hover/pressed/touch 与多尺寸仍无完整视觉证据 |
 | 12 | `end` | 结束场景并返回标题 | C+R+T+M：清理剧情舞台、交互和音频状态，设置 ended 并回到标题链路 | **已实现** | 无已知命令本地语义差距 |
 | 13 | `setComplexAnimation` | `universalSoftIn/universalSoftOff` 复杂动画，target 与 duration | P+C+R+T+M：与本地 `Animate` 统一时间线，未知名称有有界 fallback | **部分支持** | 官方两个复杂动画没有等价曲线；fallback 只是原生近似，不能视为兼容 |
-| 14 | `label` | 定义当前场景 label；命令本身无副作用 | P+C+T：Program 构建时一次性索引，执行期 no-op | **已实现** | crabgal 与 WebGAL 4.6.2 实际源码均对重复名取最后一个；官方文档仍写“第一个”，见下方漂移 |
+| 14 | `label` | 定义当前场景 label；命令本身无副作用 | P+C+T：Program 构建时一次性索引，执行期 no-op | **已实现** | keine 与 WebGAL 4.6.2 实际源码均对重复名取最后一个；官方文档仍写“第一个”，见下方漂移 |
 | 15 | `jumpLabel` | 跳到当前场景 label；支持 `-when` | P+C+T：O(1) label 查询、条件跳转、缺失 label 安全继续和 runaway 上限有测试 | **已实现** | 无已知命令本地语义差距；条件表达式全集差距归公共 `-when` |
 | 16 | `setVar` | 设置本地/全局变量；数值、布尔、字符串与表达式 | P+C+T+M：数字/布尔/带引号字符串、数组、算术/比较/逻辑、索引赋值、global 与插值可用；global 独立写入 profile，成功恢复 fingerprint 匹配的存档或 rollback 时保留当前长期值 | **部分支持** | 未识别裸值不会像 WebGAL 那样稳定回退为字符串；不执行任意 JS/用户数据对象语义 |
 | 17 | `callScene` | 临时进入场景，自然结束后返回调用点；保留舞台 | P+C+T：嵌套相对路径、LIFO 调用栈、自然 EOF 返回和嵌套调用有端到端测试 | **已实现** | 无已知命令本地语义差距；视觉舞台保留仍需人工回归 |
@@ -50,8 +50,8 @@
 | 26 | `setTransform` | 对现有状态做稀疏 transform patch；duration、14 easing、writeDefault、keep；多类 filter | P+C+R+T+M：32-byte `TransformPatch` 只覆盖出现字段并区分显式 0；position/scale/rotation/alpha/blur、默认 500 ms、显式 0 ms、target 与 4 类 easing 可用 | **部分支持** | 尚缺 10 类 easing、writeDefault/keep、stage-main 与大量 filter；仍无连续 patch 的视觉 golden |
 | 27 | `setTransition` | 为目标设置后续 enter/exit 动画 | P+C+R+T+M：target、enter/exit、duration 与若干 native preset 的持久规则可用 | **部分支持** | 自定义动画名与 WebGAL animation table 不等价；默认时长/完整 target 和退出行为尚缺视觉证据 |
 | 28 | `getUserInput` | title/button/defaultValue；regex rule/flags/error 文案；确认后写变量并继续 | P+C+R+T+M：标题、按钮、键盘输入、非空确认、变量写入和阻塞恢复可用 | **部分支持** | 不支持 defaultValue、rule/ruleFlag/ruleText/ruleButtonText；空输入行为与 WebGAL 不同；IME/触控/高 DPI 输入行为未完整验收 |
-| 29 | `applyStyle` | 将一个或多个 UI 模板样式名运行时映射到新样式 | P+T：保留字被识别并产生明确 unsupported warning | **不支持** | crabgal 没有 WebGAL React UI class/template 映射层；不会把 CSS 路径或映射静默套用到 Bevy UI |
-| 30 | `wait` | 等待指定毫秒，结束后自动继续 | P+C+R+T+M：确定性的秒数状态、阻塞与计时推进可用 | **部分支持** | 上游源码存在未文档化 `-nobreak`，crabgal 不支持；`wait -next` 的上游“不兼容”行为与本地 flow 包装仍需专门回归 |
+| 29 | `applyStyle` | 将一个或多个 UI 模板样式名运行时映射到新样式 | P+T：保留字被识别并产生明确 unsupported warning | **不支持** | keine 没有 WebGAL React UI class/template 映射层；不会把 CSS 路径或映射静默套用到 Bevy UI |
+| 30 | `wait` | 等待指定毫秒，结束后自动继续 | P+C+R+T+M：确定性的秒数状态、阻塞与计时推进可用 | **部分支持** | 上游源码存在未文档化 `-nobreak`，keine 不支持；`wait -next` 的上游“不兼容”行为与本地 flow 包装仍需专门回归 |
 | 31 | `callSteam` | Electron/Steam 桥接解锁 `achievementId` | P+T：保留字被识别并产生明确 unsupported warning | **不支持** | 无 Steam AppID/桥接/成就 API；普通桌面构建也不会伪造成功 |
 
 ## Parser 与公共参数
@@ -83,12 +83,12 @@
 
 ### 横切差距
 
-| 语义 | WebGAL 4.6.2 | crabgal |
+| 语义 | WebGAL 4.6.2 | keine |
 |---|---|---|
 | `-next` | 当前命令与后续命令同步启动；若干命令默认自带 | 非阻塞 Action 会自然继续；演出 Action 通过 `Flow.next` 取消阻塞，基本路径可用 |
 | `-when` | 条件为真才执行 | 有统一条件包装；Choice parser 能正确跨过嵌套数组索引/括号/引号，但表达式仍是安全 Rust 子集，不是 JavaScript 全集 |
 | `-continue` | 当前演出结束后自动执行下一句 | 参数可被 parser 吃掉而不污染正文，但 core 没有等价的“展示完成后自动继续”状态 |
-| 重复参数 | 上游 parser 采用首次命中的参数 | crabgal `HashMap` 当前以后出现的值覆盖先出现的值 |
+| 重复参数 | 上游 parser 采用首次命中的参数 | keine `HashMap` 当前以后出现的值覆盖先出现的值 |
 | 未知命令 | 尝试作为对话 | 保留该策略，但三个明确不支持的官方保留字会先被拦截并告警 |
 
 ## 官方文档与 4.6.2 源码漂移
@@ -97,15 +97,15 @@
 
 | 项目 | 文档 | WebGAL 4.6.2 源码 | 本审计处理 |
 |---|---|---|---|
-| 重复 `label` | 从上到下取第一个 | 构建映射时后项覆盖前项，实际取最后一个 | crabgal 取最后一个并记录漂移 |
+| 重复 `label` | 从上到下取第一个 | 构建映射时后项覆盖前项，实际取最后一个 | keine 取最后一个并记录漂移 |
 | `intro fontColor` 默认值 | 黑色 | [`intro.tsx`](https://github.com/OpenWebGAL/WebGAL/blob/e7f0abeb855b5b442460743bdaa9778ca751b43f/packages/webgal/src/Core/gameScripts/intro.tsx) 使用白色 | 以运行时源码为行为基线 |
 | `changeFigure -none` | 文档称可清空内容 | [`changeFigure.ts`](https://github.com/OpenWebGAL/WebGAL/blob/e7f0abeb855b5b442460743bdaa9778ca751b43f/packages/webgal/src/Core/gameScripts/changeFigure.ts) 明确读取 `-clear`；内容 `none`/空仍可退场 | 两种参数均不能宣称完整兼容 |
-| `say fontSize` | 设置后持续到再次设置 | [`say.ts`](https://github.com/OpenWebGAL/WebGAL/blob/e7f0abeb855b5b442460743bdaa9778ca751b43f/packages/webgal/src/Core/gameScripts/say.ts) 在缺参时回到用户默认 | crabgal 尚未实现，先记录冲突 |
+| `say fontSize` | 设置后持续到再次设置 | [`say.ts`](https://github.com/OpenWebGAL/WebGAL/blob/e7f0abeb855b5b442460743bdaa9778ca751b43f/packages/webgal/src/Core/gameScripts/say.ts) 在缺参时回到用户默认 | keine 尚未实现，先记录冲突 |
 | transform 键 | 文档列 `shockwave`、`radiusAlpha` | runtime/type 使用 `shockwaveFilter`、`radiusAlphaFilter` | 未实现前不猜测别名 |
 | `pixiInit` 示例 | 示例写 `pixi:rain` | 注册表只有 `pixiPerform` | 矩阵以注册表为准 |
 | 场景首句 | 教程描述首句需要点击 | 4.6.2 scene load 后会自动继续首个可执行动作 | 以 4.6.2 runtime 为准 |
-| 越界音量 | 教程曾描述回退 100 | runtime 实际钳制到 0..100 | crabgal 同样钳制 |
-| `setFilter` | 不在 31 命令文档目录 | 注册但 [`setFilter.ts`](https://github.com/OpenWebGAL/WebGAL/blob/e7f0abeb855b5b442460743bdaa9778ca751b43f/packages/webgal/src/Core/gameScripts/setFilter.ts) 是 no-op | 作为 crabgal 扩展记录，不计兼容数量 |
+| 越界音量 | 教程曾描述回退 100 | runtime 实际钳制到 0..100 | keine 同样钳制 |
+| `setFilter` | 不在 31 命令文档目录 | 注册但 [`setFilter.ts`](https://github.com/OpenWebGAL/WebGAL/blob/e7f0abeb855b5b442460743bdaa9778ca751b43f/packages/webgal/src/Core/gameScripts/setFilter.ts) 是 no-op | 作为 keine 扩展记录，不计兼容数量 |
 | `animationFlag` | 文档化为差分动画标志 | 值被保存但后续嘴型/眨眼按目标 id 与差分资源读取，flag 本身未消费 | 不把“成功解析”计为行为支持 |
 
 ## 上游源码存在、当前文档未公开的参数

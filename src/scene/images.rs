@@ -12,8 +12,8 @@ use libwebp_sys::{
 use crate::runtime::resources::{GameConfigResource, LocalAssetCache};
 
 const BACKGROUND_LIMIT: UVec2 = UVec2::new(
-    crabgal_core::DESIGN_WIDTH as u32,
-    crabgal_core::DESIGN_HEIGHT as u32,
+    keine_core::DESIGN_WIDTH as u32,
+    keine_core::DESIGN_HEIGHT as u32,
 );
 
 pub(crate) struct NativeWebpPlugin {
@@ -177,10 +177,7 @@ fn is_resizeable(image: &Image) -> bool {
 
 fn target_size(path: &str, original: UVec2, sprite_height: f32) -> UVec2 {
     let limit = if is_figure_path(path) {
-        UVec2::new(
-            crabgal_core::DESIGN_WIDTH as u32,
-            sprite_height.ceil() as u32,
-        )
+        UVec2::new(keine_core::DESIGN_WIDTH as u32, sprite_height.ceil() as u32)
     } else if is_background_path(path) {
         BACKGROUND_LIMIT
     } else {

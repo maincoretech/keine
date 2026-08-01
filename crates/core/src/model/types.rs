@@ -59,7 +59,7 @@ impl Position {
 
 /// How a sprite is laid out before its authored transform is applied.
 ///
-/// Normal figures use crabgal's character baseline. Editor scene layers use
+/// Normal figures use keine's character baseline. Editor scene layers use
 /// the source editor's explicit canvas fitting and anchor rules instead.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub enum SpriteLayout {

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use bevy::asset::LoadState;
 use bevy::prelude::*;
-use crabgal_loader::ResourceKind;
+use keine_loader::ResourceKind;
 
 use crate::runtime::resources::{
     AssetLoadingGate, GameConfigResource, GameState, LocalAssetCache, LocalAssetManifest,
@@ -223,9 +223,9 @@ mod tests {
 
     #[test]
     fn typewriter_progress_does_not_rebuild_the_prefetch_set() {
-        let mut state = crabgal_core::State::new();
+        let mut state = keine_core::State::new();
         state.current_scene = "main".into();
-        state.dialogue = Some(crabgal_core::state::Dialogue {
+        state.dialogue = Some(keine_core::state::Dialogue {
             speaker: "A".into(),
             text: "hello".into(),
             markup: "hello".into(),

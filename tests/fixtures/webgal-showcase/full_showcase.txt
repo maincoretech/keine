@@ -1,6 +1,6 @@
 ; Sequential tour. Every scene returns naturally before the next one starts.
 
-intro:CRABGAL FEATURE LAB|00 · 完整连续验收 -hold
+intro:KEINE FEATURE LAB|00 · 完整连续验收 -hold
 callScene:01_dialogue_textbox.txt
 callScene:02_flow_variables.txt
 callScene:03_stage_transform.txt

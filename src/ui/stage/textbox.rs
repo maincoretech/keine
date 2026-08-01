@@ -3,8 +3,8 @@ use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
-use crabgal_core::config::{GameConfig, LayoutConfig};
-use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH, DialogueStyle};
+use keine_core::config::{GameConfig, LayoutConfig, TextRevealConfig, TextRevealEffect};
+use keine_core::{DESIGN_HEIGHT, DESIGN_WIDTH, DialogueStyle};
 
 use crate::render::blur::{DialogCamera, UiBlurCamera};
 use crate::runtime::resources::{GameConfigResource, GameState};
@@ -27,6 +27,24 @@ pub(crate) struct DialogueGlyph {
     reveal_at: usize,
 }
 #[derive(Component)]
+pub(crate) struct DialogueGlyphReveal {
+    elapsed: f32,
+    settled: bool,
+}
+
+impl DialogueGlyphReveal {
+    /// Keep the render loop awake only for a glyph that is currently on screen.
+    /// Future typewriter glyphs remain hidden and must not create permanent UI
+    /// animation activity.
+    pub(crate) fn is_animating(&self, visibility: Visibility) -> bool {
+        visibility != Visibility::Hidden && !self.settled
+    }
+}
+#[derive(Component)]
+pub(crate) struct DialogueRevealText {
+    base_alpha: f32,
+}
+#[derive(Component)]
 pub(crate) struct DialogueBaseGlyph;
 #[derive(Component)]
 pub(crate) struct DialogueRubyGlyph;
@@ -47,7 +65,6 @@ type SpeakerTextQuery<'w, 's> = Query<
     (&'static mut Text, &'static mut TextFont),
     (With<SpeakerText>, Without<DialogueText>),
 >;
-
 const RUBY_FONT_SCALE: f32 = 0.44;
 const RUBY_COLLISION_PADDING: f32 = 4.5;
 
@@ -688,7 +705,7 @@ pub fn update_textbox(
     mut commands: Commands,
     mut speaker_text: SpeakerTextQuery,
     mut dialogue_root: Query<(Entity, &mut Node), DialogueRootFilter>,
-    mut glyphs: Query<(&DialogueGlyph, &mut Visibility)>,
+    mut glyphs: Query<(&DialogueGlyph, &mut DialogueGlyphReveal, &mut Visibility)>,
     mut name_bar: Query<(&mut Node, &mut BackgroundColor, &mut HideContentBg), NameBarFilter>,
     mut text_box: Query<(&mut Node, &mut BackgroundColor, &mut HideContentBg), TextBoxFilter>,
 ) {
@@ -819,17 +836,31 @@ pub fn update_textbox(
             &mut commands,
             root,
             markup,
-            visible_chars,
-            dialogue_size,
-            &resources.fonts.text,
+            RichDialogueSpawn {
+                visible_chars,
+                font_size: dialogue_size,
+                font: &resources.fonts.text,
+                reveal: &config.styles.text_reveal,
+                animate_latest: should_animate_latest_glyph(
+                    dialogue_changed,
+                    state.dialogue.is_some(),
+                    state.dialogue_retraction.is_some(),
+                    visible_chars,
+                ),
+            },
         );
     } else if visibility_changed {
-        for (glyph, mut visibility) in &mut glyphs {
-            *visibility = if glyph.reveal_at <= visible_chars {
+        for (glyph, mut reveal, mut visibility) in &mut glyphs {
+            let next = if glyph.reveal_at <= visible_chars {
                 Visibility::Inherited
             } else {
                 Visibility::Hidden
             };
+            if *visibility == Visibility::Hidden && next == Visibility::Inherited {
+                reveal.elapsed = 0.0;
+                reveal.settled = false;
+            }
+            *visibility = next;
         }
     }
     if speaker_changed {
@@ -877,13 +908,19 @@ struct RichRun {
     style: RichStyle,
 }
 
+struct RichDialogueSpawn<'a> {
+    visible_chars: usize,
+    font_size: f32,
+    font: &'a Handle<Font>,
+    reveal: &'a TextRevealConfig,
+    animate_latest: bool,
+}
+
 fn spawn_rich_dialogue(
     commands: &mut Commands,
     root: Entity,
     markup: &str,
-    visible_chars: usize,
-    font_size: f32,
-    font: &Handle<Font>,
+    spawn: RichDialogueSpawn<'_>,
 ) {
     let runs = parse_rich_markup(markup);
     commands.entity(root).with_children(|content| {
@@ -895,54 +932,39 @@ fn spawn_rich_dialogue(
                     DialogueGlyph {
                         reveal_at: character_index,
                     },
+                    DialogueGlyphReveal {
+                        elapsed: spawn.reveal.duration,
+                        settled: true,
+                    },
+                    UiTransform::default(),
                     Node {
                         width: Val::Percent(100.0),
                         height: Val::Px(0.0),
                         ..default()
                     },
-                    glyph_visibility(character_index, visible_chars),
+                    glyph_visibility(character_index, spawn.visible_chars),
                 ));
                 continue;
             }
             if let Some(ruby) = run.ruby {
                 character_index += run.base.chars().count();
-                spawn_ruby_cluster(
-                    content,
-                    run.base,
-                    ruby,
-                    run.style,
-                    character_index,
-                    visible_chars,
-                    font_size,
-                    font,
-                );
+                spawn_ruby_cluster(content, run.base, ruby, run.style, character_index, &spawn);
             } else {
                 for value in run.base.chars() {
                     character_index += 1;
-                    spawn_plain_cluster(
-                        content,
-                        value,
-                        run.style.clone(),
-                        character_index,
-                        visible_chars,
-                        font_size,
-                        font,
-                    );
+                    spawn_plain_cluster(content, value, run.style.clone(), character_index, &spawn);
                 }
             }
         }
     });
 }
 
-#[allow(clippy::too_many_arguments)]
 fn spawn_plain_cluster(
     content: &mut ChildSpawnerCommands,
     value: char,
     style: RichStyle,
     reveal_at: usize,
-    visible_chars: usize,
-    font_size: f32,
-    font: &Handle<Font>,
+    spawn: &RichDialogueSpawn<'_>,
 ) {
     let alpha = style.color.alpha();
     let background = style.background;
@@ -950,6 +972,21 @@ fn spawn_plain_cluster(
     content
         .spawn((
             DialogueGlyph { reveal_at },
+            DialogueGlyphReveal {
+                elapsed: initial_reveal_elapsed(
+                    reveal_at,
+                    spawn.visible_chars,
+                    spawn.reveal,
+                    spawn.animate_latest,
+                ),
+                settled: initial_reveal_settled(
+                    reveal_at,
+                    spawn.visible_chars,
+                    spawn.reveal,
+                    spawn.animate_latest,
+                ),
+            },
+            UiTransform::default(),
             Node {
                 flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::FlexEnd,
@@ -961,22 +998,31 @@ fn spawn_plain_cluster(
                 ..default()
             },
             BackgroundColor(background.unwrap_or(Color::NONE)),
-            glyph_visibility(reveal_at, visible_chars),
+            glyph_visibility(reveal_at, spawn.visible_chars),
         ))
         .with_children(|cluster| {
             cluster.spawn((
                 DialogueBaseGlyph,
                 Text::new(value.to_string()),
                 TextFont {
-                    font: font.clone().into(),
-                    font_size: FontSize::Px(font_size * style.scale),
+                    font: spawn.font.clone().into(),
+                    font_size: FontSize::Px(spawn.font_size * style.scale),
                     weight: style.weight,
                     style: style.font_style,
                     ..default()
                 },
                 TextColor(style.color),
                 TextLayout::no_wrap(),
-                HideContentText::new(alpha),
+                HideContentText::new(
+                    alpha
+                        * initial_reveal_alpha(
+                            reveal_at,
+                            spawn.visible_chars,
+                            spawn.reveal,
+                            spawn.animate_latest,
+                        ),
+                ),
+                DialogueRevealText { base_alpha: alpha },
             ));
             if strike {
                 spawn_strike(cluster, style.color);
@@ -984,24 +1030,36 @@ fn spawn_plain_cluster(
         });
 }
 
-#[allow(clippy::too_many_arguments)]
 fn spawn_ruby_cluster(
     content: &mut ChildSpawnerCommands,
     base: String,
     ruby: String,
     style: RichStyle,
     reveal_at: usize,
-    visible_chars: usize,
-    font_size: f32,
-    font: &Handle<Font>,
+    spawn: &RichDialogueSpawn<'_>,
 ) {
     let alpha = style.color.alpha();
     let background = style.background;
     let strike = style.strike;
-    let cluster_width = ruby_cluster_width(&base, &ruby, font_size, style.scale);
+    let cluster_width = ruby_cluster_width(&base, &ruby, spawn.font_size, style.scale);
     content
         .spawn((
             DialogueGlyph { reveal_at },
+            DialogueGlyphReveal {
+                elapsed: initial_reveal_elapsed(
+                    reveal_at,
+                    spawn.visible_chars,
+                    spawn.reveal,
+                    spawn.animate_latest,
+                ),
+                settled: initial_reveal_settled(
+                    reveal_at,
+                    spawn.visible_chars,
+                    spawn.reveal,
+                    spawn.animate_latest,
+                ),
+            },
+            UiTransform::default(),
             Node {
                 min_width: Val::Px(cluster_width),
                 flex_shrink: 0.0,
@@ -1016,7 +1074,7 @@ fn spawn_ruby_cluster(
                 ..default()
             },
             BackgroundColor(background.unwrap_or(Color::NONE)),
-            glyph_visibility(reveal_at, visible_chars),
+            glyph_visibility(reveal_at, spawn.visible_chars),
         ))
         .with_children(|cluster| {
             cluster.spawn((
@@ -1032,28 +1090,49 @@ fn spawn_ruby_cluster(
                 UiTransform::from_xy(Val::Percent(-50.0), Val::Px(-1.5)),
                 Text::new(ruby),
                 TextFont {
-                    font: font.clone().into(),
-                    font_size: FontSize::Px(font_size * RUBY_FONT_SCALE),
+                    font: spawn.font.clone().into(),
+                    font_size: FontSize::Px(spawn.font_size * RUBY_FONT_SCALE),
                     weight: FontWeight::MEDIUM,
                     ..default()
                 },
                 TextColor(style.color.with_alpha(alpha * 0.88)),
                 TextLayout::no_wrap(),
-                HideContentText::new(alpha * 0.88),
+                HideContentText::new(
+                    alpha
+                        * 0.88
+                        * initial_reveal_alpha(
+                            reveal_at,
+                            spawn.visible_chars,
+                            spawn.reveal,
+                            spawn.animate_latest,
+                        ),
+                ),
+                DialogueRevealText {
+                    base_alpha: alpha * 0.88,
+                },
             ));
             cluster.spawn((
                 DialogueBaseGlyph,
                 Text::new(base),
                 TextFont {
-                    font: font.clone().into(),
-                    font_size: FontSize::Px(font_size * style.scale),
+                    font: spawn.font.clone().into(),
+                    font_size: FontSize::Px(spawn.font_size * style.scale),
                     weight: style.weight,
                     style: style.font_style,
                     ..default()
                 },
                 TextColor(style.color),
                 TextLayout::no_wrap(),
-                HideContentText::new(alpha),
+                HideContentText::new(
+                    alpha
+                        * initial_reveal_alpha(
+                            reveal_at,
+                            spawn.visible_chars,
+                            spawn.reveal,
+                            spawn.animate_latest,
+                        ),
+                ),
+                DialogueRevealText { base_alpha: alpha },
             ));
             if strike {
                 spawn_strike(cluster, style.color);
@@ -1096,6 +1175,132 @@ fn estimated_text_width(text: &str) -> f32 {
             }
         })
         .sum()
+}
+
+fn initial_reveal_elapsed(
+    reveal_at: usize,
+    visible_chars: usize,
+    reveal: &TextRevealConfig,
+    animate_latest: bool,
+) -> f32 {
+    if reveal_at > visible_chars || animate_latest && reveal_at == visible_chars {
+        0.0
+    } else {
+        reveal.duration
+    }
+}
+
+fn should_animate_latest_glyph(
+    dialogue_changed: bool,
+    dialogue_present: bool,
+    retraction_active: bool,
+    visible_chars: usize,
+) -> bool {
+    dialogue_changed && dialogue_present && !retraction_active && visible_chars > 0
+}
+
+fn initial_reveal_alpha(
+    reveal_at: usize,
+    visible_chars: usize,
+    reveal: &TextRevealConfig,
+    animate_latest: bool,
+) -> f32 {
+    if initial_reveal_elapsed(reveal_at, visible_chars, reveal, animate_latest) > 0.0
+        || reveal.duration <= f32::EPSILON
+        || reveal.effect == TextRevealEffect::Instant
+    {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+fn initial_reveal_settled(
+    reveal_at: usize,
+    visible_chars: usize,
+    reveal: &TextRevealConfig,
+    animate_latest: bool,
+) -> bool {
+    reveal_at <= visible_chars && (!animate_latest || reveal_at != visible_chars)
+        || reveal.duration <= f32::EPSILON
+        || reveal.effect == TextRevealEffect::Instant
+}
+
+pub fn animate_glyph_reveals(
+    time: Res<Time>,
+    config: Res<GameConfigResource>,
+    mut glyphs: Query<(
+        &Visibility,
+        &Children,
+        &mut DialogueGlyphReveal,
+        &mut UiTransform,
+    )>,
+    mut texts: Query<(&DialogueRevealText, &mut HideContentText)>,
+) {
+    let reveal = config.styles.text_reveal;
+    for (visibility, children, mut animation, mut transform) in &mut glyphs {
+        if *visibility == Visibility::Hidden || animation.settled {
+            continue;
+        }
+        let duration = reveal.duration.max(0.0);
+        animation.elapsed = (animation.elapsed + time.delta_secs()).min(duration);
+        let progress = if duration <= f32::EPSILON || reveal.effect == TextRevealEffect::Instant {
+            1.0
+        } else {
+            (animation.elapsed / duration).clamp(0.0, 1.0)
+        };
+        *transform = reveal_transform(reveal, progress);
+        let alpha = reveal_alpha(reveal, progress);
+        for child in children.iter() {
+            if let Ok((base, mut hidden)) = texts.get_mut(child) {
+                hidden.base_alpha = base.base_alpha * alpha;
+            }
+        }
+        animation.settled = progress >= 1.0;
+    }
+}
+
+fn reveal_transform(reveal: TextRevealConfig, progress: f32) -> UiTransform {
+    let progress = progress * progress * (3.0 - 2.0 * progress);
+    let remaining = 1.0 - progress;
+    let mut transform = UiTransform::default();
+    match reveal.effect {
+        TextRevealEffect::SmoothRise => {
+            transform.translation.y = Val::Px(reveal.distance * remaining);
+        }
+        TextRevealEffect::SmoothDrop => {
+            transform.translation.y = Val::Px(-reveal.distance * remaining);
+        }
+        TextRevealEffect::SlideLeft => {
+            transform.translation.x = Val::Px(-reveal.distance * remaining);
+        }
+        TextRevealEffect::SlideRight => {
+            transform.translation.x = Val::Px(reveal.distance * remaining);
+        }
+        TextRevealEffect::Pop => {
+            transform.scale = Vec2::splat(reveal.scale + (1.0 - reveal.scale) * progress);
+        }
+        TextRevealEffect::Flip => {
+            let start = reveal.rotation.to_radians().cos().abs().clamp(0.08, 1.0);
+            transform.scale.y = start + (1.0 - start) * progress;
+        }
+        TextRevealEffect::Swing => {
+            transform.translation.y = Val::Px(-reveal.distance * remaining);
+            transform.rotation = Rot2::degrees(reveal.rotation * remaining);
+        }
+        TextRevealEffect::Classic | TextRevealEffect::Instant | TextRevealEffect::Blur => {}
+    }
+    transform
+}
+
+fn reveal_alpha(reveal: TextRevealConfig, progress: f32) -> f32 {
+    match reveal.effect {
+        TextRevealEffect::Instant => 1.0,
+        // Bevy UI text has no per-glyph blur filter; a steeper opacity ramp
+        // preserves Studio's soft-focus timing without rasterizing each glyph.
+        TextRevealEffect::Blur => progress.powf(1.0 + reveal.blur / 12.0),
+        _ => progress,
+    }
 }
 
 fn glyph_visibility(reveal_at: usize, visible_chars: usize) -> Visibility {
@@ -1298,6 +1503,7 @@ fn overlay_is_displayed(visibility: Visibility, display: Display) -> bool {
 
 #[allow(
     clippy::too_many_arguments,
+    clippy::type_complexity,
     reason = "the hide pass updates independent text, background, and image component families"
 )]
 pub fn apply_hide_toggle(
@@ -1305,15 +1511,18 @@ pub fn apply_hide_toggle(
     overlay: Res<TextboxOverlayFade>,
     initial_fade: Res<InitialTextboxFade>,
     state: Res<GameState>,
-    mut text_query: Query<(&mut TextColor, &HideContentText, Option<&mut TextShadow>)>,
+    mut text_queries: ParamSet<(
+        Query<(&mut TextColor, &HideContentText, Option<&mut TextShadow>)>,
+        Query<(), Changed<HideContentText>>,
+    )>,
     mut background_query: Query<(&mut BackgroundColor, &HideContentBg)>,
     mut avatars: Query<&mut ImageNode, With<MiniAvatarNode>>,
-    added_text: Query<(), Added<HideContentText>>,
     mut last: Local<Option<(f32, f32)>>,
 ) {
     let alpha = timing.hide_alpha * overlay.alpha * initial_fade.alpha;
     let current = (alpha, state.mini_avatar_progress);
-    if added_text.is_empty()
+    let text_changed = !text_queries.p1().is_empty();
+    if !text_changed
         && last.is_some_and(|last| {
             (last.0 - current.0).abs() < 0.001 && (last.1 - current.1).abs() < 0.001
         })
@@ -1321,7 +1530,7 @@ pub fn apply_hide_toggle(
         return;
     }
     *last = Some(current);
-    for (mut color, hidden, shadow) in &mut text_query {
+    for (mut color, hidden, shadow) in &mut text_queries.p0() {
         let text_alpha = hidden.base_alpha * alpha;
         color.0 = color.0.with_alpha(text_alpha);
         if let Some(mut shadow) = shadow {
@@ -1356,7 +1565,7 @@ mod rich_text_tests {
 
     #[test]
     fn narration_without_mini_avatar_uses_the_full_width_origin() {
-        let layout = crabgal_core::config::LayoutConfig {
+        let layout = keine_core::config::LayoutConfig {
             textbox_left: 0.0,
             textbox_dodge_left: 10.0,
             ..default()
@@ -1428,5 +1637,53 @@ mod rich_text_tests {
         let base_only = estimated_text_width("物") * 60.0;
         let cluster = ruby_cluster_width("物", "ものがたり", 60.0, 1.0);
         assert!(cluster > base_only);
+    }
+
+    #[test]
+    fn studio_reveal_effects_settle_to_identity() {
+        let reveal = TextRevealConfig {
+            duration: 0.1,
+            effect: TextRevealEffect::SlideLeft,
+            distance: 12.0,
+            ..default()
+        };
+        let start = reveal_transform(reveal, 0.0);
+        assert_eq!(start.translation.x, Val::Px(-12.0));
+        assert_eq!(reveal_transform(reveal, 1.0), UiTransform::default());
+        assert_eq!(reveal_alpha(reveal, 0.0), 0.0);
+        assert_eq!(reveal_alpha(reveal, 1.0), 1.0);
+    }
+
+    #[test]
+    fn visible_final_glyph_keeps_ui_animation_active_until_settled() {
+        let animating = DialogueGlyphReveal {
+            elapsed: 0.05,
+            settled: false,
+        };
+        assert!(animating.is_animating(Visibility::Inherited));
+        assert!(!animating.is_animating(Visibility::Hidden));
+
+        let settled = DialogueGlyphReveal {
+            elapsed: 0.1,
+            settled: true,
+        };
+        assert!(!settled.is_animating(Visibility::Inherited));
+    }
+
+    #[test]
+    fn restored_dialogue_does_not_replay_its_last_glyph() {
+        let reveal = TextRevealConfig {
+            duration: 0.1,
+            effect: TextRevealEffect::SmoothRise,
+            ..default()
+        };
+        assert_eq!(initial_reveal_elapsed(3, 3, &reveal, false), 0.1);
+        assert_eq!(initial_reveal_elapsed(3, 3, &reveal, true), 0.0);
+    }
+
+    #[test]
+    fn completed_retraction_does_not_replay_the_kept_final_glyph() {
+        assert!(!should_animate_latest_glyph(true, true, true, 3));
+        assert!(should_animate_latest_glyph(true, true, false, 3));
     }
 }

@@ -24,7 +24,7 @@
 |------|------|------|
 | YU-RIS | 命令队列 + batch 合并 | 渲染层 2-5 draw calls |
 | Bevy | Plugin + Schedule + 双世界 | 核心 ECS 架构 |
-| WebGAL | 编辑器预览协议 | crabgal dev 实时预览 |
+| WebGAL | 编辑器预览协议 | keine dev 实时预览 |
 | Ayaka | Tauri + WASM 插件 | 桌面壳 + 扩展系统 |
 | Ren'Py | 差分 rollback | 存档回退 |
 | hexz_k | .hxz 加密归档 | 资源打包分发 |

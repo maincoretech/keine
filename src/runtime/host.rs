@@ -10,7 +10,7 @@ use crate::ui::control_bar::ToggleStates;
 use crate::ui::extra::ExtraUi;
 use crate::ui::save_load::{SaveLoadMode, SaveLoadUi};
 use crate::ui::settings_panel::SettingsUi;
-use crabgal_core::{ShellEvent, SystemUiSlot};
+use keine_core::{ShellEvent, SystemUiSlot};
 
 pub(crate) fn dispatch_shell(
     mut state: ResMut<GameState>,
@@ -41,7 +41,7 @@ pub(crate) fn dispatch_shell(
 }
 
 struct SystemUiContext<'a> {
-    state: &'a mut crabgal_core::State,
+    state: &'a mut keine_core::State,
     save_load: &'a mut SaveLoadUi,
     settings: &'a mut SettingsUi,
     backlog: &'a mut BacklogUiState,
@@ -51,7 +51,7 @@ struct SystemUiContext<'a> {
 
 fn set_system_ui(slot: SystemUiSlot, visible: bool, context: SystemUiContext<'_>) {
     match (slot, visible) {
-        (SystemUiSlot::Title, true) => crabgal_core::step::end_game(context.state),
+        (SystemUiSlot::Title, true) => keine_core::step::end_game(context.state),
         (SystemUiSlot::Save, true) => {
             context.settings.open = false;
             context.save_load.mode = Some(SaveLoadMode::Save);
@@ -79,7 +79,7 @@ fn set_system_ui(slot: SystemUiSlot, visible: bool, context: SystemUiContext<'_>
 /// Built-in engine behavior must use typed core actions. External plugins can
 /// read this message without changing an adapter or the script VM.
 #[derive(Message, Debug, Clone, PartialEq, Eq)]
-pub struct HostCommandMessage(pub crabgal_core::HostCommandEvent);
+pub struct HostCommandMessage(pub keine_core::HostCommandEvent);
 
 /// Capability names claimed by installed extension plugins.
 #[derive(Resource, Default)]
@@ -90,7 +90,7 @@ impl HostCapabilityRegistry {
         self.0.insert((namespace.into(), command.into()));
     }
 
-    fn contains(&self, event: &crabgal_core::HostCommandEvent) -> bool {
+    fn contains(&self, event: &keine_core::HostCommandEvent) -> bool {
         self.0
             .contains(&(event.namespace.clone(), event.command.clone()))
     }
@@ -137,7 +137,7 @@ mod tests {
 
     #[test]
     fn typed_system_slots_route_to_the_native_shell() {
-        let mut state = crabgal_core::State::new();
+        let mut state = keine_core::State::new();
         let mut save_load = SaveLoadUi::default();
         let mut settings = SettingsUi::default();
         let mut backlog = BacklogUiState::default();
@@ -169,7 +169,7 @@ mod tests {
 
     #[test]
     fn gallery_slot_respects_the_project_feature_gate() {
-        let mut state = crabgal_core::State::new();
+        let mut state = keine_core::State::new();
         let mut save_load = SaveLoadUi::default();
         let mut settings = SettingsUi::default();
         let mut backlog = BacklogUiState::default();

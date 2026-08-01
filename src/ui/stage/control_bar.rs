@@ -1,7 +1,7 @@
 // WebGAL-style control bar icon definitions and interaction.
 // Both top and bottom bars spawn as children of TextBoxRoot in textbox.rs.
 use bevy::{ecs::system::SystemParam, prelude::*};
-use crabgal_core::State;
+use keine_core::State;
 use std::time::Duration;
 
 use crate::runtime::resources::ProjectRoot;

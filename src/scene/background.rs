@@ -1,9 +1,9 @@
 use bevy::camera::visibility::RenderLayers;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use crabgal_core::SpriteTransform;
-use crabgal_core::dissolve;
-use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
+use keine_core::SpriteTransform;
+use keine_core::dissolve;
+use keine_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
 use crate::runtime::platform::DesignViewport;
 use crate::runtime::resources::GameConfigResource;
@@ -28,17 +28,17 @@ pub(crate) struct BackgroundNode {
 pub(crate) struct BackgroundRenderCache {
     initialized: bool,
     image: Option<String>,
-    transition: Option<crabgal_core::state::BgTransition>,
+    transition: Option<keine_core::state::BgTransition>,
     transform: SpriteTransform,
-    filter: crabgal_core::VisualFilter,
-    films: crabgal_core::FilmEffects,
-    animation: Option<crabgal_core::state::PresetAnimation>,
+    filter: keine_core::VisualFilter,
+    films: keine_core::FilmEffects,
+    animation: Option<keine_core::state::PresetAnimation>,
     camera_distance: Option<f32>,
     camera_transform: SpriteTransform,
-    camera_targets: crabgal_core::CameraTargets,
-    camera_shake: Option<crabgal_core::state::CameraShakeState>,
-    camera_effect: crabgal_core::PostProcessEffect,
-    camera_effect_targets: crabgal_core::CameraTargets,
+    camera_targets: keine_core::CameraTargets,
+    camera_shake: Option<keine_core::state::CameraShakeState>,
+    camera_effect: keine_core::PostProcessEffect,
+    camera_effect_targets: keine_core::CameraTargets,
 }
 
 impl BackgroundRenderCache {
@@ -253,10 +253,10 @@ fn desired_backgrounds(state: &GameState) -> Vec<DesiredBackground<'_>> {
             let mut transform = state.bg_transform;
             let slide_remaining = 1.0 - dissolve::smooth_fade(transition.progress);
             match transition.kind {
-                crabgal_core::Transition::SlideFromLeft(_) => {
+                keine_core::Transition::SlideFromLeft(_) => {
                     transform.offset_x -= DESIGN_WIDTH * slide_remaining;
                 }
-                crabgal_core::Transition::SlideFromRight(_) => {
+                keine_core::Transition::SlideFromRight(_) => {
                     transform.offset_x += DESIGN_WIDTH * slide_remaining;
                 }
                 _ => {}
@@ -265,19 +265,19 @@ fn desired_backgrounds(state: &GameState) -> Vec<DesiredBackground<'_>> {
                 layer: BackgroundLayer::Current,
                 image: &transition.to,
                 alpha: match transition.kind {
-                    crabgal_core::Transition::Wipe(_)
-                    | crabgal_core::Transition::Dissolve(_)
-                    | crabgal_core::Transition::SlideFromLeft(_)
-                    | crabgal_core::Transition::SlideFromRight(_) => 1.0,
+                    keine_core::Transition::Wipe(_)
+                    | keine_core::Transition::Dissolve(_)
+                    | keine_core::Transition::SlideFromLeft(_)
+                    | keine_core::Transition::SlideFromRight(_) => 1.0,
                     _ => dissolve::smooth_fade(transition.progress),
                 },
                 z: 0.0,
                 transform,
                 transition: match transition.kind {
-                    crabgal_core::Transition::Wipe(_) => {
+                    keine_core::Transition::Wipe(_) => {
                         Vec4::new(1.0, transition.progress, animation.z, animation.w)
                     }
-                    crabgal_core::Transition::Dissolve(_) => {
+                    keine_core::Transition::Dissolve(_) => {
                         Vec4::new(2.0, transition.progress, animation.z, animation.w)
                     }
                     _ => animation,
@@ -314,9 +314,9 @@ fn apply_background_entity(
     image: Handle<Image>,
     background: &DesiredBackground<'_>,
     viewport: DesignViewport,
-    mut filter: crabgal_core::VisualFilter,
+    mut filter: keine_core::VisualFilter,
     camera: Option<(SpriteTransform, f32)>,
-    post: crabgal_core::PostProcessEffect,
+    post: keine_core::PostProcessEffect,
     lut: Option<Handle<Image>>,
     existing_sprite: Option<Mut<'_, Sprite>>,
     existing_entity: bool,
@@ -348,7 +348,7 @@ fn apply_background_entity(
             image,
             alpha,
             filter,
-            crabgal_core::BlendMode::Alpha,
+            keine_core::BlendMode::Alpha,
             background.transition,
             &post,
             lut,
@@ -396,12 +396,12 @@ mod tests {
 
     #[test]
     fn dialogue_changes_do_not_invalidate_the_background() {
-        let mut state = crabgal_core::State::new();
+        let mut state = keine_core::State::new();
         state.bg = Some("scene.webp".into());
         let mut cache = BackgroundRenderCache::default();
         cache.capture(&GameState(state.clone()));
 
-        state.dialogue = Some(crabgal_core::state::Dialogue {
+        state.dialogue = Some(keine_core::state::Dialogue {
             speaker: "A".into(),
             text: "hello".into(),
             markup: "hello".into(),

@@ -1,5 +1,5 @@
-name: Setup native video SDK
-description: Install the FFmpeg libraries used by the optional video-ffmpeg feature
+name: Setup video SDK
+description: Install the FFmpeg libraries used by the Windows and Linux fallback backend
 
 inputs:
   enabled:

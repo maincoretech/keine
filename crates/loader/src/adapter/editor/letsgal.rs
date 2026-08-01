@@ -9,7 +9,10 @@ use super::{ProjectDebugCursor, ProjectInitialState, StructuredSceneLoader, stru
 use crate::{AdaptedProject, LoadedScene, ProjectAdapter, SourceMount};
 use anyhow::{Context, Result, bail};
 
-use model::{AssetManifest, CharactersDocument, ProjectDocument, ScenesDocument};
+use model::{
+    AssetManifest, CharactersDocument, DialogueBehavior, DialogueBoxDocument, ProjectDocument,
+    ScenesDocument,
+};
 
 const PROJECT_FILE: &str = "project.json";
 
@@ -45,7 +48,8 @@ impl ProjectAdapter for LetsGalProjectAdapter {
         let project: ProjectDocument = read_json(&root.join(PROJECT_FILE))?;
         validate_project(&root, &project)?;
         let manifest: AssetManifest = read_json(&root.join("assets/.manifest.json"))?;
-        let config = compile::game_config(&project, &manifest);
+        let dialogue_behavior = load_dialogue_behavior(&root)?;
+        let config = compile::game_config(&project, &manifest, dialogue_behavior.as_ref());
         let assets = root.join("assets");
         let source = SourceMount::assets("letsgal", assets.display().to_string(), assets);
         let content = structured_project(root.clone(), vec![source], Arc::new(*self));
@@ -101,12 +105,18 @@ impl StructuredSceneLoader for LetsGalProjectAdapter {
             .components()
             .any(|component| component.as_os_str() == "chapters")
             && path.extension().and_then(|value| value.to_str()) == Some("json")
+            || path.ends_with("extensions/avg.internal.default-shell/ui/dialogue-box.json")
     }
 
-    fn load_config(&self, project_root: &Path) -> Result<Option<crabgal_core::config::GameConfig>> {
+    fn load_config(&self, project_root: &Path) -> Result<Option<keine_core::config::GameConfig>> {
         let project: ProjectDocument = read_json(&project_root.join(PROJECT_FILE))?;
         let manifest: AssetManifest = read_json(&project_root.join("assets/.manifest.json"))?;
-        Ok(Some(compile::game_config(&project, &manifest)))
+        let dialogue_behavior = load_dialogue_behavior(project_root)?;
+        Ok(Some(compile::game_config(
+            &project,
+            &manifest,
+            dialogue_behavior.as_ref(),
+        )))
     }
 
     fn is_debug_cursor_change(&self, path: &Path) -> bool {
@@ -156,6 +166,15 @@ fn validate_project(root: &Path, project: &ProjectDocument) -> Result<()> {
     Ok(())
 }
 
+fn load_dialogue_behavior(root: &Path) -> Result<Option<DialogueBehavior>> {
+    let path = root.join("extensions/avg.internal.default-shell/ui/dialogue-box.json");
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let document: DialogueBoxDocument = read_json(&path)?;
+    Ok(Some(document.dialogue_behavior))
+}
+
 pub(super) fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
     serde_json::from_slice(&bytes).with_context(|| format!("invalid JSON in {}", path.display()))
@@ -180,7 +199,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("crabgal-letsgal-{nonce}"));
+        let root = std::env::temp_dir().join(format!("keine-letsgal-{nonce}"));
         fs::create_dir_all(root.join("chapters")).unwrap();
         fs::create_dir_all(root.join("assets")).unwrap();
         fs::write(
@@ -234,12 +253,24 @@ mod tests {
             r#"{"activeFragmentId":"f","cursorBlockIndex":0,"cursorBlockIndexByFragment":{"f":2}}"#,
         )
         .unwrap();
+        fs::create_dir_all(root.join("extensions/avg.internal.default-shell/ui")).unwrap();
+        fs::write(
+            root.join("extensions/avg.internal.default-shell/ui/dialogue-box.json"),
+            r#"{"version":2,"dialogueBehavior":{"text_speed":50,"char_fade_in_duration":120,"text_reveal_effect":"slide-left"}}"#,
+        )
+        .unwrap();
         let adapter = LetsGalProjectAdapter;
         assert!(adapter.detect(&root).unwrap());
         let project = adapter.open(&root).unwrap();
         assert_eq!(project.format, "letsgal");
         assert_eq!(project.content.project_adapter(), Some("letsgal"));
         assert_eq!(project.config.title, "Studio project");
+        assert_eq!(project.config.styles.typewriter_speed, 20.0);
+        assert_eq!(project.config.styles.text_reveal.duration, 0.12);
+        assert_eq!(
+            project.config.styles.text_reveal.effect,
+            keine_core::config::TextRevealEffect::SlideLeft
+        );
         fs::write(
             root.join("assets/.manifest.json"),
             r#"{"version":1,"entries":{"new":{"path":"backgrounds/new.png"}}}"#,
@@ -258,6 +289,9 @@ mod tests {
         assert!(scenes.iter().any(|scene| scene.name == "start"));
         assert!(scenes.iter().any(|scene| scene.name == "f"));
         assert!(adapter.accepts_change(&root.join(".studio/state.json")));
+        assert!(adapter.accepts_change(
+            &root.join("extensions/avg.internal.default-shell/ui/dialogue-box.json")
+        ));
         assert!(adapter.is_debug_cursor_change(&root.join(".studio/state.json")));
         assert_eq!(
             project.content.debug_cursor().unwrap(),
@@ -266,6 +300,45 @@ mod tests {
                 source_step: 3,
             })
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn studio_191_chapter_tree_controls_runtime_order() {
+        let root = fixture();
+        fs::write(
+            root.join("chapters/Second.json"),
+            r#"{"id":"c2","name":"Second","fragments":[{"id":"f2","name":"main","blocks":[{"type":"narration","content":[{"type":"text","text":"second"}],"props":{}}]}]}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("chapters/Third.json"),
+            r#"{"id":"c3","name":"Third","fragments":[{"id":"f3","name":"main","blocks":[{"type":"narration","content":[{"type":"text","text":"third"}],"props":{}}]}]}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join(PROJECT_FILE),
+            r#"{
+                "id":"p","name":"Studio project","engineVersion":"1.0.0",
+                "chapterOrder":["Start","Second","Third"],
+                "chapterFolders":[{"id":"folder","name":"Arc","chapterIds":["c3"]}],
+                "chapterTreeOrder":[
+                    {"type":"chapter","id":"c"},
+                    {"type":"folder","id":"folder"},
+                    {"type":"chapter","id":"c2"}
+                ],
+                "resolution":{"width":1920,"height":1080}
+            }"#,
+        )
+        .unwrap();
+
+        let project = LetsGalProjectAdapter.open(&root).unwrap();
+        let scenes = project.content.scene_loader().unwrap().load(&root).unwrap();
+        let names = scenes
+            .iter()
+            .map(|scene| scene.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["f", "f3", "f2", "start"]);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -287,15 +360,15 @@ mod tests {
         let initial = project.content.initial_state().unwrap();
         assert_eq!(
             initial.variables.get("route"),
-            Some(&crabgal_core::Value::Str("sea".into()))
+            Some(&keine_core::Value::Str("sea".into()))
         );
         assert_eq!(
             initial.variables.get("hero.好感度"),
-            Some(&crabgal_core::Value::Int(7))
+            Some(&keine_core::Value::Int(7))
         );
         assert_eq!(
             initial.shared_variables.get("ending"),
-            Some(&crabgal_core::Value::Int(2))
+            Some(&keine_core::Value::Int(2))
         );
         assert!(!initial.variables.contains_key("runtime"));
         let _ = fs::remove_dir_all(root);
@@ -303,7 +376,7 @@ mod tests {
 
     #[test]
     fn checked_in_180_fixture_covers_every_runtime_block() {
-        use crabgal_core::Action;
+        use keine_core::Action;
 
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/letsgal-1.8.0");
         let chapter: model::ChapterDocument =
@@ -338,7 +411,7 @@ mod tests {
                 .actions,
             vec![Action::ChangeScene("fragment-compatibility".into())]
         );
-        fn stage_animation(action: &Action) -> Option<&crabgal_core::StageAnimation> {
+        fn stage_animation(action: &Action) -> Option<&keine_core::StageAnimation> {
             match action {
                 Action::StageAnimation { animation } => Some(animation),
                 Action::Flow { action, .. } => stage_animation(action),
@@ -352,10 +425,7 @@ mod tests {
             .expect("the 1.8.0 stageAnimation block must lower to native timeline IR");
         assert_eq!(timeline.duration, 0.24);
         assert_eq!(timeline.tracks.len(), 1);
-        assert_eq!(
-            timeline.tracks[0].property,
-            crabgal_core::StageProperty::Zoom
-        );
+        assert_eq!(timeline.tracks[0].property, keine_core::StageProperty::Zoom);
         assert_eq!(
             project.content.debug_cursor().unwrap(),
             Some(ProjectDebugCursor {

@@ -1,11 +1,13 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use crabgal_core::action::Choice;
-use crabgal_core::config::{AdapterConfig, AssetSourceConfig, GameConfig, ProjectMetadata};
-use crabgal_core::{
+use keine_core::action::Choice;
+use keine_core::config::{
+    AdapterConfig, AssetSourceConfig, GameConfig, ProjectMetadata, TextRevealConfig,
+};
+use keine_core::{
     Action, Anchor, BlendMode, CameraShakeAxis, CameraShakeFalloff, CameraShakeSpec, CameraTargets,
     ChoiceTarget, ColorToneMode, Easing, InputValueType, PortraitStyle, Position,
     PostProcessEffect, PostProcessPatch, SayOptions, SceneFit, SceneLayerLayout, SpriteLayout,
@@ -18,9 +20,9 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::model::{
-    AssetManifest, ChapterDocument, CharacterDefinition, CharactersDocument, ProjectDocument,
-    SceneDefinition, ScenesDocument, StoryBlock, StoryFragment, VariableDeclaration,
-    VariablesDocument,
+    AssetManifest, ChapterDocument, CharacterDefinition, CharactersDocument, DialogueBehavior,
+    ProjectDocument, SceneDefinition, ScenesDocument, StoryBlock, StoryFragment,
+    VariableDeclaration, VariablesDocument,
 };
 use super::read_json;
 use crate::{Diagnostic, DiagnosticLevel, LoadedScene, ParseReport, SourceSpan};
@@ -62,36 +64,36 @@ pub(super) fn initial_state(
     state
 }
 
-fn declared_value(declaration: &VariableDeclaration) -> Option<crabgal_core::Value> {
+fn declared_value(declaration: &VariableDeclaration) -> Option<keine_core::Value> {
     if !declaration.default_value.is_null() {
         return core_value(&declaration.default_value);
     }
     Some(match declaration.value_type.as_str() {
-        "number" => crabgal_core::Value::Int(0),
-        "bool" | "boolean" => crabgal_core::Value::Bool(false),
-        "string" => crabgal_core::Value::Str(String::new()),
+        "number" => keine_core::Value::Int(0),
+        "bool" | "boolean" => keine_core::Value::Bool(false),
+        "string" => keine_core::Value::Str(String::new()),
         _ => return None,
     })
 }
 
-fn core_value(value: &Value) -> Option<crabgal_core::Value> {
+fn core_value(value: &Value) -> Option<keine_core::Value> {
     match value {
         Value::Number(number) => number
             .as_i64()
-            .map(crabgal_core::Value::Int)
-            .or_else(|| number.as_f64().map(crabgal_core::Value::Float)),
-        Value::String(value) => Some(crabgal_core::Value::Str(value.clone())),
-        Value::Bool(value) => Some(crabgal_core::Value::Bool(*value)),
+            .map(keine_core::Value::Int)
+            .or_else(|| number.as_f64().map(keine_core::Value::Float)),
+        Value::String(value) => Some(keine_core::Value::Str(value.clone())),
+        Value::Bool(value) => Some(keine_core::Value::Bool(*value)),
         Value::Array(values) => values
             .iter()
             .map(core_value)
             .collect::<Option<Vec<_>>>()
-            .map(crabgal_core::Value::Array),
+            .map(keine_core::Value::Array),
         Value::Null | Value::Object(_) => None,
     }
 }
 
-/// Runtime-facing block registry observed in LetsGal Studio 1.9.0's bundled
+/// Runtime-facing block registry observed in LetsGal Studio 1.9.1's bundled
 /// editor schema. `cmdDraft` is editor-only and therefore intentionally not in
 /// this compatibility contract.
 pub(super) const BUILTIN_BLOCK_TYPES: &[&str] = &[
@@ -131,29 +133,49 @@ pub(super) const BUILTIN_BLOCK_TYPES: &[&str] = &[
     "wait",
 ];
 
-pub(super) fn game_config(project: &ProjectDocument, manifest: &AssetManifest) -> GameConfig {
+pub(super) fn game_config(
+    project: &ProjectDocument,
+    manifest: &AssetManifest,
+    dialogue_behavior: Option<&DialogueBehavior>,
+) -> GameConfig {
     let mut config = GameConfig {
         title: project.name.clone(),
         project: ProjectMetadata {
             description: project.description.clone().unwrap_or_default(),
         },
-        features: project.crabgal.features.clone(),
+        features: project.keine.features.clone(),
         adapter: AdapterConfig {
             asset: vec![AssetSourceConfig {
                 path: "assets".into(),
                 format: "fs".into(),
             }],
             script: "webgal".into(),
-            store: "crabgal".into(),
+            store: "keine".into(),
         },
         ..GameConfig::default()
     };
     // Studio positions full-canvas sprites in its 1920x1080 design space.
-    // A 1080px baseline preserves those authored proportions in crabgal. Its
+    // A 1080px baseline preserves those authored proportions in keine. Its
     // scene-layer origin is the canvas edge, so the character-oriented inset
-    // used by native crabgal projects must not shift imported layers.
-    config.layout.sprite_height = crabgal_core::DESIGN_HEIGHT;
+    // used by native keine projects must not shift imported layers.
+    config.layout.sprite_height = keine_core::DESIGN_HEIGHT;
     config.layout.anchor_offset = 0.0;
+    if let Some(behavior) = dialogue_behavior {
+        config.styles.typewriter_speed = if behavior.text_speed <= f64::EPSILON {
+            120.0
+        } else {
+            (1000.0 / behavior.text_speed).clamp(10.0, 120.0)
+        };
+        let parameters = &behavior.text_reveal_parameters;
+        config.styles.text_reveal = TextRevealConfig {
+            duration: (behavior.char_fade_in_duration.max(0.0) / 1000.0).min(1.0),
+            effect: behavior.text_reveal_effect,
+            distance: parameters.distance_px.clamp(0.0, 48.0),
+            scale: (parameters.scale_percent.clamp(30.0, 100.0) / 100.0),
+            rotation: parameters.rotation_degrees.clamp(0.0, 180.0),
+            blur: parameters.blur_px.clamp(0.0, 12.0),
+        };
+    }
 
     let mut first_background = None;
     for (hash, entry) in &manifest.entries {
@@ -162,7 +184,7 @@ pub(super) fn game_config(project: &ProjectDocument, manifest: &AssetManifest) -
             first_background.get_or_insert_with(|| path.clone());
             insert_aliases(&mut config.assets.backgrounds, hash, &path);
             // LetsGal scenes can compose several background assets as layers.
-            // The first layer uses crabgal's background renderer; later layers
+            // The first layer uses keine's background renderer; later layers
             // use the generic sprite path and need the same native asset map.
             insert_aliases(&mut config.assets.figures, hash, &path);
         } else if is_figure(&path) {
@@ -264,12 +286,50 @@ pub(super) fn load_chapters(
         }
     }
 
+    let name_by_id = by_name
+        .iter()
+        .map(|(name, (_, chapter))| (chapter.id.as_str(), name.as_str()))
+        .collect::<HashMap<_, _>>();
+    let folder_by_id = project
+        .chapter_folders
+        .iter()
+        .map(|folder| (folder.id.as_str(), folder))
+        .collect::<HashMap<_, _>>();
+    let mut requested_order = Vec::new();
+    if let Some(tree) = &project.chapter_tree_order {
+        for entry in tree {
+            match entry.kind.as_str() {
+                "chapter" => {
+                    if let Some(name) = name_by_id.get(entry.id.as_str()) {
+                        requested_order.push((*name).to_owned());
+                    }
+                }
+                "folder" => {
+                    if let Some(folder) = folder_by_id.get(entry.id.as_str()) {
+                        requested_order.extend(
+                            folder
+                                .chapter_ids
+                                .iter()
+                                .filter_map(|id| name_by_id.get(id.as_str()).copied())
+                                .map(str::to_owned),
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    requested_order.extend(project.chapter_order.iter().cloned());
+
+    let mut seen = BTreeSet::new();
     let mut ordered = Vec::with_capacity(by_name.len());
-    for name in &project.chapter_order {
-        let Some(chapter) = by_name.remove(name) else {
-            bail!("LetsGal chapterOrder references missing chapter {name:?}");
-        };
-        ordered.push(chapter);
+    for name in requested_order {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        if let Some(chapter) = by_name.remove(&name) {
+            ordered.push(chapter);
+        }
     }
     ordered.extend(by_name.into_values());
     Ok(ordered)
@@ -288,7 +348,7 @@ pub(super) fn compile_project(
         .filter(|(_, chapter)| !chapter.disabled)
         .collect::<Vec<_>>();
     // LetsGal's default shell stores its title screen as the first chapter and
-    // opens `slot:internal.system.title` from there. crabgal already owns the
+    // opens `slot:internal.system.title` from there. keine already owns the
     // native title screen, so keep that chapter available for Studio block-selection
     // debugging while starting normal gameplay from the following chapter.
     let entry_index = usize::from(
@@ -529,7 +589,7 @@ fn compile_block(
         }
         "switchDialogueStyle" => report.push(
             Action::SetDialogueStyle {
-                style: crabgal_core::DialogueStyle::from_id(prop_string_or(
+                style: keine_core::DialogueStyle::from_id(prop_string_or(
                     &block.props,
                     "targetId",
                     "default",
@@ -541,7 +601,7 @@ fn compile_block(
         "floatingText" => compile_floating_text(block, span, report),
         "enterAutoPlay" => report.push(Action::SetAutoplay { enabled: true }, span),
         "exitAutoPlay" => report.push(Action::SetAutoplay { enabled: false }, span),
-        _ => unreachable!("the 1.9.0 block registry is exhaustively matched"),
+        _ => unreachable!("the 1.9.1 block registry is exhaustively matched"),
     }
 }
 
@@ -724,8 +784,8 @@ fn show_character(
 fn studio_position(id: &str, context: &CompileContext<'_>) -> Position {
     if let Some((left, top)) = context.positions.get(id) {
         return Position {
-            x: Anchor::Left(crabgal_core::DESIGN_WIDTH * *left / 100.0),
-            y: crabgal_core::DESIGN_HEIGHT * *top / 100.0,
+            x: Anchor::Left(keine_core::DESIGN_WIDTH * *left / 100.0),
+            y: keine_core::DESIGN_HEIGHT * *top / 100.0,
         };
     }
     match id {
@@ -791,7 +851,7 @@ fn compile_scene(
     push_scene_layer_exits(transition, span, report);
 
     // A Studio scene is one canvas made from peer layers. Treating its first
-    // image as crabgal's full-screen background silently squeezes wide
+    // image as keine's full-screen background silently squeezes wide
     // `by_height` canvases (for example 5359x1080) into 1920x1080 while every
     // other layer keeps the authored aspect. That creates a hard vertical
     // seam and makes the lowest layer diverge from the composition. Clear the
@@ -1529,12 +1589,12 @@ fn parse_position(value: &str) -> [f32; 2] {
         .collect::<Vec<_>>();
     match values.as_slice() {
         [Some(x), Some(y)] => [
-            crabgal_core::DESIGN_WIDTH * *x / 100.0,
-            crabgal_core::DESIGN_HEIGHT * *y / 100.0,
+            keine_core::DESIGN_WIDTH * *x / 100.0,
+            keine_core::DESIGN_HEIGHT * *y / 100.0,
         ],
         _ => [
-            crabgal_core::DESIGN_WIDTH * 0.5,
-            crabgal_core::DESIGN_HEIGHT * 0.5,
+            keine_core::DESIGN_WIDTH * 0.5,
+            keine_core::DESIGN_HEIGHT * 0.5,
         ],
     }
 }
@@ -1555,8 +1615,8 @@ fn scene_layer_layout_from_props(props: &Map<String, Value>) -> SceneLayerLayout
     let position = parse_studio_pair(
         &prop_string_or(props, "position", "(center,center)"),
         [
-            crabgal_core::DESIGN_WIDTH * 0.5,
-            crabgal_core::DESIGN_HEIGHT * 0.5,
+            keine_core::DESIGN_WIDTH * 0.5,
+            keine_core::DESIGN_HEIGHT * 0.5,
         ],
     );
     let anchor = match prop_string_or(props, "anchor", "center").as_str() {
@@ -1594,8 +1654,8 @@ fn parse_studio_pair(value: &str, fallback: [f32; 2]) -> [f32; 2] {
         return fallback;
     };
     [
-        parse_studio_coordinate(x, crabgal_core::DESIGN_WIDTH).unwrap_or(fallback[0]),
-        parse_studio_coordinate(y, crabgal_core::DESIGN_HEIGHT).unwrap_or(fallback[1]),
+        parse_studio_coordinate(x, keine_core::DESIGN_WIDTH).unwrap_or(fallback[0]),
+        parse_studio_coordinate(y, keine_core::DESIGN_HEIGHT).unwrap_or(fallback[1]),
     ]
 }
 
@@ -1651,7 +1711,7 @@ fn compile_particle(block: &StoryBlock, span: SourceSpan, report: &mut ParseRepo
     report.push(
         Action::ShowParticles {
             id,
-            effect: crabgal_core::ParticleEffect {
+            effect: keine_core::ParticleEffect {
                 texture: (!texture.is_empty()).then_some(texture),
                 preset: prop_string_or(&block.props, "preset", "LIGHT_SNOW"),
                 count,
@@ -1698,7 +1758,7 @@ fn compile_animate_sprite(
     }
     // Keep even the compact, single-frame form on the same native timeline as
     // Studio's frame-array form. A plain SetTransform is always blocking in
-    // crabgal and would silently discard Studio's loop/waitForComplete flags.
+    // keine and would silently discard Studio's loop/waitForComplete flags.
     report.push(
         Action::AnimateKeyframes {
             target,
@@ -1768,7 +1828,7 @@ fn compile_stage_animation(
         report.diagnostics.push(Diagnostic {
             level: DiagnosticLevel::Error,
             span,
-            message: "LetsGal stageAnimation clipJson has an invalid 1.9.0 timeline schema".into(),
+            message: "LetsGal stageAnimation clipJson has an invalid 1.9 timeline schema".into(),
         });
         return;
     };
@@ -2040,7 +2100,7 @@ fn compile_stage_event(event: &Value, context: &CompileContext<'_>) -> Option<St
                 id: non_empty_value(payload, &["id", "effectId"])
                     .unwrap_or("particle")
                     .into(),
-                effect: crabgal_core::ParticleEffect {
+                effect: keine_core::ParticleEffect {
                     texture: non_empty_value(payload, &["texture", "textureUri"])
                         .map(str::to_owned),
                     preset: non_empty_value(payload, &["preset"])
@@ -2181,10 +2241,10 @@ fn value_f32(value: Option<&Value>, fallback: f32) -> f32 {
 
 fn sprite_transform_patch(props: &Map<String, Value>) -> TransformPatch {
     let mut patch = TransformPatch::default();
-    if let Some(value) = studio_coordinate(props, "x", crabgal_core::DESIGN_WIDTH) {
+    if let Some(value) = studio_coordinate(props, "x", keine_core::DESIGN_WIDTH) {
         patch.set_offset_x(value);
     }
-    if let Some(value) = studio_coordinate(props, "y", crabgal_core::DESIGN_HEIGHT) {
+    if let Some(value) = studio_coordinate(props, "y", keine_core::DESIGN_HEIGHT) {
         // LetsGal/Pixi uses a downward-positive canvas; Bevy's stage transform
         // uses upward-positive world offsets.
         patch.set_offset_y(-value);
@@ -2224,7 +2284,7 @@ fn compile_known_extension(block: &StoryBlock, span: SourceSpan, report: &mut Pa
             if let Some(file) = file {
                 report.push(
                     Action::Unlock {
-                        kind: crabgal_core::UnlockKind::Cg,
+                        kind: keine_core::UnlockKind::Cg,
                         file,
                         name: title,
                     },
@@ -2235,21 +2295,22 @@ fn compile_known_extension(block: &StoryBlock, span: SourceSpan, report: &mut Pa
         }
         "shiftz.backspace/backspace-to" | "maincore.backspace-to/backspace-to" => {
             let source = literal_extension_string(&params, "source").unwrap_or_default();
-            let keep = literal_extension_string(&params, "keep");
-            match keep {
-                Some(keep)
-                    if (!source.is_empty() && source.starts_with(&keep))
-                        || (source.is_empty() && !keep.is_empty()) =>
-                {
-                    report.push(Action::RetractDialogue { source, keep }, span);
-                }
-                _ => report.diagnostics.push(Diagnostic {
+            // Backspace 1.4.5 omits `keep` when the whole source line is
+            // removed. Treating that as malformed rejects valid 1.9.1 Studio
+            // projects even though an explicit source snapshot is present.
+            let keep = literal_extension_string(&params, "keep").unwrap_or_default();
+            if (!source.is_empty() && source.starts_with(&keep))
+                || (source.is_empty() && !keep.is_empty())
+            {
+                report.push(Action::RetractDialogue { source, keep }, span);
+            } else {
+                report.diagnostics.push(Diagnostic {
                     level: DiagnosticLevel::Error,
                     span,
                     message: "invalid sentence-tail deletion: `keep` must be a source prefix; an \
                               empty prefix removes the whole line when a source snapshot exists"
                         .into(),
-                }),
+                });
             }
             true
         }
@@ -2809,6 +2870,43 @@ mod tests {
     }
 
     #[test]
+    fn sentence_tail_deletion_can_omit_keep_to_remove_the_entire_line() {
+        let block = StoryBlock {
+            id: Some("backspace-all-legacy".into()),
+            kind: "callExtensionFunction".into(),
+            content: Value::Null,
+            props: Map::from_iter([
+                ("target".into(), json!("shiftz.backspace/backspace-to")),
+                (
+                    "paramsJson".into(),
+                    json!({
+                        "source": {"kind":"lit","value":"整句话"},
+                        "sourceBlockId": "dialogue-block",
+                        "waitMs": {"kind":"lit","value":500}
+                    }),
+                ),
+            ]),
+            children: Vec::new(),
+            extras: Map::new(),
+        };
+        let mut report = ParseReport::default();
+
+        assert!(compile_known_extension(
+            &block,
+            SourceSpan { line: 1, column: 1 },
+            &mut report
+        ));
+        assert_eq!(
+            report.actions,
+            vec![Action::RetractDialogue {
+                source: "整句话".into(),
+                keep: String::new(),
+            }]
+        );
+        assert!(report.diagnostics.is_empty());
+    }
+
+    #[test]
     fn legacy_sentence_tail_deletion_can_resolve_source_from_current_dialogue() {
         let block = StoryBlock {
             id: Some("backspace".into()),
@@ -3266,8 +3364,8 @@ mod tests {
         ]);
         let transform = sprite_transform_patch(&props).apply_to(SpriteTransform::default());
 
-        assert_eq!(transform.offset_x, crabgal_core::DESIGN_WIDTH * 0.5 + 100.0);
-        assert_eq!(transform.offset_y, -crabgal_core::DESIGN_HEIGHT * 0.25);
+        assert_eq!(transform.offset_x, keine_core::DESIGN_WIDTH * 0.5 + 100.0);
+        assert_eq!(transform.offset_y, -keine_core::DESIGN_HEIGHT * 0.25);
         assert_eq!(transform.alpha, 0.35);
         assert_eq!(transform.rotation, -1.25);
         assert_eq!(parse_studio_coordinate("50%-10px", 1920.0), Some(950.0));
@@ -3602,7 +3700,7 @@ mod tests {
         assert!(matches!(
             report.actions.as_slice(),
             [Action::SetDialogueStyle {
-                style: crabgal_core::DialogueStyle::CinematicCentered
+                style: keine_core::DialogueStyle::CinematicCentered
             }]
         ));
     }
@@ -3945,20 +4043,20 @@ mod tests {
             "entries":{"hash":{"path":"backgrounds/sea.png"}}
         }))
         .unwrap();
-        let config = game_config(&project, &manifest);
+        let config = game_config(&project, &manifest, None);
         assert_eq!(config.bg_path("hash"), "backgrounds/sea.png");
         assert_eq!(config.bg_path("backgrounds/sea.png"), "backgrounds/sea.png");
         assert_eq!(config.layout.anchor_offset, 0.0);
     }
 
     #[test]
-    fn maps_explicit_crabgal_feature_opt_ins() {
+    fn maps_explicit_keine_feature_opt_ins() {
         let project: ProjectDocument = serde_json::from_value(json!({
             "id": "p",
             "name": "n",
             "engineVersion": "1",
             "chapterOrder": [],
-            "crabgal": {
+            "keine": {
                 "features": {
                     "extra": true
                 }
@@ -3967,7 +4065,40 @@ mod tests {
         .unwrap();
         let manifest: AssetManifest = serde_json::from_value(json!({"entries": {}})).unwrap();
 
-        assert!(game_config(&project, &manifest).features.extra);
+        assert!(game_config(&project, &manifest, None).features.extra);
+    }
+
+    #[test]
+    fn maps_studio_191_dialogue_reveal_settings() {
+        let project: ProjectDocument = serde_json::from_value(json!({
+            "id": "p", "name": "n", "engineVersion": "1", "chapterOrder": []
+        }))
+        .unwrap();
+        let manifest: AssetManifest = serde_json::from_value(json!({"entries": {}})).unwrap();
+        let behavior: DialogueBehavior = serde_json::from_value(json!({
+            "text_speed": 40,
+            "char_fade_in_duration": 180,
+            "text_reveal_effect": "flip",
+            "text_reveal_parameters": {
+                "distance_px": 12,
+                "scale_percent": 76,
+                "rotation_degrees": 55,
+                "blur_px": 6
+            }
+        }))
+        .unwrap();
+
+        let config = game_config(&project, &manifest, Some(&behavior));
+        assert_eq!(config.styles.typewriter_speed, 25.0);
+        assert_eq!(config.styles.text_reveal.duration, 0.18);
+        assert_eq!(
+            config.styles.text_reveal.effect,
+            keine_core::config::TextRevealEffect::Flip
+        );
+        assert_eq!(config.styles.text_reveal.distance, 12.0);
+        assert_eq!(config.styles.text_reveal.scale, 0.76);
+        assert_eq!(config.styles.text_reveal.rotation, 55.0);
+        assert_eq!(config.styles.text_reveal.blur, 6.0);
     }
 
     #[test]

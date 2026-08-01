@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use bevy::camera::visibility::RenderLayers;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
+use keine_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
 use crate::render::blur::DialogCamera;
 use crate::ui::control_bar::{BlurStrength, ButtonAction, HoverAlpha};

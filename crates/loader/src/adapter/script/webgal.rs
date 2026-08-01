@@ -1,11 +1,11 @@
 // WebGAL .txt script parser
-// Convert WebGAL script format to crabgal Actions.
+// Convert WebGAL script format to keine Actions.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use crabgal_core::action::{Action, Choice, ChoiceTarget, SayOptions};
-use crabgal_core::types::{
+use keine_core::action::{Action, Choice, ChoiceTarget, SayOptions};
+use keine_core::types::{
     AnimationPreset, BlendMode, Easing, Position, SpriteLayout, SpriteTransform, TransformPatch,
     Transition, VideoMode, VideoSpec, VisualFilter,
 };
@@ -134,10 +134,10 @@ fn parse_webgal_line(raw: &str) -> Option<Action> {
 fn parse_webgal_command(cmd: &str, args: &ScriptArgs) -> Option<Action> {
     if let Some((rest, kind)) = cmd
         .strip_prefix("unlockCg:")
-        .map(|value| (value, crabgal_core::UnlockKind::Cg))
+        .map(|value| (value, keine_core::UnlockKind::Cg))
         .or_else(|| {
             cmd.strip_prefix("unlockBgm:")
-                .map(|value| (value, crabgal_core::UnlockKind::Bgm))
+                .map(|value| (value, keine_core::UnlockKind::Bgm))
         })
     {
         let file = statement_value(rest).unwrap_or_default();
@@ -266,7 +266,7 @@ fn parse_webgal_command(cmd: &str, args: &ScriptArgs) -> Option<Action> {
         return Some(match effect {
             Some(effect) => Action::ShowParticles {
                 id: "webgal".into(),
-                effect: crabgal_core::ParticleEffect::preset(effect),
+                effect: keine_core::ParticleEffect::preset(effect),
             },
             None => Action::HideParticles {
                 id: Some("webgal".into()),

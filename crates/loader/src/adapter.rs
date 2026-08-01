@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
-use crabgal_core::config::GameConfig;
+use keine_core::config::GameConfig;
 
 use crate::loader::SourceMount;
 use crate::{ContentProject, ScriptLanguageRegistry};
@@ -21,7 +21,7 @@ pub use editor::{
     LetsGalProjectAdapter, ProjectDebugCursor, ProjectInitialState, StructuredSceneLoader,
 };
 pub use script::{WebGalLanguage, parse_webgal, parse_webgal_report};
-pub use store::{CrabgalStore, SavedState, StoreAdapter, StoreMetadata, StoreStatus};
+pub use store::{KeineStore, SavedState, StoreAdapter, StoreMetadata, StoreStatus};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum AdapterCategory {
@@ -93,7 +93,7 @@ impl Default for LoaderRegistry {
         }
         registry.register_project(editor::LetsGalProjectAdapter);
         registry.register_project(asset::HexzProjectAdapter);
-        registry.register_store(store::CrabgalStore);
+        registry.register_store(store::KeineStore);
         registry
     }
 }
@@ -102,7 +102,7 @@ impl LoaderRegistry {
     /// Creates a registry with no format or host knowledge.
     ///
     /// Embedders can register only the adapters they ship, which keeps the
-    /// engine runtime independent from crabgal's curated default adapter set.
+    /// engine runtime independent from keine's curated default adapter set.
     pub fn empty() -> Self {
         Self {
             assets: HashMap::new(),
@@ -126,7 +126,7 @@ impl LoaderRegistry {
     }
 
     /// Opens a native editor project when one of the registered project
-    /// adapters recognizes it. A plain crabgal project deliberately returns
+    /// adapters recognizes it. A plain keine project deliberately returns
     /// `None` and continues through `config.yaml` loading in the runtime.
     pub fn open_project(&self, root: &Path) -> Result<Option<AdaptedProject>> {
         for adapter in &self.projects {
@@ -281,7 +281,7 @@ mod tests {
         }
         assert_eq!(registry.assets.len(), 3);
         assert_eq!(registry.projects.len(), 2);
-        assert!(registry.store("crabgal").is_ok());
+        assert!(registry.store("keine").is_ok());
     }
 
     #[test]
@@ -300,6 +300,6 @@ mod tests {
         let adapters = registry.adapters();
         assert!(registry.languages("webgal").is_ok());
         assert!(adapters.iter().any(|adapter| adapter.id() == "asset:fs"));
-        assert!(registry.store("crabgal").is_ok());
+        assert!(registry.store("keine").is_ok());
     }
 }

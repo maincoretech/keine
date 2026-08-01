@@ -6,10 +6,11 @@ members = [
 default-members = ["."]
 
 [package]
-name = "crabgal"
+name = "keine"
 version.workspace = true
 edition.workspace = true
-description = "A dedicated visual-novel engine with WebGAL script compatibility"
+description = "Kēne, a native visual-novel engine with WebGAL and LetsGal compatibility"
+repository = "https://github.com/maincoretech/keine"
 
 [features]
 default = ["audio-all", "ui-sounds"]
@@ -22,6 +23,12 @@ audio-mp3 = ["bevy/mp3"]
 audio-vorbis = ["bevy/vorbis"]
 audio-flac = ["bevy/flac"]
 video-ffmpeg = ["dep:video-rs", "dep:tempfile", "dep:rodio"]
+video-native = [
+    "dep:tempfile",
+    "dep:objc2-av-foundation",
+    "dep:objc2-core-media",
+    "dep:objc2-core-video",
+]
 
 [workspace.package]
 version = "0.8.1"
@@ -42,8 +49,8 @@ debug = 1
 debug-assertions = false
 
 [workspace.dependencies]
-crabgal-core = { path = "crates/core" }
-crabgal-loader = { path = "crates/loader" }
+keine-core = { path = "crates/core" }
+keine-loader = { path = "crates/loader" }
 
 log = "0.4"
 anyhow = "1"
@@ -70,8 +77,8 @@ crossterm = "0.29.0"
 fs2 = "0.4"
 
 [dependencies]
-crabgal-core = { workspace = true }
-crabgal-loader = { workspace = true }
+keine-core = { workspace = true }
+keine-loader = { workspace = true }
 log = { workspace = true }
 postcard = { workspace = true }
 anyhow = { workspace = true }
@@ -97,7 +104,10 @@ winresource = "0.1.31"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSImage", "NSResponder", "NSRunningApplication"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSData"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSData", "NSDictionary", "NSError", "NSValue", "NSString", "NSURL"] }
+objc2-av-foundation = { version = "0.3.2", default-features = false, optional = true, features = ["std", "AVPlayer", "AVPlayerItem", "AVPlayerItemOutput", "objc2-core-media", "objc2-core-video"] }
+objc2-core-media = { version = "0.3.2", default-features = false, optional = true, features = ["std", "CMTime"] }
+objc2-core-video = { version = "0.3.2", default-features = false, optional = true, features = ["std", "CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVReturn", "objc2"] }
 
 # Winit has no implicit Linux backend when Bevy's default features are disabled.
 # X11 also covers Wayland desktops through XWayland without adding native

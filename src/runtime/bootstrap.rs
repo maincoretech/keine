@@ -15,9 +15,9 @@ use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResolution};
 use bevy::winit::WINIT_WINDOWS;
-use crabgal_core::config::GameConfig;
-use crabgal_core::{Action, DESIGN_HEIGHT, DESIGN_WIDTH, Program, State};
-use crabgal_loader::{
+use keine_core::config::GameConfig;
+use keine_core::{Action, DESIGN_HEIGHT, DESIGN_WIDTH, Program, State};
+use keine_loader::{
     ContentProject, DiagnosticLevel, LoaderRegistry, ScriptWatcher, load_project_with,
     load_scenes_with,
 };
@@ -25,9 +25,9 @@ use crabgal_loader::{
 use crate::render::blur::{BlurCamera, BlurPlugin, DialogCamera, SceneBlurCamera, UiBlurCamera};
 use crate::runtime::GamePlugin;
 use crate::runtime::resources::{
-    ContentProjectResource, EditorSyncSession, GameConfigResource, GameState, HotReloadSession,
-    LocalAssetCache, LocalAssetManifest, LocalSceneAssets, PersistenceDisabled, ProjectRoot,
-    ScriptLanguages, ScriptWatcherResource, StoreCodec,
+    ContentProjectResource, DevelopmentSession, EditorSyncSession, GameConfigResource, GameState,
+    HotReloadSession, LocalAssetCache, LocalAssetManifest, LocalSceneAssets, PersistenceDisabled,
+    ProjectRoot, ScriptLanguages, ScriptWatcherResource, StoreCodec,
 };
 
 #[derive(Clone, Copy)]
@@ -39,6 +39,7 @@ struct BenchmarkOptions {
 
 #[derive(Clone, Copy, Default)]
 struct LaunchOptions {
+    development: bool,
     editor_sync: bool,
     hot_reload: bool,
     benchmark: Option<BenchmarkOptions>,
@@ -93,6 +94,7 @@ fn try_run_with_loader(loader: LoaderRegistry) -> Result<()> {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
     let check_only = args.first().is_some_and(|command| command == "check");
     let editor_sync = args.first().is_some_and(|command| command == "studio");
+    let development = development_requested(&args);
     let hot_reload = hot_reload_requested(&args);
     let benchmark = benchmark_options_from_args(&args)?;
     let project_path = project_root_from_args(args.iter().cloned());
@@ -118,6 +120,7 @@ fn try_run_with_loader(loader: LoaderRegistry) -> Result<()> {
         languages,
         store,
         LaunchOptions {
+            development,
             editor_sync,
             hot_reload,
             benchmark,
@@ -169,11 +172,16 @@ fn instance_lock_path(project_root: &Path) -> PathBuf {
     let mut hasher = DefaultHasher::new();
     canonical.hash(&mut hasher);
     std::env::temp_dir()
-        .join("crabgal")
+        .join("keine")
         .join(format!("{:016x}.lock", hasher.finish()))
 }
 
 fn hot_reload_requested(args: &[std::ffi::OsString]) -> bool {
+    args.first()
+        .is_some_and(|command| command == "dev" || command == "studio")
+}
+
+fn development_requested(args: &[std::ffi::OsString]) -> bool {
     args.first()
         .is_some_and(|command| command == "dev" || command == "studio")
 }
@@ -206,8 +214,8 @@ fn build_opened_app(
     project_root: PathBuf,
     config: GameConfig,
     content: ContentProject,
-    languages: crabgal_loader::ScriptLanguageRegistry,
-    store: std::sync::Arc<dyn crabgal_loader::StoreAdapter>,
+    languages: keine_loader::ScriptLanguageRegistry,
+    store: std::sync::Arc<dyn keine_loader::StoreAdapter>,
     options: LaunchOptions,
 ) -> App {
     let webp = crate::scene::images::NativeWebpPlugin::new(config.layout.sprite_height);
@@ -268,6 +276,9 @@ fn build_opened_app(
     if options.editor_sync {
         app.init_resource::<EditorSyncSession>();
     }
+    if options.development {
+        app.init_resource::<DevelopmentSession>();
+    }
     if options.hot_reload {
         app.init_resource::<HotReloadSession>();
     }
@@ -319,7 +330,7 @@ fn set_macos_application_icon() -> Result<()> {
 
     let main_thread =
         MainThreadMarker::new().context("application icon must be set on main thread")?;
-    let bytes = include_bytes!("../../assets/icons/crabgal-256.png");
+    let bytes = include_bytes!("../../assets/icons/keine-256.png");
     // SAFETY: `NSData` copies exactly `bytes.len()` readable bytes from this
     // process-owned static buffer before returning.
     let data = unsafe { NSData::dataWithBytes_length(bytes.as_ptr().cast(), bytes.len()) };
@@ -340,7 +351,7 @@ fn load_window_icon() -> Result<winit::window::Icon> {
 
 fn decode_window_icon() -> Result<(Vec<u8>, u32, u32)> {
     let image = Image::from_buffer(
-        include_bytes!("../../assets/icons/crabgal-256.png"),
+        include_bytes!("../../assets/icons/keine-256.png"),
         ImageType::Extension("png"),
         CompressedImageFormats::NONE,
         true,
@@ -359,7 +370,7 @@ fn decode_window_icon() -> Result<(Vec<u8>, u32, u32)> {
 fn check_project(
     config: &GameConfig,
     content: &ContentProject,
-    languages: &crabgal_loader::ScriptLanguageRegistry,
+    languages: &keine_loader::ScriptLanguageRegistry,
 ) -> Result<()> {
     let scenes =
         load_scenes_with(content, languages).context("failed to compile project scenes")?;
@@ -585,16 +596,16 @@ fn bootstrap_project(
     ensure_playable_scene(&mut state);
     if mode.editor_sync.is_some() {
         // An editor is already the outer shell. Enter its current selected block directly
-        // so the native overlay never flashes crabgal's title screen first.
+        // so the native overlay never flashes keine's title screen first.
         state.ended = false;
         if !crate::runtime::tick::sync_editor_cursor(&content, &mut state, &manifest) {
-            crabgal_core::step::step(&mut state);
+            keine_core::step::step(&mut state);
         }
     } else if mode.benchmark.is_some() {
         // Runtime captures start on the actual stage, not the comparatively
         // cheap title screen, and never require synthetic keyboard input.
         state.ended = false;
-        crabgal_core::step::step(&mut state);
+        keine_core::step::step(&mut state);
         let timelines = state
             .program
             .scene(&state.current_scene)
@@ -607,7 +618,7 @@ fn bootstrap_project(
             })
             .collect::<Vec<_>>()
             .join(", ");
-        log::info!(target: "crabgal::performance", "TIMELINE | {timelines}");
+        log::info!(target: "keine::performance", "TIMELINE | {timelines}");
         if let Some(cursor) = mode.benchmark.as_ref().and_then(|capture| capture.cursor) {
             let target_scene = state.current_scene.clone();
             let mut preview = State {
@@ -628,7 +639,7 @@ fn bootstrap_project(
                 state = preview;
             } else {
                 log::warn!(
-                    target: "crabgal::performance",
+                    target: "keine::performance",
                     "benchmark cursor {cursor} could not be replayed in {target_scene:?}",
                 );
             }
@@ -641,7 +652,7 @@ fn bootstrap_project(
             }
         }
         log::info!(
-            target: "crabgal::performance",
+            target: "keine::performance",
             "START    | requested cursor {:?} · running cursor {} · timeline {}",
             mode.benchmark.as_ref().and_then(|capture| capture.cursor),
             state.cursor,
@@ -730,7 +741,7 @@ fn ensure_playable_scene(state: &mut State) {
                     transform: Default::default(),
                 },
                 Action::Say {
-                    speaker: "crabgal".into(),
+                    speaker: "keine".into(),
                     text: "No script found.".into(),
                     options: Default::default(),
                 },
@@ -750,7 +761,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system clock should be after the Unix epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!("crabgal-{name}-{}-{nonce}", std::process::id()))
+        std::env::temp_dir().join(format!("keine-{name}-{}-{nonce}", std::process::id()))
     }
 
     #[test]
@@ -809,6 +820,15 @@ mod tests {
         assert!(hot_reload_requested(&args("studio")));
         assert!(!hot_reload_requested(&args("benchmark")));
         assert!(!hot_reload_requested(&args("/tmp/release-project")));
+    }
+
+    #[test]
+    fn dev_and_studio_commands_enable_development_ui() {
+        let args = |command: &str| vec![std::ffi::OsString::from(command)];
+        assert!(development_requested(&args("dev")));
+        assert!(development_requested(&args("studio")));
+        assert!(!development_requested(&args("benchmark")));
+        assert!(!development_requested(&args("/tmp/release-project")));
     }
 
     #[test]

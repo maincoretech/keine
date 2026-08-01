@@ -5,7 +5,7 @@ use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::text::FontWeight;
 use bevy::ui::FocusPolicy;
-use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
+use keine_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
 use crate::render::blur::{DialogCamera, UiBlurCamera};
 use crate::runtime::resources::{GameConfigResource, GameState};
@@ -348,7 +348,7 @@ fn spawn_item_functions(
     row: &mut ChildSpawnerCommands,
     index: usize,
     order: usize,
-    entry: &crabgal_core::state::BacklogEntry,
+    entry: &keine_core::state::BacklogEntry,
     assets: &UiFonts,
 ) {
     row.spawn((Node {

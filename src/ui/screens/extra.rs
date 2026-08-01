@@ -20,7 +20,7 @@ use crate::ui::foundation::{
 };
 use crate::ui::settings_panel::{SettingsWatermark, menu_watermark};
 use crate::ui::support::i18n::{LocalizedText, UiText};
-use crabgal_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
+use keine_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
 const CG_PER_PAGE: usize = 8;
 const EXTRA_PANEL_PADDING: f32 = 24.0;
