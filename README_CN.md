@@ -51,7 +51,8 @@ cargo dev projects/test-project
 二进制程序写入 `.keine/compiled/program.bin`（可用 `--output <path>` 覆盖）。
 产物使用固定 envelope（magic、版本、长度、CRC32、程序 fingerprint），让发布包在
 启动时跳过源脚本解析；fingerprint 与源码构建的程序一致，因此存档保持兼容。
-开发运行仍然读取源脚本，以获得诊断与热重载。
+开发运行仍然读取源脚本，以获得诊断与热重载。可用
+`cargo compiler preview <project>` 对任何已生成 program.bin 的工程运行编译加载路径。
 
 ## 项目输入
 

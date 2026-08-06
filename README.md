@@ -59,7 +59,9 @@ Invalid project paths fail immediately.
 uses a fixed envelope (magic, versions, lengths, CRC32, program fingerprint)
 so release packages can skip source-script parsing at startup; the fingerprint
 matches the program built from source, so saves remain compatible. Development
-runs still read source scripts for diagnostics and hot reload.
+runs still read source scripts for diagnostics and hot reload. Use
+`cargo compiler preview <project>` to run the compiled-loading path against any
+project that has a program.bin.
 
 ## Project inputs
 

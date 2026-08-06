@@ -4,7 +4,10 @@ use anyhow::{Context, Result, bail};
 use keine_core::config::GameConfig;
 
 use crate::loader::{HexzArchive, SourceMount, load_hexz_project_from_archive};
-use crate::{AdaptedProject, ProjectAdapter};
+use crate::{
+    AdaptedProject, COMPILED_PROGRAM_PATH, IR_SCHEMA_VERSION, ProjectAdapter,
+    attach_compiled_program,
+};
 
 /// Physical layout/container rules owned by one asset adapter.
 pub trait FormatAdapter: Send + Sync {
@@ -68,7 +71,23 @@ impl ProjectAdapter for HexzProjectAdapter {
         let yaml = archive.read(Path::new("config.yaml"))?;
         let yaml = std::str::from_utf8(&yaml).context("Hexz config.yaml is not UTF-8")?;
         let config = GameConfig::from_yaml(yaml).context("invalid Hexz config.yaml")?;
+        let path = Path::new(COMPILED_PROGRAM_PATH);
+        let bin = archive
+            .contains_file(path)
+            .then(|| {
+                archive
+                    .read(path)
+                    .context("failed to read compiled program")
+            })
+            .transpose()?;
         let content = load_hexz_project_from_archive(archive, &config.adapter.asset)?;
+        let content = attach_compiled_program(
+            content,
+            config.compiled_program,
+            true,
+            bin,
+            IR_SCHEMA_VERSION,
+        )?;
         let root = project_root
             .canonicalize()
             .unwrap_or_else(|_| project_root.to_owned())

@@ -25,6 +25,10 @@ pub struct GameConfig {
     #[serde(default)]
     pub features: FeatureConfig,
 
+    /// How the loader treats a precompiled `.keine/compiled/program.bin`.
+    #[serde(default)]
+    pub compiled_program: CompiledProgramPolicy,
+
     /// Independently selected parser/codec categories.
     #[serde(default)]
     pub adapter: AdapterConfig,
@@ -44,6 +48,20 @@ pub struct GameConfig {
     /// Layout settings (anchor offsets, dodge, etc).
     #[serde(default)]
     pub layout: LayoutConfig,
+}
+
+/// Loader policy for precompiled program artifacts.
+///
+/// `Auto` uses the artifact for packaged (Hexz) projects and keeps source
+/// scripts for development directories; `Require` fails when the artifact is
+/// missing or invalid; `Disable` always parses source scripts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CompiledProgramPolicy {
+    #[default]
+    Auto,
+    Require,
+    Disable,
 }
 
 /// Human-facing project information. It deliberately stays independent from
@@ -352,6 +370,7 @@ impl Default for GameConfig {
             title_background: default_title_background(),
             project: ProjectMetadata::default(),
             features: FeatureConfig::default(),
+            compiled_program: CompiledProgramPolicy::default(),
             adapter: AdapterConfig::default(),
             assets: AssetMap::default(),
             fonts: FontConfig::default(),
@@ -556,5 +575,17 @@ adapter:
         assert_eq!(cfg.adapter.asset[2].format, "hexz");
         assert_eq!(cfg.adapter.script, "webgal");
         assert_eq!(cfg.adapter.store, "keine");
+    }
+
+    #[test]
+    fn parses_compiled_program_policy_with_auto_default() {
+        assert_eq!(
+            GameConfig::default().compiled_program,
+            CompiledProgramPolicy::Auto
+        );
+        let cfg = GameConfig::from_yaml("compiled_program: require\n").unwrap();
+        assert_eq!(cfg.compiled_program, CompiledProgramPolicy::Require);
+        let cfg = GameConfig::from_yaml("compiled_program: disable\n").unwrap();
+        assert_eq!(cfg.compiled_program, CompiledProgramPolicy::Disable);
     }
 }

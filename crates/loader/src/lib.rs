@@ -21,9 +21,10 @@ pub use compiled::{
 };
 pub use language::{ScriptLanguage, ScriptLanguageRegistry};
 pub use loader::{
-    ContentBackend, ContentFile, ContentMount, ContentProject, HexzArchive, HexzCursor, HexzFile,
-    LoadedScene, ScriptWatcher, SourceMount, hexz_password, load_hexz_project,
-    load_hexz_project_from_archive, load_project, load_project_with, load_scenes, load_scenes_with,
+    COMPILED_PROGRAM_PATH, CompiledProgramSceneLoader, ContentBackend, ContentFile, ContentMount,
+    ContentProject, HexzArchive, HexzCursor, HexzFile, LoadedScene, ScriptWatcher, SourceMount,
+    attach_compiled_program, hexz_password, load_hexz_project, load_hexz_project_from_archive,
+    load_project, load_project_with, load_scenes, load_scenes_with, read_compiled_program,
 };
 pub use report::{
     Diagnostic, DiagnosticLevel, ParseReport, ResourceKind, ResourceRef, SceneRef, SourceSpan,

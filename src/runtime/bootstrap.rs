@@ -15,11 +15,11 @@ use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResolution};
 use bevy::winit::WINIT_WINDOWS;
-use keine_core::config::GameConfig;
+use keine_core::config::{CompiledProgramPolicy, GameConfig};
 use keine_core::{Action, DESIGN_HEIGHT, DESIGN_WIDTH, Program, State};
 use keine_loader::{
-    ContentProject, DiagnosticLevel, LoaderRegistry, ScriptWatcher, load_project_with,
-    load_scenes_with,
+    ContentProject, DiagnosticLevel, IR_SCHEMA_VERSION, LoaderRegistry, ScriptWatcher,
+    attach_compiled_program, load_project_with, load_scenes_with, read_compiled_program,
 };
 
 use crate::render::blur::{BlurCamera, BlurPlugin, DialogCamera, SceneBlurCamera, UiBlurCamera};
@@ -110,13 +110,15 @@ fn try_run_with_loader(loader: LoaderRegistry) -> Result<()> {
     if check_only {
         return check_project(&config, &content, &languages);
     }
-    if compile_request {
-        if compile_preview {
-            anyhow::bail!("compiler preview requires the compiled loader integration");
-        }
+    if compile_request && !compile_preview {
         return crate::compiler::compile_project(&config, &content, &languages, compiler_output)
             .map(|_report| ());
     }
+    let content = if compile_preview {
+        force_compiled_preview(content)?
+    } else {
+        content
+    };
     let store = loader
         .store(&config.adapter.store)
         .context("failed to select store adapter")?;
@@ -454,7 +456,34 @@ fn open_project(
     let config = GameConfig::from_yaml(&yaml)
         .with_context(|| format!("invalid project config {}", config_path.display()))?;
     let content = load_project_with(project_path, &config.adapter.asset, loader)?;
+    let bin = if config.compiled_program == CompiledProgramPolicy::Require {
+        read_compiled_program(&content.root)?
+    } else {
+        None
+    };
+    let content = attach_compiled_program(
+        content,
+        config.compiled_program,
+        false,
+        bin,
+        IR_SCHEMA_VERSION,
+    )?;
     Ok((content.root.clone(), config, content))
+}
+
+/// Run the compiled-loading path for any project that has a program.bin,
+/// mirroring packaged `Require` semantics during development.
+fn force_compiled_preview(content: ContentProject) -> Result<ContentProject> {
+    let bin = read_compiled_program(&content.root)?.ok_or_else(|| {
+        anyhow::anyhow!("no compiled program found; run `cargo compiler <project>` first")
+    })?;
+    attach_compiled_program(
+        content,
+        CompiledProgramPolicy::Require,
+        true,
+        Some(bin),
+        IR_SCHEMA_VERSION,
+    )
 }
 
 fn ensure_project_directory(project_path: &Path) -> Result<()> {

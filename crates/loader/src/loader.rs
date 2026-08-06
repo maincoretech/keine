@@ -1,3 +1,4 @@
+mod compiled;
 mod scenes;
 mod source;
 mod watcher;
@@ -11,6 +12,10 @@ use keine_core::config::{AssetSourceConfig, GameConfig};
 
 use crate::{LoaderRegistry, StructuredSceneLoader};
 
+pub use compiled::{
+    COMPILED_PROGRAM_PATH, CompiledProgramSceneLoader, attach_compiled_program,
+    read_compiled_program,
+};
 pub use scenes::{LoadedScene, load_scenes, load_scenes_with};
 pub use source::{
     ContentBackend, ContentFile, ContentMount, HexzArchive, HexzCursor, HexzFile, hexz_password,
