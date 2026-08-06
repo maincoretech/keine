@@ -212,7 +212,7 @@ FALLEN_LEAVES。粒子应具有柔边、速度/尺寸/漂移差异；切换时�
 ### Hexz
 
 ```bash
-export KEINE_HEXZ_PASSWORD='<test-only password>'
+export HEXZ_PASSWORD='<test-only password>'
 PATH="/path/to/hexz_k/target/release:$PATH" \
   bash dev/scripts/package-release.sh projects/test-project target/phase7-release
 target/phase7-release/run.sh
@@ -234,7 +234,7 @@ open target/bundle/macos/keine-demo.app
 
 8. `.app` 可脱离工作目录启动内置项目。
 9. 普通推送后 `ci.yml` 在 Linux/macOS/Windows 执行 fmt、Clippy、测试和 release build。
-   配置仓库 Secret `KEINE_HEXZ_PASSWORD` 后，手动运行 `encrypted-release` workflow；
+   配置仓库 Secret `HEXZ_PASSWORD` 后，手动运行 `encrypted-release` workflow；
    三个平台 artifact 均应只包含引擎、encrypted `game.hxz` 和启动脚本，日志不显示密钥。
 
 ### 外部媒体适配边界

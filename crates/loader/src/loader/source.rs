@@ -15,7 +15,7 @@ const HEXZ_READ_AHEAD_BYTES: usize = 64 * 1024;
 /// protection. It deters casual extraction but is not DRM: a key embedded in
 /// a client executable can always be recovered by a determined user.
 pub fn hexz_password() -> &'static str {
-    option_env!("KEINE_HEXZ_PASSWORD").unwrap_or(DEFAULT_HEXZ_PASSWORD)
+    option_env!("HEXZ_PASSWORD").unwrap_or(DEFAULT_HEXZ_PASSWORD)
 }
 
 /// One immutable physical content backend shared by scripts and Bevy assets.

@@ -28,15 +28,15 @@ jobs:
             artifact: keine-windows
     runs-on: ${{ matrix.os }}
     env:
-      KEINE_HEXZ_PASSWORD: ${{ secrets.KEINE_HEXZ_PASSWORD }}
+      HEXZ_PASSWORD: ${{ secrets.HEXZ_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Require encrypted-release secret
         shell: bash
         run: |
-          if [[ -z "$KEINE_HEXZ_PASSWORD" ]]; then
-            echo "Configure the KEINE_HEXZ_PASSWORD repository secret" >&2
+          if [[ -z "$HEXZ_PASSWORD" ]]; then
+            echo "Configure the HEXZ_PASSWORD repository secret" >&2
             exit 2
           fi
       - name: Detect project media features

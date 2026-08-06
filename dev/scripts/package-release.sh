@@ -8,8 +8,8 @@ source "$root/dev/scripts/audio-features.sh"
 
 cd "$root"
 require_project_directory "$project"
-if [[ -z "${KEINE_HEXZ_PASSWORD:-}" ]]; then
-    echo "KEINE_HEXZ_PASSWORD must be set" >&2
+if [[ -z "${HEXZ_PASSWORD:-}" ]]; then
+    echo "HEXZ_PASSWORD must be set" >&2
     exit 2
 fi
 if ! command -v hexz >/dev/null 2>&1; then
@@ -38,12 +38,11 @@ find "$staging/project" -type f \( -name '.DS_Store' -o -name '*.meta' \) -delet
 rm -rf "$output"
 mkdir -p "$output"
 cp "$root/assets/icons/keine-256.png" "$output/keine.png"
-HEXZ_PASSWORD="$KEINE_HEXZ_PASSWORD" \
-    hexz pack "$staging/project" "$output/game.hxz" \
+hexz pack "$staging/project" "$output/game.hxz" \
     --compression zstd --encrypt --block-size 65536
 
 release_features="$(detect_audio_features "$staging/project")"
-KEINE_HEXZ_PASSWORD="$KEINE_HEXZ_PASSWORD" \
+HEXZ_PASSWORD="$HEXZ_PASSWORD" \
     KEINE_AUDIO_FEATURES="$release_features" \
     build_engine_for_project "$staging/project" --release --locked
 if [[ -f target/release/keine.exe ]]; then

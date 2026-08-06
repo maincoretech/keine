@@ -214,7 +214,7 @@ LetsGal 长期维护的原生项目（config.yaml + 规范目录 + 脚本）。
 - 排除：`saves/`、`imported_assets/`、`*.meta`、`.DS_Store`、`.keine/` 之外
   的所有临时文件；`.keine/compiled/program.bin` 为预留编译产物（打包脚本写入，
   见 program.bin v2 设计）。
-- 容器参数固定：64 KiB block、zstd、AES-256-GCM 加密（`KEINE_HEXZ_PASSWORD`）。
+- 容器参数固定：64 KiB block、zstd、AES-256-GCM 加密（`HEXZ_PASSWORD`）。
 - 运行时用 `memory_constrained()`（约 16 MiB 解压块缓存）打开，包句柄全周期保持。
 
 ## 9. 版本与演进

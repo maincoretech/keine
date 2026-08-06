@@ -180,7 +180,7 @@ development libraries.
 Package an encrypted Hexz game:
 
 ```bash
-KEINE_HEXZ_PASSWORD='your-password' \
+HEXZ_PASSWORD='your-password' \
   dev/scripts/package-release.sh projects/test-project target/release-package
 ```
 

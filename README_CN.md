@@ -167,7 +167,7 @@ cargo build --release --features video-ffmpeg
 打包加密 Hexz 游戏：
 
 ```bash
-KEINE_HEXZ_PASSWORD='your-password' \
+HEXZ_PASSWORD='your-password' \
   dev/scripts/package-release.sh projects/test-project target/release-package
 ```
 

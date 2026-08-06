@@ -181,7 +181,7 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 - [x] macOS .app bundle 脚本
 - [x] Linux / macOS / Windows fmt、Clippy、测试与 release CI
 - [x] WebGAL_k 风格 CI 加密发布 — 通过 GitHub Actions Secret / 手动构建输入注入
-  `KEINE_HEXZ_PASSWORD`，让 Hexz 打包与引擎编译使用同一密钥，并确保日志、缓存与
+  `HEXZ_PASSWORD`，让 Hexz 打包与引擎编译使用同一密钥，并确保日志、缓存与
   artifact 不泄露密钥
 
 Phase 7 已完成不依赖第三方专有 SDK 的工程主线。Live2D、Spine、Steam 和
