@@ -33,5 +33,6 @@ cargo validate projects/test-project           # 涉及项目加载/适配器时
 ## 提交约定
 
 - 本项目直接提交 `main`，不走 PR。
+- 每次提交完成后立即推送到 `origin/main`（`git push`），不积压本地提交。
 - 一个 commit 只解决一个热点；提交信息说明改了什么、为什么、验证结果。
 - 工作树有无关改动时先 `git status` 核对范围，不顺手提交无关文件。
