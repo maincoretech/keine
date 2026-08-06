@@ -1,5 +1,7 @@
 # Kēne
 
+**English** · [中文 (Chinese)](README_CN.md)
+
 <p align="center">
   <img src="assets/branding/keine-portrait.png" width="220" alt="Kēne character artwork">
 </p>
@@ -40,6 +42,7 @@ numbered visual test is in
 |---|---|
 | `cargo adapters` | Enable or disable built-in adapters |
 | `cargo validate <project>` | Validate without opening a window |
+| `cargo compiler <project> [--output <path>]` | Compile source scripts into a `program.bin` artifact |
 | `cargo dev <project>` | Run with hot reload and video |
 | `cargo dev-lite <project>` | Run without FFmpeg |
 | `cargo preview <project>` | Run an optimized preview |
@@ -47,6 +50,16 @@ numbered visual test is in
 | `cargo studio-sync <project>` | Follow an open LetsGal project and step |
 
 Invalid project paths fail immediately.
+
+### Compiled program artifact
+
+`cargo compiler <project>` parses and validates the project exactly like
+`cargo validate`, then writes a versioned binary program to
+`.keine/compiled/program.bin` (override with `--output <path>`). The artifact
+uses a fixed envelope (magic, versions, lengths, CRC32, program fingerprint)
+so release packages can skip source-script parsing at startup; the fingerprint
+matches the program built from source, so saves remain compatible. Development
+runs still read source scripts for diagnostics and hot reload.
 
 ## Project inputs
 
