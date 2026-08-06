@@ -1,4 +1,4 @@
-# LetsGal Studio 1.9.1 原生同步
+# LetsGal Studio 1.9.x 原生同步
 
 keine 把 LetsGal 当作一种开放的编辑器工程格式，而不是运行宿主。Studio 与 keine 是两个
 独立进程；同步只通过工程目录中的开放 JSON 完成，不安装扩展、不注入 DOM、不修改 ASAR，
@@ -46,7 +46,7 @@ cargo studio-sync '/absolute/path/to/LetsGal project'
 | project variables | slot/shared 默认值 | 每次确定性重放重新注入 |
 | character attributes | `<character-id>.<attribute>` 默认值 | 每次确定性重放重新注入 |
 | chapterFolders / chapterTreeOrder | 1.9.1 虚拟目录展开后的章节执行顺序 | project 保存后重编译 |
-| dialogueBehavior | 打字间隔、字符淡入和 10 种文字出现效果 | 对话框样式保存后刷新 config |
+| dialogueBehavior | 打字间隔、字符淡入、10 种文字出现效果；1.9.2 的等待光标字段明确不支持 | 对话框样式保存后刷新 config |
 | `.studio/state.json` | fragment UUID + 一基 source step | 选择 block 后立即重放 |
 
 Studio 的 block index 是零基；loader 转成一基 `SourceSpan.line`。一个 block 可编译成多个 Action，
@@ -77,6 +77,27 @@ runtime 以所有 `line <= selected_step` 的 Action 为目标，因此不会把
 - 默认壳 `dialogue-box.json` 的 `text_speed`、`char_fade_in_duration`、
   `text_reveal_effect` 与四个 reveal 参数进入 adapter-neutral config；字符动画由原生 Bevy UI
   执行，`blur` 在当前 2D UI 后端以同节奏的柔和透明度聚焦近似，不引入 Studio runtime；
+
+## 1.9.2 增量
+
+1.9.2 没有新增 runtime block（仍是 34 种），也没有改变 `chapterTreeOrder` /
+`chapterFolders` 语义；变化集中在工程文件形态与对话行为：
+
+- `dialogue-box.json` 在 1.9.2 中成为 UI 布局文档（`canvas` + `elements`，元素类型
+  `dialogue-backdrop/dialogue-frame/dialogue-text/dialogue-name/dialogue-wait-cursor`），
+  同时保留旧 `dialogueBehavior` 段。keine 只消费 `dialogueBehavior`，布局元素被安全忽略；
+  只升级到 1.9.2 的工程即使没有该文件也按默认行为加载。
+- 等待光标（`dialogue-wait-cursor` 元素、`wait_for_icon_delay` 与
+  `styles.dialogue.show_wait_for_icon`）**明确不支持**：keine 不消费这些字段、不渲染
+  任何等待指示器，遇到含它们的工程安全忽略且不报错；不会为它保留 config 字段。
+- 1.9.2 引入 ui-2.0 槽位系统（`systemBindings` 指向 `ui:@avg.internal.default-shell/*`）、
+  工程根 `config/`（`fonts.json`、`personalization`）与 `ui/` 目录，以及 `message-box.json`
+  等按屏幕拆分的 UI JSON。这些是 Studio 壳层 UI 的编辑产物，keine 不解析、不渲染，
+  watcher 也不对其建立依赖。
+- 扩展 SDK 版本由 1.9.0 提升为 `1.9.2-beta`；keine 不加载或执行扩展，仅按该版本更新
+  兼容基线文档（见 `12-letsgal-studio-extension-api.md`）。
+- 1.9.2 工程仍可带 `chapterFolders` / `chapterTreeOrder`、`scenes.json`（版本 3 视差层）与
+  `characters.json`（版本 2 全局位置/高度比），这些字段的解析保持兼容。
 - 新增 `stageAnimation` 编译为 adapter-neutral 共享舞台时间轴：camera、character、scene layer
   共用真实时间时钟，支持关键帧、循环、倍率、等待，以及 camera/scene/particle/shake/audio
   事件；

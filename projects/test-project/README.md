@@ -1,6 +1,6 @@
-# Kēne LetsGal 1.9.1 Feature Lab
+# Kēne LetsGal 1.9.2 Feature Lab
 
-默认验收工程现已收敛为一个原生 LetsGal 1.9.1 项目，直接覆盖 Kēne 已接入的完整时间轴、
+默认验收工程现已收敛为一个原生 LetsGal 1.9.2 项目，直接覆盖 Kēne 已接入的完整时间轴、
 立绘皮肤、视口相对高度、玩家确认等待、跨章节调用与播放控制。它不依赖 LetsGal Studio、
 扩展、注入或 `studio-sync`。
 

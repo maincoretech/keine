@@ -1,6 +1,70 @@
 {
   "version": 2,
-  "name": "1.9.1 dialogue reveal fixture",
+  "name": "1.9.2 dialogue box fixture",
+  "canvas": { "width": 1920, "height": 1080 },
+  "elements": [
+    {
+      "id": "dialogue-backdrop",
+      "refId": "dialogue-backdrop",
+      "type": "dialogue-backdrop",
+      "name": "舞台遮罩",
+      "rect": { "x": 0, "y": 0, "w": 1920, "h": 1080 },
+      "anchor": "c",
+      "style": { "fill": "#000000", "opacity": 0 }
+    },
+    {
+      "id": "dialogue-frame",
+      "refId": "dialogue-frame",
+      "type": "dialogue-frame",
+      "name": "框体背景",
+      "rect": { "x": 0, "y": 840, "w": 1920, "h": 240 },
+      "anchor": "b",
+      "style": {
+        "fill": "transparent",
+        "borderColor": "transparent",
+        "borderWidth": 0,
+        "radius": 0,
+        "opacity": 100
+      },
+      "props": {
+        "runtimeOverride": false,
+        "backgroundImage": "",
+        "backgroundImageFit": "stretch",
+        "backgroundImagePosition": "center",
+        "backgroundImageRepeat": "no-repeat"
+      }
+    },
+    {
+      "id": "dialogue-text",
+      "refId": "dialogue-text",
+      "type": "dialogue-text",
+      "name": "对白文本",
+      "rect": { "x": 64, "y": 872, "w": 1792, "h": 176 },
+      "anchor": "b",
+      "style": {
+        "fontSize": 28,
+        "fontWeight": 400,
+        "color": "#e7e7e7",
+        "opacity": 100
+      },
+      "props": { "lineHeight": 1.5, "textShadows": [] }
+    },
+    {
+      "id": "dialogue-name",
+      "refId": "dialogue-name",
+      "type": "dialogue-name",
+      "name": "角色名",
+      "rect": { "x": 64, "y": 788, "w": 384, "h": 52 },
+      "anchor": "b",
+      "style": {
+        "fontSize": 34,
+        "fontWeight": 400,
+        "color": "#fff707",
+        "opacity": 100
+      },
+      "props": { "lineHeight": 1.5, "textShadows": [] }
+    }
+  ],
   "dialogueBehavior": {
     "text_speed": 30,
     "char_fade_in_duration": 100,

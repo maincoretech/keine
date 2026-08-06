@@ -66,11 +66,11 @@ flowchart LR
 
 | 对象 | 版本/提交 | 结论 |
 |---|---|---|
-| 本机当前安装 | Studio 1.9.1 | 原生工程格式主基线；keine 不执行扩展 |
+| 本机当前安装 | Studio 1.9.2 | 原生工程格式主基线；keine 不执行扩展 |
 | 前一实测稳定版 | Studio 1.6.3 | 用于宿主行为差异对照 |
 | 本机旧对照包 | Studio 1.6.2 | 用于 SDK 字节级差异 |
 | 已校验的历史包 | `Studio-1.6.3-mac.zip` | 保留历史 SHA-256 证据 |
-| 扩展 SDK | `SDK_VERSION = "1.9.0"` | 1.9.1 未提升 SDK 合同；新 API 使用者声明 `>=1.9.0` |
+| 扩展 SDK | `SDK_VERSION = "1.9.2-beta"` | 1.9.2 提升 SDK 合同；新 API 使用者声明 `>=1.9.2-beta` |
 | `avg.renderer` | `d69d1681fe07e6273f99ed329fb01503cb3f3394`，2020-08-31 | 仅作历史语义参考 |
 | `avgplus-asarmor` | `3a95e627831268207b5da81310c5e9f4e4e1829b`，2025-01-26 | 仅用于判断 ASAR 保护方式 |
 
@@ -82,10 +82,15 @@ flowchart LR
 1f8ca44870142f222e25034297f436477d12cc202e229840251ab7402ca3c661
 ```
 
-本机 1.9.1 的 `dist/sdk/constants.ts` 声明 `SDK_VERSION = "1.9.0"`。当前
-`FlowAPI` 含 `signal`、跨章节 `callFragment()`、`unsafe_goToFragment()` 和 `restart()`；
-`ExtensionContext` 仍没有编辑器/preview backend 命名空间。因此不应制造
-未发布的 SDK 版本号，也不能把宿主私有对象当作新增 SDK。
+本机 1.9.1 的 `dist/sdk/constants.ts` 声明 `SDK_VERSION = "1.9.0"`；1.9.2 的
+`dist/sdk/constants.ts` 声明 `SDK_VERSION = "1.9.2-beta"`。1.9.2 的 `FlowAPI` 仍含
+`signal`、跨章节 `callFragment()`、`unsafe_goToFragment()` 和 `restart()`；
+`ExtensionContext` 仍没有编辑器/preview backend 命名空间。工程格式层面 1.9.2 新增
+ui-2.0 槽位（`systemBindings` → `ui:@avg.internal.default-shell/*`）、`config/` 与
+`ui/` 目录、按屏幕拆分的壳 UI JSON（`message-box.json` 等），并把 `dialogue-box.json`
+扩展为 UI 布局文档（`dialogueBehavior` 段保留；等待光标相关字段
+`wait_for_icon_delay` 与 `styles.dialogue.show_wait_for_icon` 明确不支持，keine 忽略）。
+这些都不属于扩展 ABI，keine 不解析 UI JSON。
 
 ### 1.2 证据标记
 
