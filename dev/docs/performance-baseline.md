@@ -173,3 +173,22 @@ cargo validate projects/test-project
 
 The benchmark prints every available timeline cursor before sampling. This
 keeps cursor selection explicit when the test project changes.
+
+## 2026-08-07 script / load / rollback baseline
+
+First criterion-based runtime baselines (`benches/`). Quick mode (1 sample);
+full runs should repeat with `cargo bench` and record machine/config/commit.
+
+- Machine: 本机 macOS（与 07-22 渲染基线同机）
+- Build: `cargo bench`（release bench profile）
+- Commit: `2eab45a` 之后、基准落地 commit 时记录
+- Inputs: 合成 100k Action 单场景；rollback 压力场景 100 sprites + 1000 local vars
+
+| Benchmark | Workload | Time | Throughput |
+| --- | --- | ---: | ---: |
+| `script_runtime/step` | 100k 非阻塞 Action 推进 | 3.36 ms | 29.7 Melem/s |
+| `program_load/parse_and_build` | 100k Action WebGAL 解析 + Program 构建 | 33.7 ms | 2.97 Melem/s |
+| `rollback/record_200_checkpoints` | 200 个 checkpoint | 76.8 µs | 0.38 µs/checkpoint |
+
+对比口径：后续所有优化必须用同一 bench 与同一 release 配置做前后对比；结果记录
+commit、机器与编译配置。启动分段计时（T-1..T7）随 program.bin 路径落地后加入。

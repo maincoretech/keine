@@ -115,3 +115,18 @@ objc2-core-video = { version = "0.3.2", default-features = false, optional = tru
 [target.'cfg(target_os = "linux")'.dependencies]
 bevy = { workspace = true, features = ["x11"] }
 rfd = { workspace = true, features = ["xdg-portal"] }
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "script_runtime"
+harness = false
+
+[[bench]]
+name = "program_load"
+harness = false
+
+[[bench]]
+name = "rollback"
+harness = false
