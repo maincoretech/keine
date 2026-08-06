@@ -93,10 +93,15 @@ pub fn run_with_loader(loader: LoaderRegistry) {
 fn try_run_with_loader(loader: LoaderRegistry) -> Result<()> {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
     let check_only = args.first().is_some_and(|command| command == "check");
+    let compile_request = args.first().is_some_and(|command| command == "compiler");
+    let compile_preview = args
+        .get(1)
+        .is_some_and(|subcommand| subcommand == "preview");
     let editor_sync = args.first().is_some_and(|command| command == "studio");
     let development = development_requested(&args);
     let hot_reload = hot_reload_requested(&args);
     let benchmark = benchmark_options_from_args(&args)?;
+    let compiler_output = compiler_output_from_args(&args)?;
     let project_path = project_root_from_args(args.iter().cloned());
     let (project_root, config, content) = open_project(&project_path, &loader)?;
     let languages = loader
@@ -104,6 +109,13 @@ fn try_run_with_loader(loader: LoaderRegistry) -> Result<()> {
         .context("failed to select script adapter")?;
     if check_only {
         return check_project(&config, &content, &languages);
+    }
+    if compile_request {
+        if compile_preview {
+            anyhow::bail!("compiler preview requires the compiled loader integration");
+        }
+        return crate::compiler::compile_project(&config, &content, &languages, compiler_output)
+            .map(|_report| ());
     }
     let store = loader
         .store(&config.adapter.store)
@@ -462,11 +474,15 @@ fn ensure_project_directory(project_path: &Path) -> Result<()> {
 fn project_root_from_args(args: impl Iterator<Item = std::ffi::OsString>) -> PathBuf {
     let args = args.collect::<Vec<_>>();
     let relative = match args.as_slice() {
+        [command, subcommand, path, ..] if command == "compiler" && subcommand == "preview" => {
+            PathBuf::from(path)
+        }
         [command, path, ..]
             if command == "dev"
                 || command == "check"
                 || command == "studio"
-                || command == "benchmark" =>
+                || command == "benchmark"
+                || command == "compiler" =>
         {
             PathBuf::from(path)
         }
@@ -480,6 +496,23 @@ fn project_root_from_args(args: impl Iterator<Item = std::ffi::OsString>) -> Pat
             PathBuf::from(".")
         })
         .join(relative)
+}
+
+fn compiler_output_from_args(args: &[std::ffi::OsString]) -> Result<Option<PathBuf>> {
+    let mut output = None;
+    let mut index = 2;
+    while index < args.len() {
+        if args[index] == "--output" {
+            let value = args
+                .get(index + 1)
+                .context("--output requires a path argument")?;
+            output = Some(PathBuf::from(value));
+            index += 2;
+        } else {
+            index += 1;
+        }
+    }
+    Ok(output)
 }
 
 fn benchmark_options_from_args(args: &[std::ffi::OsString]) -> Result<Option<BenchmarkOptions>> {

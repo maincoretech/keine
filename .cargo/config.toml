@@ -23,5 +23,7 @@ studio-check = "run -- check"
 studio-test = "test --workspace --all-targets --no-default-features"
 studio-lint = "clippy --workspace --all-targets --no-default-features -- -D warnings"
 validate = "run -- check"
+# Build-time compilation of a source project into `.keine/compiled/program.bin`.
+compiler = "run -- compiler"
 # Backward-compatible name used by earlier local workflows.
 parse = "run -- check"

@@ -9,6 +9,9 @@ target/
 # Save files (runtime user data)
 saves/
 
+# Engine-generated artifacts (compiled program, caches)
+**/.keine/
+
 # IDE
 .idea/
 .vscode/
