@@ -1,5 +1,7 @@
 name: encrypted-release
 
+# Release is manual-only: the archive password is supplied at dispatch time
+# and is never stored as a repository secret.
 on:
   workflow_dispatch:
     inputs:
@@ -7,9 +9,10 @@ on:
         description: Project directory to package
         required: true
         default: projects/test-project
-  push:
-    tags:
-      - "v*"
+      hexzPassword:
+        description: HEXZ archive password used to encrypt game.hxz
+        type: string
+        required: true
 
 permissions:
   contents: read
@@ -28,22 +31,15 @@ jobs:
             artifact: keine-windows
     runs-on: ${{ matrix.os }}
     env:
-      HEXZ_PASSWORD: ${{ secrets.HEXZ_PASSWORD }}
+      HEXZ_PASSWORD: ${{ inputs.hexzPassword }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Require encrypted-release secret
-        shell: bash
-        run: |
-          if [[ -z "$HEXZ_PASSWORD" ]]; then
-            echo "Configure the HEXZ_PASSWORD repository secret" >&2
-            exit 2
-          fi
       - name: Detect project media features
         shell: bash
         run: |
           source dev/scripts/audio-features.sh
-          features="$(detect_audio_features "${{ inputs.project || 'projects/test-project' }}")"
+          features="$(detect_audio_features "${{ inputs.project }}")"
           echo "KEINE_RELEASE_FEATURES=$features" >> "$GITHUB_ENV"
       - uses: ./.github/actions/setup-video
         with:
@@ -57,7 +53,7 @@ jobs:
         shell: bash
         run: >-
           bash dev/scripts/package-release.sh
-          "${{ inputs.project || 'projects/test-project' }}"
+          "${{ inputs.project }}"
           "target/${{ matrix.artifact }}"
       - uses: actions/upload-artifact@v4
         with:

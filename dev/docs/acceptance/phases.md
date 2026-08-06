@@ -234,8 +234,8 @@ open target/bundle/macos/keine-demo.app
 
 8. `.app` 可脱离工作目录启动内置项目。
 9. 普通推送后 `ci.yml` 在 Linux/macOS/Windows 执行 fmt、Clippy、测试和 release build。
-   配置仓库 Secret `HEXZ_PASSWORD` 后，手动运行 `encrypted-release` workflow；
-   三个平台 artifact 均应只包含引擎、encrypted `game.hxz` 和启动脚本，日志不显示密钥。
+   手动运行 `encrypted-release` workflow，在 `hexzPassword` 输入中填写密钥（不依赖仓库
+   Secret）；三个平台 artifact 均应只包含引擎、encrypted `game.hxz` 和启动脚本，日志不显示密钥。
 
 ### 外部媒体适配边界
 
