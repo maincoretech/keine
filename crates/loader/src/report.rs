@@ -1,7 +1,8 @@
 use keine_core::config::GameConfig;
 use keine_core::{Action, ChoiceTarget};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SourceSpan {
     pub line: usize,
     pub column: usize,
@@ -20,7 +21,7 @@ pub struct Diagnostic {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ResourceKind {
     Background,
     Figure,
@@ -32,7 +33,7 @@ pub enum ResourceKind {
     MiniAvatar,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResourceRef {
     pub path: String,
     pub kind: ResourceKind,
@@ -56,7 +57,7 @@ impl ResourceRef {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneRef {
     pub scene: String,
     pub action_index: usize,

@@ -3,6 +3,7 @@
 #![warn(unused_crate_dependencies)]
 
 pub mod adapter;
+pub mod compiled;
 mod language;
 mod loader;
 mod report;
@@ -12,6 +13,11 @@ pub use adapter::{
     ProjectAdapter, ProjectDebugCursor, ProjectInitialState, SavedState, StoreAdapter,
     StoreMetadata, StoreStatus, StructuredSceneLoader, WebGalLanguage, mount_hexz, parse_webgal,
     parse_webgal_report,
+};
+pub use compiled::{
+    CompiledError, CompiledProgramV1, CompiledSceneV1, DecodedProgram, ENVELOPE_VERSION,
+    EncodeInput, FIXED_HEADER_LEN, IR_SCHEMA_VERSION, PROGRAM_MAGIC, ProgramMetadataV1, decode,
+    encode,
 };
 pub use language::{ScriptLanguage, ScriptLanguageRegistry};
 pub use loader::{
