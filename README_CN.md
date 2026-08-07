@@ -42,7 +42,7 @@ cargo dev projects/test-project
 | `cargo dev-lite <project>` | 不带 FFmpeg 运行 |
 | `cargo preview <project>` | 运行优化预览 |
 | `cargo perf <project> [seconds] [cursor] [profile]` | 记录性能样本 |
-| `cargo studio-sync <project>` | 跟随打开的 LetsGal 工程逐步同步 |
+| `cargo dev <project> --sync` | 跟随打开的 LetsGal 工程逐步同步 |
 
 无效的项目路径会立即失败。
 

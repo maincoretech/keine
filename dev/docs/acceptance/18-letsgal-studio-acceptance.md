@@ -12,7 +12,7 @@
 2. 在 keine 仓库运行：
 
    ```bash
-   cargo studio-sync '/absolute/path/to/LetsGal project'
+   cargo dev '/absolute/path/to/LetsGal project' --sync
    ```
 
 3. 预期直接出现一个正常可缩放的 keine 原生窗口；没有安装提示、KEINE 扩展按钮、灰屏、

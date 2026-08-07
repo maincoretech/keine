@@ -96,7 +96,7 @@ forced 60 Hz rows above intentionally measure sustained rendering cost.
 ## 2026-07-22 lifecycle and high-refresh pass
 
 - Ordinary `dev` previews now use the same focused/unfocused lifecycle as a
-  shipping runtime. Only the explicit `studio-sync` session keeps continuous
+  shipping runtime. Only the explicit `dev --sync` session keeps continuous
   rendering while unfocused, because selected-block and authored-file changes
   must appear immediately.
 - Weather simulation and dynamic particle-mesh uploads run on a bounded 60 Hz

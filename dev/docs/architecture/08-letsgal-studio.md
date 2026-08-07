@@ -29,11 +29,11 @@ keine studio session -> deterministic replay -> native 1920x1080 preview
 
 ```bash
 cd /Users/shiftz/dev/keine
-cargo studio-sync '/absolute/path/to/LetsGal project'
+cargo dev '/absolute/path/to/LetsGal project' --sync
 ```
 
-`studio-sync` 与 `studio-dev` 都展开为 `keine studio <project>`。它们不会安装任何东西；换一台
-机器只需 keine 源码/二进制和 LetsGal 工程目录。普通 `cargo dev`、发行二进制与
+`--sync` 让普通 `cargo dev` 进入 Studio 同步模式。它不会安装任何东西；换一台机器只需
+keine 源码/二进制和 LetsGal 工程目录。不带 `--sync` 的 `cargo dev`、发行二进制与
 `build_app_with_loader` 不会进入 Studio 同步模式。
 
 ## 同步合同

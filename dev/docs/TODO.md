@@ -231,7 +231,7 @@ Flowchart 仍保留为可选适配工作，不能用静态占位或实验依赖�
   不得经 `HostCommand` 降级，流式视频由项目特征按需启用
 - [x] Godray 八字段进入稀疏 IR、状态插值和单通道 GPU 材质；动态 `callFragment`
   继续使用原生 scene call stack
-- [x] 无扩展同步：`cargo studio-sync <project>` 直接读取 Studio 开放 JSON 与
+- [x] 无扩展同步：`cargo dev <project> --sync` 直接读取 Studio 开放 JSON 与
   `.studio/state.json`，不安装 SDK bundle、不注入界面、不启动 localhost bridge
 - [x] 当前 fragment/block 变化跨帧稳健同步；chapter/config/manifest/variables 保存后先原子
   重编译，再按最新选中剧情块从入口确定性重放

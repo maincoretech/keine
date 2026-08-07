@@ -104,7 +104,7 @@ fn try_run_with_loader(loader: LoaderRegistry, mut startup: Option<StartupTimeli
     let compile_preview = args
         .get(1)
         .is_some_and(|subcommand| subcommand == "preview");
-    let editor_sync = args.first().is_some_and(|command| command == "studio");
+    let editor_sync = editor_sync_requested(&args);
     let development = development_requested(&args);
     let hot_reload = hot_reload_requested(&args);
     let benchmark = benchmark_options_from_args(&args)?;
@@ -215,13 +215,18 @@ fn instance_lock_path(project_root: &Path) -> PathBuf {
 }
 
 fn hot_reload_requested(args: &[std::ffi::OsString]) -> bool {
-    args.first()
-        .is_some_and(|command| command == "dev" || command == "studio")
+    args.first().is_some_and(|command| command == "dev")
 }
 
 fn development_requested(args: &[std::ffi::OsString]) -> bool {
-    args.first()
-        .is_some_and(|command| command == "dev" || command == "studio")
+    args.first().is_some_and(|command| command == "dev")
+}
+
+/// `cargo dev <project> --sync` follows an open LetsGal project, the same
+/// editor-sync session the former `studio` subcommand started.
+fn editor_sync_requested(args: &[std::ffi::OsString]) -> bool {
+    args.first().is_some_and(|command| command == "dev")
+        && args.iter().any(|argument| argument == "--sync")
 }
 
 /// Builds a customizable Bevy application for one project without running it.
@@ -537,7 +542,6 @@ fn project_root_from_args(args: impl Iterator<Item = std::ffi::OsString>) -> Pat
         [command, path, ..]
             if command == "dev"
                 || command == "check"
-                || command == "studio"
                 || command == "benchmark"
                 || command == "compiler"
                 || command == "startup" =>
@@ -902,9 +906,9 @@ mod tests {
     }
 
     #[test]
-    fn studio_command_uses_the_native_project_path() {
+    fn sync_flag_uses_the_native_project_path() {
         let expected = std::env::current_dir().unwrap().join("editor-project");
-        let args = ["studio", "editor-project"]
+        let args = ["dev", "editor-project", "--sync"]
             .into_iter()
             .map(std::ffi::OsString::from)
             .collect::<Vec<_>>();
@@ -915,18 +919,36 @@ mod tests {
     fn only_development_commands_enable_hot_reload() {
         let args = |command: &str| vec![std::ffi::OsString::from(command)];
         assert!(hot_reload_requested(&args("dev")));
-        assert!(hot_reload_requested(&args("studio")));
+        assert!(!hot_reload_requested(&args("studio")));
         assert!(!hot_reload_requested(&args("benchmark")));
         assert!(!hot_reload_requested(&args("/tmp/release-project")));
     }
 
     #[test]
-    fn dev_and_studio_commands_enable_development_ui() {
+    fn dev_commands_enable_development_ui() {
         let args = |command: &str| vec![std::ffi::OsString::from(command)];
         assert!(development_requested(&args("dev")));
-        assert!(development_requested(&args("studio")));
+        assert!(!development_requested(&args("studio")));
         assert!(!development_requested(&args("benchmark")));
         assert!(!development_requested(&args("/tmp/release-project")));
+    }
+
+    #[test]
+    fn sync_flag_enables_editor_sync_on_dev_only() {
+        let args = |commands: &[&str]| {
+            commands
+                .iter()
+                .map(std::ffi::OsString::from)
+                .collect::<Vec<_>>()
+        };
+        assert!(editor_sync_requested(&args(&["dev", "project", "--sync"])));
+        assert!(!editor_sync_requested(&args(&["dev", "project"])));
+        assert!(!editor_sync_requested(&args(&[
+            "studio", "project", "--sync"
+        ])));
+        assert!(!editor_sync_requested(&args(&[
+            "check", "project", "--sync"
+        ])));
     }
 
     #[test]

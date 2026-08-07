@@ -48,7 +48,7 @@ numbered visual test is in
 | `cargo dev-lite <project>` | Run without FFmpeg |
 | `cargo preview <project>` | Run an optimized preview |
 | `cargo perf <project> [seconds] [cursor] [profile]` | Record a performance sample |
-| `cargo studio-sync <project>` | Follow an open LetsGal project and step |
+| `cargo dev <project> --sync` | Follow an open LetsGal project and step |
 
 Invalid project paths fail immediately.
 
