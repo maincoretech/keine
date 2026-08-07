@@ -66,7 +66,7 @@ for a comparatively small saving and is not currently justified.
 
 This pass removed eager construction of the presentation, text-input, and F3
 diagnostic overlays. They are now created on first use. It also confines asset
-and script watchers to explicit `dev` and `studio` sessions; normal binaries and
+and script watchers to explicit `dev` sessions; normal binaries and
 benchmarks no longer create development-only watchers. The benchmark itself no
 longer injects a 2 ms wake event and instead owns a stable 60 Hz deadline.
 

@@ -47,7 +47,7 @@ Bevy、Winit 或 Electron。LetsGal adapter 的回归测试还会对 fixture 做
 保证 detect/open/load/config/debug-position 全流程不修改源工程。
 
 根引擎只调用 `ProjectAdapter`、`StructuredSceneLoader` 和统一 `ContentProject`；它不导入任何
-LetsGal 类型。`studio` 命令只是给通用 runtime 加一个只读同步会话标记，不安装扩展、不启动
+LetsGal 类型。`dev --sync` 只是给通用 runtime 加一个只读同步会话标记，不安装扩展、不启动
 localhost 服务，也不覆盖 Studio 原版 Player。因此移除或替换某个 editor adapter 不会改变
 VM、渲染器、UI 或原生 keine 工程的启动路径。
 library embedder 还可从 `LoaderRegistry::empty()` 开始只注册自己需要的 adapter；`Default`

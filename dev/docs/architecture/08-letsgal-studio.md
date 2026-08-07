@@ -22,7 +22,7 @@ LetsGal Studio 1.9
 LetsGalProjectAdapter -> typed Program + config + initial variables + selected-block position
               │
               v
-keine studio session -> deterministic replay -> native 1920x1080 preview
+keine dev --sync session -> deterministic replay -> native 1920x1080 preview
 ```
 
 ## 唯一启动方式
@@ -54,7 +54,7 @@ runtime 以所有 `line <= selected_step` 的 Action 为目标，因此不会把
 
 ## 生命周期
 
-1. `studio` 打开工程并一次编译全部有效 fragment；
+1. `dev --sync` 打开工程并一次编译全部有效 fragment；
 2. 从 `.studio/state.json` 读取当前 fragment/block；
 3. 从 keine 项目入口确定性重放到目标，恢复其此前背景、角色、变量、音频和镜头状态；
 4. watcher 常驻工程根目录；只改调试位置时不重编译，内容保存时先重编译再重新定位；
