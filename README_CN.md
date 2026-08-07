@@ -38,7 +38,6 @@ cargo dev projects/test-project
 | `cargo adapters` | 启用或禁用内置适配器 |
 | `cargo validate <project>` | 不打开窗口进行校验 |
 | `cargo compiler <project> [--output <path>]` | 把源脚本编译为 `program.bin` 产物 |
-| `cargo startup <project> [--compiled]` | 打印启动分段计时（T-1..T7）并退出 |
 | `cargo dev <project>` | 带热重载与视频运行 |
 | `cargo preview <project>` | 运行优化预览 |
 | `cargo perf <project> [seconds] [cursor] [profile]` | 记录性能样本 |
@@ -55,12 +54,6 @@ cargo dev projects/test-project
 开发运行仍然读取源脚本，以获得诊断与热重载。可用
 `cargo compiler preview <project>` 对任何已生成 program.bin 的工程运行编译加载路径。
 发布流水线会自动执行这一步，并在打包配置中固定 `compiled_program: require`。
-
-`cargo startup <project>` 把启动过程切成八段（T-1 CLI 准备、T1 工程打开、T2 脚本语言、
-T3 存储设置、T4 应用装配、T5 应用启动、T6 场景加载、T7 首帧，外加 TOTAL 总计），
-首帧后打印并退出。加 `--compiled` 强制走编译后的 `program.bin` 加载路径；分别带与不带
-`--compiled` 各跑一次即可对比源脚本与编译产物的启动差异，其中 T6 场景加载是两条路径
-唯一不同的段。
 
 ## 项目输入
 

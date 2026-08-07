@@ -29,7 +29,6 @@ use crate::runtime::resources::{
     HotReloadSession, LocalAssetCache, LocalAssetManifest, LocalSceneAssets, PersistenceDisabled,
     ProjectRoot, ScriptLanguages, ScriptWatcherResource, StoreCodec,
 };
-use crate::runtime::startup::{SceneLoadPath, StartupTimeline};
 
 #[derive(Clone, Copy)]
 struct BenchmarkOptions {
@@ -44,7 +43,6 @@ struct LaunchOptions {
     editor_sync: bool,
     hot_reload: bool,
     benchmark: Option<BenchmarkOptions>,
-    startup: Option<StartupTimeline>,
 }
 
 #[derive(SystemParam)]
@@ -62,16 +60,12 @@ pub fn run_cli() -> std::process::ExitCode {
     let configure_adapters = std::env::args_os()
         .nth(1)
         .is_some_and(|command| command == "adapters");
-    let startup_requested = std::env::args_os()
-        .nth(1)
-        .is_some_and(|command| command == "startup");
-    let mut startup = startup_requested.then(StartupTimeline::begin);
     let mut loader = LoaderRegistry::default();
     let result = if configure_adapters {
         super::adapter_tui::configure(&loader)
     } else {
         super::adapter_tui::apply_saved_selection(&mut loader)
-            .and_then(|()| try_run_with_loader(loader, startup.take()))
+            .and_then(|()| try_run_with_loader(loader))
     };
 
     match result {
@@ -91,14 +85,13 @@ pub fn run_cli() -> std::process::ExitCode {
 }
 
 pub fn run_with_loader(loader: LoaderRegistry) {
-    if let Err(error) = try_run_with_loader(loader, None) {
+    if let Err(error) = try_run_with_loader(loader) {
         super::platform::startup_error("failed to open project", &error);
     }
 }
 
-fn try_run_with_loader(loader: LoaderRegistry, mut startup: Option<StartupTimeline>) -> Result<()> {
+fn try_run_with_loader(loader: LoaderRegistry) -> Result<()> {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
-    let startup_requested = args.first().is_some_and(|command| command == "startup");
     let check_only = args.first().is_some_and(|command| command == "check");
     let compile_request = args.first().is_some_and(|command| command == "compiler");
     let compile_preview = args
@@ -110,19 +103,10 @@ fn try_run_with_loader(loader: LoaderRegistry, mut startup: Option<StartupTimeli
     let benchmark = benchmark_options_from_args(&args)?;
     let compiler_output = compiler_output_from_args(&args)?;
     let project_path = project_root_from_args(args.iter().cloned());
-    if let Some(startup) = startup.as_mut() {
-        startup.mark_cli_ready();
-    }
     let (project_root, config, content) = open_project(&project_path, &loader)?;
-    if let Some(startup) = startup.as_mut() {
-        startup.mark_project_opened();
-    }
     let languages = loader
         .languages(&config.adapter.script)
         .context("failed to select script adapter")?;
-    if let Some(startup) = startup.as_mut() {
-        startup.mark_languages();
-    }
     if check_only {
         return check_project(&config, &content, &languages);
     }
@@ -130,11 +114,7 @@ fn try_run_with_loader(loader: LoaderRegistry, mut startup: Option<StartupTimeli
         return crate::compiler::compile_project(&config, &content, &languages, compiler_output)
             .map(|_report| ());
     }
-    let force_compiled = startup_requested && args.iter().any(|argument| argument == "--compiled");
-    let content = if compile_preview || force_compiled {
-        if let Some(startup) = startup.as_mut() {
-            startup.set_path(SceneLoadPath::Compiled);
-        }
+    let content = if compile_preview {
         force_compiled_preview(content)?
     } else {
         content
@@ -142,9 +122,6 @@ fn try_run_with_loader(loader: LoaderRegistry, mut startup: Option<StartupTimeli
     let store = loader
         .store(&config.adapter.store)
         .context("failed to select store adapter")?;
-    if let Some(startup) = startup.as_mut() {
-        startup.mark_store();
-    }
     let _instance = single_instance_required(check_only, hot_reload, benchmark).then(|| {
         SingleInstanceGuard::acquire(&project_root)
             .context("another instance of this project is already running")
@@ -161,7 +138,6 @@ fn try_run_with_loader(loader: LoaderRegistry, mut startup: Option<StartupTimeli
             editor_sync,
             hot_reload,
             benchmark,
-            startup,
         },
     );
     app.run();
@@ -335,10 +311,6 @@ fn build_opened_app(
         );
     }
     super::platform::install_runtime_diagnostics(&mut app);
-    if let Some(mut startup) = options.startup {
-        startup.mark_app_built();
-        super::startup::install(&mut app, startup);
-    }
     app
 }
 
@@ -543,8 +515,7 @@ fn project_root_from_args(args: impl Iterator<Item = std::ffi::OsString>) -> Pat
             if command == "dev"
                 || command == "check"
                 || command == "benchmark"
-                || command == "compiler"
-                || command == "startup" =>
+                || command == "compiler" =>
         {
             PathBuf::from(path)
         }
@@ -626,7 +597,6 @@ fn bootstrap_project(
     languages: Res<ScriptLanguages>,
     config: Res<GameConfigResource>,
     mode: BootstrapMode,
-    mut startup: Option<ResMut<StartupTimeline>>,
 ) {
     spawn_cameras(
         &mut commands,
@@ -656,9 +626,6 @@ fn bootstrap_project(
     let mut scene_count = 0;
     let mut action_count = 0;
     let mut manifest = LocalAssetManifest::default();
-    if let Some(startup) = startup.as_deref_mut() {
-        startup.mark_scenes_start();
-    }
     match load_scenes_with(&content, &languages) {
         Ok(scenes) => {
             let mut program_scenes = Vec::with_capacity(scenes.len());
@@ -689,9 +656,6 @@ fn bootstrap_project(
                 program_scenes.push((scene.name, scene.actions));
             }
             state.install_program(Program::from_scenes(program_scenes));
-            if let Some(mut startup) = startup {
-                startup.record_scenes(scene_count, action_count as u64);
-            }
         }
         Err(error) => log::error!("failed to load scripts: {error:#}"),
     }

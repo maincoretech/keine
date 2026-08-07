@@ -17,6 +17,3 @@ perf = "run --release --features video-native,video-ffmpeg -- benchmark"
 validate = "run -- check"
 # Build-time compilation of a source project into `.keine/compiled/program.bin`.
 compiler = "run -- compiler"
-# Process-to-first-frame segment timing (T-1..T7); `--compiled` forces the
-# compiled program.bin loading path for A/B comparison.
-startup = "run -- startup"

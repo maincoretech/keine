@@ -5,7 +5,6 @@ mod bootstrap;
 pub(crate) mod host;
 pub(crate) mod platform;
 pub(crate) mod resources;
-pub(crate) mod startup;
 pub(crate) mod tick;
 
 use bevy::prelude::*;
