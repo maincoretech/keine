@@ -1,7 +1,7 @@
 mod adapter_tui;
 pub(crate) mod asset_reader;
 pub(crate) mod audio;
-mod bootstrap;
+pub(crate) mod bootstrap;
 pub(crate) mod host;
 pub(crate) mod platform;
 pub(crate) mod resources;

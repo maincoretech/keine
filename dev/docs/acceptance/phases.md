@@ -213,13 +213,13 @@ FALLEN_LEAVES。粒子应具有柔边、速度/尺寸/漂移差异；切换时�
 
 ```bash
 export HEXZ_PASSWORD='<test-only password>'
-PATH="/path/to/hexz_k/target/release:$PATH" \
-  bash dev/scripts/package-release.sh <native-project> target/phase7-release
+cargo run --release --no-default-features -- \
+  package <project> --output target/phase7-release
 target/phase7-release/run.sh
 ```
 
-`<native-project>` 是带 `config.yaml` 的原生工程；`projects/test-project` 是 LetsGal
-工程，需先完成原生转换（见 `docs/project-and-assets-spec.md`）。
+`<project>` 可以是带 `config.yaml` 的原生工程或 LetsGal（`project.json`）工程；
+LetsGal 的配置在打包时物化为 `config.yaml`，`projects/test-project` 可直接打包。
 
 5. `target/phase7-release` 包含引擎、启动脚本和 encrypted `game.hxz`；归档内含
    `.keine/compiled/program.bin`，config.yaml 为 `compiled_program: require`，且不包含

@@ -26,6 +26,59 @@ use crate::ui::control_bar::{AutoHideTiming, ButtonAction, QuickPreviewSurface, 
 use crate::ui::textbox::{ContentRoot, QuickPreviewLayer};
 use crate::ui::user_input::UserInputCaretBlink;
 
+/// Raises the cost of runtime extraction for packaged builds.
+///
+/// Only the `keine package` engine build compiles with the `hardened`
+/// feature, so `cargo dev` and CI runner builds remain fully debuggable.
+/// None of this is DRM — a determined attacker can patch the binary or dump
+/// memory another way — it only closes the trivial "attach a debugger and
+/// read the restored key" path.
+///
+/// Compile-time guard: the call site is also `#[cfg(feature = "hardened")]`,
+/// so non-packaged builds compile this function away entirely.
+#[cfg(feature = "hardened")]
+pub fn apply_hardening() {
+    #[cfg(target_os = "macos")]
+    deny_attach();
+    #[cfg(unix)]
+    disable_core_dumps();
+    #[cfg(windows)]
+    exit_under_debugger();
+}
+
+/// Refuse debugger attachment at the kernel level: after `PT_DENY_ATTACH`,
+/// lldb `process attach` and DTrace task-port access both fail for this task.
+#[cfg(all(feature = "hardened", target_os = "macos"))]
+fn deny_attach() {
+    unsafe {
+        libc::ptrace(libc::PT_DENY_ATTACH, 0, std::ptr::null_mut(), 0);
+    }
+}
+
+/// Crash dumps would otherwise capture the decrypted key after an unwind.
+#[cfg(all(feature = "hardened", unix))]
+fn disable_core_dumps() {
+    let limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    unsafe {
+        libc::setrlimit(libc::RLIMIT_CORE, &limit);
+    }
+}
+
+/// A packaged game under a user-mode debugger exits immediately. Trivially
+/// bypassable, but it stops casual attach-and-inspect sessions.
+#[cfg(all(feature = "hardened", windows))]
+fn exit_under_debugger() {
+    use windows_sys::Win32::System::Diagnostics::Debug::IsDebuggerPresent;
+    unsafe {
+        if IsDebuggerPresent() != 0 {
+            std::process::exit(1);
+        }
+    }
+}
+
 /// Platform-neutral actions consumed by the VN runtime.
 #[derive(Resource, Default, Debug)]
 pub(crate) struct InputActions {

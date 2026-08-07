@@ -91,7 +91,10 @@ pub fn run_with_loader(loader: LoaderRegistry) {
 }
 
 fn try_run_with_loader(loader: LoaderRegistry) -> Result<()> {
+    #[cfg(feature = "hardened")]
+    super::platform::apply_hardening();
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    let package_requested = args.first().is_some_and(|command| command == "package");
     let check_only = args.first().is_some_and(|command| command == "check");
     let compile_request = args.first().is_some_and(|command| command == "compiler");
     let compile_preview = args
@@ -101,8 +104,12 @@ fn try_run_with_loader(loader: LoaderRegistry) -> Result<()> {
     let development = development_requested(&args);
     let hot_reload = hot_reload_requested(&args);
     let benchmark = benchmark_options_from_args(&args)?;
-    let compiler_output = compiler_output_from_args(&args)?;
+    let output = output_from_args(&args)?;
     let project_path = project_root_from_args(args.iter().cloned());
+    if package_requested {
+        let output = output.unwrap_or_else(|| PathBuf::from(crate::package::DEFAULT_OUTPUT));
+        return crate::package::package_project(&project_path, &loader, &output);
+    }
     let (project_root, config, content) = open_project(&project_path, &loader)?;
     let languages = loader
         .languages(&config.adapter.script)
@@ -111,7 +118,7 @@ fn try_run_with_loader(loader: LoaderRegistry) -> Result<()> {
         return check_project(&config, &content, &languages);
     }
     if compile_request && !compile_preview {
-        return crate::compiler::compile_project(&config, &content, &languages, compiler_output)
+        return crate::compiler::compile_project(&config, &content, &languages, output)
             .map(|_report| ());
     }
     let content = if compile_preview {
@@ -446,7 +453,7 @@ fn check_project(
     Ok(())
 }
 
-fn open_project(
+pub(crate) fn open_project(
     project_path: &Path,
     loader: &LoaderRegistry,
 ) -> Result<(PathBuf, GameConfig, ContentProject)> {
@@ -515,7 +522,8 @@ fn project_root_from_args(args: impl Iterator<Item = std::ffi::OsString>) -> Pat
             if command == "dev"
                 || command == "check"
                 || command == "benchmark"
-                || command == "compiler" =>
+                || command == "compiler"
+                || command == "package" =>
         {
             PathBuf::from(path)
         }
@@ -531,7 +539,7 @@ fn project_root_from_args(args: impl Iterator<Item = std::ffi::OsString>) -> Pat
         .join(relative)
 }
 
-fn compiler_output_from_args(args: &[std::ffi::OsString]) -> Result<Option<PathBuf>> {
+fn output_from_args(args: &[std::ffi::OsString]) -> Result<Option<PathBuf>> {
     let mut output = None;
     let mut index = 2;
     while index < args.len() {

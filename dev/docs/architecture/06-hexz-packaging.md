@@ -5,19 +5,30 @@
 ## 边界
 
 - `hexz_k::ResourcePack` 负责标准 `.hxz` 的索引、校验、解压、解密信息和随机读取。
-- 发布 CI 调用 Hexz 官方工具负责 zstd 与 AES-256-GCM 分块打包；运行时不依赖
-  `hexz-ops`，也不复制 magic、header、block 或 CRC 语义。
+- 发布流水线（`keine package`）通过 hexz_k 的 `pack` 库接口负责 zstd 与
+  AES-256-GCM 分块打包；运行时（游戏）不依赖 `hexz-ops`，也不复制 magic、
+  header、block 或 CRC 语义。
 - `keine-loader::adapter::asset::hexz` 只负责配置适配、安全路径检查和 loader mount。
 - Hexz 不进入 core、ECS、UI 或脚本解析。
 
 ## 打包
 
-打包属于发布流水线，不属于引擎或 loader API。CI 使用 Hexz 官方 CLI 生成标准 `.hxz`，
-默认采用 64 KiB block、zstd 和 AES-256-GCM 分块加密。文件排除交给 Hexz 标准的
-`.gitignore`、`.ignore` 或 `.hexzignore`；项目必须排除 `saves/` 与生成缓存。
+打包属于发布流水线，不属于引擎或 loader API。`keine package` 通过 hexz_k 的
+`pack` 库接口生成标准 `.hxz`，默认采用 64 KiB block、zstd 和 AES-256-GCM 分块加密。
+文件排除由 `keine package` 的 staging 清理显式完成（`saves/`、`imported_assets/`、
+`.keine`、`*.meta`、`.DS_Store`）；Hexz 标准的 `.gitignore`、`.ignore` 或
+`.hexzignore` 仍可作为补充。
 
 默认编译期资源密钥只用于防止资源被直接解压，属于弱保护而不是 DRM。发行方可在构建打包工具和
-引擎时使用同一个 `HEXZ_PASSWORD`；客户端内置密钥始终可能被逆向获得。
+引擎时使用同一个 `HEXZ_PASSWORD`；客户端内置密钥始终可能被逆向获得。密钥在
+`keine-loader` 构建时由 `build.rs` 做 XOR 混淆（`cargo:rerun-if-env-changed`
+保证换密码时缓存正确失效），明文不会进入二进制字符串表；运行时才在内存还原。
+
+`keine package` 编译引擎时会额外启用 `hardened` feature，抬高运行期提取成本：
+macOS 上调用 `PT_DENY_ATTACH` 拒绝内核级调试器挂载、Unix 上禁用 core dump（防止
+崩溃转储泄漏还原后的密钥）、Windows 上检测到调试器立即退出。开发构建不启用该
+feature，`cargo dev` 与 CI runner 始终可调试。这一切仍不是 DRM：修改二进制或换一种
+内存转储方式即可绕过。
 
 推荐发行音频统一采用标准 Ogg Opus（`.opus`）。BGM、语音、音效与 UI 提示音共用
 同一加载入口，Opus 使用增量解码路径；发布脚本同时允许引擎已启用的 WAV、MP3、
@@ -25,13 +36,17 @@ Vorbis 与 FLAC 素材直接进入 app 或 Hexz，兼容素材无需为了打包
 `bundled-opus` 特性静态构建 libopus，因此目标设备不需要安装动态库；构建机需要
 CMake。
 
-开发构建默认启用 `audio-all`，以便直接预览不同来源的素材。`package-release.sh` 与
+开发构建默认启用 `audio-all`，以便直接预览不同来源的素材。`keine package` 与
 `bundle-macos.sh` 会在编译前扫描项目内全部资源层，根据 `.opus`、`.wav`、`.mp3`、
 `.ogg/.oga/.spx` 和 `.flac` 只启用实际需要的 Cargo features。标准发行还会启用
 `ui-sounds`，因为内置 WebGAL K 提示音使用 Opus；明确禁用 UI 音效的自定义构建才可
 同时移除 Symphonia 0.6、Opus adapter、libopus 与 CMake 要求。无法静态检查内容的
 嵌套 Hexz 保守回退到 `audio-all`，CI 也可通过 `KEINE_AUDIO_FEATURES` 显式覆盖
 检测结果。
+
+含视频内容时，`keine package` 默认同时启用 `video-native,video-ffmpeg`，与
+`cargo dev` 的跨平台构建行为一致：`video-native` 的依赖目标门控在 macOS，其他平台
+启用该 feature 时自动退化为只编译 FFmpeg。
 
 ## 读取
 

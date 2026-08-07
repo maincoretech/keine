@@ -44,17 +44,16 @@ jobs:
       - uses: ./.github/actions/setup-video
         with:
           enabled: ${{ contains(env.KEINE_RELEASE_FEATURES, 'video-ffmpeg') }}
-      - name: Install pinned Hexz CLI
+      - name: Build package runner
+        # A separate target dir keeps the running runner out of the engine
+        # rebuild that `keine package` performs inside target/release.
+        run: cargo build --release --locked --no-default-features --target-dir target/runner
+      - name: Package encrypted release
         shell: bash
         run: >-
-          cargo install --locked --git https://github.com/maincoretech/hexz_k
-          --rev 4cf5287 --no-default-features --features cli
-      - name: Build encrypted release package
-        shell: bash
-        run: >-
-          bash dev/scripts/package-release.sh
+          target/runner/release/keine package
           "${{ inputs.project }}"
-          "target/${{ matrix.artifact }}"
+          --output target/${{ matrix.artifact }}
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}

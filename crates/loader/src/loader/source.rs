@@ -4,18 +4,34 @@ use std::fs;
 use std::io::{Error, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
 use hexz_k::{ResourceFile, ResourcePack, ResourcePackOptions};
 
-const DEFAULT_HEXZ_PASSWORD: &str = "keine-hexz-resource-v1";
 const HEXZ_READ_AHEAD_BYTES: usize = 64 * 1024;
 
-/// Compile-time resource key used for deliberately weak distribution
-/// protection. It deters casual extraction but is not DRM: a key embedded in
-/// a client executable can always be recovered by a determined user.
+/// Resource key used for deliberately weak distribution protection. The key
+/// is XOR-masked by `build.rs` at compile time and restored on first use, so
+/// plaintext passwords never appear in the binary's string tables. It deters
+/// casual extraction but is not DRM: a key embedded in a client executable
+/// can always be recovered by a determined user.
 pub fn hexz_password() -> &'static str {
-    option_env!("HEXZ_PASSWORD").unwrap_or(DEFAULT_HEXZ_PASSWORD)
+    static PASSWORD: OnceLock<&'static str> = OnceLock::new();
+    PASSWORD.get_or_init(|| {
+        let cipher = include_bytes!(concat!(env!("OUT_DIR"), "/hexz-password.bin"));
+        let mask = include_bytes!(concat!(env!("OUT_DIR"), "/hexz-password-mask.bin"));
+        let plain: Vec<u8> = cipher
+            .iter()
+            .zip(mask.iter().cycle())
+            .map(|(byte, mask)| byte ^ mask)
+            .collect();
+        Box::leak(
+            String::from_utf8(plain)
+                .expect("HEXZ_PASSWORD must be UTF-8")
+                .into_boxed_str(),
+        )
+    })
 }
 
 /// One immutable physical content backend shared by scripts and Bevy assets.

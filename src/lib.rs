@@ -1,6 +1,7 @@
 #![warn(unused_crate_dependencies)]
 
 mod compiler;
+mod package;
 mod render;
 mod runtime;
 mod scene;

@@ -212,8 +212,9 @@ LetsGal 长期维护的原生项目（config.yaml + 规范目录 + 脚本）。
 
 ## 8. 打包规范（game.hxz）
 
-- 打包输入 = 原生目录项目；输出 `config.yaml` 位于包根，`assets/` 暴露为
-  asset root，脚本在 `scripts/`（或编译产物）。
+- 打包输入 = 原生目录项目或 LetsGal 工程；输出 `config.yaml` 位于包根（LetsGal
+  的适配器配置在打包时物化），`assets/` 暴露为 asset root，脚本在 `scripts/`
+  （或编译产物）。
 - 排除：`saves/`、`imported_assets/`、`*.meta`、`.DS_Store`、`.keine/` 之外
   的所有临时文件；`.keine/compiled/program.bin` 为预留编译产物（打包脚本写入，
   见 program.bin v2 设计）。

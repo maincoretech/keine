@@ -182,14 +182,18 @@ Package an encrypted Hexz game:
 
 ```bash
 HEXZ_PASSWORD='your-password' \
-  dev/scripts/package-release.sh path/to/native-project target/release-package
+  cargo run --release --no-default-features -- package path/to/native-project
 ```
 
-Release packaging requires a native project with `config.yaml`; LetsGal
-`project.json` projects need the native conversion described in
-[`docs/project-and-assets-spec.md`](docs/project-and-assets-spec.md). The
-pipeline compiles `.keine/compiled/program.bin`, pins `compiled_program: require`,
-and keeps runtime state and caches out of the archive.
+Release packaging accepts a native project (`config.yaml`) or a LetsGal
+project (`project.json`); for LetsGal, the adapter-derived config (asset
+aliases, layout, styles) is materialized into `config.yaml` at build time.
+The pipeline compiles `.keine/compiled/program.bin`, pins
+`compiled_program: require`, and keeps runtime state and caches out of the
+archive. Output defaults to
+`target/release-package` (override with `--output <dir>`); on Windows build the
+runner with `--target-dir target/runner` so the engine rebuild never replaces a
+running executable.
 
 Create a macOS app bundle:
 

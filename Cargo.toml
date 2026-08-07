@@ -16,15 +16,18 @@ repository = "https://github.com/maincoretech/keine"
 default = ["audio-all", "ui-sounds"]
 audio-all = ["bundled-opus", "audio-wav", "audio-mp3", "audio-vorbis", "audio-flac"]
 ui-sounds = ["bundled-opus"]
+# Only the `keine package` engine build enables this: developer builds stay
+# fully debuggable. Raises the cost of runtime key extraction (debugger
+# attach, core dumps), see `platform::apply_hardening`.
+hardened = ["dep:libc", "dep:windows-sys"]
 audio-opus = ["dep:rodio", "dep:symphonia", "dep:symphonia-adapter-libopus"]
 bundled-opus = ["audio-opus", "symphonia-adapter-libopus/bundled"]
 audio-wav = ["bevy/wav"]
 audio-mp3 = ["bevy/mp3"]
 audio-vorbis = ["bevy/vorbis"]
 audio-flac = ["bevy/flac"]
-video-ffmpeg = ["dep:video-rs", "dep:tempfile", "dep:rodio"]
+video-ffmpeg = ["dep:video-rs", "dep:rodio"]
 video-native = [
-    "dep:tempfile",
     "dep:objc2-av-foundation",
     "dep:objc2-core-media",
     "dep:objc2-core-video",
@@ -49,6 +52,16 @@ debug = 1
 [profile.dev.package.icu_provider]
 debug-assertions = false
 
+# Shipping profile: smaller and faster at the cost of slower release builds.
+# LTO removes cross-crate duplication, strip drops the symbol table, and
+# panic=abort removes unwind tables (a release panic terminates the process;
+# graceful paths like startup_error and AppExit are unaffected).
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
+panic = "abort"
+
 [workspace.dependencies]
 keine-core = { path = "crates/core" }
 keine-loader = { path = "crates/loader" }
@@ -62,7 +75,9 @@ unicode-segmentation = "1.13"
 crc32fast = "1"
 notify = "8.2"
 noyalib = { version = "0.0.15", default-features = false, features = ["std", "fast-int", "fast-float"] }
-hexz_k = { git = "https://github.com/maincoretech/hexz_k", rev = "4cf5287", default-features = false }
+hexz_k = { git = "https://github.com/maincoretech/hexz_k", rev = "c570b0f", default-features = false }
+libc = "0.2"
+windows-sys = { version = "0.61.2", default-features = false, features = ["Win32_System_Diagnostics_Debug"] }
 bevy = { version = "0.19", default-features = false }
 libwebp-sys = "0.14.4"
 futures-lite = "2"
@@ -93,11 +108,13 @@ rodio = { workspace = true, optional = true }
 symphonia = { workspace = true, optional = true }
 symphonia-adapter-libopus = { workspace = true, optional = true }
 video-rs = { workspace = true, optional = true }
-tempfile = { workspace = true, optional = true }
+tempfile = { workspace = true }
 winit = { workspace = true }
 crossterm = { workspace = true }
 fs2 = { workspace = true }
 bevy = { workspace = true, features = ["bevy_winit", "bevy_log", "bevy_render", "bevy_sprite", "bevy_ui", "bevy_ui_render", "bevy_audio", "png", "jpeg"] }
+hexz_k = { workspace = true, features = ["pack"] }
+noyalib = { workspace = true }
 
 [build-dependencies]
 winresource = "0.1.31"
@@ -109,6 +126,15 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = ["N
 objc2-av-foundation = { version = "0.3.2", default-features = false, optional = true, features = ["std", "AVPlayer", "AVPlayerItem", "AVPlayerItemOutput", "objc2-core-media", "objc2-core-video"] }
 objc2-core-media = { version = "0.3.2", default-features = false, optional = true, features = ["std", "CMTime"] }
 objc2-core-video = { version = "0.3.2", default-features = false, optional = true, features = ["std", "CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVReturn", "objc2"] }
+
+# Hardening is compiled in only by `keine package` (feature `hardened`); the
+# dependencies stay target-gated so unused-crate-dependencies never fires on
+# platforms that cannot use them.
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, optional = true }
 
 # Winit has no implicit Linux backend when Bevy's default features are disabled.
 # X11 also covers Wayland desktops through XWayland without adding native
