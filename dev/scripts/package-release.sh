@@ -25,15 +25,56 @@ case "$output" in
         ;;
 esac
 
+# Release packages are the native project form: the packaged loader reads
+# config.yaml from inside the archive. LetsGal (project.json) projects need
+# the native conversion defined in docs/project-and-assets-spec.md first.
+if [[ ! -f "$project/config.yaml" ]]; then
+    echo "release packaging requires a native project with config.yaml at its root" >&2
+    echo "($project has no config.yaml; LetsGal project.json conversion is not implemented yet)" >&2
+    exit 2
+fi
+
 staging="$(mktemp -d)"
 trap 'rm -rf "$staging"' EXIT
 mkdir -p "$staging/project"
 cp -R "$project"/. "$staging/project/"
 
 # Runtime state and generated caches must never enter the encrypted artifact.
-find "$staging/project" -type d \( -name saves -o -name imported_assets \) -prune \
-    -exec rm -rf {} +
+# The staging copy regenerates `.keine/compiled/program.bin` below, so any
+# source-project `.keine` contents are dropped as well.
+find "$staging/project" -type d \( -name saves -o -name imported_assets -o -name .keine \) \
+    -prune -exec rm -rf {} +
 find "$staging/project" -type f \( -name '.DS_Store' -o -name '*.meta' \) -delete
+
+# Pin `compiled_program` in the staged config. The compiler must parse source
+# scenes, so it runs with the policy neutralized to `auto`; the packaged
+# config is then set to `require`, making startup fail loudly if the compiled
+# artifact is missing.
+set_compiled_policy() {
+    local config="$1" policy="$2"
+    awk -v policy="$policy" '
+        /^compiled_program:/ { print "compiled_program: " policy; seen = 1; next }
+        { print }
+        END { if (!seen) print "compiled_program: " policy }
+    ' "$config" > "$config.tmp" && mv "$config.tmp" "$config"
+}
+set_compiled_policy "$staging/project/config.yaml" auto
+
+release_features="$(detect_audio_features "$staging/project")"
+HEXZ_PASSWORD="$HEXZ_PASSWORD" \
+    KEINE_AUDIO_FEATURES="$release_features" \
+    build_engine_for_project "$staging/project" --release --locked
+
+# Reuse the just-built engine for `cargo compiler` so the release pipeline
+# performs a single release build. The compiler emits
+# `.keine/compiled/program.bin` inside the staging copy, which `hexz pack`
+# ships in the archive.
+engine_bin="$root/target/release/keine"
+if [[ -f "$root/target/release/keine.exe" ]]; then
+    engine_bin="$root/target/release/keine.exe"
+fi
+"$engine_bin" compiler "$staging/project"
+set_compiled_policy "$staging/project/config.yaml" require
 
 rm -rf "$output"
 mkdir -p "$output"
@@ -41,10 +82,6 @@ cp "$root/assets/icons/keine-256.png" "$output/keine.png"
 hexz pack "$staging/project" "$output/game.hxz" \
     --compression zstd --encrypt --block-size 65536
 
-release_features="$(detect_audio_features "$staging/project")"
-HEXZ_PASSWORD="$HEXZ_PASSWORD" \
-    KEINE_AUDIO_FEATURES="$release_features" \
-    build_engine_for_project "$staging/project" --release --locked
 if [[ -f target/release/keine.exe ]]; then
     cp target/release/keine.exe "$output/keine.exe"
     if [[ ",$release_features," == *,video-ffmpeg,* ]]; then

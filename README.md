@@ -61,7 +61,8 @@ so release packages can skip source-script parsing at startup; the fingerprint
 matches the program built from source, so saves remain compatible. Development
 runs still read source scripts for diagnostics and hot reload. Use
 `cargo compiler preview <project>` to run the compiled-loading path against any
-project that has a program.bin.
+project that has a program.bin. Release packaging runs this step automatically
+and pins `compiled_program: require` in the packaged config.
 
 ## Project inputs
 
@@ -181,8 +182,14 @@ Package an encrypted Hexz game:
 
 ```bash
 HEXZ_PASSWORD='your-password' \
-  dev/scripts/package-release.sh projects/test-project target/release-package
+  dev/scripts/package-release.sh path/to/native-project target/release-package
 ```
+
+Release packaging requires a native project with `config.yaml`; LetsGal
+`project.json` projects need the native conversion described in
+[`docs/project-and-assets-spec.md`](docs/project-and-assets-spec.md). The
+pipeline compiles `.keine/compiled/program.bin`, pins `compiled_program: require`,
+and keeps runtime state and caches out of the archive.
 
 Create a macOS app bundle:
 

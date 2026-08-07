@@ -37,8 +37,8 @@ Kēne 支持三种输入形态，本规范只定义后两种（原生形态）�
 │   ├── luts/                # 调色 LUT（PNG）
 │   ├── font/                # 自定义字体（预留）
 │   └── ui/                  # UI 图标 / 对话框皮肤（预留）
-├── scenes/                  # 脚本场景（script: webgal 时放 .txt；结构化工程可留空）
-├── .keine/                  # 引擎产物：compiled program.bin、缓存等（永不打包）
+├── scripts/                 # 脚本场景（script: webgal 时放 .txt；结构化工程可留空）
+├── .keine/                  # 引擎产物：program.bin 等（源项目永不打包；发布时在 staging 内重新生成并随包）
 ├── saves/                   # 运行时用户数据：slot_*.sav、profile.bin 等（永不打包）
 └── imported_assets/         # Bevy 生成缓存（永不打包，.gitignore 已排除）
 ```
@@ -55,7 +55,7 @@ Kēne 支持三种输入形态，本规范只定义后两种（原生形态）�
 
 | 名称 | 用途 | 约束 |
 |---|---|---|
-| `.keine/` | 引擎编译产物与内部缓存 | 永不打包；开发模式生成 |
+| `.keine/` | 引擎编译产物与内部缓存 | 源项目永不打包；发布脚本在 staging 内重新生成 `.keine/compiled/program.bin` 并随包发布（运行时契约） |
 | `saves/` | 存档、profile、阅读历史、图库 | 永不打包；打包脚本显式排除 |
 | `imported_assets/`、`*.meta` | Bevy 资产处理器生成物 | 永不打包；不进 git |
 | `.hexz/` | hexz pack 的 staging 目录 | 打包器自动跳过 |
@@ -97,6 +97,9 @@ assets:
 - 脚本既可以直接写相对路径（`background/day.webp`），也可以写逻辑名
   （`day`，通过别名表解析）。
 - 未在别名表中的名称按第 4 节的默认回退目录解析。
+- `compiled_program` 为编译产物策略：`auto`（默认；目录项目解析源脚本，打包项目信任
+  program.bin）、`require`（发布包强制，缺失即启动失败）、`disable`（始终解析源脚本）。
+  发布流水线在 staging 内编译 `.keine/compiled/program.bin` 并写入 `require`。
 
 ## 4. 资源类别规范
 
@@ -185,7 +188,7 @@ LetsGal 长期维护的原生项目（config.yaml + 规范目录 + 脚本）。
 │   ├── se/            # 来自 se/、sound(s)/、effect(s)/
 │   ├── video/         # 来自 video(s)/ 或 *.mp4/*.webm/*.mov/*.mkv
 │   └── luts/          # 来自 lut(s)/
-└── scenes/            # 转换后的脚本（形态待 demo 确认）
+└── scripts/           # 转换后的脚本（形态待 demo 确认；引擎 fs mount 固定挂载 scripts/）
 ```
 
 转换步骤：
@@ -196,7 +199,7 @@ LetsGal 长期维护的原生项目（config.yaml + 规范目录 + 脚本）。
 3. 生成 `config.yaml`：`assets` 别名表由 manifest 条目翻译（逻辑名与路径双键），
    `layout`/`styles` 来自 Studio 默认壳配置，`features` 来自 `project.json` 的
    `keine` 段；
-4. 转换章节为 `scenes/*.txt`（script: webgal）或结构化为编辑器工程（待定）；
+4. 转换章节为 `scripts/*.txt`（script: webgal）或结构化为编辑器工程（待定）；
 5. 输出后必须通过 `cargo validate <output>` 才能算完成；
 6. 校验项：所有脚本引用都能解析到文件、无重复 scene 名、资源类别归属正确。
 
@@ -210,7 +213,7 @@ LetsGal 长期维护的原生项目（config.yaml + 规范目录 + 脚本）。
 ## 8. 打包规范（game.hxz）
 
 - 打包输入 = 原生目录项目；输出 `config.yaml` 位于包根，`assets/` 暴露为
-  asset root，脚本在 `scenes/`（或编译产物）。
+  asset root，脚本在 `scripts/`（或编译产物）。
 - 排除：`saves/`、`imported_assets/`、`*.meta`、`.DS_Store`、`.keine/` 之外
   的所有临时文件；`.keine/compiled/program.bin` 为预留编译产物（打包脚本写入，
   见 program.bin v2 设计）。
@@ -227,7 +230,7 @@ LetsGal 长期维护的原生项目（config.yaml + 规范目录 + 脚本）。
 
 ## 10. 待定项（demo 项目引入后确认）
 
-1. `scenes/` 的脚本形态：WebGAL `.txt` 还是结构化 JSON（LetsGal 章节内联）；
+1. `scripts/` 的脚本形态：WebGAL `.txt` 还是结构化 JSON（LetsGal 章节内联）；
 2. `font/` 与 `ui/` 的实际需求（自定义字体目前仅内置）；
 3. 视频编解码默认组合（H.264 vs VP9，依赖目标平台视频后端）；
 4. 转换工具的转码选项默认值（WebP 质量、Opus 码率）；

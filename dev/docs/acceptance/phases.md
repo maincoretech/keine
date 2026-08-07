@@ -214,12 +214,16 @@ FALLEN_LEAVES。粒子应具有柔边、速度/尺寸/漂移差异；切换时�
 ```bash
 export HEXZ_PASSWORD='<test-only password>'
 PATH="/path/to/hexz_k/target/release:$PATH" \
-  bash dev/scripts/package-release.sh projects/test-project target/phase7-release
+  bash dev/scripts/package-release.sh <native-project> target/phase7-release
 target/phase7-release/run.sh
 ```
 
-5. `target/phase7-release` 包含引擎、启动脚本和 encrypted `game.hxz`，且归档不包含
-   `saves/`、`imported_assets/` 或 `.meta`。
+`<native-project>` 是带 `config.yaml` 的原生工程；`projects/test-project` 是 LetsGal
+工程，需先完成原生转换（见 `docs/project-and-assets-spec.md`）。
+
+5. `target/phase7-release` 包含引擎、启动脚本和 encrypted `game.hxz`；归档内含
+   `.keine/compiled/program.bin`，config.yaml 为 `compiled_program: require`，且不包含
+   `saves/`、`imported_assets/`、`*.meta` 或源项目 `.keine` 缓存。
 6. 直接运行 `.hxz` 时脚本、图片、字体和多来源音频行为与目录项目一致；运行期间不得出现
    staging、ready marker 或明文资源目录。截断或破坏归档后应由 `hexz_k` 校验拒绝启动。
 7. 执行 `cargo test --workspace --all-targets`，并确认运行时通过 `hexz_k::ResourceFile`

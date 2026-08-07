@@ -53,6 +53,7 @@ cargo dev projects/test-project
 启动时跳过源脚本解析；fingerprint 与源码构建的程序一致，因此存档保持兼容。
 开发运行仍然读取源脚本，以获得诊断与热重载。可用
 `cargo compiler preview <project>` 对任何已生成 program.bin 的工程运行编译加载路径。
+发布流水线会自动执行这一步，并在打包配置中固定 `compiled_program: require`。
 
 ## 项目输入
 
@@ -168,8 +169,13 @@ cargo build --release --features video-ffmpeg
 
 ```bash
 HEXZ_PASSWORD='your-password' \
-  dev/scripts/package-release.sh projects/test-project target/release-package
+  dev/scripts/package-release.sh path/to/native-project target/release-package
 ```
+
+发布打包要求带 `config.yaml` 的原生工程；LetsGal（`project.json`）工程需要先完成
+原生转换，见 [`docs/project-and-assets-spec.md`](docs/project-and-assets-spec.md)。
+流水线会编译 `.keine/compiled/program.bin`、固定 `compiled_program: require`，并
+确保运行时状态与缓存不进入归档。
 
 创建 macOS 应用包：
 
