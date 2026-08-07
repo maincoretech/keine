@@ -34,8 +34,9 @@ cargo validate projects/test-project
 cargo dev projects/test-project
 ```
 
-Use `cargo dev-lite projects/test-project` when FFmpeg is unavailable. The
-numbered visual test is in
+Use `cargo run -- dev projects/test-project` when FFmpeg development libraries
+are unavailable (the same session without video backends). The numbered visual
+test is in
 [`projects/test-project/ACCEPTANCE.md`](projects/test-project/ACCEPTANCE.md).
 
 | Command | Purpose |
@@ -45,7 +46,6 @@ numbered visual test is in
 | `cargo compiler <project> [--output <path>]` | Compile source scripts into a `program.bin` artifact |
 | `cargo startup <project> [--compiled]` | Print startup segment timing (T-1..T7) and exit |
 | `cargo dev <project>` | Run with hot reload and video |
-| `cargo dev-lite <project>` | Run without FFmpeg |
 | `cargo preview <project>` | Run an optimized preview |
 | `cargo perf <project> [seconds] [cursor] [profile]` | Record a performance sample |
 | `cargo dev <project> --sync` | Follow an open LetsGal project and step |

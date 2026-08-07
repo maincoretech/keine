@@ -2,11 +2,9 @@
 adapters = "run -- adapters"
 # Interactive preview; add `--sync` to follow an open LetsGal project the
 # same way the former `studio-sync` command did.
+# Machines without FFmpeg development libraries can use `cargo run -- dev`
+# for the same session without video backends.
 dev = "run --features video-native,video-ffmpeg -- dev"
-# Minimal runtime without a video backend. Projects that contain video
-# deliberately fail that capability at runtime instead of pretending playback
-# succeeded.
-dev-lite = "run -- dev"
 # Optimized interactive preview. Keeping `--release` inside the alias avoids
 # leaking Cargo's option ordering into the project-facing command line.
 preview = "run --release --features video-native,video-ffmpeg -- dev"

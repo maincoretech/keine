@@ -29,7 +29,8 @@ cargo validate projects/test-project
 cargo dev projects/test-project
 ```
 
-当 FFmpeg 不可用时使用 `cargo dev-lite projects/test-project`。编号视觉验收见
+当缺少 FFmpeg 开发库时使用 `cargo run -- dev projects/test-project`
+（同一会话但不带视频后端）。编号视觉验收见
 [`projects/test-project/ACCEPTANCE.md`](projects/test-project/ACCEPTANCE.md)。
 
 | 命令 | 用途 |
@@ -39,7 +40,6 @@ cargo dev projects/test-project
 | `cargo compiler <project> [--output <path>]` | 把源脚本编译为 `program.bin` 产物 |
 | `cargo startup <project> [--compiled]` | 打印启动分段计时（T-1..T7）并退出 |
 | `cargo dev <project>` | 带热重载与视频运行 |
-| `cargo dev-lite <project>` | 不带 FFmpeg 运行 |
 | `cargo preview <project>` | 运行优化预览 |
 | `cargo perf <project> [seconds] [cursor] [profile]` | 记录性能样本 |
 | `cargo dev <project> --sync` | 跟随打开的 LetsGal 工程逐步同步 |
