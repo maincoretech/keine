@@ -44,6 +44,7 @@ test is in
 | `cargo adapters` | Enable or disable built-in adapters |
 | `cargo validate <project>` | Validate without opening a window |
 | `cargo compiler <project> [--output <path>]` | Compile source scripts into a `program.bin` artifact |
+| `cargo package <project> [--output <dir>]` | Package an encrypted release build |
 | `cargo dev <project>` | Run with hot reload and video |
 | `cargo preview <project>` | Run an optimized preview |
 | `cargo perf <project> [seconds] [cursor] [profile]` | Record a performance sample |
@@ -194,6 +195,15 @@ archive. Output defaults to
 `target/release-package` (override with `--output <dir>`); on Windows build the
 runner with `--target-dir target/runner` so the engine rebuild never replaces a
 running executable.
+
+The packaged engine is rebuilt per project: only the audio/video backends
+detected in the content are compiled in, the `hardened` feature enables
+anti-debugging (macOS `PT_DENY_ATTACH`, disabled core dumps, Windows debugger
+exit), and the release profile (LTO + stripped symbols + `panic=abort`)
+shrinks the binary from ~108 MB to ~43 MB. The `HEXZ_PASSWORD` key is
+XOR-masked into the binary at build time, so the plaintext never appears in
+the shipped string tables. Packaged builds are deliberately weak protection,
+not DRM.
 
 Create a macOS app bundle:
 

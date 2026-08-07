@@ -38,6 +38,7 @@ cargo dev projects/test-project
 | `cargo adapters` | 启用或禁用内置适配器 |
 | `cargo validate <project>` | 不打开窗口进行校验 |
 | `cargo compiler <project> [--output <path>]` | 把源脚本编译为 `program.bin` 产物 |
+| `cargo package <project> [--output <dir>]` | 打包加密发布构建 |
 | `cargo dev <project>` | 带热重载与视频运行 |
 | `cargo preview <project>` | 运行优化预览 |
 | `cargo perf <project> [seconds] [cursor] [profile]` | 记录性能样本 |
@@ -178,6 +179,12 @@ HEXZ_PASSWORD='your-password' \
 与缓存不进入归档。输出默认在 `target/release-package`
 （可用 `--output <dir>` 覆盖）；Windows 上用 `--target-dir target/runner`
 构建 runner，避免引擎重建覆盖正在运行的可执行文件。
+
+打包引擎按项目重新构建：只编译内容中检测到的音频/视频后端，`hardened` 特性启用
+反调试（macOS `PT_DENY_ATTACH`、禁用 core dump、Windows 检测到调试器即退出），
+release profile（LTO + 剥离符号 + `panic=abort`）把二进制从约 108 MB 压到约
+43 MB。`HEXZ_PASSWORD` 在构建期以 XOR 掩码写进二进制，明文不会出现在发行包的
+字符串表中。打包属于刻意保留的弱保护，不是 DRM。
 
 创建 macOS 应用包：
 
