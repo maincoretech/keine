@@ -191,4 +191,57 @@ full runs should repeat with `cargo bench` and record machine/config/commit.
 | `rollback/record_200_checkpoints` | 200 个 checkpoint | 76.8 µs | 0.38 µs/checkpoint |
 
 对比口径：后续所有优化必须用同一 bench 与同一 release 配置做前后对比；结果记录
-commit、机器与编译配置。启动分段计时（T-1..T7）随 program.bin 路径落地后加入。
+commit、机器与编译配置。
+
+## 2026-08-07 启动分段基线（T-1..T7）
+
+`cargo startup <project>` 把进程启动切成八段（`--compiled` 强制走 program.bin
+加载路径）：
+
+| 段 | 含义 |
+| --- | --- |
+| T-1 | CLI 准备（进程入口 → 打开工程前） |
+| T1 | 工程打开（config + 内容挂载） |
+| T2 | 脚本语言注册 |
+| T3 | 存储 + 实例锁（compiled 路径含 program.bin 解码） |
+| T4 | 应用装配（build_opened_app） |
+| T5 | 应用启动（app.run() 初始化 + GPU，到 `load_scenes_with` 前） |
+| T6 | 场景加载（`load_scenes_with`，源脚本解析 / program.bin 重建） |
+| T7 | 首帧（场景加载完成 → 首个 Update） |
+| TOTAL | 总启动 |
+
+只有 T6 是两条路径唯一不同的段；T4/T5（Bevy/wgpu 初始化）两者完全相同且是
+启动主导成本。
+
+- Machine: 本机 macOS Apple M5 Pro，integrated GPU，Metal（与 07-22 渲染基线同机）
+- Build: `cargo build --release`（默认 features）
+- Project: `projects/test-project`（LetsGal 1.9.2，3 scenes / 66 actions）
+- 每路径连续 3 次取中位数；首跑受 OS 页缓存 / GPU 预热影响，仅作参考
+
+| 段 | 源脚本 (median) | program.bin (median) |
+| --- | ---: | ---: |
+| T-1 | 0.109 ms | 0.096 ms |
+| T1 | 0.284 ms | 0.544 ms |
+| T2 | 0.001 ms | 0.001 ms |
+| T3 | 0.001 ms | 0.093 ms |
+| T4 | 320.7 ms | 341.1 ms |
+| T5 | 334.1 ms | 303.8 ms |
+| T6 | 0.453 ms | 0.044 ms |
+| T7 | 10.6 ms | 10.6 ms |
+| TOTAL | 666.1 ms | 657.6 ms |
+
+大规模扩展性（10 万行 WebGAL 脚本，1 scene / 100000 action，合成 fixture）：
+
+| 路径 | T6 场景加载 (median) | 说明 |
+| --- | ---: | --- |
+| 源脚本 | 40.3 ms | 全量解析 + Program 构建 |
+| program.bin | 4.6 ms | 解码 + 重建（约 8.7 倍） |
+
+结论：
+
+- 小工程下 program.bin 只省亚毫秒级场景加载，总启动在噪声内（666 vs 658 ms）；
+  启动瓶颈是 Bevy/wgpu 初始化（T4+T5 ≈ 650 ms），与场景来源无关。
+- program.bin 的收益随脚本规模放大：10 万行解析 40.3 ms → 解码 4.6 ms，与
+  `program_load/parse_and_build` 基准（100k Action 33.7 ms）同向。
+- 对比口径：同机器、同会话、release 构建，丢弃首跑样本，T6 取中位数；T4/T5
+  是环境噪声，不应作为回归信号。

@@ -25,5 +25,8 @@ studio-lint = "clippy --workspace --all-targets --no-default-features -- -D warn
 validate = "run -- check"
 # Build-time compilation of a source project into `.keine/compiled/program.bin`.
 compiler = "run -- compiler"
+# Process-to-first-frame segment timing (T-1..T7); `--compiled` forces the
+# compiled program.bin loading path for A/B comparison.
+startup = "run -- startup"
 # Backward-compatible name used by earlier local workflows.
 parse = "run -- check"

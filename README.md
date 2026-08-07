@@ -43,6 +43,7 @@ numbered visual test is in
 | `cargo adapters` | Enable or disable built-in adapters |
 | `cargo validate <project>` | Validate without opening a window |
 | `cargo compiler <project> [--output <path>]` | Compile source scripts into a `program.bin` artifact |
+| `cargo startup <project> [--compiled]` | Print startup segment timing (T-1..T7) and exit |
 | `cargo dev <project>` | Run with hot reload and video |
 | `cargo dev-lite <project>` | Run without FFmpeg |
 | `cargo preview <project>` | Run an optimized preview |
@@ -63,6 +64,14 @@ runs still read source scripts for diagnostics and hot reload. Use
 `cargo compiler preview <project>` to run the compiled-loading path against any
 project that has a program.bin. Release packaging runs this step automatically
 and pins `compiled_program: require` in the packaged config.
+
+`cargo startup <project>` measures startup in eight segments (T-1 CLI setup,
+T1 project open, T2 script language, T3 store setup, T4 app assembly, T5 app
+start, T6 scene loading, T7 first frame, plus a total row) and exits after
+the first frame. Add `--compiled` to force the compiled `program.bin` loading
+path; run it twice (with and without `--compiled`) for a source-vs-compiled
+A/B. The T6 scene-loading segment is the only one that differs between the
+two paths.
 
 ## Project inputs
 
