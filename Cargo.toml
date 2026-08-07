@@ -33,6 +33,7 @@ video-native = [
 [workspace.package]
 version = "0.8.1"
 edition = "2024"
+rust-version = "1.97"
 
 # Disable icu_provider's debug eprintln! fallback in dev builds.
 # Without this, icu_provider prints "ICU4X data error: ..." to stderr
