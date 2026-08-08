@@ -7,7 +7,7 @@ use keine_core::config::GameConfig;
 use keine_loader::{
     ContentProject, ResourceRef, SceneRef, ScriptLanguageRegistry, ScriptWatcher, StoreAdapter,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Resource, Deref, DerefMut)]
 pub struct GameState(pub State);
@@ -59,8 +59,24 @@ pub struct LocalSceneAssets {
     pub action_spans: Vec<keine_loader::SourceSpan>,
 }
 
+/// Strong handles retained around the current script position.
+///
+/// `critical` is deliberately separate from the retained handle set. Assets
+/// predicted by the lookahead should be loaded and kept warm, but only assets
+/// required by the currently presented state are allowed to pause execution.
 #[derive(Resource, Default)]
-pub struct LocalAssetCache(pub HashMap<String, UntypedHandle>);
+pub struct LocalAssetCache {
+    pub(crate) handles: HashMap<String, UntypedHandle>,
+    pub(crate) critical: HashSet<String>,
+}
+
+impl LocalAssetCache {
+    pub(crate) fn blocking_handles(&self) -> impl Iterator<Item = &UntypedHandle> {
+        self.critical
+            .iter()
+            .filter_map(|path| self.handles.get(path))
+    }
+}
 
 #[derive(Resource)]
 pub struct AssetLoadingGate {

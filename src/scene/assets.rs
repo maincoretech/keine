@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bevy::asset::LoadState;
 use bevy::prelude::*;
@@ -10,6 +10,27 @@ use crate::runtime::resources::{
 use crate::ui::foundation::UiFonts;
 
 const LOOKAHEAD_ACTIONS: usize = 20;
+
+#[derive(Default)]
+struct AssetPlan {
+    retained: HashMap<String, ResourceKind>,
+    critical: HashSet<String>,
+}
+
+impl AssetPlan {
+    fn warm(&mut self, path: String, kind: ResourceKind) {
+        if kind != ResourceKind::Video {
+            self.retained.insert(path, kind);
+        }
+    }
+
+    fn require(&mut self, path: String, kind: ResourceKind) {
+        if kind != ResourceKind::Video {
+            self.critical.insert(path.clone());
+            self.retained.insert(path, kind);
+        }
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct PrefetchState {
@@ -102,7 +123,7 @@ pub fn prefetch_local_assets(
         return;
     }
     previous.capture(&state);
-    let mut desired = HashMap::new();
+    let mut plan = AssetPlan::default();
     // While the title is open, use otherwise idle time to warm the entry scene.
     // This also keeps its handles alive after returning from the game, instead
     // of releasing and recreating them on the next START click.
@@ -116,7 +137,7 @@ pub fn prefetch_local_assets(
             resource.action_index >= cursor && resource.action_index <= cursor + LOOKAHEAD_ACTIONS
         }) {
             let path = resource.resolved_path(&config);
-            desired.insert(path, resource.kind);
+            plan.warm(path, resource.kind);
         }
         for reference in scene.sub_scenes.iter().filter(|reference| {
             reference.action_index >= cursor && reference.action_index <= cursor + LOOKAHEAD_ACTIONS
@@ -130,37 +151,48 @@ pub fn prefetch_local_assets(
                     .filter(|resource| resource.action_index <= LOOKAHEAD_ACTIONS)
                 {
                     let path = resource.resolved_path(&config);
-                    desired.insert(path, resource.kind);
+                    plan.warm(path, resource.kind);
                 }
             }
         }
     }
 
     if state.ended {
-        desired.insert(
+        plan.require(
             config.bg_path(&config.title_background),
             ResourceKind::Background,
         );
     }
 
     if let Some(background) = &state.bg {
-        desired.insert(config.bg_path(background), ResourceKind::Background);
+        plan.require(config.bg_path(background), ResourceKind::Background);
+    }
+    if let Some(transition) = &state.bg_transition {
+        if let Some(background) = &transition.from {
+            plan.require(config.bg_path(background), ResourceKind::Background);
+        }
+        if !transition.to.is_empty() {
+            plan.require(config.bg_path(&transition.to), ResourceKind::Background);
+        }
     }
     for sprite in state.sprites.values() {
-        desired.insert(config.figure_path(&sprite.image), ResourceKind::Figure);
+        plan.require(config.figure_path(&sprite.image), ResourceKind::Figure);
+    }
+    if let Some(avatar) = &state.mini_avatar {
+        plan.require(config.figure_path(avatar), ResourceKind::MiniAvatar);
     }
     if let Some(vocal) = state
         .dialogue
         .as_ref()
         .and_then(|dialogue| dialogue.vocal.as_ref())
     {
-        desired.insert(config.voice_path(vocal), ResourceKind::Voice);
+        plan.require(config.voice_path(vocal), ResourceKind::Voice);
     }
     if let Some(bgm) = &state.bgm.file {
-        desired.insert(config.bgm_path(bgm), ResourceKind::Bgm);
+        plan.require(config.bgm_path(bgm), ResourceKind::Bgm);
     }
     for effect in state.looping_effects.values() {
-        desired.insert(config.effect_path(&effect.file), ResourceKind::Effect);
+        plan.require(config.effect_path(&effect.file), ResourceKind::Effect);
     }
     for effect in state.particle_effects.values() {
         if let Some(texture) = effect
@@ -169,32 +201,38 @@ pub fn prefetch_local_assets(
             .as_ref()
             .filter(|path| !path.is_empty())
         {
-            desired.insert(texture.clone(), ResourceKind::Particle);
+            plan.require(texture.clone(), ResourceKind::Particle);
         }
     }
 
-    if cache.0.len() == desired.len() && desired.keys().all(|path| cache.0.contains_key(path)) {
+    if cache.handles.len() == plan.retained.len()
+        && plan
+            .retained
+            .keys()
+            .all(|path| cache.handles.contains_key(path))
+        && cache.critical == plan.critical
+    {
         return;
     }
-    cache.0.retain(|path, _| desired.contains_key(path));
-    for (path, kind) in desired {
-        // Video is streamed by the dedicated playback backend. Keeping the
-        // whole container alive in Bevy's generic asset cache would defeat
-        // bounded-memory decoding and duplicate the compressed payload.
-        if kind == ResourceKind::Video {
-            continue;
-        }
-        cache.0.entry(path.clone()).or_insert_with(|| match kind {
-            ResourceKind::Background
-            | ResourceKind::Figure
-            | ResourceKind::Particle
-            | ResourceKind::MiniAvatar => asset_server.load::<Image>(path).untyped(),
-            ResourceKind::Voice | ResourceKind::Bgm | ResourceKind::Effect => {
-                crate::runtime::audio::load_untyped(&asset_server, path)
-            }
-            ResourceKind::Video => unreachable!("video prefetch is handled above"),
-        });
+    cache
+        .handles
+        .retain(|path, _| plan.retained.contains_key(path));
+    for (path, kind) in plan.retained {
+        cache
+            .handles
+            .entry(path.clone())
+            .or_insert_with(|| match kind {
+                ResourceKind::Background
+                | ResourceKind::Figure
+                | ResourceKind::Particle
+                | ResourceKind::MiniAvatar => asset_server.load::<Image>(path).untyped(),
+                ResourceKind::Voice | ResourceKind::Bgm | ResourceKind::Effect => {
+                    crate::runtime::audio::load_untyped(&asset_server, path)
+                }
+                ResourceKind::Video => unreachable!("video prefetch is handled above"),
+            });
     }
+    cache.critical = plan.critical;
 }
 
 pub fn update_loading_gate(
@@ -212,7 +250,7 @@ pub fn update_loading_gate(
             LoadState::NotLoaded | LoadState::Loading
         )
     };
-    gate.blocked = cache.0.values().any(|handle| pending(handle.id()))
+    gate.blocked = cache.blocking_handles().any(|handle| pending(handle.id()))
         || pending(fonts.text.id().untyped())
         || pending(fonts.icons.id().untyped());
 }
@@ -242,5 +280,28 @@ mod tests {
         assert!(previous.matches(&GameState(state.clone())));
         state.cursor += 1;
         assert!(!previous.matches(&GameState(state)));
+    }
+
+    #[test]
+    fn predicted_assets_are_retained_without_becoming_critical() {
+        let mut plan = AssetPlan::default();
+        plan.warm("background/later.webp".into(), ResourceKind::Background);
+        plan.require("background/current.webp".into(), ResourceKind::Background);
+
+        assert_eq!(plan.retained.len(), 2);
+        assert_eq!(
+            plan.critical,
+            HashSet::from(["background/current.webp".into()])
+        );
+    }
+
+    #[test]
+    fn streamed_video_is_never_added_to_the_generic_asset_plan() {
+        let mut plan = AssetPlan::default();
+        plan.warm("video/opening.mp4".into(), ResourceKind::Video);
+        plan.require("video/current.mp4".into(), ResourceKind::Video);
+
+        assert!(plan.retained.is_empty());
+        assert!(plan.critical.is_empty());
     }
 }

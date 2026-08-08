@@ -101,7 +101,7 @@ pub(crate) fn prepare(
         dimensions.0.remove(&id);
     }
     let is_image = |path: &str| is_background_path(path) || is_figure_path(path);
-    let has_pending = cache.0.iter().any(|(path, handle)| {
+    let has_pending = cache.handles.iter().any(|(path, handle)| {
         is_image(path) && !prepared.0.contains(&handle.id().typed::<Image>())
     });
     if !cache.is_changed() && !has_pending {
@@ -109,7 +109,7 @@ pub(crate) fn prepare(
     }
 
     let active = cache
-        .0
+        .handles
         .iter()
         .filter(|(path, _)| is_image(path))
         .map(|(_, handle)| handle.id().typed::<Image>())
@@ -123,7 +123,7 @@ pub(crate) fn prepare(
         }
     }
 
-    for (path, handle) in &cache.0 {
+    for (path, handle) in &cache.handles {
         if !is_background_path(path) && !is_figure_path(path) {
             continue;
         }
