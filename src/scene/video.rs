@@ -175,6 +175,11 @@ mod ffmpeg_backend {
         rgba: Vec<u8>,
     }
 
+    struct RgbaConverter {
+        scaler: VideoScaler,
+        target: ffmpeg::frame::Video,
+    }
+
     #[derive(Asset, TypePath, Clone, Debug)]
     pub(super) struct FfmpegVideoAudio {
         source: Arc<PreparedSource>,
@@ -475,7 +480,7 @@ mod ffmpeg_backend {
             return;
         }
         let mut loop_offset = 0.0;
-        let mut rgba_scaler = None;
+        let mut rgba_converter = None;
         loop {
             if cancelled.load(Ordering::Acquire) {
                 return;
@@ -486,7 +491,7 @@ mod ffmpeg_backend {
                         video_rs::Time::new(Some(frame.packet().dts), decoder.time_base());
                     let width = frame.width() as usize;
                     let height = frame.height() as usize;
-                    let rgba = convert_to_rgba(&frame, &mut rgba_scaler)
+                    let rgba = convert_to_rgba(&frame, &mut rgba_converter)
                         .map_err(|error| error.to_string());
                     let rgba = match rgba {
                         Ok(rgba) => rgba,
@@ -533,26 +538,31 @@ mod ffmpeg_backend {
 
     fn convert_to_rgba(
         source: &ffmpeg::frame::Video,
-        scaler: &mut Option<VideoScaler>,
+        converter: &mut Option<RgbaConverter>,
     ) -> Result<Vec<u8>, ffmpeg::Error> {
         let width = source.width();
         let height = source.height();
-        let scaler = scaler.get_or_insert(VideoScaler::get(
-            source.format(),
-            width,
-            height,
-            ffmpeg::format::Pixel::RGBA,
-            width,
-            height,
-            Flags::FAST_BILINEAR,
-        )?);
-        let mut target = ffmpeg::frame::Video::empty();
-        scaler.run(source, &mut target)?;
+        let converter = match converter {
+            Some(converter) => converter,
+            slot @ None => slot.insert(RgbaConverter {
+                scaler: VideoScaler::get(
+                    source.format(),
+                    width,
+                    height,
+                    ffmpeg::format::Pixel::RGBA,
+                    width,
+                    height,
+                    Flags::FAST_BILINEAR,
+                )?,
+                target: ffmpeg::frame::Video::empty(),
+            }),
+        };
+        converter.scaler.run(source, &mut converter.target)?;
 
         let row_bytes = width as usize * 4;
         let height = height as usize;
-        let stride = target.stride(0);
-        let data = target.data(0);
+        let stride = converter.target.stride(0);
+        let data = converter.target.data(0);
         if stride == row_bytes {
             return Ok(data[..row_bytes * height].to_vec());
         }

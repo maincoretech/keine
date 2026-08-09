@@ -102,14 +102,13 @@ pub(super) fn present_frame(
     commands: &mut Commands,
     resources: VisualResources<'_>,
 ) {
-    let image = video_image(frame);
     let handle = if let Some(handle) = &visual.image {
         if let Some(mut current) = resources.images.get_mut(handle) {
-            *current = image;
+            update_video_image(&mut current, frame);
         }
         handle.clone()
     } else {
-        let handle = resources.images.add(image);
+        let handle = resources.images.add(video_image(frame));
         visual.image = Some(handle.clone());
         handle
     };
@@ -198,6 +197,22 @@ fn video_image(frame: VideoFrame) -> Image {
     )
 }
 
+fn update_video_image(image: &mut Image, frame: VideoFrame) {
+    let same_layout = image.texture_descriptor.size.width == frame.width
+        && image.texture_descriptor.size.height == frame.height
+        && image.texture_descriptor.size.depth_or_array_layers == 1
+        && image.texture_descriptor.dimension == TextureDimension::D2
+        && image.texture_descriptor.format == frame.format;
+    if same_layout {
+        // Only pixel storage changes during normal playback. Preserving the
+        // descriptor, sampler, view and handle avoids rebuilding asset state
+        // for every decoded frame while Bevy reuses the GPU texture.
+        image.data = Some(frame.pixels);
+    } else {
+        *image = video_image(frame);
+    }
+}
+
 fn video_transform(viewport: DesignViewport, mode: VideoMode) -> Transform {
     Transform::from_translation(viewport.content_center().extend(video_z(mode))).with_scale(
         Vec3::new(
@@ -248,5 +263,29 @@ mod tests {
             format: TextureFormat::Rgba8UnormSrgb,
         });
         assert_eq!(image.asset_usage, RenderAssetUsages::RENDER_WORLD);
+    }
+
+    #[test]
+    fn same_size_video_frame_preserves_image_configuration() {
+        let mut image = video_image(VideoFrame {
+            width: 2,
+            height: 1,
+            pixels: vec![0; 8],
+            format: TextureFormat::Rgba8UnormSrgb,
+        });
+        image.copy_on_resize = true;
+        update_video_image(
+            &mut image,
+            VideoFrame {
+                width: 2,
+                height: 1,
+                pixels: vec![7; 8],
+                format: TextureFormat::Rgba8UnormSrgb,
+            },
+        );
+
+        assert_eq!(image.data.as_deref(), Some([7; 8].as_slice()));
+        assert!(image.copy_on_resize);
+        assert_eq!(image.texture_descriptor.size.width, 2);
     }
 }
