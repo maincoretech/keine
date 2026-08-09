@@ -93,7 +93,7 @@ crc32fast = "1"
 criterion = "0.5"
 notify = "8.2"
 noyalib = { version = "0.0.15", default-features = false, features = ["std", "fast-int", "fast-float"] }
-hexz_k = { git = "https://github.com/maincoretech/hexz_k", rev = "26ed52c", default-features = false }
+hexz_k = { git = "https://github.com/maincoretech/hexz_k", rev = "12e9ee0", default-features = false }
 libc = "0.2"
 windows-sys = { version = "0.61.2", default-features = false, features = ["Win32_System_Diagnostics_Debug"] }
 bevy = { version = "0.19", default-features = false }
@@ -116,6 +116,10 @@ fs2 = "0.4"
 # render loop. Keep the patch local and drop it when the upstream crate does.
 [patch.crates-io]
 bevy_winit = { path = "vendor/bevy_winit" }
+# `hexz-ops` enables the network-oriented upstream store defaults internally.
+# Use hexz_k's API-compatible local backend so an offline engine does not carry
+# S3, HTTP, async-runtime, or TLS implementations that it can never call.
+hexz-store = { git = "https://github.com/maincoretech/hexz_k", rev = "12e9ee0" }
 
 [dependencies]
 keine-core = { workspace = true }
