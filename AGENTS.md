@@ -27,7 +27,7 @@ cargo test --workspace                         # 全过
 cargo validate projects/test-project           # 涉及项目加载/适配器时
 ```
 
-涉及性能的改动还必须带前后基准（`cargo bench` 或 `cargo perf`），并把结果写进
+涉及性能的改动还必须带前后基准（`cargo bench --workspace` 或 `cargo perf`），并把结果写进
 `dev/docs/performance-baseline.md`。
 
 ## 提交约定
