@@ -54,6 +54,8 @@ struct NativePlayer {
     player: Retained<AVPlayer>,
     item: Retained<AVPlayerItem>,
     output: Retained<AVPlayerItemVideoOutput>,
+    volume: f32,
+    muted: bool,
 }
 
 impl Drop for NativePlayer {
@@ -166,13 +168,10 @@ pub(super) fn sync_video_playback(
             }
         }
 
-        let Some(player) = session.player.as_ref() else {
+        let Some(player) = session.player.as_mut() else {
             continue;
         };
-        unsafe {
-            player.player.setVolume(resources.settings.master_volume);
-            player.player.setMuted(session.muted);
-        }
+        player.sync_audio_settings(resources.settings.master_volume, session.muted);
         match player.next_frame() {
             Ok(Some(frame)) => present_frame(
                 id,
@@ -197,7 +196,7 @@ pub(super) fn sync_video_playback(
             }
         }
         update_visual(
-            &session.visual,
+            &mut session.visual,
             VideoPresentation {
                 mode: session.mode,
                 opacity: video.opacity,
@@ -258,7 +257,22 @@ impl NativePlayer {
             player,
             item,
             output,
+            volume,
+            muted,
         })
+    }
+
+    fn sync_audio_settings(&mut self, volume: f32, muted: bool) {
+        unsafe {
+            if self.volume != volume {
+                self.player.setVolume(volume);
+                self.volume = volume;
+            }
+            if self.muted != muted {
+                self.player.setMuted(muted);
+                self.muted = muted;
+            }
+        }
     }
 
     fn next_frame(&self) -> Result<Option<VideoFrame>, String> {

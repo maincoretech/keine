@@ -21,6 +21,7 @@ pub struct BgmPlayer {
     elapsed: f32,
     duration: f32,
     direction: FadeDirection,
+    applied_volume: Option<f32>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -109,6 +110,7 @@ pub fn sync_bgm(
             } else {
                 FadeDirection::Settled
             },
+            applied_volume: None,
         },
         PlaybackSettings {
             mode: PlaybackMode::Loop,
@@ -138,9 +140,11 @@ pub fn animate_bgm(
 ) {
     let mut animating = false;
     for (entity, mut player, sink) in &mut players {
+        let sink_added = sink.as_ref().is_some_and(|sink| sink.is_added());
         if player.direction == FadeDirection::Settled
             && !settings.is_changed()
             && !state.is_changed()
+            && !sink_added
         {
             continue;
         }
@@ -158,13 +162,15 @@ pub fn animate_bgm(
             FadeDirection::Settled => 1.0,
         };
         if let Some(mut sink) = sink {
-            sink.set_volume(Volume::Linear(
-                player.base_volume
-                    * settings.master_volume
-                    * settings.bgm_volume
-                    * player.envelope
-                    * if state.videos.is_empty() { 1.0 } else { 0.0 },
-            ));
+            let volume = player.base_volume
+                * settings.master_volume
+                * settings.bgm_volume
+                * player.envelope
+                * if state.videos.is_empty() { 1.0 } else { 0.0 };
+            if sink_added || player.applied_volume != Some(volume) {
+                sink.set_volume(Volume::Linear(volume));
+                player.applied_volume = Some(volume);
+            }
         }
         if progress >= 1.0 {
             match player.direction {
@@ -178,7 +184,9 @@ pub fn animate_bgm(
         }
         animating |= player.direction != FadeDirection::Settled;
     }
-    activity.0 = animating;
+    if activity.0 != animating {
+        activity.0 = animating;
+    }
 }
 
 pub fn sync_effects(
@@ -294,31 +302,67 @@ type EffectSinkQuery<'w, 's> = Query<
     (&'static EffectPlayer, &'static mut AudioSink),
     (With<EffectPlayer>, Without<VocalPlayer>),
 >;
+type AddedEffectSinkQuery<'w, 's> = Query<
+    'w,
+    's,
+    (&'static EffectPlayer, &'static mut AudioSink),
+    (With<EffectPlayer>, Without<VocalPlayer>, Added<AudioSink>),
+>;
+type VocalSinkQuery<'w, 's> =
+    Query<'w, 's, &'static mut AudioSink, (With<VocalPlayer>, Without<BgmPlayer>)>;
+type AddedVocalSinkQuery<'w, 's> = Query<
+    'w,
+    's,
+    &'static mut AudioSink,
+    (With<VocalPlayer>, Without<BgmPlayer>, Added<AudioSink>),
+>;
+
+#[derive(Default)]
+pub(crate) struct AppliedBusVolumes {
+    vocal: Option<f32>,
+    effects: Option<f32>,
+}
 
 pub fn apply_bus_volumes(
     settings: Res<RuntimeSettings>,
     state: Res<GameState>,
-    mut vocals: Query<&mut AudioSink, (With<VocalPlayer>, Without<BgmPlayer>)>,
-    mut effects: EffectSinkQuery,
+    mut sinks: ParamSet<(
+        VocalSinkQuery,
+        AddedVocalSinkQuery,
+        EffectSinkQuery,
+        AddedEffectSinkQuery,
+    )>,
+    mut applied: Local<AppliedBusVolumes>,
 ) {
-    if !settings.is_changed() && !state.is_changed() {
-        return;
-    }
     let line_volume = state
         .dialogue
         .as_ref()
         .map_or(1.0, |dialogue| dialogue.volume);
     let video_duck = if state.videos.is_empty() { 1.0 } else { 0.0 };
-    for mut sink in &mut vocals {
-        sink.set_volume(Volume::Linear(
-            line_volume * settings.master_volume * settings.vocal_volume * video_duck,
-        ));
+    let vocal_volume = line_volume * settings.master_volume * settings.vocal_volume * video_duck;
+    let effect_bus = settings.master_volume * settings.se_volume;
+    let vocal_changed = applied.vocal != Some(vocal_volume);
+    let effects_changed = applied.effects != Some(effect_bus);
+    if vocal_changed {
+        for mut sink in &mut sinks.p0() {
+            sink.set_volume(Volume::Linear(vocal_volume));
+        }
+    } else {
+        for mut sink in &mut sinks.p1() {
+            sink.set_volume(Volume::Linear(vocal_volume));
+        }
     }
-    for (player, mut sink) in &mut effects {
-        sink.set_volume(Volume::Linear(
-            player.base_volume * settings.master_volume * settings.se_volume,
-        ));
+    if effects_changed {
+        for (player, mut sink) in &mut sinks.p2() {
+            sink.set_volume(Volume::Linear(player.base_volume * effect_bus));
+        }
+    } else {
+        for (player, mut sink) in &mut sinks.p3() {
+            sink.set_volume(Volume::Linear(player.base_volume * effect_bus));
+        }
     }
+    applied.vocal = Some(vocal_volume);
+    applied.effects = Some(effect_bus);
 }
 
 pub fn sync_vocal(

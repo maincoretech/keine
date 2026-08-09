@@ -365,7 +365,7 @@ mod ffmpeg_backend {
                 );
             }
             update_visual(
-                &session.visual,
+                &mut session.visual,
                 VideoPresentation {
                     mode: session.mode,
                     opacity: video.opacity,

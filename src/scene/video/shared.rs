@@ -19,6 +19,7 @@ pub(super) struct VideoVisual {
     pub(super) image: Option<Handle<Image>>,
     pub(super) material: Option<Handle<StageMaterial>>,
     pub(super) entity: Option<Entity>,
+    presentation: Option<VideoPresentation>,
 }
 
 pub(super) struct VideoFrame {
@@ -87,7 +88,7 @@ pub(super) struct VisualResources<'a> {
     pub(super) quad: &'a StageQuad,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(super) struct VideoPresentation {
     pub(super) mode: VideoMode,
     pub(super) opacity: f32,
@@ -135,11 +136,12 @@ pub(super) fn present_frame(
                 ))
                 .id(),
         );
+        visual.presentation = Some(presentation);
     }
 }
 
 pub(super) fn update_visual(
-    visual: &VideoVisual,
+    visual: &mut VideoVisual,
     presentation: VideoPresentation,
     materials: &mut Assets<StageMaterial>,
     nodes: &mut Query<
@@ -151,6 +153,9 @@ pub(super) fn update_visual(
         With<VideoNode>,
     >,
 ) {
+    if visual.presentation == Some(presentation) {
+        return;
+    }
     let Some(entity) = visual.entity else {
         return;
     };
@@ -162,6 +167,7 @@ pub(super) fn update_visual(
     }
     *transform = video_transform(presentation.viewport, presentation.mode);
     *layers = RenderLayers::layer(video_layer(presentation.mode));
+    visual.presentation = Some(presentation);
 }
 
 pub(super) fn cleanup_visual(
@@ -179,6 +185,7 @@ pub(super) fn cleanup_visual(
     if let Some(material) = visual.material.take() {
         materials.remove(material.id());
     }
+    visual.presentation = None;
 }
 
 fn video_image(frame: VideoFrame) -> Image {
