@@ -6,6 +6,10 @@ inputs:
     description: Install the optional FFmpeg SDK in addition to base platform libraries
     required: false
     default: "true"
+  windows-triplet:
+    description: vcpkg target triplet for the Windows FFmpeg SDK
+    required: false
+    default: x64-windows
 
 runs:
   using: composite
@@ -29,7 +33,7 @@ runs:
       uses: actions/cache@v4
       with:
         path: ${{ runner.temp }}/vcpkg-binary-cache
-        key: vcpkg-ffmpeg-windows-x64-v1
+        key: vcpkg-ffmpeg-${{ inputs.windows-triplet }}-v1
 
     - name: Install Windows FFmpeg SDK
       if: runner.os == 'Windows' && inputs.enabled == 'true'
@@ -41,6 +45,8 @@ runs:
         New-Item -ItemType Directory -Force $cache | Out-Null
         $env:VCPKG_ROOT = $root
         $env:VCPKG_DEFAULT_BINARY_CACHE = $cache
+        $triplet = '${{ inputs.windows-triplet }}'
         "VCPKG_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
         "VCPKG_DEFAULT_BINARY_CACHE=$cache" | Out-File -FilePath $env:GITHUB_ENV -Append
-        & (Join-Path $root 'vcpkg.exe') install ffmpeg:x64-windows
+        "VCPKG_TARGET_TRIPLET=$triplet" | Out-File -FilePath $env:GITHUB_ENV -Append
+        & (Join-Path $root 'vcpkg.exe') install "ffmpeg:$triplet"

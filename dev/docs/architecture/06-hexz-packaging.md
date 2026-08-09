@@ -44,9 +44,9 @@ CMake。
 嵌套 Hexz 保守回退到 `audio-all`，CI 也可通过 `KEINE_AUDIO_FEATURES` 显式覆盖
 检测结果。
 
-含视频内容时，`keine package` 默认同时启用 `video-native,video-ffmpeg`，与
-`cargo dev` 的跨平台构建行为一致：`video-native` 的依赖目标门控在 macOS，其他平台
-启用该 feature 时自动退化为只编译 FFmpeg。
+含视频内容时，`keine package` 只启用目标平台的发行后端：macOS 为 `video-native`，
+Windows/Linux 为 `video-ffmpeg`。Windows 发行同时支持 x64 与 ARM64；Linux 包递归收集
+FFmpeg 的非 glibc 动态依赖到本地 `lib/`，启动脚本只为该包设置库搜索路径。
 
 ## 读取
 
@@ -57,8 +57,8 @@ CMake。
    播放时逐包解码，不创建整段 PCM 副本。
 5. reader 支持 seek，解码器无需先复制完整文件；entry 名仍经过相对路径安全检查。
 
-普通资源不会创建 staging、ready marker 或明文资源缓存。当前唯一过渡例外是平台视频
-播放器：非文件 mount 的媒体会写入 session 级 `NamedTempFile`，关闭时删除；移除这项明文
-临时文件的 byte-source 方案与跨仓库待办见
-[`09-native-video.md`](09-native-video.md)。完整项目包暴露 `assets/` 与 `scripts/`；纯资源包只
-暴露 asset root。
+普通资源不会创建 staging、ready marker 或明文资源缓存。视频也复用同一随机读取合同：
+macOS 通过 `AVAssetResourceLoader`，Windows/Linux 通过 FFmpeg `AVIOContext` 直接读取
+Hexz，不再创建完整解密的临时文件。实现与验收见
+[`09-native-video.md`](09-native-video.md)。完整项目包暴露 `assets/` 与 `scripts/`；纯资源包
+只暴露 asset root。

@@ -6,6 +6,9 @@ pub(crate) mod images;
 pub mod sprites;
 pub(crate) mod video;
 
+#[cfg(all(feature = "video-native", target_os = "macos"))]
+pub(crate) use video::validate_native_video;
+
 use bevy::prelude::*;
 
 use crate::runtime::GameSystemSet;

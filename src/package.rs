@@ -17,11 +17,10 @@ use crate::runtime::bootstrap::open_project;
 
 pub const DEFAULT_OUTPUT: &str = "target/release-package";
 
-/// Both video backends are compiled by default so packaged games behave like
-/// `cargo dev` on every platform. `video-native` only activates on macOS (its
-/// dependencies are target-gated); elsewhere it is a no-op and FFmpeg carries
-/// video.
-const VIDEO_FEATURES: &str = "video-native,video-ffmpeg";
+#[cfg(target_os = "macos")]
+const VIDEO_FEATURE: &str = "video-native";
+#[cfg(not(target_os = "macos"))]
+const VIDEO_FEATURE: &str = "video-ffmpeg";
 
 fn project_manifest_error(project: &Path) -> String {
     format!(
@@ -243,7 +242,7 @@ fn detect_features(project: &Path) -> Result<String> {
     for file in walk_files(project)? {
         let lower = file.to_string_lossy().to_ascii_lowercase();
         if lower.ends_with(".hxz") {
-            return Ok(format!("audio-all,ui-sounds,{VIDEO_FEATURES}"));
+            return Ok(format!("audio-all,ui-sounds,{VIDEO_FEATURE}"));
         }
         let extension = lower.rsplit('.').next().unwrap_or("");
         match extension {
@@ -270,7 +269,7 @@ fn detect_features(project: &Path) -> Result<String> {
         features.push("audio-flac".to_owned());
     }
     if video {
-        features.push(VIDEO_FEATURES.to_owned());
+        features.push(VIDEO_FEATURE.to_owned());
     }
     Ok(features.join(","))
 }
@@ -311,13 +310,21 @@ fn build_engine(features: &str) -> Result<PathBuf> {
         .args(["--features", &all_features])
         .arg("--target-dir")
         .arg(repo_root.join("target"));
+    let build_target = env::var("KEINE_BUILD_TARGET")
+        .ok()
+        .filter(|target| !target.is_empty());
+    if let Some(target) = build_target.as_deref() {
+        command.args(["--target", target]);
+    }
     let status = command.status().context("failed to run cargo build")?;
     if !status.success() {
         bail!("engine build failed with status {status}");
     }
-    Ok(repo_root
-        .join("target/release")
-        .join(format!("keine{}", env::consts::EXE_SUFFIX)))
+    let release = build_target.map_or_else(
+        || repo_root.join("target/release"),
+        |target| repo_root.join("target").join(target).join("release"),
+    );
+    Ok(release.join(format!("keine{}", env::consts::EXE_SUFFIX)))
 }
 
 fn pack_staging(staged: &Path, output: &Path, password: &str) -> Result<()> {
@@ -345,6 +352,10 @@ fn assemble(output: &Path, _features: &str, engine: &Path) -> Result<()> {
     #[cfg(not(windows))]
     {
         fs::copy(engine, output.join("keine"))?;
+        #[cfg(target_os = "linux")]
+        if has_feature(_features, "video-ffmpeg") {
+            bundle_linux_runtime(output, engine)?;
+        }
         fs::write(output.join("run.sh"), RUN_SH)?;
         {
             use std::os::unix::fs::PermissionsExt;
@@ -364,7 +375,14 @@ fn assemble(output: &Path, _features: &str, engine: &Path) -> Result<()> {
 fn bundle_ffmpeg_runtime(output: &Path) -> Result<()> {
     let vcpkg_root = env::var("VCPKG_ROOT")
         .context("VCPKG_ROOT is required to bundle the Windows FFmpeg runtime")?;
-    let ffmpeg_bin = Path::new(&vcpkg_root).join("installed/x64-windows/bin");
+    let triplet = env::var("VCPKG_TARGET_TRIPLET").unwrap_or_else(|_| match env::consts::ARCH {
+        "aarch64" => "arm64-windows".to_owned(),
+        _ => "x64-windows".to_owned(),
+    });
+    let ffmpeg_bin = Path::new(&vcpkg_root)
+        .join("installed")
+        .join(&triplet)
+        .join("bin");
     let mut copied = 0;
     for entry in fs::read_dir(&ffmpeg_bin).with_context(|| {
         format!(
@@ -384,7 +402,96 @@ fn bundle_ffmpeg_runtime(output: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(any(windows, test))]
+#[cfg(target_os = "linux")]
+fn bundle_linux_runtime(output: &Path, engine: &Path) -> Result<()> {
+    use std::collections::{HashSet, VecDeque};
+
+    let lib_dir = output.join("lib");
+    fs::create_dir_all(&lib_dir)?;
+    let mut queue = VecDeque::from([engine.to_owned()]);
+    let mut visited = HashSet::new();
+    let mut copied = 0;
+    while let Some(binary) = queue.pop_front() {
+        for library in linked_libraries(&binary)? {
+            let name = library
+                .file_name()
+                .context("linked library path has no file name")?
+                .to_owned();
+            let canonical = library.canonicalize().unwrap_or(library);
+            if is_linux_abi_library(&canonical) {
+                continue;
+            }
+            let bundled = lib_dir.join(name);
+            if !bundled.exists() {
+                fs::copy(&canonical, bundled)?;
+                copied += 1;
+            }
+            if visited.insert(canonical.clone()) {
+                queue.push_back(canonical);
+            }
+        }
+    }
+    if copied == 0 {
+        bail!("Linux video runtime has no dynamic libraries to bundle");
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn linked_libraries(binary: &Path) -> Result<Vec<PathBuf>> {
+    let output = Command::new("ldd")
+        .arg(binary)
+        .output()
+        .with_context(|| format!("failed to inspect {} with ldd", binary.display()))?;
+    if !output.status.success() {
+        bail!("ldd failed for {}", binary.display());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if stdout.lines().any(|line| line.contains("=> not found")) {
+        bail!(
+            "{} has an unresolved dynamic dependency:\n{stdout}",
+            binary.display()
+        );
+    }
+    Ok(parse_ldd(&stdout))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn parse_ldd(output: &str) -> Vec<PathBuf> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let dependency = line
+                .split_once("=>")
+                .map_or(line, |(_, target)| target)
+                .split_whitespace()
+                .next()?;
+            dependency
+                .starts_with('/')
+                .then(|| PathBuf::from(dependency))
+        })
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn is_linux_abi_library(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    [
+        "ld-linux",
+        "libc.so",
+        "libdl.so",
+        "libm.so",
+        "libpthread.so",
+        "librt.so",
+    ]
+    .iter()
+    .any(|prefix| name.starts_with(prefix))
+}
+
+#[cfg(any(windows, target_os = "linux", test))]
 fn has_feature(features: &str, wanted: &str) -> bool {
     features.split(',').any(|feature| feature == wanted)
 }
@@ -392,22 +499,36 @@ fn has_feature(features: &str, wanted: &str) -> bool {
 #[cfg(windows)]
 const RUN_BAT: &str = "@echo off\n\"%~dp0keine.exe\" \"%~dp0game.hxz\"\n";
 #[cfg(not(windows))]
-const RUN_SH: &str = "#!/usr/bin/env bash\nset -euo pipefail\nroot=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\nexec \"$root/keine\" \"$root/game.hxz\"\n";
+const RUN_SH: &str = "#!/usr/bin/env bash\nset -euo pipefail\nroot=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\nif [[ -d \"$root/lib\" ]]; then\n  export LD_LIBRARY_PATH=\"$root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\"\nfi\nexec \"$root/keine\" \"$root/game.hxz\"\n";
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn video_content_enables_both_backends_by_default() {
+    fn video_content_enables_the_platform_backend() {
         let root = tempdir().unwrap();
         let assets = root.path().join("assets");
         fs::create_dir_all(&assets).unwrap();
         fs::write(assets.join("intro.mp4"), b"video").unwrap();
         let features = detect_features(root.path()).unwrap();
-        assert!(has_feature(&features, "video-native"));
-        assert!(has_feature(&features, "video-ffmpeg"));
+        assert!(has_feature(&features, VIDEO_FEATURE));
         assert!(has_feature(&features, "ui-sounds"));
+    }
+
+    #[test]
+    fn parses_direct_and_resolved_ldd_dependencies() {
+        let output = "\
+            libavcodec.so.60 => /opt/keine/libavcodec.so.60 (0x1)\n\
+            /lib64/ld-linux-x86-64.so.2 (0x2)\n\
+            libmissing.so => not found\n";
+        assert_eq!(
+            parse_ldd(output),
+            [
+                PathBuf::from("/opt/keine/libavcodec.so.60"),
+                PathBuf::from("/lib64/ld-linux-x86-64.so.2"),
+            ]
+        );
     }
 
     #[test]

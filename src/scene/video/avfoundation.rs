@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::ptr;
 use std::sync::Arc;
@@ -9,19 +10,26 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
+use dispatch2::{DispatchQueue, DispatchRetained};
 use keine_core::VideoMode;
 use keine_loader::ContentMount;
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
-use objc2::{AnyThread, MainThreadMarker, MainThreadOnly};
-use objc2_av_foundation::{AVPlayer, AVPlayerItem, AVPlayerItemStatus, AVPlayerItemVideoOutput};
+use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2::{AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
+use objc2_av_foundation::{
+    AVAssetResourceLoader, AVAssetResourceLoaderDelegate, AVAssetResourceLoadingRequest, AVPlayer,
+    AVPlayerItem, AVPlayerItemStatus, AVPlayerItemVideoOutput, AVURLAsset,
+};
 use objc2_core_video::{
     CVPixelBuffer, CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow,
     CVPixelBufferGetHeight, CVPixelBufferGetPixelFormatType, CVPixelBufferGetWidth,
     CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
     kCVPixelFormatType_32BGRA, kCVReturnSuccess,
 };
-use objc2_foundation::{NSDictionary, NSNumber, NSString, NSURL, ns_string};
+use objc2_foundation::{
+    NSData, NSDate, NSDictionary, NSNumber, NSObject, NSObjectProtocol, NSRunLoop, NSString, NSURL,
+    ns_string,
+};
 
 use super::shared::{
     PreparedSource, VideoFrame, VideoNode, VideoPresentation, VideoVisual, VisualResources,
@@ -51,11 +59,113 @@ struct VideoSession {
 
 struct NativePlayer {
     _source: Arc<PreparedSource>,
+    _asset: Option<Retained<AVURLAsset>>,
+    _resource_delegate: Option<Retained<ResourceLoaderDelegate>>,
+    _resource_queue: Option<DispatchRetained<DispatchQueue>>,
     player: Retained<AVPlayer>,
     item: Retained<AVPlayerItem>,
     output: Retained<AVPlayerItemVideoOutput>,
     volume: f32,
     muted: bool,
+}
+
+struct ResourceLoaderIvars {
+    source: Arc<PreparedSource>,
+}
+
+define_class!(
+    // SAFETY: NSObject has no subclassing requirements. The only ivar is an
+    // immutable, Send + Sync source factory used on one serial dispatch queue.
+    #[unsafe(super(NSObject))]
+    #[name = "KeineResourceLoaderDelegate"]
+    #[ivars = ResourceLoaderIvars]
+    struct ResourceLoaderDelegate;
+
+    unsafe impl NSObjectProtocol for ResourceLoaderDelegate {}
+
+    unsafe impl AVAssetResourceLoaderDelegate for ResourceLoaderDelegate {
+        #[unsafe(method(resourceLoader:shouldWaitForLoadingOfRequestedResource:))]
+        fn should_load(
+            &self,
+            _resource_loader: &AVAssetResourceLoader,
+            request: &AVAssetResourceLoadingRequest,
+        ) -> bool {
+            if let Err(error) = self.fulfill(request) {
+                log::error!("AVFoundation resource read failed: {error}");
+                unsafe { request.finishLoadingWithError(None) };
+            } else {
+                unsafe { request.finishLoading() };
+            }
+            true
+        }
+    }
+);
+
+impl ResourceLoaderDelegate {
+    fn new(source: Arc<PreparedSource>) -> Retained<Self> {
+        let this = Self::alloc().set_ivars(ResourceLoaderIvars { source });
+        unsafe { msg_send![super(this), init] }
+    }
+
+    fn fulfill(&self, request: &AVAssetResourceLoadingRequest) -> Result<(), String> {
+        let source = &self.ivars().source;
+        if let Some(info) = unsafe { request.contentInformationRequest() } {
+            let allowed = unsafe { info.allowedContentTypes() };
+            let content_type = allowed
+                .as_ref()
+                .and_then(|types| types.firstObject())
+                .unwrap_or_else(|| NSString::from_str(content_type(source.extension())));
+            unsafe {
+                info.setContentType(Some(&content_type));
+                info.setContentLength(
+                    i64::try_from(source.len())
+                        .map_err(|_| "video source is too large for AVFoundation".to_owned())?,
+                );
+                info.setByteRangeAccessSupported(true);
+                info.setEntireLengthAvailableOnDemand(true);
+            }
+        }
+        let Some(data_request) = (unsafe { request.dataRequest() }) else {
+            return Ok(());
+        };
+        let offset = unsafe { data_request.currentOffset() };
+        let offset = u64::try_from(offset).map_err(|_| "negative video byte offset".to_owned())?;
+        let available = source.len().saturating_sub(offset);
+        let requested = if unsafe { data_request.requestsAllDataToEndOfResource() } {
+            available
+        } else {
+            u64::try_from(unsafe { data_request.requestedLength() })
+                .unwrap_or(0)
+                .min(available)
+        };
+        let mut stream = source.open().map_err(|error| error.to_string())?;
+        stream
+            .seek(SeekFrom::Start(offset))
+            .map_err(|error| error.to_string())?;
+        let mut remaining = requested;
+        let mut buffer = vec![0; 256 * 1024];
+        while remaining > 0 && !unsafe { request.isCancelled() } {
+            let chunk = remaining.min(buffer.len() as u64) as usize;
+            let read = stream
+                .read(&mut buffer[..chunk])
+                .map_err(|error| error.to_string())?;
+            if read == 0 {
+                break;
+            }
+            let data = NSData::with_bytes(&buffer[..read]);
+            unsafe { data_request.respondWithData(&data) };
+            remaining -= read as u64;
+        }
+        Ok(())
+    }
+}
+
+fn content_type(extension: Option<&str>) -> &'static str {
+    match extension.map(str::to_ascii_lowercase).as_deref() {
+        Some("mov") => "com.apple.quicktime-movie",
+        Some("webm") => "org.webmproject.webm",
+        _ => "public.mpeg-4",
+    }
 }
 
 impl Drop for NativePlayer {
@@ -226,8 +336,6 @@ impl NativePlayer {
         let mtm = MainThreadMarker::new().ok_or_else(|| {
             "AVFoundation video must be initialized on the main thread".to_owned()
         })?;
-        let path = NSString::from_str(source.path.to_string_lossy().as_ref());
-        let url = NSURL::fileURLWithPath(&path);
         let pixel_format = NSNumber::new_u32(kCVPixelFormatType_32BGRA);
         let attributes =
             NSDictionary::from_slices(&[ns_string!("PixelFormatType")], &[&*pixel_format]);
@@ -243,10 +351,46 @@ impl NativePlayer {
             )
         };
         unsafe { output.setSuppressesPlayerRendering(true) };
-        let item = unsafe { AVPlayerItem::initWithURL(AVPlayerItem::alloc(mtm), &url) };
+        let (item, asset, resource_delegate, resource_queue) = if let Some(path) =
+            source.physical_path()
+        {
+            let path = NSString::from_str(path.to_string_lossy().as_ref());
+            let url = NSURL::fileURLWithPath(&path);
+            (
+                unsafe { AVPlayerItem::initWithURL(AVPlayerItem::alloc(mtm), &url) },
+                None,
+                None,
+                None,
+            )
+        } else {
+            let url = NSURL::URLWithString(&NSString::from_str(&format!(
+                "keine-resource://local/video.{}",
+                source.extension().unwrap_or("mp4")
+            )))
+            .ok_or_else(|| "could not create AVFoundation resource URL".to_owned())?;
+            let asset = unsafe { AVURLAsset::initWithURL_options(AVURLAsset::alloc(), &url, None) };
+            let resource_delegate = ResourceLoaderDelegate::new(source.clone());
+            let resource_queue = DispatchQueue::new("tech.maincore.keine.video-resource", None);
+            let delegate = ProtocolObject::from_ref(&*resource_delegate);
+            unsafe {
+                asset
+                    .resourceLoader()
+                    .setDelegate_queue(Some(delegate), Some(&resource_queue));
+            }
+            let item = unsafe { AVPlayerItem::initWithAsset(AVPlayerItem::alloc(mtm), &asset) };
+            (
+                item,
+                Some(asset),
+                Some(resource_delegate),
+                Some(resource_queue),
+            )
+        };
         unsafe { item.addOutput(&output) };
         let player = unsafe { AVPlayer::initWithPlayerItem(AVPlayer::alloc(mtm), Some(&item)) };
         unsafe {
+            if asset.is_some() {
+                player.setAutomaticallyWaitsToMinimizeStalling(false);
+            }
             player.setMuted(muted);
             player.setVolume(volume);
             player.play();
@@ -254,6 +398,9 @@ impl NativePlayer {
         log::info!("video decoder · AVFoundation");
         Ok(Self {
             _source: source,
+            _asset: asset,
+            _resource_delegate: resource_delegate,
+            _resource_queue: resource_queue,
             player,
             item,
             output,
@@ -433,6 +580,24 @@ fn reap_source_workers(workers: &mut Vec<thread::JoinHandle<()>>) {
             index += 1;
         }
     }
+}
+
+/// Headless backend acceptance used by macOS CI. It must be called from the
+/// process main thread so AVFoundation observes the same ownership rules as
+/// the engine runtime.
+pub(crate) fn validate_native_video(mounts: &[ContentMount], path: &Path) -> Result<(), String> {
+    let source = Arc::new(prepare_source(mounts, path)?);
+    let player = NativePlayer::open(source, false, 0.0)?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let run_loop = NSRunLoop::currentRunLoop();
+    while std::time::Instant::now() < deadline {
+        if player.next_frame()?.is_some() {
+            return Ok(());
+        }
+        player.playback_end()?;
+        run_loop.runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.01));
+    }
+    Err("AVFoundation did not produce a decoded frame within 10 seconds".to_owned())
 }
 
 #[cfg(test)]

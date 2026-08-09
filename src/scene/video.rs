@@ -11,14 +11,15 @@ use std::collections::HashMap;
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 
-// When both desktop backends are enabled, macOS selects AVFoundation at
-// runtime while keeping FFmpeg available as the cross-platform build fallback.
+// On macOS the native backend wins when both developer features are enabled,
+// but Cargo still links the optional FFmpeg dependency. Keep that intentional
+// dependency visible to the workspace's unused-crate lint.
 #[cfg(all(
     feature = "video-ffmpeg",
     feature = "video-native",
     target_os = "macos"
 ))]
-use video_rs as _;
+use ffmpeg_next as _;
 
 #[cfg(not(any(
     feature = "video-ffmpeg",
@@ -36,6 +37,16 @@ mod shared;
 #[cfg(all(feature = "video-native", target_os = "macos"))]
 #[path = "video/avfoundation.rs"]
 mod avfoundation_backend;
+
+#[cfg(all(feature = "video-native", target_os = "macos"))]
+pub(crate) use avfoundation_backend::validate_native_video;
+
+#[cfg(all(
+    feature = "video-ffmpeg",
+    not(all(feature = "video-native", target_os = "macos"))
+))]
+#[path = "video/ffmpeg_io.rs"]
+mod ffmpeg_io;
 
 pub(crate) struct VideoPlugin;
 
@@ -56,7 +67,7 @@ impl Plugin for VideoPlugin {
         {
             use bevy::audio::AddAudioSource;
 
-            if let Err(error) = video_rs::init() {
+            if let Err(error) = ffmpeg_next::init() {
                 log::error!("failed to initialize FFmpeg video backend: {error}");
             }
             app.init_resource::<VideoPlayback>()
@@ -114,16 +125,20 @@ mod ffmpeg_backend {
     use std::thread;
     use std::time::Duration;
 
-    use bevy::audio::{AudioPlayer, Decodable, PlaybackMode, PlaybackSettings, Volume};
+    use bevy::audio::{
+        AudioPlayer, AudioSink, AudioSinkPlayback, Decodable, PlaybackMode, PlaybackSettings,
+        Volume,
+    };
     use bevy::ecs::system::SystemParam;
     use bevy::prelude::*;
     use bevy::render::render_resource::TextureFormat;
+    use ffmpeg_next as ffmpeg;
+    use ffmpeg_next::software::scaling::{context::Context as VideoScaler, flag::Flags};
     use keine_core::VideoMode;
     use keine_loader::ContentMount;
     use rodio::{ChannelCount, SampleRate, Source};
-    use video_rs::ffmpeg;
-    use video_rs::ffmpeg::software::scaling::{context::Context as VideoScaler, flag::Flags};
 
+    use super::ffmpeg_io::{MediaInput, VideoDecoder};
     use super::shared::{
         PreparedSource, VideoFrame, VideoNode, VideoPresentation, VideoVisual, VisualResources,
         cleanup_visual, prepare_source, present_frame, update_visual,
@@ -150,6 +165,11 @@ mod ffmpeg_backend {
         audio_asset: Option<Handle<FfmpegVideoAudio>>,
         source: Option<Arc<PreparedSource>>,
         start_elapsed: Option<f32>,
+        has_audio: bool,
+        audio_started: bool,
+        audio_position: f32,
+        audio_state_elapsed: f32,
+        audio_volume: f32,
         mode: VideoMode,
         muted: bool,
         revision: u64,
@@ -162,7 +182,10 @@ mod ffmpeg_backend {
     }
 
     enum DecoderEvent {
-        Ready(Arc<PreparedSource>),
+        Ready {
+            source: Arc<PreparedSource>,
+            has_audio: bool,
+        },
         Frame(DecodedFrame),
         End,
         Error(String),
@@ -183,15 +206,16 @@ mod ffmpeg_backend {
     #[derive(Asset, TypePath, Clone, Debug)]
     pub(super) struct FfmpegVideoAudio {
         source: Arc<PreparedSource>,
+        looped: bool,
     }
 
     impl Decodable for FfmpegVideoAudio {
         type Decoder = FfmpegAudioStream;
 
         fn decoder(&self) -> Self::Decoder {
-            FfmpegAudioStream::open(self.source.clone()).unwrap_or_else(|error| {
+            FfmpegAudioStream::open(self.source.clone(), self.looped).unwrap_or_else(|error| {
                 log::warn!("video audio track is unavailable: {error}");
-                FfmpegAudioStream::failed(self.source.clone())
+                FfmpegAudioStream::failed(self.source.clone(), self.looped)
             })
         }
     }
@@ -213,6 +237,7 @@ mod ffmpeg_backend {
         windows: Query<Ref<Window>>,
         mut playback: ResMut<VideoPlayback>,
         mut resources: VideoResources,
+        mut audio_sinks: Query<&mut AudioSink>,
         mut nodes: Query<
             (
                 &MeshMaterial2d<StageMaterial>,
@@ -275,7 +300,14 @@ mod ffmpeg_backend {
             };
             let mut newest = None;
             if let Some(frame) = session.pending.take() {
-                if frame.timestamp <= playback_elapsed(video.elapsed, session.start_elapsed) {
+                if playback_clock(
+                    session,
+                    video.elapsed,
+                    resources.settings.master_volume,
+                    &mut audio_sinks,
+                )
+                .is_some_and(|elapsed| frame.timestamp <= elapsed)
+                {
                     newest = Some(frame);
                 } else {
                     session.pending = Some(frame);
@@ -289,22 +321,24 @@ mod ffmpeg_backend {
                         receiver.try_recv()
                     });
                 match event {
-                    Ok(DecoderEvent::Ready(source)) => {
+                    Ok(DecoderEvent::Ready { source, has_audio }) => {
                         session.start_elapsed.get_or_insert(video.elapsed);
-                        if !session.muted && session.audio_entity.is_none() {
+                        session.has_audio = has_audio;
+                        if has_audio && !session.muted && session.audio_entity.is_none() {
                             let asset = resources.audio.add(FfmpegVideoAudio {
                                 source: source.clone(),
+                                looped: video.spec.looped,
                             });
                             let entity = commands
                                 .spawn((
                                     Name::new(format!("video-audio::{id}")),
                                     AudioPlayer(asset.clone()),
                                     PlaybackSettings {
-                                        mode: if video.spec.looped {
-                                            PlaybackMode::Loop
-                                        } else {
-                                            PlaybackMode::Despawn
-                                        },
+                                        // The FFmpeg source handles looping by
+                                        // reopening its random-access input.
+                                        // Rodio's generic loop buffers the
+                                        // complete decoded PCM stream.
+                                        mode: PlaybackMode::Despawn,
                                         volume: Volume::Linear(resources.settings.master_volume),
                                         ..default()
                                     },
@@ -315,15 +349,19 @@ mod ffmpeg_backend {
                         }
                         session.source = Some(source);
                     }
-                    Ok(DecoderEvent::Frame(frame))
-                        if frame.timestamp
-                            <= playback_elapsed(video.elapsed, session.start_elapsed) =>
-                    {
-                        newest = Some(frame);
-                    }
                     Ok(DecoderEvent::Frame(frame)) => {
-                        session.pending = Some(frame);
-                        break;
+                        let elapsed = playback_clock(
+                            session,
+                            video.elapsed,
+                            resources.settings.master_volume,
+                            &mut audio_sinks,
+                        );
+                        if elapsed.is_some_and(|elapsed| frame.timestamp <= elapsed) {
+                            newest = Some(frame);
+                        } else {
+                            session.pending = Some(frame);
+                            break;
+                        }
                     }
                     Ok(DecoderEvent::End) => {
                         ended.push(id.clone());
@@ -442,6 +480,11 @@ mod ffmpeg_backend {
             audio_asset: None,
             source: None,
             start_elapsed: None,
+            has_audio: false,
+            audio_started: false,
+            audio_position: 0.0,
+            audio_state_elapsed: 0.0,
+            audio_volume: f32::NAN,
             mode,
             muted,
             revision,
@@ -450,6 +493,43 @@ mod ffmpeg_backend {
 
     fn playback_elapsed(state_elapsed: f32, start_elapsed: Option<f32>) -> f32 {
         start_elapsed.map_or(0.0, |start| (state_elapsed - start).max(0.0))
+    }
+
+    fn playback_clock(
+        session: &mut VideoSession,
+        state_elapsed: f32,
+        master_volume: f32,
+        audio_sinks: &mut Query<&mut AudioSink>,
+    ) -> Option<f32> {
+        if session.muted || !session.has_audio {
+            return Some(playback_elapsed(state_elapsed, session.start_elapsed));
+        }
+        let entity = session.audio_entity?;
+        if let Ok(mut sink) = audio_sinks.get_mut(entity) {
+            if session.audio_volume != master_volume {
+                sink.set_volume(Volume::Linear(master_volume));
+                session.audio_volume = master_volume;
+            }
+            session.audio_started = true;
+            session.audio_position = sink.position().as_secs_f32();
+            session.audio_state_elapsed = state_elapsed;
+            return Some(session.audio_position);
+        }
+        session.audio_started.then(|| {
+            fallback_audio_clock(
+                session.audio_position,
+                session.audio_state_elapsed,
+                state_elapsed,
+            )
+        })
+    }
+
+    fn fallback_audio_clock(
+        last_audio_position: f32,
+        last_state_elapsed: f32,
+        state_elapsed: f32,
+    ) -> f32 {
+        last_audio_position + (state_elapsed - last_state_elapsed).max(0.0)
     }
 
     fn decode_video(
@@ -466,17 +546,20 @@ mod ffmpeg_backend {
                 return;
             }
         };
-        let mut decoder = match open_decoder(source.path.as_path()) {
+        let mut decoder = match open_decoder(&source) {
             Ok(decoder) => decoder,
             Err(error) => {
                 let _ = sender.send(DecoderEvent::Error(error.to_string()));
                 return;
             }
         };
-        let duration = decoder
-            .duration()
-            .map_or(0.0, |duration| duration.as_secs());
-        if !send_event(&sender, DecoderEvent::Ready(source), &cancelled) {
+        let duration = decoder.duration();
+        let has_audio = decoder.has_audio();
+        if !send_event(
+            &sender,
+            DecoderEvent::Ready { source, has_audio },
+            &cancelled,
+        ) {
             return;
         }
         let mut loop_offset = 0.0;
@@ -486,9 +569,11 @@ mod ffmpeg_backend {
                 return;
             }
             match decoder.decode_raw() {
-                Ok(frame) => {
-                    let timestamp =
-                        video_rs::Time::new(Some(frame.packet().dts), decoder.time_base());
+                Ok(Some(frame)) => {
+                    let timestamp = frame.timestamp().map_or(0.0, |timestamp| {
+                        timestamp as f64 * f64::from(decoder.time_base().numerator())
+                            / f64::from(decoder.time_base().denominator())
+                    }) as f32;
                     let width = frame.width() as usize;
                     let height = frame.height() as usize;
                     let rgba = convert_to_rgba(&frame, &mut rgba_converter)
@@ -501,7 +586,7 @@ mod ffmpeg_backend {
                         }
                     };
                     let frame = DecodedFrame {
-                        timestamp: loop_offset + timestamp.as_secs().max(0.0),
+                        timestamp: loop_offset + timestamp.max(0.0),
                         width: width as u32,
                         height: height as u32,
                         rgba,
@@ -510,16 +595,14 @@ mod ffmpeg_backend {
                         return;
                     }
                 }
-                Err(video_rs::Error::DecodeExhausted | video_rs::Error::ReadExhausted)
-                    if looped =>
-                {
+                Ok(None) if looped => {
                     loop_offset += duration;
                     if let Err(error) = decoder.seek_to_start() {
                         let _ = sender.send(DecoderEvent::Error(error.to_string()));
                         return;
                     }
                 }
-                Err(video_rs::Error::DecodeExhausted | video_rs::Error::ReadExhausted) => {
+                Ok(None) => {
                     let _ = sender.send(DecoderEvent::End);
                     return;
                 }
@@ -531,9 +614,9 @@ mod ffmpeg_backend {
         }
     }
 
-    fn open_decoder(path: &Path) -> Result<video_rs::Decoder, video_rs::Error> {
+    fn open_decoder(source: &Arc<PreparedSource>) -> Result<VideoDecoder, ffmpeg::Error> {
         log::info!("video decoder · software");
-        video_rs::Decoder::new(path)
+        VideoDecoder::open(source)
     }
 
     fn convert_to_rgba(
@@ -596,7 +679,7 @@ mod ffmpeg_backend {
 
     pub(super) struct FfmpegAudioStream {
         source: Arc<PreparedSource>,
-        input: Option<ffmpeg::format::context::Input>,
+        input: Option<MediaInput>,
         decoder: Option<ffmpeg::decoder::Audio>,
         resampler: Option<ffmpeg::software::resampling::Context>,
         stream_index: usize,
@@ -604,13 +687,14 @@ mod ffmpeg_backend {
         position: usize,
         sample_rate: SampleRate,
         duration: Option<Duration>,
+        looped: bool,
         eof_sent: bool,
         ended: bool,
     }
 
     impl FfmpegAudioStream {
-        fn open(source: Arc<PreparedSource>) -> Result<Self, ffmpeg::Error> {
-            let input = ffmpeg::format::input(&source.path)?;
+        fn open(source: Arc<PreparedSource>, looped: bool) -> Result<Self, ffmpeg::Error> {
+            let input = MediaInput::open(&source)?;
             let stream = input
                 .streams()
                 .best(ffmpeg::media::Type::Audio)
@@ -649,12 +733,13 @@ mod ffmpeg_backend {
                 position: 0,
                 sample_rate: SampleRate::new(rate).unwrap_or(SampleRate::MIN),
                 duration,
+                looped,
                 eof_sent: false,
                 ended: false,
             })
         }
 
-        fn failed(source: Arc<PreparedSource>) -> Self {
+        fn failed(source: Arc<PreparedSource>, looped: bool) -> Self {
             Self {
                 source,
                 input: None,
@@ -665,6 +750,7 @@ mod ffmpeg_backend {
                 position: 0,
                 sample_rate: SampleRate::new(48_000).unwrap_or(SampleRate::MIN),
                 duration: None,
+                looped,
                 eof_sent: true,
                 ended: true,
             }
@@ -701,6 +787,15 @@ mod ffmpeg_backend {
                     return true;
                 }
                 if self.eof_sent {
+                    if self.looped {
+                        match Self::open(self.source.clone(), true) {
+                            Ok(reopened) => {
+                                *self = reopened;
+                                continue;
+                            }
+                            Err(_) => self.ended = true,
+                        }
+                    }
                     self.ended = true;
                     return false;
                 }
@@ -764,11 +859,11 @@ mod ffmpeg_backend {
         }
 
         fn total_duration(&self) -> Option<Duration> {
-            self.duration
+            if self.looped { None } else { self.duration }
         }
 
         fn try_seek(&mut self, position: Duration) -> Result<(), rodio::source::SeekError> {
-            let mut reopened = Self::open(self.source.clone()).map_err(|error| {
+            let mut reopened = Self::open(self.source.clone(), self.looped).map_err(|error| {
                 rodio::source::SeekError::Other(Arc::new(std::io::Error::other(error.to_string())))
             })?;
             let samples =
@@ -785,21 +880,159 @@ mod ffmpeg_backend {
 
     #[cfg(test)]
     mod tests {
+        use std::fs;
         use std::path::PathBuf;
 
+        use hexz_k::cmd::pack::{PackOptions, pack_directory};
+        use keine_loader::{ContentBackend, ContentMount, hexz_password, mount_hexz};
+
         use super::*;
+
+        fn playback_fixture() -> PathBuf {
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("dev/fixtures/video/playback.mp4")
+        }
+
+        #[test]
+        #[ignore = "manual source-preparation performance baseline"]
+        fn benchmark_hexz_video_direct_open_against_legacy_copy() {
+            use std::io::Write;
+            use std::time::Instant;
+
+            const MEDIA_BYTES: usize = 32 * 1024 * 1024;
+            let temporary = tempfile::tempdir().unwrap();
+            let source_dir = temporary.path().join("source");
+            fs::create_dir(&source_dir).unwrap();
+            let mut media = fs::File::create(source_dir.join("large.mp4")).unwrap();
+            let mut state = 0x4d59_5df4_d0f3_3173_u64;
+            let mut block = [0_u8; 64 * 1024];
+            for _ in 0..MEDIA_BYTES / block.len() {
+                for chunk in block.chunks_exact_mut(8) {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    chunk.copy_from_slice(&state.to_le_bytes());
+                }
+                media.write_all(&block).unwrap();
+            }
+            drop(media);
+            let archive_path = temporary.path().join("media.hxz");
+            pack_directory(&PackOptions {
+                input: source_dir.display().to_string(),
+                output: archive_path.display().to_string(),
+                compression: "zstd".to_owned(),
+                encrypt: true,
+                block_size: 65_536,
+                password: Some(hexz_password().to_owned()),
+            })
+            .unwrap();
+            let mount =
+                ContentMount::new(ContentBackend::Hexz(mount_hexz(&archive_path).unwrap()), "")
+                    .unwrap();
+
+            let direct_start = Instant::now();
+            for _ in 0..1_000 {
+                let source =
+                    prepare_source(std::slice::from_ref(&mount), Path::new("large.mp4")).unwrap();
+                assert_eq!(source.len(), MEDIA_BYTES as u64);
+            }
+            let direct = direct_start.elapsed() / 1_000;
+
+            let legacy_start = Instant::now();
+            for _ in 0..3 {
+                let mut source = mount.open_file(Path::new("large.mp4")).unwrap();
+                let mut output = tempfile::NamedTempFile::new().unwrap();
+                assert_eq!(
+                    std::io::copy(&mut source, &mut output).unwrap(),
+                    MEDIA_BYTES as u64
+                );
+            }
+            let legacy = legacy_start.elapsed() / 3;
+            eprintln!(
+                "32 MiB encrypted Hexz video source: legacy_copy={legacy:?}/open, direct_random_access={direct:?}/open, plaintext_write=32 MiB -> 0"
+            );
+        }
+
+        #[test]
+        fn decodes_encrypted_hexz_video_through_random_access() {
+            ffmpeg::init().unwrap();
+            let temporary = tempfile::tempdir().unwrap();
+            let source_dir = temporary.path().join("source");
+            fs::create_dir(&source_dir).unwrap();
+            fs::copy(playback_fixture(), source_dir.join("playback.mp4")).unwrap();
+            let archive_path = temporary.path().join("media.hxz");
+            pack_directory(&PackOptions {
+                input: source_dir.display().to_string(),
+                output: archive_path.display().to_string(),
+                compression: "zstd".to_owned(),
+                encrypt: true,
+                block_size: 65_536,
+                password: Some(hexz_password().to_owned()),
+            })
+            .unwrap();
+            let mount =
+                ContentMount::new(ContentBackend::Hexz(mount_hexz(&archive_path).unwrap()), "")
+                    .unwrap();
+            let source = Arc::new(prepare_source(&[mount], Path::new("playback.mp4")).unwrap());
+            assert!(source.physical_path().is_none());
+
+            let mut video = VideoDecoder::open(&source).unwrap();
+            assert!(video.has_audio());
+            let video_duration = video.duration();
+            let first = video.decode_raw().unwrap().unwrap();
+            assert_eq!((first.width(), first.height()), (320, 240));
+            video.seek_to_start().unwrap();
+            assert!(video.decode_raw().unwrap().is_some());
+            video.seek_to_start().unwrap();
+            let mut last_timestamp = -1.0_f32;
+            for cycle in 0..3 {
+                while let Some(frame) = video.decode_raw().unwrap() {
+                    let local = frame.timestamp().map_or(0.0, |timestamp| {
+                        timestamp as f64 * f64::from(video.time_base().numerator())
+                            / f64::from(video.time_base().denominator())
+                    }) as f32;
+                    let timestamp = cycle as f32 * video_duration + local;
+                    assert!(timestamp >= last_timestamp);
+                    last_timestamp = timestamp;
+                }
+                if cycle < 2 {
+                    video.seek_to_start().unwrap();
+                }
+            }
+
+            let mut audio = FfmpegAudioStream::open(source.clone(), false).unwrap();
+            assert!(audio.by_ref().take(4_096).any(|sample| sample != 0.0));
+            audio.try_seek(Duration::ZERO).unwrap();
+            assert!(audio.by_ref().take(4_096).any(|sample| sample != 0.0));
+
+            let mut looped_audio = FfmpegAudioStream::open(source.clone(), true).unwrap();
+            let two_seconds = looped_audio.sample_rate().get() as usize * 2 * 2;
+            assert_eq!(looped_audio.by_ref().take(two_seconds).count(), two_seconds);
+
+            let audio = FfmpegAudioStream::open(source, false).unwrap();
+            let sample_rate = audio.sample_rate().get() as f32;
+            let audio_duration = audio.count() as f32 / (sample_rate * 2.0);
+            assert!((audio_duration - video_duration).abs() < 0.05);
+        }
+
+        #[test]
+        fn audio_clock_fallback_is_pause_stable_and_long_play_monotonic() {
+            assert_eq!(fallback_audio_clock(12.5, 100.0, 100.0), 12.5);
+            assert_eq!(fallback_audio_clock(12.5, 100.0, 99.0), 12.5);
+            assert_eq!(fallback_audio_clock(12.5, 100.0, 3_700.0), 3_612.5);
+        }
 
         #[test]
         #[ignore = "set KEINE_TEST_VIDEO to a local video"]
         fn decodes_video_frames_with_the_runtime_pipeline() {
-            video_rs::init().unwrap();
+            ffmpeg::init().unwrap();
             let path = std::env::var_os("KEINE_TEST_VIDEO")
                 .map(PathBuf::from)
                 .expect("KEINE_TEST_VIDEO is required");
-            let mut decoder = open_decoder(path.as_path()).unwrap();
+            let source = Arc::new(PreparedSource::filesystem(path));
+            let mut decoder = open_decoder(&source).unwrap();
             let mut scaler = None;
             for _ in 0..60 {
-                let frame = decoder.decode_raw().unwrap();
+                let frame = decoder.decode_raw().unwrap().unwrap();
                 let expected = frame.width() as usize * frame.height() as usize * 4;
                 assert_eq!(
                     convert_to_rgba(&frame, &mut scaler).unwrap().len(),
@@ -815,11 +1048,11 @@ mod ffmpeg_backend {
                 .map(PathBuf::from)
                 .expect("KEINE_TEST_VIDEO is required");
             let source = Arc::new(PreparedSource::filesystem(path.clone()));
-            let mut video = video_rs::Decoder::new(path.as_path()).unwrap();
-            let frame = video.decode_raw().unwrap();
+            let mut video = VideoDecoder::open(&source).unwrap();
+            let frame = video.decode_raw().unwrap().unwrap();
             assert!(frame.width() > 0 && frame.height() > 0);
 
-            let mut audio = FfmpegAudioStream::open(source).unwrap();
+            let mut audio = FfmpegAudioStream::open(source, false).unwrap();
             assert!(audio.by_ref().take(4_096).any(|sample| sample != 0.0));
         }
     }

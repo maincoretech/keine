@@ -21,16 +21,30 @@ jobs:
         include:
           - os: ubuntu-latest
             artifact: keine-linux
+            target: ''
+            triplet: x64-windows
           - os: macos-latest
             artifact: keine-macos
+            target: ''
+            triplet: x64-windows
           - os: windows-latest
-            artifact: keine-windows
+            artifact: keine-windows-x64
+            target: x86_64-pc-windows-msvc
+            triplet: x64-windows
+          - os: windows-latest
+            artifact: keine-windows-arm64
+            target: aarch64-pc-windows-msvc
+            triplet: arm64-windows
     runs-on: ${{ matrix.os }}
     env:
       HEXZ_PASSWORD: ${{ secrets.HEXZ_PASSWORD }}
+      KEINE_BUILD_TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.97
+      - name: Install cross-compilation target
+        if: matrix.target != ''
+        run: rustup target add ${{ matrix.target }}
       - name: Require encrypted-release secret
         shell: bash
         run: |
@@ -47,6 +61,7 @@ jobs:
       - uses: ./.github/actions/setup-video
         with:
           enabled: ${{ contains(env.KEINE_RELEASE_FEATURES, 'video-ffmpeg') }}
+          windows-triplet: ${{ matrix.triplet }}
       - name: Build package runner
         # A separate target dir keeps the running runner out of the engine
         # rebuild that `keine package` performs inside target/release.
@@ -57,6 +72,23 @@ jobs:
           target/runner/release/keine package
           "${{ inputs.project }}"
           --output target/${{ matrix.artifact }}
+      - name: Verify Linux runtime closure
+        if: runner.os == 'Linux' && contains(env.KEINE_RELEASE_FEATURES, 'video-ffmpeg')
+        shell: bash
+        run: |
+          test -x "target/${{ matrix.artifact }}/keine"
+          test -d "target/${{ matrix.artifact }}/lib"
+          if LD_LIBRARY_PATH="target/${{ matrix.artifact }}/lib" ldd "target/${{ matrix.artifact }}/keine" | grep -q 'not found'; then
+            echo 'Linux release has unresolved dynamic libraries' >&2
+            exit 1
+          fi
+      - name: Verify Windows FFmpeg runtime
+        if: runner.os == 'Windows' && contains(env.KEINE_RELEASE_FEATURES, 'video-ffmpeg')
+        shell: pwsh
+        run: |
+          $root = 'target/${{ matrix.artifact }}'
+          if (-not (Test-Path (Join-Path $root 'keine.exe'))) { throw 'keine.exe is missing' }
+          if (-not (Get-ChildItem $root -Filter '*.dll')) { throw 'FFmpeg runtime DLLs are missing' }
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}

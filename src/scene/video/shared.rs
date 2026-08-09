@@ -1,3 +1,4 @@
+use std::io;
 use std::path::{Path, PathBuf};
 
 use bevy::asset::RenderAssetUsages;
@@ -5,8 +6,7 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use keine_core::{BlendMode, VideoMode, VisualFilter};
-use keine_loader::ContentMount;
-use tempfile::NamedTempFile;
+use keine_loader::{ContentFile, ContentMount};
 
 use crate::runtime::platform::DesignViewport;
 use crate::scene::effects::material::{StageMaterial, StageQuad};
@@ -31,20 +31,56 @@ pub(super) struct VideoFrame {
 
 #[derive(Debug)]
 pub(super) struct PreparedSource {
-    pub(super) path: PathBuf,
-    _temporary: Option<NamedTempFile>,
+    mount: ContentMount,
+    logical_path: PathBuf,
+    physical_path: Option<PathBuf>,
+    length: u64,
 }
 
 impl PreparedSource {
+    pub(super) fn open(&self) -> io::Result<ContentFile> {
+        self.mount
+            .open_file(&self.logical_path)
+            .map_err(|error| io::Error::other(error.to_string()))
+    }
+
+    pub(super) fn physical_path(&self) -> Option<&Path> {
+        self.physical_path.as_deref()
+    }
+
+    pub(super) const fn len(&self) -> u64 {
+        self.length
+    }
+
+    pub(super) fn extension(&self) -> Option<&str> {
+        self.logical_path
+            .extension()
+            .and_then(|value| value.to_str())
+    }
+
     #[cfg(all(
         test,
         feature = "video-ffmpeg",
         not(all(feature = "video-native", target_os = "macos"))
     ))]
     pub(super) fn filesystem(path: PathBuf) -> Self {
+        use keine_loader::ContentBackend;
+
+        let root = path.parent().unwrap_or_else(|| Path::new(".")).to_owned();
+        let logical_path = path
+            .file_name()
+            .map(PathBuf::from)
+            .expect("test video path must name a file");
+        let mount = ContentMount::new(ContentBackend::FileSystem(root), "")
+            .expect("test video mount must be valid");
+        let length = std::fs::metadata(&path)
+            .expect("test video must exist")
+            .len();
         Self {
-            path,
-            _temporary: None,
+            mount,
+            logical_path,
+            physical_path: Some(path),
+            length,
         }
     }
 }
@@ -57,26 +93,13 @@ pub(super) fn prepare_source(
         if !mount.contains_file(path) {
             continue;
         }
-        if let Some(root) = mount.filesystem_root() {
-            return Ok(PreparedSource {
-                path: root.join(path),
-                _temporary: None,
-            });
-        }
-        let mut source = mount.open_file(path).map_err(|error| error.to_string())?;
-        let suffix = path
-            .extension()
-            .and_then(|value| value.to_str())
-            .map_or(String::new(), |extension| format!(".{extension}"));
-        let mut file = tempfile::Builder::new()
-            .prefix("keine-video-")
-            .suffix(&suffix)
-            .tempfile()
-            .map_err(|error| error.to_string())?;
-        std::io::copy(&mut source, &mut file).map_err(|error| error.to_string())?;
+        let source = mount.open_file(path).map_err(|error| error.to_string())?;
+        let length = source.len().map_err(|error| error.to_string())?;
         return Ok(PreparedSource {
-            path: file.path().to_owned(),
-            _temporary: Some(file),
+            mount: mount.clone(),
+            logical_path: path.to_owned(),
+            physical_path: mount.filesystem_root().map(|root| root.join(path)),
+            length,
         });
     }
     Err(format!("video asset does not exist: {}", path.display()))

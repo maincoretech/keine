@@ -11,6 +11,7 @@ version.workspace = true
 edition.workspace = true
 description = "Kēne, a native visual-novel engine with WebGAL and LetsGal compatibility"
 repository = "https://github.com/maincoretech/keine"
+default-run = "keine"
 
 [lib]
 bench = false
@@ -21,6 +22,11 @@ path = "src/main.rs"
 # Criterion benches exercise the library; linking the full GUI binary with
 # release LTO adds several minutes without contributing a measurement.
 bench = false
+
+[[bin]]
+name = "keine-video-acceptance"
+path = "dev/tools/video_acceptance.rs"
+required-features = ["video-native"]
 
 [features]
 default = ["audio-all", "ui-sounds"]
@@ -36,11 +42,12 @@ audio-wav = ["bevy/wav"]
 audio-mp3 = ["bevy/mp3"]
 audio-vorbis = ["bevy/vorbis"]
 audio-flac = ["bevy/flac"]
-video-ffmpeg = ["dep:video-rs", "dep:rodio"]
+video-ffmpeg = ["dep:ffmpeg-next", "dep:rodio"]
 video-native = [
     "dep:objc2-av-foundation",
     "dep:objc2-core-media",
     "dep:objc2-core-video",
+    "dep:dispatch2",
 ]
 
 [workspace.package]
@@ -97,7 +104,7 @@ webbrowser = "1"
 rodio = { version = "0.22.2", default-features = false }
 symphonia = { version = "0.6", default-features = false, features = ["ogg"] }
 symphonia-adapter-libopus = { version = "0.3", default-features = false }
-video-rs = { version = "0.11", default-features = false }
+ffmpeg-next = { version = "8.1", default-features = false, features = ["codec", "format", "software-scaling", "software-resampling"] }
 tempfile = "3"
 winit = { version = "0.30.13", default-features = false }
 crossterm = "0.29.0"
@@ -125,7 +132,7 @@ webbrowser = { workspace = true }
 rodio = { workspace = true, optional = true }
 symphonia = { workspace = true, optional = true }
 symphonia-adapter-libopus = { workspace = true, optional = true }
-video-rs = { workspace = true, optional = true }
+ffmpeg-next = { workspace = true, optional = true }
 tempfile = { workspace = true }
 winit = { workspace = true }
 crossterm = { workspace = true }
@@ -140,10 +147,11 @@ winresource = "0.1.31"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSImage", "NSResponder", "NSRunningApplication"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSData", "NSDictionary", "NSError", "NSValue", "NSString", "NSURL"] }
-objc2-av-foundation = { version = "0.3.2", default-features = false, optional = true, features = ["std", "AVPlayer", "AVPlayerItem", "AVPlayerItemOutput", "objc2-core-media", "objc2-core-video"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSArray", "NSData", "NSDate", "NSDictionary", "NSError", "NSRunLoop", "NSValue", "NSString", "NSURL"] }
+objc2-av-foundation = { version = "0.3.2", default-features = false, optional = true, features = ["std", "AVAsset", "AVAssetResourceLoader", "AVPlayer", "AVPlayerItem", "AVPlayerItemOutput", "dispatch2", "objc2-core-media", "objc2-core-video"] }
 objc2-core-media = { version = "0.3.2", default-features = false, optional = true, features = ["std", "CMTime"] }
 objc2-core-video = { version = "0.3.2", default-features = false, optional = true, features = ["std", "CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVReturn", "objc2"] }
+dispatch2 = { version = "0.3.1", optional = true }
 
 # Hardening is compiled in only by `keine package` (feature `hardened`); the
 # dependencies stay target-gated so unused-crate-dependencies never fires on

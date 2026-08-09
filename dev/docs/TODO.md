@@ -191,13 +191,14 @@ Flowchart 仍保留为可选适配工作，不能用静态占位或实验依赖�
 ### 延期适配（不属于 Phase 7 完成条件）
 
 - GIF、Spine 与 Live2D（Live2D 已由用户决定暂缓）
-- [x] macOS AVFoundation 单播放器音画时钟、BGRA 帧输出、共享 Bevy 渲染生命周期与后台
-  Hexz 临时源准备；发行按内容启用 `video-native`
-- [ ] Windows Media Foundation frame-server 后端与 Hexz `IMFByteStream`；完成前 Windows/Linux
-  按项目资源启用 `video-ffmpeg`
-- [ ] 移除 Hexz 视频的明文临时文件：macOS `AVAssetResourceLoader` 与 Windows byte stream
-  共用稳定随机读取合同；具体 API、缓存、取消和 fixture 见
+- [x] macOS AVFoundation 单播放器音画时钟、BGRA 帧输出、共享 Bevy 渲染生命周期，以及
+  `AVAssetResourceLoader` 对 Hexz 随机读取的直接映射
+- [x] Windows/Linux FFmpeg `AVIOContext` 直接读取 Hexz，rodio sink 作为音频主时钟；
+  Windows x64 与 Linux 真实 fixture 解码，Windows ARM64 交叉编译
+- [x] 移除 Hexz 视频的完整解密与明文临时文件；平台路径、缓存和 fixture 见
   [`09-native-video.md`](architecture/09-native-video.md)
+- [ ] 可选：Windows Media Foundation frame-server 后端与 Hexz `IMFByteStream`，在不增加
+  双重运行时复杂度的前提下换取系统硬件解码
 - Android / iOS 视频解码暂缓：移动端不承诺 FFmpeg 交叉编译与分发，待桌面平台 byte
   source 与硬件解码生命周期稳定后再验收
 - MainCore 固定 UI 的完整本地化（主题和运行时换肤明确不做）

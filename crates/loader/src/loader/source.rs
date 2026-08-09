@@ -205,6 +205,18 @@ enum ContentFileInner {
 }
 
 impl ContentFile {
+    /// Total logical length without changing the current cursor position.
+    pub fn len(&self) -> std::io::Result<u64> {
+        match &self.inner {
+            ContentFileInner::FileSystem(file) => file.metadata().map(|metadata| metadata.len()),
+            ContentFileInner::Archive(cursor) => Ok(cursor.len() as u64),
+        }
+    }
+
+    pub fn is_empty(&self) -> std::io::Result<bool> {
+        self.len().map(|length| length == 0)
+    }
+
     pub fn read_remaining_into(&mut self, output: &mut Vec<u8>) -> std::io::Result<usize> {
         match &mut self.inner {
             ContentFileInner::FileSystem(file) => file.read_to_end(output),

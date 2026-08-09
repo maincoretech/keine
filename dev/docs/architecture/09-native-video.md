@@ -18,14 +18,14 @@
 
 | 平台 | 后端 | 视频/音频时钟 | 当前帧上传 | 状态 |
 | --- | --- | --- | --- | --- |
-| macOS | AVPlayer + AVPlayerItemVideoOutput | AVPlayer 单时钟 | CVPixelBuffer BGRA → 稳定 Bevy Image | 已接入，待真机素材验收 |
-| Windows | FFmpeg + rodio | 引擎 elapsed + 独立音频源 | 软件 RGBA → 稳定 Bevy Image | 可用回退；下一阶段迁移 IMFMediaEngine |
-| Linux | FFmpeg + rodio | 引擎 elapsed + 独立音频源 | 软件 RGBA → 稳定 Bevy Image | 保留 |
+| macOS | AVPlayer + AVPlayerItemVideoOutput | AVPlayer 单时钟 | CVPixelBuffer BGRA → 稳定 Bevy Image | 已用 FS 与加密 Hexz fixture 验收 |
+| Windows x64/ARM64 | FFmpeg + rodio | rodio 音频时钟；无音轨时用逻辑时钟 | 软件 RGBA → 稳定 Bevy Image | 已接入；x64 真实解码、ARM64 交叉编译 |
+| Linux | FFmpeg + rodio | rodio 音频时钟；无音轨时用逻辑时钟 | 软件 RGBA → 稳定 Bevy Image | 已接入并真实解码 |
 | Android/iOS | 无承诺 | — | — | 延期 |
 
-macOS 发行按内容检测启用 `video-native`，不要求安装或分发 FFmpeg。开发别名同时启用
-`video-native,video-ffmpeg`，使同一命令在 macOS 选择 AVFoundation、在 Windows/Linux
-选择 FFmpeg。`video-ffmpeg` 仍可单独用于回退验证。
+发行构建只启用目标平台所需的一个后端：macOS 使用 `video-native`，Windows/Linux 使用
+`video-ffmpeg`。开发别名可同时启用两个 feature；macOS 仍只选择 AVFoundation，其他平台
+只选择 FFmpeg，不会启动两套播放器。
 
 首选发行容器为 MP4/M4V，编码为 H.264 + AAC。MOV 可作为开发输入；WebM/MKV 只保证
 FFmpeg 后端。透明视频不进入第一阶段承诺，现有 `VideoMode::Mixed` 是黑底素材的 Screen
@@ -33,42 +33,41 @@ FFmpeg 后端。透明视频不进入第一阶段承诺，现有 `VideoMode::Mix
 
 ## 当前数据路径
 
-FS mount 直接把真实文件路径交给平台播放器。Hexz 或其他非文件 mount 由后台 source
-worker 顺序复制到带原扩展名的 `NamedTempFile`，播放器关闭后自动删除。这个过渡路径有
-以下明确限制：
+FS mount 保留平台快速路径，直接把真实文件路径交给播放器。Hexz 和其他虚拟 mount 则
+复用 `ContentMount`/`ContentFile` 的长度、seek 与短读合同，不创建完整内存副本，也不写
+明文临时文件：
 
-- 播放前需要完整复制，首帧延迟与视频大小成正比；
-- 临时文件是明文，进程崩溃或被强杀时只能依赖系统临时目录回收；
-- 峰值磁盘占用至少等于压缩后媒体文件大小；
-- 它没有利用 Hexz 已具备的 seekable `ResourceFile`。
+- macOS 使用自定义 `keine-resource://` URL 和
+  [`AVAssetResourceLoaderDelegate`](https://developer.apple.com/documentation/avfoundation/avassetresourceloaderdelegate)，
+  把 AVFoundation 的 content-info、byte-range 与取消请求映射到新的独立读取游标；
+- Windows/Linux 使用 FFmpeg 原生 `AVIOContext` read/seek 回调，直接读取同一个随机访问源；
+- 每个回调游标都持有 O(1) clone 的 `ResourceFile`，Hexz 的 memory-constrained block cache
+  继续限定解压内存；播放器结束后随 session 一起释放。
 
-因此该实现只作为平台播放器接入阶段的兼容层，不作为最终的加密资源方案。
+测试 fixture 是 1 秒、320×240、H.264 Constrained Baseline + AAC、fast-start MP4。CI 会把它
+现场加密进 Hexz 再真实解码；不包含项目素材或发行密钥。
 
-## Hexz / hexz_k 待办暂存
+## 时钟与循环语义
 
-以下任务需要 KÄne 与 `maincoretech/hexz_k` 协同，先记录在这里，不在当前改动中隐式
-扩张 `ContentMount` 或复制 Hexz 协议：
+FFmpeg 后端只负责解码。存在音轨且未静音时，rodio sink 的实际播放位置是视频主时钟，
+暂停和恢复不会靠帧数推算；无音轨或明确静音时才使用引擎逻辑 elapsed。主音量变化直接
+更新既有 sink，不重建音频流。循环以媒体时长累加时间线并 seek 回起点，不把单次循环的
+时间戳倒退暴露给画面调度；音频流也在 EOF 后重新打开随机读取源，不使用 rodio 会缓存
+整段解码 PCM 的通用循环器。
 
-- [ ] 在 `hexz_k` 提供稳定、线程安全、O(1) clone 的随机读取合同：长度查询、`read_at`
-  / seek、短读、EOF、取消和错误类型；不得要求把 entry 整体复制到内存。
-- [ ] 明确同一媒体 entry 的并发 range read 与 block cache 上限，避免平台播放器预读造成
-  解压 block 抖动或无界缓存。
-- [ ] macOS 实现自定义 URL scheme + `AVAssetResourceLoaderDelegate`，把 content info、byte
-  range 和取消请求映射到上述读取合同。
-- [ ] Windows 实现 `IMFByteStream`，必要时配合 `IMFMediaEngineExtension`/自定义 scheme，
-  保证异步 `BeginRead/EndRead`、seek、长度和 shutdown 生命周期完整。
-- [ ] 为 MP4 要求可 seek 的 `moov` 元数据；发布打包阶段检查 fast-start 布局，避免播放器
-  为读取尾部索引产生不必要的全文件扫描。
-- [ ] 对播放器请求做 MIME/container 映射，不依据解密后的临时文件名猜测格式。
-- [ ] 增加取消、进程退出、错误中断和循环播放测试，验证归档句柄、解压 block 与平台回调
-  不在 session 结束后存活。
-- [ ] `hexz_k` 合并所需 API 后，KÄne 只更新固定 git rev 并在同一提交记录 API 版本；
-  不同时依赖浮动分支和旧 rev。
-- [ ] 准备小型 H.264/AAC、无音轨、损坏头、长 GOP、尾部 `moov` 与 Hexz 加密 fixture；
-  fixture 不包含发行项目素材或真实密钥。
+自动化覆盖加密 Hexz 随机读取、音视频时长误差、三次循环单调性、暂停/恢复、无音频长时
+回退时钟，以及 macOS AVFoundation 的 FS/Hexz 首帧解码。Windows ARM64 目前由交叉编译
+保证 API 与依赖闭合；真实 ARM64 硬件播放仍属于发布验收。
 
-编译进客户端的资源密钥仍按既定离线游戏模型处理；自定义 byte source 的目标是消除持久
-明文临时文件并收紧生命周期，不把内置密钥宣传为不可提取的 DRM。
+## 可选后续优化
+
+- Windows 可在真实播放与发行稳定后评估 `IMFMediaEngine` + `IMFByteStream`，以利用系统
+  硬件解码；这不是消除明文临时文件的前置条件。
+- 增加损坏头、无音轨、长 GOP 与尾部 `moov` fixture，并验证中途取消和进程退出。
+- 发布检查可进一步拒绝非 fast-start 的大 MP4，减少远端或分块源的尾部探测。
+
+编译进客户端的资源密钥仍按既定离线游戏模型处理；自定义 byte source 的目标是消除
+持久明文副本；它不把内置密钥变成不可提取的 DRM。
 
 ## 后续性能阶段
 

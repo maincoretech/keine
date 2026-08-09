@@ -269,7 +269,27 @@ the macOS reactive event loop and sampled at 0.0% CPU. A three-second exit-time
 debug inspection traced the small engine-side entries to Bevy renderer startup
 assets and plugin handles; the remaining largest roots were macOS NSXPC
 framework cycles. No project-owned growing container was found. This is a
-bounded exit-time retention result, not a claim of zero leaks. Native video
-still lacks a representative valid playback fixture, so its setter suppression
-is compile- and unit-tested but intentionally has no playback performance
-number here.
+bounded exit-time retention result, not a claim of zero leaks. At that point,
+native video still lacked a representative valid playback fixture, so its
+setter suppression had no playback performance number.
+
+## 2026-08-09 encrypted video random-access pass
+
+The comparison packs one deterministic 32 MiB incompressible video-shaped entry
+with the same encrypted Hexz path. The legacy control copies the entire decoded
+entry to a plaintext sink before returning; the current source preparation only
+opens the seekable entry, records its length, and leaves reads to the platform
+decoder:
+
+| Preparation path | Time per open | Plaintext written before playback |
+| --- | ---: | ---: |
+| Legacy full copy | 122.682 ms | 32 MiB |
+| Direct random-access source | 292 ns | 0 bytes |
+
+Command: `cargo test --no-default-features --features video-ffmpeg
+benchmark_hexz_video_direct_open_against_legacy_copy -- --ignored --nocapture`.
+This measures source preparation rather than decode throughput. The committed
+H.264/AAC fixture separately passes the FFmpeg encrypted-Hexz decode/seek/loop
+test and the macOS AVFoundation filesystem/encrypted-Hexz first-frame acceptance
+probe. The direct path removes the size-proportional startup copy and plaintext
+temporary file; decode and texture-upload costs are unchanged.

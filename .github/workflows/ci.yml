@@ -22,8 +22,23 @@ jobs:
       - run: cargo test --workspace
       - name: Check typed video backend
         if: runner.os == 'Linux' || runner.os == 'Windows'
-        run: cargo check --workspace --features video-ffmpeg
+        run: cargo test --workspace --no-default-features --features video-ffmpeg decodes_encrypted_hexz_video_through_random_access
       - name: Check AVFoundation video backend
         if: runner.os == 'macOS'
-        run: cargo check --workspace --features video-native
+        run: >-
+          cargo run --locked --no-default-features --features video-native
+          --bin keine-video-acceptance -- dev/fixtures/video/playback.mp4
       - run: cargo build --release
+
+  windows-arm64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97
+        with:
+          targets: aarch64-pc-windows-msvc
+      - uses: ./.github/actions/setup-video
+        with:
+          windows-triplet: arm64-windows
+      - name: Check Windows ARM64 video backend
+        run: cargo check --workspace --target aarch64-pc-windows-msvc --no-default-features --features video-ffmpeg
