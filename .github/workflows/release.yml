@@ -1,7 +1,7 @@
 name: encrypted-release
 
-# Release is manual-only: the archive password is supplied at dispatch time
-# and is never stored as a repository secret.
+# Release is manual-only. The archive password comes from the repository's
+# HEXZ_PASSWORD secret so GitHub can mask it in logs.
 on:
   workflow_dispatch:
     inputs:
@@ -9,10 +9,6 @@ on:
         description: Project directory to package
         required: true
         default: projects/test-project
-      hexzPassword:
-        description: HEXZ archive password used to encrypt game.hxz
-        type: string
-        required: true
 
 permissions:
   contents: read
@@ -31,10 +27,17 @@ jobs:
             artifact: keine-windows
     runs-on: ${{ matrix.os }}
     env:
-      HEXZ_PASSWORD: ${{ inputs.hexzPassword }}
+      HEXZ_PASSWORD: ${{ secrets.HEXZ_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.97
+      - name: Require encrypted-release secret
+        shell: bash
+        run: |
+          if [[ -z "$HEXZ_PASSWORD" ]]; then
+            echo "Configure the HEXZ_PASSWORD repository secret" >&2
+            exit 2
+          fi
       - name: Detect project media features
         shell: bash
         run: |

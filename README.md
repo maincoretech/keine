@@ -183,7 +183,7 @@ Package an encrypted Hexz game:
 
 ```bash
 HEXZ_PASSWORD='your-password' \
-  cargo run --release --no-default-features -- package path/to/native-project
+  cargo package path/to/native-project
 ```
 
 Release packaging accepts a native project (`config.yaml`) or a LetsGal
@@ -192,9 +192,9 @@ aliases, layout, styles) is materialized into `config.yaml` at build time.
 The pipeline compiles `.keine/compiled/program.bin`, pins
 `compiled_program: require`, and keeps runtime state and caches out of the
 archive. Output defaults to
-`target/release-package` (override with `--output <dir>`); on Windows build the
-runner with `--target-dir target/runner` so the engine rebuild never replaces a
-running executable.
+`target/release-package` (override with a named directory below `target/`). The
+Cargo alias builds its runner in an isolated target directory, so Windows never
+needs to replace the executable that is currently packaging the game.
 
 The packaged engine is rebuilt per project: only the audio/video backends
 detected in the content are compiled in, the `hardened` feature enables

@@ -10,7 +10,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use hexz_k::cmd::pack::{PackOptions, pack_directory};
-use tempfile::tempdir;
+use tempfile::{Builder, TempDir, tempdir};
 
 use crate::compiler::compile_project;
 use crate::runtime::bootstrap::open_project;
@@ -40,20 +40,14 @@ pub fn package_project(
     if !project.join("config.yaml").is_file() && !project.join("project.json").is_file() {
         bail!("{}", project_manifest_error(project));
     }
-    if output.components().next() != Some(Component::Normal("target".as_ref())) {
-        bail!(
-            "release output must stay under target/: {}",
-            output.display()
-        );
-    }
     if !project.is_dir() {
         bail!("project directory does not exist: {}", project.display());
     }
+    let output = release_output_path(output)?;
 
     let staging = tempdir().context("failed to create staging directory")?;
     let staged = staging.path().join("project");
     copy_tree(project, &staged)?;
-    cleanup_staging(&staged)?;
 
     let (_root, config, content) = open_project(&staged, loader)?;
     let config_path = staged.join("config.yaml");
@@ -78,16 +72,93 @@ pub fn package_project(
 
     let features = detect_features(&staged)?;
     println!("content features: {features}");
-    build_engine(&features)?;
+    let engine = build_engine(&features)?;
 
-    if output.exists() {
-        fs::remove_dir_all(output)
-            .with_context(|| format!("failed to clear {}", output.display()))?;
-    }
-    fs::create_dir_all(output)?;
-    pack_staging(&staged, output, &password)?;
-    assemble(output, &features)?;
+    let output_parent = output.parent().context("release output has no parent")?;
+    fs::create_dir_all(output_parent)?;
+    let assembled = Builder::new()
+        .prefix(".keine-package-")
+        .tempdir_in(output_parent)
+        .context("failed to create release assembly directory")?;
+    pack_staging(&staged, assembled.path(), &password)?;
+    assemble(assembled.path(), &features, &engine)?;
+    publish_directory(assembled, &output)?;
     println!("{}", output.display());
+    Ok(())
+}
+
+fn release_output_path(output: &Path) -> Result<PathBuf> {
+    let mut relative = PathBuf::new();
+    for component in output.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => relative.push(part),
+            _ => bail!(
+                "release output must be a relative child of target/: {}",
+                output.display()
+            ),
+        }
+    }
+    let mut components = relative.components();
+    let below_target = components.next() == Some(Component::Normal("target".as_ref()));
+    let first_directory = components.next();
+    if !below_target || first_directory.is_none() {
+        bail!(
+            "release output must be a named directory below target/, not {}",
+            output.display()
+        );
+    }
+    if matches!(
+        first_directory,
+        Some(Component::Normal(name))
+            if matches!(name.to_str(), Some("debug" | "release" | "package-runner" | "runner"))
+    ) {
+        bail!(
+            "release output overlaps a Cargo build directory: {}",
+            output.display()
+        );
+    }
+    Ok(Path::new(env!("CARGO_MANIFEST_DIR")).join(relative))
+}
+
+fn publish_directory(assembled: TempDir, output: &Path) -> Result<()> {
+    let parent = output.parent().context("release output has no parent")?;
+    let name = output
+        .file_name()
+        .context("release output has no directory name")?
+        .to_string_lossy();
+    let backup = parent.join(format!(".{name}.backup-{}", std::process::id()));
+    if backup.exists() {
+        bail!(
+            "stale release backup blocks publication: {}",
+            backup.display()
+        );
+    }
+
+    let had_previous = output.exists();
+    if had_previous {
+        if !output.is_dir() {
+            bail!("release output is not a directory: {}", output.display());
+        }
+        fs::rename(output, &backup)
+            .with_context(|| format!("failed to preserve {}", output.display()))?;
+    }
+    let assembled = assembled.keep();
+    if let Err(error) = fs::rename(&assembled, output) {
+        let _ = fs::remove_dir_all(&assembled);
+        if had_previous && let Err(restore_error) = fs::rename(&backup, output) {
+            return Err(anyhow::anyhow!(error)).context(format!(
+                "failed to publish {}; restoring the previous release also failed: {restore_error}; it remains at {}",
+                output.display(),
+                backup.display()
+            ));
+        }
+        return Err(error).with_context(|| format!("failed to publish {}", output.display()));
+    }
+    if had_previous {
+        fs::remove_dir_all(&backup)
+            .with_context(|| format!("failed to remove old release {}", backup.display()))?;
+    }
     Ok(())
 }
 
@@ -95,52 +166,44 @@ fn copy_tree(from: &Path, to: &Path) -> Result<()> {
     fs::create_dir_all(to)?;
     for entry in fs::read_dir(from)? {
         let entry = entry?;
+        let file_type = entry.file_type()?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if file_type.is_symlink() {
+            bail!(
+                "release projects cannot contain symbolic links: {}",
+                entry.path().display()
+            );
+        }
+        if (file_type.is_dir() && is_ignored_directory(&name))
+            || (!file_type.is_dir() && is_ignored_file(&name))
+        {
+            continue;
+        }
         let target = to.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
+        if file_type.is_dir() {
             copy_tree(&entry.path(), &target)?;
-        } else {
+        } else if file_type.is_file() {
             fs::copy(entry.path(), &target)?;
+        } else {
+            bail!(
+                "release projects cannot contain special files: {}",
+                entry.path().display()
+            );
         }
     }
     Ok(())
 }
 
-/// Runtime state and generated caches must never enter the encrypted
-/// artifact. The staging copy regenerates `.keine/compiled/program.bin`, so
-/// any source-project `.keine` contents are dropped as well.
-fn cleanup_staging(root: &Path) -> Result<()> {
-    let mut remove_dirs = Vec::new();
-    let mut remove_files = Vec::new();
-    collect_cleanup(root, &mut remove_dirs, &mut remove_files)?;
-    for directory in remove_dirs {
-        fs::remove_dir_all(directory)?;
-    }
-    for file in remove_files {
-        fs::remove_file(file)?;
-    }
-    Ok(())
+fn is_ignored_directory(name: &str) -> bool {
+    matches!(
+        name,
+        ".git" | "target" | "saves" | "imported_assets" | ".keine"
+    )
 }
 
-fn collect_cleanup(
-    root: &Path,
-    remove_dirs: &mut Vec<PathBuf>,
-    remove_files: &mut Vec<PathBuf>,
-) -> Result<()> {
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if entry.file_type()?.is_dir() {
-            if matches!(name.as_str(), "saves" | "imported_assets" | ".keine") {
-                remove_dirs.push(path);
-            } else {
-                collect_cleanup(&path, remove_dirs, remove_files)?;
-            }
-        } else if name == ".DS_Store" || name.ends_with(".meta") {
-            remove_files.push(path);
-        }
-    }
-    Ok(())
+fn is_ignored_file(name: &str) -> bool {
+    name == ".DS_Store" || name.ends_with(".meta")
 }
 
 /// Replace or append the top-level `compiled_program` policy in a config.yaml.
@@ -233,9 +296,10 @@ fn collect_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
 
 /// Content-trimmed release engine build, reusing the repo's default target
 /// directory so the same binary the user develops with is rebuilt.
-fn build_engine(features: &str) -> Result<()> {
+fn build_engine(features: &str) -> Result<PathBuf> {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut command = Command::new("cargo");
+    let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let mut command = Command::new(cargo);
     let mut all_features = String::from("hardened");
     if !features.is_empty() {
         all_features.push(',');
@@ -244,12 +308,16 @@ fn build_engine(features: &str) -> Result<()> {
     command
         .current_dir(repo_root)
         .args(["build", "--release", "--locked", "--no-default-features"])
-        .args(["--features", &all_features]);
+        .args(["--features", &all_features])
+        .arg("--target-dir")
+        .arg(repo_root.join("target"));
     let status = command.status().context("failed to run cargo build")?;
     if !status.success() {
         bail!("engine build failed with status {status}");
     }
-    Ok(())
+    Ok(repo_root
+        .join("target/release")
+        .join(format!("keine{}", env::consts::EXE_SUFFIX)))
 }
 
 fn pack_staging(staged: &Path, output: &Path, password: &str) -> Result<()> {
@@ -264,20 +332,20 @@ fn pack_staging(staged: &Path, output: &Path, password: &str) -> Result<()> {
     .context("hexz pack failed")
 }
 
-fn assemble(output: &Path, features: &str) -> Result<()> {
+fn assemble(output: &Path, _features: &str, engine: &Path) -> Result<()> {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let windows_engine = repo_root.join("target/release/keine.exe");
-    if windows_engine.is_file() {
-        fs::copy(&windows_engine, output.join("keine.exe"))?;
-        if has_feature(features, "video-ffmpeg") {
+    #[cfg(windows)]
+    {
+        fs::copy(engine, output.join("keine.exe"))?;
+        if has_feature(_features, "video-ffmpeg") {
             bundle_ffmpeg_runtime(output)?;
         }
         fs::write(output.join("run.bat"), RUN_BAT)?;
-    } else {
-        let engine = repo_root.join("target/release/keine");
-        fs::copy(&engine, output.join("keine"))?;
+    }
+    #[cfg(not(windows))]
+    {
+        fs::copy(engine, output.join("keine"))?;
         fs::write(output.join("run.sh"), RUN_SH)?;
-        #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             for name in ["keine", "run.sh"] {
@@ -292,6 +360,7 @@ fn assemble(output: &Path, features: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
 fn bundle_ffmpeg_runtime(output: &Path) -> Result<()> {
     let vcpkg_root = env::var("VCPKG_ROOT")
         .context("VCPKG_ROOT is required to bundle the Windows FFmpeg runtime")?;
@@ -315,11 +384,14 @@ fn bundle_ffmpeg_runtime(output: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(windows, test))]
 fn has_feature(features: &str, wanted: &str) -> bool {
     features.split(',').any(|feature| feature == wanted)
 }
 
+#[cfg(windows)]
 const RUN_BAT: &str = "@echo off\n\"%~dp0keine.exe\" \"%~dp0game.hxz\"\n";
+#[cfg(not(windows))]
 const RUN_SH: &str = "#!/usr/bin/env bash\nset -euo pipefail\nroot=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\nexec \"$root/keine\" \"$root/game.hxz\"\n";
 
 #[cfg(test)]
@@ -346,5 +418,39 @@ mod tests {
         fs::write(assets.join("bgm.opus"), b"audio").unwrap();
         let features = detect_features(root.path()).unwrap();
         assert_eq!(features, "ui-sounds");
+    }
+
+    #[test]
+    fn release_output_cannot_select_target_itself_or_escape_it() {
+        assert!(release_output_path(Path::new("target/release-package")).is_ok());
+        assert!(release_output_path(Path::new("target")).is_err());
+        assert!(release_output_path(Path::new("target/../outside")).is_err());
+        assert!(release_output_path(Path::new("/tmp/release")).is_err());
+        assert!(release_output_path(Path::new("target/release")).is_err());
+        assert!(release_output_path(Path::new("target/debug/package")).is_err());
+    }
+
+    #[test]
+    fn staging_copy_omits_generated_and_private_directories() {
+        let root = tempdir().unwrap();
+        let source = root.path().join("source");
+        let destination = root.path().join("destination");
+        fs::create_dir_all(source.join("assets")).unwrap();
+        for ignored in [".git", "target", "saves", "imported_assets", ".keine"] {
+            fs::create_dir_all(source.join(ignored)).unwrap();
+            fs::write(source.join(ignored).join("private"), b"private").unwrap();
+        }
+        fs::write(source.join("assets/kept.txt"), b"kept").unwrap();
+        fs::write(source.join("assets/ignored.meta"), b"ignored").unwrap();
+
+        copy_tree(&source, &destination).unwrap();
+
+        assert!(destination.join("assets/kept.txt").is_file());
+        assert!(!destination.join("assets/ignored.meta").exists());
+        assert!(!destination.join(".git").exists());
+        assert!(!destination.join("target").exists());
+        assert!(!destination.join("saves").exists());
+        assert!(!destination.join("imported_assets").exists());
+        assert!(!destination.join(".keine").exists());
     }
 }

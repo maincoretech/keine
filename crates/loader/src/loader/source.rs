@@ -17,7 +17,7 @@ const HEXZ_READ_AHEAD_BYTES: usize = 64 * 1024;
 /// casual extraction but is not DRM: a key embedded in a client executable
 /// can always be recovered by a determined user.
 pub fn hexz_password() -> &'static str {
-    static PASSWORD: OnceLock<&'static str> = OnceLock::new();
+    static PASSWORD: OnceLock<String> = OnceLock::new();
     PASSWORD.get_or_init(|| {
         let cipher = include_bytes!(concat!(env!("OUT_DIR"), "/hexz-password.bin"));
         let mask = include_bytes!(concat!(env!("OUT_DIR"), "/hexz-password-mask.bin"));
@@ -26,11 +26,7 @@ pub fn hexz_password() -> &'static str {
             .zip(mask.iter().cycle())
             .map(|(byte, mask)| byte ^ mask)
             .collect();
-        Box::leak(
-            String::from_utf8(plain)
-                .expect("HEXZ_PASSWORD must be UTF-8")
-                .into_boxed_str(),
-        )
+        String::from_utf8(plain).expect("HEXZ_PASSWORD must be UTF-8")
     })
 }
 

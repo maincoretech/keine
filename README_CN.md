@@ -170,15 +170,15 @@ cargo build --release --features video-ffmpeg
 
 ```bash
 HEXZ_PASSWORD='your-password' \
-  cargo run --release --no-default-features -- package path/to/native-project
+  cargo package path/to/native-project
 ```
 
 发布打包接受原生工程（`config.yaml`）或 LetsGal 工程（`project.json`）；LetsGal
 的适配器配置（资源别名、布局、样式）会在打包时物化为 `config.yaml`。流水线会编译
 `.keine/compiled/program.bin`、固定 `compiled_program: require`，并确保运行时状态
 与缓存不进入归档。输出默认在 `target/release-package`
-（可用 `--output <dir>` 覆盖）；Windows 上用 `--target-dir target/runner`
-构建 runner，避免引擎重建覆盖正在运行的可执行文件。
+（可用 `target/` 下的具名目录覆盖）。Cargo 别名会把 runner 构建到隔离的 target
+目录，避免 Windows 在打包时覆盖正在运行的可执行文件。
 
 打包引擎按项目重新构建：只编译内容中检测到的音频/视频后端，`hardened` 特性启用
 反调试（macOS `PT_DENY_ATTACH`、禁用 core dump、Windows 检测到调试器即退出），
