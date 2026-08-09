@@ -320,6 +320,7 @@ fn apply_post(color: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {
 
 @fragment
 fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
+#ifdef STAGE_COMPLEX
     let kind = u32(material.transition_data.x + 0.5);
     let progress = clamp(material.transition_data.y, 0.0, 1.0);
     if kind == 1u && mesh.uv.x > progress {
@@ -454,4 +455,15 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     color = vec4<f32>(color.rgb * color.a, color.a);
 #endif
     return color;
+#else
+    var color = textureSample(color_texture, color_sampler, mesh.uv) * material.tint;
+#ifdef BLEND_MULTIPLY
+    let perceptual = pow(max(color.rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
+    color = vec4<f32>(perceptual * color.a, color.a);
+#endif
+#ifdef BLEND_SCREEN
+    color = vec4<f32>(color.rgb * color.a, color.a);
+#endif
+    return color;
+#endif
 }

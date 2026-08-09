@@ -311,12 +311,58 @@ pub(crate) struct StageMaterialKey(u8);
 
 impl From<&StageMaterial> for StageMaterialKey {
     fn from(material: &StageMaterial) -> Self {
-        Self(match material.blend {
+        let blend = match material.blend {
             BlendMode::Alpha => 0,
             BlendMode::Add => 1,
             BlendMode::Multiply => 2,
             BlendMode::Screen => 3,
-        })
+        };
+        Self(blend | u8::from(material.needs_complex_shader()) << 2)
+    }
+}
+
+impl StageMaterial {
+    fn needs_complex_shader(&self) -> bool {
+        const ACTIVE: f32 = 0.001;
+        self.filter.x > ACTIVE
+            || (self.filter.y - 1.0).abs() > ACTIVE
+            || (self.filter.z - 1.0).abs() > ACTIVE
+            || (self.filter.w - 1.0).abs() > ACTIVE
+            || self.transition.x.abs() > ACTIVE
+            || self.transition.z.abs() > ACTIVE
+            || self.post_a.x.abs() > ACTIVE
+            || self.post_a.y > ACTIVE
+            || self.post_a.w > ACTIVE
+            || self.post_b.y > ACTIVE
+            || self.post_b.z > ACTIVE
+            || self.post_b.w > ACTIVE
+            || self.post_c.x > ACTIVE
+            || self.post_c.y > ACTIVE
+            || self.post_f.x.abs() > ACTIVE
+            || self.post_f.y.abs() > ACTIVE
+            || self.post_f.z.abs() > ACTIVE
+            || (self.post_f.w - 1.0).abs() > ACTIVE
+            || self.post_g.x.abs() > ACTIVE
+            || self.post_g.y > ACTIVE
+            || self.post_g.z > ACTIVE
+            || self.post_g.w > 1.01
+            || self.post_h.x > ACTIVE
+            || self.post_h.y > ACTIVE
+            || self.post_h.z > ACTIVE
+            || self.post_h.w > ACTIVE
+            || self.post_i.z > ACTIVE
+            || self.post_j.x > ACTIVE
+            || self.post_j.w > ACTIVE
+            || self.post_k.y > ACTIVE
+            || self.post_l.x > ACTIVE
+            || self.post_l.z > ACTIVE
+            || self.post_m.y > ACTIVE
+            || self.post_n.z > ACTIVE
+            || self.post_o.y > ACTIVE
+            || self.post_p.x > ACTIVE
+            || self.post_p.w > ACTIVE
+            || self.post_q.y > ACTIVE
+            || self.post_q.w < 0.999
     }
 }
 
@@ -337,7 +383,8 @@ impl Material2d for StageMaterial {
         _layout: &MeshVertexBufferLayoutRef,
         key: Material2dKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        let blend = match key.bind_group_data.0 {
+        let blend_key = key.bind_group_data.0 & 0b11;
+        let blend = match blend_key {
             1 => BlendState {
                 color: BlendComponent {
                     src_factor: BlendFactor::SrcAlpha,
@@ -365,7 +412,10 @@ impl Material2d for StageMaterial {
             _ => BlendState::ALPHA_BLENDING,
         };
         if let Some(fragment) = descriptor.fragment.as_mut() {
-            match key.bind_group_data.0 {
+            if key.bind_group_data.0 & 0b100 != 0 {
+                fragment.shader_defs.push("STAGE_COMPLEX".into());
+            }
+            match blend_key {
                 2 => fragment.shader_defs.push("BLEND_MULTIPLY".into()),
                 3 => fragment.shader_defs.push("BLEND_SCREEN".into()),
                 _ => {}
@@ -403,5 +453,27 @@ mod tests {
 
         effect.lut_intensity = 0.5;
         assert_eq!(active_lut_preset(&effect), Some("warm"));
+    }
+
+    #[test]
+    fn plain_material_uses_the_lightweight_pipeline_variant() {
+        let plain = StageMaterial::new(
+            Handle::default(),
+            1.0,
+            VisualFilter::default(),
+            BlendMode::Alpha,
+            Vec4::ZERO,
+            &PostProcessEffect::default(),
+            None,
+        );
+        assert_eq!(StageMaterialKey::from(&plain).0, 0);
+
+        let mut filtered = plain.clone();
+        filtered.filter.y = 1.2;
+        assert_eq!(StageMaterialKey::from(&filtered).0, 0b100);
+
+        let mut screen = plain;
+        screen.blend = BlendMode::Screen;
+        assert_eq!(StageMaterialKey::from(&screen).0, 0b11);
     }
 }

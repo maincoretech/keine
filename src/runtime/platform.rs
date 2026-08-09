@@ -387,7 +387,7 @@ fn core_is_animating(state: &GameState) -> bool {
         || state.floating_text.is_some()
         || !state.videos.is_empty()
         || !state.particle_effects.is_empty()
-        || !state.bg_films.is_empty()
+        || state.bg_films.is_time_varying()
         || state.bg_transition.is_some()
         || state.bg_transform_animation.is_some()
         || state.bg_keyframe_animation.is_some()
@@ -395,11 +395,9 @@ fn core_is_animating(state: &GameState) -> bool {
         || state.camera_effect_animation.is_some()
         || state.camera_shake.is_some()
         || state.stage_animation.is_some()
-        || state.camera_effect.old_film_intensity > f32::EPSILON
-        || (state.camera_effect.godray_intensity > f32::EPSILON
-            && state.camera_effect.godray_speed.abs() > f32::EPSILON)
+        || state.camera_effect.is_time_varying()
         || state.sprites.values().any(|sprite| {
-            !sprite.films.is_empty()
+            sprite.films.is_time_varying()
                 || sprite.animation.is_some()
                 || sprite.transform_animation.is_some()
                 || sprite.keyframe_animation.is_some()
@@ -749,8 +747,15 @@ mod tests {
         assert!(state.bg_films.apply(&keine_core::AnimationPreset::OldFilm));
         assert!(core_is_animating(&state));
         state.bg_films.clear();
+        assert!(state.bg_films.apply(&keine_core::AnimationPreset::DotFilm));
+        assert!(!core_is_animating(&state));
+        state.bg_films.clear();
         state.camera_effect.godray_intensity = 0.8;
         state.camera_effect.godray_speed = 0.2;
+        assert!(core_is_animating(&state));
+        state.camera_effect.godray_speed = 0.0;
+        assert!(!core_is_animating(&state));
+        state.camera_effect.film_grain_intensity = 0.5;
         assert!(core_is_animating(&state));
     }
 

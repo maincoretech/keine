@@ -188,6 +188,19 @@ impl FilmEffects {
         self.0 == 0
     }
 
+    /// Returns whether this set changes as presentation time advances.
+    ///
+    /// Dot film is intentionally absent: it is a static screen pattern and
+    /// does not justify keeping an otherwise idle renderer awake.
+    pub const fn is_time_varying(self) -> bool {
+        const TIME_VARYING: u8 = FilmEffects::OLD_FILM
+            | FilmEffects::REFLECTION_FILM
+            | FilmEffects::GLITCH_FILM
+            | FilmEffects::RGB_FILM
+            | FilmEffects::GODRAY_FILM;
+        self.0 & TIME_VARYING != 0
+    }
+
     pub fn clear(&mut self) {
         self.0 = 0;
     }
@@ -848,6 +861,28 @@ impl Default for PostProcessEffect {
             eyelid_center_x: 0.5,
             eyelid_center_y: 0.5,
         }
+    }
+}
+
+impl PostProcessEffect {
+    /// Returns whether advancing presentation time can change the output.
+    ///
+    /// Keeping this decision beside the effect model prevents platform loops
+    /// from duplicating shader-specific knowledge.
+    pub fn is_time_varying(&self) -> bool {
+        const ACTIVE: f32 = 0.001;
+        const MOVING: f32 = f32::EPSILON;
+
+        self.old_film_intensity > ACTIVE
+            || self.glitch_intensity > ACTIVE
+            || self.film_grain_intensity > ACTIVE
+            || self.light_leak_intensity > ACTIVE
+            || (self.godray_intensity > ACTIVE && self.godray_speed.abs() > MOVING)
+            || (self.heat_haze_intensity > ACTIVE && self.heat_haze_speed.abs() > MOVING)
+            || (self.water_ripple_intensity > ACTIVE && self.water_ripple_speed.abs() > MOVING)
+            || (self.fog_intensity > ACTIVE && self.fog_speed.abs() > MOVING)
+            || (self.vhs_intensity > ACTIVE
+                && (self.vhs_jitter > ACTIVE || self.vhs_noise > ACTIVE))
     }
 }
 

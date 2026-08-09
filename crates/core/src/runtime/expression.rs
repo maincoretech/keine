@@ -38,88 +38,75 @@ pub fn interpolate(
     vars: &HashMap<String, Value>,
     globals: &HashMap<String, Value>,
 ) -> String {
-    let chars = source.chars().collect::<Vec<_>>();
     let mut output = String::with_capacity(source.len());
     let mut cursor = 0;
-    while cursor < chars.len() {
-        if chars[cursor] == '\\' && chars.get(cursor + 1) == Some(&'{') {
+    while let Some(relative_open) = source[cursor..].find('{') {
+        let open = cursor + relative_open;
+        if open > 0 && source.as_bytes()[open - 1] == b'\\' {
+            output.push_str(&source[cursor..open - 1]);
             output.push('{');
-            cursor += 2;
+            cursor = open + 1;
             continue;
         }
-        if chars[cursor] != '{' {
-            output.push(chars[cursor]);
-            cursor += 1;
-            continue;
-        }
-        let Some(end) = chars[cursor + 1..].iter().position(|value| *value == '}') else {
-            output.push('{');
-            cursor += 1;
-            continue;
+        output.push_str(&source[cursor..open]);
+        let Some(relative_close) = source[open + 1..].find('}') else {
+            output.push_str(&source[open..]);
+            return output;
         };
-        let end = cursor + 1 + end;
-        let expression = chars[cursor + 1..end].iter().collect::<String>();
+        let close = open + 1 + relative_close;
+        let expression = &source[open + 1..close];
         match evaluate(expression.trim(), vars, globals) {
             Ok(value) => output.push_str(&value.display()),
-            Err(_) => output.extend(chars[cursor..=end].iter()),
+            Err(_) => output.push_str(&source[open..=close]),
         }
-        cursor = end + 1;
+        cursor = close + 1;
     }
+    output.push_str(&source[cursor..]);
     output
 }
 
 fn tokenize(source: &str) -> Result<Vec<Token>, String> {
-    let chars = source.chars().collect::<Vec<_>>();
     let mut tokens = Vec::new();
-    let mut cursor = 0;
-    while cursor < chars.len() {
-        match chars[cursor] {
-            value if value.is_whitespace() => cursor += 1,
-            '(' => {
-                tokens.push(Token::LeftParen);
-                cursor += 1;
-            }
-            ')' => {
-                tokens.push(Token::RightParen);
-                cursor += 1;
-            }
-            '[' => {
-                tokens.push(Token::LeftBracket);
-                cursor += 1;
-            }
-            ']' => {
-                tokens.push(Token::RightBracket);
-                cursor += 1;
-            }
-            ',' => {
-                tokens.push(Token::Comma);
-                cursor += 1;
-            }
+    let mut chars = source.char_indices().peekable();
+    while let Some((start, character)) = chars.next() {
+        match character {
+            value if value.is_whitespace() => {}
+            '(' => tokens.push(Token::LeftParen),
+            ')' => tokens.push(Token::RightParen),
+            '[' => tokens.push(Token::LeftBracket),
+            ']' => tokens.push(Token::RightBracket),
+            ',' => tokens.push(Token::Comma),
             quote @ ('"' | '\'') => {
-                cursor += 1;
                 let mut value = String::new();
-                while cursor < chars.len() && chars[cursor] != quote {
-                    if chars[cursor] == '\\' && cursor + 1 < chars.len() {
-                        cursor += 1;
+                let mut terminated = false;
+                while let Some((_, character)) = chars.next() {
+                    if character == quote {
+                        terminated = true;
+                        break;
                     }
-                    value.push(chars[cursor]);
-                    cursor += 1;
+                    if character == '\\' {
+                        if let Some((_, escaped)) = chars.next() {
+                            value.push(escaped);
+                        }
+                    } else {
+                        value.push(character);
+                    }
                 }
-                if chars.get(cursor) != Some(&quote) {
+                if !terminated {
                     return Err("unterminated string".into());
                 }
-                cursor += 1;
                 tokens.push(Token::Value(Value::Str(value)));
             }
             value if value.is_ascii_digit() || value == '.' => {
-                let start = cursor;
-                cursor += 1;
-                while cursor < chars.len()
-                    && (chars[cursor].is_ascii_digit() || chars[cursor] == '.')
-                {
-                    cursor += 1;
+                let mut end = start + value.len_utf8();
+                while let Some(&(index, next)) = chars.peek() {
+                    if !next.is_ascii_digit() && next != '.' {
+                        break;
+                    }
+                    chars.next();
+                    end = index + next.len_utf8();
                 }
-                let raw = chars[start..cursor].iter().collect::<String>();
+                let raw = &source[start..end];
                 if raw.contains('.') {
                     tokens.push(Token::Value(Value::Float(
                         raw.parse().map_err(|_| format!("invalid number {raw}"))?,
@@ -131,30 +118,33 @@ fn tokenize(source: &str) -> Result<Vec<Token>, String> {
                 }
             }
             value if value.is_alphabetic() || matches!(value, '_' | '$') => {
-                let start = cursor;
-                cursor += 1;
-                while cursor < chars.len()
-                    && (chars[cursor].is_alphanumeric() || matches!(chars[cursor], '_' | '$' | '.'))
-                {
-                    cursor += 1;
+                let mut end = start + value.len_utf8();
+                while let Some(&(index, next)) = chars.peek() {
+                    if !next.is_alphanumeric() && !matches!(next, '_' | '$' | '.') {
+                        break;
+                    }
+                    chars.next();
+                    end = index + next.len_utf8();
                 }
-                let ident = chars[start..cursor].iter().collect::<String>();
-                match ident.as_str() {
+                let ident = &source[start..end];
+                match ident {
                     "true" => tokens.push(Token::Value(Value::Bool(true))),
                     "false" => tokens.push(Token::Value(Value::Bool(false))),
-                    _ => tokens.push(Token::Ident(ident)),
+                    _ => tokens.push(Token::Ident(ident.to_owned())),
                 }
             }
             _ => {
-                let rest = chars[cursor..].iter().collect::<String>();
+                let rest = &source[start..];
                 let operator = [
                     "||", "&&", "==", "!=", ">=", "<=", "+", "-", "*", "/", "%", ">", "<", "!",
                 ]
                 .into_iter()
                 .find(|operator| rest.starts_with(operator))
-                .ok_or_else(|| format!("unexpected character {}", chars[cursor]))?;
+                .ok_or_else(|| format!("unexpected character {character}"))?;
                 tokens.push(Token::Op(operator));
-                cursor += operator.len();
+                for _ in 1..operator.len() {
+                    chars.next();
+                }
             }
         }
     }
@@ -355,6 +345,26 @@ mod tests {
         assert_eq!(
             interpolate("Hi {name}, {missing}, \\{literal}", &vars, &HashMap::new()),
             "Hi Crab, {missing}, {literal}"
+        );
+    }
+
+    #[test]
+    fn borrowed_scanner_preserves_unicode_and_unclosed_input() {
+        let vars = HashMap::from([
+            ("名字".into(), Value::Str("慧音".into())),
+            ("count".into(), Value::Int(2)),
+        ]);
+        assert_eq!(
+            interpolate(
+                "你好，{名字}：\\{原样}，{count >= 2}，末尾{",
+                &vars,
+                &HashMap::new()
+            ),
+            "你好，慧音：{原样}，true，末尾{"
+        );
+        assert_eq!(
+            evaluate("名字 == '慧音'", &vars, &HashMap::new()),
+            Ok(Value::Bool(true))
         );
     }
 }
