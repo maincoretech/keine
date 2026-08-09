@@ -177,18 +177,53 @@ keeps cursor selection explicit when the test project changes.
 ## 2026-08-07 script / load / rollback baseline
 
 First criterion-based runtime baselines (`benches/`). Quick mode (1 sample);
-full runs should repeat with `cargo bench` and record machine/config/commit.
+full runs should repeat with `cargo bench --workspace` and record machine/config/commit.
 
 - Machine: 本机 macOS（与 07-22 渲染基线同机）
-- Build: `cargo bench`（release bench profile）
+- Build: `cargo bench --workspace`（release bench profile）
 - Commit: `2eab45a` 之后、基准落地 commit 时记录
 - Inputs: 合成 100k Action 单场景；rollback 压力场景 100 sprites + 1000 local vars
 
 | Benchmark | Workload | Time | Throughput |
 | --- | --- | ---: | ---: |
 | `script_runtime/step` | 100k 非阻塞 Action 推进 | 3.36 ms | 29.7 Melem/s |
-| `program_load/parse_and_build` | 100k Action WebGAL 解析 + Program 构建 | 33.7 ms | 2.97 Melem/s |
-| `rollback/record_200_checkpoints` | 200 个 checkpoint | 76.8 µs | 0.38 µs/checkpoint |
+| `program_load/parse_and_build` | 100k Action WebGAL 解析 + Program 构建 | 32.10 ms | 3.12 Melem/s |
+| `program_load/decode_and_build` | 100k Action 严格解码 + fingerprint 校验 + Program 构建 | 7.10 ms | 14.1 Melem/s |
+| `rollback/record_200_checkpoints` | 200 个真实 checkpoint | 13.21 ms | 66.0 µs/checkpoint |
+
+Rollback 于本次审查中修正：原基准没有设置当前 dialogue，`record_dialogue` 会提前
+返回，因此 76.8 µs 的旧数据无效。新数据来自 `cargo bench -p keine-core --bench
+rollback -- --quick`，每次确实复制 100 sprites 与 1000 local vars 到 200 个快照。
+
+Program load 于同次审查增加 compiled 路径的同负载对照，命令为 `cargo bench -p
+keine-loader --bench program_load -- --quick`；严格校验后的 compiled load 约为源脚本
+解析路径的 4.5 倍速度。
 
 对比口径：后续所有优化必须用同一 bench 与同一 release 配置做前后对比；结果记录
 commit、机器与编译配置。
+
+## 2026-08-09 runtime P0-P2 pass
+
+Full Criterion runs on the same Apple M5 Pro development machine, using the
+release bench profile and 100 measured samples:
+
+| Benchmark | Result | Change |
+| --- | ---: | ---: |
+| `script_runtime_mixed/dialogue_turns/1000` | 3.991 ms / 250.6 K turns/s | time -16.1%, throughput +19.2% |
+| `rollback/record_200_checkpoints` | 2.238 ms | time -56.8% from 5.181 ms |
+| `rollback/record_200_mutating_checkpoints` | 4.831 ms | new worst-case control |
+
+The mixed script benchmark evaluates conditions and assignments, interpolates
+speaker and dialogue strings, advances each line, and therefore exercises the
+allocation reductions in the borrowed expression scanner. The rollback case
+contains 100 sprites and 1000 local variables. Adjacent checkpoints now share
+unchanged collections; the mutating control confirms that a changed variable
+map remains within the previous static baseline rather than hiding copy cost.
+
+The same pass also makes speculative asset prefetch non-blocking, compiles a
+single-sample stage shader variant for ordinary images, lets static film
+patterns return to the reactive render lifecycle, reuses FFmpeg's conversion
+frame, and updates same-size video images without rebuilding their descriptor,
+sampler, or view state. Shader/video changes are guarded by unit tests and both
+the macOS native-video and cross-platform FFmpeg feature builds; they still
+need a long native playback capture before assigning an FPS or memory delta.

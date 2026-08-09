@@ -29,3 +29,8 @@ pub use loader::{
 pub use report::{
     Diagnostic, DiagnosticLevel, ParseReport, ResourceKind, ResourceRef, SceneRef, SourceSpan,
 };
+
+// Criterion is a bench-only dev-dependency; the lib-test build sees it as
+// available and the crate-level lint would otherwise report it as unused.
+#[cfg(test)]
+use criterion as _;

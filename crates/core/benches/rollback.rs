@@ -4,7 +4,7 @@
 use std::sync::OnceLock;
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use keine_core::model::state::Sprite;
+use keine_core::model::state::{Dialogue, Sprite};
 use keine_core::{
     Action, BlendMode, FilmEffects, Position, Program, SpriteLayout, SpriteTransform, State,
     Transition, Value, VisualFilter,
@@ -56,6 +56,16 @@ fn stressed_state() -> State {
     for i in 0..VARS {
         state.vars.insert(format!("v{i}"), Value::Int(i as i64));
     }
+    state.dialogue = Some(Dialogue {
+        speaker: "benchmark".to_string(),
+        text: "checkpoint".to_string(),
+        markup: "checkpoint".to_string(),
+        visible_chars: 10,
+        pauses: Vec::new(),
+        vocal: None,
+        volume: 1.0,
+        auto_advance: false,
+    });
     state
 }
 
@@ -65,6 +75,18 @@ fn bench(c: &mut Criterion) {
         b.iter(|| {
             let mut state = stressed_state();
             for i in 0..CHECKPOINTS {
+                state.record_dialogue(i);
+            }
+            black_box(state.backlog.len());
+        });
+    });
+    group.bench_function(format!("record_{CHECKPOINTS}_mutating_checkpoints"), |b| {
+        b.iter(|| {
+            let mut state = stressed_state();
+            for i in 0..CHECKPOINTS {
+                state
+                    .vars
+                    .insert("changing".to_string(), Value::Int(i as i64));
                 state.record_dialogue(i);
             }
             black_box(state.backlog.len());

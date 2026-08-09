@@ -14,3 +14,10 @@ serde = { workspace = true }
 crc32fast = { workspace = true }
 postcard = { workspace = true }
 hexz_k = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "program_load"
+harness = false

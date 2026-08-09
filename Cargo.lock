@@ -3569,7 +3569,6 @@ version = "0.8.1"
 dependencies = [
  "anyhow",
  "bevy",
- "criterion",
  "crossterm",
  "fs2",
  "futures-lite",
@@ -3605,6 +3604,7 @@ dependencies = [
 name = "keine-core"
 version = "0.8.1"
 dependencies = [
+ "criterion",
  "log",
  "noyalib",
  "postcard",
@@ -3618,6 +3618,7 @@ version = "0.8.1"
 dependencies = [
  "anyhow",
  "crc32fast",
+ "criterion",
  "hexz_k",
  "keine-core",
  "log",

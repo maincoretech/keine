@@ -299,17 +299,17 @@ pub struct RollbackSnapshot {
     pub camera_targets: CameraTargets,
     #[serde(default)]
     pub camera_effect_targets: CameraTargets,
-    pub sprites: HashMap<String, Sprite>,
+    pub sprites: Arc<HashMap<String, Sprite>>,
     pub dialogue: Dialogue,
     pub mini_avatar: Option<String>,
     pub textbox_hidden: bool,
     pub textbox_auto_hidden: bool,
     pub film_mode: bool,
-    pub particle_effects: HashMap<String, ActiveParticleEffect>,
-    pub transition_rules: HashMap<String, TransitionRule>,
+    pub particle_effects: Arc<HashMap<String, ActiveParticleEffect>>,
+    pub transition_rules: Arc<HashMap<String, TransitionRule>>,
     pub bgm: BgmState,
-    pub looping_effects: HashMap<String, EffectState>,
-    pub vars: HashMap<String, Value>,
+    pub looping_effects: Arc<HashMap<String, EffectState>>,
+    pub vars: Arc<HashMap<String, Value>>,
 }
 
 /// Return point saved by `callScene`.
@@ -726,6 +726,21 @@ impl State {
             scene: self.current_scene.clone(),
             action_index,
         };
+        let previous = self.backlog.last().map(|entry| &entry.snapshot);
+        let sprites = shared_snapshot(&self.sprites, previous.map(|snapshot| &snapshot.sprites));
+        let particle_effects = shared_snapshot(
+            &self.particle_effects,
+            previous.map(|snapshot| &snapshot.particle_effects),
+        );
+        let transition_rules = shared_snapshot(
+            &self.transition_rules,
+            previous.map(|snapshot| &snapshot.transition_rules),
+        );
+        let looping_effects = shared_snapshot(
+            &self.looping_effects,
+            previous.map(|snapshot| &snapshot.looping_effects),
+        );
+        let vars = shared_snapshot(&self.vars, previous.map(|snapshot| &snapshot.vars));
         self.backlog.push(BacklogEntry {
             key,
             speaker: dialogue.speaker.clone(),
@@ -745,17 +760,17 @@ impl State {
                 camera_transform: self.camera_transform,
                 camera_targets: self.camera_targets,
                 camera_effect_targets: self.camera_effect_targets,
-                sprites: self.sprites.clone(),
+                sprites,
                 dialogue,
                 mini_avatar: self.mini_avatar.clone(),
                 textbox_hidden: self.textbox_hidden,
                 textbox_auto_hidden: self.textbox_auto_hidden,
                 film_mode: self.film_mode,
-                particle_effects: self.particle_effects.clone(),
-                transition_rules: self.transition_rules.clone(),
+                particle_effects,
+                transition_rules,
                 bgm: self.bgm.clone(),
-                looping_effects: self.looping_effects.clone(),
-                vars: self.vars.clone(),
+                looping_effects,
+                vars,
             },
         });
         let excess = self.backlog.len().saturating_sub(DEFAULT_BACKLOG_CAPACITY);
@@ -811,7 +826,7 @@ impl State {
         self.bg_transform_animation = None;
         self.bg_keyframe_animation = None;
         self.bg_animation = None;
-        self.sprites = snapshot.sprites;
+        self.sprites = snapshot.sprites.as_ref().clone();
         self.dialogue = Some(snapshot.dialogue);
         self.previous_dialogue = None;
         self.dialogue_retraction = None;
@@ -822,17 +837,17 @@ impl State {
         self.mini_avatar_progress = if self.mini_avatar.is_some() { 1.0 } else { 0.0 };
         self.bgm = snapshot.bgm;
         self.bgm.revision = self.bgm.revision.wrapping_add(1);
-        self.looping_effects = snapshot.looping_effects;
+        self.looping_effects = snapshot.looping_effects.as_ref().clone();
         self.effect_queue.clear();
-        self.vars = snapshot.vars;
+        self.vars = snapshot.vars.as_ref().clone();
         self.menu = None;
         self.wait_remaining = 0.0;
         self.wait_blocking = false;
         self.waiting_for_advance = false;
         self.intro = None;
         self.film_mode = snapshot.film_mode;
-        self.particle_effects = snapshot.particle_effects;
-        self.transition_rules = snapshot.transition_rules;
+        self.particle_effects = snapshot.particle_effects.as_ref().clone();
+        self.transition_rules = snapshot.transition_rules.as_ref().clone();
         self.ended = false;
         self.backlog.truncate(index + 1);
         true
@@ -916,6 +931,12 @@ fn reconcile_scene_stack(program: &Program, scene_stack: &mut Vec<SceneFrame>) {
     });
 }
 
+fn shared_snapshot<T: Clone + PartialEq>(current: &T, previous: Option<&Arc<T>>) -> Arc<T> {
+    previous
+        .filter(|value| value.as_ref() == current)
+        .map_or_else(|| Arc::new(current.clone()), Arc::clone)
+}
+
 fn reconcile_backlog_entry(
     program: &Program,
     program_fingerprint: u64,
@@ -994,6 +1015,31 @@ mod tests {
 
         assert!(Arc::ptr_eq(&state.program, &snapshot.program));
         assert_eq!(snapshot.program.action_count(), 2_000);
+    }
+
+    #[test]
+    fn adjacent_checkpoints_share_unchanged_large_collections() {
+        let mut state = State::new();
+        state.current_scene = "main".into();
+        state.vars.insert("route".into(), Value::Int(1));
+        state.dialogue = Some(dialogue("first"));
+        state.record_dialogue(0);
+        state.dialogue = Some(dialogue("second"));
+        state.record_dialogue(1);
+
+        let first = &state.backlog[0].snapshot;
+        let second = &state.backlog[1].snapshot;
+        assert!(Arc::ptr_eq(&first.sprites, &second.sprites));
+        assert!(Arc::ptr_eq(&first.vars, &second.vars));
+        let second_sprites = Arc::clone(&second.sprites);
+        let second_vars = Arc::clone(&second.vars);
+
+        state.vars.insert("route".into(), Value::Int(2));
+        state.dialogue = Some(dialogue("third"));
+        state.record_dialogue(2);
+        let third = &state.backlog[2].snapshot;
+        assert!(Arc::ptr_eq(&second_sprites, &third.sprites));
+        assert!(!Arc::ptr_eq(&second_vars, &third.vars));
     }
 
     #[test]
