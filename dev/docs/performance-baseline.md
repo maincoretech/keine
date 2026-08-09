@@ -231,3 +231,45 @@ frame, and updates same-size video images without rebuilding their descriptor,
 sampler, or view state. Shader/video changes are guarded by unit tests and both
 the macOS native-video and cross-platform FFmpeg feature builds; they still
 need a long native playback capture before assigning an FPS or memory delta.
+
+## 2026-08-09 event-driven invalidation pass
+
+This pass does not cap or sample down the runtime frame rate. It preserves
+elapsed-time animation and removes only writes whose resulting state is
+identical: stable camera viewports and blur regions, settled UI surfaces,
+unchanged audio/video presentation state, clean persistence snapshots, and
+unchanged background/particle presentation data. Particle simulation retains
+its existing fixed clock; no other subsystem gained a frame-rate cadence.
+
+The blur-family timeline at cursor 31 was captured for 8 seconds in the same
+release configuration before and after the pass:
+
+| Metric | Before | After |
+| --- | ---: | ---: |
+| Render P95 | 17.34 ms | 16.82 ms |
+| Render P99 | 17.51 ms | 16.93 ms |
+| Maximum | 17.60 ms | 17.49 ms |
+| Wall time | 11.50 s | 11.46 s |
+| User CPU time | 0.97 s | 0.97 s |
+| System CPU time | 0.55 s | 0.57 s |
+| Retired instructions | 9,362,494,773 | 9,328,465,448 |
+| CPU cycles | 6,147,715,981 | 5,934,704,680 |
+| Maximum RSS | 227.59 MB | 227.87 MB |
+| Peak footprint | 418.65 MB | 419.07 MB |
+
+CPU time and memory are effectively neutral within run-to-run noise. Retired
+instructions fell by about 0.36%; the larger cycle reduction is encouraging
+but too noisy to treat as a guaranteed gain from one pair of runs. The useful
+result is that substantially fewer ECS changes and downstream render
+invalidations did not regress sustained rendering.
+
+After startup and control-surface settling, a static release title returned to
+the macOS reactive event loop and sampled at 0.0% CPU. A three-second exit-time
+`leaks` audit reported 310 retained allocations / 21,328 bytes. Symbolized
+debug inspection traced the small engine-side entries to Bevy renderer startup
+assets and plugin handles; the remaining largest roots were macOS NSXPC
+framework cycles. No project-owned growing container was found. This is a
+bounded exit-time retention result, not a claim of zero leaks. Native video
+still lacks a representative valid playback fixture, so its setter suppression
+is compile- and unit-tested but intentionally has no playback performance
+number here.
