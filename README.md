@@ -17,7 +17,7 @@ continue to work.
 
 ## Highlights
 
-- Native rendering, audio, video, UI, saves, and single-binary distribution.
+- Native rendering, audio, video, UI, saves, and self-contained distribution.
 - Frame-rate-independent transitions, typewriter text, timelines, and
   particles.
 - Backgrounds, portraits, layers, filters, blend modes, camera transforms, and
@@ -46,7 +46,7 @@ test is in
 | `cargo bundle <project> [--output <dir>]` | Package an encrypted release build |
 | `cargo dev <project>` | Run with hot reload and video |
 | `cargo preview <project>` | Run an optimized preview |
-| `cargo perf <project> [seconds] [cursor] [profile]` | Record a performance sample |
+| `cargo perf <project> [seconds] [timeline|cursor] [profile]` | Record a performance sample |
 | `cargo dev <project> --sync` | Follow an open LetsGal project and step |
 
 Invalid project paths fail immediately.
@@ -59,6 +59,41 @@ reload. `cargo bundle` validates those sources and writes a versioned
 require that artifact and skip source-script parsing at startup. Its fixed
 envelope (magic, versions, lengths, CRC32 and program fingerprint) keeps saves
 compatible with the source project.
+
+## Develop a game
+
+Kēne does not require a separate compiler project. Keep editing the original
+WebGAL/native directory or LetsGal project; the same directory is used from
+validation through release:
+
+```mermaid
+flowchart LR
+    A["Edit project<br/>config.yaml or project.json"] --> B["Validate<br/>cargo validate"]
+    B --> C["Iterate<br/>cargo dev"]
+    C --> D["Release check<br/>cargo preview"]
+    D --> E["Package<br/>cargo bundle"]
+    E --> F["Ship<br/>engine + game.hxz"]
+```
+
+1. Create or open a project whose root contains `config.yaml` (native/WebGAL)
+   or `project.json` (LetsGal).
+2. Run `cargo validate <project>` after script or configuration changes. This
+   checks the project without opening a window.
+3. Use `cargo dev <project>` for normal iteration and hot reload. For an open
+   LetsGal project, add `--sync`; Kēne reads Studio state but never modifies it.
+4. Use `cargo preview <project>` for an optimized final visual pass.
+5. Set one game-specific `HEXZ_PASSWORD`, then run `cargo bundle <project>`.
+   Distribute the complete output directory; players do not need Rust, source
+   scripts, Kēne, or LetsGal installed separately.
+
+The default output is `target/release-package/`: `keine`/`keine.exe` is the
+player, `game.hxz` is the encrypted game, and the remaining launcher/runtime
+files belong to the same distributable. On macOS, the wrapper script places
+that pair inside one `.app`.
+
+Development always reads editable source files and stays debugger-friendly.
+Only `cargo bundle` compiles the story, encrypts assets, signs the archive, and
+builds the project-specific release engine.
 
 ## Project inputs
 
@@ -214,6 +249,42 @@ HEXZ_PASSWORD='your-password' \
 The macOS wrapper consumes the same encrypted, hardened `cargo bundle` output;
 the app contains `game.hxz`, never a plaintext copy of the source project.
 
+### Security model
+
+Kēne targets offline games where the player controls the machine. It protects
+the distributed content from casual extraction and detects modification when
+it is opened by the unmodified official engine; it does not claim DRM.
+
+```mermaid
+flowchart LR
+    S["Developer source"] --> C["Validate and compile"]
+    C --> P["Encrypt game.hxz"]
+    K["Temporary private key"] --> P
+    P --> B["Release bundle"]
+    U["Engine with public key<br/>and masked password"] --> B
+    B --> V["Verify before use"]
+    V --> R["Decrypt blocks on demand"]
+```
+
+- **Confidentiality:** assets and compiled story are AES-256-GCM encrypted in
+  `game.hxz`. The password is masked in the executable and no plaintext archive
+  or video temporary file is created, but a determined owner can still recover
+  the password from the binary or process memory.
+- **Integrity:** each bundle gets a temporary Ed25519 keypair. The private key
+  is discarded after packaging; the matching public key is embedded in that
+  engine. Modified headers, indexes, metadata, dictionaries, or data blocks are
+  rejected. This remains the standard Hexz format.
+- **Runtime hardening:** packaged engines reject simple debugger attachment and
+  core dumps; development builds remain fully debuggable. These controls raise
+  extraction cost but can be patched out by a determined attacker.
+- **Trust boundary:** if an attacker replaces both the engine and `game.hxz`,
+  Kēne alone cannot establish publisher identity. Platform signing/notarization
+  would cover that outer boundary and is intentionally outside the current
+  offline package model.
+
+The complete packaging and verification design is documented in
+[Hexz packaging and mounts](dev/docs/architecture/06-hexz-packaging.md).
+
 ## Validate
 
 ```bash
@@ -229,6 +300,7 @@ cargo validate projects/test-project
 - [Content loader](dev/docs/architecture/07-content-loader.md)
 - [Rendering](dev/docs/architecture/03-render-pipeline.md)
 - [Saves and rollback](dev/docs/architecture/04-rollback-and-save.md)
+- [Hexz packaging and security model](dev/docs/architecture/06-hexz-packaging.md)
 - [LetsGal integration](dev/docs/architecture/08-letsgal-studio.md)
 - [WebGAL compatibility](dev/docs/webgal-compatibility/README.md)
 - [Current work](dev/docs/TODO.md)

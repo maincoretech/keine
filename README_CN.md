@@ -14,7 +14,7 @@
 
 ## 亮点
 
-- 原生渲染、音频、视频、UI、存档与单二进制分发。
+- 原生渲染、音频、视频、UI、存档与自包含分发。
 - 与帧率无关的转场、打字机文本、时间轴与粒子。
 - 背景、立绘、图层、滤镜、混合模式、相机变换与区域模糊。
 - 对话、旁白、注音文本、选项、回看、自动、跳过与回滚。
@@ -40,7 +40,7 @@ cargo dev projects/test-project
 | `cargo bundle <project> [--output <dir>]` | 打包加密发布构建 |
 | `cargo dev <project>` | 带热重载与视频运行 |
 | `cargo preview <project>` | 运行优化预览 |
-| `cargo perf <project> [seconds] [cursor] [profile]` | 记录性能样本 |
+| `cargo perf <project> [seconds] [timeline|cursor] [profile]` | 记录性能样本 |
 | `cargo dev <project> --sync` | 跟随打开的 LetsGal 工程逐步同步 |
 
 无效的项目路径会立即失败。
@@ -51,6 +51,36 @@ cargo dev projects/test-project
 中写入版本化的 `.keine/compiled/program.bin`；打包后的 `.hxz` 必须包含该产物，启动
 时不再解析源脚本。固定 envelope（magic、版本、长度、CRC32 和程序 fingerprint）
 保证发布包与源码工程的存档兼容。
+
+## 开发一个游戏
+
+Kēne 不要求再创建一个独立的“编译器工程”。从校验、预览到发布，始终操作原来的
+WebGAL/原生目录或 LetsGal 工程：
+
+```mermaid
+flowchart LR
+    A["编辑工程<br/>config.yaml 或 project.json"] --> B["无窗口校验<br/>cargo validate"]
+    B --> C["日常开发<br/>cargo dev"]
+    C --> D["发布前预览<br/>cargo preview"]
+    D --> E["加密打包<br/>cargo bundle"]
+    E --> F["分发<br/>引擎 + game.hxz"]
+```
+
+1. 创建或打开工程：原生/WebGAL 工程根目录放 `config.yaml`，LetsGal 工程使用现有
+   `project.json`。
+2. 修改脚本或配置后运行 `cargo validate <工程>`；它不打开窗口，只报告确定性错误。
+3. 日常使用 `cargo dev <工程>`，保留源码诊断与热重载。跟随已打开的 LetsGal 工程时
+   加 `--sync`；Kēne 只读取 Studio 状态，不修改工程。
+4. 发布前运行 `cargo preview <工程>`，用优化构建做最后一次视觉检查。
+5. 为该游戏设置一个独立的 `HEXZ_PASSWORD`，运行 `cargo bundle <工程>`，然后分发完整
+   输出目录。玩家不需要另外安装 Rust、Kēne、LetsGal，也不需要取得源脚本。
+
+默认输出位于 `target/release-package/`：`keine`/`keine.exe` 是播放器，`game.hxz`
+是加密游戏，其余启动器和运行库也属于同一个发行物。macOS 包装脚本会把这两者装入
+一个 `.app`。
+
+开发阶段始终读取可编辑源码并允许调试；只有 `cargo bundle` 才会编译剧情、加密资源、
+签名归档并构建该游戏专用的发行引擎。
 
 ## 项目输入
 
@@ -180,7 +210,8 @@ HEXZ_PASSWORD='your-password' \
 反调试（macOS `PT_DENY_ATTACH`、禁用 core dump、Windows 检测到调试器即退出），
 release profile（LTO + 剥离符号 + `panic=abort`）把二进制从约 108 MB 压到约
 43 MB。`HEXZ_PASSWORD` 在构建期以 XOR 掩码写进二进制，明文不会出现在发行包的
-字符串表中。打包属于刻意保留的弱保护，不是 DRM。
+字符串表中。打包还会生成仅用于本次发行包的 Ed25519 密钥对：私钥签名后随临时目录
+销毁，公钥编译进配套引擎。它能检测资源替换，但不能把离线客户端变成 DRM。
 
 创建 macOS 应用包：
 
@@ -191,6 +222,35 @@ HEXZ_PASSWORD='your-password' \
 
 macOS 包装脚本复用同一套加密且启用加固的 `cargo bundle` 产物；App 内只携带
 `game.hxz`，不会复制明文源项目。
+
+### 安全模型
+
+Kēne 面向玩家完全控制本机的离线游戏。它的目标是防止直接解包，并让未被修改的官方
+引擎能够发现资源篡改；它不承诺 DRM。
+
+```mermaid
+flowchart LR
+    S["开发者源码"] --> C["校验并编译"]
+    C --> P["加密 game.hxz"]
+    K["临时签名私钥"] --> P
+    P --> B["发行目录"]
+    U["内含公钥与掩码密码的引擎"] --> B
+    B --> V["使用前验签"]
+    V --> R["按块解密读取"]
+```
+
+- **保密性：**素材与编译后的剧情使用 AES-256-GCM 加密进 `game.hxz`。密码经过掩码，
+  运行时不会生成完整明文归档或视频临时文件；但能控制电脑的攻击者最终仍可从二进制
+  或进程内存取得密码。
+- **完整性：**每次打包生成临时 Ed25519 密钥对，私钥不进入发行物，公钥只进入配套
+  引擎。header、索引、metadata、字典或数据块被修改后都会被拒绝；归档仍是标准 Hexz。
+- **运行时加固：**发行引擎会阻止最直接的调试器挂载和 core dump，开发构建保持完全
+  可调试。这只提高提取成本，坚定的攻击者仍可修改引擎绕过检查。
+- **信任边界：**如果攻击者同时替换引擎与 `game.hxz`，Kēne 自身无法证明发布者身份。
+  macOS/Windows 平台签名负责最外层身份，但目前按你的决定暂缓。
+
+完整的打包、验签和随机读取设计见
+[Hexz 打包与挂载](dev/docs/architecture/06-hexz-packaging.md)。
 
 ## 校验
 
@@ -207,6 +267,7 @@ cargo validate projects/test-project
 - [内容加载器](dev/docs/architecture/07-content-loader.md)
 - [渲染](dev/docs/architecture/03-render-pipeline.md)
 - [存档与回滚](dev/docs/architecture/04-rollback-and-save.md)
+- [Hexz 打包与安全模型](dev/docs/architecture/06-hexz-packaging.md)
 - [LetsGal 集成](dev/docs/architecture/08-letsgal-studio.md)
 - [WebGAL 兼容](dev/docs/webgal-compatibility/README.md)
 - [当前工作](dev/docs/TODO.md)

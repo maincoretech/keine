@@ -5,7 +5,7 @@
 ## 边界
 
 - `hexz_k::ResourcePack` 负责标准 `.hxz` 的索引、校验、解压、解密信息和随机读取。
-- 发布流水线（`keine package`）通过 hexz_k 的 `pack` 库接口负责 zstd 与
+- 发布流水线（`cargo bundle`）通过 hexz_k 的 `pack` 库接口负责 zstd 与
   AES-256-GCM 分块打包；运行时（游戏）不依赖 `hexz-ops`，也不复制 magic、
   header、block 或 CRC 语义。
 - `keine-loader::adapter::asset::hexz` 只负责配置适配、安全路径检查和 loader mount。
@@ -13,9 +13,9 @@
 
 ## 打包
 
-打包属于发布流水线，不属于引擎或 loader API。`keine package` 通过 hexz_k 的
+打包属于发布流水线，不属于引擎或 loader API。`cargo bundle` 通过 hexz_k 的
 `pack` 库接口生成标准 `.hxz`，默认采用 64 KiB block、zstd 和 AES-256-GCM 分块加密。
-文件排除由 `keine package` 的 staging 清理显式完成（`saves/`、`imported_assets/`、
+文件排除由 `cargo bundle` 的 staging 清理显式完成（`saves/`、`imported_assets/`、
 `.keine`、`*.meta`、`.DS_Store`）；Hexz 标准的 `.gitignore`、`.ignore` 或
 `.hexzignore` 仍可作为补充。
 
@@ -24,7 +24,7 @@
 `keine-loader` 构建时由 `build.rs` 做 XOR 混淆（`cargo:rerun-if-env-changed`
 保证换密码时缓存正确失效），明文不会进入二进制字符串表；运行时才在内存还原。
 
-`keine package` 编译引擎时会额外启用 `hardened` feature，抬高运行期提取成本：
+`cargo bundle` 编译引擎时会额外启用 `hardened` feature，抬高运行期提取成本：
 macOS 上调用 `PT_DENY_ATTACH` 拒绝内核级调试器挂载、Unix 上禁用 core dump（防止
 崩溃转储泄漏还原后的密钥）、Windows 上检测到调试器立即退出。开发构建不启用该
 feature，`cargo dev` 与 CI runner 始终可调试。这一切仍不是 DRM：修改二进制或换一种
@@ -32,7 +32,7 @@ feature，`cargo dev` 与 CI runner 始终可调试。这一切仍不是 DRM：�
 
 ### 标准签名与完整性配置
 
-`keine package` 会为每个发行包临时生成一对 Ed25519 密钥：私钥只存在于本次打包的
+`cargo bundle` 会为每个发行包临时生成一对 Ed25519 密钥：私钥只存在于本次打包的
 临时目录，公钥编译进同一包的引擎，流水线结束时临时目录自动删除。因此本地与 CI 都
 不需要保管平台签名证书或长期 Hexz 签名密钥；若以后需要跨版本发行身份，再单独增加
 稳定私钥输入即可，不影响当前格式。
@@ -45,7 +45,7 @@ feature，`cargo dev` 与 CI runner 始终可调试。这一切仍不是 DRM：�
 
 ```mermaid
 flowchart LR
-    P["keine package"] --> K["临时 Ed25519 密钥对"]
+    P["cargo bundle"] --> K["临时 Ed25519 密钥对"]
     K -->|"私钥，仅打包期"| S["标准 Hexz 原生签名"]
     K -->|"公钥"| E["发行引擎"]
     A["header + 分页索引 + 字典 + 数据块"] --> H["hexz_k 完整性 metadata"]
@@ -67,7 +67,7 @@ Vorbis 与 FLAC 素材直接进入 app 或 Hexz，兼容素材无需为了打包
 `bundled-opus` 特性静态构建 libopus，因此目标设备不需要安装动态库；构建机需要
 CMake。
 
-开发构建默认启用 `audio-all`，以便直接预览不同来源的素材。`keine package` 会在
+开发构建默认启用 `audio-all`，以便直接预览不同来源的素材。`cargo bundle` 会在
 编译前扫描项目内全部资源层，根据 `.opus`、`.wav`、`.mp3`、
 `.ogg/.oga/.spx` 和 `.flac` 只启用实际需要的 Cargo features。标准发行还会启用
 `ui-sounds`，因为内置 WebGAL K 提示音使用 Opus；明确禁用 UI 音效的自定义构建才可
@@ -79,9 +79,9 @@ CMake。
 `bundle-macos.sh` 只把这一流水线生成的 hardened 引擎与 encrypted `game.hxz` 包装进
 标准 App 目录，不再单独构建引擎，也不复制明文项目。
 
-含视频内容时，`keine package` 只启用目标平台的发行后端：macOS 为 `video-native`，
-Windows/Linux 为 `video-ffmpeg`。Windows 发行同时支持 x64 与 ARM64；Linux 包递归收集
-FFmpeg 的非 glibc 动态依赖到本地 `lib/`，启动脚本只为该包设置库搜索路径。
+含视频内容时，`cargo bundle` 只启用目标平台的发行后端：macOS 为 `video-native`，
+Windows/Linux 为 `video-ffmpeg`。Windows 当前只发布 x64；Linux 包递归收集 FFmpeg 的
+非 glibc 动态依赖到本地 `lib/`，启动脚本只为该包设置库搜索路径。
 
 ## 读取
 
