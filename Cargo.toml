@@ -62,7 +62,7 @@ rust-version = "1.97"
 # every frame when debug_assertions is enabled (dev profile default),
 # even with the "logging" feature disabled.
 [profile.dev]
-# Interactive previews process full-HD pixels every frame. A small amount of
+# Interactive development processes full-HD pixels every frame. A small amount of
 # optimization keeps `cargo dev` representative without turning it into a slow
 # release build or removing useful debug information.
 opt-level = 1

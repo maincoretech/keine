@@ -145,7 +145,7 @@ cargo dev projects/test-project
 
 ## Phase 5 演出验收
 
-运行 `cargo preview projects/test-project`，分别选择菜单的 **02**、**03**、**04**。
+运行 `cargo dev projects/test-project`，分别选择菜单的 **02**、**03**、**04**。
 
 ### 02 · 转场、遮幅与混合
 
@@ -178,7 +178,7 @@ FALLEN_LEAVES。粒子应具有柔边、速度/尺寸/漂移差异；切换时�
 
 ## Phase 6 文本增强验收
 
-运行 `cargo preview projects/test-project`，选择 **05 · 富文本、头像与输入**。
+运行 `cargo dev projects/test-project`，选择 **05 · 富文本、头像与输入**。
 
 1. 第一行同时出现普通、樱花色粗体、背景色、放大、斜体和删除线；样式只影响各自区段。
 2. `蟹 / 桜 / 物語` 的假名叠加在正文正上方，不占用独立行高；正文基线保持一致，

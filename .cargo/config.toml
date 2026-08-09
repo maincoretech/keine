@@ -5,9 +5,6 @@ adapters = "run -- adapters"
 # Machines without FFmpeg development libraries can use `cargo run -- dev`
 # for the same session without video backends.
 dev = "run --features video-native,video-ffmpeg -- dev"
-# Optimized interactive preview. Keeping `--release` inside the alias avoids
-# leaking Cargo's option ordering into the project-facing command line.
-preview = "run --release --features video-native,video-ffmpeg -- dev"
 # Repeatable release-mode runtime capture. The optional final argument is the
 # sampling duration in seconds (default: 15, after a 3-second warm-up); a
 # second optional argument selects a stable timeline id (a numeric cursor is

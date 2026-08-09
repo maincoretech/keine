@@ -39,7 +39,6 @@ cargo dev projects/test-project
 | `cargo validate <project>` | 不打开窗口进行校验 |
 | `cargo bundle <project> [--output <dir>]` | 打包加密发布构建 |
 | `cargo dev <project>` | 带热重载与视频运行 |
-| `cargo preview <project>` | 运行优化预览 |
 | `cargo perf <project> [seconds] [timeline|cursor] [profile]` | 记录性能样本 |
 | `cargo dev <project> --sync` | 跟随打开的 LetsGal 工程逐步同步 |
 
@@ -64,8 +63,8 @@ WebGAL/原生目录或 LetsGal 工程：
 flowchart LR
     A["编辑工程<br/>config.yaml 或 project.json"] --> B["无窗口校验<br/>cargo validate"]
     B --> C["日常开发<br/>cargo dev"]
-    C --> D["发布前预览<br/>cargo preview"]
-    D --> E["加密打包<br/>cargo bundle"]
+    C --> D["加密打包<br/>cargo bundle"]
+    D --> E["运行实际发行物"]
     E --> F["分发<br/>引擎 + game.hxz"]
 ```
 
@@ -74,9 +73,9 @@ flowchart LR
 2. 修改脚本或配置后运行 `cargo validate <工程>`；它不打开窗口，只报告确定性错误。
 3. 日常使用 `cargo dev <工程>`，保留源码诊断与热重载。跟随已打开的 LetsGal 工程时
    加 `--sync`；Kēne 只读取 Studio 状态，不修改工程。
-4. 发布前运行 `cargo preview <工程>`，用优化构建做最后一次视觉检查。
-5. 为该游戏设置一个独立的 `HEXZ_PASSWORD`，运行 `cargo bundle <工程>`，然后分发完整
-   输出目录。玩家不需要另外安装 Rust、Kēne、LetsGal，也不需要取得源脚本。
+4. 为该游戏设置一个独立的 `HEXZ_PASSWORD`，运行 `cargo bundle <工程>`。
+5. 运行输出目录中的 `run.sh`/`run.bat` 验收真正的加密发行物，然后分发完整目录。玩家
+   不需要另外安装 Rust、Kēne、LetsGal，也不需要取得源脚本。
 
 默认输出位于 `target/release-package/`：`keine`/`keine.exe` 是播放器，`game.hxz`
 是加密游戏，其余启动器和运行库也属于同一个发行物。macOS 包装脚本会把这两者装入

@@ -108,8 +108,6 @@ const COMMANDS: &[CommandHelp] = &[
     },
 ];
 
-const CARGO_ONLY_COMMANDS: &[(&str, &str, &str)] =
-    &[("preview", "<project>", "Run an optimized preview")];
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub(super) fn help_or_version(args: &[OsString]) -> Option<ExitCode> {
@@ -160,7 +158,7 @@ pub(super) fn parse(args: &[OsString]) -> Result<CliCommand> {
         }
         Some("dev") => parse_development(args),
         Some("benchmark") => parse_benchmark(args),
-        Some("validate" | "perf" | "preview") => anyhow::bail!(
+        Some("validate" | "perf") => anyhow::bail!(
             "{command:?} is a Cargo alias, not a keine subcommand; run `cargo {}` or `keine --help`",
             command.to_string_lossy()
         ),
@@ -307,11 +305,7 @@ fn print_help() {
     for command in COMMANDS {
         println!("  {:<60}{}", command_usage(command, cargo), command.summary);
     }
-    if cargo {
-        for (name, args, summary) in CARGO_ONLY_COMMANDS {
-            println!("  {:<60}{}", format!("cargo {name} {args}"), summary);
-        }
-    } else {
+    if !cargo {
         println!(
             "  {:<60}Run a packaged or directory project",
             "keine <project>"

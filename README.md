@@ -45,7 +45,6 @@ test is in
 | `cargo validate <project>` | Validate without opening a window |
 | `cargo bundle <project> [--output <dir>]` | Package an encrypted release build |
 | `cargo dev <project>` | Run with hot reload and video |
-| `cargo preview <project>` | Run an optimized preview |
 | `cargo perf <project> [seconds] [timeline|cursor] [profile]` | Record a performance sample |
 | `cargo dev <project> --sync` | Follow an open LetsGal project and step |
 
@@ -75,8 +74,8 @@ validation through release:
 flowchart LR
     A["Edit project<br/>config.yaml or project.json"] --> B["Validate<br/>cargo validate"]
     B --> C["Iterate<br/>cargo dev"]
-    C --> D["Release check<br/>cargo preview"]
-    D --> E["Package<br/>cargo bundle"]
+    C --> D["Package<br/>cargo bundle"]
+    D --> E["Run the actual release"]
     E --> F["Ship<br/>engine + game.hxz"]
 ```
 
@@ -86,9 +85,9 @@ flowchart LR
    checks the project without opening a window.
 3. Use `cargo dev <project>` for normal iteration and hot reload. For an open
    LetsGal project, add `--sync`; Kēne reads Studio state but never modifies it.
-4. Use `cargo preview <project>` for an optimized final visual pass.
-5. Set one game-specific `HEXZ_PASSWORD`, then run `cargo bundle <project>`.
-   Distribute the complete output directory; players do not need Rust, source
+4. Set one game-specific `HEXZ_PASSWORD`, then run `cargo bundle <project>`.
+5. Validate the actual encrypted release with `run.sh`/`run.bat`, then
+   distribute the complete output directory. Players do not need Rust, source
    scripts, Kēne, or LetsGal installed separately.
 
 The default output is `target/release-package/`: `keine`/`keine.exe` is the
