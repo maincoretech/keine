@@ -190,16 +190,23 @@ fn read_json_or_default<T: serde::de::DeserializeOwned + Default>(path: &Path) -
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
+
+    static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
     fn fixture() -> PathBuf {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("keine-letsgal-{nonce}"));
+        let sequence = FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "keine-letsgal-{}-{nonce}-{sequence}",
+            std::process::id()
+        ));
         fs::create_dir_all(root.join("chapters")).unwrap();
         fs::create_dir_all(root.join("assets")).unwrap();
         fs::write(

@@ -13,7 +13,7 @@ serde_json = { workspace = true }
 serde = { workspace = true }
 crc32fast = { workspace = true }
 postcard = { workspace = true }
-hexz_k = { workspace = true }
+hexz_k = { workspace = true, features = ["signing"] }
 
 [dev-dependencies]
 criterion = { workspace = true }
