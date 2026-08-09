@@ -56,8 +56,8 @@ FFmpeg 后端只负责解码。存在音轨且未静音时，rodio sink 的实�
 整段解码 PCM 的通用循环器。
 
 自动化覆盖加密 Hexz 随机读取、音视频时长误差、三次循环单调性、暂停/恢复、无音频长时
-回退时钟，以及 macOS AVFoundation 的 FS/Hexz 首帧解码。Windows ARM64 目前由交叉编译
-保证 API 与依赖闭合；真实 ARM64 硬件播放仍属于发布验收。
+回退时钟，以及 macOS AVFoundation 的 FS/Hexz 首帧解码。Windows 当前只发布并验证 x64；
+ARM64 原生构建暂缓，在具备明确发行需求和真实硬件验收条件后再恢复。
 
 ## 可选后续优化
 

@@ -35,18 +35,10 @@ jobs:
             artifact: keine-windows-x64
             target: x86_64-pc-windows-msvc
             triplet: x64-windows
-          - name: Windows ARM64
-            os: windows-latest
-            artifact: keine-windows-arm64
-            target: aarch64-pc-windows-msvc
-            triplet: arm64-windows
     runs-on: ${{ matrix.os }}
     env:
       HEXZ_PASSWORD: ${{ secrets.HEXZ_PASSWORD }}
       KEINE_BUILD_TARGET: ${{ matrix.target }}
-      # Ignored unless the ARM64 target is built. ring 0.16 requires clang-cl
-      # rather than MSVC cl.exe for its Windows ARM64 C implementation.
-      CC_aarch64_pc_windows_msvc: clang-cl
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.97

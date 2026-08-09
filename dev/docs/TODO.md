@@ -195,7 +195,9 @@ Flowchart 仍保留为可选适配工作，不能用静态占位或实验依赖�
 - [x] macOS AVFoundation 单播放器音画时钟、BGRA 帧输出、共享 Bevy 渲染生命周期，以及
   `AVAssetResourceLoader` 对 Hexz 随机读取的直接映射
 - [x] Windows/Linux FFmpeg `AVIOContext` 直接读取 Hexz，rodio sink 作为音频主时钟；
-  Windows x64 与 Linux 真实 fixture 解码，Windows ARM64 交叉编译
+  Windows x64 与 Linux 真实 fixture 解码
+- [ ] Windows ARM64 原生构建暂缓；当前通过 Windows 11 的 x64 应用模拟覆盖，待出现明确
+  发行需求并具备真实 ARM64 硬件验收条件后再恢复
 - [x] 移除 Hexz 视频的完整解密与明文临时文件；平台路径、缓存和 fixture 见
   [`09-native-video.md`](architecture/09-native-video.md)
 - [ ] 可选：Windows Media Foundation frame-server 后端与 Hexz `IMFByteStream`，在不增加
