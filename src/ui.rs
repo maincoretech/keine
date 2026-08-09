@@ -1,6 +1,7 @@
 mod overlays;
 mod screens;
 mod stage;
+pub(crate) mod startup_error;
 mod support;
 
 pub(crate) use overlays::user_input;

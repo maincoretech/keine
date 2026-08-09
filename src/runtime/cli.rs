@@ -59,6 +59,18 @@ pub(super) enum CliCommand {
     },
 }
 
+impl CliCommand {
+    pub(super) const fn uses_startup_error_page(&self) -> bool {
+        matches!(
+            self,
+            Self::Run {
+                mode: InteractiveMode::Shipping,
+                ..
+            }
+        )
+    }
+}
+
 struct CommandHelp {
     binary_name: &'static str,
     cargo_name: &'static str,
@@ -181,6 +193,13 @@ pub(super) fn parse(args: &[OsString]) -> Result<CliCommand> {
 
 pub(super) fn resolve_project_path(path: impl AsRef<Path>) -> PathBuf {
     let path = path.as_ref();
+    if path.as_os_str().is_empty() {
+        return std::env::current_exe()
+            .ok()
+            .and_then(|executable| executable.parent().map(Path::to_owned))
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("game.hxz");
+    }
     if path.is_absolute() {
         return path.to_owned();
     }

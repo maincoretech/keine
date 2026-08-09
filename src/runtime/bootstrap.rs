@@ -65,6 +65,7 @@ pub fn run_cli() -> std::process::ExitCode {
         }
     };
     let configure_adapters = matches!(&command, CliCommand::Adapters);
+    let uses_startup_error_page = command.uses_startup_error_page();
     let mut loader = LoaderRegistry::default();
     let result = if configure_adapters {
         super::adapter_tui::configure(&loader)
@@ -76,7 +77,8 @@ pub fn run_cli() -> std::process::ExitCode {
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
-            super::platform::startup_error(
+            report_startup_error(
+                uses_startup_error_page,
                 if configure_adapters {
                     "failed to configure adapters"
                 } else {
@@ -91,9 +93,20 @@ pub fn run_cli() -> std::process::ExitCode {
 
 pub fn run_with_loader(loader: LoaderRegistry) {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
-    let result = parse_cli(&args).and_then(|command| execute_command(loader, command));
+    let parsed = parse_cli(&args);
+    let uses_startup_error_page = parsed
+        .as_ref()
+        .is_ok_and(CliCommand::uses_startup_error_page);
+    let result = parsed.and_then(|command| execute_command(loader, command));
     if let Err(error) = result {
-        super::platform::startup_error("failed to open project", &error);
+        report_startup_error(uses_startup_error_page, "failed to open project", &error);
+    }
+}
+
+fn report_startup_error(show_page: bool, stage: &str, error: &anyhow::Error) {
+    super::platform::startup_error(stage, error);
+    if show_page {
+        crate::ui::startup_error::show();
     }
 }
 
@@ -815,6 +828,17 @@ mod tests {
             })
             .requires_single_instance()
         );
+    }
+
+    #[test]
+    fn only_shipping_runs_use_the_native_startup_error_page() {
+        let shipping = parse_cli(&args(&["game.hxz"])).unwrap();
+        let development = parse_cli(&args(&["dev", "project"])).unwrap();
+        let check = parse_cli(&args(&["check", "project"])).unwrap();
+
+        assert!(shipping.uses_startup_error_page());
+        assert!(!development.uses_startup_error_page());
+        assert!(!check.uses_startup_error_page());
     }
 
     #[test]
