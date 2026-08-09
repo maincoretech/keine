@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use keine_core::config::CompiledProgramPolicy;
 
 use crate::compiled::{CompiledProgramV1, decode};
@@ -110,18 +110,19 @@ pub fn attach_compiled_program(
     bin: Option<Vec<u8>>,
     expected_schema: u32,
 ) -> Result<ContentProject> {
-    let use_compiled = match policy {
-        CompiledProgramPolicy::Disable => false,
-        CompiledProgramPolicy::Require => bin.is_some(),
-        CompiledProgramPolicy::Auto => auto_trusts_bin && bin.is_some(),
-    };
-    if !use_compiled {
-        if policy == CompiledProgramPolicy::Require {
-            bail!("compiled program is required but {COMPILED_PROGRAM_PATH} is missing");
+    let bytes = match policy {
+        CompiledProgramPolicy::Disable => return Ok(project),
+        CompiledProgramPolicy::Require => bin.ok_or_else(|| {
+            anyhow::anyhow!("compiled program is required but {COMPILED_PROGRAM_PATH} is missing")
+        })?,
+        CompiledProgramPolicy::Auto if auto_trusts_bin => {
+            let Some(bytes) = bin else {
+                return Ok(project);
+            };
+            bytes
         }
-        return Ok(project);
-    }
-    let bytes = bin.expect("use_compiled guarantees a present artifact");
+        CompiledProgramPolicy::Auto => return Ok(project),
+    };
     let loader = Arc::new(
         CompiledProgramSceneLoader::from_program_bin(&bytes, expected_schema)
             .with_context(|| format!("failed to load {COMPILED_PROGRAM_PATH}"))?,

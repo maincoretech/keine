@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use keine_core::config::GameConfig;
+use keine_core::config::{CompiledProgramPolicy, GameConfig};
 
 use crate::loader::{HexzArchive, SourceMount, load_hexz_project_from_archive};
 use crate::{
@@ -72,14 +72,14 @@ impl ProjectAdapter for HexzProjectAdapter {
         let yaml = std::str::from_utf8(&yaml).context("Hexz config.yaml is not UTF-8")?;
         let config = GameConfig::from_yaml(yaml).context("invalid Hexz config.yaml")?;
         let path = Path::new(COMPILED_PROGRAM_PATH);
-        let bin = archive
-            .contains_file(path)
-            .then(|| {
-                archive
-                    .read(path)
-                    .context("failed to read compiled program")
-            })
-            .transpose()?;
+        let bin = (config.compiled_program != CompiledProgramPolicy::Disable
+            && archive.contains_file(path))
+        .then(|| {
+            archive
+                .read(path)
+                .context("failed to read compiled program")
+        })
+        .transpose()?;
         let content = load_hexz_project_from_archive(archive, &config.adapter.asset)?;
         let content = attach_compiled_program(
             content,

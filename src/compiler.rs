@@ -3,11 +3,12 @@
 //!
 //! Compilation reuses the exact scene pipeline behind `cargo validate`:
 //! source parsing with full diagnostics, resource existence checks, and the
-//! same typed `Program` construction. The artifact is written atomically so a
+//! same typed action model. The artifact is written atomically so a
 //! crashed build never leaves a half-written program.bin.
 
 use std::collections::HashSet;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -41,24 +42,27 @@ pub fn compile_project(
         .map(|scene| scene.actions.len() as u64)
         .sum::<u64>();
 
-    // The fingerprint is the identity of the source-built program; the runtime
-    // compares it after reconstruction instead of trusting the header alone.
-    let program = Program::from_scenes(
+    // Compute the source program identity without cloning the complete action
+    // tree solely to construct temporary label indexes.
+    let fingerprint = Program::fingerprint_scenes(
         scenes
             .iter()
-            .map(|scene| (scene.name.clone(), scene.actions.clone())),
+            .map(|scene| (scene.name.as_str(), scene.actions.as_slice())),
     );
-    let fingerprint = program.fingerprint();
+    let compiled_scenes = scenes
+        .iter()
+        .map(CompiledSceneV1::from_loaded)
+        .collect::<Vec<_>>();
     let bytes = encode(&EncodeInput {
-        scenes: scenes.iter().map(CompiledSceneV1::from_loaded).collect(),
         metadata: ProgramMetadataV1 {
             compiler_version: env!("CARGO_PKG_VERSION").to_string(),
             engine_version: env!("CARGO_PKG_VERSION").to_string(),
             source_adapter: config.adapter.script.clone(),
             scene_count: scenes.len() as u32,
             action_count,
-            source_manifest_hash: manifest_hash(&scenes),
+            source_manifest_hash: manifest_hash(&compiled_scenes)?,
         },
+        scenes: compiled_scenes,
         fingerprint,
     })
     .context("failed to encode compiled program")?;
@@ -126,35 +130,48 @@ fn validate_scenes(
     Ok(warnings)
 }
 
-/// Stable diagnostic hash over scene identities, independent of build order,
-/// timestamps and absolute paths.
-fn manifest_hash(scenes: &[LoadedScene]) -> u64 {
-    let mut entries = scenes
-        .iter()
-        .map(|scene| format!("{}|{}", scene.name, scene.path.display()))
-        .collect::<Vec<_>>();
-    entries.sort();
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for entry in entries {
-        for byte in entry.bytes() {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        }
+/// Stable hash over the compiled source manifest. Source paths are excluded:
+/// LetsGal reports absolute paths, which would make temporary staging builds
+/// produce different artifacts from the same project.
+fn manifest_hash(scenes: &[CompiledSceneV1]) -> Result<u64> {
+    let mut writer = ManifestHasher::default();
+    postcard::to_io(scenes, &mut writer).context("failed to hash compiled scene manifest")?;
+    Ok(writer.0)
+}
+
+struct ManifestHasher(u64);
+
+impl Default for ManifestHasher {
+    fn default() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
     }
-    hash
+}
+
+impl Write for ManifestHasher {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        for byte in bytes {
+            self.0 ^= u64::from(*byte);
+            self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 fn write_atomically(output: &Path, bytes: &[u8]) -> Result<()> {
-    if let Some(parent) = output.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-    let mut temporary_name = output.as_os_str().to_os_string();
-    temporary_name.push(format!(".tmp-{}", std::process::id()));
-    let temporary = PathBuf::from(temporary_name);
-    fs::write(&temporary, bytes)
-        .with_context(|| format!("failed to write {}", temporary.display()))?;
-    fs::rename(&temporary, output)
+    let parent = output.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("failed to create temporary file in {}", parent.display()))?;
+    temporary
+        .write_all(bytes)
+        .with_context(|| format!("failed to write temporary file for {}", output.display()))?;
+    temporary
+        .persist(output)
+        .map_err(|error| error.error)
         .with_context(|| format!("failed to publish {}", output.display()))?;
     Ok(())
 }

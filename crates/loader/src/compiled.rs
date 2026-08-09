@@ -24,7 +24,7 @@
 use std::collections::HashSet;
 use std::fmt;
 
-use keine_core::Action;
+use keine_core::{Action, Program};
 use serde::{Deserialize, Serialize};
 
 use crate::{LoadedScene, ResourceRef, SceneRef};
@@ -140,6 +140,11 @@ pub struct CompiledProgramV1 {
     pub scenes: Vec<CompiledSceneV1>,
 }
 
+#[derive(Serialize)]
+struct CompiledProgramRef<'a> {
+    scenes: &'a [CompiledSceneV1],
+}
+
 impl CompiledProgramV1 {
     pub fn from_loaded(scenes: &[LoadedScene]) -> Self {
         Self {
@@ -194,6 +199,10 @@ pub enum CompiledError {
         expected: usize,
         found: usize,
     },
+    TrailingSectionBytes {
+        section: &'static str,
+        count: usize,
+    },
     ReservedNonZero,
     MetadataTooLarge(usize),
     PayloadTooLarge(u64),
@@ -211,6 +220,10 @@ pub enum CompiledError {
     DuplicateScene(String),
     MetadataCountMismatch {
         field: &'static str,
+        expected: u64,
+        actual: u64,
+    },
+    FingerprintMismatch {
         expected: u64,
         actual: u64,
     },
@@ -242,6 +255,10 @@ impl fmt::Display for CompiledError {
             Self::TrailingBytes { expected, found } => write!(
                 f,
                 "compiled program: length mismatch ({found} bytes, expected {expected})"
+            ),
+            Self::TrailingSectionBytes { section, count } => write!(
+                f,
+                "compiled program: {section} contains {count} trailing byte(s)"
             ),
             Self::ReservedNonZero => {
                 write!(f, "compiled program: reserved header bytes are not zero")
@@ -280,6 +297,10 @@ impl fmt::Display for CompiledError {
                 f,
                 "compiled program: metadata {field} mismatch (expected {expected}, got {actual})"
             ),
+            Self::FingerprintMismatch { expected, actual } => write!(
+                f,
+                "compiled program: fingerprint mismatch (expected {expected:016x}, got {actual:016x})"
+            ),
             Self::Payload(error) => write!(f, "compiled program: invalid payload: {error}"),
             Self::Metadata(error) => write!(f, "compiled program: invalid metadata: {error}"),
         }
@@ -291,8 +312,9 @@ impl std::error::Error for CompiledError {}
 /// Serialize scenes, metadata and fingerprint into a versioned program.bin.
 pub fn encode(input: &EncodeInput) -> Result<Vec<u8>, CompiledError> {
     validate_semantics(&input.scenes, &input.metadata)?;
-    let payload = postcard::to_stdvec(&CompiledProgramV1 {
-        scenes: input.scenes.clone(),
+    validate_fingerprint(&input.scenes, input.fingerprint)?;
+    let payload = postcard::to_stdvec(&CompiledProgramRef {
+        scenes: &input.scenes,
     })
     .map_err(CompiledError::Payload)?;
     if payload.len() as u64 > MAX_PAYLOAD_LEN {
@@ -373,16 +395,41 @@ pub fn decode(bytes: &[u8], expected_schema: u32) -> Result<DecodedProgram, Comp
         });
     }
 
-    let metadata: ProgramMetadataV1 =
-        postcard::from_bytes(metadata_bytes).map_err(CompiledError::Metadata)?;
-    let program: CompiledProgramV1 =
-        postcard::from_bytes(payload_bytes).map_err(CompiledError::Payload)?;
+    let (metadata, remaining): (ProgramMetadataV1, _) =
+        postcard::take_from_bytes(metadata_bytes).map_err(CompiledError::Metadata)?;
+    if !remaining.is_empty() {
+        return Err(CompiledError::TrailingSectionBytes {
+            section: "metadata",
+            count: remaining.len(),
+        });
+    }
+    let (program, remaining): (CompiledProgramV1, _) =
+        postcard::take_from_bytes(payload_bytes).map_err(CompiledError::Payload)?;
+    if !remaining.is_empty() {
+        return Err(CompiledError::TrailingSectionBytes {
+            section: "payload",
+            count: remaining.len(),
+        });
+    }
     validate_semantics(&program.scenes, &metadata)?;
+    validate_fingerprint(&program.scenes, header.fingerprint)?;
     Ok(DecodedProgram {
         metadata,
         scenes: program.scenes,
         fingerprint: header.fingerprint,
     })
+}
+
+fn validate_fingerprint(scenes: &[CompiledSceneV1], expected: u64) -> Result<(), CompiledError> {
+    let actual = Program::fingerprint_scenes(
+        scenes
+            .iter()
+            .map(|scene| (scene.name.as_str(), scene.actions.as_slice())),
+    );
+    if actual != expected {
+        return Err(CompiledError::FingerprintMismatch { expected, actual });
+    }
+    Ok(())
 }
 
 fn validate_semantics(
@@ -565,6 +612,31 @@ mod tests {
         assert!(matches!(
             decode(&bytes, IR_SCHEMA_VERSION),
             Err(CompiledError::MetadataCrcMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_trailing_section_data_and_fingerprint_drift() {
+        let mut bytes = encode(&fixture_input()).unwrap();
+        let metadata_len = read_u32(&bytes, 20) as usize;
+        let extra_at = FIXED_HEADER_LEN + metadata_len;
+        bytes.insert(extra_at, 0);
+        bytes[20..24].copy_from_slice(&((metadata_len + 1) as u32).to_le_bytes());
+        let crc = crc32fast::hash(&bytes[FIXED_HEADER_LEN..=extra_at]);
+        bytes[32..36].copy_from_slice(&crc.to_le_bytes());
+        assert!(matches!(
+            decode(&bytes, IR_SCHEMA_VERSION),
+            Err(CompiledError::TrailingSectionBytes {
+                section: "metadata",
+                count: 1
+            })
+        ));
+
+        let mut bytes = encode(&fixture_input()).unwrap();
+        bytes[40..48].copy_from_slice(&0u64.to_le_bytes());
+        assert!(matches!(
+            decode(&bytes, IR_SCHEMA_VERSION),
+            Err(CompiledError::FingerprintMismatch { expected: 0, .. })
         ));
     }
 

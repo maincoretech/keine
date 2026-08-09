@@ -210,6 +210,7 @@ release bench profile and 100 measured samples:
 | Benchmark | Result | Change |
 | --- | ---: | ---: |
 | `script_runtime_mixed/dialogue_turns/1000` | 3.991 ms / 250.6 K turns/s | time -16.1%, throughput +19.2% |
+| `program_load/decode_and_build_100000` | 4.301 ms / 23.25 M actions/s | time -42.3% from 7.450 ms |
 | `rollback/record_200_checkpoints` | 2.238 ms | time -56.8% from 5.181 ms |
 | `rollback/record_200_mutating_checkpoints` | 4.831 ms | new worst-case control |
 
@@ -219,6 +220,9 @@ allocation reductions in the borrowed expression scanner. The rollback case
 contains 100 sprites and 1000 local variables. Adjacent checkpoints now share
 unchanged collections; the mutating control confirms that a changed variable
 map remains within the previous static baseline rather than hiding copy cost.
+Compiled loading validates the envelope and content fingerprint directly over
+borrowed decoded scenes, avoiding a second 100k-action clone and label-index
+construction before the final `Program` takes ownership.
 
 The same pass also makes speculative asset prefetch non-blocking, compiles a
 single-sample stage shader variant for ordinary images, lets static film

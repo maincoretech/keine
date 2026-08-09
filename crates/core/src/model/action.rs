@@ -621,6 +621,26 @@ impl Program {
         self.fingerprint
     }
 
+    /// Computes the stable program identity directly from borrowed scenes.
+    ///
+    /// Loaders use this before taking ownership of decoded actions, avoiding a
+    /// second full action-tree clone solely for integrity validation.
+    pub fn fingerprint_scenes<'a>(
+        scenes: impl IntoIterator<Item = (&'a str, &'a [Action])>,
+    ) -> u64 {
+        let mut scenes = scenes.into_iter().collect::<Vec<_>>();
+        if scenes.is_empty() {
+            return 0;
+        }
+        scenes.sort_unstable_by_key(|(name, _)| *name);
+        let mut writer = Fnv64::default();
+        for (name, actions) in scenes {
+            postcard::to_io(&(name, actions), &mut writer)
+                .expect("serializing typed actions into a fingerprint cannot fail");
+        }
+        writer.finish()
+    }
+
     pub fn contains_scene(&self, name: &str) -> bool {
         self.scenes.contains_key(name)
     }
@@ -665,19 +685,11 @@ impl Scene {
 /// FNV-1a is intentionally small and deterministic. This is a compatibility
 /// identity, not a cryptographic signature; the save payload has its own CRC.
 fn program_fingerprint(scenes: &HashMap<String, Scene>) -> u64 {
-    if scenes.is_empty() {
-        return 0;
-    }
-
-    let mut names = scenes.keys().collect::<Vec<_>>();
-    names.sort_unstable();
-    let mut writer = Fnv64::default();
-    for name in names {
-        let scene = &scenes[name];
-        postcard::to_io(&(name.as_str(), scene.actions.as_ref()), &mut writer)
-            .expect("serializing typed actions into a fingerprint cannot fail");
-    }
-    writer.finish()
+    Program::fingerprint_scenes(
+        scenes
+            .iter()
+            .map(|(name, scene)| (name.as_str(), scene.actions.as_ref())),
+    )
 }
 
 struct Fnv64(u64);
@@ -743,5 +755,20 @@ mod program_tests {
 
         assert_eq!(first.fingerprint(), reordered.fingerprint());
         assert_ne!(first.fingerprint(), changed.fingerprint());
+    }
+
+    #[test]
+    fn borrowed_scene_fingerprint_matches_owned_program() {
+        let scenes = [
+            ("main".to_owned(), vec![Action::Comment]),
+            ("aside".to_owned(), vec![Action::Label("start".into())]),
+        ];
+        let borrowed = Program::fingerprint_scenes(
+            scenes
+                .iter()
+                .map(|(name, actions)| (name.as_str(), actions.as_slice())),
+        );
+        let owned = Program::from_scenes(scenes);
+        assert_eq!(borrowed, owned.fingerprint());
     }
 }
