@@ -30,6 +30,11 @@ pub fn hexz_password() -> &'static str {
     })
 }
 
+fn packaged_hexz_public_key() -> Option<[u8; 32]> {
+    let key = *include_bytes!(concat!(env!("OUT_DIR"), "/hexz-public-key.bin"));
+    (key != [0; 32]).then_some(key)
+}
+
 /// One immutable physical content backend shared by scripts and Bevy assets.
 #[derive(Clone)]
 pub enum ContentBackend {
@@ -267,17 +272,28 @@ impl fmt::Debug for HexzArchive {
 
 impl HexzArchive {
     pub fn open(path: &Path) -> Result<Self> {
+        Self::open_with_public_key(path, None)
+    }
+
+    /// Open the primary release package. Release builds produced by
+    /// `keine package` embed a matching one-bundle public key and require the
+    /// native Hexz signature plus the complete hexz_k integrity profile.
+    pub(crate) fn open_packaged(path: &Path) -> Result<Self> {
+        Self::open_with_public_key(path, packaged_hexz_public_key())
+    }
+
+    fn open_with_public_key(path: &Path, public_key: Option<[u8; 32]>) -> Result<Self> {
         let path = path
             .canonicalize()
             .with_context(|| format!("failed to resolve Hexz package {}", path.display()))?;
         let encrypted = hexz_k::is_encrypted(&path)
             .with_context(|| format!("failed to inspect Hexz package {}", path.display()))?;
-        let pack = ResourcePack::open_with_options(
-            &path,
-            Some(hexz_password()),
-            ResourcePackOptions::memory_constrained(),
-        )
-        .with_context(|| format!("failed to open Hexz package {}", path.display()))?;
+        let mut options = ResourcePackOptions::memory_constrained();
+        if let Some(public_key) = public_key {
+            options = options.require_integrity(public_key);
+        }
+        let pack = ResourcePack::open_with_options(&path, Some(hexz_password()), options)
+            .with_context(|| format!("failed to open Hexz package {}", path.display()))?;
         let files = pack
             .iter_files()
             .map(|path| safe_relative(Path::new(path)))

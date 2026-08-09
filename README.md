@@ -202,8 +202,13 @@ anti-debugging (macOS `PT_DENY_ATTACH`, disabled core dumps, Windows debugger
 exit), and the release profile (LTO + stripped symbols + `panic=abort`)
 shrinks the binary from ~108 MB to ~43 MB. The `HEXZ_PASSWORD` key is
 XOR-masked into the binary at build time, so the plaintext never appears in
-the shipped string tables. Packaged builds are deliberately weak protection,
-not DRM.
+the shipped string tables. Packaging also creates a one-bundle Ed25519 keypair,
+embeds only the public key in that engine, and signs the standard Hexz archive
+plus its complete integrity manifest; the temporary private key is discarded
+when packaging finishes. This detects resource replacement without adding a
+signing-key management step. The embedded decryption password can still be
+recovered from a running client, so packaged builds are tamper-evident rather
+than DRM.
 
 Create a macOS app bundle:
 

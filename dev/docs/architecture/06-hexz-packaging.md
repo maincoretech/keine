@@ -30,6 +30,37 @@ macOS 上调用 `PT_DENY_ATTACH` 拒绝内核级调试器挂载、Unix 上禁用
 feature，`cargo dev` 与 CI runner 始终可调试。这一切仍不是 DRM：修改二进制或换一种
 内存转储方式即可绕过。
 
+### 标准签名与完整性配置
+
+`keine package` 会为每个发行包临时生成一对 Ed25519 密钥：私钥只存在于本次打包的
+临时目录，公钥编译进同一包的引擎，流水线结束时临时目录自动删除。因此本地与 CI 都
+不需要保管平台签名证书或长期 Hexz 签名密钥；若以后需要跨版本发行身份，再单独增加
+稳定私钥输入即可，不影响当前格式。
+
+归档仍是完整的标准 Hexz 0.8：最终签名使用 Hexz 原生 header 字段与 Ed25519
+`sign_archive`，额外的 `hexz_k_integrity` 只是 metadata 中的可忽略 JSON 字段。旧工具
+可以打开、提取和执行原生验签；Keine 则在此基础上验证 header、分页索引、压缩字典和
+所有物理数据块。分页索引在打开时验证，数据块只在第一次 cache miss 时计算 BLAKE3，
+不会为了安全在启动时遍历整个游戏。
+
+```mermaid
+flowchart LR
+    P["keine package"] --> K["临时 Ed25519 密钥对"]
+    K -->|"私钥，仅打包期"| S["标准 Hexz 原生签名"]
+    K -->|"公钥"| E["发行引擎"]
+    A["header + 分页索引 + 字典 + 数据块"] --> H["hexz_k 完整性 metadata"]
+    H --> S
+    S --> X["标准 game.hxz"]
+    E --> V["运行时验签"]
+    X --> V
+    V --> I["启动验证签名、header、索引"]
+    V --> L["读取时懒验证数据块"]
+```
+
+这个模型把“保密”和“发布者完整性”分开：AES 密码随离线客户端分发，主要防止直接
+解包；Ed25519 私钥不进入客户端，所以提取出 AES 密码仍不能伪造通过验证的新资源包。
+它不替代未来的 macOS/Windows 平台代码签名，也不能阻止攻击者修改引擎本身后移除验证。
+
 推荐发行音频统一采用标准 Ogg Opus（`.opus`）。BGM、语音、音效与 UI 提示音共用
 同一加载入口，Opus 使用增量解码路径；发布脚本同时允许引擎已启用的 WAV、MP3、
 Vorbis 与 FLAC 素材直接进入 app 或 Hexz，兼容素材无需为了打包强制转码。默认
@@ -54,7 +85,9 @@ FFmpeg 的非 glibc 动态依赖到本地 `lib/`，启动脚本只为该包设�
 
 ## 读取
 
-1. 使用 `ResourcePackOptions::memory_constrained()` 打开，限制解压 block cache。
+1. 主发行包使用内嵌公钥强制完整性校验，并采用
+   `ResourcePackOptions::memory_constrained()` 限制解压 block cache；开发期普通 Hexz
+   资源挂载保持标准兼容。
 2. 归档与 O(1) clone 的索引句柄在整个游戏生命周期内保持打开。
 3. 配置和脚本通过统一 `ContentMount` 按需读取，不写入临时目录。
 4. 图片、音频和字体由 Bevy `AssetReader` 打开 `ResourceFile`；Opus 保持压缩数据，

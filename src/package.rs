@@ -9,7 +9,8 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use hexz_k::cmd::pack::{PackOptions, pack_directory};
+use hexz_k::cmd::pack::{PackOptions, pack_signed_directory};
+use hexz_k::integrity::generate_keypair;
 use tempfile::{Builder, TempDir, tempdir};
 
 use crate::compiler::compile_project;
@@ -71,7 +72,10 @@ pub fn package_project(
 
     let features = detect_features(&staged)?;
     println!("content features: {features}");
-    let engine = build_engine(&features)?;
+    let private_key = staging.path().join("hexz-private.key");
+    let public_key = staging.path().join("hexz-public.key");
+    generate_keypair(&private_key, &public_key)?;
+    let engine = build_engine(&features, &public_key)?;
 
     let output_parent = output.parent().context("release output has no parent")?;
     fs::create_dir_all(output_parent)?;
@@ -79,7 +83,7 @@ pub fn package_project(
         .prefix(".keine-package-")
         .tempdir_in(output_parent)
         .context("failed to create release assembly directory")?;
-    pack_staging(&staged, assembled.path(), &password)?;
+    pack_staging(&staged, assembled.path(), &password, &private_key)?;
     assemble(assembled.path(), &features, &engine)?;
     publish_directory(assembled, &output)?;
     println!("{}", output.display());
@@ -295,7 +299,7 @@ fn collect_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
 
 /// Content-trimmed release engine build, reusing the repo's default target
 /// directory so the same binary the user develops with is rebuilt.
-fn build_engine(features: &str) -> Result<PathBuf> {
+fn build_engine(features: &str, public_key: &Path) -> Result<PathBuf> {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let mut command = Command::new(cargo);
@@ -308,6 +312,7 @@ fn build_engine(features: &str) -> Result<PathBuf> {
         .current_dir(repo_root)
         .args(["build", "--release", "--locked", "--no-default-features"])
         .args(["--features", &all_features])
+        .env("KEINE_HEXZ_PUBLIC_KEY", public_key)
         .arg("--target-dir")
         .arg(repo_root.join("target"));
     let build_target = env::var("KEINE_BUILD_TARGET")
@@ -327,15 +332,18 @@ fn build_engine(features: &str) -> Result<PathBuf> {
     Ok(release.join(format!("keine{}", env::consts::EXE_SUFFIX)))
 }
 
-fn pack_staging(staged: &Path, output: &Path, password: &str) -> Result<()> {
-    pack_directory(&PackOptions {
-        input: staged.display().to_string(),
-        output: output.join("game.hxz").display().to_string(),
-        compression: "zstd".to_owned(),
-        encrypt: true,
-        block_size: 65_536,
-        password: Some(password.to_owned()),
-    })
+fn pack_staging(staged: &Path, output: &Path, password: &str, private_key: &Path) -> Result<()> {
+    pack_signed_directory(
+        &PackOptions {
+            input: staged.display().to_string(),
+            output: output.join("game.hxz").display().to_string(),
+            compression: "zstd".to_owned(),
+            encrypt: true,
+            block_size: 65_536,
+            password: Some(password.to_owned()),
+        },
+        private_key,
+    )
     .context("hexz pack failed")
 }
 

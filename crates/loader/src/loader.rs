@@ -219,7 +219,7 @@ pub fn load_project_with(
 /// embedded config become logical prefixes inside the same archive, preserving
 /// the same low-to-high override order used during development.
 pub fn load_hexz_project(package: &Path, sources: &[AssetSourceConfig]) -> Result<ContentProject> {
-    load_hexz_project_from_archive(HexzArchive::open(package)?, sources)
+    load_hexz_project_from_archive(HexzArchive::open_packaged(package)?, sources)
 }
 
 pub fn load_hexz_project_from_archive(

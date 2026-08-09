@@ -93,7 +93,7 @@ crc32fast = "1"
 criterion = "0.5"
 notify = "8.2"
 noyalib = { version = "0.0.15", default-features = false, features = ["std", "fast-int", "fast-float"] }
-hexz_k = { git = "https://github.com/maincoretech/hexz_k", rev = "c570b0f", default-features = false }
+hexz_k = { git = "https://github.com/maincoretech/hexz_k", rev = "26ed52c", default-features = false }
 libc = "0.2"
 windows-sys = { version = "0.61.2", default-features = false, features = ["Win32_System_Diagnostics_Debug"] }
 bevy = { version = "0.19", default-features = false }
@@ -138,7 +138,7 @@ winit = { workspace = true }
 crossterm = { workspace = true }
 fs2 = { workspace = true }
 bevy = { workspace = true, features = ["bevy_winit", "bevy_log", "bevy_render", "bevy_sprite", "bevy_ui", "bevy_ui_render", "bevy_audio", "png", "jpeg"] }
-hexz_k = { workspace = true, features = ["pack"] }
+hexz_k = { workspace = true, features = ["signing"] }
 noyalib = { workspace = true }
 
 [build-dependencies]

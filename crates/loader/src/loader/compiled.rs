@@ -87,7 +87,7 @@ pub fn read_compiled_program(root: &Path) -> Result<Option<Vec<u8>>> {
             .map(Some)
             .with_context(|| format!("failed to read {}", path.display()));
     }
-    let archive = HexzArchive::open(root)
+    let archive = HexzArchive::open_packaged(root)
         .with_context(|| format!("failed to open package {}", root.display()))?;
     let path = Path::new(COMPILED_PROGRAM_PATH);
     if !archive.contains_file(path) {

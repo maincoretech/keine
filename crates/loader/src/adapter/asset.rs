@@ -67,7 +67,7 @@ impl ProjectAdapter for HexzProjectAdapter {
     }
 
     fn open(&self, project_root: &Path) -> Result<AdaptedProject> {
-        let archive = mount_hexz(project_root)?;
+        let archive = HexzArchive::open_packaged(project_root)?;
         let yaml = archive.read(Path::new("config.yaml"))?;
         let yaml = std::str::from_utf8(&yaml).context("Hexz config.yaml is not UTF-8")?;
         let config = GameConfig::from_yaml(yaml).context("invalid Hexz config.yaml")?;

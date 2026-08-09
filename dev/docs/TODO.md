@@ -178,6 +178,7 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 - [x] `config.yaml` 有序多来源、同名 scene/资产确定性覆盖与多目录热重载
 - [x] 统一 InputAction 层（鼠标、触控、键盘、手柄）
 - [x] `hexz_k` 标准加密 `.hxz`、受限缓存、配置/脚本直读与 seekable Bevy `AssetReader`
+- [x] 标准 Hexz Ed25519 签名 + metadata 完整性配置；header/索引启动验证、数据块懒验证
 - [x] macOS .app bundle 脚本
 - [x] Linux / macOS / Windows fmt、Clippy、测试与 release CI
 - [x] WebGAL_k 风格 CI 加密发布 — 通过 GitHub Actions Secret / 手动构建输入注入
