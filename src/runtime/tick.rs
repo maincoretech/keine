@@ -92,14 +92,18 @@ pub fn tick(mut context: TickContext) {
     let delta_seconds = context.time.delta_secs_f64();
     let mut state_changed = reload_scripts_if_changed(&mut context, delta_seconds as f32);
     if context.loading.blocked {
-        context.toggles.skip = false;
+        if context.toggles.skip {
+            context.toggles.skip = false;
+        }
         if state_changed {
             context.state.set_changed();
         }
         return;
     }
     if *context.input_scope != UiInputScope::Stage {
-        context.toggles.skip = false;
+        if context.toggles.skip {
+            context.toggles.skip = false;
+        }
         if state_changed {
             context.state.set_changed();
         }
@@ -175,8 +179,12 @@ pub fn tick(mut context: TickContext) {
         &mut context.typewriter_clock,
     );
     if context.editor_sync.is_some() {
-        context.toggles.auto = false;
-        context.toggles.skip = false;
+        if context.toggles.auto {
+            context.toggles.auto = false;
+        }
+        if context.toggles.skip {
+            context.toggles.skip = false;
+        }
         if state_changed {
             context.state.set_changed();
         }
@@ -240,10 +248,10 @@ fn update_toggle_shortcuts(
     toggles: &mut ToggleStates,
     auto_timer: &mut f64,
 ) {
-    if actions.skip_held {
+    if actions.skip_held && !toggles.skip {
         toggles.skip = true;
     }
-    if actions.skip_released {
+    if actions.skip_released && toggles.skip {
         toggles.skip = false;
     }
     if actions.toggle_auto {

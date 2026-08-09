@@ -241,6 +241,9 @@ pub(crate) fn animate_advance_hint(
         .as_ref()
         .is_some_and(|intro| intro.hold && intro.elapsed >= 0.9);
     let visible = intro_ready || (video_revision.is_some() && hint_state.video_armed);
+    if !visible && hints.iter().all(|(node, _)| node.display == Display::None) {
+        return;
+    }
     let pulse = 0.38 + 0.58 * (time.elapsed_secs() * 3.8).sin().abs();
     for (mut node, mut border) in &mut hints {
         node.display = if visible {
@@ -248,7 +251,9 @@ pub(crate) fn animate_advance_hint(
         } else {
             Display::None
         };
-        *border = BorderColor::all(Color::srgba(1.0, 1.0, 1.0, pulse));
+        if visible {
+            *border = BorderColor::all(Color::srgba(1.0, 1.0, 1.0, pulse));
+        }
     }
 }
 

@@ -856,6 +856,9 @@ pub fn update_textbox(
             } else {
                 Visibility::Hidden
             };
+            if *visibility == next {
+                continue;
+            }
             if *visibility == Visibility::Hidden && next == Visibility::Inherited {
                 reveal.elapsed = 0.0;
                 reveal.settled = false;

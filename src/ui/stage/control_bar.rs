@@ -515,26 +515,38 @@ pub fn animate_quick_previews(
 
     let amount = (time.delta_secs() / TRANSITION_SECONDS).min(1.0);
     let mut visual_alpha = [0.0; 2];
+    let mut changed = false;
     for (panel, mut fade, mut node, surface, background, strength) in &mut panels {
-        fade.current = if fade.current < fade.target {
+        let next = if fade.current < fade.target {
             (fade.current + amount).min(fade.target)
         } else {
             (fade.current - amount).max(fade.target)
         };
+        let panel_changed = fade.current != next;
+        if panel_changed {
+            fade.current = next;
+            changed = true;
+        }
         let eased = fade.current * fade.current * (3.0 - 2.0 * fade.current);
 
-        if let Some(mut background) = background {
-            background.0 = Color::srgba(0.0, 0.0, 0.0, SURFACE_ALPHA * eased);
-        }
-        if let Some(mut strength) = strength {
-            strength.0 = BLUR_STRENGTH * eased;
+        if panel_changed {
+            if let Some(mut background) = background {
+                background.0 = Color::srgba(0.0, 0.0, 0.0, SURFACE_ALPHA * eased);
+            }
+            if let Some(mut strength) = strength {
+                strength.0 = BLUR_STRENGTH * eased;
+            }
         }
         if surface.is_some() {
             visual_alpha[preview_index(panel.owner)] = eased;
         }
-        if fade.target == 0.0 && fade.current == 0.0 {
+        if fade.target == 0.0 && fade.current == 0.0 && node.display != Display::None {
             node.display = Display::None;
         }
+    }
+
+    if !changed {
+        return;
     }
 
     for (visual, mut color) in &mut text {
@@ -753,7 +765,9 @@ pub fn auto_hide_tick(
             Some(prev) => (prev - pos).length_squared() > 1.0,
             None => true,
         };
-        timing.last_cursor = Some(pos);
+        if timing.last_cursor != Some(pos) {
+            timing.last_cursor = Some(pos);
+        }
         if moved {
             timing.last_move = now;
         }
@@ -761,9 +775,26 @@ pub fn auto_hide_tick(
     let idle = now - timing.last_move;
     let (bar_target, hide_target, hide_btn_target) = auto_hide_targets(idle, &toggles);
     let amount = exp_lerp(time.delta_secs(), 5.0);
-    timing.alpha += (bar_target - timing.alpha) * amount;
-    timing.hide_alpha += (hide_target - timing.hide_alpha) * amount;
-    timing.hide_btn_alpha += (hide_btn_target - timing.hide_btn_alpha) * amount;
+    let alpha = approach_alpha(timing.alpha, bar_target, amount);
+    let hide_alpha = approach_alpha(timing.hide_alpha, hide_target, amount);
+    let hide_btn_alpha = approach_alpha(timing.hide_btn_alpha, hide_btn_target, amount);
+    if timing.alpha != alpha {
+        timing.alpha = alpha;
+    }
+    if timing.hide_alpha != hide_alpha {
+        timing.hide_alpha = hide_alpha;
+    }
+    if timing.hide_btn_alpha != hide_btn_alpha {
+        timing.hide_btn_alpha = hide_btn_alpha;
+    }
+}
+
+fn approach_alpha(current: f32, target: f32, amount: f32) -> f32 {
+    if (current - target).abs() <= 0.001 {
+        target
+    } else {
+        current + (target - current) * amount
+    }
 }
 
 fn auto_hide_targets(idle: f32, toggles: &ToggleStates) -> (f32, f32, f32) {
@@ -807,6 +838,12 @@ mod auto_hide_tests {
 
         let (animating, _) = timing.lifecycle(2.5, &toggles);
         assert!(animating);
+    }
+
+    #[test]
+    fn settled_auto_hide_alpha_stays_bitwise_stable() {
+        assert_eq!(approach_alpha(1.0, 1.0, 0.25), 1.0);
+        assert_eq!(approach_alpha(0.0005, 0.0, 0.25), 0.0);
     }
 }
 

@@ -155,7 +155,7 @@ pub fn sync_choice(
                                 choice.text.clone(),
                                 &font,
                                 48.0,
-                                if choice.enabled { 0.88 } else { 0.45 },
+                                if choice.enabled { 0.88 } else { 0.38 },
                             ),
                             TextLayout::justify(Justify::Center),
                         ));
@@ -261,7 +261,15 @@ pub fn animate_choice_buttons(
         } else {
             0.0
         };
-        button.highlight += (target - button.highlight) * exp_lerp(time.delta_secs(), 10.0);
+        let difference = (target - button.highlight).abs();
+        if difference <= 0.001 && button.highlight == target {
+            continue;
+        }
+        button.highlight = if difference <= 0.001 {
+            target
+        } else {
+            button.highlight + (target - button.highlight) * exp_lerp(time.delta_secs(), 10.0)
+        };
         let highlight = button.highlight;
         background.0 = if button.enabled {
             button_surface_over_dark(NORMAL_ALPHA, highlight)

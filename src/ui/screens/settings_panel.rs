@@ -825,11 +825,13 @@ pub fn animate_watermark(
 ) {
     let amount = exp_lerp(time.delta_secs(), 34.0);
     for (mut watermark, mut text, mut color) in &mut watermarks {
+        let mut changed = false;
         if (watermark.current - watermark.target).abs() >= 0.001 {
             watermark.current += (watermark.target - watermark.current) * amount;
             if (watermark.target - watermark.current).abs() < 0.001 {
                 watermark.current = watermark.target;
             }
+            changed = true;
         }
         if watermark.current == 0.0
             && watermark.target == 0.0
@@ -837,6 +839,10 @@ pub fn animate_watermark(
         {
             text.0 = label;
             watermark.target = 1.0;
+            changed = true;
+        }
+        if !changed {
+            continue;
         }
         color.0 = Color::srgba(1.0, 1.0, 1.0, 0.075 * watermark.current);
     }

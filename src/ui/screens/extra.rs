@@ -1198,25 +1198,27 @@ pub(crate) fn handle_bgm_seek(
     }
 }
 
+#[derive(SystemParam)]
+pub(crate) struct ExtraBgmProgressUi<'w, 's> {
+    fills: Query<'w, 's, &'static mut Node, With<ExtraBgmProgress>>,
+    thumbs:
+        Query<'w, 's, &'static mut Node, (With<ExtraBgmProgressThumb>, Without<ExtraBgmProgress>)>,
+    times: Query<'w, 's, (Entity, &'static Children), With<ExtraBgmTime>>,
+    labels: Query<'w, 's, &'static mut Text>,
+}
+
+type BgmTimeDisplayKey = (Option<Entity>, u64, Option<u64>);
+
 #[cfg(feature = "audio-opus")]
 pub(crate) fn update_bgm_progress(
     mut players: ExtraOpusPlayerQuery,
     audio: Res<Assets<crate::runtime::audio::OpusAudio>>,
     seek: Query<&ExtraBgmSeekBar>,
-    mut fills: Query<&mut Node, With<ExtraBgmProgress>>,
-    mut thumbs: Query<&mut Node, (With<ExtraBgmProgressThumb>, Without<ExtraBgmProgress>)>,
-    times: Query<&Children, With<ExtraBgmTime>>,
-    mut labels: Query<&mut Text>,
+    mut ui: ExtraBgmProgressUi,
+    mut displayed_time: Local<Option<BgmTimeDisplayKey>>,
 ) {
     let Ok((mut player, sink, opus_player)) = players.single_mut() else {
-        set_bgm_progress(
-            &mut fills,
-            &mut thumbs,
-            &times,
-            &mut labels,
-            Duration::ZERO,
-            None,
-        );
+        set_bgm_progress(&mut ui, Duration::ZERO, None, &mut displayed_time);
         return;
     };
     if player.duration.is_none() {
@@ -1229,34 +1231,18 @@ pub(crate) fn update_bgm_progress(
         .ok()
         .and_then(|seek| seek.preview)
         .unwrap_or_else(|| sink.map_or(Duration::ZERO, AudioSinkPlayback::position));
-    set_bgm_progress(
-        &mut fills,
-        &mut thumbs,
-        &times,
-        &mut labels,
-        position,
-        player.duration,
-    );
+    set_bgm_progress(&mut ui, position, player.duration, &mut displayed_time);
 }
 
 #[cfg(not(feature = "audio-opus"))]
 pub(crate) fn update_bgm_progress(
     players: Query<(&ExtraBgmPlayer, Option<&AudioSink>)>,
     seek: Query<&ExtraBgmSeekBar>,
-    mut fills: Query<&mut Node, With<ExtraBgmProgress>>,
-    mut thumbs: Query<&mut Node, (With<ExtraBgmProgressThumb>, Without<ExtraBgmProgress>)>,
-    times: Query<&Children, With<ExtraBgmTime>>,
-    mut labels: Query<&mut Text>,
+    mut ui: ExtraBgmProgressUi,
+    mut displayed_time: Local<Option<BgmTimeDisplayKey>>,
 ) {
     let Ok((player, sink)) = players.single() else {
-        set_bgm_progress(
-            &mut fills,
-            &mut thumbs,
-            &times,
-            &mut labels,
-            Duration::ZERO,
-            None,
-        );
+        set_bgm_progress(&mut ui, Duration::ZERO, None, &mut displayed_time);
         return;
     };
     let position = seek
@@ -1264,23 +1250,14 @@ pub(crate) fn update_bgm_progress(
         .ok()
         .and_then(|seek| seek.preview)
         .unwrap_or_else(|| sink.map_or(Duration::ZERO, AudioSinkPlayback::position));
-    set_bgm_progress(
-        &mut fills,
-        &mut thumbs,
-        &times,
-        &mut labels,
-        position,
-        player.duration,
-    );
+    set_bgm_progress(&mut ui, position, player.duration, &mut displayed_time);
 }
 
 fn set_bgm_progress(
-    fills: &mut Query<&mut Node, With<ExtraBgmProgress>>,
-    thumbs: &mut Query<&mut Node, (With<ExtraBgmProgressThumb>, Without<ExtraBgmProgress>)>,
-    times: &Query<&Children, With<ExtraBgmTime>>,
-    labels: &mut Query<&mut Text>,
+    ui: &mut ExtraBgmProgressUi,
     position: Duration,
     duration: Option<Duration>,
+    displayed_time: &mut Option<BgmTimeDisplayKey>,
 ) {
     let elapsed = duration.map_or(position, |duration| position.min(duration));
     let percent = duration
@@ -1288,20 +1265,29 @@ fn set_bgm_progress(
         .map_or(0.0, |duration| {
             (elapsed.as_secs_f32() / duration.as_secs_f32() * 100.0).clamp(0.0, 100.0)
         });
-    for mut fill in fills.iter_mut() {
+    for mut fill in ui.fills.iter_mut() {
         fill.width = Val::Percent(percent);
     }
-    for mut thumb in thumbs.iter_mut() {
+    for mut thumb in ui.thumbs.iter_mut() {
         thumb.left = Val::Percent(percent);
     }
+    let time_key = (
+        ui.times.iter().next().map(|(entity, _)| entity),
+        elapsed.as_secs(),
+        duration.map(|duration| duration.as_secs()),
+    );
+    if *displayed_time == Some(time_key) {
+        return;
+    }
+    *displayed_time = Some(time_key);
     let value = format!(
         "{} / {}",
         format_bgm_time(elapsed),
         duration.map_or_else(|| "--:--".to_owned(), format_bgm_time)
     );
-    for children in times {
+    for (_, children) in &ui.times {
         for child in children.iter() {
-            if let Ok(mut label) = labels.get_mut(child) {
+            if let Ok(mut label) = ui.labels.get_mut(child) {
                 label.0.clone_from(&value);
             }
         }

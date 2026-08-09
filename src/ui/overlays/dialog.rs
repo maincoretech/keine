@@ -391,6 +391,9 @@ pub fn animate_dialog(
     let Ok(mut fade) = fade_query.single_mut() else {
         return;
     };
+    if fade.0 >= 1.0 {
+        return;
+    }
     fade.0 = (fade.0 + time.delta_secs() / FADE_DURATION).min(1.0);
 
     for (visual, mut color) in &mut backgrounds {

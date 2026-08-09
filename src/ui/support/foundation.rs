@@ -154,6 +154,9 @@ pub(crate) fn animate_hover_sweeps(
     let amount = exp_lerp(time.delta_secs(), HOVER_SWEEP_RATE);
     for (interaction, mut sweep, children) in &mut buttons {
         let target = hover_sweep_target(*interaction);
+        if sweep.fill == target {
+            continue;
+        }
         if (sweep.fill - target).abs() <= 0.001 {
             sweep.fill = target;
         } else {

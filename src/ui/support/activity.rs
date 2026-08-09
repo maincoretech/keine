@@ -121,7 +121,7 @@ pub(crate) struct UiActivityContext<'w, 's> {
 }
 
 pub(crate) fn update(context: UiActivityContext, mut activity: ResMut<UiAnimationActivity>) {
-    activity.0 = context
+    let animating = context
         .hovers
         .iter()
         .any(|hover| (hover.current - hover.target).abs() > SETTLED_EPSILON)
@@ -184,6 +184,9 @@ pub(crate) fn update(context: UiActivityContext, mut activity: ResMut<UiAnimatio
             .iter()
             .any(|(reveal, visibility)| reveal.is_animating(*visibility))
         || !is_endpoint(context.textbox_fade.alpha);
+    if activity.0 != animating {
+        activity.0 = animating;
+    }
 }
 
 fn menu_controls_are_animating(context: &UiActivityContext<'_, '_>) -> bool {
