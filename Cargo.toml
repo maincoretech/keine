@@ -113,9 +113,11 @@ fs2 = "0.4"
 # Bevy 0.19 unconditionally requests a redraw from `about_to_wait` on macOS.
 # Its stock event handler also treats that synthetic RedrawRequested event as
 # fresh window input, turning every reactive update mode into a display-rate
-# render loop. Keep the patch local and drop it when the upstream crate does.
+# render loop. The fixed revision lives on an isolated dependency branch so the
+# engine tree does not vendor an entire Bevy crate. Drop this override when
+# upstream provides equivalent behavior.
 [patch.crates-io]
-bevy_winit = { path = "vendor/bevy_winit" }
+bevy_winit = { git = "https://github.com/maincoretech/keine", rev = "f5b3e8d5fe1809ad3ded2f3c5fded328a9bb619d" }
 # `hexz-ops` enables the network-oriented upstream store defaults internally.
 # Use hexz_k's API-compatible local backend so an offline engine does not carry
 # S3, HTTP, async-runtime, or TLS implementations that it can never call.
