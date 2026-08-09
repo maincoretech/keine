@@ -19,7 +19,7 @@
 | 平台 | 后端 | 视频/音频时钟 | 当前帧上传 | 状态 |
 | --- | --- | --- | --- | --- |
 | macOS | AVPlayer + AVPlayerItemVideoOutput | AVPlayer 单时钟 | CVPixelBuffer BGRA → 稳定 Bevy Image | 已用 FS 与加密 Hexz fixture 验收 |
-| Windows x64/ARM64 | FFmpeg + rodio | rodio 音频时钟；无音轨时用逻辑时钟 | 软件 RGBA → 稳定 Bevy Image | 已接入；x64 真实解码、ARM64 交叉编译 |
+| Windows x64 | FFmpeg + rodio | rodio 音频时钟；无音轨时用逻辑时钟 | 软件 RGBA → 稳定 Bevy Image | 已接入并真实解码 |
 | Linux | FFmpeg + rodio | rodio 音频时钟；无音轨时用逻辑时钟 | 软件 RGBA → 稳定 Bevy Image | 已接入并真实解码 |
 | Android/iOS | 无承诺 | — | — | 延期 |
 
