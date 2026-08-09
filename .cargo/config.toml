@@ -15,8 +15,6 @@ preview = "run --release --features video-native,video-ffmpeg -- dev"
 # per-camera render overhead without changing normal runtime composition.
 perf = "run --release --features video-native,video-ffmpeg -- benchmark"
 validate = "run -- check"
-# Build-time compilation of a source project into `.keine/compiled/program.bin`.
-compiler = "run -- compiler"
 # Keep the bundle runner outside target/release: Windows cannot replace a
 # running keine.exe when the child build produces the hardened game engine.
 # `bundle` deliberately avoids Cargo's built-in `package` command.

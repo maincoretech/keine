@@ -13,7 +13,7 @@ use hexz_k::cmd::pack::{PackOptions, pack_signed_directory};
 use hexz_k::integrity::generate_keypair;
 use tempfile::{Builder, TempDir, tempdir};
 
-use crate::compiler::compile_project;
+use crate::compiler::build_program;
 use crate::runtime::bootstrap::open_project;
 
 pub const DEFAULT_OUTPUT: &str = "target/release-package";
@@ -60,15 +60,10 @@ pub fn package_project(
         fs::write(&config_path, yaml)?;
     }
 
-    // The compiler must parse source scenes, so the policy starts neutralized
-    // to `auto`; the packaged config is pinned to `require` afterwards, which
-    // makes startup fail loudly if the compiled artifact is missing.
-    set_compiled_policy(&config_path, "auto")?;
     let languages = loader
         .languages(&config.adapter.script)
         .context("failed to select script adapter")?;
-    compile_project(&config, &content, &languages, None)?;
-    set_compiled_policy(&config_path, "require")?;
+    build_program(&config, &content, &languages)?;
 
     let features = detect_features(&staged)?;
     println!("content features: {features}");
@@ -207,26 +202,6 @@ fn is_ignored_directory(name: &str) -> bool {
 
 fn is_ignored_file(name: &str) -> bool {
     name == ".DS_Store" || name.ends_with(".meta")
-}
-
-/// Replace or append the top-level `compiled_program` policy in a config.yaml.
-fn set_compiled_policy(config: &Path, policy: &str) -> Result<()> {
-    let text = fs::read_to_string(config)?;
-    let mut replaced = false;
-    let mut lines = Vec::with_capacity(text.lines().count() + 1);
-    for line in text.lines() {
-        if line.starts_with("compiled_program:") {
-            lines.push(format!("compiled_program: {policy}"));
-            replaced = true;
-        } else {
-            lines.push(line.to_owned());
-        }
-    }
-    if !replaced {
-        lines.push(format!("compiled_program: {policy}"));
-    }
-    fs::write(config, lines.join("\n").into_bytes())?;
-    Ok(())
 }
 
 /// Smallest comma-separated feature set required by a project, mirroring

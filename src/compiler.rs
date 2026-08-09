@@ -1,5 +1,5 @@
-//! `cargo compiler` — build-time compilation of a source project into
-//! `.keine/compiled/program.bin` (codec in `keine-loader::compiled`).
+//! Internal bundle stage that builds `.keine/compiled/program.bin` from a
+//! source project (codec in `keine-loader::compiled`).
 //!
 //! Compilation reuses the exact scene pipeline behind `cargo validate`:
 //! source parsing with full diagnostics, resource existence checks, and the
@@ -9,7 +9,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use keine_core::Program;
@@ -19,21 +19,11 @@ use keine_loader::{
     ContentProject, DiagnosticLevel, LoadedScene, ScriptLanguageRegistry, load_scenes_with,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CompileReport {
-    pub output: PathBuf,
-    pub scene_count: usize,
-    pub action_count: u64,
-    pub fingerprint: u64,
-    pub warnings: usize,
-}
-
-pub fn compile_project(
+pub(crate) fn build_program(
     config: &GameConfig,
     content: &ContentProject,
     languages: &ScriptLanguageRegistry,
-    output: Option<PathBuf>,
-) -> Result<CompileReport> {
+) -> Result<()> {
     let scenes =
         load_scenes_with(content, languages).context("failed to compile project scenes")?;
     let warnings = validate_scenes(config, content, &scenes)?;
@@ -67,20 +57,14 @@ pub fn compile_project(
     })
     .context("failed to encode compiled program")?;
 
-    let output = output.unwrap_or_else(|| content.root.join(".keine/compiled/program.bin"));
+    let output = content.root.join(".keine/compiled/program.bin");
     write_atomically(&output, &bytes)?;
     println!(
         "compiled · {} scene(s) · {action_count} action(s) · fingerprint {fingerprint:016x} · {warnings} warning(s) → {}",
         scenes.len(),
         output.display()
     );
-    Ok(CompileReport {
-        output,
-        scene_count: scenes.len(),
-        action_count,
-        fingerprint,
-        warnings,
-    })
+    Ok(())
 }
 
 /// Reject the same conditions as `cargo validate`: error diagnostics and
@@ -185,7 +169,7 @@ mod tests {
 
     #[test]
     fn compiles_a_directory_project_into_a_decodeable_program_bin() {
-        let root = std::env::temp_dir().join(format!("keine-compiler-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("keine-program-build-{}", std::process::id()));
         fs::create_dir_all(root.join("scripts")).unwrap();
         fs::create_dir_all(root.join("assets")).unwrap();
         fs::write(
@@ -216,18 +200,15 @@ mod tests {
             .languages("webgal")
             .unwrap()
             .clone();
-        let output = root.join("out/program.bin");
+        build_program(&config, &content, &languages).unwrap();
 
-        let report = compile_project(&config, &content, &languages, Some(output.clone())).unwrap();
-        assert_eq!(report.scene_count, 1);
-        assert_eq!(report.action_count, 2);
-
+        let output = root.join(".keine/compiled/program.bin");
         let bytes = fs::read(&output).unwrap();
         let decoded = decode(&bytes, IR_SCHEMA_VERSION).unwrap();
         assert_eq!(decoded.scenes.len(), 1);
         assert_eq!(decoded.scenes[0].name, "start");
         assert_eq!(decoded.scenes[0].actions.len(), 2);
-        assert_eq!(decoded.fingerprint, report.fingerprint);
+        assert_ne!(decoded.fingerprint, 0);
         assert_eq!(
             decoded.metadata.source_adapter,
             config.adapter.script.as_str()
@@ -237,8 +218,9 @@ mod tests {
     }
 
     #[test]
-    fn compiler_rejects_error_diagnostics() {
-        let root = std::env::temp_dir().join(format!("keine-compiler-bad-{}", std::process::id()));
+    fn bundle_stage_rejects_error_diagnostics() {
+        let root =
+            std::env::temp_dir().join(format!("keine-program-build-bad-{}", std::process::id()));
         fs::create_dir_all(root.join("scripts")).unwrap();
         fs::create_dir_all(root.join("assets")).unwrap();
         fs::write(root.join("scripts/start.txt"), "callScene:missing;\n").unwrap();
@@ -256,7 +238,7 @@ mod tests {
             .languages("webgal")
             .unwrap()
             .clone();
-        assert!(compile_project(&config, &content, &languages, None).is_err());
+        assert!(build_program(&config, &content, &languages).is_err());
 
         let _ = fs::remove_dir_all(&root);
     }

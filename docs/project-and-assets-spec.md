@@ -97,9 +97,9 @@ assets:
 - 脚本既可以直接写相对路径（`background/day.webp`），也可以写逻辑名
   （`day`，通过别名表解析）。
 - 未在别名表中的名称按第 4 节的默认回退目录解析。
-- `compiled_program` 为编译产物策略：`auto`（默认；目录项目解析源脚本，打包项目信任
-  program.bin）、`require`（发布包强制，缺失即启动失败）、`disable`（始终解析源脚本）。
-  发布流水线在 staging 内编译 `.keine/compiled/program.bin` 并写入 `require`。
+- 目录工程始终解析源脚本；发布流水线在 staging 内生成
+  `.keine/compiled/program.bin`，打包后的 `.hxz` 缺少或损坏该产物时拒绝启动。
+  旧工程中的 `compiled_program` 字段仅为向后兼容而忽略。
 
 ## 4. 资源类别规范
 

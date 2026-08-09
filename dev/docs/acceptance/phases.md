@@ -221,7 +221,7 @@ target/phase7-release/run.sh
 LetsGal 的配置在打包时物化为 `config.yaml`，`projects/test-project` 可直接打包。
 
 5. `target/phase7-release` 包含引擎、启动脚本和 encrypted `game.hxz`；归档内含
-   `.keine/compiled/program.bin`，config.yaml 为 `compiled_program: require`，且不包含
+   `.keine/compiled/program.bin`，且不包含
    `saves/`、`imported_assets/`、`*.meta` 或源项目 `.keine` 缓存。
 6. 直接运行 `.hxz` 时脚本、图片、字体和多来源音频行为与目录项目一致；运行期间不得出现
    staging、ready marker 或明文资源目录。截断或破坏归档后应由 `hexz_k` 校验拒绝启动。

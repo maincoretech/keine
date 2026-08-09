@@ -37,7 +37,6 @@ cargo dev projects/test-project
 |---|---|
 | `cargo adapters` | 启用或禁用内置适配器 |
 | `cargo validate <project>` | 不打开窗口进行校验 |
-| `cargo compiler <project> [--output <path>]` | 把源脚本编译为 `program.bin` 产物 |
 | `cargo bundle <project> [--output <dir>]` | 打包加密发布构建 |
 | `cargo dev <project>` | 带热重载与视频运行 |
 | `cargo preview <project>` | 运行优化预览 |
@@ -46,15 +45,12 @@ cargo dev projects/test-project
 
 无效的项目路径会立即失败。
 
-### 编译程序产物
+### 源码工程与发布包
 
-`cargo compiler <project>` 与 `cargo validate` 一样解析并校验项目，然后把版本化
-二进制程序写入 `.keine/compiled/program.bin`（可用 `--output <path>` 覆盖）。
-产物使用固定 envelope（magic、版本、长度、CRC32、程序 fingerprint），让发布包在
-启动时跳过源脚本解析；fingerprint 与源码构建的程序一致，因此存档保持兼容。
-开发运行仍然读取源脚本，以获得诊断与热重载。可用
-`cargo compiler preview <project>` 对任何已生成 program.bin 的工程运行编译加载路径。
-发布流水线会自动执行这一步，并在打包配置中固定 `compiled_program: require`。
+目录工程始终读取源脚本，以保留诊断和热重载。`cargo bundle` 会校验源码，并在发布包
+中写入版本化的 `.keine/compiled/program.bin`；打包后的 `.hxz` 必须包含该产物，启动
+时不再解析源脚本。固定 envelope（magic、版本、长度、CRC32 和程序 fingerprint）
+保证发布包与源码工程的存档兼容。
 
 ## 项目输入
 
@@ -175,8 +171,8 @@ HEXZ_PASSWORD='your-password' \
 
 发布打包接受原生工程（`config.yaml`）或 LetsGal 工程（`project.json`）；LetsGal
 的适配器配置（资源别名、布局、样式）会在打包时物化为 `config.yaml`。流水线会编译
-`.keine/compiled/program.bin`、固定 `compiled_program: require`，并确保运行时状态
-与缓存不进入归档。输出默认在 `target/release-package`
+`.keine/compiled/program.bin`，并确保运行时状态与缓存不进入归档。输出默认在
+`target/release-package`
 （可用 `target/` 下的具名目录覆盖）。Cargo 别名会把 runner 构建到隔离的 target
 目录，避免 Windows 在打包时覆盖正在运行的可执行文件。
 

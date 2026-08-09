@@ -17,7 +17,6 @@ pub(super) struct BenchmarkOptions {
 pub(super) enum InteractiveMode {
     Shipping,
     Development,
-    CompiledPreview,
     Benchmark(BenchmarkOptions),
 }
 
@@ -34,7 +33,7 @@ impl InteractiveMode {
     }
 
     pub(super) const fn requires_single_instance(self) -> bool {
-        matches!(self, Self::Shipping | Self::CompiledPreview)
+        matches!(self, Self::Shipping)
     }
 }
 
@@ -43,10 +42,6 @@ pub(super) enum CliCommand {
     Adapters,
     Check {
         project: PathBuf,
-    },
-    Compile {
-        project: PathBuf,
-        output: Option<PathBuf>,
     },
     Package {
         project: PathBuf,
@@ -90,12 +85,6 @@ const COMMANDS: &[CommandHelp] = &[
         cargo_name: "validate",
         args: "<project>",
         summary: "Validate without opening a window",
-    },
-    CommandHelp {
-        binary_name: "compiler",
-        cargo_name: "compiler",
-        args: "<project> [--output <path>]",
-        summary: "Compile source scripts into a program.bin artifact",
     },
     CommandHelp {
         binary_name: "package",
@@ -160,16 +149,6 @@ pub(super) fn parse(args: &[OsString]) -> Result<CliCommand> {
             let project = required_path(args, 1, "keine check <project>")?;
             require_no_extra_args(args, 2, "keine check <project>")?;
             Ok(CliCommand::Check { project })
-        }
-        Some("compiler") if args.get(1).is_some_and(|arg| arg == "preview") => {
-            let project = required_path(args, 2, "keine compiler preview <project>")?;
-            require_no_extra_args(args, 3, "keine compiler preview <project>")?;
-            Ok(run(project, InteractiveMode::CompiledPreview))
-        }
-        Some("compiler") => {
-            let project = required_path(args, 1, "keine compiler <project>")?;
-            let output = parse_output_option(&args[2..])?;
-            Ok(CliCommand::Compile { project, output })
         }
         Some("package") => {
             let project = required_path(args, 1, "keine package <project>")?;
@@ -336,10 +315,6 @@ fn print_help() {
         println!(
             "  {:<60}Run a packaged or directory project",
             "keine <project>"
-        );
-        println!(
-            "  {:<60}Run an existing compiled program",
-            "keine compiler preview <project>"
         );
     }
     println!("\nOptions:");

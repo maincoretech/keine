@@ -15,11 +15,11 @@ use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResolution};
 use bevy::winit::WINIT_WINDOWS;
-use keine_core::config::{CompiledProgramPolicy, GameConfig};
+use keine_core::config::GameConfig;
 use keine_core::{Action, DESIGN_HEIGHT, DESIGN_WIDTH, Program, State};
 use keine_loader::{
-    ContentProject, DiagnosticLevel, IR_SCHEMA_VERSION, LoaderRegistry, ScriptWatcher,
-    attach_compiled_program, load_project_with, load_scenes_with, read_compiled_program,
+    ContentProject, DiagnosticLevel, LoaderRegistry, ScriptWatcher, load_project_with,
+    load_scenes_with,
 };
 
 use crate::render::blur::{BlurCamera, BlurPlugin, DialogCamera, SceneBlurCamera, UiBlurCamera};
@@ -125,7 +125,6 @@ fn execute_command(loader: LoaderRegistry, command: CliCommand) -> Result<()> {
             );
         }
         CliCommand::Check { project } => (project, ProjectAction::Check),
-        CliCommand::Compile { project, output } => (project, ProjectAction::Compile { output }),
         CliCommand::Run {
             project,
             mode,
@@ -139,15 +138,7 @@ fn execute_command(loader: LoaderRegistry, command: CliCommand) -> Result<()> {
         .context("failed to select script adapter")?;
     let (mode, editor_sync) = match action {
         ProjectAction::Check => return check_project(&config, &content, &languages),
-        ProjectAction::Compile { output } => {
-            return crate::compiler::compile_project(&config, &content, &languages, output)
-                .map(|_report| ());
-        }
         ProjectAction::Run { mode, editor_sync } => (mode, editor_sync),
-    };
-    let content = match mode {
-        InteractiveMode::CompiledPreview => force_compiled_preview(content)?,
-        _ => content,
     };
     let store = loader
         .store(&config.adapter.store)
@@ -175,9 +166,6 @@ fn execute_command(loader: LoaderRegistry, command: CliCommand) -> Result<()> {
 
 enum ProjectAction {
     Check,
-    Compile {
-        output: Option<PathBuf>,
-    },
     Run {
         mode: InteractiveMode,
         editor_sync: bool,
@@ -471,34 +459,7 @@ pub(crate) fn open_project(
     let config = GameConfig::from_yaml(&yaml)
         .with_context(|| format!("invalid project config {}", config_path.display()))?;
     let content = load_project_with(project_path, &config.adapter.asset, loader)?;
-    let bin = if config.compiled_program == CompiledProgramPolicy::Require {
-        read_compiled_program(&content.root)?
-    } else {
-        None
-    };
-    let content = attach_compiled_program(
-        content,
-        config.compiled_program,
-        false,
-        bin,
-        IR_SCHEMA_VERSION,
-    )?;
     Ok((content.root.clone(), config, content))
-}
-
-/// Run the compiled-loading path for any project that has a program.bin,
-/// mirroring packaged `Require` semantics during development.
-fn force_compiled_preview(content: ContentProject) -> Result<ContentProject> {
-    let bin = read_compiled_program(&content.root)?.ok_or_else(|| {
-        anyhow::anyhow!("no compiled program found; run `cargo compiler <project>` first")
-    })?;
-    attach_compiled_program(
-        content,
-        CompiledProgramPolicy::Require,
-        true,
-        Some(bin),
-        IR_SCHEMA_VERSION,
-    )
 }
 
 fn ensure_project_directory(project_path: &Path) -> Result<()> {
@@ -795,14 +756,6 @@ mod tests {
         };
         assert_eq!(project, Path::new("project"));
 
-        let CliCommand::Compile { project, output } =
-            parse_cli(&args(&["compiler", "project", "--output", "out.bin"])).unwrap()
-        else {
-            panic!("expected compiler command");
-        };
-        assert_eq!(project, Path::new("project"));
-        assert_eq!(output.as_deref(), Some(Path::new("out.bin")));
-
         let CliCommand::Run {
             project,
             mode: InteractiveMode::Development,
@@ -818,7 +771,6 @@ mod tests {
     #[test]
     fn only_non_development_interactive_modes_require_a_process_lock() {
         assert!(InteractiveMode::Shipping.requires_single_instance());
-        assert!(InteractiveMode::CompiledPreview.requires_single_instance());
         assert!(!InteractiveMode::Development.requires_single_instance());
         assert!(
             !InteractiveMode::Benchmark(BenchmarkOptions {
@@ -920,7 +872,6 @@ mod tests {
         assert!(parse_cli(&args(&["validate", "project"])).is_err());
         assert!(parse_cli(&args(&["perf", "project"])).is_err());
         assert!(parse_cli(&args(&["check", "project", "ignored"])).is_err());
-        assert!(parse_cli(&args(&["compiler", "project", "--unknown"])).is_err());
         assert!(parse_cli(&args(&["dev", "project", "--sync", "--sync"])).is_err());
     }
 

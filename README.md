@@ -43,7 +43,6 @@ test is in
 |---|---|
 | `cargo adapters` | Enable or disable built-in adapters |
 | `cargo validate <project>` | Validate without opening a window |
-| `cargo compiler <project> [--output <path>]` | Compile source scripts into a `program.bin` artifact |
 | `cargo bundle <project> [--output <dir>]` | Package an encrypted release build |
 | `cargo dev <project>` | Run with hot reload and video |
 | `cargo preview <project>` | Run an optimized preview |
@@ -52,18 +51,14 @@ test is in
 
 Invalid project paths fail immediately.
 
-### Compiled program artifact
+### Source and packaged projects
 
-`cargo compiler <project>` parses and validates the project exactly like
-`cargo validate`, then writes a versioned binary program to
-`.keine/compiled/program.bin` (override with `--output <path>`). The artifact
-uses a fixed envelope (magic, versions, lengths, CRC32, program fingerprint)
-so release packages can skip source-script parsing at startup; the fingerprint
-matches the program built from source, so saves remain compatible. Development
-runs still read source scripts for diagnostics and hot reload. Use
-`cargo compiler preview <project>` to run the compiled-loading path against any
-project that has a program.bin. Release packaging runs this step automatically
-and pins `compiled_program: require` in the packaged config.
+Directory projects always read source scripts, preserving diagnostics and hot
+reload. `cargo bundle` validates those sources and writes a versioned
+`.keine/compiled/program.bin` inside the release package. Packaged `.hxz` games
+require that artifact and skip source-script parsing at startup. Its fixed
+envelope (magic, versions, lengths, CRC32 and program fingerprint) keeps saves
+compatible with the source project.
 
 ## Project inputs
 
@@ -189,9 +184,8 @@ HEXZ_PASSWORD='your-password' \
 Release packaging accepts a native project (`config.yaml`) or a LetsGal
 project (`project.json`); for LetsGal, the adapter-derived config (asset
 aliases, layout, styles) is materialized into `config.yaml` at build time.
-The pipeline compiles `.keine/compiled/program.bin`, pins
-`compiled_program: require`, and keeps runtime state and caches out of the
-archive. Output defaults to
+The pipeline compiles `.keine/compiled/program.bin` and keeps runtime state and
+caches out of the archive. Output defaults to
 `target/release-package` (override with a named directory below `target/`). The
 Cargo alias builds its runner in an isolated target directory, so Windows never
 needs to replace the executable that is currently packaging the game.
