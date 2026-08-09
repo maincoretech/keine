@@ -24,24 +24,20 @@ use keine_loader::{
 
 use crate::render::blur::{BlurCamera, BlurPlugin, DialogCamera, SceneBlurCamera, UiBlurCamera};
 use crate::runtime::GamePlugin;
+use crate::runtime::cli::{
+    BenchmarkOptions, CliCommand, InteractiveMode, help_or_version, parse as parse_cli,
+    resolve_project_path,
+};
 use crate::runtime::resources::{
     ContentProjectResource, DevelopmentSession, EditorSyncSession, GameConfigResource, GameState,
     HotReloadSession, LocalAssetCache, LocalAssetManifest, LocalSceneAssets, PersistenceDisabled,
     ProjectRoot, ScriptLanguages, ScriptWatcherResource, StoreCodec,
 };
 
-#[derive(Clone, Copy)]
-struct BenchmarkOptions {
-    seconds: f32,
-    cursor: Option<usize>,
-    cameras: crate::ui::performance::BenchmarkCameras,
-}
-
 #[derive(Clone, Copy, Default)]
 struct LaunchOptions {
     development: bool,
     editor_sync: bool,
-    hot_reload: bool,
     benchmark: Option<BenchmarkOptions>,
 }
 
@@ -57,15 +53,24 @@ pub fn run() {
 }
 
 pub fn run_cli() -> std::process::ExitCode {
-    let configure_adapters = std::env::args_os()
-        .nth(1)
-        .is_some_and(|command| command == "adapters");
+    let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if let Some(code) = help_or_version(&args) {
+        return code;
+    }
+    let command = match parse_cli(&args) {
+        Ok(command) => command,
+        Err(error) => {
+            eprintln!("{error:#}\nrun `keine --help` for usage");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let configure_adapters = matches!(&command, CliCommand::Adapters);
     let mut loader = LoaderRegistry::default();
     let result = if configure_adapters {
         super::adapter_tui::configure(&loader)
     } else {
         super::adapter_tui::apply_saved_selection(&mut loader)
-            .and_then(|()| try_run_with_loader(loader))
+            .and_then(|()| execute_command(loader, command))
     };
 
     match result {
@@ -85,51 +90,56 @@ pub fn run_cli() -> std::process::ExitCode {
 }
 
 pub fn run_with_loader(loader: LoaderRegistry) {
-    if let Err(error) = try_run_with_loader(loader) {
+    let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    let result = parse_cli(&args).and_then(|command| execute_command(loader, command));
+    if let Err(error) = result {
         super::platform::startup_error("failed to open project", &error);
     }
 }
 
-fn try_run_with_loader(loader: LoaderRegistry) -> Result<()> {
+fn execute_command(loader: LoaderRegistry, command: CliCommand) -> Result<()> {
     #[cfg(feature = "hardened")]
     super::platform::apply_hardening();
-    let args = std::env::args_os().skip(1).collect::<Vec<_>>();
-    let package_requested = args.first().is_some_and(|command| command == "package");
-    let check_only = args.first().is_some_and(|command| command == "check");
-    let compile_request = args.first().is_some_and(|command| command == "compiler");
-    let compile_preview = args
-        .get(1)
-        .is_some_and(|subcommand| subcommand == "preview");
-    let editor_sync = editor_sync_requested(&args);
-    let development = development_requested(&args);
-    let hot_reload = hot_reload_requested(&args);
-    let benchmark = benchmark_options_from_args(&args)?;
-    let output = output_from_args(&args)?;
-    let project_path = project_root_from_args(args.iter().cloned());
-    if package_requested {
-        let output = output.unwrap_or_else(|| PathBuf::from(crate::package::DEFAULT_OUTPUT));
-        return crate::package::package_project(&project_path, &loader, &output);
-    }
-    let (project_root, config, content) = open_project(&project_path, &loader)?;
+    let (project_path, action) = match command {
+        CliCommand::Adapters => {
+            anyhow::bail!("adapter configuration must run before project setup")
+        }
+        CliCommand::Package { project, output } => {
+            return crate::package::package_project(
+                &resolve_project_path(project),
+                &loader,
+                &output,
+            );
+        }
+        CliCommand::Check { project } => (project, ProjectAction::Check),
+        CliCommand::Compile { project, output } => (project, ProjectAction::Compile { output }),
+        CliCommand::Run {
+            project,
+            mode,
+            editor_sync,
+        } => (project, ProjectAction::Run { mode, editor_sync }),
+    };
+    let (project_root, config, content) =
+        open_project(&resolve_project_path(project_path), &loader)?;
     let languages = loader
         .languages(&config.adapter.script)
         .context("failed to select script adapter")?;
-    if check_only {
-        return check_project(&config, &content, &languages);
-    }
-    if compile_request && !compile_preview {
-        return crate::compiler::compile_project(&config, &content, &languages, output)
-            .map(|_report| ());
-    }
-    let content = if compile_preview {
-        force_compiled_preview(content)?
-    } else {
-        content
+    let (mode, editor_sync) = match action {
+        ProjectAction::Check => return check_project(&config, &content, &languages),
+        ProjectAction::Compile { output } => {
+            return crate::compiler::compile_project(&config, &content, &languages, output)
+                .map(|_report| ());
+        }
+        ProjectAction::Run { mode, editor_sync } => (mode, editor_sync),
+    };
+    let content = match mode {
+        InteractiveMode::CompiledPreview => force_compiled_preview(content)?,
+        _ => content,
     };
     let store = loader
         .store(&config.adapter.store)
         .context("failed to select store adapter")?;
-    let _instance = single_instance_required(check_only, hot_reload, benchmark).then(|| {
+    let _instance = mode.requires_single_instance().then(|| {
         SingleInstanceGuard::acquire(&project_root)
             .context("another instance of this project is already running")
     });
@@ -141,22 +151,24 @@ fn try_run_with_loader(loader: LoaderRegistry) -> Result<()> {
         languages,
         store,
         LaunchOptions {
-            development,
+            development: mode.development(),
             editor_sync,
-            hot_reload,
-            benchmark,
+            benchmark: mode.benchmark(),
         },
     );
     app.run();
     Ok(())
 }
 
-const fn single_instance_required(
-    check_only: bool,
-    development: bool,
-    benchmark: Option<BenchmarkOptions>,
-) -> bool {
-    !check_only && !development && benchmark.is_none()
+enum ProjectAction {
+    Check,
+    Compile {
+        output: Option<PathBuf>,
+    },
+    Run {
+        mode: InteractiveMode,
+        editor_sync: bool,
+    },
 }
 
 struct SingleInstanceGuard {
@@ -197,21 +209,6 @@ fn instance_lock_path(project_root: &Path) -> PathBuf {
         .join(format!("{:016x}.lock", hasher.finish()))
 }
 
-fn hot_reload_requested(args: &[std::ffi::OsString]) -> bool {
-    args.first().is_some_and(|command| command == "dev")
-}
-
-fn development_requested(args: &[std::ffi::OsString]) -> bool {
-    args.first().is_some_and(|command| command == "dev")
-}
-
-/// `cargo dev <project> --sync` follows an open LetsGal project, the same
-/// editor-sync session the former `studio` subcommand started.
-fn editor_sync_requested(args: &[std::ffi::OsString]) -> bool {
-    args.first().is_some_and(|command| command == "dev")
-        && args.iter().any(|argument| argument == "--sync")
-}
-
 /// Builds a customizable Bevy application for one project without running it.
 /// Extension plugins can claim and consume [`crate::HostCommandMessage`] before
 /// calling `App::run`, while built-in adapter semantics stay on typed actions.
@@ -246,7 +243,7 @@ fn build_opened_app(
 ) -> App {
     let webp = crate::scene::images::NativeWebpPlugin::new(config.layout.sprite_height);
     let asset_mounts = content.asset_mounts();
-    let watch_assets = options.hot_reload
+    let watch_assets = options.development
         && asset_mounts
             .iter()
             .any(|mount| mount.filesystem_root().is_some());
@@ -304,8 +301,6 @@ fn build_opened_app(
     }
     if options.development {
         app.init_resource::<DevelopmentSession>();
-    }
-    if options.hot_reload {
         app.init_resource::<HotReloadSession>();
     }
     if let Some(benchmark) = options.benchmark {
@@ -510,92 +505,6 @@ fn ensure_project_directory(project_path: &Path) -> Result<()> {
         anyhow::bail!("project config does not exist: {}", config_path.display());
     }
     Ok(())
-}
-
-fn project_root_from_args(args: impl Iterator<Item = std::ffi::OsString>) -> PathBuf {
-    let args = args.collect::<Vec<_>>();
-    let relative = match args.as_slice() {
-        [command, subcommand, path, ..] if command == "compiler" && subcommand == "preview" => {
-            PathBuf::from(path)
-        }
-        [command, path, ..]
-            if command == "dev"
-                || command == "check"
-                || command == "benchmark"
-                || command == "compiler"
-                || command == "package" =>
-        {
-            PathBuf::from(path)
-        }
-        [path, ..] => PathBuf::from(path),
-        [] => PathBuf::new(),
-    };
-
-    std::env::current_dir()
-        .unwrap_or_else(|error| {
-            log::warn!("failed to read current directory: {error}");
-            PathBuf::from(".")
-        })
-        .join(relative)
-}
-
-fn output_from_args(args: &[std::ffi::OsString]) -> Result<Option<PathBuf>> {
-    let mut output = None;
-    let mut index = 2;
-    while index < args.len() {
-        if args[index] == "--output" {
-            let value = args
-                .get(index + 1)
-                .context("--output requires a path argument")?;
-            output = Some(PathBuf::from(value));
-            index += 2;
-        } else {
-            index += 1;
-        }
-    }
-    Ok(output)
-}
-
-fn benchmark_options_from_args(args: &[std::ffi::OsString]) -> Result<Option<BenchmarkOptions>> {
-    if args.first().is_none_or(|command| command != "benchmark") {
-        return Ok(None);
-    }
-    let seconds = match args.get(2) {
-        Some(value) => value
-            .to_string_lossy()
-            .parse::<f32>()
-            .context("benchmark duration must be a number of seconds")?,
-        None => 15.0,
-    };
-    if !seconds.is_finite() || seconds < 1.0 {
-        anyhow::bail!("benchmark duration must be at least one second");
-    }
-    let cursor = args
-        .get(3)
-        .map(|value| {
-            value
-                .to_string_lossy()
-                .parse::<usize>()
-                .context("benchmark cursor must be a non-negative action index")
-        })
-        .transpose()?;
-    let cameras = match args.get(4).map(|value| value.to_string_lossy()) {
-        None => crate::ui::performance::BenchmarkCameras::Full,
-        Some(value) if value == "full" => crate::ui::performance::BenchmarkCameras::Full,
-        Some(value) if value == "scene-ui" => crate::ui::performance::BenchmarkCameras::SceneUi,
-        Some(value) if value == "scene-dialog" => {
-            crate::ui::performance::BenchmarkCameras::SceneDialog
-        }
-        Some(value) if value == "scene" => crate::ui::performance::BenchmarkCameras::SceneOnly,
-        Some(value) => anyhow::bail!(
-            "unknown benchmark camera profile {value:?}; expected full, scene-ui, scene-dialog, or scene"
-        ),
-    };
-    Ok(Some(BenchmarkOptions {
-        seconds,
-        cursor,
-        cameras,
-    }))
 }
 
 fn bootstrap_project(
@@ -829,6 +738,7 @@ fn ensure_playable_scene(state: &mut State) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
 
     fn unique_temp_path(name: &str) -> PathBuf {
         let nonce = std::time::SystemTime::now()
@@ -866,77 +776,50 @@ mod tests {
         std::fs::remove_dir(&path).unwrap();
     }
 
-    #[test]
-    fn check_command_uses_the_explicit_project_path() {
-        let expected = std::env::current_dir().unwrap().join("editor-project");
-        let path = project_root_from_args(
-            ["check", "editor-project"]
-                .into_iter()
-                .map(std::ffi::OsString::from),
-        );
-        assert_eq!(path, expected);
+    fn args(values: &[&str]) -> Vec<OsString> {
+        values.iter().map(OsString::from).collect()
     }
 
     #[test]
-    fn sync_flag_uses_the_native_project_path() {
-        let expected = std::env::current_dir().unwrap().join("editor-project");
-        let args = ["dev", "editor-project", "--sync"]
-            .into_iter()
-            .map(std::ffi::OsString::from)
-            .collect::<Vec<_>>();
-        assert_eq!(project_root_from_args(args.iter().cloned()), expected);
-    }
-
-    #[test]
-    fn only_development_commands_enable_hot_reload() {
-        let args = |command: &str| vec![std::ffi::OsString::from(command)];
-        assert!(hot_reload_requested(&args("dev")));
-        assert!(!hot_reload_requested(&args("studio")));
-        assert!(!hot_reload_requested(&args("benchmark")));
-        assert!(!hot_reload_requested(&args("/tmp/release-project")));
-    }
-
-    #[test]
-    fn dev_commands_enable_development_ui() {
-        let args = |command: &str| vec![std::ffi::OsString::from(command)];
-        assert!(development_requested(&args("dev")));
-        assert!(!development_requested(&args("studio")));
-        assert!(!development_requested(&args("benchmark")));
-        assert!(!development_requested(&args("/tmp/release-project")));
-    }
-
-    #[test]
-    fn sync_flag_enables_editor_sync_on_dev_only() {
-        let args = |commands: &[&str]| {
-            commands
-                .iter()
-                .map(std::ffi::OsString::from)
-                .collect::<Vec<_>>()
+    fn parser_keeps_each_commands_project_and_options_together() {
+        let CliCommand::Check { project } = parse_cli(&args(&["check", "project"])).unwrap() else {
+            panic!("expected check command");
         };
-        assert!(editor_sync_requested(&args(&["dev", "project", "--sync"])));
-        assert!(!editor_sync_requested(&args(&["dev", "project"])));
-        assert!(!editor_sync_requested(&args(&[
-            "studio", "project", "--sync"
-        ])));
-        assert!(!editor_sync_requested(&args(&[
-            "check", "project", "--sync"
-        ])));
+        assert_eq!(project, Path::new("project"));
+
+        let CliCommand::Compile { project, output } =
+            parse_cli(&args(&["compiler", "project", "--output", "out.bin"])).unwrap()
+        else {
+            panic!("expected compiler command");
+        };
+        assert_eq!(project, Path::new("project"));
+        assert_eq!(output.as_deref(), Some(Path::new("out.bin")));
+
+        let CliCommand::Run {
+            project,
+            mode: InteractiveMode::Development,
+            editor_sync,
+        } = parse_cli(&args(&["dev", "editor-project", "--sync"])).unwrap()
+        else {
+            panic!("expected development command");
+        };
+        assert_eq!(project, Path::new("editor-project"));
+        assert!(editor_sync);
     }
 
     #[test]
-    fn only_the_shipping_runtime_requires_a_process_lock() {
-        assert!(single_instance_required(false, false, None));
-        assert!(!single_instance_required(false, true, None));
-        assert!(!single_instance_required(true, false, None));
-        assert!(!single_instance_required(
-            false,
-            false,
-            Some(BenchmarkOptions {
+    fn only_non_development_interactive_modes_require_a_process_lock() {
+        assert!(InteractiveMode::Shipping.requires_single_instance());
+        assert!(InteractiveMode::CompiledPreview.requires_single_instance());
+        assert!(!InteractiveMode::Development.requires_single_instance());
+        assert!(
+            !InteractiveMode::Benchmark(BenchmarkOptions {
                 seconds: 1.0,
                 cursor: None,
                 cameras: crate::ui::performance::BenchmarkCameras::Full,
             })
-        ));
+            .requires_single_instance()
+        );
     }
 
     #[test]
@@ -954,11 +837,13 @@ mod tests {
 
     #[test]
     fn benchmark_command_has_repeatable_defaults() {
-        let args = ["benchmark", "/tmp/project"]
-            .into_iter()
-            .map(std::ffi::OsString::from)
-            .collect::<Vec<_>>();
-        let options = benchmark_options_from_args(&args).unwrap().unwrap();
+        let CliCommand::Run {
+            mode: InteractiveMode::Benchmark(options),
+            ..
+        } = parse_cli(&args(&["benchmark", "/tmp/project"])).unwrap()
+        else {
+            panic!("expected benchmark command");
+        };
         assert_eq!(options.seconds, 15.0);
         assert_eq!(options.cursor, None);
         assert_eq!(
@@ -969,11 +854,13 @@ mod tests {
 
     #[test]
     fn benchmark_command_accepts_duration_and_cursor() {
-        let args = ["benchmark", "/tmp/project", "7.5", "25"]
-            .into_iter()
-            .map(std::ffi::OsString::from)
-            .collect::<Vec<_>>();
-        let options = benchmark_options_from_args(&args).unwrap().unwrap();
+        let CliCommand::Run {
+            mode: InteractiveMode::Benchmark(options),
+            ..
+        } = parse_cli(&args(&["benchmark", "/tmp/project", "7.5", "25"])).unwrap()
+        else {
+            panic!("expected benchmark command");
+        };
         assert_eq!(options.seconds, 7.5);
         assert_eq!(options.cursor, Some(25));
         assert_eq!(
@@ -984,11 +871,20 @@ mod tests {
 
     #[test]
     fn benchmark_command_accepts_camera_profile() {
-        let args = ["benchmark", "/tmp/project", "7.5", "25", "scene-ui"]
-            .into_iter()
-            .map(std::ffi::OsString::from)
-            .collect::<Vec<_>>();
-        let options = benchmark_options_from_args(&args).unwrap().unwrap();
+        let CliCommand::Run {
+            mode: InteractiveMode::Benchmark(options),
+            ..
+        } = parse_cli(&args(&[
+            "benchmark",
+            "/tmp/project",
+            "7.5",
+            "25",
+            "scene-ui",
+        ]))
+        .unwrap()
+        else {
+            panic!("expected benchmark command");
+        };
         assert_eq!(
             options.cameras,
             crate::ui::performance::BenchmarkCameras::SceneUi
@@ -997,11 +893,24 @@ mod tests {
 
     #[test]
     fn benchmark_command_rejects_zero_duration() {
-        let args = ["benchmark", "/tmp/project", "0"]
-            .into_iter()
-            .map(std::ffi::OsString::from)
-            .collect::<Vec<_>>();
-        assert!(benchmark_options_from_args(&args).is_err());
+        assert!(parse_cli(&args(&["benchmark", "/tmp/project", "0"])).is_err());
+    }
+
+    #[test]
+    fn parser_rejects_alias_names_and_ignored_arguments() {
+        assert!(parse_cli(&args(&["validate", "project"])).is_err());
+        assert!(parse_cli(&args(&["perf", "project"])).is_err());
+        assert!(parse_cli(&args(&["check", "project", "ignored"])).is_err());
+        assert!(parse_cli(&args(&["compiler", "project", "--unknown"])).is_err());
+        assert!(parse_cli(&args(&["dev", "project", "--sync", "--sync"])).is_err());
+    }
+
+    #[test]
+    fn version_keeps_the_established_uppercase_short_option() {
+        assert!(help_or_version(&args(&["-V"])).is_some());
+        assert!(help_or_version(&args(&["--version"])).is_some());
+        assert!(help_or_version(&args(&["-v"])).is_none());
+        assert!(parse_cli(&args(&["-v"])).is_err());
     }
 
     #[test]
