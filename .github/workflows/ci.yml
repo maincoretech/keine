@@ -40,6 +40,11 @@ jobs:
   windows-arm64:
     name: Windows ARM64
     runs-on: windows-latest
+    # The transitive ring 0.16 C sources require clang-cl for Windows ARM64;
+    # MSVC cl.exe cannot compile their 64-bit limb implementation.
+    # https://github.com/rust-lang/cc-rs/issues/882
+    env:
+      CC_aarch64_pc_windows_msvc: clang-cl
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.97

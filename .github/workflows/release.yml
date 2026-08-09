@@ -44,6 +44,9 @@ jobs:
     env:
       HEXZ_PASSWORD: ${{ secrets.HEXZ_PASSWORD }}
       KEINE_BUILD_TARGET: ${{ matrix.target }}
+      # Ignored unless the ARM64 target is built. ring 0.16 requires clang-cl
+      # rather than MSVC cl.exe for its Windows ARM64 C implementation.
+      CC_aarch64_pc_windows_msvc: clang-cl
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.97
