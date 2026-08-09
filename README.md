@@ -60,6 +60,11 @@ require that artifact and skip source-script parsing at startup. Its fixed
 envelope (magic, versions, lengths, CRC32 and program fingerprint) keeps saves
 compatible with the source project.
 
+The release archive currently retains **encrypted copies** of project source
+documents so every project format and resource adapter stays intact. The Hexz
+runtime loads only `program.bin`; players do not need a separate plaintext
+source directory.
+
 ## Develop a game
 
 Kēne does not require a separate compiler project. Keep editing the original

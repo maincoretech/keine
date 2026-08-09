@@ -1,4 +1,4 @@
-//! `keine package` — the single command-based packaging pipeline shared by
+//! `cargo bundle` — the single command-based packaging pipeline shared by
 //! local builds and CI. It stages a project (native or LetsGal), compiles
 //! `.keine/compiled/program.bin`, builds a content-trimmed release engine,
 //! packs an encrypted `.hxz`, and assembles a runnable output directory.
