@@ -155,13 +155,13 @@ cargo perf projects/test-project
 # Initial stage, 10-second sample
 cargo perf projects/test-project 10
 
-# Sustained authored timelines (compiled action cursors)
-cargo perf projects/test-project 10 22  # blur family
-cargo perf projects/test-project 10 25  # atmosphere effects
-cargo perf projects/test-project 10 31  # all event types
+# Sustained authored timelines (stable authored ids)
+cargo perf projects/test-project 10 10-04-blur-family
+cargo perf projects/test-project 10 10-05-atmosphere
+cargo perf projects/test-project 10 10-07-event-track
 
-# Benchmark-only camera composition A/B. A cursor is required before the final
-# profile argument; cursor 0 keeps every run on the same initial stage.
+# Benchmark-only camera composition A/B. A target is required before the final
+# profile argument; cursor 0 is the explicit initial-stage escape hatch.
 cargo perf projects/test-project 5 0 full
 cargo perf projects/test-project 5 0 scene-ui
 cargo perf projects/test-project 5 0 scene-dialog
@@ -171,8 +171,10 @@ cargo perf projects/test-project 5 0 scene
 cargo validate projects/test-project
 ```
 
-The benchmark prints every available timeline cursor before sampling. This
-keeps cursor selection explicit when the test project changes.
+The benchmark prints every available timeline id and its resolved cursor before
+sampling. Commands use authored ids so action insertion cannot silently move a
+capture to a different workload; numeric cursors remain available for ad-hoc
+low-level investigation.
 
 ## 2026-08-07 script / load / rollback baseline
 
@@ -241,7 +243,7 @@ unchanged audio/video presentation state, clean persistence snapshots, and
 unchanged background/particle presentation data. Particle simulation retains
 its existing fixed clock; no other subsystem gained a frame-rate cadence.
 
-The blur-family timeline at cursor 31 was captured for 8 seconds in the same
+The `10-04-blur-family` timeline was captured for 8 seconds in the same
 release configuration before and after the pass:
 
 | Metric | Before | After |

@@ -10,7 +10,8 @@ dev = "run --features video-native,video-ffmpeg -- dev"
 preview = "run --release --features video-native,video-ffmpeg -- dev"
 # Repeatable release-mode runtime capture. The optional final argument is the
 # sampling duration in seconds (default: 15, after a 3-second warm-up); a
-# second optional argument selects the compiled action cursor. A final profile
+# second optional argument selects a stable timeline id (a numeric cursor is
+# retained only as a low-level escape hatch). A final profile
 # (`full`, `scene-ui`, `scene-dialog`, or `scene`) is reserved for measuring
 # per-camera render overhead without changing normal runtime composition.
 perf = "run --release --features video-native,video-ffmpeg -- benchmark"

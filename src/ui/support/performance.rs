@@ -7,11 +7,17 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BenchmarkTarget {
+    Cursor(usize),
+    Timeline(String),
+}
+
 #[derive(Resource)]
 pub(crate) struct RuntimeCaptureConfig {
     warmup_seconds: f32,
     sample_seconds: f32,
-    pub(crate) cursor: Option<usize>,
+    pub(crate) target: Option<BenchmarkTarget>,
     pub(crate) cameras: BenchmarkCameras,
 }
 
@@ -56,14 +62,14 @@ struct RenderCaptureSamples(Arc<Mutex<RenderSampleData>>);
 pub(crate) fn install_runtime_capture(
     app: &mut App,
     sample_seconds: f32,
-    cursor: Option<usize>,
+    target: Option<BenchmarkTarget>,
     cameras: BenchmarkCameras,
 ) {
     let render_samples = RenderCaptureSamples::default();
     app.insert_resource(RuntimeCaptureConfig {
         warmup_seconds: 3.0,
         sample_seconds,
-        cursor,
+        target,
         cameras,
     })
     // Captures commonly run behind a terminal or on a second display. Start

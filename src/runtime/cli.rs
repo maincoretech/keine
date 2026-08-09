@@ -6,14 +6,16 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 
-#[derive(Debug, Clone, Copy)]
+use crate::ui::performance::BenchmarkTarget;
+
+#[derive(Debug, Clone)]
 pub(super) struct BenchmarkOptions {
     pub(super) seconds: f32,
-    pub(super) cursor: Option<usize>,
+    pub(super) target: Option<BenchmarkTarget>,
     pub(super) cameras: crate::ui::performance::BenchmarkCameras,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(super) enum InteractiveMode {
     Shipping,
     Development,
@@ -21,18 +23,18 @@ pub(super) enum InteractiveMode {
 }
 
 impl InteractiveMode {
-    pub(super) const fn development(self) -> bool {
+    pub(super) const fn development(&self) -> bool {
         matches!(self, Self::Development)
     }
 
-    pub(super) const fn benchmark(self) -> Option<BenchmarkOptions> {
+    pub(super) const fn benchmark(&self) -> Option<&BenchmarkOptions> {
         match self {
             Self::Benchmark(options) => Some(options),
             _ => None,
         }
     }
 
-    pub(super) const fn requires_single_instance(self) -> bool {
+    pub(super) const fn requires_single_instance(&self) -> bool {
         matches!(self, Self::Shipping)
     }
 }
@@ -101,7 +103,7 @@ const COMMANDS: &[CommandHelp] = &[
     CommandHelp {
         binary_name: "benchmark",
         cargo_name: "perf",
-        args: "<project> [seconds] [cursor] [profile]",
+        args: "<project> [seconds] [timeline|cursor] [profile]",
         summary: "Record a performance sample",
     },
 ];
@@ -216,7 +218,7 @@ fn parse_development(args: &[OsString]) -> Result<CliCommand> {
 }
 
 fn parse_benchmark(args: &[OsString]) -> Result<CliCommand> {
-    const USAGE: &str = "keine benchmark <project> [seconds] [cursor] [profile]";
+    const USAGE: &str = "keine benchmark <project> [seconds] [timeline|cursor] [profile]";
     let project = required_path(args, 1, USAGE)?;
     require_no_extra_args(args, 5, USAGE)?;
     let seconds = match args.get(2) {
@@ -229,15 +231,13 @@ fn parse_benchmark(args: &[OsString]) -> Result<CliCommand> {
     if !seconds.is_finite() || seconds < 1.0 {
         anyhow::bail!("benchmark duration must be at least one second");
     }
-    let cursor = args
-        .get(3)
-        .map(|value| {
-            value
-                .to_string_lossy()
-                .parse::<usize>()
-                .context("benchmark cursor must be a non-negative action index")
-        })
-        .transpose()?;
+    let target = args.get(3).map(|value| {
+        let value = value.to_string_lossy();
+        value.parse::<usize>().map_or_else(
+            |_| BenchmarkTarget::Timeline(value.into_owned()),
+            BenchmarkTarget::Cursor,
+        )
+    });
     let cameras = match args.get(4).and_then(|value| value.to_str()) {
         None | Some("full") => crate::ui::performance::BenchmarkCameras::Full,
         Some("scene-ui") => crate::ui::performance::BenchmarkCameras::SceneUi,
@@ -251,7 +251,7 @@ fn parse_benchmark(args: &[OsString]) -> Result<CliCommand> {
         project,
         InteractiveMode::Benchmark(BenchmarkOptions {
             seconds,
-            cursor,
+            target,
             cameras,
         }),
     ))

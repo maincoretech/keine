@@ -33,8 +33,9 @@ use crate::runtime::resources::{
     HotReloadSession, LocalAssetCache, LocalAssetManifest, LocalSceneAssets, PersistenceDisabled,
     ProjectRoot, ScriptLanguages, ScriptWatcherResource, StoreCodec,
 };
+use crate::ui::performance::BenchmarkTarget;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 struct LaunchOptions {
     development: bool,
     editor_sync: bool,
@@ -157,7 +158,7 @@ fn execute_command(loader: LoaderRegistry, command: CliCommand) -> Result<()> {
         LaunchOptions {
             development: mode.development(),
             editor_sync,
-            benchmark: mode.benchmark(),
+            benchmark: mode.benchmark().cloned(),
         },
     );
     app.run();
@@ -304,7 +305,7 @@ fn build_opened_app(
         crate::ui::performance::install_runtime_capture(
             &mut app,
             benchmark.seconds,
-            benchmark.cursor,
+            benchmark.target.clone(),
             benchmark.cameras,
         );
     }
@@ -571,7 +572,33 @@ fn bootstrap_project(
             .collect::<Vec<_>>()
             .join(", ");
         log::info!(target: "keine::performance", "TIMELINE | {timelines}");
-        if let Some(cursor) = mode.benchmark.as_ref().and_then(|capture| capture.cursor) {
+        let requested_target = mode
+            .benchmark
+            .as_ref()
+            .and_then(|capture| capture.target.as_ref());
+        let resolved_cursor = requested_target.and_then(|target| match target {
+            BenchmarkTarget::Cursor(cursor) => Some(*cursor),
+            BenchmarkTarget::Timeline(name) => state
+                .program
+                .scene(&state.current_scene)
+                .into_iter()
+                .flatten()
+                .enumerate()
+                .find_map(|(index, action)| match action {
+                    Action::StageAnimation { animation } if animation.id == *name => Some(index),
+                    _ => None,
+                }),
+        });
+        if let Some(BenchmarkTarget::Timeline(name)) = requested_target
+            && resolved_cursor.is_none()
+        {
+            log::error!(
+                target: "keine::performance",
+                "benchmark timeline {name:?} does not exist in {:?}; available timelines: {timelines}",
+                state.current_scene,
+            );
+        }
+        if let Some(cursor) = resolved_cursor {
             let target_scene = state.current_scene.clone();
             let mut preview = State {
                 program: state.program.clone(),
@@ -605,8 +632,9 @@ fn bootstrap_project(
         }
         log::info!(
             target: "keine::performance",
-            "START    | requested cursor {:?} · running cursor {} · timeline {}",
-            mode.benchmark.as_ref().and_then(|capture| capture.cursor),
+            "START    | requested target {:?} · resolved cursor {:?} · running cursor {} · timeline {}",
+            requested_target,
+            resolved_cursor,
             state.cursor,
             state
                 .stage_animation
@@ -775,7 +803,7 @@ mod tests {
         assert!(
             !InteractiveMode::Benchmark(BenchmarkOptions {
                 seconds: 1.0,
-                cursor: None,
+                target: None,
                 cameras: crate::ui::performance::BenchmarkCameras::Full,
             })
             .requires_single_instance()
@@ -816,7 +844,7 @@ mod tests {
             panic!("expected benchmark command");
         };
         assert_eq!(options.seconds, 15.0);
-        assert_eq!(options.cursor, None);
+        assert_eq!(options.target, None);
         assert_eq!(
             options.cameras,
             crate::ui::performance::BenchmarkCameras::Full
@@ -833,10 +861,31 @@ mod tests {
             panic!("expected benchmark command");
         };
         assert_eq!(options.seconds, 7.5);
-        assert_eq!(options.cursor, Some(25));
+        assert_eq!(options.target, Some(BenchmarkTarget::Cursor(25)));
         assert_eq!(
             options.cameras,
             crate::ui::performance::BenchmarkCameras::Full
+        );
+    }
+
+    #[test]
+    fn benchmark_command_accepts_stable_timeline_name() {
+        let CliCommand::Run {
+            mode: InteractiveMode::Benchmark(options),
+            ..
+        } = parse_cli(&args(&[
+            "benchmark",
+            "/tmp/project",
+            "7.5",
+            "10-04-blur-family",
+        ]))
+        .unwrap()
+        else {
+            panic!("expected benchmark command");
+        };
+        assert_eq!(
+            options.target,
+            Some(BenchmarkTarget::Timeline("10-04-blur-family".into()))
         );
     }
 
