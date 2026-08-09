@@ -1,4 +1,4 @@
-name: encrypted-release
+name: Release
 
 # Release is manual-only. The archive password comes from the repository's
 # HEXZ_PASSWORD secret so GitHub can mask it in logs.
@@ -15,23 +15,28 @@ permissions:
 
 jobs:
   package:
+    name: ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - name: Linux x64
+            os: ubuntu-latest
             artifact: keine-linux
             target: ''
             triplet: x64-windows
-          - os: macos-latest
+          - name: macOS
+            os: macos-latest
             artifact: keine-macos
             target: ''
             triplet: x64-windows
-          - os: windows-latest
+          - name: Windows x64
+            os: windows-latest
             artifact: keine-windows-x64
             target: x86_64-pc-windows-msvc
             triplet: x64-windows
-          - os: windows-latest
+          - name: Windows ARM64
+            os: windows-latest
             artifact: keine-windows-arm64
             target: aarch64-pc-windows-msvc
             triplet: arm64-windows
