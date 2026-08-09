@@ -295,3 +295,36 @@ H.264/AAC fixture separately passes the FFmpeg encrypted-Hexz decode/seek/loop
 test and the macOS AVFoundation filesystem/encrypted-Hexz first-frame acceptance
 probe. The direct path removes the size-proportional startup copy and plaintext
 temporary file; decode and texture-upload costs are unchanged.
+
+## 2026-08-10 macOS native video frame-transfer pass
+
+The previous AVFoundation path locked every `CVPixelBuffer`, allocated a packed
+BGRA `Vec<u8>`, copied each row on the CPU, then uploaded the same bytes to a
+stable Bevy texture. The new path imports the retained pixel buffer through
+`CVMetalTextureCache` and performs one GPU texture copy in the render world;
+the stable destination preserves the existing material bind group.
+
+For a 1920×1080 BGRA frame, the deterministic transfer budget is:
+
+| Transfer stage | Before | After |
+| --- | ---: | ---: |
+| Main-world pixel allocation | 8,294,400 bytes/frame | 0 bytes/frame |
+| CPU pixel copy | 8,294,400 bytes/frame | 0 bytes/frame |
+| CPU copy traffic at 60 decoded frames/s | 497,664,000 bytes/s (474.6 MiB/s) | 0 bytes/s |
+| GPU texture copy/upload | queue upload from CPU bytes | one texture-to-texture blit |
+
+This is an algorithmic byte-transfer baseline, not an FPS claim: the fixture is
+320×240 and too short to represent production decode throughput. The acceptance
+command below decodes both filesystem and encrypted-Hexz sources and executes
+the real Core Video → Metal → wgpu copy, including a blocking queue completion:
+
+```sh
+cargo run --features video-native --bin keine-video-acceptance -- \
+  dev/fixtures/video/playback.mp4
+```
+
+Windows/Linux still use the FFmpeg software-frame upload path; this result must
+not be extrapolated to those platforms. Directly sampling the imported Metal
+texture could remove the remaining GPU blit, but would trade a stable material
+binding for per-frame external-texture synchronization and is intentionally
+deferred.

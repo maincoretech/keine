@@ -22,6 +22,10 @@ pub(super) struct VideoVisual {
     presentation: Option<VideoPresentation>,
 }
 
+#[cfg(all(
+    feature = "video-ffmpeg",
+    not(all(feature = "video-native", target_os = "macos"))
+))]
 pub(super) struct VideoFrame {
     pub(super) width: u32,
     pub(super) height: u32,
@@ -118,6 +122,10 @@ pub(super) struct VideoPresentation {
     pub(super) viewport: DesignViewport,
 }
 
+#[cfg(all(
+    feature = "video-ffmpeg",
+    not(all(feature = "video-native", target_os = "macos"))
+))]
 pub(super) fn present_frame(
     id: &str,
     visual: &mut VideoVisual,
@@ -136,6 +144,17 @@ pub(super) fn present_frame(
         visual.image = Some(handle.clone());
         handle
     };
+    present_image(id, visual, handle, presentation, commands, resources);
+}
+
+pub(super) fn present_image(
+    id: &str,
+    visual: &mut VideoVisual,
+    handle: Handle<Image>,
+    presentation: VideoPresentation,
+    commands: &mut Commands,
+    resources: VisualResources<'_>,
+) {
     if visual.entity.is_none() {
         let material = resources.materials.add(StageMaterial::new(
             handle,
@@ -211,6 +230,10 @@ pub(super) fn cleanup_visual(
     visual.presentation = None;
 }
 
+#[cfg(all(
+    feature = "video-ffmpeg",
+    not(all(feature = "video-native", target_os = "macos"))
+))]
 fn video_image(frame: VideoFrame) -> Image {
     Image::new(
         Extent3d {
@@ -227,6 +250,19 @@ fn video_image(frame: VideoFrame) -> Image {
     )
 }
 
+pub(super) fn video_image_placeholder(size: Extent3d, format: TextureFormat) -> Image {
+    Image::new_uninit(
+        size,
+        TextureDimension::D2,
+        format,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+}
+
+#[cfg(all(
+    feature = "video-ffmpeg",
+    not(all(feature = "video-native", target_os = "macos"))
+))]
 fn update_video_image(image: &mut Image, frame: VideoFrame) {
     let same_layout = image.texture_descriptor.size.width == frame.width
         && image.texture_descriptor.size.height == frame.height
@@ -284,6 +320,10 @@ mod tests {
         assert_eq!(video_blend(VideoMode::Fullscreen), BlendMode::Alpha);
     }
 
+    #[cfg(all(
+        feature = "video-ffmpeg",
+        not(all(feature = "video-native", target_os = "macos"))
+    ))]
     #[test]
     fn video_frames_do_not_keep_a_second_main_world_copy() {
         let image = video_image(VideoFrame {
@@ -295,6 +335,10 @@ mod tests {
         assert_eq!(image.asset_usage, RenderAssetUsages::RENDER_WORLD);
     }
 
+    #[cfg(all(
+        feature = "video-ffmpeg",
+        not(all(feature = "video-native", target_os = "macos"))
+    ))]
     #[test]
     fn same_size_video_frame_preserves_image_configuration() {
         let mut image = video_image(VideoFrame {

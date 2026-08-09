@@ -47,7 +47,9 @@ video-native = [
     "dep:objc2-av-foundation",
     "dep:objc2-core-media",
     "dep:objc2-core-video",
+    "dep:objc2-metal",
     "dep:dispatch2",
+    "dep:wgpu",
 ]
 
 [workspace.package]
@@ -107,6 +109,7 @@ symphonia-adapter-libopus = { version = "0.3", default-features = false }
 ffmpeg-next = { version = "8.1", default-features = false, features = ["codec", "format", "software-scaling", "software-resampling"] }
 tempfile = "3"
 winit = { version = "0.30.13", default-features = false }
+wgpu = { version = "29.0.4", default-features = false, features = ["metal"] }
 crossterm = "0.29.0"
 fs2 = "0.4"
 
@@ -156,8 +159,10 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSAp
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSArray", "NSData", "NSDate", "NSDictionary", "NSError", "NSRunLoop", "NSValue", "NSString", "NSURL"] }
 objc2-av-foundation = { version = "0.3.2", default-features = false, optional = true, features = ["std", "AVAsset", "AVAssetResourceLoader", "AVPlayer", "AVPlayerItem", "AVPlayerItemOutput", "dispatch2", "objc2-core-media", "objc2-core-video"] }
 objc2-core-media = { version = "0.3.2", default-features = false, optional = true, features = ["std", "CMTime"] }
-objc2-core-video = { version = "0.3.2", default-features = false, optional = true, features = ["std", "CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVReturn", "objc2"] }
+objc2-core-video = { version = "0.3.2", default-features = false, optional = true, features = ["std", "CVBase", "CVBuffer", "CVImageBuffer", "CVMetalTexture", "CVMetalTextureCache", "CVPixelBuffer", "CVReturn", "objc2", "objc2-metal"] }
+objc2-metal = { version = "0.3.2", default-features = false, optional = true, features = ["MTLDevice", "MTLPixelFormat", "MTLTexture"] }
 dispatch2 = { version = "0.3.1", optional = true }
+wgpu = { workspace = true, optional = true }
 
 # Hardening is compiled in only by `keine package` (feature `hardened`); the
 # dependencies stay target-gated so unused-crate-dependencies never fires on

@@ -39,6 +39,10 @@ mod shared;
 mod avfoundation_backend;
 
 #[cfg(all(feature = "video-native", target_os = "macos"))]
+#[path = "video/metal_frame.rs"]
+mod metal_frame;
+
+#[cfg(all(feature = "video-native", target_os = "macos"))]
 pub(crate) use avfoundation_backend::validate_native_video;
 
 #[cfg(all(
@@ -53,12 +57,16 @@ pub(crate) struct VideoPlugin;
 impl Plugin for VideoPlugin {
     fn build(&self, app: &mut App) {
         #[cfg(all(feature = "video-native", target_os = "macos"))]
-        app.init_non_send::<avfoundation_backend::VideoPlayback>()
-            .add_systems(
-                Update,
-                avfoundation_backend::sync_video_playback
-                    .in_set(crate::runtime::GameSystemSet::Sync),
-            );
+        app.init_non_send::<avfoundation_backend::VideoPlayback>();
+
+        #[cfg(all(feature = "video-native", target_os = "macos"))]
+        metal_frame::install(app);
+
+        #[cfg(all(feature = "video-native", target_os = "macos"))]
+        app.add_systems(
+            Update,
+            avfoundation_backend::sync_video_playback.in_set(crate::runtime::GameSystemSet::Sync),
+        );
 
         #[cfg(all(
             feature = "video-ffmpeg",

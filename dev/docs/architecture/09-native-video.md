@@ -18,7 +18,7 @@
 
 | 平台 | 后端 | 视频/音频时钟 | 当前帧上传 | 状态 |
 | --- | --- | --- | --- | --- |
-| macOS | AVPlayer + AVPlayerItemVideoOutput | AVPlayer 单时钟 | CVPixelBuffer BGRA → 稳定 Bevy Image | 已用 FS 与加密 Hexz fixture 验收 |
+| macOS | AVPlayer + AVPlayerItemVideoOutput | AVPlayer 单时钟 | CVPixelBuffer → CVMetalTexture → 稳定 Bevy GPU Image | 已用 FS 与加密 Hexz fixture 验收解码及 GPU 导入 |
 | Windows x64 | FFmpeg + rodio | rodio 音频时钟；无音轨时用逻辑时钟 | 软件 RGBA → 稳定 Bevy Image | 已接入并真实解码 |
 | Linux | FFmpeg + rodio | rodio 音频时钟；无音轨时用逻辑时钟 | 软件 RGBA → 稳定 Bevy Image | 已接入并真实解码 |
 | Android/iOS | 无承诺 | — | — | 延期 |
@@ -56,8 +56,9 @@ FFmpeg 后端只负责解码。存在音轨且未静音时，rodio sink 的实�
 整段解码 PCM 的通用循环器。
 
 自动化覆盖加密 Hexz 随机读取、音视频时长误差、三次循环单调性、暂停/恢复、无音频长时
-回退时钟，以及 macOS AVFoundation 的 FS/Hexz 首帧解码。Windows 当前只发布并验证 x64；
-ARM64 原生构建暂缓，在具备明确发行需求和真实硬件验收条件后再恢复。
+回退时钟，以及 macOS AVFoundation 的 FS/Hexz 首帧解码和 Core Video → Metal → wgpu
+实际复制。Windows 当前只发布并验证 x64；ARM64 原生构建暂缓，在具备明确发行需求和
+真实硬件验收条件后再恢复。
 
 ## 可选后续优化
 
@@ -69,13 +70,16 @@ ARM64 原生构建暂缓，在具备明确发行需求和真实硬件验收条�
 编译进客户端的资源密钥仍按既定离线游戏模型处理；自定义 byte source 的目标是消除
 持久明文副本；它不把内置密钥变成不可提取的 DRM。
 
-## 后续性能阶段
+## 帧传输与后续性能阶段
 
-第一阶段仍把 CVPixelBuffer/D3D surface 复制到 Bevy CPU `Image`，但复用 texture handle，
-不会在 main world 保留第二份像素。完成语义与生命周期验收后再推进零拷贝：
+macOS 已不再锁定 `CVPixelBuffer`、分配 `Vec<u8>` 或经过 main-world 像素副本。
+[`CVMetalTextureCacheCreateTextureFromImage`](https://developer.apple.com/documentation/corevideo/cvmetaltexturecachecreatetexturefromimage%28_%3A_%3A_%3A_%3A_%3A_%3A_%3A_%3A_%3A%29)
+将解码帧映射为 Metal texture，render world 再用一次 GPU blit 写入
+稳定的 Bevy texture。稳定 handle 保留了材质 bind group、Screen blend、sRGB 采样和
+清理语义；源 pixel buffer 与 `CVMetalTexture` 会一直持有到对应 queue submission 完成。
+这消除了 CPU 像素复制，但不是“直接采样解码纹理”：后者还可省一次 GPU 内部复制，代价
+是每帧更换外部纹理绑定并处理更复杂的同步与设备丢失，当前不值得破坏项目一体性。
 
-- macOS：`CVMetalTextureCache` 把 CVPixelBuffer 包装为 Metal texture；
-- Windows：IMFMediaEngine frame-server 输出 DXGI surface，并与 wgpu 外部纹理互操作；
-- 两端都必须先证明 adapter/format/同步和设备丢失处理可维护，再替换 CPU 上传路径。
-
-零拷贝不能改变 Screen blend、颜色空间、sRGB 采样或 Bevy render-world 清理语义。
+Windows/Linux 仍使用 FFmpeg 软件 RGBA 帧和 Bevy texture upload。未来只有在能提供真实
+硬件、发行和设备丢失验收时，才分别评估 IMF/DXGI 与 VA-API/DMABUF；在那之前不以额外
+跨平台封装或大依赖换取未经验证的“零拷贝”。

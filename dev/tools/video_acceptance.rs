@@ -33,7 +33,7 @@ fn main() -> std::process::ExitCode {
     })();
     match result {
         Ok(()) => {
-            println!("AVFoundation decoded encrypted Hexz video successfully");
+            println!("AVFoundation decoded and imported FS/Hexz video frames successfully");
             std::process::ExitCode::SUCCESS
         }
         Err(error) => {

@@ -9,7 +9,6 @@ use std::thread;
 use bevy::camera::visibility::RenderLayers;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use bevy::render::render_resource::TextureFormat;
 use dispatch2::{DispatchQueue, DispatchRetained};
 use keine_core::VideoMode;
 use keine_loader::ContentMount;
@@ -20,20 +19,18 @@ use objc2_av_foundation::{
     AVAssetResourceLoader, AVAssetResourceLoaderDelegate, AVAssetResourceLoadingRequest, AVPlayer,
     AVPlayerItem, AVPlayerItemStatus, AVPlayerItemVideoOutput, AVURLAsset,
 };
-use objc2_core_video::{
-    CVPixelBuffer, CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow,
-    CVPixelBufferGetHeight, CVPixelBufferGetPixelFormatType, CVPixelBufferGetWidth,
-    CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
-    kCVPixelFormatType_32BGRA, kCVReturnSuccess,
-};
+use objc2_core_video::{kCVPixelBufferMetalCompatibilityKey, kCVPixelFormatType_32BGRA};
 use objc2_foundation::{
     NSData, NSDate, NSDictionary, NSNumber, NSObject, NSObjectProtocol, NSRunLoop, NSString, NSURL,
     ns_string,
 };
 
+use super::metal_frame::{
+    MetalFrameBridge, NativeVideoFrame, present_native_frame, validate_frame_import,
+};
 use super::shared::{
-    PreparedSource, VideoFrame, VideoNode, VideoPresentation, VideoVisual, VisualResources,
-    cleanup_visual, prepare_source, present_frame, update_visual,
+    PreparedSource, VideoNode, VideoPresentation, VideoVisual, VisualResources, cleanup_visual,
+    prepare_source, update_visual,
 };
 use crate::runtime::platform::DesignViewport;
 use crate::runtime::resources::{ContentProjectResource, GameConfigResource, GameState};
@@ -184,6 +181,7 @@ pub(super) struct VideoResources<'w> {
     images: ResMut<'w, Assets<Image>>,
     materials: ResMut<'w, Assets<StageMaterial>>,
     quad: Res<'w, StageQuad>,
+    frame_bridge: Res<'w, MetalFrameBridge>,
 }
 
 pub(super) fn sync_video_playback(
@@ -222,6 +220,9 @@ pub(super) fn sync_video_playback(
         .collect::<Vec<_>>();
     for id in removed {
         if let Some(mut session) = playback.sessions.remove(&id) {
+            if let Some(image) = session.visual.image.as_ref() {
+                resources.frame_bridge.discard(image.id());
+            }
             cleanup_visual(
                 &mut session.visual,
                 &mut commands,
@@ -283,7 +284,7 @@ pub(super) fn sync_video_playback(
         };
         player.sync_audio_settings(resources.settings.master_volume, session.muted);
         match player.next_frame() {
-            Ok(Some(frame)) => present_frame(
+            Ok(Some(frame)) => present_native_frame(
                 id,
                 &mut session.visual,
                 frame,
@@ -292,6 +293,7 @@ pub(super) fn sync_video_playback(
                     opacity: video.opacity,
                     viewport,
                 },
+                &resources.frame_bridge,
                 &mut commands,
                 VisualResources {
                     images: &mut resources.images,
@@ -337,8 +339,15 @@ impl NativePlayer {
             "AVFoundation video must be initialized on the main thread".to_owned()
         })?;
         let pixel_format = NSNumber::new_u32(kCVPixelFormatType_32BGRA);
-        let attributes =
-            NSDictionary::from_slices(&[ns_string!("PixelFormatType")], &[&*pixel_format]);
+        let metal_compatible = NSNumber::new_bool(true);
+        // Core Foundation strings and NSString are toll-free bridged. Use the
+        // framework constant rather than depending on its private string value.
+        let metal_compatibility_key: &NSString =
+            unsafe { &*std::ptr::from_ref(kCVPixelBufferMetalCompatibilityKey).cast::<NSString>() };
+        let attributes = NSDictionary::from_slices(
+            &[ns_string!("PixelFormatType"), metal_compatibility_key],
+            &[&*pixel_format, &*metal_compatible],
+        );
         // Objective-C lightweight generics are erased at runtime. NSNumber is
         // an Objective-C object, so this widens only the Rust dictionary view.
         let attributes: Retained<NSDictionary<NSString, AnyObject>> =
@@ -422,7 +431,7 @@ impl NativePlayer {
         }
     }
 
-    fn next_frame(&self) -> Result<Option<VideoFrame>, String> {
+    fn next_frame(&self) -> Result<Option<NativeVideoFrame>, String> {
         let item_time = unsafe { self.player.currentTime() };
         if !unsafe { self.output.hasNewPixelBufferForItemTime(item_time) } {
             return Ok(None);
@@ -433,7 +442,7 @@ impl NativePlayer {
         }) else {
             return Ok(None);
         };
-        copy_bgra_frame(&pixel_buffer).map(Some)
+        NativeVideoFrame::new(pixel_buffer).map(Some)
     }
 
     fn playback_end(&self) -> Result<bool, String> {
@@ -464,76 +473,6 @@ impl NativePlayer {
             self.player.play();
         }
     }
-}
-
-fn copy_bgra_frame(pixel_buffer: &CVPixelBuffer) -> Result<VideoFrame, String> {
-    let pixel_format = CVPixelBufferGetPixelFormatType(pixel_buffer);
-    if pixel_format != kCVPixelFormatType_32BGRA {
-        return Err(format!(
-            "AVFoundation returned unsupported pixel format 0x{pixel_format:08x}"
-        ));
-    }
-    let width = CVPixelBufferGetWidth(pixel_buffer);
-    let height = CVPixelBufferGetHeight(pixel_buffer);
-    let row_bytes = width
-        .checked_mul(4)
-        .ok_or_else(|| "video row size overflow".to_owned())?;
-    let stride = CVPixelBufferGetBytesPerRow(pixel_buffer);
-    if stride < row_bytes {
-        return Err(format!(
-            "AVFoundation pixel stride {stride} is smaller than row size {row_bytes}"
-        ));
-    }
-
-    let flags = CVPixelBufferLockFlags::ReadOnly;
-    let lock_result = unsafe { CVPixelBufferLockBaseAddress(pixel_buffer, flags) };
-    if lock_result != kCVReturnSuccess {
-        return Err(format!("could not lock CVPixelBuffer: {lock_result}"));
-    }
-    let copied = (|| {
-        let base = CVPixelBufferGetBaseAddress(pixel_buffer).cast::<u8>();
-        if base.is_null() {
-            return Err("CVPixelBuffer has no CPU base address".to_owned());
-        }
-        let allocation = stride
-            .checked_mul(height)
-            .ok_or_else(|| "video frame size overflow".to_owned())?;
-        let source = unsafe { std::slice::from_raw_parts(base, allocation) };
-        let pixels = copy_packed_rows(source, stride, row_bytes, height)?;
-        Ok(VideoFrame {
-            width: u32::try_from(width).map_err(|_| "video width exceeds u32".to_owned())?,
-            height: u32::try_from(height).map_err(|_| "video height exceeds u32".to_owned())?,
-            pixels,
-            format: TextureFormat::Bgra8UnormSrgb,
-        })
-    })();
-    let unlock_result = unsafe { CVPixelBufferUnlockBaseAddress(pixel_buffer, flags) };
-    if unlock_result != kCVReturnSuccess {
-        return Err(format!("could not unlock CVPixelBuffer: {unlock_result}"));
-    }
-    copied
-}
-
-fn copy_packed_rows(
-    source: &[u8],
-    stride: usize,
-    row_bytes: usize,
-    height: usize,
-) -> Result<Vec<u8>, String> {
-    let source_len = stride
-        .checked_mul(height)
-        .ok_or_else(|| "video frame size overflow".to_owned())?;
-    let packed_len = row_bytes
-        .checked_mul(height)
-        .ok_or_else(|| "video frame size overflow".to_owned())?;
-    if row_bytes > stride || source.len() < source_len {
-        return Err("video frame rows do not fit the source buffer".to_owned());
-    }
-    let mut pixels = Vec::with_capacity(packed_len);
-    for row in source[..source_len].chunks(stride) {
-        pixels.extend_from_slice(&row[..row_bytes]);
-    }
-    Ok(pixels)
 }
 
 fn spawn_source_worker(
@@ -591,30 +530,11 @@ pub(crate) fn validate_native_video(mounts: &[ContentMount], path: &Path) -> Res
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let run_loop = NSRunLoop::currentRunLoop();
     while std::time::Instant::now() < deadline {
-        if player.next_frame()?.is_some() {
-            return Ok(());
+        if let Some(frame) = player.next_frame()? {
+            return validate_frame_import(frame);
         }
         player.playback_end()?;
         run_loop.runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.01));
     }
     Err("AVFoundation did not produce a decoded frame within 10 seconds".to_owned())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn strips_core_video_row_padding_without_reordering_bgra() {
-        let source = [1, 2, 3, 4, 99, 99, 5, 6, 7, 8, 88, 88];
-        assert_eq!(
-            copy_packed_rows(&source, 6, 4, 2).unwrap(),
-            [1, 2, 3, 4, 5, 6, 7, 8]
-        );
-    }
-
-    #[test]
-    fn rejects_short_core_video_rows() {
-        assert!(copy_packed_rows(&[0; 7], 4, 4, 2).is_err());
-    }
 }

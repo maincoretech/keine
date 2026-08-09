@@ -9,7 +9,7 @@
 | # | 检查点 | 结论 | 证据 |
 |---|---|---|---|
 | 1 | blur 是否重复执行 | **不改** | 两条路径语义独立 |
-| 2 | 视频帧复制与上传 | **不改**（记录未来） | 每帧 CPU Vec + 全量纹理替换 |
+| 2 | 视频帧复制与上传 | **macOS 已修；其他平台保留回退** | macOS 无 CPU 像素副本，FFmpeg 仍软件上传 |
 | 3 | StageMaterial 重效果组合 | **暂缓** | 仅按 blend 4 变体 specialize |
 | 4 | 立绘同步重复查找 | **不改** | 有快速返回，对象少 |
 | 5 | 逐字符富文本 | **不改** | glyph 惰性 reveal，台词短 |
@@ -31,12 +31,16 @@
 矩形来自 UI 组件而不是场景 sprite。两条路径视觉语义不同，同一 authored 值
 不会被应用两次。当前行为正确，不修改。
 
-## 2. 视频帧复制与上传 —— 不改（记录为未来工作）
+## 2. 视频帧复制与上传 —— macOS 已修；其他平台保留回退
 
-AVFoundation 后端 `copy_bgra_frame()` 每帧把 `CVPixelBuffer` 复制成新的
-`VideoFrame { pixels: Vec<u8> }`；`present_frame()` 再把整幅像素写回 Bevy
-`Image`（全量纹理上传）。FFmpeg 路径同样逐帧分配。这是真实 CPU/带宽热点，
-但零拷贝/纹理复用属于独立工作，需先有视频路径基准（见性能计划 C6）。
+AVFoundation 后端已移除 `copy_bgra_frame()`：解码得到的 `CVPixelBuffer` 经
+`CVMetalTextureCache` 映射为 Metal texture，再在 render world 内 GPU 复制到稳定的
+Bevy texture。main world 不再分配或复制整帧 BGRA；queue completion 回调保证外部纹理
+生命周期覆盖 GPU 使用期。为保持材质绑定稳定，当前仍有一次 GPU 内部 blit。
+
+FFmpeg 路径继续复用 scaler frame，并把软件 RGBA 上传到相同 `Image`。Windows/Linux 的
+真正零 CPU-copy 分别依赖 DXGI 和 DMABUF 外部纹理互操作，必须由真实平台基准与设备丢失
+测试驱动，不能只在 macOS 上写一套无法验收的条件编译代码。
 
 ## 3. StageMaterial 重效果组合 —— 暂缓
 
