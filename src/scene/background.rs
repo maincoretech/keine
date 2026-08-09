@@ -75,6 +75,7 @@ impl BackgroundRenderCache {
     }
 }
 
+#[derive(Clone, Copy)]
 struct DesiredBackground<'a> {
     layer: BackgroundLayer,
     image: &'a str,
@@ -135,7 +136,11 @@ pub fn sync_bg(context: BackgroundSyncContext) {
     let mut current_exists = false;
 
     for (entity, mut node, mut transform, existing_material, existing_sprite) in &mut backgrounds {
-        let Some(background) = desired.iter().find(|item| item.layer == node.layer) else {
+        let Some(background) = desired
+            .iter()
+            .flatten()
+            .find(|item| item.layer == node.layer)
+        else {
             commands.entity(entity).despawn();
             continue;
         };
@@ -172,7 +177,7 @@ pub fn sync_bg(context: BackgroundSyncContext) {
         );
     }
 
-    for background in desired {
+    for background in desired.into_iter().flatten() {
         let exists = match background.layer {
             BackgroundLayer::Previous => previous_exists,
             BackgroundLayer::Current => current_exists,
@@ -235,12 +240,13 @@ fn camera_transform(state: &GameState) -> Option<(SpriteTransform, f32)> {
         })
 }
 
-fn desired_backgrounds(state: &GameState) -> Vec<DesiredBackground<'_>> {
+fn desired_backgrounds(state: &GameState) -> [Option<DesiredBackground<'_>>; 2] {
     let animation = animation_uniform(state.bg_films, state.bg_animation.as_ref());
     if let Some(transition) = &state.bg_transition {
-        let mut backgrounds = Vec::with_capacity(2);
-        if let Some(previous) = &transition.from {
-            backgrounds.push(DesiredBackground {
+        let previous = transition
+            .from
+            .as_deref()
+            .map(|previous| DesiredBackground {
                 layer: BackgroundLayer::Previous,
                 image: previous,
                 alpha: 1.0,
@@ -248,8 +254,9 @@ fn desired_backgrounds(state: &GameState) -> Vec<DesiredBackground<'_>> {
                 transform: state.bg_transform,
                 transition: animation,
             });
-        }
-        if !transition.to.is_empty() {
+        let current = if transition.to.is_empty() {
+            None
+        } else {
             let mut transform = state.bg_transform;
             let slide_remaining = 1.0 - dissolve::smooth_fade(transition.progress);
             match transition.kind {
@@ -261,7 +268,7 @@ fn desired_backgrounds(state: &GameState) -> Vec<DesiredBackground<'_>> {
                 }
                 _ => {}
             }
-            backgrounds.push(DesiredBackground {
+            Some(DesiredBackground {
                 layer: BackgroundLayer::Current,
                 image: &transition.to,
                 alpha: match transition.kind {
@@ -282,24 +289,21 @@ fn desired_backgrounds(state: &GameState) -> Vec<DesiredBackground<'_>> {
                     }
                     _ => animation,
                 },
-            });
-        }
-        backgrounds
-    } else {
-        state
-            .bg
-            .as_deref()
-            .map(|image| {
-                vec![DesiredBackground {
-                    layer: BackgroundLayer::Current,
-                    image,
-                    alpha: 1.0,
-                    z: 0.0,
-                    transform: state.bg_transform,
-                    transition: animation,
-                }]
             })
-            .unwrap_or_default()
+        };
+        [previous, current]
+    } else {
+        [
+            state.bg.as_deref().map(|image| DesiredBackground {
+                layer: BackgroundLayer::Current,
+                image,
+                alpha: 1.0,
+                z: 0.0,
+                transform: state.bg_transform,
+                transition: animation,
+            }),
+            None,
+        ]
     }
 }
 

@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use bevy::asset::io::AssetSourceId;
 use bevy::asset::{AssetApp, AssetPlugin, RenderAssetUsages};
 use bevy::camera::visibility::RenderLayers;
-use bevy::diagnostic::{EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin};
+use bevy::diagnostic::EntityCountDiagnosticsPlugin;
 use bevy::ecs::system::NonSendMarker;
 use bevy::ecs::system::SystemParam;
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
@@ -282,13 +282,7 @@ fn build_opened_app(
             .set(ImagePlugin::default())
             .set(super::platform::log_plugin()),
     )
-    .add_plugins((
-        webp,
-        GamePlugin,
-        BlurPlugin,
-        FrameTimeDiagnosticsPlugin::default(),
-        EntityCountDiagnosticsPlugin::default(),
-    ))
+    .add_plugins((webp, GamePlugin, BlurPlugin))
     .insert_resource(ProjectRoot(project_root))
     .insert_resource(ContentProjectResource(content))
     .insert_resource(ScriptLanguages(languages))
@@ -304,6 +298,7 @@ fn build_opened_app(
         app.init_resource::<HotReloadSession>();
     }
     if let Some(benchmark) = options.benchmark {
+        app.add_plugins(EntityCountDiagnosticsPlugin::default());
         app.init_resource::<PersistenceDisabled>();
         crate::ui::performance::install_runtime_capture(
             &mut app,

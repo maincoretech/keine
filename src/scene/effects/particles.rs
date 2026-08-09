@@ -186,14 +186,19 @@ pub(crate) fn sync(
     mut assets: ParticleAssets,
     mut commands: Commands,
 ) {
+    let unchanged = runtime.effects.len() == state.particle_effects.len()
+        && state
+            .particle_effects
+            .iter()
+            .all(|(id, active)| runtime.effects.get(id) == Some(&active.effect));
+    if unchanged {
+        return;
+    }
     let desired = state
         .particle_effects
         .iter()
         .map(|(id, active)| (id.clone(), active.effect.clone()))
         .collect::<HashMap<_, _>>();
-    if runtime.effects == desired {
-        return;
-    }
 
     let changed = runtime
         .effects
@@ -340,8 +345,14 @@ pub(crate) fn animate(
         let Some(effect) = state.particle_effects.get(&batch.effect_id) else {
             continue;
         };
-        transform.translation = viewport.content_center().extend(0.8);
-        transform.scale = Vec3::splat(viewport.scale);
+        let translation = viewport.content_center().extend(0.8);
+        let scale = Vec3::splat(viewport.scale);
+        if transform.translation != translation {
+            transform.translation = translation;
+        }
+        if transform.scale != scale {
+            transform.scale = scale;
+        }
         if frame.steps == 0 {
             continue;
         }

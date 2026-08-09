@@ -38,7 +38,7 @@ pub struct BlurCamera {
     pub _pad: UVec3,
     pub rects: [BlurRect; 16],
 }
-#[derive(Clone, Copy, Default, ShaderType)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, ShaderType)]
 pub(crate) struct BlurRect {
     pub min_x: f32,
     pub max_x: f32,
@@ -550,7 +550,9 @@ pub fn update_blur_regions(
     // pass here blurs the scene, textbox, and control bar together. Camera 2
     // then draws the dialog itself without post-processing.
     if behavior.dialog.is_some() {
-        if let Ok(mut bc) = scene_blur_query.single_mut() {
+        if let Ok(mut bc) = scene_blur_query.single_mut()
+            && bc.count != 0
+        {
             bc.count = 0;
         }
         if let Ok(mut bc) = ui_blur_query.single_mut() {
@@ -559,7 +561,7 @@ pub fn update_blur_regions(
                 + Vec2::new(keine_core::DESIGN_WIDTH, keine_core::DESIGN_HEIGHT)
                     * design_viewport.scale
                     * sf;
-            bc.rects[0] = BlurRect {
+            let region = BlurRect {
                 min_x: min.x,
                 max_x: max.x,
                 min_y: min.y,
@@ -567,7 +569,10 @@ pub fn update_blur_regions(
                 coc: clamp_ui_blur(crate::ui::FULLSCREEN_BLUR_STRENGTH, blur_scale),
                 _pad: Vec3::ZERO,
             };
-            bc.count = 1;
+            if bc.count != 1 || bc.rects[0] != region {
+                bc.rects[0] = region;
+                bc.count = 1;
+            }
         }
         return;
     }
@@ -591,7 +596,11 @@ pub fn update_blur_regions(
                 _pad: Vec3::ZERO,
             });
         }
-        write_regions(&mut bc, &mut scratch.ui);
+        if prepare_regions(&bc, &mut scratch.ui) {
+            write_prepared_regions(&mut bc, &mut scratch.ui);
+        } else {
+            scratch.ui.clear();
+        }
     }
 
     let Ok(mut bc) = scene_blur_query.single_mut() else {
@@ -662,7 +671,11 @@ pub fn update_blur_regions(
             _pad: Vec3::ZERO,
         });
     }
-    write_regions(&mut bc, &mut scratch.scene);
+    if prepare_regions(&bc, &mut scratch.scene) {
+        write_prepared_regions(&mut bc, &mut scratch.scene);
+    } else {
+        scratch.scene.clear();
+    }
 }
 
 fn blur_node_alpha(
@@ -686,12 +699,22 @@ fn clamp_ui_blur(strength: f32, viewport_scale: f32) -> f32 {
     clamp_blur(strength * viewport_scale * UI_BLUR_STRENGTH_SCALE)
 }
 
+#[cfg(test)]
 fn write_regions(camera: &mut BlurCamera, regions: &mut Vec<BlurRect>) {
     merge_regions(regions, camera.rects.len());
+    write_prepared_regions(camera, regions);
+}
+
+fn write_prepared_regions(camera: &mut BlurCamera, regions: &mut Vec<BlurRect>) {
     camera.count = regions.len() as u32;
     for (target, region) in camera.rects.iter_mut().zip(regions.drain(..)) {
         *target = region;
     }
+}
+
+fn prepare_regions(camera: &BlurCamera, regions: &mut Vec<BlurRect>) -> bool {
+    merge_regions(regions, camera.rects.len());
+    camera.count as usize != regions.len() || camera.rects[..regions.len()] != regions[..]
 }
 
 fn merge_regions(regions: &mut Vec<BlurRect>, limit: usize) {
@@ -805,6 +828,20 @@ mod tests {
             })
         );
         assert!(regions.iter().any(|region| region.coc == 12.0));
+    }
+
+    #[test]
+    fn stable_regions_do_not_rewrite_the_camera_uniform() {
+        let mut camera = BlurCamera::default();
+        let mut initial = vec![region(10.0, 100.0, 20.0, 80.0, 30.0)];
+        write_regions(&mut camera, &mut initial);
+        let snapshot = camera.clone();
+
+        let mut same = vec![region(10.0, 100.0, 20.0, 80.0, 30.0)];
+        assert!(!prepare_regions(&camera, &mut same));
+
+        assert_eq!(camera.count, snapshot.count);
+        assert_eq!(camera.rects, snapshot.rects);
     }
 
     #[test]

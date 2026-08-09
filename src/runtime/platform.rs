@@ -332,10 +332,13 @@ pub(crate) fn update_lifecycle(
     if *activity != next {
         *activity = next;
     }
-    if matches!(next, RuntimeActivity::Idle | RuntimeActivity::Background) {
-        virtual_time.pause();
-    } else {
-        virtual_time.unpause();
+    let should_pause_time = matches!(next, RuntimeActivity::Idle | RuntimeActivity::Background);
+    if virtual_time.is_paused() != should_pause_time {
+        if should_pause_time {
+            virtual_time.pause();
+        } else {
+            virtual_time.unpause();
+        }
     }
 }
 
@@ -420,7 +423,7 @@ type DesignCameraFilter = Or<(
     With<DialogCamera>,
 )>;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DesignViewport {
     pub scale: f32,
     pub offset: Vec2,
@@ -466,20 +469,33 @@ impl DesignViewport {
 }
 
 /// Keeps the fixed design canvas centered inside the window letterbox.
+#[expect(
+    clippy::type_complexity,
+    reason = "ParamSet keeps added-camera detection disjoint from viewport mutation"
+)]
 pub(crate) fn resize_viewport(
     mut content_root: Query<&mut Node, (With<ContentRoot>, Without<QuickPreviewLayer>)>,
     mut quick_preview_layer: Query<&mut Node, (With<QuickPreviewLayer>, Without<ContentRoot>)>,
     window_query: Query<&Window>,
-    mut cameras: Query<&mut Camera, DesignCameraFilter>,
+    mut cameras: ParamSet<(
+        Query<Entity, (DesignCameraFilter, Added<Camera>)>,
+        Query<&mut Camera, DesignCameraFilter>,
+    )>,
     mut ui_scale: ResMut<UiScale>,
+    mut previous: Local<Option<DesignViewport>>,
 ) {
     let Ok(window) = window_query.single() else {
         return;
     };
     let viewport = DesignViewport::from_window(window);
+    let camera_added = !cameras.p0().is_empty();
+    if !camera_added && previous.as_ref() == Some(&viewport) {
+        return;
+    }
+    *previous = Some(viewport);
 
     ui_scale.0 = viewport.scale;
-    for mut camera in &mut cameras {
+    for mut camera in &mut cameras.p1() {
         camera.viewport = Some(viewport.camera_viewport(window));
     }
     if let Ok(mut node) = content_root.single_mut() {
@@ -864,6 +880,29 @@ mod tests {
         assert_eq!(
             viewports,
             vec![(UVec2::new(320, 0), UVec2::new(1920, 1080)); 3]
+        );
+
+        app.update();
+        let mut cameras = app.world_mut().query::<Ref<Camera>>();
+        assert!(
+            cameras.iter(app.world()).all(|camera| !camera.is_changed()),
+            "a stable window must not dirty every camera each frame"
+        );
+        assert!(
+            !app.world().resource_ref::<UiScale>().is_changed(),
+            "a stable window must not invalidate UI layout each frame"
+        );
+
+        app.world_mut().spawn((Camera::default(), SceneBlurCamera));
+        app.update();
+        let mut cameras = app.world_mut().query::<&Camera>();
+        assert_eq!(
+            cameras
+                .iter(app.world())
+                .filter(|camera| camera.viewport.is_some())
+                .count(),
+            4,
+            "a camera spawned after the window settles still needs the viewport"
         );
     }
 }
