@@ -17,6 +17,7 @@ perf = "run --release --features video-native,video-ffmpeg -- benchmark"
 validate = "run -- check"
 # Build-time compilation of a source project into `.keine/compiled/program.bin`.
 compiler = "run -- compiler"
-# Keep the package runner outside target/release: Windows cannot replace a
+# Keep the bundle runner outside target/release: Windows cannot replace a
 # running keine.exe when the child build produces the hardened game engine.
-package = "run --release --no-default-features --target-dir target/package-runner -- package"
+# `bundle` deliberately avoids Cargo's built-in `package` command.
+bundle = "run --release --no-default-features --target-dir target/package-runner -- package"

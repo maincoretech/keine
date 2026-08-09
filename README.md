@@ -44,7 +44,7 @@ test is in
 | `cargo adapters` | Enable or disable built-in adapters |
 | `cargo validate <project>` | Validate without opening a window |
 | `cargo compiler <project> [--output <path>]` | Compile source scripts into a `program.bin` artifact |
-| `cargo package <project> [--output <dir>]` | Package an encrypted release build |
+| `cargo bundle <project> [--output <dir>]` | Package an encrypted release build |
 | `cargo dev <project>` | Run with hot reload and video |
 | `cargo preview <project>` | Run an optimized preview |
 | `cargo perf <project> [seconds] [cursor] [profile]` | Record a performance sample |
@@ -183,7 +183,7 @@ Package an encrypted Hexz game:
 
 ```bash
 HEXZ_PASSWORD='your-password' \
-  cargo package path/to/native-project
+  cargo bundle path/to/native-project
 ```
 
 Release packaging accepts a native project (`config.yaml`) or a LetsGal
@@ -208,8 +208,12 @@ not DRM.
 Create a macOS app bundle:
 
 ```bash
-dev/scripts/bundle-macos.sh projects/test-project
+HEXZ_PASSWORD='your-password' \
+  dev/scripts/bundle-macos.sh projects/test-project
 ```
+
+The macOS wrapper consumes the same encrypted, hardened `cargo bundle` output;
+the app contains `game.hxz`, never a plaintext copy of the source project.
 
 ## Validate
 

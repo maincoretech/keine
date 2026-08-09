@@ -36,13 +36,17 @@ Vorbis 与 FLAC 素材直接进入 app 或 Hexz，兼容素材无需为了打包
 `bundled-opus` 特性静态构建 libopus，因此目标设备不需要安装动态库；构建机需要
 CMake。
 
-开发构建默认启用 `audio-all`，以便直接预览不同来源的素材。`keine package` 与
-`bundle-macos.sh` 会在编译前扫描项目内全部资源层，根据 `.opus`、`.wav`、`.mp3`、
+开发构建默认启用 `audio-all`，以便直接预览不同来源的素材。`keine package` 会在
+编译前扫描项目内全部资源层，根据 `.opus`、`.wav`、`.mp3`、
 `.ogg/.oga/.spx` 和 `.flac` 只启用实际需要的 Cargo features。标准发行还会启用
 `ui-sounds`，因为内置 WebGAL K 提示音使用 Opus；明确禁用 UI 音效的自定义构建才可
 同时移除 Symphonia 0.6、Opus adapter、libopus 与 CMake 要求。无法静态检查内容的
 嵌套 Hexz 保守回退到 `audio-all`，CI 也可通过 `KEINE_AUDIO_FEATURES` 显式覆盖
 检测结果。
+
+`cargo bundle` 是无冲突的 Cargo 入口（避免与 Cargo 自带的 `package` 命令重名）。
+`bundle-macos.sh` 只把这一流水线生成的 hardened 引擎与 encrypted `game.hxz` 包装进
+标准 App 目录，不再单独构建引擎，也不复制明文项目。
 
 含视频内容时，`keine package` 只启用目标平台的发行后端：macOS 为 `video-native`，
 Windows/Linux 为 `video-ffmpeg`。Windows 发行同时支持 x64 与 ARM64；Linux 包递归收集

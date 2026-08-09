@@ -87,7 +87,7 @@ const COMMANDS: &[CommandHelp] = &[
     },
     CommandHelp {
         binary_name: "package",
-        cargo_name: "package",
+        cargo_name: "bundle",
         args: "<project> [--output <dir>]",
         summary: "Package an encrypted release build",
     },

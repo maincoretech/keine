@@ -38,7 +38,7 @@ cargo dev projects/test-project
 | `cargo adapters` | 启用或禁用内置适配器 |
 | `cargo validate <project>` | 不打开窗口进行校验 |
 | `cargo compiler <project> [--output <path>]` | 把源脚本编译为 `program.bin` 产物 |
-| `cargo package <project> [--output <dir>]` | 打包加密发布构建 |
+| `cargo bundle <project> [--output <dir>]` | 打包加密发布构建 |
 | `cargo dev <project>` | 带热重载与视频运行 |
 | `cargo preview <project>` | 运行优化预览 |
 | `cargo perf <project> [seconds] [cursor] [profile]` | 记录性能样本 |
@@ -170,7 +170,7 @@ cargo build --release --features video-ffmpeg
 
 ```bash
 HEXZ_PASSWORD='your-password' \
-  cargo package path/to/native-project
+  cargo bundle path/to/native-project
 ```
 
 发布打包接受原生工程（`config.yaml`）或 LetsGal 工程（`project.json`）；LetsGal
@@ -189,8 +189,12 @@ release profile（LTO + 剥离符号 + `panic=abort`）把二进制从约 108 MB
 创建 macOS 应用包：
 
 ```bash
-dev/scripts/bundle-macos.sh projects/test-project
+HEXZ_PASSWORD='your-password' \
+  dev/scripts/bundle-macos.sh projects/test-project
 ```
+
+macOS 包装脚本复用同一套加密且启用加固的 `cargo bundle` 产物；App 内只携带
+`game.hxz`，不会复制明文源项目。
 
 ## 校验
 

@@ -4,23 +4,45 @@ set -euo pipefail
 project="${1:-projects/test-project}"
 name="${2:-Kēne}"
 root="$(cd "$(dirname "$0")/../.." && pwd)"
-source "$root/dev/scripts/audio-features.sh"
-bundle="$root/target/bundle/macos/$name.app"
+bundle_parent="$root/target/bundle/macos"
+bundle="$bundle_parent/$name.app"
+package_output="target/bundle/macos/.$name.package"
+package_dir="$root/$package_output"
 version="$(awk '
     /^\[workspace.package\]$/ { workspace = 1; next }
     /^\[/ { workspace = 0 }
     workspace && /^version = / { gsub(/version = |"/, ""); print; exit }
 ' "$root/Cargo.toml")"
 
-cd "$root"
-build_engine_for_project "$project" --release
-rm -rf "$bundle"
-mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources/project"
-cp target/release/keine "$bundle/Contents/MacOS/keine"
-cp -R "$project"/. "$bundle/Contents/Resources/project/"
-cp "$root/assets/icons/keine.icns" "$bundle/Contents/Resources/keine.icns"
+case "$name" in
+    ""|"."|".."|*/*|*'&'*|*'<'*|*'>'*|*'\'*|*$'\n'*|*$'\r'*)
+        echo "invalid app name: $name" >&2
+        exit 2
+        ;;
+esac
+if [[ -z "${HEXZ_PASSWORD:-}" ]]; then
+    echo "HEXZ_PASSWORD must be set" >&2
+    exit 2
+fi
 
-sed -e "s/__NAME__/$name/g" -e "s/__VERSION__/$version/g" > "$bundle/Contents/Info.plist" <<'PLIST'
+cd "$root"
+mkdir -p "$bundle_parent"
+cargo bundle "$project" --output "$package_output"
+
+staging="$(mktemp -d "$bundle_parent/.$name.app.staging.XXXXXX")"
+backup="$bundle_parent/.$name.app.backup"
+cleanup() {
+    [[ -n "${staging:-}" && -e "$staging" ]] && rm -rf -- "$staging"
+    [[ -e "$package_dir" ]] && rm -rf -- "$package_dir"
+}
+trap cleanup EXIT
+
+mkdir -p "$staging/Contents/MacOS" "$staging/Contents/Resources"
+cp "$package_dir/keine" "$staging/Contents/MacOS/keine"
+cp "$package_dir/game.hxz" "$staging/Contents/Resources/game.hxz"
+cp "$root/assets/icons/keine.icns" "$staging/Contents/Resources/keine.icns"
+
+sed -e "s/__NAME__/$name/g" -e "s/__VERSION__/$version/g" > "$staging/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -33,11 +55,26 @@ sed -e "s/__NAME__/$name/g" -e "s/__VERSION__/$version/g" > "$bundle/Contents/In
 </dict></plist>
 PLIST
 
-cat > "$bundle/Contents/MacOS/launch" <<'LAUNCH'
+cat > "$staging/Contents/MacOS/launch" <<'LAUNCH'
 #!/usr/bin/env bash
 launcher_dir="$(cd "$(dirname "$0")" && pwd)"
-cd "$launcher_dir/../Resources/project"
-exec "$launcher_dir/keine" .
+exec "$launcher_dir/keine" "$launcher_dir/../Resources/game.hxz"
 LAUNCH
-chmod +x "$bundle/Contents/MacOS/keine" "$bundle/Contents/MacOS/launch"
+chmod +x "$staging/Contents/MacOS/keine" "$staging/Contents/MacOS/launch"
+
+if [[ -e "$backup" ]]; then
+    echo "stale bundle backup blocks publication: $backup" >&2
+    exit 1
+fi
+had_previous=0
+if [[ -e "$bundle" ]]; then
+    mv "$bundle" "$backup"
+    had_previous=1
+fi
+if ! mv "$staging" "$bundle"; then
+    [[ "$had_previous" -eq 1 ]] && mv "$backup" "$bundle"
+    exit 1
+fi
+staging=""
+[[ "$had_previous" -eq 1 ]] && rm -rf -- "$backup"
 echo "$bundle"
