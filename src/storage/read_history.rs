@@ -65,8 +65,13 @@ pub(crate) fn persist_read_history(
     if editor_sync.is_some() || persistence_disabled.is_some() {
         return;
     }
+    if writer.dirty_seconds == 0.0 && !state.is_changed() {
+        return;
+    }
     if writer.saved_len == state.read_dialogues.len() {
-        writer.dirty_seconds = 0.0;
+        if writer.dirty_seconds != 0.0 {
+            writer.dirty_seconds = 0.0;
+        }
         return;
     }
     writer.dirty_seconds += time.delta_secs();

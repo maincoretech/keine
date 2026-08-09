@@ -61,8 +61,13 @@ pub(crate) fn persist(
     if editor_sync.is_some() || persistence_disabled.is_some() {
         return;
     }
+    if writer.dirty_seconds == 0.0 && !state.is_changed() {
+        return;
+    }
     if writer.saved == state.global_vars {
-        writer.dirty_seconds = 0.0;
+        if writer.dirty_seconds != 0.0 {
+            writer.dirty_seconds = 0.0;
+        }
         return;
     }
     writer.dirty_seconds += time.delta_secs();
