@@ -103,6 +103,13 @@ winit = { version = "0.30.13", default-features = false }
 crossterm = "0.29.0"
 fs2 = "0.4"
 
+# Bevy 0.19 unconditionally requests a redraw from `about_to_wait` on macOS.
+# Its stock event handler also treats that synthetic RedrawRequested event as
+# fresh window input, turning every reactive update mode into a display-rate
+# render loop. Keep the patch local and drop it when the upstream crate does.
+[patch.crates-io]
+bevy_winit = { path = "vendor/bevy_winit" }
+
 [dependencies]
 keine-core = { workspace = true }
 keine-loader = { workspace = true }
