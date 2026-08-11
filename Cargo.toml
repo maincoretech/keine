@@ -38,7 +38,7 @@ ui-sounds = ["bundled-opus"]
 hardened = ["dep:libc", "dep:windows-sys"]
 # Publisher-only compiler and Hakutaku packer. Release game engines deliberately
 # omit this feature and link only hakutaku-core through keine-loader.
-publisher = ["dep:hakutaku-pack", "dep:noyalib", "dep:tempfile"]
+publisher = ["dep:hakutaku-core", "dep:hakutaku-pack", "dep:noyalib", "dep:tempfile"]
 audio-opus = ["dep:rodio", "dep:symphonia", "dep:symphonia-adapter-libopus"]
 bundled-opus = ["audio-opus", "symphonia-adapter-libopus/bundled"]
 audio-wav = ["bevy/wav"]
@@ -58,7 +58,7 @@ video-native = [
 [workspace.package]
 version = "0.8.1"
 edition = "2024"
-rust-version = "1.96"
+rust-version = "1.97.1"
 
 # Disable icu_provider's debug eprintln! fallback in dev builds.
 # Without this, icu_provider prints "ICU4X data error: ..." to stderr
@@ -98,8 +98,8 @@ crc32fast = "1"
 criterion = "0.5"
 notify = "8.2"
 noyalib = { version = "0.0.15", default-features = false, features = ["std", "fast-int", "fast-float"] }
-hakutaku-core = { git = "https://github.com/maincoretech/hakutaku", rev = "1c12811" }
-hakutaku-pack = { git = "https://github.com/maincoretech/hakutaku", rev = "1c12811" }
+hakutaku-core = { git = "https://github.com/maincoretech/hakutaku", rev = "effa468" }
+hakutaku-pack = { git = "https://github.com/maincoretech/hakutaku", rev = "effa468" }
 libc = "0.2"
 windows-sys = { version = "0.61.2", default-features = false, features = ["Win32_System_Diagnostics_Debug"] }
 bevy = { version = "0.19", default-features = false }
@@ -147,6 +147,7 @@ winit = { workspace = true }
 crossterm = { workspace = true }
 fs2 = { workspace = true }
 bevy = { workspace = true, features = ["bevy_winit", "bevy_log", "bevy_render", "bevy_sprite", "bevy_ui", "bevy_ui_render", "bevy_audio", "png", "jpeg"] }
+hakutaku-core = { workspace = true, optional = true }
 hakutaku-pack = { workspace = true, optional = true }
 noyalib = { workspace = true, optional = true }
 

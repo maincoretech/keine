@@ -219,7 +219,7 @@ target/phase7-release/run.sh
 `<project>` 可以是带 `config.yaml` 的原生工程或 LetsGal（`project.json`）工程；
 LetsGal 的配置在打包时物化为 `config.yaml`，`projects/test-project` 可直接打包。
 
-5. `target/phase7-release` 包含引擎、启动脚本、`game.haku` 与 `data/*.hks`；快照内含
+5. `target/phase7-release` 包含引擎、启动脚本、`game.haku` 与 `data/*.taku`；快照内含
    `.keine/compiled/program.bin`，且不包含
    `saves/`、`imported_assets/`、`*.meta` 或源项目 `.keine` 缓存。
 6. 直接运行 `.haku` 时脚本、图片、字体和多来源音频行为与目录项目一致；运行期间不得出现

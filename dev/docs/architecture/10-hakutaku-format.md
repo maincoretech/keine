@@ -15,15 +15,15 @@ release/
 ├── keine[.exe]
 ├── game.haku
 └── data/
-    ├── <segment-id>.hks
-    └── <segment-id>.hks
+    ├── <segment-id>.taku
+    └── <segment-id>.taku
 ```
 
 这是桌面发行和调试时的规范逻辑布局，不是移动端宿主路径契约；移动端可以由系统 asset pack 或
 应用私有目录提供同一个 `game.haku` 与 SegmentId 集合。
 
 - `game.haku` 是当前完整逻辑文件树，经过压缩、加密并由发行者签名；
-- `.hks` 只保存不可变的密文块，不保存路径和可变目录；
+- `.taku` 只保存不可变的密文块，不保存路径和可变目录；
 - 每个文件直接引用物理块，不递归解析 parent，也不在运行时搜索 CAS；
 - 新版本复用旧块引用，只顺序写入包含新块的新 segment，再原子替换 `game.haku`；
 - 运行时从任意文件偏移直接得到 segment、物理偏移和解码参数；
@@ -126,7 +126,7 @@ catalog；加载某个 map page 时先核对 catalog 中已签名的 digest，�
 单向承诺链既保持发行者完整性，也避免把整个 block map 常驻内存。未知 major 直接拒绝，v1 不做
 “尽量读取”。
 
-### `.hks`
+### `.taku`
 
 segment 由一个 4 KiB header 和连续 payload region 组成：
 
@@ -487,7 +487,7 @@ SegmentSource::open(segment_id) -> PositionedFile | SegmentUnavailable
 
 `PositionedFile` 只需要 `len` 和 `read_exact_at`。core 不关心它来自：
 
-- 桌面的 `data/<id>.hks`；
+- 桌面的 `data/<id>.taku`；
 - Android Play Asset Delivery 的当前 pack location；
 - Apple Background Assets 返回的 file descriptor；
 - 应用私有目录中自行下载的不可变 segment；
@@ -499,7 +499,7 @@ Assets 能直接返回适合程序读取的 file descriptor，并在应用版本
 <https://developer.apple.com/documentation/backgroundassets/downloading-apple-hosted-asset-packs>。
 两者都只实现 `SegmentSource`；Hakutaku core 不直接依赖 Play Core、Foundation、JNI 或 Objective-C。
 
-放入 APK/AAB 的 `.haku`/`.hks` 必须配置为 `noCompress`。密文基本不可再次压缩，而 Android
+放入 APK/AAB 的 `.haku`/`.taku` 必须配置为 `noCompress`。密文基本不可再次压缩，而 Android
 `AssetManager::openFd` 只接受未压缩 asset：
 <https://developer.android.com/reference/android/content/res/AssetManager#openFd(java.lang.String)>。
 这避免额外解包和明文/密文临时副本，同时保留 positioned read。
@@ -520,7 +520,7 @@ Assets 能直接返回适合程序读取的 file descriptor，并在应用版本
 内的 atomic safe-save/rename；应用 bundle 保持只读。Hakutaku 不实现下载器、后台任务、重试、
 联网策略或更新 UI，也不引入 SQLite 记录链式 patch。
 
-商店托管更新可以把同一组 `.hks` 任意组合为 install-time、essential、prefetch 或 on-demand pack；
+商店托管更新可以把同一组 `.taku` 任意组合为 install-time、essential、prefetch 或 on-demand pack；
 自托管更新则直接按 SegmentId 下载。两种方式最终都提供相同不可变文件，平台分发策略不会改变
 签名、加密或块引用。
 
@@ -602,7 +602,7 @@ clap、rayon、crossbeam、lru、memmap2、S3/HTTP/TLS、多个压缩 codec。
 2. staging 内容按规范路径排序并计算 source fingerprint；
 3. fingerprint 未变则不生成新 segment；
 4. 从旧快照的 ReusePage 构建临时 `chunk_id -> BlockRef` index；
-5. 顺序写入只包含新块的 `.hks.part`；
+5. 顺序写入只包含新块的 `.taku.part`；
 6. 完成、sync 并计算完整 hash 后按 SegmentId 原子改名；
 7. 生成包含完整当前文件树的新 `game.haku.part`；
 8. 重新打开、验签、解密，并逐文件与 staging 对照；

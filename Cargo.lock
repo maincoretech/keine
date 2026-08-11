@@ -2528,7 +2528,7 @@ dependencies = [
 [[package]]
 name = "hakutaku-core"
 version = "0.1.0"
-source = "git+https://github.com/maincoretech/hakutaku?rev=1c12811#1c128114cfb48df555ad981c59a912769e773b59"
+source = "git+https://github.com/maincoretech/hakutaku?rev=effa468#effa4685616654434f5ed0ee45fb8bd9aea02743"
 dependencies = [
  "blake3",
  "ring",
@@ -2539,7 +2539,7 @@ dependencies = [
 [[package]]
 name = "hakutaku-pack"
 version = "0.1.0"
-source = "git+https://github.com/maincoretech/hakutaku?rev=1c12811#1c128114cfb48df555ad981c59a912769e773b59"
+source = "git+https://github.com/maincoretech/hakutaku?rev=effa468#effa4685616654434f5ed0ee45fb8bd9aea02743"
 dependencies = [
  "blake3",
  "fastcdc",
@@ -3009,6 +3009,7 @@ dependencies = [
  "ffmpeg-next",
  "fs2",
  "futures-lite",
+ "hakutaku-core",
  "hakutaku-pack",
  "keine-core",
  "keine-loader",

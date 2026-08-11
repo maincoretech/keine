@@ -84,7 +84,7 @@ adapter:
 |---|---|---|
 | asset / `fs` | 开发时无需打包的本地目录 | 项目根或纯资产根 |
 | asset / `auto` | 本地目录或容器 | 根据路径委派 asset adapter |
-| project / `hakutaku` | `.haku` 快照与同级 `data/*.hks` | `hakutaku_core::Package` 验签、解密与随机读取 |
+| project / `hakutaku` | `.haku` 快照与同级 `data/*.taku` | `hakutaku_core::Package` 验签、解密与随机读取 |
 | script / `webgal` | `.txt` scene | `ParseReport<Action>` |
 | store / `keine` | v9 原生 `.sav` bytes 或当前 `State` | 编码后的 bytes；解码后的 `SavedState`；可独立检查的 `StoreStatus`/metadata |
 

@@ -9,6 +9,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
+use hakutaku_core::SEGMENT_FILE_EXTENSION;
 use hakutaku_pack::{Identity, PackOptions, pack_directory};
 use tempfile::{Builder, TempDir, tempdir};
 
@@ -356,7 +357,7 @@ fn seed_previous_release(previous: &Path, assembled: &Path) -> Result<()> {
                 && Path::new(&name)
                     .extension()
                     .and_then(|value| value.to_str())
-                    == Some("hks")
+                    == Some(SEGMENT_FILE_EXTENSION)
             {
                 link_or_copy(&entry.path(), &assembled.join("data").join(name))?;
             }
@@ -631,14 +632,14 @@ mod tests {
         fs::create_dir_all(previous.join("data")).unwrap();
         fs::create_dir_all(&assembled).unwrap();
         fs::write(previous.join("game.haku"), b"snapshot").unwrap();
-        fs::write(previous.join("data/kept.hks"), b"segment").unwrap();
+        fs::write(previous.join("data/kept.taku"), b"segment").unwrap();
         fs::write(previous.join("data/ignored.txt"), b"not a segment").unwrap();
 
         seed_previous_release(&previous, &assembled).unwrap();
 
         assert_eq!(fs::read(assembled.join("game.haku")).unwrap(), b"snapshot");
         assert_eq!(
-            fs::read(assembled.join("data/kept.hks")).unwrap(),
+            fs::read(assembled.join("data/kept.taku")).unwrap(),
             b"segment"
         );
         assert!(!assembled.join("data/ignored.txt").exists());

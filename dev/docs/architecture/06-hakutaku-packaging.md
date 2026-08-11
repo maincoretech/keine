@@ -11,11 +11,11 @@ release/
 ├── keine[.exe]
 ├── game.haku
 ├── data/
-│   └── <content-id>.hks
+│   └── <content-id>.taku
 └── run.sh | run.bat
 ```
 
-`game.haku` 是签名快照与加密目录，`data/*.hks` 是不可变、内容寻址的加密 segment。
+`game.haku` 是签名快照与加密目录，`data/*.taku` 是不可变、内容寻址的加密 segment。
 更新时 Kēne 先将上一版快照和 segment 以硬链接（失败时复制）放进临时发布目录，Hakutaku
 只写新增块，并在新快照提交后清理未引用 segment。最终目录仍通过同目录 rename 事务发布。
 

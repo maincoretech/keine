@@ -20,7 +20,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.96
+      - uses: dtolnay/rust-toolchain@1.97.1
         with:
           components: rustfmt, clippy
       - uses: ./.github/actions/setup-video

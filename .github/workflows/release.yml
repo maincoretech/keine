@@ -41,7 +41,7 @@ jobs:
       KEINE_BUILD_TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.96
+      - uses: dtolnay/rust-toolchain@1.97.1
       - name: Install cross-compilation target
         if: matrix.target != ''
         run: rustup target add ${{ matrix.target }}

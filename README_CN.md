@@ -79,7 +79,7 @@ flowchart LR
    不需要另外安装 Rust、Kēne、LetsGal，也不需要取得源脚本。
 
 默认输出位于 `target/release-package/`：`keine`/`keine.exe` 是播放器，`game.haku`
-是签名加密快照，`data/*.hks` 是不可变加密 segment，其余启动器和运行库也属于同一个发行物。macOS 包装脚本会把它们装入
+是签名加密快照，`data/*.taku` 是不可变加密 segment，其余启动器和运行库也属于同一个发行物。macOS 包装脚本会把它们装入
 一个 `.app`。
 
 开发阶段始终读取可编辑源码并允许调试；只有 `cargo bundle` 才会编译剧情、加密资源、

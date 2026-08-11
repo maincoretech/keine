@@ -216,7 +216,7 @@ LetsGal 长期维护的原生项目（config.yaml + 规范目录 + 脚本）。
 - 排除：`saves/`、`imported_assets/`、`*.meta`、`.DS_Store`、`.keine/` 之外
   的所有临时文件；`.keine/compiled/program.bin` 为预留编译产物（打包脚本写入，
   见 program.bin v2 设计）。
-- 输出固定为签名 `game.haku` 快照和内容寻址 `data/*.hks` segment；按访问类型选择
+- 输出固定为签名 `game.haku` 快照和内容寻址 `data/*.taku` segment；按访问类型选择
   256 KiB streaming block、1 MiB bulk block 或 FastCDC，并用 zstd + AES-256-GCM。
 - 运行时用 `ResourceBudget::memory_constrained()`（16 MiB 明文块预算）打开，包句柄全周期保持。
 

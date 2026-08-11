@@ -177,7 +177,7 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 - [x] `keine-loader` adapter 按 asset/script/store 分类，并由配置分别选择 FS、WebGAL 与存档 codec
 - [x] `config.yaml` 有序多来源、同名 scene/资产确定性覆盖与多目录热重载
 - [x] 统一 InputAction 层（鼠标、触控、键盘、手柄）
-- [x] Hakutaku `.haku` + `.hks`、受限缓存、配置/脚本直读与 seekable Bevy `AssetReader`
+- [x] Hakutaku `.haku` + `.taku`、受限缓存、配置/脚本直读与 seekable Bevy `AssetReader`
 - [x] Ed25519 快照签名 + AES-256-GCM；目录启动验证、page/block 懒验证
 - [x] macOS .app bundle 脚本
 - [x] Linux / macOS / Windows fmt、Clippy、测试与 release CI

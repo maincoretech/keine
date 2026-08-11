@@ -92,7 +92,7 @@ flowchart LR
    scripts, Kēne, or LetsGal installed separately.
 
 The default output is `target/release-package/`: `keine`/`keine.exe` is the
-player, `game.haku` is the signed encrypted snapshot, `data/*.hks` contains its
+player, `game.haku` is the signed encrypted snapshot, `data/*.taku` contains its
 immutable encrypted segments, and the remaining launcher/runtime
 files belong to the same distributable. On macOS, the wrapper script places
 that pair inside one `.app`.
