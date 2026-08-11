@@ -37,7 +37,7 @@ loader 打开快照时一次建立文件/目录索引。`ContentFile` 直接包�
 - 先验证签名目录，再按需验证并解密 page/block；
 - Streaming/Transient 块保留独占明文 buffer，不进入全局缓存；
 - Hot 块直接进入有界 CLOCK cache，Normal 块二次访问后才晋升；
-- 视频游标保留当前解密块，不再由 Kēne 叠加第二层 read-ahead；
+- 视频游标保留当前和前一个 Streaming 解密块，不再由 Kēne 叠加第二层 read-ahead；
 - FS 来源仍把真实路径交给原生视频后端，Hakutaku 来源通过同一个 `Read + Seek` byte source。
 
 完整格式、安全边界和更新模型见 [10-hakutaku-format.md](10-hakutaku-format.md)。

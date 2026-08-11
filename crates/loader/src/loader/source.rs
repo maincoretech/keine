@@ -134,7 +134,7 @@ impl ContentMount {
                 )
             }
             ContentBackend::Hakutaku(archive) => {
-                ContentFileInner::Archive(archive.open_file(&path)?)
+                ContentFileInner::Archive(Box::new(archive.open_file(&path)?))
             }
         };
         Ok(ContentFile { inner })
@@ -192,7 +192,7 @@ pub struct ContentFile {
 
 enum ContentFileInner {
     FileSystem(fs::File),
-    Archive(AssetCursor),
+    Archive(Box<AssetCursor>),
 }
 
 impl ContentFile {

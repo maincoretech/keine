@@ -157,8 +157,8 @@ asset pack 或自托管下载。格式不保存 Play/Apple pack 名称；部署�
 tag 延迟验证。`hakutaku verify` 和打包事务必须执行完整 segment hash。
 
 数据区只在起点做 4 KiB 对齐。不能给每个小 block 填充到 4 KiB，否则大量脚本和小图片会产生
-显著空间浪费。流式大资源可以由 packer 自然产生 4 KiB 倍数的固定 block；普通小块紧密排列，
-I/O planner 在内存中扩大和合并读取范围，而不是把设备扇区大小写进格式。
+显著空间浪费。流式大资源由 packer 产生固定 256 KiB block；普通小块紧密排列。v1 reader 按块
+执行 positioned read，不把设备扇区大小或尚未验证收益的 extent planner 写进格式。
 
 ## Catalog、冷页与 working set
 
@@ -246,11 +246,12 @@ pages 并建立临时 `chunk_id -> BlockRef` map；runtime 验证 catalog 中的
 直接作为下一次增量构建输入，不再维护另一份 publisher sidecar。
 
 map page cache 与 plaintext block cache 分开计量；page miss 不持有 cache lock 做 I/O、AEAD、
-解压或解析。page value 是不可变 `Arc<[u8]>`，相同 file/segment 的并发读取共享一份页面。
+解压或解析。page value 是不可变 `Arc<Vec<u8>>`，相同 file/segment 的并发读取共享一份页面，
+解码后的 `Vec` 进入 cache 时不再搬运到第二份字节分配。
 
-packer 按 `required/deferred` 先分 segment，再根据编译后的启动依赖和场景邻近性排列文件；这让
-启动和同场景资源形成连续 extent，但不增加 runtime tier 或 eager load。cache `access_class` 与
-物理布局是两个简单决策：前者决定是否保留 plaintext，后者只决定块在 segment 中的顺序。
+packer 按 `required/deferred` 与 `access_class` 分离 segment writer，并按规范化路径的确定顺序
+写入。当前分类只依据 deferred prefix、文件大小和已知媒体扩展名；基于真实运行 trace 的场景
+邻近排序尚未实现，不能把它当作现有性能保证。
 
 ## 分块与压缩
 
@@ -382,18 +383,14 @@ Hakutaku 也不把 NAND page、erase block、NVMe queue depth、APFS allocation 
 确定性。格式负责连续 extent、少量大顺序写和不原地覆写；reader 的 batch、prefetch 与并发度
 由目标机器基准和运行时反馈决定。
 
-### Read planner
+### 当前 read path 与 planner 边界
 
-一次逻辑读取可能覆盖多个相邻 block。planner 在发出系统调用前：
+v1 Core 将一次逻辑读取映射到独立 block，逐块执行 positioned read、BLAKE3、AES-GCM 与可选
+zstd。连续读取复用密文和解压 buffer；Streaming cursor 保留当前与前一个 block。显式
+`Asset::prefetch_range` 逐块认证并写入独立的有界 prefetch cache，可由宿主任务池提前执行。
 
-1. 将请求转换成有序 physical extents；
-2. 合并同一 segment 内相邻或间隔很小的 extents；
-3. 给顺序流限制单次 batch 上限，初始候选 1 MiB；
-4. 将完成数据按 block 边界原地解密；
-5. RAW block 直接成为 plaintext buffer；zstd block 解压到目标缓存 buffer。
-
-planner 不扩大随机单块请求到固定 1 MiB。它只有观察到连续访问或收到 prefetch 提示时才批量，
-兼顾 SSD queue depth 与无谓读放大。
+相邻 physical extent 合并和并行 block pipeline 仍是后续候选，不是当前实现。只有实际冷读 trace
+证明系统调用或队列深度成为瓶颈时才增加，且不能扩大随机单块请求或引入新的 async runtime。
 
 ### 同步核心、可插拔异步调度
 
@@ -417,20 +414,20 @@ Hakutaku 数据。Apple 的 Metal I/O 面向文件到 GPU resource：
 
 - `hot`：第一次按需读取即可进入共享 CLOCK cache，但不永久 pin；
 - `normal`：先进入只保存 key 的小型 probation ring，第二次命中才占 plaintext cache；
-- `streaming`：不进入共享 cache，只在 cursor 内保留当前块和有限 read-ahead；
+- `streaming`：不自动进入共享 cache，cursor 内保留当前与前一个 block；
 - `transient`：读取后立即交给调用者，适合只解析一次的 program/config 和一次性大资源；
-- cache key 是 `(snapshot identity, segment uid, block ordinal)`；
-- cache value 是 `Arc<[u8]>`，命中后不复制完整 block；
+- 每个 `Package` 独占 cache，entry key 是 `(segment ordinal, block ordinal)`；
+- cache value 是 `Arc<Vec<u8>>`，命中后不复制完整 block，cache admission 也不搬运明文；
 - 总字节预算是硬限制，不能只限制 entry 数量。
 
 cache 使用标准库实现针对 block 的固定策略，不引入通用 `lru`。每个 `AssetCursor` 有独立逻辑
-位置；不可变 `Asset` 提供线程安全 `read_at`，因此视频 seek 不争用 cursor lock。prefetch 数据只
-进入 cursor read-ahead，真正被 demand read 后才获得 cache admission，不能因推测读取驱逐热块。
+位置；不可变 `Asset` 提供线程安全 `read_at`，因此视频 seek 不争用 cursor lock。显式预取进入
+单独的 CLOCK cache，由 `prefetch_cache_bytes` 限制，不能驱逐 Hot/Normal plaintext cache。
 
-`access_class` 是 packer 根据启动依赖图、资源类型和真实 trace 生成的性能 hint，不是另一个数据
-stream，也不导致 eager load。默认只把反复读取的小型 UI/font/配置块标为 `hot`；启动时只读一次
-并转成运行时结构的 compiled program 应为 `transient`。这样“热”表示高复用价值，而不是把大量
-plaintext 预先塞入 RAM。
+`access_class` 是性能 hint，不是另一个数据 stream，也不导致 eager load。当前 reference packer
+将不超过 32 KiB 的文件标为 `hot`，已知音视频扩展名标为 `streaming`，其余标为 `normal`；
+`transient` 已存在于格式和 runtime，但尚无自动选择规则。启动依赖图或真实 trace 驱动的分类属于
+后续 profile-guided packing，不能提前假设已经存在。
 
 zstd 使用可复用的 `zstd::bulk::Decompressor` context，并通过 `decompress_to_buffer` 写入复用
 buffer；该 API 正是为独立多块解压和减少重复内存成本设计：
@@ -447,12 +444,12 @@ buffer；该 API 正是为独立多块解压和减少重复内存成本设计：
 - block miss：对 `stored_len` 字节做一次 BLAKE3-128 核对，再原地 AES-GCM，必要时直接解压进
   caller/cache buffer；不再 hash 较大的 plaintext；
 - block hit：不重复 hash、AEAD 或 zstd，只共享 `Arc` 并复制调用者实际请求的范围；
-- streaming：安全检查按顺序 block 摊销，planner 合并系统调用，但不为了合并而复制整个 batch；
+- streaming：安全检查按顺序 block 摊销；当前逐块读取，不为了合并而复制整个 batch；
 - hardened runner：所有检查只在 bootstrap 执行一次，没有轮询线程、timer 或 frame system。
 
-page cache、block cache、scratch 和 read-ahead 分别计入 `ResourceBudget`，诊断统计使用 atomic
-counter 且可在 release 编译掉详细 trace。任何进一步的安全层若需要对每帧轮询、重复扫描已验证
-plaintext、额外保留一份密文/明文，或让 streaming 多一次整块复制，默认拒绝。
+page cache、block cache、prefetch cache、空闲 handle 和 Normal probation 由 `ResourceBudget`
+显式限制；cursor scratch 则由格式的最大 block 长度约束。任何进一步的安全层若需要对每帧轮询、
+重复扫描已验证 plaintext、额外保留一份密文/明文，或让 streaming 多一次整块复制，默认拒绝。
 
 ### 写路径与 SSD write amplification
 
@@ -526,11 +523,11 @@ Assets 能直接返回适合程序读取的 file descriptor，并在应用版本
 
 ### 内存、功耗与生命周期
 
-移动适配只调整一个显式 `ResourceBudget`：map-page cache、plaintext cache、空闲 segment handle、
-最大并发读取和 read-ahead 的字节/数量上限。core 不根据 User-Agent 或设备型号猜策略；Kēne 的
-平台层给出默认预算，真实设备基准再调整。`Package::trim()` 清空可重建的 page/plaintext cache、
-read-ahead 和空闲 handle，供 Android memory trim 与 iOS 进入后台/内存警告时调用；活跃
-`AssetCursor` 保持正确，后续读取按需重开。
+移动适配只调整一个显式 `ResourceBudget`：map-page、plaintext、prefetch cache、空闲 segment
+handle 与 Normal probation。core 不根据 User-Agent 或设备型号猜策略；Kēne 的平台层给出默认
+预算，真实设备基准再调整。`Package::trim()` 清空 package 级 page/plaintext/prefetch cache、
+probation 和空闲 handle；活跃 `AssetCursor` 的当前/前一 block 属于 cursor 工作集，生命周期结束
+时释放，后续读取仍可按需重开 segment。
 
 不 mmap 解密后的可写大区，不把整段视频解密进 RAM，也不因 page cache 看起来占用内存而复制
 一份私有缓存。Android 官方说明 clean file-backed page 可以被系统回收，而被修改或匿名的页面会

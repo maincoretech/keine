@@ -354,7 +354,7 @@ frame-rate loop participates.
 Reproduce with `cargo bench --offline -p hakutaku-pack --bench runtime` from
 the Hakutaku workspace root. This is an in-memory/OS-buffered runtime regression
 point, not a cold-device storage claim. The prepared snapshot/segment AES keys
-and cursor-private current block ensure a small caller read does not repeat the
+and cursor-private decoded blocks ensure a small caller read does not repeat the
 AES key schedule or decrypt the same 256 KiB block.
 
 ### Streaming buffer ownership optimization
@@ -379,3 +379,21 @@ The important invariant is structural: uncached video blocks now have no
 decode-result copy before bytes reach the caller. The measured gains are modest
 because APFS cache, AES-GCM, BLAKE3 verification, and the final caller copy still
 dominate this small fixture.
+
+### 2026-08-12 buffered cursor and bounded prefetch
+
+Kēne pins Hakutaku `0438e78`. Sequential and complete reads now recycle
+ciphertext/decompression buffers, cached plaintext keeps its decoded allocation,
+and a Streaming cursor retains the current and previous block. The `A -> B -> A`
+regression test confirms that the final return to `A` issues no segment read.
+
+The upstream three-run median moved 128 KiB sequential reads from 1,612.7 to
+1,636.3 MiB/s (+1.5%), 256 KiB reads from 1,629.8 to 1,659.3 MiB/s (+1.8%), and
+uniform random 4 KiB reads from 6,689 to 6,784 IOPS (+1.4%). These remain warm
+APFS regression figures. The canonical protocol and raw interpretation live in
+<https://github.com/maincoretech/hakutaku/blob/main/PERFORMANCE.md>.
+
+`Asset::prefetch_range` is available with a separate bounded cache, but Kēne does
+not yet call it speculatively. Existing Bevy asset loading already runs on its
+task system, while video decoders maintain their own read cadence; adding a
+second predictor without a cold-read trace could duplicate authentication work.
