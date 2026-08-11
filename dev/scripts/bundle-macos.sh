@@ -20,11 +20,6 @@ case "$name" in
         exit 2
         ;;
 esac
-if [[ -z "${HEXZ_PASSWORD:-}" ]]; then
-    echo "HEXZ_PASSWORD must be set" >&2
-    exit 2
-fi
-
 cd "$root"
 mkdir -p "$bundle_parent"
 cargo bundle "$project" --output "$package_output"
@@ -39,7 +34,8 @@ trap cleanup EXIT
 
 mkdir -p "$staging/Contents/MacOS" "$staging/Contents/Resources"
 cp "$package_dir/keine" "$staging/Contents/MacOS/keine"
-cp "$package_dir/game.hxz" "$staging/Contents/Resources/game.hxz"
+cp "$package_dir/game.haku" "$staging/Contents/Resources/game.haku"
+cp -R "$package_dir/data" "$staging/Contents/Resources/data"
 cp "$root/assets/icons/keine.icns" "$staging/Contents/Resources/keine.icns"
 
 sed -e "s/__NAME__/$name/g" -e "s/__VERSION__/$version/g" > "$staging/Contents/Info.plist" <<'PLIST'
@@ -58,7 +54,7 @@ PLIST
 cat > "$staging/Contents/MacOS/launch" <<'LAUNCH'
 #!/usr/bin/env bash
 launcher_dir="$(cd "$(dirname "$0")" && pwd)"
-exec "$launcher_dir/keine" "$launcher_dir/../Resources/game.hxz"
+exec "$launcher_dir/keine" "$launcher_dir/../Resources/game.haku"
 LAUNCH
 chmod +x "$staging/Contents/MacOS/keine" "$staging/Contents/MacOS/launch"
 

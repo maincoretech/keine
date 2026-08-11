@@ -15,7 +15,7 @@ const WINDOW_WIDTH: u32 = 960;
 const WINDOW_HEIGHT: u32 = 540;
 const CARD_WIDTH: f32 = 600.0;
 const TITLE: &str = "游戏资源不可用";
-const INSTRUCTION: &str = "请重新下载 game.hxz，并放到游戏可执行文件同目录";
+const INSTRUCTION: &str = "请重新下载 game.haku 和 data 文件夹，并放到游戏可执行文件同目录";
 
 #[derive(Component)]
 struct CloseButton;

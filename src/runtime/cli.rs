@@ -8,6 +8,8 @@ use anyhow::{Context, Result};
 
 use crate::ui::performance::BenchmarkTarget;
 
+const DEFAULT_PACKAGE_OUTPUT: &str = "target/release-package";
+
 #[derive(Debug, Clone)]
 pub(super) struct BenchmarkOptions {
     pub(super) seconds: f32,
@@ -153,7 +155,7 @@ pub(super) fn parse(args: &[OsString]) -> Result<CliCommand> {
         Some("package") => {
             let project = required_path(args, 1, "keine package <project>")?;
             let output = parse_output_option(&args[2..])?
-                .unwrap_or_else(|| PathBuf::from(crate::package::DEFAULT_OUTPUT));
+                .unwrap_or_else(|| PathBuf::from(DEFAULT_PACKAGE_OUTPUT));
             Ok(CliCommand::Package { project, output })
         }
         Some("dev") => parse_development(args),
@@ -177,7 +179,7 @@ pub(super) fn resolve_project_path(path: impl AsRef<Path>) -> PathBuf {
             .ok()
             .and_then(|executable| executable.parent().map(Path::to_owned))
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("game.hxz");
+            .join("game.haku");
     }
     if path.is_absolute() {
         return path.to_owned();

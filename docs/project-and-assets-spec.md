@@ -1,14 +1,14 @@
 # Kēne 原生项目与资源规范（v1 草案）
 
 > 状态：草案。所有条目都以当前代码事实为准（`config.yaml` / `GameConfig` /
-> `ResourceKind` / loader adapter / hexz 打包），未实现的部分明确标注「预留」。
+> `ResourceKind` / loader adapter / Hakutaku 打包），未实现的部分明确标注「预留」。
 > 本规范是 LetsGal → Kēne 转换的目标形态，也是后续 demo 项目的落点。
 
 ## 0. 目的
 
 1. 定义 Kēne 原生项目（Native Project）的目录布局与资源组织方式；
 2. 为「LetsGal 资源完全转换为我们自己的资源」提供权威目标格式；
-3. 为发布打包（`game.hxz`）与编译产物（`.keine/compiled/program.bin`）预留稳定路径；
+3. 为发布打包（`game.haku` + `data/`）与编译产物（`.keine/compiled/program.bin`）预留稳定路径；
 4. 让脚本、配置、预取、图库与打包共用同一套资源语义，不依赖 LetsGal 专用字段。
 
 ## 1. 项目形态
@@ -19,7 +19,7 @@ Kēne 支持三种输入形态，本规范只定义后两种（原生形态）�
 |---|---|---|
 | LetsGal 工程 | `project.json` | 加载期由 letsgal editor adapter 在内存中转换，无需物理迁移 |
 | Kēne 原生目录项目 | `config.yaml`（项目根） | 本规范定义的主要开发形态 |
-| Kēne 打包项目 | `game.hxz`（包根含 `config.yaml`） | 原生目录项目的发布形态 |
+| Kēne 打包项目 | `game.haku` 与同级 `data/` | 原生目录项目的发布形态 |
 
 ## 2. 项目目录规范（预留布局）
 
@@ -48,7 +48,7 @@ Kēne 支持三种输入形态，本规范只定义后两种（原生形态）�
 - 规范目录是默认回退路径（见第 4 节），也是转换工具的目标位置。
 - 任何偏离规范目录的资产，必须通过 `config.yaml` 的 `assets` 别名表或脚本中的
   完整相对路径引用；否则引擎按默认回退路径解析会找不到。
-- 目录可分层叠加：`adapter.asset` 声明多个来源（fs / hexz），后者覆盖前者，
+- 目录可分层叠加：`adapter.asset` 声明多个 fs 来源，后者覆盖前者，
   覆盖粒度是逻辑相对路径（如 `background/day.webp`）。
 
 ### 2.2 保留名
@@ -58,8 +58,6 @@ Kēne 支持三种输入形态，本规范只定义后两种（原生形态）�
 | `.keine/` | 引擎编译产物与内部缓存 | 源项目永不打包；发布脚本在 staging 内重新生成 `.keine/compiled/program.bin` 并随包发布（运行时契约） |
 | `saves/` | 存档、profile、阅读历史、图库 | 永不打包；打包脚本显式排除 |
 | `imported_assets/`、`*.meta` | Bevy 资产处理器生成物 | 永不打包；不进 git |
-| `.hexz/` | hexz pack 的 staging 目录 | 打包器自动跳过 |
-| `memory`（项目根） | hexz 辅助流 | 保留给打包工具，业务层不使用 |
 
 ## 3. 配置（config.yaml）
 
@@ -98,7 +96,7 @@ assets:
   （`day`，通过别名表解析）。
 - 未在别名表中的名称按第 4 节的默认回退目录解析。
 - 目录工程始终解析源脚本；发布流水线在 staging 内生成
-  `.keine/compiled/program.bin`，打包后的 `.hxz` 缺少或损坏该产物时拒绝启动。
+  `.keine/compiled/program.bin`，打包后的 `.haku` 缺少或损坏该产物时拒绝启动。
   旧工程中的 `compiled_program` 字段仅为向后兼容而忽略。
 
 ## 4. 资源类别规范
@@ -210,7 +208,7 @@ LetsGal 长期维护的原生项目（config.yaml + 规范目录 + 脚本）。
   `dialogue-box.json` 等），但允许保留 `.manifest.json` 作为过渡输入；
 - 无法静态枚举的动态路径（如 `bg/{route}.webp`）保持动态引用，不强制物化。
 
-## 8. 打包规范（game.hxz）
+## 8. 打包规范（Hakutaku）
 
 - 打包输入 = 原生目录项目或 LetsGal 工程；输出 `config.yaml` 位于包根（LetsGal
   的适配器配置在打包时物化），`assets/` 暴露为 asset root，脚本在 `scripts/`
@@ -218,8 +216,9 @@ LetsGal 长期维护的原生项目（config.yaml + 规范目录 + 脚本）。
 - 排除：`saves/`、`imported_assets/`、`*.meta`、`.DS_Store`、`.keine/` 之外
   的所有临时文件；`.keine/compiled/program.bin` 为预留编译产物（打包脚本写入，
   见 program.bin v2 设计）。
-- 容器参数固定：64 KiB block、zstd、AES-256-GCM 加密（`HEXZ_PASSWORD`）。
-- 运行时用 `memory_constrained()`（约 16 MiB 解压块缓存）打开，包句柄全周期保持。
+- 输出固定为签名 `game.haku` 快照和内容寻址 `data/*.hks` segment；按访问类型选择
+  256 KiB streaming block、1 MiB bulk block 或 FastCDC，并用 zstd + AES-256-GCM。
+- 运行时用 `ResourceBudget::memory_constrained()`（16 MiB 明文块预算）打开，包句柄全周期保持。
 
 ## 9. 版本与演进
 

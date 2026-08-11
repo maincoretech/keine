@@ -20,19 +20,21 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.97
+      - uses: dtolnay/rust-toolchain@1.96
         with:
           components: rustfmt, clippy
       - uses: ./.github/actions/setup-video
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - name: Check publisher pipeline
+        run: cargo test --workspace --no-default-features --features publisher package::tests
       - name: Check typed video backend
         if: runner.os == 'Linux' || runner.os == 'Windows'
-        run: cargo test --workspace --no-default-features --features video-ffmpeg decodes_encrypted_hexz_video_through_random_access
+        run: cargo test --workspace --no-default-features --features publisher,video-ffmpeg decodes_encrypted_hakutaku_video_through_random_access
       - name: Check AVFoundation video backend
         if: runner.os == 'macOS'
         run: >-
-          cargo run --locked --no-default-features --features video-native
+          cargo run --locked --no-default-features --features publisher,video-native
           --bin keine-video-acceptance -- dev/fixtures/video/playback.mp4
       - run: cargo build --release

@@ -13,10 +13,11 @@ serde_json = { workspace = true }
 serde = { workspace = true }
 crc32fast = { workspace = true }
 postcard = { workspace = true }
-hexz_k = { workspace = true, features = ["signing"] }
+hakutaku-core = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+hakutaku-pack = { workspace = true }
 
 [[bench]]
 name = "program_load"

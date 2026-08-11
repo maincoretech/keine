@@ -40,7 +40,7 @@ keine/
 │   └── loader/                    package: keine-loader
 │       └── src/
 │           ├── adapter.rs + adapter/ 可配置格式 registry 及四类 adapter 实现
-│           │   ├── asset.rs       fs、auto 与 hexz_k 统一资源适配
+│           │   ├── asset.rs       fs、auto 与 Hakutaku packaged-project 适配
 │           │   ├── editor.rs + editor/ 完整编辑器工程门面与 LetsGal 实现
 │           │   ├── script.rs + script/ 脚本门面与 WebGAL 统一 IR 导出
 │           │   └── store.rs       存档状态格式接口与 keine codec
@@ -92,7 +92,7 @@ keine/
   `editor/letsgal/`）；它只负责检测、统一 IR 编译、资源挂载和调试游标。
 - 特定编辑器的安装包放在该 adapter 的宿主子模块；根 runtime 只保留格式无关的本地桥接
   协议，普通启动不得启用桥接或导入具体 adapter 类型。
-- Hexz 属于 asset，容器协议完全由 `hexz_k`/Hexz 生态库负责。
+- Hakutaku 属于 packaged-project adapter，格式与打包协议由独立 Hakutaku workspace 负责。
 - 完整资源包也由 asset adapter 作为通用 `ProjectAdapter` 打开；bootstrap 不按扩展名分支。
 - Bevy 仅通过只读 `ContentMount/ContentFile` overlay reader 消费统一逻辑路径；包格式和语言
   适配不得进入 runtime 或渲染层。

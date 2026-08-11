@@ -16,4 +16,4 @@ validate = "run -- check"
 # Keep the bundle runner outside target/release: Windows cannot replace a
 # running keine.exe when the child build produces the hardened game engine.
 # `bundle` deliberately avoids Cargo's built-in `package` command.
-bundle = "run --release --no-default-features --target-dir target/package-runner -- package"
+bundle = "run --release --no-default-features --features publisher --target-dir target/package-runner -- package"

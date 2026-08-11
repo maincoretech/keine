@@ -23,7 +23,7 @@ continue to work.
 - Backgrounds, portraits, layers, filters, blend modes, camera transforms, and
   regional blur.
 - Dialogue, narration, ruby text, choices, backlog, Auto, Skip, and rollback.
-- Directory and Hexz asset overlays with development hot reload.
+- Directory development sources and encrypted Hakutaku releases.
 - WebGAL scripts and LetsGal projects compiled into one typed action model.
 - Optional codec features; Ogg Opus is recommended for distributed audio.
 
@@ -54,13 +54,13 @@ Invalid project paths fail immediately.
 
 Directory projects always read source scripts, preserving diagnostics and hot
 reload. `cargo bundle` validates those sources and writes a versioned
-`.keine/compiled/program.bin` inside the release package. Packaged `.hxz` games
+`.keine/compiled/program.bin` inside the release package. Packaged `.haku` games
 require that artifact and skip source-script parsing at startup. Its fixed
 envelope (magic, versions, lengths, CRC32 and program fingerprint) keeps saves
 compatible with the source project.
 
 The release archive currently retains **encrypted copies** of project source
-documents so every project format and resource adapter stays intact. The Hexz
+documents so every project format and resource adapter stays intact. The Hakutaku
 runtime loads only `program.bin`; players do not need a separate plaintext
 source directory.
 
@@ -76,7 +76,7 @@ flowchart LR
     B --> C["Iterate<br/>cargo dev"]
     C --> D["Package<br/>cargo bundle"]
     D --> E["Run the actual release"]
-    E --> F["Ship<br/>engine + game.hxz"]
+    E --> F["Ship<br/>engine + game.haku + data/"]
 ```
 
 1. Create or open a project whose root contains `config.yaml` (native/WebGAL)
@@ -85,13 +85,15 @@ flowchart LR
    checks the project without opening a window.
 3. Use `cargo dev <project>` for normal iteration and hot reload. For an open
    LetsGal project, add `--sync`; Kēne reads Studio state but never modifies it.
-4. Set one game-specific `HEXZ_PASSWORD`, then run `cargo bundle <project>`.
+4. Run `cargo bundle <project>`. The first bundle creates a persistent publisher
+   identity at `.keine/publisher.hakutaku-key`; back it up and never ship it.
 5. Validate the actual encrypted release with `run.sh`/`run.bat`, then
    distribute the complete output directory. Players do not need Rust, source
    scripts, Kēne, or LetsGal installed separately.
 
 The default output is `target/release-package/`: `keine`/`keine.exe` is the
-player, `game.hxz` is the encrypted game, and the remaining launcher/runtime
+player, `game.haku` is the signed encrypted snapshot, `data/*.hks` contains its
+immutable encrypted segments, and the remaining launcher/runtime
 files belong to the same distributable. On macOS, the wrapper script places
 that pair inside one `.app`.
 
@@ -105,7 +107,7 @@ builds the project-specific release engine.
 |---|---|
 | Native / WebGAL directory | `config.yaml` |
 | LetsGal project | `project.json` |
-| Packaged game | `game.hxz` |
+| Packaged game | `game.haku` + sibling `data/` |
 
 A directory project can combine ordered asset sources:
 
@@ -114,7 +116,6 @@ adapter:
   asset:
     - { path: ".", format: fs }
     - { path: "content/shared", format: fs }
-    - { path: "packs/route.hxz", format: hexz }
   script: webgal
   store: keine
 ```
@@ -147,10 +148,10 @@ Built-in adapters:
 
 | Capability | Implementations |
 |---|---|
-| Assets | `auto`, `fs`, `hexz` |
+| Assets | `auto`, `fs` |
 | Scripts | `webgal` |
 | Editor projects | `letsgal` |
-| Packages | `hexz` |
+| Packages | `hakutaku` |
 | Saves | `keine` |
 
 ## Architecture
@@ -159,7 +160,7 @@ Built-in adapters:
 
 ```mermaid
 flowchart LR
-    P["Project<br/>WebGAL · LetsGal · Hexz"] --> L["Loader<br/>adapters · validation · resources"]
+    P["Project<br/>WebGAL · LetsGal · Hakutaku"] --> L["Loader<br/>adapters · validation · resources"]
     L --> C["Core<br/>Config · Action · State"]
     C --> R["Runtime<br/>Bevy · rendering · UI · media"]
     R --> O["Player<br/>window · audio · saves"]
@@ -213,11 +214,10 @@ cargo build --release --features video-ffmpeg
 The bundled Opus decoder requires CMake. Video builds require FFmpeg
 development libraries.
 
-Package an encrypted Hexz game:
+Package an encrypted Hakutaku game:
 
 ```bash
-HEXZ_PASSWORD='your-password' \
-  cargo bundle path/to/native-project
+cargo bundle path/to/native-project
 ```
 
 Release packaging accepts a native project (`config.yaml`) or a LetsGal
@@ -233,25 +233,21 @@ The packaged engine is rebuilt per project: only the audio/video backends
 detected in the content are compiled in, the `hardened` feature enables
 anti-debugging (macOS `PT_DENY_ATTACH`, disabled core dumps, Windows debugger
 exit), and the release profile (LTO + stripped symbols + `panic=abort`)
-shrinks the binary from ~108 MB to ~43 MB. The `HEXZ_PASSWORD` key is
-XOR-masked into the binary at build time, so the plaintext never appears in
-the shipped string tables. Packaging also creates a one-bundle Ed25519 keypair,
-embeds only the public key in that engine, and signs the standard Hexz archive
-plus its complete integrity manifest; the temporary private key is discarded
-when packaging finishes. This detects resource replacement without adding a
-signing-key management step. The embedded decryption password can still be
-recovered from a running client, so packaged builds are tamper-evident rather
-than DRM.
+shrinks the binary from ~108 MB to ~43 MB. The persistent Hakutaku identity
+owns the project ID, AES-256 root key, and Ed25519 signing key. Packaging embeds
+two separately generated XOR key shares plus the public key into the matching
+engine and signs the snapshot's page/block commitments. The complete key can
+still be recovered from a running offline client, so this is tamper evidence
+and extraction resistance rather than DRM.
 
 Create a macOS app bundle:
 
 ```bash
-HEXZ_PASSWORD='your-password' \
-  dev/scripts/bundle-macos.sh projects/test-project
+dev/scripts/bundle-macos.sh projects/test-project
 ```
 
 The macOS wrapper consumes the same encrypted, hardened `cargo bundle` output;
-the app contains `game.hxz`, never a plaintext copy of the source project.
+the app contains `game.haku` and `data/`, never a plaintext source directory.
 
 ### Security model
 
@@ -262,32 +258,30 @@ it is opened by the unmodified official engine; it does not claim DRM.
 ```mermaid
 flowchart LR
     S["Developer source"] --> C["Validate and compile"]
-    C --> P["Encrypt game.hxz"]
-    K["Temporary private key"] --> P
+    C --> P["Pack game.haku + data/"]
+    K["Persistent publisher identity<br/>developer only"] --> P
     P --> B["Release bundle"]
-    U["Engine with public key<br/>and masked password"] --> B
+    U["Engine with public key<br/>and split AES key"] --> B
     B --> V["Verify before use"]
     V --> R["Decrypt blocks on demand"]
 ```
 
-- **Confidentiality:** assets and compiled story are AES-256-GCM encrypted in
-  `game.hxz`. The password is masked in the executable and no plaintext archive
-  or video temporary file is created, but a determined owner can still recover
-  the password from the binary or process memory.
-- **Integrity:** each bundle gets a temporary Ed25519 keypair. The private key
-  is discarded after packaging; the matching public key is embedded in that
-  engine. Modified headers, indexes, metadata, dictionaries, or data blocks are
-  rejected. This remains the standard Hexz format.
+- **Confidentiality:** assets and compiled story use per-segment AES-256-GCM.
+  No plaintext archive or video temporary file is created, but a determined
+  owner can still recover the runtime key from the binary or process memory.
+- **Integrity:** one backed-up publisher identity signs the encrypted catalog,
+  page digests, and block ciphertext commitments across releases. Modified
+  snapshots or segments are rejected before their plaintext is consumed.
 - **Runtime hardening:** packaged engines reject simple debugger attachment and
   core dumps; development builds remain fully debuggable. These controls raise
   extraction cost but can be patched out by a determined attacker.
-- **Trust boundary:** if an attacker replaces both the engine and `game.hxz`,
+- **Trust boundary:** if an attacker replaces both the engine and the Hakutaku package,
   Kēne alone cannot establish publisher identity. Platform signing/notarization
   would cover that outer boundary and is intentionally outside the current
   offline package model.
 
 The complete packaging and verification design is documented in
-[Hexz packaging and mounts](dev/docs/architecture/06-hexz-packaging.md).
+[Hakutaku packaging and mounts](dev/docs/architecture/06-hakutaku-packaging.md).
 
 ## Validate
 
@@ -304,7 +298,7 @@ cargo validate projects/test-project
 - [Content loader](dev/docs/architecture/07-content-loader.md)
 - [Rendering](dev/docs/architecture/03-render-pipeline.md)
 - [Saves and rollback](dev/docs/architecture/04-rollback-and-save.md)
-- [Hexz packaging and security model](dev/docs/architecture/06-hexz-packaging.md)
+- [Hakutaku packaging and security model](dev/docs/architecture/06-hakutaku-packaging.md)
 - [LetsGal integration](dev/docs/architecture/08-letsgal-studio.md)
 - [WebGAL compatibility](dev/docs/webgal-compatibility/README.md)
 - [Current work](dev/docs/TODO.md)

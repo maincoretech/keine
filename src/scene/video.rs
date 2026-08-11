@@ -888,26 +888,61 @@ mod ffmpeg_backend {
 
     #[cfg(test)]
     mod tests {
+        #[cfg(feature = "publisher")]
         use std::fs;
         use std::path::PathBuf;
+        #[cfg(feature = "publisher")]
+        use std::time::{SystemTime, UNIX_EPOCH};
 
-        use hexz_k::cmd::pack::{PackOptions, pack_directory};
-        use keine_loader::{ContentBackend, ContentMount, hexz_password, mount_hexz};
+        #[cfg(feature = "publisher")]
+        use hakutaku_pack::{Identity, PackOptions, pack_directory};
+        #[cfg(feature = "publisher")]
+        use keine_loader::{ContentBackend, ContentMount, HakutakuArchive};
 
         use super::*;
 
+        #[cfg(feature = "publisher")]
         fn playback_fixture() -> PathBuf {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("dev/fixtures/video/playback.mp4")
         }
 
+        #[cfg(feature = "publisher")]
+        struct Scratch(PathBuf);
+
+        #[cfg(feature = "publisher")]
+        impl Scratch {
+            fn new() -> Self {
+                let nonce = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos();
+                let path = std::env::temp_dir()
+                    .join(format!("keine-video-test-{}-{nonce}", std::process::id()));
+                fs::create_dir(&path).unwrap();
+                Self(path)
+            }
+
+            fn path(&self) -> &Path {
+                &self.0
+            }
+        }
+
+        #[cfg(feature = "publisher")]
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
         #[test]
+        #[cfg(feature = "publisher")]
         #[ignore = "manual source-preparation performance baseline"]
-        fn benchmark_hexz_video_direct_open_against_legacy_copy() {
+        fn benchmark_hakutaku_video_direct_open_against_legacy_copy() {
             use std::io::Write;
             use std::time::Instant;
 
             const MEDIA_BYTES: usize = 32 * 1024 * 1024;
-            let temporary = tempfile::tempdir().unwrap();
+            let temporary = Scratch::new();
             let source_dir = temporary.path().join("source");
             fs::create_dir(&source_dir).unwrap();
             let mut media = fs::File::create(source_dir.join("large.mp4")).unwrap();
@@ -923,19 +958,7 @@ mod ffmpeg_backend {
                 media.write_all(&block).unwrap();
             }
             drop(media);
-            let archive_path = temporary.path().join("media.hxz");
-            pack_directory(&PackOptions {
-                input: source_dir.display().to_string(),
-                output: archive_path.display().to_string(),
-                compression: "zstd".to_owned(),
-                encrypt: true,
-                block_size: 65_536,
-                password: Some(hexz_password().to_owned()),
-            })
-            .unwrap();
-            let mount =
-                ContentMount::new(ContentBackend::Hexz(mount_hexz(&archive_path).unwrap()), "")
-                    .unwrap();
+            let mount = encrypted_mount(&source_dir, temporary.path());
 
             let direct_start = Instant::now();
             for _ in 0..1_000 {
@@ -946,9 +969,11 @@ mod ffmpeg_backend {
             let direct = direct_start.elapsed() / 1_000;
 
             let legacy_start = Instant::now();
-            for _ in 0..3 {
+            for iteration in 0..3 {
                 let mut source = mount.open_file(Path::new("large.mp4")).unwrap();
-                let mut output = tempfile::NamedTempFile::new().unwrap();
+                let mut output =
+                    fs::File::create(temporary.path().join(format!("legacy-{iteration}.bin")))
+                        .unwrap();
                 assert_eq!(
                     std::io::copy(&mut source, &mut output).unwrap(),
                     MEDIA_BYTES as u64
@@ -956,30 +981,19 @@ mod ffmpeg_backend {
             }
             let legacy = legacy_start.elapsed() / 3;
             eprintln!(
-                "32 MiB encrypted Hexz video source: legacy_copy={legacy:?}/open, direct_random_access={direct:?}/open, plaintext_write=32 MiB -> 0"
+                "32 MiB Hakutaku video source: legacy_copy={legacy:?}/open, direct_random_access={direct:?}/open, plaintext_write=32 MiB -> 0"
             );
         }
 
         #[test]
-        fn decodes_encrypted_hexz_video_through_random_access() {
+        #[cfg(feature = "publisher")]
+        fn decodes_encrypted_hakutaku_video_through_random_access() {
             ffmpeg::init().unwrap();
-            let temporary = tempfile::tempdir().unwrap();
+            let temporary = Scratch::new();
             let source_dir = temporary.path().join("source");
             fs::create_dir(&source_dir).unwrap();
             fs::copy(playback_fixture(), source_dir.join("playback.mp4")).unwrap();
-            let archive_path = temporary.path().join("media.hxz");
-            pack_directory(&PackOptions {
-                input: source_dir.display().to_string(),
-                output: archive_path.display().to_string(),
-                compression: "zstd".to_owned(),
-                encrypt: true,
-                block_size: 65_536,
-                password: Some(hexz_password().to_owned()),
-            })
-            .unwrap();
-            let mount =
-                ContentMount::new(ContentBackend::Hexz(mount_hexz(&archive_path).unwrap()), "")
-                    .unwrap();
+            let mount = encrypted_mount(&source_dir, temporary.path());
             let source = Arc::new(prepare_source(&[mount], Path::new("playback.mp4")).unwrap());
             assert!(source.physical_path().is_none());
 
@@ -1020,6 +1034,20 @@ mod ffmpeg_backend {
             let sample_rate = audio.sample_rate().get() as f32;
             let audio_duration = audio.count() as f32 / (sample_rate * 2.0);
             assert!((audio_duration - video_duration).abs() < 0.05);
+        }
+
+        #[cfg(feature = "publisher")]
+        fn encrypted_mount(source: &Path, temporary: &Path) -> ContentMount {
+            let release = temporary.join("release");
+            let identity = Identity::generate().unwrap();
+            pack_directory(&PackOptions::new(source, &release), &identity).unwrap();
+            let archive = HakutakuArchive::open_with_keys(
+                &release.join("game.haku"),
+                identity.root_key(),
+                identity.public_key(),
+            )
+            .unwrap();
+            ContentMount::new(ContentBackend::Hakutaku(archive), "").unwrap()
         }
 
         #[test]

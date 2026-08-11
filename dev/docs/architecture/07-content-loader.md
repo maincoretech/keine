@@ -6,7 +6,8 @@
 
 ```text
 config.yaml
-    ├── adapter.asset[] ──> asset/{fs, auto, hexz...} ──> logical roots
+    ├── adapter.asset[] ──> asset/{fs, auto...} ──> logical roots
+    ├── packaged .haku ──> project/hakutaku ──> logical roots
     ├── adapter.script ───> script/{webgal...}          ──> State actions
     └── adapter.store ────> store/{keine...}          ──> SavedState / StoreStatus
 ```
@@ -16,7 +17,7 @@ config.yaml
 ```text
 adapter.rs          registry 与稳定能力入口
 adapter/
-├── asset.rs        fs、auto、hexz_k 资源目录或容器挂载
+├── asset.rs        fs、auto 目录挂载与 Hakutaku packaged-project opener
 ├── editor.rs       完整编辑器工程的稳定 trait 与 registry
 ├── editor/
 │   ├── letsgal.rs  LetsGal adapter 门面
@@ -31,13 +32,13 @@ adapter/
 editor 负责一次读取 project、chapter、character、scene 与 manifest 的完整编辑器工程。
 具体格式仍由所属类别注册，例如 `editor/letsgal`、script 类别的 `webgal.rs` 和 store 类别的
 keine codec。类别拥有独立 trait 或 registry 时使用同名门面文件；紧密耦合且没有独立
-生命周期的实现（例如 asset 的 fs/auto/hexz 分派）保留在一个文件中，不为视觉上的对称制造目录。
+生命周期的实现（例如 asset 的 fs/auto 分派与 Hakutaku project opener）保留在一个文件中，不为视觉上的对称制造目录。
 
 ### 职责不可越界
 
 | 层 | 负责 | 明确不负责 |
 |---|---|---|
-| `adapter/asset.rs` 的 Hexz 实现 | 检测完整 `.hxz` 工程、解析包内 config、生成通用 seekable content mount | Bevy `AssetReader`、渲染资源、运行状态 |
+| `adapter/asset.rs` 的 Hakutaku project adapter | 检测完整 `.haku` 工程、解析包内 config、生成通用 seekable content mount | Bevy `AssetReader`、渲染资源、运行状态 |
 | `adapter/editor/letsgal` | 检测工程、只读解析 JSON/manifest/Studio 当前选中剧情块、补齐来源默认值、生成统一 config/mount/Action | 文件监控、写回工程、Bevy、窗口、进程、TCP、Studio DOM |
 | loader | adapter registry、来源合并、`notify` 监控、临时编译完整 Program | 运行游戏状态、重放剧情、渲染 UI |
 | core/runtime | 消费统一 Action、原子替换 Program、保留持久状态并重建瞬态演出 | 理解 LetsGal JSON 字段或 UUID 模型 |
@@ -67,8 +68,6 @@ adapter:
       format: fs
     - path: "content/shared"
       format: fs
-    - path: "packs/route.hxz"
-      format: hexz
   script: webgal
   store: keine
 ```
@@ -85,7 +84,7 @@ adapter:
 |---|---|---|
 | asset / `fs` | 开发时无需打包的本地目录 | 项目根或纯资产根 |
 | asset / `auto` | 本地目录或容器 | 根据路径委派 asset adapter |
-| asset / `hexz` | 标准 `.hxz` 包 | `hexz_k::ResourcePack` 校验、解密与随机读取 |
+| project / `hakutaku` | `.haku` 快照与同级 `data/*.hks` | `hakutaku_core::Package` 验签、解密与随机读取 |
 | script / `webgal` | `.txt` scene | `ParseReport<Action>` |
 | store / `keine` | v9 原生 `.sav` bytes 或当前 `State` | 编码后的 bytes；解码后的 `SavedState`；可独立检查的 `StoreStatus`/metadata |
 
@@ -114,10 +113,10 @@ adapter:
   并从当前 scene 开头重建瞬态演出/交互状态。变量和图库等持久数据保留。
 - FS 资源根由 `OverlayAssetWatcher` 监控；逻辑路径事件交给 Bevy AssetServer，原 handle 原位
   重载。多来源中高优先级文件被删除时会立即重新读取低优先级 fallback；图片重新执行尺寸
-  限制与 CPU 像素释放。Hexz 是只读发行来源，不创建 watcher。
+  限制与 CPU 像素释放。Hakutaku 是只读发行来源，不创建 watcher。
 - macOS/Windows/Linux 使用同一 `notify::RecommendedWatcher` 生命周期与相同逻辑路径，差异仅在
   notify 选择的系统后端；Windows 的反斜杠不会进入 IR 或资源键。
-- Hexz 使用受限 block cache 和 seekable `ResourceFile`；配置、脚本、图片、字体与音频共享一个归档索引。
+- Hakutaku 使用受限 block cache 和 seekable `AssetCursor`；配置、脚本、图片、字体与音频共享一个快照索引。
 
 ## 约束
 

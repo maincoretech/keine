@@ -16,8 +16,8 @@
 //! [48..64) reserved, must be zero in V1
 //! ```
 //!
-//! The Hexz container already provides per-block CRC32 plus AES-256-GCM
-//! authentication; the envelope CRC32 guards the logical file against wrong
+//! Hakutaku already authenticates its encrypted blocks; the envelope CRC32
+//! additionally guards the logical file against wrong
 //! read ranges, truncation and payload/metadata drift. Schema mismatches must
 //! fail loudly instead of silently falling back to source scripts.
 

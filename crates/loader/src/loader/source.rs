@@ -1,52 +1,38 @@
 use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 use std::fs;
-use std::io::{Error, Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
-use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
-use hexz_k::{ResourceFile, ResourcePack, ResourcePackOptions};
+use hakutaku_core::{AssetCursor, Package, ResourceBudget};
 
-const HEXZ_READ_AHEAD_BYTES: usize = 64 * 1024;
-
-/// Resource key used for deliberately weak distribution protection. The key
-/// is XOR-masked by `build.rs` at compile time and restored on first use, so
-/// plaintext passwords never appear in the binary's string tables. It deters
-/// casual extraction but is not DRM: a key embedded in a client executable
-/// can always be recovered by a determined user.
-pub fn hexz_password() -> &'static str {
-    static PASSWORD: OnceLock<String> = OnceLock::new();
-    PASSWORD.get_or_init(|| {
-        let cipher = include_bytes!(concat!(env!("OUT_DIR"), "/hexz-password.bin"));
-        let mask = include_bytes!(concat!(env!("OUT_DIR"), "/hexz-password-mask.bin"));
-        let plain: Vec<u8> = cipher
-            .iter()
-            .zip(mask.iter().cycle())
-            .map(|(byte, mask)| byte ^ mask)
-            .collect();
-        String::from_utf8(plain).expect("HEXZ_PASSWORD must be UTF-8")
-    })
-}
-
-fn packaged_hexz_public_key() -> Option<[u8; 32]> {
-    let key = *include_bytes!(concat!(env!("OUT_DIR"), "/hexz-public-key.bin"));
-    (key != [0; 32]).then_some(key)
+fn packaged_hakutaku_keys() -> Result<([u8; 32], [u8; 32])> {
+    let share_a = *include_bytes!(concat!(env!("OUT_DIR"), "/hakutaku-key-share-a.bin"));
+    let share_b = *include_bytes!(concat!(env!("OUT_DIR"), "/hakutaku-key-share-b.bin"));
+    let public_key = *include_bytes!(concat!(env!("OUT_DIR"), "/hakutaku-public-key.bin"));
+    if share_a == [0; 32] && share_b == [0; 32] && public_key == [0; 32] {
+        bail!("this development engine does not embed Hakutaku release keys");
+    }
+    Ok((
+        std::array::from_fn(|index| share_a[index] ^ share_b[index]),
+        public_key,
+    ))
 }
 
 /// One immutable physical content backend shared by scripts and Bevy assets.
 #[derive(Clone)]
 pub enum ContentBackend {
     FileSystem(PathBuf),
-    Hexz(HexzArchive),
+    Hakutaku(HakutakuArchive),
 }
 
 impl fmt::Debug for ContentBackend {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::FileSystem(root) => formatter.debug_tuple("FileSystem").field(root).finish(),
-            Self::Hexz(archive) => formatter.debug_tuple("Hexz").field(archive).finish(),
+            Self::Hakutaku(archive) => formatter.debug_tuple("Hakutaku").field(archive).finish(),
         }
     }
 }
@@ -57,7 +43,7 @@ impl ContentBackend {
         match self {
             Self::FileSystem(root) => fs::read(root.join(&path))
                 .with_context(|| format!("failed to read {}", root.join(path).display())),
-            Self::Hexz(archive) => archive.read(&path),
+            Self::Hakutaku(archive) => archive.read(&path),
         }
     }
 
@@ -67,7 +53,7 @@ impl ContentBackend {
         };
         match self {
             Self::FileSystem(root) => root.join(path).is_file(),
-            Self::Hexz(archive) => archive.contains_file(&path),
+            Self::Hakutaku(archive) => archive.contains_file(&path),
         }
     }
 
@@ -77,7 +63,7 @@ impl ContentBackend {
         };
         match self {
             Self::FileSystem(root) => root.join(path).is_dir(),
-            Self::Hexz(archive) => archive.is_directory(&path),
+            Self::Hakutaku(archive) => archive.is_directory(&path),
         }
     }
 
@@ -93,14 +79,14 @@ impl ContentBackend {
                 entries.sort();
                 Ok(entries)
             }
-            Self::Hexz(archive) => Ok(archive.read_directory(&path)),
+            Self::Hakutaku(archive) => Ok(archive.read_directory(&path)),
         }
     }
 
     pub fn filesystem_root(&self) -> Option<&Path> {
         match self {
             Self::FileSystem(root) => Some(root),
-            Self::Hexz(_) => None,
+            Self::Hakutaku(_) => None,
         }
     }
 }
@@ -147,8 +133,8 @@ impl ContentMount {
                         .with_context(|| format!("failed to open {}", physical.display()))?,
                 )
             }
-            ContentBackend::Hexz(archive) => {
-                ContentFileInner::Archive(archive.open_file(&path)?.cursor())
+            ContentBackend::Hakutaku(archive) => {
+                ContentFileInner::Archive(archive.open_file(&path)?)
             }
         };
         Ok(ContentFile { inner })
@@ -180,14 +166,14 @@ impl ContentMount {
 
     /// Recursively collects every file below this mount.
     ///
-    /// Hexz mounts filter the archive's in-memory file index once instead of
+    /// Hakutaku mounts filter the package's in-memory file index once instead of
     /// rescanning the complete package for every directory. Filesystem mounts
     /// follow links only when their canonical target stays inside the mount;
     /// canonical directory identities prevent links from creating cycles.
     pub(crate) fn recursive_files(&self) -> Result<Vec<PathBuf>> {
         match &self.backend {
             ContentBackend::FileSystem(root) => collect_filesystem_files(&root.join(&self.prefix)),
-            ContentBackend::Hexz(archive) => Ok(archive.files_under(&self.prefix)),
+            ContentBackend::Hakutaku(archive) => Ok(archive.files_under(&self.prefix)),
         }
     }
 
@@ -206,7 +192,7 @@ pub struct ContentFile {
 
 enum ContentFileInner {
     FileSystem(fs::File),
-    Archive(HexzCursor),
+    Archive(AssetCursor),
 }
 
 impl ContentFile {
@@ -214,7 +200,7 @@ impl ContentFile {
     pub fn len(&self) -> std::io::Result<u64> {
         match &self.inner {
             ContentFileInner::FileSystem(file) => file.metadata().map(|metadata| metadata.len()),
-            ContentFileInner::Archive(cursor) => Ok(cursor.len() as u64),
+            ContentFileInner::Archive(cursor) => Ok(cursor.len()),
         }
     }
 
@@ -225,7 +211,7 @@ impl ContentFile {
     pub fn read_remaining_into(&mut self, output: &mut Vec<u8>) -> std::io::Result<usize> {
         match &mut self.inner {
             ContentFileInner::FileSystem(file) => file.read_to_end(output),
-            ContentFileInner::Archive(cursor) => cursor.read_remaining_into(output),
+            ContentFileInner::Archive(cursor) => cursor.read_to_end(output),
         }
     }
 }
@@ -248,55 +234,53 @@ impl Seek for ContentFile {
     }
 }
 
-/// Shared, indexed Hexz archive. Cloning this handle is O(1).
+/// Shared, indexed Hakutaku snapshot. Cloning this handle is O(1).
 #[derive(Clone)]
-pub struct HexzArchive {
+pub struct HakutakuArchive {
     path: Arc<PathBuf>,
-    pack: ResourcePack,
-    encrypted: bool,
+    package: Package,
     files: Arc<HashSet<PathBuf>>,
     directories: Arc<HashSet<PathBuf>>,
 }
 
-impl fmt::Debug for HexzArchive {
+impl fmt::Debug for HakutakuArchive {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("HexzArchive")
+            .debug_struct("HakutakuArchive")
             .field("path", &self.path)
-            .field("encrypted", &self.encrypted)
             .field("files", &self.files.len())
             .field("directories", &self.directories.len())
             .finish()
     }
 }
 
-impl HexzArchive {
+impl HakutakuArchive {
     pub fn open(path: &Path) -> Result<Self> {
-        Self::open_with_public_key(path, None)
+        let (root_key, public_key) = packaged_hakutaku_keys()?;
+        Self::open_with_keys(path, root_key, public_key)
     }
 
-    /// Open the primary release package. Release builds produced by
-    /// `keine package` embed a matching one-bundle public key and require the
-    /// native Hexz signature plus the complete hexz_k integrity profile.
     pub(crate) fn open_packaged(path: &Path) -> Result<Self> {
-        Self::open_with_public_key(path, packaged_hexz_public_key())
+        Self::open(path)
     }
 
-    fn open_with_public_key(path: &Path, public_key: Option<[u8; 32]>) -> Result<Self> {
+    pub fn open_with_keys(path: &Path, root_key: [u8; 32], public_key: [u8; 32]) -> Result<Self> {
         let path = path
             .canonicalize()
-            .with_context(|| format!("failed to resolve Hexz package {}", path.display()))?;
-        let encrypted = hexz_k::is_encrypted(&path)
-            .with_context(|| format!("failed to inspect Hexz package {}", path.display()))?;
-        let mut options = ResourcePackOptions::memory_constrained();
-        if let Some(public_key) = public_key {
-            options = options.require_integrity(public_key);
-        }
-        let pack = ResourcePack::open_with_options(&path, Some(hexz_password()), options)
-            .with_context(|| format!("failed to open Hexz package {}", path.display()))?;
-        let files = pack
-            .iter_files()
-            .map(|path| safe_relative(Path::new(path)))
+            .with_context(|| format!("failed to resolve Hakutaku snapshot {}", path.display()))?;
+        let data = path.parent().unwrap_or_else(|| Path::new(".")).join("data");
+        let package = Package::open_directory(
+            &path,
+            data,
+            root_key,
+            public_key,
+            ResourceBudget::memory_constrained(),
+        )
+        .with_context(|| format!("failed to open Hakutaku snapshot {}", path.display()))?;
+        let files = package
+            .list_assets()?
+            .into_iter()
+            .map(|asset| safe_relative(Path::new(&asset.path)))
             .collect::<Result<HashSet<_>>>()?;
         let directories = files
             .iter()
@@ -304,8 +288,7 @@ impl HexzArchive {
             .collect::<HashSet<_>>();
         Ok(Self {
             path: Arc::new(path),
-            pack,
-            encrypted,
+            package,
             files: Arc::new(files),
             directories: Arc::new(directories),
         })
@@ -316,20 +299,20 @@ impl HexzArchive {
     }
 
     pub fn read(&self, path: &Path) -> Result<Vec<u8>> {
-        self.pack
-            .read_file(&archive_path(path)?)
-            .with_context(|| format!("failed to read Hexz entry {}", path.display()))
+        let path = archive_path(path)?;
+        self.package
+            .asset(&path)?
+            .read()
+            .with_context(|| format!("failed to read Hakutaku entry {path}"))
     }
 
-    pub fn open_file(&self, path: &Path) -> Result<HexzFile> {
-        let file = self
-            .pack
-            .open_file(&archive_path(path)?)
-            .with_context(|| format!("failed to open Hexz entry {}", path.display()))?;
-        Ok(HexzFile {
-            file,
-            read_ahead: self.encrypted,
-        })
+    pub fn open_file(&self, path: &Path) -> Result<AssetCursor> {
+        let path = archive_path(path)?;
+        Ok(self
+            .package
+            .asset(&path)
+            .with_context(|| format!("failed to open Hakutaku entry {path}"))?
+            .cursor())
     }
 
     pub fn contains_file(&self, path: &Path) -> bool {
@@ -441,139 +424,6 @@ fn collect_filesystem_files(mount_root: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-/// Seekable file view used by Bevy without materializing the resource.
-#[derive(Clone)]
-pub struct HexzFile {
-    file: ResourceFile,
-    read_ahead: bool,
-}
-
-impl HexzFile {
-    pub fn len(&self) -> usize {
-        self.file.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.file.is_empty()
-    }
-
-    pub fn read_range_into(&self, offset: usize, buffer: &mut [u8]) -> Result<usize> {
-        self.file.read_range_into(offset, buffer)
-    }
-
-    pub fn cursor(self) -> HexzCursor {
-        HexzCursor::new(self)
-    }
-}
-
-/// Seekable Hexz file cursor with one-block read-ahead. Asset decoders often
-/// request headers and audio frames in small pieces; serving those requests
-/// from this private buffer avoids authenticating/decompressing the same Hexz
-/// block repeatedly.
-pub struct HexzCursor {
-    file: HexzFile,
-    position: usize,
-    cache_start: usize,
-    cache: Vec<u8>,
-}
-
-impl HexzCursor {
-    fn new(file: HexzFile) -> Self {
-        Self {
-            file,
-            position: 0,
-            cache_start: 0,
-            cache: Vec::new(),
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.file.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.file.is_empty()
-    }
-
-    pub fn position(&self) -> usize {
-        self.position
-    }
-
-    pub fn read_remaining_into(&mut self, output: &mut Vec<u8>) -> std::io::Result<usize> {
-        let remaining = self.file.len().saturating_sub(self.position);
-        let start = output.len();
-        output.resize(start + remaining, 0);
-        match self
-            .file
-            .read_range_into(self.position, &mut output[start..])
-        {
-            Ok(read) => {
-                self.position += read;
-                output.truncate(start + read);
-                Ok(read)
-            }
-            Err(error) => {
-                output.truncate(start);
-                Err(Error::other(error.to_string()))
-            }
-        }
-    }
-
-    fn refill(&mut self) -> std::io::Result<()> {
-        let remaining = self.file.len().saturating_sub(self.position);
-        let capacity = remaining.min(HEXZ_READ_AHEAD_BYTES);
-        self.cache.resize(capacity, 0);
-        let read = self
-            .file
-            .read_range_into(self.position, &mut self.cache)
-            .map_err(|error| Error::other(error.to_string()))?;
-        self.cache.truncate(read);
-        self.cache_start = self.position;
-        Ok(())
-    }
-}
-
-impl Read for HexzCursor {
-    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
-        if output.is_empty() || self.position >= self.file.len() {
-            return Ok(0);
-        }
-        if !self.file.read_ahead || output.len() >= HEXZ_READ_AHEAD_BYTES {
-            let read = self
-                .file
-                .read_range_into(self.position, output)
-                .map_err(|error| Error::other(error.to_string()))?;
-            self.position += read;
-            return Ok(read);
-        }
-
-        let cache_end = self.cache_start + self.cache.len();
-        if self.position < self.cache_start || self.position >= cache_end {
-            self.refill()?;
-        }
-        let offset = self.position - self.cache_start;
-        let read = output.len().min(self.cache.len().saturating_sub(offset));
-        output[..read].copy_from_slice(&self.cache[offset..offset + read]);
-        self.position += read;
-        Ok(read)
-    }
-}
-
-impl Seek for HexzCursor {
-    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
-        let position = match position {
-            SeekFrom::Start(offset) => i128::from(offset),
-            SeekFrom::End(offset) => self.file.len() as i128 + i128::from(offset),
-            SeekFrom::Current(offset) => self.position as i128 + i128::from(offset),
-        };
-        if !(0..=self.file.len() as i128).contains(&position) {
-            return Err(Error::other("Hexz seek is outside the resource"));
-        }
-        self.position = position as usize;
-        Ok(self.position as u64)
-    }
-}
-
 fn archive_path(path: &Path) -> Result<String> {
     let path = safe_relative(path)?;
     Ok(path
@@ -600,6 +450,8 @@ fn safe_relative(path: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hakutaku_pack::{Identity, PackOptions, pack_directory};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn rejects_paths_that_escape_a_source() {
@@ -608,7 +460,7 @@ mod tests {
     }
 
     #[test]
-    fn collects_nested_hexz_files_relative_to_a_mount_in_one_pass() {
+    fn collects_nested_hakutaku_files_relative_to_a_mount_in_one_pass() {
         let files = [
             "project/scripts/main.txt",
             "project/scripts/chapter/act/scene.txt",
@@ -631,5 +483,34 @@ mod tests {
                 PathBuf::from("main.txt"),
             ]
         );
+    }
+
+    #[test]
+    fn streams_hakutaku_assets_without_a_loader_read_ahead_layer() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("keine-hakutaku-{nonce}"));
+        let input = root.join("input");
+        let release = root.join("release");
+        fs::create_dir_all(&input).unwrap();
+        let expected: Vec<u8> = (0..700_000).map(|index| index as u8).collect();
+        fs::write(input.join("video.mp4"), &expected).unwrap();
+        let identity = Identity::generate().unwrap();
+        pack_directory(&PackOptions::new(&input, &release), &identity).unwrap();
+        let archive = HakutakuArchive::open_with_keys(
+            &release.join("game.haku"),
+            identity.root_key(),
+            identity.public_key(),
+        )
+        .unwrap();
+        let mount = ContentMount::new(ContentBackend::Hakutaku(archive), "").unwrap();
+        let mut file = mount.open_file(Path::new("video.mp4")).unwrap();
+        file.seek(SeekFrom::Start(255_900)).unwrap();
+        let mut actual = vec![0; 500];
+        file.read_exact(&mut actual).unwrap();
+        assert_eq!(actual, expected[255_900..256_400]);
+        fs::remove_dir_all(root).unwrap();
     }
 }

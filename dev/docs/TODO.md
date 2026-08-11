@@ -8,7 +8,7 @@
 
 ## 当前优先级
 
-1. **桌面视频后端** — macOS AVFoundation 已接入，继续 Windows Media Foundation 与 Hexz byte source；Linux 保留 FFmpeg
+1. **桌面视频后端** — macOS AVFoundation 已接入，继续 Windows Media Foundation 与 Hakutaku byte source；Linux 保留 FFmpeg
 2. **跨平台视觉基线** — 在 Linux/Windows、1× DPI、超宽/高窗口建立独立 screenshot/golden
 
 ## WebGAL 4.6.2 兼容性审计与内部格式 (DONE)
@@ -20,7 +20,7 @@
 - [x] 稀疏 32-byte `TransformPatch`，区分未出现字段与显式 0，避免连续演出重置状态
 - [x] 存档绑定 Program fingerprint：不匹配时原子拒绝；匹配时夹紧 cursor、清理 frame/Backlog、回到最近有效 caller 或安全结束
 - [x] profile/read/gallery 与单槽 save/rollback 分离；CLEAR ALL 同步清理磁盘、运行态和 writer cache
-- [x] FS 递归扫描阻止 symlink cycle/根逃逸；Hexz 复用一次 archive index，避免目录级重复全包扫描
+- [x] FS 递归扫描阻止 symlink cycle/根逃逸；Hakutaku 复用一次 snapshot index
 - [x] 修复 Choice 首帧误确认、启动 Enter 穿透与 mini avatar 遮挡正文
 - [x] 独立报告目录 `dev/docs/webgal-compatibility/`：语义矩阵、缺口、视觉边界、内部格式与复现入口
 
@@ -89,7 +89,7 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 - [x] Rust 2024、格式检查、严格 Clippy，并在 Phase 2.5 当时建立 51 项测试质量基线（当前无默认功能全量为 217 项）
 - [x] UI 公共字体、文本原语、菜单顶栏与淡入/模糊生命周期集中化；CONFIG 控件改为数据表驱动
 - [x] 全仓目录收敛：领域入口统一为同名 `.rs` 门面并清零 `mod.rs`；storage、UI support、
-  scene effects 与 adapter 按执行机制放入同名目录，FS/Hexz 等紧密实现保持同文件；内嵌资源
+  scene effects 与 adapter 按执行机制放入同名目录，FS/Hakutaku 等紧密实现保持同文件；内嵌资源
   集中到 `src/assets/`，Phase 1–7 验收文档合一。结构不再以最低文件数为目标，而以稳定边界、
   易定位和避免巨型入口为准
 
@@ -177,13 +177,12 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 - [x] `keine-loader` adapter 按 asset/script/store 分类，并由配置分别选择 FS、WebGAL 与存档 codec
 - [x] `config.yaml` 有序多来源、同名 scene/资产确定性覆盖与多目录热重载
 - [x] 统一 InputAction 层（鼠标、触控、键盘、手柄）
-- [x] `hexz_k` 标准加密 `.hxz`、受限缓存、配置/脚本直读与 seekable Bevy `AssetReader`
-- [x] 标准 Hexz Ed25519 签名 + metadata 完整性配置；header/索引启动验证、数据块懒验证
+- [x] Hakutaku `.haku` + `.hks`、受限缓存、配置/脚本直读与 seekable Bevy `AssetReader`
+- [x] Ed25519 快照签名 + AES-256-GCM；目录启动验证、page/block 懒验证
 - [x] macOS .app bundle 脚本
 - [x] Linux / macOS / Windows fmt、Clippy、测试与 release CI
-- [x] WebGAL_k 风格 CI 加密发布 — 通过 GitHub Actions Secret / 手动构建输入注入
-  `HEXZ_PASSWORD`，让 Hexz 打包与引擎编译使用同一密钥，并确保日志、缓存与
-  artifact 不泄露密钥
+- [x] CI 加密发布 — 通过 `HAKUTAKU_IDENTITY_BASE64` Secret 复用发布身份，并确保
+  日志与 artifact 不泄露私钥
 
 Phase 7 已完成不依赖第三方专有 SDK 的工程主线。Live2D、Spine、Steam 和
 Flowchart 仍保留为可选适配工作，不能用静态占位或实验依赖冒充完成。逐步验收见
@@ -193,14 +192,14 @@ Flowchart 仍保留为可选适配工作，不能用静态占位或实验依赖�
 
 - GIF、Spine 与 Live2D（Live2D 已由用户决定暂缓）
 - [x] macOS AVFoundation 单播放器音画时钟、BGRA 帧输出、共享 Bevy 渲染生命周期，以及
-  `AVAssetResourceLoader` 对 Hexz 随机读取的直接映射
-- [x] Windows/Linux FFmpeg `AVIOContext` 直接读取 Hexz，rodio sink 作为音频主时钟；
+  `AVAssetResourceLoader` 对 Hakutaku 随机读取的直接映射
+- [x] Windows/Linux FFmpeg `AVIOContext` 直接读取 Hakutaku，rodio sink 作为音频主时钟；
   Windows x64 与 Linux 真实 fixture 解码
 - [ ] Windows ARM64 原生构建暂缓；当前通过 Windows 11 的 x64 应用模拟覆盖，待出现明确
   发行需求并具备真实 ARM64 硬件验收条件后再恢复
-- [x] 移除 Hexz 视频的完整解密与明文临时文件；平台路径、缓存和 fixture 见
+- [x] Hakutaku 视频不产生完整解密或明文临时文件；平台路径、缓存和 fixture 见
   [`09-native-video.md`](architecture/09-native-video.md)
-- [ ] 可选：Windows Media Foundation frame-server 后端与 Hexz `IMFByteStream`，在不增加
+- [ ] 可选：Windows Media Foundation frame-server 后端与 Hakutaku `IMFByteStream`，在不增加
   双重运行时复杂度的前提下换取系统硬件解码
 - Android / iOS 视频解码暂缓：移动端不承诺 FFmpeg 交叉编译与分发，待桌面平台 byte
   source 与硬件解码生命周期稳定后再验收
@@ -266,10 +265,10 @@ Flowchart 仍保留为可选适配工作，不能用静态占位或实验依赖�
 | [03-render-pipeline.md](architecture/03-render-pipeline.md) | 渲染管线 |
 | [04-rollback-and-save.md](architecture/04-rollback-and-save.md) | 存档与回溯 |
 | [05-bevy-architecture.md](architecture/05-bevy-architecture.md) | Bevy 架构设计（当前权威） |
-| [06-hexz-packaging.md](architecture/06-hexz-packaging.md) | Hexz 标准打包、校验与挂载 |
-| [07-content-loader.md](architecture/07-content-loader.md) | 内容来源、adapter、多根覆盖与 Hexz 加载契约 |
+| [06-hakutaku-packaging.md](architecture/06-hakutaku-packaging.md) | Hakutaku 打包、更新与挂载 |
+| [07-content-loader.md](architecture/07-content-loader.md) | 内容来源、adapter、多根覆盖与 Hakutaku 加载契约 |
 | [08-letsgal-studio.md](architecture/08-letsgal-studio.md) | LetsGal 原生工程、动作编译、资源与步进调试边界 |
-| [09-native-video.md](architecture/09-native-video.md) | 桌面原生视频后端、FFmpeg 回退与 Hexz byte source 待办 |
+| [09-native-video.md](architecture/09-native-video.md) | 桌面原生视频后端、FFmpeg 回退与 Hakutaku byte source 待办 |
 | `crates/loader/src/lib.rs` | 可注册语言、诊断与资源引用合同 |
 | [07-references.md](reference/07-references.md) | 业界引擎参考 |
 | [09-webgal-script-reference.md](reference/09-webgal-script-reference.md) | WebGAL 脚本参考 |

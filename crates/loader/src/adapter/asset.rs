@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use keine_core::config::GameConfig;
 
 use crate::loader::{
-    COMPILED_PROGRAM_PATH, HexzArchive, SourceMount, load_hexz_project_from_archive,
+    COMPILED_PROGRAM_PATH, HakutakuArchive, SourceMount, load_hakutaku_project_from_archive,
     with_compiled_program,
 };
 use crate::{AdaptedProject, IR_SCHEMA_VERSION, ProjectAdapter};
@@ -50,27 +50,24 @@ impl FormatAdapter for FsFormat {
     }
 }
 
-/// Standard Hexz asset archive backed by `hexz_k`.
-pub(crate) struct HexzFormat;
+/// Complete packaged-project opener kept beside the filesystem asset formats.
+pub(crate) struct HakutakuProjectAdapter;
 
-/// Complete packaged-project opener kept next to the Hexz asset format.
-pub(crate) struct HexzProjectAdapter;
-
-impl ProjectAdapter for HexzProjectAdapter {
+impl ProjectAdapter for HakutakuProjectAdapter {
     fn name(&self) -> &'static str {
-        "hexz"
+        "hakutaku"
     }
 
     fn detect(&self, project_root: &Path) -> Result<bool> {
         Ok(project_root.is_file()
-            && project_root.extension().and_then(|value| value.to_str()) == Some("hxz"))
+            && project_root.extension().and_then(|value| value.to_str()) == Some("haku"))
     }
 
     fn open(&self, project_root: &Path) -> Result<AdaptedProject> {
-        let archive = HexzArchive::open_packaged(project_root)?;
+        let archive = HakutakuArchive::open_packaged(project_root)?;
         let yaml = archive.read(Path::new("config.yaml"))?;
-        let yaml = std::str::from_utf8(&yaml).context("Hexz config.yaml is not UTF-8")?;
-        let config = GameConfig::from_yaml(yaml).context("invalid Hexz config.yaml")?;
+        let yaml = std::str::from_utf8(&yaml).context("Hakutaku config.yaml is not UTF-8")?;
+        let config = GameConfig::from_yaml(yaml).context("invalid Hakutaku config.yaml")?;
         let path = Path::new(COMPILED_PROGRAM_PATH);
         if !archive.contains_file(path) {
             bail!("packaged project is missing required {COMPILED_PROGRAM_PATH}");
@@ -78,7 +75,7 @@ impl ProjectAdapter for HexzProjectAdapter {
         let bin = archive
             .read(path)
             .context("failed to read packaged program")?;
-        let content = load_hexz_project_from_archive(archive, &config.adapter.asset)?;
+        let content = load_hakutaku_project_from_archive(archive, &config.adapter.asset)?;
         let content = with_compiled_program(content, &bin, IR_SCHEMA_VERSION)?;
         let root = project_root
             .canonicalize()
@@ -95,27 +92,6 @@ impl ProjectAdapter for HexzProjectAdapter {
     }
 }
 
-impl FormatAdapter for HexzFormat {
-    fn name(&self) -> &'static str {
-        "hexz"
-    }
-
-    fn mount(&self, project_root: &Path, location: &str) -> Result<SourceMount> {
-        let package = resolve_local(project_root, location)?;
-        let archive = mount_hexz(&package)?;
-        if archive.is_directory(Path::new("assets")) || archive.is_directory(Path::new("scripts")) {
-            SourceMount::hexz_project(self.name(), archive, "")
-        } else {
-            SourceMount::hexz_assets(self.name(), archive, "")
-        }
-    }
-}
-
-/// Open a standard Hexz archive without extracting it.
-pub fn mount_hexz(package: &Path) -> Result<HexzArchive> {
-    HexzArchive::open(package)
-}
-
 /// Convenience selector for development inputs; concrete formats keep their
 /// own adapter modules below this category.
 pub(crate) struct AutoFormat;
@@ -126,11 +102,6 @@ impl FormatAdapter for AutoFormat {
     }
 
     fn mount(&self, project_root: &Path, location: &str) -> Result<SourceMount> {
-        let path = resolve_local(project_root, location)?;
-        if path.extension().and_then(|value| value.to_str()) == Some("hxz") {
-            HexzFormat.mount(project_root, location)
-        } else {
-            FsFormat.mount(project_root, location)
-        }
+        FsFormat.mount(project_root, location)
     }
 }

@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 
 # Prints the smallest comma-separated Cargo feature set required by a project.
-# An opaque nested Hexz cannot be inspected safely here, so it deliberately
-# falls back to all codecs. KEINE_AUDIO_FEATURES is an explicit CI override.
+# KEINE_AUDIO_FEATURES is an explicit CI override.
 require_project_directory() {
     local project="$1"
     if [[ ! -d "$project" ]]; then
@@ -31,10 +30,6 @@ detect_audio_features() {
     while IFS= read -r -d '' file; do
         lower="$(printf '%s' "$file" | tr '[:upper:]' '[:lower:]')"
         case "$lower" in
-            *.hxz)
-                printf '%s\n' "audio-all,ui-sounds,$video_feature"
-                return
-                ;;
             *.opus) : ;;
             *.wav|*.wave) wav=1 ;;
             *.mp3) mp3=1 ;;

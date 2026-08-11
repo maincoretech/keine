@@ -119,11 +119,17 @@ fn execute_command(loader: LoaderRegistry, command: CliCommand) -> Result<()> {
             anyhow::bail!("adapter configuration must run before project setup")
         }
         CliCommand::Package { project, output } => {
+            #[cfg(feature = "publisher")]
             return crate::package::package_project(
                 &resolve_project_path(project),
                 &loader,
                 &output,
             );
+            #[cfg(not(feature = "publisher"))]
+            {
+                let _ = (project, output);
+                anyhow::bail!("publisher tools are not compiled; run `cargo bundle <project>`");
+            }
         }
         CliCommand::Check { project } => (project, ProjectAction::Check),
         CliCommand::Run {
@@ -812,7 +818,7 @@ mod tests {
 
     #[test]
     fn only_shipping_runs_use_the_native_startup_error_page() {
-        let shipping = parse_cli(&args(&["game.hxz"])).unwrap();
+        let shipping = parse_cli(&args(&["game.haku"])).unwrap();
         let development = parse_cli(&args(&["dev", "project"])).unwrap();
         let check = parse_cli(&args(&["check", "project"])).unwrap();
 

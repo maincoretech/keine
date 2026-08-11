@@ -209,10 +209,9 @@ FALLEN_LEAVES。粒子应具有柔边、速度/尺寸/漂移差异；切换时�
    或 FFmpeg 错误。完整的逐项预期见
    [`projects/test-project/ACCEPTANCE.md`](../../../projects/test-project/ACCEPTANCE.md)。
 
-### Hexz
+### Hakutaku
 
 ```bash
-export HEXZ_PASSWORD='<test-only password>'
 cargo bundle <project> --output target/phase7-release
 target/phase7-release/run.sh
 ```
@@ -220,12 +219,12 @@ target/phase7-release/run.sh
 `<project>` 可以是带 `config.yaml` 的原生工程或 LetsGal（`project.json`）工程；
 LetsGal 的配置在打包时物化为 `config.yaml`，`projects/test-project` 可直接打包。
 
-5. `target/phase7-release` 包含引擎、启动脚本和 encrypted `game.hxz`；归档内含
+5. `target/phase7-release` 包含引擎、启动脚本、`game.haku` 与 `data/*.hks`；快照内含
    `.keine/compiled/program.bin`，且不包含
    `saves/`、`imported_assets/`、`*.meta` 或源项目 `.keine` 缓存。
-6. 直接运行 `.hxz` 时脚本、图片、字体和多来源音频行为与目录项目一致；运行期间不得出现
-   staging、ready marker 或明文资源目录。截断或破坏归档后应由 `hexz_k` 校验拒绝启动。
-7. 执行 `cargo test --workspace --all-targets`，并确认运行时通过 `hexz_k::ResourceFile`
+6. 直接运行 `.haku` 时脚本、图片、字体和多来源音频行为与目录项目一致；运行期间不得出现
+   staging、ready marker 或明文资源目录。截断或破坏快照/segment 后应由 Hakutaku 拒绝启动或读取。
+7. 执行 `cargo test --workspace --all-targets`，并确认运行时通过 `AssetCursor`
    直接 seek/read，不生成解包目录或完整文件副本。
 
 ### 桌面包与 CI
@@ -236,10 +235,10 @@ open target/bundle/macos/keine-demo.app
 ```
 
 8. `.app` 可脱离工作目录启动内置项目；包内存在
-   `Contents/Resources/game.hxz`，且不存在 `Contents/Resources/project` 明文目录。
+   `Contents/Resources/game.haku` 与 `Contents/Resources/data`，且不存在明文 project 目录。
 9. 普通推送后 `ci.yml` 在 Linux/macOS/Windows 执行 fmt、Clippy、测试和 release build。
-   配置仓库 Secret `HEXZ_PASSWORD` 后手动运行 `encrypted-release` workflow；三个平台
-   artifact 均应只包含引擎、encrypted `game.hxz` 和启动脚本，日志不显示密钥。
+   配置仓库 Secret `HAKUTAKU_IDENTITY_BASE64` 后手动运行 Release workflow；三个平台
+   artifact 均应只包含引擎、`game.haku`、`data/` 和启动脚本，日志不显示发布身份。
 
 ### 外部媒体适配边界
 

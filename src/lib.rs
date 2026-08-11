@@ -1,6 +1,8 @@
 #![warn(unused_crate_dependencies)]
 
+#[cfg(feature = "publisher")]
 mod compiler;
+#[cfg(feature = "publisher")]
 mod package;
 mod render;
 mod runtime;

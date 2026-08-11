@@ -1,7 +1,7 @@
 //! Compiled program scene loader for packaged games.
 //!
 //! Every packaged project ships `.keine/compiled/program.bin`, produced by the
-//! bundle pipeline. Directory projects always use source scripts, while Hexz
+//! bundle pipeline. Directory projects always use source scripts, while Hakutaku
 //! projects always use this loader, so there is no runtime policy to resolve.
 
 use std::path::{Path, PathBuf};

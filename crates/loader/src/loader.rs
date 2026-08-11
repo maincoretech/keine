@@ -14,9 +14,7 @@ use crate::{LoaderRegistry, StructuredSceneLoader};
 
 pub(crate) use compiled::{COMPILED_PROGRAM_PATH, with_compiled_program};
 pub use scenes::{LoadedScene, load_scenes, load_scenes_with};
-pub use source::{
-    ContentBackend, ContentFile, ContentMount, HexzArchive, HexzCursor, HexzFile, hexz_password,
-};
+pub use source::{ContentBackend, ContentFile, ContentMount, HakutakuArchive};
 pub use watcher::ScriptWatcher;
 
 /// Mounted roots produced by one complete format adapter.
@@ -51,13 +49,13 @@ impl SourceMount {
         }
     }
 
-    pub fn hexz_project(
+    pub fn hakutaku_project(
         adapter: impl Into<String>,
-        archive: HexzArchive,
+        archive: HakutakuArchive,
         prefix: impl Into<PathBuf>,
     ) -> Result<Self> {
         let prefix = prefix.into();
-        let backend = ContentBackend::Hexz(archive.clone());
+        let backend = ContentBackend::Hakutaku(archive.clone());
         Ok(Self {
             adapter: adapter.into(),
             origin: archive.path().display().to_string(),
@@ -66,16 +64,19 @@ impl SourceMount {
         })
     }
 
-    pub fn hexz_assets(
+    pub fn hakutaku_assets(
         adapter: impl Into<String>,
-        archive: HexzArchive,
+        archive: HakutakuArchive,
         prefix: impl Into<PathBuf>,
     ) -> Result<Self> {
         let origin = archive.path().display().to_string();
         Ok(Self {
             adapter: adapter.into(),
             origin,
-            asset: Some(ContentMount::new(ContentBackend::Hexz(archive), prefix)?),
+            asset: Some(ContentMount::new(
+                ContentBackend::Hakutaku(archive),
+                prefix,
+            )?),
             scripts: None,
         })
     }
@@ -215,12 +216,15 @@ pub fn load_project_with(
 /// Open a packaged project without extracting any file. Source paths from the
 /// embedded config become logical prefixes inside the same archive, preserving
 /// the same low-to-high override order used during development.
-pub fn load_hexz_project(package: &Path, sources: &[AssetSourceConfig]) -> Result<ContentProject> {
-    load_hexz_project_from_archive(HexzArchive::open_packaged(package)?, sources)
+pub fn load_hakutaku_project(
+    package: &Path,
+    sources: &[AssetSourceConfig],
+) -> Result<ContentProject> {
+    load_hakutaku_project_from_archive(HakutakuArchive::open_packaged(package)?, sources)
 }
 
-pub fn load_hexz_project_from_archive(
-    archive: HexzArchive,
+pub fn load_hakutaku_project_from_archive(
+    archive: HakutakuArchive,
     sources: &[AssetSourceConfig],
 ) -> Result<ContentProject> {
     if sources.is_empty() {
@@ -229,36 +233,18 @@ pub fn load_hexz_project_from_archive(
     let mut mounted = Vec::with_capacity(sources.len());
     for source in sources {
         let path = PathBuf::from(&source.path);
-        let external_hexz = matches!(source.format.as_str(), "hexz")
-            || (source.format == "auto"
-                && path.extension().and_then(|value| value.to_str()) == Some("hxz"));
-        if external_hexz && path != Path::new(".") {
-            let parent = archive.path().parent().unwrap_or_else(|| Path::new("."));
-            let external = parent.join(&path);
-            let external = HexzArchive::open(&external).with_context(|| {
-                format!("failed to open packaged source {}", external.display())
-            })?;
-            let project_layout = external.is_directory(Path::new("assets"))
-                || external.is_directory(Path::new("scripts"));
-            mounted.push(if project_layout {
-                SourceMount::hexz_project("hexz", external, "")?
-            } else {
-                SourceMount::hexz_assets("hexz", external, "")?
-            });
-            continue;
-        }
-        if !matches!(source.format.as_str(), "fs" | "auto" | "hexz") {
+        if !matches!(source.format.as_str(), "fs" | "auto") {
             bail!(
-                "adapter {:?} cannot be resolved from inside a Hexz project",
+                "adapter {:?} cannot be resolved from inside a Hakutaku project",
                 source.format
             );
         }
         let project_layout = archive.is_directory(&path.join("assets"))
             || archive.is_directory(&path.join("scripts"));
         mounted.push(if project_layout {
-            SourceMount::hexz_project("hexz", archive.clone(), path)?
+            SourceMount::hakutaku_project("hakutaku", archive.clone(), path)?
         } else {
-            SourceMount::hexz_assets("hexz", archive.clone(), path)?
+            SourceMount::hakutaku_assets("hakutaku", archive.clone(), path)?
         });
     }
     Ok(ContentProject {

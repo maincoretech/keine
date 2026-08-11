@@ -250,6 +250,7 @@ fn video_image(frame: VideoFrame) -> Image {
     )
 }
 
+#[cfg(all(feature = "video-native", target_os = "macos"))]
 pub(super) fn video_image_placeholder(size: Extent3d, format: TextureFormat) -> Image {
     Image::new_uninit(
         size,

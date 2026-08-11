@@ -11,7 +11,7 @@ mod report;
 pub use adapter::{
     AdaptedProject, AdapterCategory, AdapterDescriptor, FormatAdapter, KeineStore, LoaderRegistry,
     ProjectAdapter, ProjectDebugCursor, ProjectInitialState, SavedState, StoreAdapter,
-    StoreMetadata, StoreStatus, StructuredSceneLoader, WebGalLanguage, mount_hexz, parse_webgal,
+    StoreMetadata, StoreStatus, StructuredSceneLoader, WebGalLanguage, parse_webgal,
     parse_webgal_report,
 };
 pub use compiled::{
@@ -21,9 +21,9 @@ pub use compiled::{
 };
 pub use language::{ScriptLanguage, ScriptLanguageRegistry};
 pub use loader::{
-    ContentBackend, ContentFile, ContentMount, ContentProject, HexzArchive, HexzCursor, HexzFile,
-    LoadedScene, ScriptWatcher, SourceMount, hexz_password, load_hexz_project,
-    load_hexz_project_from_archive, load_project, load_project_with, load_scenes, load_scenes_with,
+    ContentBackend, ContentFile, ContentMount, ContentProject, HakutakuArchive, LoadedScene,
+    ScriptWatcher, SourceMount, load_hakutaku_project, load_hakutaku_project_from_archive,
+    load_project, load_project_with, load_scenes, load_scenes_with,
 };
 pub use report::{
     Diagnostic, DiagnosticLevel, ParseReport, ResourceKind, ResourceRef, SceneRef, SourceSpan,

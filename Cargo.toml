@@ -26,7 +26,7 @@ bench = false
 [[bin]]
 name = "keine-video-acceptance"
 path = "dev/tools/video_acceptance.rs"
-required-features = ["video-native"]
+required-features = ["publisher", "video-native"]
 
 [features]
 default = ["audio-all", "ui-sounds"]
@@ -36,6 +36,9 @@ ui-sounds = ["bundled-opus"]
 # fully debuggable. Raises the cost of runtime key extraction (debugger
 # attach, core dumps), see `platform::apply_hardening`.
 hardened = ["dep:libc", "dep:windows-sys"]
+# Publisher-only compiler and Hakutaku packer. Release game engines deliberately
+# omit this feature and link only hakutaku-core through keine-loader.
+publisher = ["dep:hakutaku-pack", "dep:noyalib", "dep:tempfile"]
 audio-opus = ["dep:rodio", "dep:symphonia", "dep:symphonia-adapter-libopus"]
 bundled-opus = ["audio-opus", "symphonia-adapter-libopus/bundled"]
 audio-wav = ["bevy/wav"]
@@ -55,7 +58,7 @@ video-native = [
 [workspace.package]
 version = "0.8.1"
 edition = "2024"
-rust-version = "1.97"
+rust-version = "1.96"
 
 # Disable icu_provider's debug eprintln! fallback in dev builds.
 # Without this, icu_provider prints "ICU4X data error: ..." to stderr
@@ -95,7 +98,8 @@ crc32fast = "1"
 criterion = "0.5"
 notify = "8.2"
 noyalib = { version = "0.0.15", default-features = false, features = ["std", "fast-int", "fast-float"] }
-hexz_k = { git = "https://github.com/maincoretech/hexz_k", rev = "12e9ee0", default-features = false }
+hakutaku-core = { git = "https://github.com/maincoretech/hakutaku", rev = "3dd87ba" }
+hakutaku-pack = { git = "https://github.com/maincoretech/hakutaku", rev = "3dd87ba" }
 libc = "0.2"
 windows-sys = { version = "0.61.2", default-features = false, features = ["Win32_System_Diagnostics_Debug"] }
 bevy = { version = "0.19", default-features = false }
@@ -121,10 +125,6 @@ fs2 = "0.4"
 # upstream provides equivalent behavior.
 [patch.crates-io]
 bevy_winit = { git = "https://github.com/maincoretech/keine", rev = "f5b3e8d5fe1809ad3ded2f3c5fded328a9bb619d" }
-# `hexz-ops` enables the network-oriented upstream store defaults internally.
-# Use hexz_k's API-compatible local backend so an offline engine does not carry
-# S3, HTTP, async-runtime, or TLS implementations that it can never call.
-hexz-store = { git = "https://github.com/maincoretech/hexz_k", rev = "12e9ee0" }
 
 [dependencies]
 keine-core = { workspace = true }
@@ -142,13 +142,13 @@ rodio = { workspace = true, optional = true }
 symphonia = { workspace = true, optional = true }
 symphonia-adapter-libopus = { workspace = true, optional = true }
 ffmpeg-next = { workspace = true, optional = true }
-tempfile = { workspace = true }
+tempfile = { workspace = true, optional = true }
 winit = { workspace = true }
 crossterm = { workspace = true }
 fs2 = { workspace = true }
 bevy = { workspace = true, features = ["bevy_winit", "bevy_log", "bevy_render", "bevy_sprite", "bevy_ui", "bevy_ui_render", "bevy_audio", "png", "jpeg"] }
-hexz_k = { workspace = true, features = ["signing"] }
-noyalib = { workspace = true }
+hakutaku-pack = { workspace = true, optional = true }
+noyalib = { workspace = true, optional = true }
 
 [build-dependencies]
 winresource = "0.1.31"

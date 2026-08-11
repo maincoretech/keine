@@ -277,8 +277,8 @@ setter suppression had no playback performance number.
 
 ## 2026-08-09 encrypted video random-access pass
 
-The comparison packs one deterministic 32 MiB incompressible video-shaped entry
-with the same encrypted Hexz path. The legacy control copies the entire decoded
+This historical pre-Hakutaku comparison packed one deterministic 32 MiB
+incompressible video-shaped entry. The legacy control copied the entire decoded
 entry to a plaintext sink before returning; the current source preparation only
 opens the seekable entry, records its length, and leaves reads to the platform
 decoder:
@@ -288,11 +288,11 @@ decoder:
 | Legacy full copy | 122.682 ms | 32 MiB |
 | Direct random-access source | 292 ns | 0 bytes |
 
-Command: `cargo test --no-default-features --features video-ffmpeg
-benchmark_hexz_video_direct_open_against_legacy_copy -- --ignored --nocapture`.
-This measures source preparation rather than decode throughput. The committed
-H.264/AAC fixture separately passes the FFmpeg encrypted-Hexz decode/seek/loop
-test and the macOS AVFoundation filesystem/encrypted-Hexz first-frame acceptance
+The current equivalent command is `cargo test --no-default-features --features
+video-ffmpeg benchmark_hakutaku_video_direct_open_against_legacy_copy --
+--ignored --nocapture`. It measures source preparation rather than decode throughput.
+The committed H.264/AAC fixture separately passes the FFmpeg encrypted-Hakutaku
+decode/seek/loop test and the macOS AVFoundation filesystem/Hakutaku first-frame acceptance
 probe. The direct path removes the size-proportional startup copy and plaintext
 temporary file; decode and texture-upload costs are unchanged.
 
@@ -315,11 +315,11 @@ For a 1920×1080 BGRA frame, the deterministic transfer budget is:
 
 This is an algorithmic byte-transfer baseline, not an FPS claim: the fixture is
 320×240 and too short to represent production decode throughput. The acceptance
-command below decodes both filesystem and encrypted-Hexz sources and executes
+command below decodes both filesystem and encrypted-Hakutaku sources and executes
 the real Core Video → Metal → wgpu copy, including a blocking queue completion:
 
 ```sh
-cargo run --features video-native --bin keine-video-acceptance -- \
+cargo run --features publisher,video-native --bin keine-video-acceptance -- \
   dev/fixtures/video/playback.mp4
 ```
 
@@ -356,3 +356,26 @@ the Hakutaku workspace root. This is an in-memory/OS-buffered runtime regression
 point, not a cold-device storage claim. The prepared snapshot/segment AES keys
 and cursor-private current block ensure a small caller read does not repeat the
 AES key schedule or decrypt the same 256 KiB block.
+
+### Streaming buffer ownership optimization
+
+After the baseline, the RAW decode path was changed to keep decrypted
+Streaming/Transient blocks in their owned `Vec<u8>`. Only Hot blocks and
+second-hit Normal blocks are converted into shared cache entries. Kēne now
+stores the resulting `AssetCursor` directly in `ContentFile`, removing its old
+64 KiB container-specific read-ahead layer.
+
+The table is the median of three before and three after runs of the same
+`stream-32m-v1` fixture on the machine above:
+
+| Metric | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| Full pack and staged verification | 109.727 ms | 107.664 ms | -1.9% |
+| Signed snapshot open | 0.059 ms | 0.058 ms | noise floor |
+| Sequential authenticated read | 1,556.7 MiB/s | 1,590.1 MiB/s | +2.1% |
+| Random authenticated 4 KiB read | 6,308 IOPS | 6,486 IOPS | +2.8% |
+
+The important invariant is structural: uncached video blocks now have no
+decode-result copy before bytes reach the caller. The measured gains are modest
+because APFS cache, AES-GCM, BLAKE3 verification, and the final caller copy still
+dominate this small fixture.

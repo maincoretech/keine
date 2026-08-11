@@ -10,7 +10,7 @@
 | UI | bevy_ui | Node 布局、Interaction 系统、Bootstrap Icons 字体图标 |
 | 音频 | 待定 (rodio / Bevy audio) | -- |
 | 桌面壳 | 原生 winit (via Bevy) | 无 WebView 开销 |
-| 资源打包 | hexz_k / Hexz (.hxz) | AES-256-GCM、zstd、O(1) 随机访问 |
+| 资源打包 | Hakutaku (`.haku` + `.hks`) | AES-256-GCM、zstd、签名随机访问 |
 | 存档序列化 | Postcard | 紧凑、Serde 原生、持续维护的版本化状态快照 |
 | 脚本 | 可注册语言适配器（内置 WebGAL `.txt`） | 各语法统一编译为 `Action` IR |
 
@@ -31,7 +31,7 @@
 | WebGAL | 编辑器预览协议、脚本语义、UI 布局参考 |
 | YU-RIS | 延迟命令队列 + batch 合并 |
 | Ren'Py | RevertableObject、差分 rollback |
-| hexz_k | .hxz 加密归档 |
+| hakutaku-core / pack | 加密快照、增量 segment 与随机读取 |
 
 ## 性能目标
 

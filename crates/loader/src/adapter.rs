@@ -16,7 +16,7 @@ use keine_core::config::GameConfig;
 use crate::loader::SourceMount;
 use crate::{ContentProject, ScriptLanguageRegistry};
 
-pub use asset::{FormatAdapter, mount_hexz};
+pub use asset::FormatAdapter;
 pub use editor::{
     LetsGalProjectAdapter, ProjectDebugCursor, ProjectInitialState, StructuredSceneLoader,
 };
@@ -86,13 +86,12 @@ impl Default for LoaderRegistry {
     fn default() -> Self {
         let mut registry = Self::empty();
         registry.register_asset(asset::FsFormat);
-        registry.register_asset(asset::HexzFormat);
         registry.register_asset(asset::AutoFormat);
         for language in script::builtin() {
             registry.languages.register_shared(language);
         }
         registry.register_project(editor::LetsGalProjectAdapter);
-        registry.register_project(asset::HexzProjectAdapter);
+        registry.register_project(asset::HakutakuProjectAdapter);
         registry.register_store(store::KeineStore);
         registry
     }
@@ -276,10 +275,10 @@ mod tests {
                 .unwrap()
                 .supports(Path::new("scene.txt"))
         );
-        for name in ["fs", "hexz", "auto"] {
+        for name in ["fs", "auto"] {
             assert!(registry.assets.contains_key(name));
         }
-        assert_eq!(registry.assets.len(), 3);
+        assert_eq!(registry.assets.len(), 2);
         assert_eq!(registry.projects.len(), 2);
         assert!(registry.store("keine").is_ok());
     }

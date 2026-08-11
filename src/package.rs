@@ -1,7 +1,7 @@
 //! `cargo bundle` — the single command-based packaging pipeline shared by
 //! local builds and CI. It stages a project (native or LetsGal), compiles
 //! `.keine/compiled/program.bin`, builds a content-trimmed release engine,
-//! packs an encrypted `.hxz`, and assembles a runnable output directory.
+//! packs an encrypted Hakutaku release, and assembles a runnable output directory.
 
 use std::env;
 use std::fs;
@@ -9,14 +9,11 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use hexz_k::cmd::pack::{PackOptions, pack_signed_directory};
-use hexz_k::integrity::generate_keypair;
+use hakutaku_pack::{Identity, PackOptions, pack_directory};
 use tempfile::{Builder, TempDir, tempdir};
 
 use crate::compiler::build_program;
 use crate::runtime::bootstrap::open_project;
-
-pub const DEFAULT_OUTPUT: &str = "target/release-package";
 
 #[cfg(target_os = "macos")]
 const VIDEO_FEATURE: &str = "video-native";
@@ -36,13 +33,13 @@ pub fn package_project(
     loader: &keine_loader::LoaderRegistry,
     output: &Path,
 ) -> Result<()> {
-    let password = env::var("HEXZ_PASSWORD").context("HEXZ_PASSWORD must be set")?;
     if !project.join("config.yaml").is_file() && !project.join("project.json").is_file() {
         bail!("{}", project_manifest_error(project));
     }
     if !project.is_dir() {
         bail!("project directory does not exist: {}", project.display());
     }
+    let identity = load_or_create_identity(project)?;
     let output = release_output_path(output)?;
 
     let staging = tempdir().context("failed to create staging directory")?;
@@ -67,10 +64,14 @@ pub fn package_project(
 
     let features = detect_features(&staged)?;
     println!("content features: {features}");
-    let private_key = staging.path().join("hexz-private.key");
-    let public_key = staging.path().join("hexz-public.key");
-    generate_keypair(&private_key, &public_key)?;
-    let engine = build_engine(&features, &public_key)?;
+    let runtime_keys = identity.runtime_key_material()?;
+    let key_share_a = staging.path().join("hakutaku-key-share-a.bin");
+    let key_share_b = staging.path().join("hakutaku-key-share-b.bin");
+    let public_key = staging.path().join("hakutaku-public-key.bin");
+    fs::write(&key_share_a, runtime_keys.key_share_a)?;
+    fs::write(&key_share_b, runtime_keys.key_share_b)?;
+    fs::write(&public_key, runtime_keys.public_key)?;
+    let engine = build_engine(&features, &key_share_a, &key_share_b, &public_key)?;
 
     let output_parent = output.parent().context("release output has no parent")?;
     fs::create_dir_all(output_parent)?;
@@ -78,11 +79,34 @@ pub fn package_project(
         .prefix(".keine-package-")
         .tempdir_in(output_parent)
         .context("failed to create release assembly directory")?;
-    pack_staging(&staged, assembled.path(), &password, &private_key)?;
+    seed_previous_release(&output, assembled.path())?;
+    pack_staging(&staged, assembled.path(), &identity)?;
     assemble(assembled.path(), &features, &engine)?;
     publish_directory(assembled, &output)?;
     println!("{}", output.display());
     Ok(())
+}
+
+fn load_or_create_identity(project: &Path) -> Result<Identity> {
+    let path = env::var_os("KEINE_HAKUTAKU_IDENTITY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| project.join(".keine/publisher.hakutaku-key"));
+    load_or_create_identity_at(&path)
+}
+
+fn load_or_create_identity_at(path: &Path) -> Result<Identity> {
+    if path.is_file() {
+        return Identity::load(path)
+            .with_context(|| format!("failed to load publisher identity {}", path.display()));
+    }
+    let parent = path.parent().context("publisher identity has no parent")?;
+    fs::create_dir_all(parent)?;
+    let identity = Identity::generate()?;
+    identity
+        .save(path)
+        .with_context(|| format!("failed to save publisher identity {}", path.display()))?;
+    println!("created publisher identity: {}", path.display());
+    Ok(identity)
 }
 
 fn release_output_path(output: &Path) -> Result<PathBuf> {
@@ -220,9 +244,6 @@ fn detect_features(project: &Path) -> Result<String> {
     let mut video = false;
     for file in walk_files(project)? {
         let lower = file.to_string_lossy().to_ascii_lowercase();
-        if lower.ends_with(".hxz") {
-            return Ok(format!("audio-all,ui-sounds,{VIDEO_FEATURE}"));
-        }
         let extension = lower.rsplit('.').next().unwrap_or("");
         match extension {
             "opus" => {}
@@ -274,7 +295,12 @@ fn collect_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
 
 /// Content-trimmed release engine build, reusing the repo's default target
 /// directory so the same binary the user develops with is rebuilt.
-fn build_engine(features: &str, public_key: &Path) -> Result<PathBuf> {
+fn build_engine(
+    features: &str,
+    key_share_a: &Path,
+    key_share_b: &Path,
+    public_key: &Path,
+) -> Result<PathBuf> {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let mut command = Command::new(cargo);
@@ -287,7 +313,9 @@ fn build_engine(features: &str, public_key: &Path) -> Result<PathBuf> {
         .current_dir(repo_root)
         .args(["build", "--release", "--locked", "--no-default-features"])
         .args(["--features", &all_features])
-        .env("KEINE_HEXZ_PUBLIC_KEY", public_key)
+        .env("KEINE_HAKUTAKU_KEY_SHARE_A", key_share_a)
+        .env("KEINE_HAKUTAKU_KEY_SHARE_B", key_share_b)
+        .env("KEINE_HAKUTAKU_PUBLIC_KEY", public_key)
         .arg("--target-dir")
         .arg(repo_root.join("target"));
     let build_target = env::var("KEINE_BUILD_TARGET")
@@ -307,19 +335,41 @@ fn build_engine(features: &str, public_key: &Path) -> Result<PathBuf> {
     Ok(release.join(format!("keine{}", env::consts::EXE_SUFFIX)))
 }
 
-fn pack_staging(staged: &Path, output: &Path, password: &str, private_key: &Path) -> Result<()> {
-    pack_signed_directory(
-        &PackOptions {
-            input: staged.display().to_string(),
-            output: output.join("game.hxz").display().to_string(),
-            compression: "zstd".to_owned(),
-            encrypt: true,
-            block_size: 65_536,
-            password: Some(password.to_owned()),
-        },
-        private_key,
-    )
-    .context("hexz pack failed")
+fn pack_staging(staged: &Path, output: &Path, identity: &Identity) -> Result<()> {
+    pack_directory(&PackOptions::new(staged, output), identity).context("Hakutaku pack failed")?;
+    Ok(())
+}
+
+fn seed_previous_release(previous: &Path, assembled: &Path) -> Result<()> {
+    let snapshot = previous.join("game.haku");
+    if !snapshot.is_file() {
+        return Ok(());
+    }
+    fs::create_dir_all(assembled.join("data"))?;
+    link_or_copy(&snapshot, &assembled.join("game.haku"))?;
+    let data = previous.join("data");
+    if data.is_dir() {
+        for entry in fs::read_dir(data)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            if entry.file_type()?.is_file()
+                && Path::new(&name)
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    == Some("hks")
+            {
+                link_or_copy(&entry.path(), &assembled.join("data").join(name))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn link_or_copy(source: &Path, target: &Path) -> Result<()> {
+    if fs::hard_link(source, target).is_err() {
+        fs::copy(source, target)?;
+    }
+    Ok(())
 }
 
 fn assemble(output: &Path, _features: &str, engine: &Path) -> Result<()> {
@@ -480,9 +530,9 @@ fn has_feature(features: &str, wanted: &str) -> bool {
 }
 
 #[cfg(windows)]
-const RUN_BAT: &str = "@echo off\n\"%~dp0keine.exe\" \"%~dp0game.hxz\"\n";
+const RUN_BAT: &str = "@echo off\n\"%~dp0keine.exe\" \"%~dp0game.haku\"\n";
 #[cfg(not(windows))]
-const RUN_SH: &str = "#!/usr/bin/env bash\nset -euo pipefail\nroot=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\nif [[ -d \"$root/lib\" ]]; then\n  export LD_LIBRARY_PATH=\"$root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\"\nfi\nexec \"$root/keine\" \"$root/game.hxz\"\n";
+const RUN_SH: &str = "#!/usr/bin/env bash\nset -euo pipefail\nroot=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\nif [[ -d \"$root/lib\" ]]; then\n  export LD_LIBRARY_PATH=\"$root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\"\nfi\nexec \"$root/keine\" \"$root/game.haku\"\n";
 
 #[cfg(test)]
 mod tests {
@@ -556,5 +606,41 @@ mod tests {
         assert!(!destination.join("saves").exists());
         assert!(!destination.join("imported_assets").exists());
         assert!(!destination.join(".keine").exists());
+    }
+
+    #[test]
+    fn publisher_identity_is_created_once_and_reused() {
+        let project = tempdir().unwrap();
+        let path = project.path().join(".keine/publisher.hakutaku-key");
+        let first = load_or_create_identity_at(&path).unwrap();
+        let second = load_or_create_identity_at(&path).unwrap();
+        assert_eq!(first.project_id(), second.project_id());
+        assert!(
+            project
+                .path()
+                .join(".keine/publisher.hakutaku-key")
+                .is_file()
+        );
+    }
+
+    #[test]
+    fn previous_hakutaku_segments_seed_incremental_output() {
+        let root = tempdir().unwrap();
+        let previous = root.path().join("previous");
+        let assembled = root.path().join("assembled");
+        fs::create_dir_all(previous.join("data")).unwrap();
+        fs::create_dir_all(&assembled).unwrap();
+        fs::write(previous.join("game.haku"), b"snapshot").unwrap();
+        fs::write(previous.join("data/kept.hks"), b"segment").unwrap();
+        fs::write(previous.join("data/ignored.txt"), b"not a segment").unwrap();
+
+        seed_previous_release(&previous, &assembled).unwrap();
+
+        assert_eq!(fs::read(assembled.join("game.haku")).unwrap(), b"snapshot");
+        assert_eq!(
+            fs::read(assembled.join("data/kept.hks")).unwrap(),
+            b"segment"
+        );
+        assert!(!assembled.join("data/ignored.txt").exists());
     }
 }

@@ -123,11 +123,11 @@ schema migration：目前 v1–v4 会被明确拒绝；未来若需要迁移，�
 目标工作流应是一条连续链：
 
 ```
-keine new → dev 热重载 → check 静态检查 → build → pack .hxz → 发布
+dev 热重载 → validate 静态检查 → bundle Hakutaku → 发布
 ```
 
 当前已经有脚本热重载、稳定场景加载和重复场景检测。后续把资源预取、编辑器协议、
-CLI 检查、`.hxz` 压缩/加密随机访问和平台打包接入同一项目模型，可以同时服务个人作者
+CLI 检查、Hakutaku 压缩/加密随机访问和平台打包接入同一项目模型，可以同时服务个人作者
 和正式发行项目。
 
 真正的优势是“同一份项目在创作期严格、运行期稳定、发布期可控”，不是单独拥有一个
@@ -204,7 +204,7 @@ Skip 必须区分已读，长期玩家数据不能被单槽读档倒退。
 
 - `new/dev/check/build/pack` CLI；
 - 资源图、预取、加载进度和缺失资源检查；
-- `.hxz` 与 macOS/Windows/Linux 打包；
+- Hakutaku 与 macOS/Windows/Linux 打包；
 - 编辑器预览协议、CI 和可复现 release。
 
 完成标准：新项目能从模板创建，经自动检查后生成无需开发环境的发布包。

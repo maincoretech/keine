@@ -545,15 +545,15 @@ adapter:
       format: fs
     - path: "packs/voices"
       format: fs
-    - path: "packs/route.hxz"
-      format: hexz
+    - path: "content/route"
+      format: auto
   script: webgal
   store: keine
 "#;
         let cfg: GameConfig = noyalib::from_str(yaml).unwrap();
         assert_eq!(cfg.adapter.asset.len(), 3);
         assert_eq!(cfg.adapter.asset[1].format, "fs");
-        assert_eq!(cfg.adapter.asset[2].format, "hexz");
+        assert_eq!(cfg.adapter.asset[2].format, "auto");
         assert_eq!(cfg.adapter.script, "webgal");
         assert_eq!(cfg.adapter.store, "keine");
     }

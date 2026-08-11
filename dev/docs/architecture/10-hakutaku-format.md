@@ -658,7 +658,7 @@ target 必须由基准决定，不能因为某个 SSD 型号的宣传参数直�
 3. **已完成：**full/incremental packer、基于旧 snapshot 的 block reuse、CLI 与独立 GUI；
 4. **待迁移：**用 Kēne 真实 staging 和原生视频后端建立前后基准；
 5. **待迁移：**一次性将 Kēne loader/package 切到 Hakutaku，重新生成 fixture；
-6. **待迁移：**删除 `hexz_k`、Hexz patches、`.hxz` 回退和旧文档，不保留双实现；
+6. **已迁移：**删除 `hexz_k`、Hexz patches、`.hxz` 回退和旧文档，不保留双实现；
 7. **移动端阶段：**实现 Android/iOS 的薄 `SegmentSource` adapter、资源预算和生命周期测试，不复制
    core reader；
 8. **最终验收：**通过完整 workspace gate 和桌面/移动 GUI、视频验收后发布独立仓库。

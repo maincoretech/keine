@@ -37,7 +37,7 @@ App::new()
     .add_plugin(ScriptPlugin)
     .add_plugin(RenderPlugin { backend: WgpuBackend::new() })
     .add_plugin(AudioPlugin)
-    .add_plugin(HexzResourcePlugin::with_password(env_key))
+    .add_plugin(ResourcePlugin)
     .add_plugin(EditorSyncPlugin)       // WebGAL 协议
     .add_plugin(RollbackPlugin)         // 差分存档回退
     .run();
@@ -60,7 +60,7 @@ Update 是事件驱动的 `step_until_interactive()`，Render 是固定的 vsync
 keine/
 ├── core/               # package keine-core
 ├── loader/             # package keine-loader；统一 asset/script/store adapter
-│   └── adapter/asset.rs # fs、auto、hexz_k 标准 Hexz 资源包
+│   └── adapter/asset.rs # fs、auto、Hakutaku 资源包
 ├── keine-render/     # wgpu 渲染后端 + Displayable trait
 ├── keine-audio/      # rodio 音频
 ├── keine-rollback/   # 差分快照 + 回退

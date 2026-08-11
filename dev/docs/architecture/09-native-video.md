@@ -1,4 +1,4 @@
-# 桌面视频后端与 Hexz 流式读取
+# 桌面视频后端与 Hakutaku 流式读取
 
 > 状态：macOS 已接入 AVFoundation；Windows/Linux 当前保留 FFmpeg。移动端暂缓。
 
@@ -18,7 +18,7 @@
 
 | 平台 | 后端 | 视频/音频时钟 | 当前帧上传 | 状态 |
 | --- | --- | --- | --- | --- |
-| macOS | AVPlayer + AVPlayerItemVideoOutput | AVPlayer 单时钟 | CVPixelBuffer → CVMetalTexture → 稳定 Bevy GPU Image | 已用 FS 与加密 Hexz fixture 验收解码及 GPU 导入 |
+| macOS | AVPlayer + AVPlayerItemVideoOutput | AVPlayer 单时钟 | CVPixelBuffer → CVMetalTexture → 稳定 Bevy GPU Image | 已用 FS 与加密 Hakutaku fixture 验收解码及 GPU 导入 |
 | Windows x64 | FFmpeg + rodio | rodio 音频时钟；无音轨时用逻辑时钟 | 软件 RGBA → 稳定 Bevy Image | 已接入并真实解码 |
 | Linux | FFmpeg + rodio | rodio 音频时钟；无音轨时用逻辑时钟 | 软件 RGBA → 稳定 Bevy Image | 已接入并真实解码 |
 | Android/iOS | 无承诺 | — | — | 延期 |
@@ -33,7 +33,7 @@ FFmpeg 后端。透明视频不进入第一阶段承诺，现有 `VideoMode::Mix
 
 ## 当前数据路径
 
-FS mount 保留平台快速路径，直接把真实文件路径交给播放器。Hexz 和其他虚拟 mount 则
+FS mount 保留平台快速路径，直接把真实文件路径交给播放器。Hakutaku 和其他虚拟 mount 则
 复用 `ContentMount`/`ContentFile` 的长度、seek 与短读合同，不创建完整内存副本，也不写
 明文临时文件：
 
@@ -41,11 +41,11 @@ FS mount 保留平台快速路径，直接把真实文件路径交给播放器�
   [`AVAssetResourceLoaderDelegate`](https://developer.apple.com/documentation/avfoundation/avassetresourceloaderdelegate)，
   把 AVFoundation 的 content-info、byte-range 与取消请求映射到新的独立读取游标；
 - Windows/Linux 使用 FFmpeg 原生 `AVIOContext` read/seek 回调，直接读取同一个随机访问源；
-- 每个回调游标都持有 O(1) clone 的 `ResourceFile`，Hexz 的 memory-constrained block cache
+- 每个回调游标直接持有 `AssetCursor`，Hakutaku 的 memory-constrained block cache
   继续限定解压内存；播放器结束后随 session 一起释放。
 
 测试 fixture 是 1 秒、320×240、H.264 Constrained Baseline + AAC、fast-start MP4。CI 会把它
-现场加密进 Hexz 再真实解码；不包含项目素材或发行密钥。
+现场加密进临时 Hakutaku 包再真实解码；不包含项目素材或发行密钥。
 
 ## 时钟与循环语义
 
@@ -55,8 +55,8 @@ FFmpeg 后端只负责解码。存在音轨且未静音时，rodio sink 的实�
 时间戳倒退暴露给画面调度；音频流也在 EOF 后重新打开随机读取源，不使用 rodio 会缓存
 整段解码 PCM 的通用循环器。
 
-自动化覆盖加密 Hexz 随机读取、音视频时长误差、三次循环单调性、暂停/恢复、无音频长时
-回退时钟，以及 macOS AVFoundation 的 FS/Hexz 首帧解码和 Core Video → Metal → wgpu
+自动化覆盖加密 Hakutaku 随机读取、音视频时长误差、三次循环单调性、暂停/恢复、无音频长时
+回退时钟，以及 macOS AVFoundation 的 FS/Hakutaku 首帧解码和 Core Video → Metal → wgpu
 实际复制。Windows 当前只发布并验证 x64；ARM64 原生构建暂缓，在具备明确发行需求和
 真实硬件验收条件后再恢复。
 

@@ -309,7 +309,7 @@ mod tests {
     fn one_of_multiple_adapters_can_be_disabled() {
         let mut rows = vec![
             row(AdapterCategory::Asset, "fs", true),
-            row(AdapterCategory::Asset, "hexz", true),
+            row(AdapterCategory::Asset, "auto", true),
         ];
         assert!(toggle(&mut rows, 0));
         assert!(!rows[0].enabled);

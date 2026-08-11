@@ -18,7 +18,7 @@
 - 与帧率无关的转场、打字机文本、时间轴与粒子。
 - 背景、立绘、图层、滤镜、混合模式、相机变换与区域模糊。
 - 对话、旁白、注音文本、选项、回看、自动、跳过与回滚。
-- 目录与 Hexz 资源叠加，开发热重载。
+- 目录开发资源与加密 Hakutaku 发行包。
 - WebGAL 脚本与 LetsGal 工程统一编译为一种类型化动作模型。
 - 可选编解码特性；分发音频推荐 Ogg Opus。
 
@@ -47,12 +47,12 @@ cargo dev projects/test-project
 ### 源码工程与发布包
 
 目录工程始终读取源脚本，以保留诊断和热重载。`cargo bundle` 会校验源码，并在发布包
-中写入版本化的 `.keine/compiled/program.bin`；打包后的 `.hxz` 必须包含该产物，启动
+中写入版本化的 `.keine/compiled/program.bin`；打包后的 `.haku` 必须包含该产物，启动
 时不再解析源脚本。固定 envelope（magic、版本、长度、CRC32 和程序 fingerprint）
 保证发布包与源码工程的存档兼容。
 
 当前发布归档仍会保存工程源文档的**加密副本**，以维持不同工程格式与资源适配器的
-完整性；Hexz 运行时只加载 `program.bin`，玩家无需另行取得或部署明文源码目录。
+完整性；Hakutaku 运行时只加载 `program.bin`，玩家无需另行取得或部署明文源码目录。
 
 ## 开发一个游戏
 
@@ -65,7 +65,7 @@ flowchart LR
     B --> C["日常开发<br/>cargo dev"]
     C --> D["加密打包<br/>cargo bundle"]
     D --> E["运行实际发行物"]
-    E --> F["分发<br/>引擎 + game.hxz"]
+    E --> F["分发<br/>引擎 + game.haku + data/"]
 ```
 
 1. 创建或打开工程：原生/WebGAL 工程根目录放 `config.yaml`，LetsGal 工程使用现有
@@ -73,12 +73,13 @@ flowchart LR
 2. 修改脚本或配置后运行 `cargo validate <工程>`；它不打开窗口，只报告确定性错误。
 3. 日常使用 `cargo dev <工程>`，保留源码诊断与热重载。跟随已打开的 LetsGal 工程时
    加 `--sync`；Kēne 只读取 Studio 状态，不修改工程。
-4. 为该游戏设置一个独立的 `HEXZ_PASSWORD`，运行 `cargo bundle <工程>`。
+4. 运行 `cargo bundle <工程>`。第一次会创建 `.keine/publisher.hakutaku-key`；请备份，
+   且绝不能随游戏分发。
 5. 运行输出目录中的 `run.sh`/`run.bat` 验收真正的加密发行物，然后分发完整目录。玩家
    不需要另外安装 Rust、Kēne、LetsGal，也不需要取得源脚本。
 
-默认输出位于 `target/release-package/`：`keine`/`keine.exe` 是播放器，`game.hxz`
-是加密游戏，其余启动器和运行库也属于同一个发行物。macOS 包装脚本会把这两者装入
+默认输出位于 `target/release-package/`：`keine`/`keine.exe` 是播放器，`game.haku`
+是签名加密快照，`data/*.hks` 是不可变加密 segment，其余启动器和运行库也属于同一个发行物。macOS 包装脚本会把它们装入
 一个 `.app`。
 
 开发阶段始终读取可编辑源码并允许调试；只有 `cargo bundle` 才会编译剧情、加密资源、
@@ -90,7 +91,7 @@ flowchart LR
 |---|---|
 | 原生 / WebGAL 目录 | `config.yaml` |
 | LetsGal 工程 | `project.json` |
-| 打包游戏 | `game.hxz` |
+| 打包游戏 | `game.haku` 与同级 `data/` |
 
 目录工程可以组合有序资源来源：
 
@@ -99,7 +100,6 @@ adapter:
   asset:
     - { path: ".", format: fs }
     - { path: "content/shared", format: fs }
-    - { path: "packs/route.hxz", format: hexz }
   script: webgal
   store: keine
 ```
@@ -130,10 +130,10 @@ LetsGal 工程使用 `project.json` 中同等的工程级对象：
 
 | 能力 | 实现 |
 |---|---|
-| 资源 | `auto`、`fs`、`hexz` |
+| 资源 | `auto`、`fs` |
 | 脚本 | `webgal` |
 | 编辑器工程 | `letsgal` |
-| 打包 | `hexz` |
+| 打包 | `hakutaku` |
 | 存档 | `keine` |
 
 ## 架构
@@ -142,7 +142,7 @@ LetsGal 工程使用 `project.json` 中同等的工程级对象：
 
 ```mermaid
 flowchart LR
-    P["工程<br/>WebGAL · LetsGal · Hexz"] --> L["加载器<br/>适配器 · 校验 · 资源"]
+    P["工程<br/>WebGAL · LetsGal · Hakutaku"] --> L["加载器<br/>适配器 · 校验 · 资源"]
     L --> C["核心<br/>配置 · Action · State"]
     C --> R["运行时<br/>Bevy · 渲染 · UI · 媒体"]
     R --> O["播放器<br/>窗口 · 音频 · 存档"]
@@ -194,11 +194,10 @@ cargo build --release --features video-ffmpeg
 
 内置 Opus 解码器需要 CMake。视频构建需要 FFmpeg 开发库。
 
-打包加密 Hexz 游戏：
+打包加密 Hakutaku 游戏：
 
 ```bash
-HEXZ_PASSWORD='your-password' \
-  cargo bundle path/to/native-project
+cargo bundle path/to/native-project
 ```
 
 发布打包接受原生工程（`config.yaml`）或 LetsGal 工程（`project.json`）；LetsGal
@@ -211,19 +210,18 @@ HEXZ_PASSWORD='your-password' \
 打包引擎按项目重新构建：只编译内容中检测到的音频/视频后端，`hardened` 特性启用
 反调试（macOS `PT_DENY_ATTACH`、禁用 core dump、Windows 检测到调试器即退出），
 release profile（LTO + 剥离符号 + `panic=abort`）把二进制从约 108 MB 压到约
-43 MB。`HEXZ_PASSWORD` 在构建期以 XOR 掩码写进二进制，明文不会出现在发行包的
-字符串表中。打包还会生成仅用于本次发行包的 Ed25519 密钥对：私钥签名后随临时目录
-销毁，公钥编译进配套引擎。它能检测资源替换，但不能把离线客户端变成 DRM。
+43 MB。持久 Hakutaku 发布身份同时保存项目 ID、AES-256 根密钥与 Ed25519 私钥；
+打包时生成两份随机 XOR share，与公钥分别编译进配套引擎，并签名目录、page 与 block
+密文承诺。运行时密钥仍可能被提取，因此它提供防直接解包和篡改检测，而不是 DRM。
 
 创建 macOS 应用包：
 
 ```bash
-HEXZ_PASSWORD='your-password' \
-  dev/scripts/bundle-macos.sh projects/test-project
+dev/scripts/bundle-macos.sh projects/test-project
 ```
 
 macOS 包装脚本复用同一套加密且启用加固的 `cargo bundle` 产物；App 内只携带
-`game.hxz`，不会复制明文源项目。
+`game.haku` 与 `data/`，不会复制明文源项目。
 
 ### 安全模型
 
@@ -233,26 +231,25 @@ Kēne 面向玩家完全控制本机的离线游戏。它的目标是防止直�
 ```mermaid
 flowchart LR
     S["开发者源码"] --> C["校验并编译"]
-    C --> P["加密 game.hxz"]
-    K["临时签名私钥"] --> P
+    C --> P["打包 game.haku + data/"]
+    K["持久发布身份<br/>仅开发者保存"] --> P
     P --> B["发行目录"]
-    U["内含公钥与掩码密码的引擎"] --> B
+    U["内含公钥与拆分 AES 密钥的引擎"] --> B
     B --> V["使用前验签"]
     V --> R["按块解密读取"]
 ```
 
-- **保密性：**素材与编译后的剧情使用 AES-256-GCM 加密进 `game.hxz`。密码经过掩码，
-  运行时不会生成完整明文归档或视频临时文件；但能控制电脑的攻击者最终仍可从二进制
-  或进程内存取得密码。
-- **完整性：**每次打包生成临时 Ed25519 密钥对，私钥不进入发行物，公钥只进入配套
-  引擎。header、索引、metadata、字典或数据块被修改后都会被拒绝；归档仍是标准 Hexz。
+- **保密性：**素材与编译后的剧情按 segment 使用 AES-256-GCM。运行时不会生成完整
+  明文归档或视频临时文件；但能控制电脑的攻击者最终仍可从二进制或进程内存取得密钥。
+- **完整性：**同一个备份过的发布身份跨版本签名加密目录、page digest 与 block 密文承诺；
+  快照或 segment 被修改后会在其明文被使用前拒绝。
 - **运行时加固：**发行引擎会阻止最直接的调试器挂载和 core dump，开发构建保持完全
   可调试。这只提高提取成本，坚定的攻击者仍可修改引擎绕过检查。
-- **信任边界：**如果攻击者同时替换引擎与 `game.hxz`，Kēne 自身无法证明发布者身份。
+- **信任边界：**如果攻击者同时替换引擎与 Hakutaku 包，Kēne 自身无法证明发布者身份。
   macOS/Windows 平台签名负责最外层身份，但目前按你的决定暂缓。
 
 完整的打包、验签和随机读取设计见
-[Hexz 打包与挂载](dev/docs/architecture/06-hexz-packaging.md)。
+[Hakutaku 打包与挂载](dev/docs/architecture/06-hakutaku-packaging.md)。
 
 ## 校验
 
@@ -269,7 +266,7 @@ cargo validate projects/test-project
 - [内容加载器](dev/docs/architecture/07-content-loader.md)
 - [渲染](dev/docs/architecture/03-render-pipeline.md)
 - [存档与回滚](dev/docs/architecture/04-rollback-and-save.md)
-- [Hexz 打包与安全模型](dev/docs/architecture/06-hexz-packaging.md)
+- [Hakutaku 打包与安全模型](dev/docs/architecture/06-hakutaku-packaging.md)
 - [LetsGal 集成](dev/docs/architecture/08-letsgal-studio.md)
 - [WebGAL 兼容](dev/docs/webgal-compatibility/README.md)
 - [当前工作](dev/docs/TODO.md)
