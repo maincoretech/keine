@@ -2528,7 +2528,7 @@ dependencies = [
 [[package]]
 name = "hakutaku-core"
 version = "0.1.0"
-source = "git+https://github.com/maincoretech/hakutaku?rev=3dd87ba#3dd87ba5595f654d40e4252d876d8ba3b492ecf9"
+source = "git+https://github.com/maincoretech/hakutaku?rev=1c12811#1c128114cfb48df555ad981c59a912769e773b59"
 dependencies = [
  "blake3",
  "ring",
@@ -2539,7 +2539,7 @@ dependencies = [
 [[package]]
 name = "hakutaku-pack"
 version = "0.1.0"
-source = "git+https://github.com/maincoretech/hakutaku?rev=3dd87ba#3dd87ba5595f654d40e4252d876d8ba3b492ecf9"
+source = "git+https://github.com/maincoretech/hakutaku?rev=1c12811#1c128114cfb48df555ad981c59a912769e773b59"
 dependencies = [
  "blake3",
  "fastcdc",
