@@ -169,6 +169,9 @@ cargo perf projects/test-project 5 0 scene
 
 # Project parser/validator
 cargo validate projects/test-project
+
+# Filesystem/Hakutaku content path using the checked-in release fixture
+cargo bench -p keine-loader --bench content_io
 ```
 
 The benchmark prints every available timeline id and its resolved cursor before
@@ -408,3 +411,31 @@ rejected because its changes stayed at noise level while retaining more state.
 not yet call it speculatively. Existing Bevy asset loading already runs on its
 task system, while video decoders maintain their own read cadence; adding a
 second predictor without a cold-read trace could duplicate authentication work.
+
+### 2026-08-12 checked-in project content path
+
+`content_io/test_project_v1` packages the checked-in acceptance project's
+shipping inputs and reads them through the same adapter-neutral `ContentMount`
+and `ContentFile` interfaces used by Bevy and native video. Saves, publisher
+identity, documentation, and other development files are deliberately excluded.
+The fixture is locked to 12 files, 1,126,318 bytes, and CRC32 `90e88d07`; a
+content change must rename and re-baseline the fixture instead of silently
+changing a supposedly stable workload.
+
+Criterion 100-sample run on the Apple M5 Pro development machine, release LTO,
+warm APFS cache:
+
+| Path | Estimate | Throughput |
+| --- | ---: | ---: |
+| Open snapshot and build the asset/directory index | 47.423 µs | — |
+| Filesystem mixed complete reads | 151.40 µs | 6.929 GiB/s |
+| Hakutaku mixed reads, fresh runtime caches | 710.58 µs | 1.476 GiB/s |
+| Hakutaku mixed reads, warm runtime caches | 25.140 µs | 41.725 GiB/s |
+
+“Fresh” resets Hakutaku's in-process package caches but does not claim a cold
+device read; Criterion intentionally warms filesystem and processor caches.
+Authentication, decryption, decompression, and cache admission add about
+0.56 ms over direct filesystem reads for this complete real-project mix. Once
+admitted, the result is a memory-copy benchmark and its GiB/s figure is not a
+storage claim. The absolute fresh-cache cost provides no evidence for adding
+platform-specific vectored I/O, direct storage, or another prefetch scheduler.
