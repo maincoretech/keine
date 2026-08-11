@@ -328,3 +328,31 @@ not be extrapolated to those platforms. Directly sampling the imported Metal
 texture could remove the remaining GPU blit, but would trade a stable material
 binding for per-frame external-texture synchronization and is intentionally
 deferred.
+
+## 2026-08-11 Hakutaku v1 runtime baseline
+
+The named `stream-32m-v1` scenario generates one deterministic 32 MiB
+incompressible `opening.mp4`, packs it into 128 independently authenticated
+256 KiB AES-256-GCM blocks, then exercises the same `hakutaku-core` reader that
+will be linked by the engine. Sequential reads use a 256 KiB caller buffer;
+random reads perform 10,000 seeks followed by exact 4 KiB reads. No GUI or
+frame-rate loop participates.
+
+- Machine: Apple M5 Pro, arm64, local APFS storage
+- Build: release, LTO, one codegen unit
+- Cache: default 64 MiB plaintext budget; `Package::trim()` before each phase
+- Result: median of three independently generated package runs
+
+| Metric | Median |
+| --- | ---: |
+| Full pack and staged verification | 113.509 ms |
+| Signed snapshot open | 0.074 ms |
+| Sequential authenticated read | 1,507.2 MiB/s |
+| Random authenticated 4 KiB read | 5,932 IOPS |
+| Immutable segment bytes | 33,560,576 bytes |
+
+Reproduce with `cargo bench --offline -p hakutaku-pack --bench runtime` from
+the Hakutaku workspace root. This is an in-memory/OS-buffered runtime regression
+point, not a cold-device storage claim. The prepared snapshot/segment AES keys
+and cursor-private current block ensure a small caller read does not repeat the
+AES key schedule or decrypt the same 256 KiB block.
