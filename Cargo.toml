@@ -98,8 +98,8 @@ crc32fast = "1"
 criterion = "0.5"
 notify = "8.2"
 noyalib = { version = "0.0.15", default-features = false, features = ["std", "fast-int", "fast-float"] }
-hakutaku-core = { git = "https://github.com/maincoretech/hakutaku", rev = "144c9e3" }
-hakutaku-pack = { git = "https://github.com/maincoretech/hakutaku", rev = "144c9e3" }
+hakutaku-core = { git = "https://github.com/maincoretech/hakutaku", rev = "24c39ea" }
+hakutaku-pack = { git = "https://github.com/maincoretech/hakutaku", rev = "24c39ea" }
 libc = "0.2"
 windows-sys = { version = "0.61.2", default-features = false, features = ["Win32_System_Diagnostics_Debug"] }
 bevy = { version = "0.19", default-features = false }
