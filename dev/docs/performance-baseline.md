@@ -382,16 +382,27 @@ dominate this small fixture.
 
 ### 2026-08-12 buffered cursor and bounded prefetch
 
-Kēne pins Hakutaku `0438e78`. Sequential and complete reads now recycle
+Kēne pins Hakutaku `144c9e3`. Sequential and complete reads now recycle
 ciphertext/decompression buffers, cached plaintext keeps its decoded allocation,
 and a Streaming cursor retains the current and previous block. The `A -> B -> A`
 regression test confirms that the final return to `A` issues no segment read.
+
+The current reader also retains its active immutable-segment handle and encodes
+catalog/page/block AAD into fixed-size stack arrays. This removes the shared
+idle-handle cache lookup and a small heap allocation at block boundaries without
+adding a platform path: Kēne and Hakutaku Core still depend only on the generic
+`PositionedFile` contract.
 
 The upstream three-run median moved 128 KiB sequential reads from 1,612.7 to
 1,636.3 MiB/s (+1.5%), 256 KiB reads from 1,629.8 to 1,659.3 MiB/s (+1.8%), and
 uniform random 4 KiB reads from 6,689 to 6,784 IOPS (+1.4%). These remain warm
 APFS regression figures. The canonical protocol and raw interpretation live in
 <https://github.com/maincoretech/hakutaku/blob/main/PERFORMANCE.md>.
+
+Against `0438e78` in a later same-session three-run A/B, `144c9e3` improved the
+median 128/256 KiB sequential paths by 2.3%/3.5%, random 4 KiB reads by 2.9%,
+and full packing by 6.0%. A cursor-local block-map page window was measured and
+rejected because its changes stayed at noise level while retaining more state.
 
 `Asset::prefetch_range` is available with a separate bounded cache, but Kēne does
 not yet call it speculatively. Existing Bevy asset loading already runs on its
