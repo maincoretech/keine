@@ -120,7 +120,14 @@ saves/
   slot_N.webp
 ```
 
-预览 WebP 不嵌入 `.sav`，也不参与 v9 CRC。删除槽位会同时删除 state 与 preview；只清除游戏槽会保留 settings/profile/read history/gallery，而 UI 的 CLEAR ALL 会删除整个 `saves/` 数据目录并同步清理内存 writer cache。
+预览 WebP 不嵌入 `.sav`，也不参与 v9 CRC。保存时由独立相机直接渲染到不超过
+480x270、保持当前窗口宽高比的目标，随后在有界后台队列中以质量 80 的有损 WebP
+编码；不回读全窗口纹理，也不在渲染线程缩放或编码。存档页通过 `IoTaskPool` 按当前页
+异步解码，强 `Handle<Image>` 缓存仅保留十个可见槽位。
+
+删除槽位会同时删除 state 与 preview；只清除游戏槽会保留 settings/profile/read
+history/gallery，而 UI 的 CLEAR ALL 会删除整个 `saves/` 数据目录并同步清理内存
+writer cache。
 
 写入采用同目录临时文件、`write_all`、`sync_all` 和 `rename` 原子替换。进程在替换前中断时不会用半写入 payload 覆盖现有槽位。
 

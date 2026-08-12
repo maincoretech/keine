@@ -242,6 +242,32 @@ Compiled loading validates the envelope and content fingerprint directly over
 borrowed decoded scenes, avoiding a second 100k-action clone and label-index
 construction before the final `Program` takes ownership.
 
+## 2026-08-12 save preview encoding
+
+Quick Criterion comparison on the same Apple M5 Pro development machine:
+
+```text
+cargo bench --bench save_preview -- --quick
+```
+
+The input is a deterministic 480x270 opaque RGBA gradient with fine synthetic
+grain, intended to exercise both flat visual-novel artwork and higher-entropy
+detail. Both rows use the same native libwebp dependency already shipped by the
+runtime.
+
+| Encoder | Time | Output | Change from previous path |
+| --- | ---: | ---: | ---: |
+| lossless RGB | 76.782 ms | 39,732 bytes | baseline |
+| lossy RGBA, quality 80 | 4.819 ms | 5,668 bytes | time -93.7%, bytes -85.7% |
+
+The runtime now renders directly into a target bounded by 480x270 instead of
+capturing the window-sized target and resizing it on the worker. At a 1920x1080
+window this reduces the screenshot readback and queued pixel buffer from
+8,294,400 to 518,400 bytes (16x smaller) and removes the CPU thumbnail/RGB-copy
+step. Non-16:9 windows retain their original aspect and logical camera extent.
+The save-page cache was already bounded to its ten visible slots; a regression
+test now makes that lifetime policy explicit.
+
 The same pass also makes speculative asset prefetch non-blocking, compiles a
 single-sample stage shader variant for ordinary images, lets static film
 patterns return to the reactive render lifecycle, reuses FFmpeg's conversion

@@ -5,8 +5,8 @@ use bevy::asset::{AssetApp, AssetId, AssetLoader, LoadContext, RenderAssetUsages
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use libwebp_sys::{
-    VP8StatusCode, WEBP_CSP_MODE, WebPDecode, WebPDecoderConfig, WebPFree, WebPFreeDecBuffer,
-    WebPGetFeatures, WebPInitDecoderConfig, WebPRGBABuffer,
+    VP8StatusCode, WEBP_CSP_MODE, WebPDecode, WebPDecoderConfig, WebPEncodeRGBA, WebPFree,
+    WebPFreeDecBuffer, WebPGetFeatures, WebPInitDecoderConfig, WebPRGBABuffer,
 };
 
 use crate::runtime::resources::{GameConfigResource, LocalAssetCache};
@@ -277,30 +277,36 @@ fn decode_webp(bytes: &[u8], target: impl FnOnce(UVec2) -> UVec2) -> io::Result<
     }
 }
 
-pub(crate) fn encode_preview(rgb: &[u8], width: u32, height: u32) -> io::Result<Vec<u8>> {
+const PREVIEW_WEBP_QUALITY: f32 = 80.0;
+
+pub(crate) fn encode_preview(rgba: &[u8], width: u32, height: u32) -> io::Result<Vec<u8>> {
     let stride = width
-        .checked_mul(3)
+        .checked_mul(4)
         .and_then(|value| i32::try_from(value).ok())
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "preview row too wide"))?;
     let expected = (stride as usize)
         .checked_mul(height as usize)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "preview too large"))?;
-    if rgb.len() != expected {
+    if rgba.len() != expected {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "preview RGB buffer has an invalid length",
+            "preview RGBA buffer has an invalid length",
         ));
     }
 
     let mut encoded = std::ptr::null_mut();
-    // SAFETY: `rgb` is validated as tightly packed RGB8 and remains alive for
-    // the call. libwebp owns `encoded` until it is copied and freed below.
+    // Save-card previews are small display aids rather than archival artwork.
+    // Lossy WebP at a fixed quality avoids spending CPU and disk on pixel-exact
+    // output while retaining the alpha channel should a render target need it.
+    // SAFETY: `rgba` is validated as tightly packed RGBA8 and remains alive
+    // for the call. libwebp owns `encoded` until it is copied and freed below.
     let len = unsafe {
-        libwebp_sys::WebPEncodeLosslessRGB(
-            rgb.as_ptr(),
+        WebPEncodeRGBA(
+            rgba.as_ptr(),
             width as i32,
             height as i32,
             stride,
+            PREVIEW_WEBP_QUALITY,
             &mut encoded,
         )
     };
@@ -355,11 +361,11 @@ mod tests {
 
     #[test]
     fn native_webp_round_trip_and_scaled_decode() {
-        let rgb = [
-            255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255, // row 1
-            0, 0, 0, 64, 64, 64, 128, 128, 128, 192, 192, 192, // row 2
+        let rgba = [
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255, // row 1
+            0, 0, 0, 255, 64, 64, 64, 255, 128, 128, 128, 255, 192, 192, 192, 255, // row 2
         ];
-        let encoded = encode_preview(&rgb, 4, 2).expect("encode preview");
+        let encoded = encode_preview(&rgba, 4, 2).expect("encode preview");
         let decoded = decode_webp(&encoded, |_| UVec2::new(2, 1)).expect("decode preview");
         assert_eq!(decoded.size(), UVec2::new(2, 1));
         assert_eq!(decoded.asset_usage, RenderAssetUsages::RENDER_WORLD);

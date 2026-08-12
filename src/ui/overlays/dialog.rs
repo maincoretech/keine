@@ -13,7 +13,9 @@ use crate::ui::foundation::{HoverSweep, UiFonts, UiSoundStyle, hover_sweep_fill}
 use crate::ui::save_load::SaveLoadRoot;
 use crate::ui::settings_panel::SettingsRoot;
 use crate::ui::support::i18n::{UiText, tr};
-use bevy::camera::{RenderTarget, visibility::RenderLayers};
+use bevy::camera::{
+    OrthographicProjection, Projection, RenderTarget, ScalingMode, visibility::RenderLayers,
+};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
@@ -24,6 +26,7 @@ use bevy::window::{PrimaryWindow, WindowCloseRequested};
 const FADE_DURATION: f32 = 0.2;
 const OVERLAY_ALPHA: f32 = 0.16;
 const PANEL_ALPHA: f32 = 0.78;
+const SAVE_PREVIEW_LIMIT: UVec2 = UVec2::new(480, 270);
 
 /// Which action to perform when the user confirms.
 #[derive(Clone, Copy, Debug)]
@@ -115,8 +118,9 @@ pub(crate) struct SavePreviewWriter {
 
 impl Default for SavePreviewWriter {
     fn default() -> Self {
-        // Full-resolution screenshot buffers are large, so keep at most two
-        // waiting behind the image currently being encoded.
+        // Keep at most two final-size render targets waiting behind the image
+        // currently being encoded. Rapid repeated saves never grow memory
+        // without bound or stall the render thread on image compression.
         let (sender, receiver) = sync_channel::<SavePreviewJob>(2);
         let worker = thread::Builder::new()
             .name("keine-save-preview".into())
@@ -164,11 +168,11 @@ impl Drop for SavePreviewWriter {
 fn write_save_preview(job: SavePreviewJob) {
     let result = job
         .image
-        .try_into_dynamic()
-        .map(|image| image.thumbnail(480, 270).to_rgb8())
-        .map_err(anyhow::Error::from)
-        .and_then(|image| {
-            crate::scene::images::encode_preview(image.as_raw(), image.width(), image.height())
+        .data
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("captured preview has no CPU pixel data"))
+        .and_then(|rgba| {
+            crate::scene::images::encode_preview(rgba, job.image.width(), job.image.height())
                 .map_err(anyhow::Error::from)
         })
         .and_then(|bytes| std::fs::write(&job.path, bytes).map_err(anyhow::Error::from));
@@ -607,11 +611,10 @@ pub(crate) fn capture_save_preview(
     size: Vec2,
     slot: u32,
 ) {
-    let width = size.x.round().max(1.0) as u32;
-    let height = size.y.round().max(1.0) as u32;
+    let extent = preview_extent(size);
     let target = images.add(Image::new_target_texture(
-        width,
-        height,
+        extent.x,
+        extent.y,
         TextureFormat::Rgba8UnormSrgb,
         None,
     ));
@@ -620,6 +623,16 @@ pub(crate) fn capture_save_preview(
             Name::new("save_preview_camera"),
             Camera2d,
             Camera { ..default() },
+            Projection::Orthographic(OrthographicProjection {
+                // The small render target must retain the main scene camera's
+                // logical viewport. WindowSize would instead zoom the scene to
+                // 480x270 world units.
+                scaling_mode: ScalingMode::Fixed {
+                    width: size.x.max(1.0),
+                    height: size.y.max(1.0),
+                },
+                ..OrthographicProjection::default_2d()
+            }),
             RenderTarget::Image(target.clone().into()),
             RenderLayers::layer(0),
         ))
@@ -630,6 +643,17 @@ pub(crate) fn capture_save_preview(
             SavePreviewCapture { camera, slot },
         ))
         .observe(store_save_preview);
+}
+
+fn preview_extent(viewport: Vec2) -> UVec2 {
+    let viewport = viewport.max(Vec2::ONE);
+    let scale = (SAVE_PREVIEW_LIMIT.x as f32 / viewport.x)
+        .min(SAVE_PREVIEW_LIMIT.y as f32 / viewport.y)
+        .min(1.0);
+    UVec2::new(
+        (viewport.x * scale).round().max(1.0) as u32,
+        (viewport.y * scale).round().max(1.0) as u32,
+    )
 }
 
 fn store_save_preview(capture: On<ScreenshotCaptured>, mut context: SavePreviewContext) {
@@ -648,4 +672,25 @@ fn store_save_preview(capture: On<ScreenshotCaptured>, mut context: SavePreviewC
     }
     let path = crate::storage::save::preview_path(&context.project_root, target.slot);
     context.writer.enqueue(capture.image.clone(), path);
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+
+    #[test]
+    fn preview_extent_caps_pixels_without_changing_aspect_ratio() {
+        assert_eq!(
+            preview_extent(Vec2::new(1920.0, 1080.0)),
+            UVec2::new(480, 270)
+        );
+        assert_eq!(
+            preview_extent(Vec2::new(1920.0, 1200.0)),
+            UVec2::new(432, 270)
+        );
+        assert_eq!(
+            preview_extent(Vec2::new(320.0, 180.0)),
+            UVec2::new(320, 180)
+        );
+    }
 }

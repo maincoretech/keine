@@ -3004,6 +3004,7 @@ version = "0.8.1"
 dependencies = [
  "anyhow",
  "bevy",
+ "criterion",
  "crossterm",
  "dispatch2",
  "ffmpeg-next",
