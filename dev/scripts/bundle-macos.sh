@@ -43,7 +43,7 @@ sed -e "s/__NAME__/$name/g" -e "s/__VERSION__/$version/g" > "$staging/Contents/I
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>CFBundleExecutable</key><string>launch</string>
-<key>CFBundleIdentifier</key><string>io.github.maincoretech.keine</string>
+<key>CFBundleIdentifier</key><string>moe.maincore.keine</string>
 <key>CFBundleName</key><string>__NAME__</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleIconFile</key><string>keine.icns</string>

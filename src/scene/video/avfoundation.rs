@@ -379,7 +379,7 @@ impl NativePlayer {
             .ok_or_else(|| "could not create AVFoundation resource URL".to_owned())?;
             let asset = unsafe { AVURLAsset::initWithURL_options(AVURLAsset::alloc(), &url, None) };
             let resource_delegate = ResourceLoaderDelegate::new(source.clone());
-            let resource_queue = DispatchQueue::new("tech.maincore.keine.video-resource", None);
+            let resource_queue = DispatchQueue::new("moe.maincore.keine.video-resource", None);
             let delegate = ProtocolObject::from_ref(&*resource_delegate);
             unsafe {
                 asset
