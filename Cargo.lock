@@ -1326,7 +1326,7 @@ dependencies = [
 [[package]]
 name = "bevy_winit"
 version = "0.19.0"
-source = "git+https://github.com/maincoretech/keine?rev=f5b3e8d5fe1809ad3ded2f3c5fded328a9bb619d#f5b3e8d5fe1809ad3ded2f3c5fded328a9bb619d"
+source = "git+https://github.com/maincoretech/keine?rev=916ee960f9cf571a3fe6c009aaa6f0667f69a060#916ee960f9cf571a3fe6c009aaa6f0667f69a060"
 dependencies = [
  "accesskit",
  "accesskit_winit",

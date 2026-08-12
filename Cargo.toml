@@ -117,14 +117,11 @@ wgpu = { version = "29.0.4", default-features = false, features = ["metal"] }
 crossterm = "0.29.0"
 fs2 = "0.4"
 
-# Bevy 0.19 unconditionally requests a redraw from `about_to_wait` on macOS.
-# Its stock event handler also treats that synthetic RedrawRequested event as
-# fresh window input, turning every reactive update mode into a display-rate
-# render loop. The fixed revision lives on an isolated dependency branch so the
-# engine tree does not vendor an entire Bevy crate. Drop this override when
-# upstream provides equivalent behavior.
+# Bevy 0.19 requests synthetic macOS redraws from `about_to_wait`. The pinned
+# fix keeps reactive idle asleep while preserving redraw-driven continuous
+# animation. Drop this override once upstream provides equivalent behavior.
 [patch.crates-io]
-bevy_winit = { git = "https://github.com/maincoretech/keine", rev = "f5b3e8d5fe1809ad3ded2f3c5fded328a9bb619d" }
+bevy_winit = { git = "https://github.com/maincoretech/keine", rev = "916ee960f9cf571a3fe6c009aaa6f0667f69a060" }
 
 [dependencies]
 keine-core = { workspace = true }

@@ -93,6 +93,22 @@ RSS and 253 MiB physical footprint, with repeated one-second CPU samples
 returning to 0%. This is the relevant baseline for a player's idle engine; the
 forced 60 Hz rows above intentionally measure sustained rendering cost.
 
+### 2026-08-12 macOS redraw regression
+
+The first macOS reactive-loop patch (`f5b3e8d`) excluded every synthetic
+`RedrawRequested` event from update scheduling. That correctly stopped the idle
+feedback loop, but also prevented Bevy's `Continuous` mode from driving the
+next animation frame: menu input advanced one frame and then waited for another
+unrelated window event. The corrected dependency revision `916ee96` ignores
+synthetic redraws only in reactive mode and counts them normally in continuous
+mode.
+
+Interactive acceptance covered repeated SAVE, LOAD, CONFIG, settings-page and
+back navigation with complete animations. Four one-second `top` samples on the
+settled development title screen were 0.0%, 0.2%, 0.2%, and 0.3% CPU, preserving
+the low-power idle behavior. This is a lifecycle regression check, not a render
+throughput benchmark.
+
 ## 2026-07-22 lifecycle and high-refresh pass
 
 - Ordinary `dev` previews now use the same focused/unfocused lifecycle as a
