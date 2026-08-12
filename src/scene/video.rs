@@ -472,7 +472,7 @@ mod ffmpeg_backend {
         let cancelled = Arc::new(AtomicBool::new(false));
         let thread_cancelled = cancelled.clone();
         let decoder = thread::Builder::new()
-            .name(format!("keine-video-{path}"))
+            .name("keine-video-decode".into())
             .spawn(move || decode_video(mounts, &path, looped, thread_cancelled, sender))
             .unwrap_or_else(|error| {
                 log::error!("failed to start video decoder thread: {error}");

@@ -273,7 +273,7 @@ pub(super) fn sync_video_playback(
                 }
                 Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => {
-                    log::error!("video `{}` source worker disconnected", video.spec.file);
+                    log::error!("video `{}` I/O worker disconnected", video.spec.file);
                     ended.push(id.clone());
                 }
             }
@@ -373,13 +373,13 @@ impl NativePlayer {
             )
         } else {
             let url = NSURL::URLWithString(&NSString::from_str(&format!(
-                "keine-resource://local/video.{}",
+                "keine-video://local/stream.{}",
                 source.extension().unwrap_or("mp4")
             )))
             .ok_or_else(|| "could not create AVFoundation resource URL".to_owned())?;
             let asset = unsafe { AVURLAsset::initWithURL_options(AVURLAsset::alloc(), &url, None) };
             let resource_delegate = ResourceLoaderDelegate::new(source.clone());
-            let resource_queue = DispatchQueue::new("moe.maincore.keine.video-resource", None);
+            let resource_queue = DispatchQueue::new("moe.maincore.keine.video-io", None);
             let delegate = ProtocolObject::from_ref(&*resource_delegate);
             unsafe {
                 asset
@@ -486,13 +486,13 @@ fn spawn_source_worker(
     let (sender, receiver) = sync_channel(1);
     let worker_path = path.clone();
     let worker = thread::Builder::new()
-        .name(format!("keine-video-source-{path}"))
+        .name("keine-video-io".into())
         .spawn(move || {
             let source = prepare_source(&mounts, Path::new(&worker_path)).map(Arc::new);
             let _ = sender.send(source);
         })
         .unwrap_or_else(|error| {
-            log::error!("failed to start video source worker: {error}");
+            log::error!("failed to start video I/O worker: {error}");
             thread::spawn(|| {})
         });
     VideoSession {
@@ -513,7 +513,7 @@ fn reap_source_workers(workers: &mut Vec<thread::JoinHandle<()>>) {
         if workers[index].is_finished() {
             let worker = workers.swap_remove(index);
             if worker.join().is_err() {
-                log::warn!("video source worker panicked during shutdown");
+                log::warn!("video I/O worker panicked during shutdown");
             }
         } else {
             index += 1;

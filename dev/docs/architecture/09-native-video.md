@@ -37,7 +37,7 @@ FS mount 保留平台快速路径，直接把真实文件路径交给播放器�
 复用 `ContentMount`/`ContentFile` 的长度、seek 与短读合同，不创建完整内存副本，也不写
 明文临时文件：
 
-- macOS 使用自定义 `keine-resource://` URL 和
+- macOS 使用自定义 `keine-video://` URL 和
   [`AVAssetResourceLoaderDelegate`](https://developer.apple.com/documentation/avfoundation/avassetresourceloaderdelegate)，
   把 AVFoundation 的 content-info、byte-range 与取消请求映射到新的独立读取游标；
 - Windows/Linux 使用 FFmpeg 原生 `AVIOContext` read/seek 回调，直接读取同一个随机访问源；
