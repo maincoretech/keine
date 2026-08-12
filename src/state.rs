@@ -210,7 +210,7 @@ impl ApplicationHandler<WinitUserEvent> for WinitAppRunnerState {
         // creating a permanent display-rate loop while the app is idle.
         // Real input/window events still wake the app normally.
         #[cfg(target_os = "macos")]
-        if !matches!(&event, WindowEvent::RedrawRequested) {
+        if macos_window_event_wakes_update(&event, self.update_mode) {
             self.window_event_received = true;
         }
         #[cfg(not(target_os = "macos"))]
@@ -529,6 +529,15 @@ impl ApplicationHandler<WinitUserEvent> for WinitAppRunnerState {
         let world = self.world_mut();
         world.clear_all();
     }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_window_event_wakes_update(event: &WindowEvent, update_mode: UpdateMode) -> bool {
+    // Reactive mode's synthetic redraw bridge must not wake another update or
+    // it becomes a permanent idle loop. Continuous mode is different: Bevy
+    // deliberately requests each following redraw to drive the next animation
+    // frame, so suppressing that event freezes time until unrelated input.
+    !matches!(event, WindowEvent::RedrawRequested) || matches!(update_mode, UpdateMode::Continuous)
 }
 
 impl WinitAppRunnerState {
@@ -990,6 +999,23 @@ mod tests {
     use bevy_app::Update;
 
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn redraw_drives_continuous_updates_without_waking_reactive_idle() {
+        let redraw = WindowEvent::RedrawRequested;
+        let reactive = UpdateMode::reactive_low_power(std::time::Duration::MAX);
+
+        assert!(!macos_window_event_wakes_update(&redraw, reactive));
+        assert!(macos_window_event_wakes_update(
+            &redraw,
+            UpdateMode::Continuous
+        ));
+        assert!(macos_window_event_wakes_update(
+            &WindowEvent::Focused(true),
+            reactive
+        ));
+    }
 
     #[test]
     fn test_react_to_scale_factor_change_with_changed_scale_factor() {
