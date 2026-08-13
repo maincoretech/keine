@@ -353,6 +353,20 @@ pub enum Value {
 }
 
 impl Value {
+    pub(crate) fn from_finite_f64(value: f64) -> Option<Self> {
+        const I64_UPPER_EXCLUSIVE: f64 = 9_223_372_036_854_775_808.0;
+        if !value.is_finite() {
+            return None;
+        }
+        if value.fract() == 0.0 && value >= i64::MIN as f64 && value < I64_UPPER_EXCLUSIVE {
+            let integer = value as i64;
+            if integer as f64 == value {
+                return Some(Self::Int(integer));
+            }
+        }
+        Some(Self::Float(value))
+    }
+
     pub fn display(&self) -> String {
         match self {
             Self::Int(value) => value.to_string(),

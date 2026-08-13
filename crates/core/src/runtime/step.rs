@@ -1565,10 +1565,14 @@ pub fn submit_user_input(state: &mut State) -> bool {
                 input.error = "数值超出允许范围".into();
                 return false;
             }
-            if number.fract() == 0.0 && number >= i64::MIN as f64 && number <= i64::MAX as f64 {
-                crate::Value::Int(number as i64)
+            if let Ok(integer) = trimmed.parse::<i64>() {
+                crate::Value::Int(integer)
             } else {
-                crate::Value::Float(number)
+                let Some(value) = crate::Value::from_finite_f64(number) else {
+                    input.error = "请输入有效数字".into();
+                    return false;
+                };
+                value
             }
         }
         crate::types::InputValueType::Bool => crate::Value::Bool(trimmed == "true"),
@@ -2774,6 +2778,27 @@ mod tests {
         state.user_input.as_mut().unwrap().value = "16".into();
         assert!(submit_user_input(&mut state));
         assert_eq!(state.vars["age"], crate::Value::Int(16));
+    }
+
+    #[test]
+    fn typed_number_input_preserves_large_integers() {
+        let mut state = state_with(vec![Action::RequestInput {
+            spec: crate::UserInputSpec {
+                variable: "identifier".into(),
+                value_type: crate::InputValueType::Number,
+                title: "Identifier".into(),
+                required_text: "required".into(),
+                ..Default::default()
+            },
+        }]);
+
+        assert_eq!(step(&mut state), StepResult::AwaitInput);
+        state.user_input.as_mut().unwrap().value = "9007199254740993".into();
+        assert!(submit_user_input(&mut state));
+        assert_eq!(
+            state.vars["identifier"],
+            crate::Value::Int(9_007_199_254_740_993)
+        );
     }
 
     #[test]

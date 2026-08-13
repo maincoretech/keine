@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use crate::Value;
@@ -191,7 +192,10 @@ impl Parser<'_> {
                 .ok_or_else(|| format!("unknown variable {name}")),
             Token::Op("!") => Ok(Value::Bool(!self.parse_expression(7)?.truthy())),
             Token::Op("-") => match self.parse_expression(7)? {
-                Value::Int(value) => Ok(Value::Int(-value)),
+                Value::Int(value) => value
+                    .checked_neg()
+                    .map(Value::Int)
+                    .ok_or_else(|| "integer negation overflow".into()),
                 Value::Float(value) => Ok(Value::Float(-value)),
                 _ => Err("unary minus requires a number".into()),
             },
@@ -264,7 +268,7 @@ fn apply_binary(operator: &str, left: Value, right: Value) -> Result<Value, Stri
         }));
     }
     if operator == "==" || operator == "!=" {
-        let equal = left == right || numeric_pair(&left, &right).is_some_and(|(a, b)| a == b);
+        let equal = left == right || numeric_equal(&left, &right).unwrap_or(false);
         return Ok(Value::Bool(if operator == "==" { equal } else { !equal }));
     }
     if operator == "+" && (matches!(left, Value::Str(_)) || matches!(right, Value::Str(_))) {
@@ -272,45 +276,134 @@ fn apply_binary(operator: &str, left: Value, right: Value) -> Result<Value, Stri
     }
     let (left, right) = numeric_pair(&left, &right)
         .ok_or_else(|| format!("operator {operator} requires compatible values"))?;
+    if let (Numeric::Int(left), Numeric::Int(right)) = (left, right) {
+        return match operator {
+            "+" => checked_integer(left.checked_add(right), "addition"),
+            "-" => checked_integer(left.checked_sub(right), "subtraction"),
+            "*" => checked_integer(left.checked_mul(right), "multiplication"),
+            "/" if right != 0 => divide_integers(left, right),
+            "/" => Err("division by zero".into()),
+            "%" if right == -1 => Ok(Value::Int(0)),
+            "%" if right != 0 => checked_integer(left.checked_rem(right), "remainder"),
+            "%" => Err("division by zero".into()),
+            ">" => Ok(Value::Bool(left > right)),
+            ">=" => Ok(Value::Bool(left >= right)),
+            "<" => Ok(Value::Bool(left < right)),
+            "<=" => Ok(Value::Bool(left <= right)),
+            _ => Err(format!("unsupported operator {operator}")),
+        };
+    }
+    if matches!(operator, ">" | ">=" | "<" | "<=") {
+        let ordering = numeric_cmp(left, right);
+        let result = match operator {
+            ">" => ordering == Some(Ordering::Greater),
+            ">=" => matches!(ordering, Some(Ordering::Greater | Ordering::Equal)),
+            "<" => ordering == Some(Ordering::Less),
+            "<=" => matches!(ordering, Some(Ordering::Less | Ordering::Equal)),
+            _ => unreachable!(),
+        };
+        return Ok(Value::Bool(result));
+    }
+    let (left, right) = (left.as_f64(), right.as_f64());
     match operator {
         "+" => number(left + right),
         "-" => number(left - right),
         "*" => number(left * right),
-        "/" if right != 0.0 => Ok(Value::Float(left / right)),
+        "/" if right != 0.0 => finite_float(left / right),
         "/" => Err("division by zero".into()),
         "%" if right != 0.0 => number(left % right),
         "%" => Err("division by zero".into()),
-        ">" => Ok(Value::Bool(left > right)),
-        ">=" => Ok(Value::Bool(left >= right)),
-        "<" => Ok(Value::Bool(left < right)),
-        "<=" => Ok(Value::Bool(left <= right)),
         _ => Err(format!("unsupported operator {operator}")),
     }
 }
 
-fn numeric_pair(left: &Value, right: &Value) -> Option<(f64, f64)> {
-    fn numeric(value: &Value) -> Option<f64> {
+#[derive(Clone, Copy)]
+enum Numeric {
+    Int(i64),
+    Float(f64),
+}
+
+impl Numeric {
+    fn as_f64(self) -> f64 {
+        match self {
+            Self::Int(value) => value as f64,
+            Self::Float(value) => value,
+        }
+    }
+}
+
+fn numeric_pair(left: &Value, right: &Value) -> Option<(Numeric, Numeric)> {
+    fn numeric(value: &Value) -> Option<Numeric> {
         match value {
-            Value::Int(value) => Some(*value as f64),
-            Value::Float(value) => Some(*value),
+            Value::Int(value) => Some(Numeric::Int(*value)),
+            Value::Float(value) => Some(Numeric::Float(*value)),
             _ => None,
         }
     }
     Some((numeric(left)?, numeric(right)?))
 }
 
-fn number(value: f64) -> Result<Value, String> {
-    if value.is_finite()
-        && value.fract() == 0.0
-        && value >= i64::MIN as f64
-        && value <= i64::MAX as f64
-    {
-        Ok(Value::Int(value as i64))
-    } else if value.is_finite() {
-        Ok(Value::Float(value))
-    } else {
-        Err("numeric result is not finite".into())
+fn numeric_equal(left: &Value, right: &Value) -> Option<bool> {
+    let (left, right) = numeric_pair(left, right)?;
+    Some(numeric_cmp(left, right)? == Ordering::Equal)
+}
+
+fn numeric_cmp(left: Numeric, right: Numeric) -> Option<Ordering> {
+    match (left, right) {
+        (Numeric::Int(left), Numeric::Int(right)) => Some(left.cmp(&right)),
+        (Numeric::Float(left), Numeric::Float(right)) => left.partial_cmp(&right),
+        (Numeric::Int(left), Numeric::Float(right)) => compare_int_float(left, right),
+        (Numeric::Float(left), Numeric::Int(right)) => {
+            compare_int_float(right, left).map(Ordering::reverse)
+        }
     }
+}
+
+fn compare_int_float(integer: i64, float: f64) -> Option<Ordering> {
+    const I64_UPPER_EXCLUSIVE: f64 = 9_223_372_036_854_775_808.0;
+    if float.is_nan() {
+        return None;
+    }
+    if float >= I64_UPPER_EXCLUSIVE {
+        return Some(Ordering::Less);
+    }
+    if float < i64::MIN as f64 {
+        return Some(Ordering::Greater);
+    }
+    let truncated = float as i64;
+    match integer.cmp(&truncated) {
+        Ordering::Equal if float.fract() > 0.0 => Some(Ordering::Less),
+        Ordering::Equal if float.fract() < 0.0 => Some(Ordering::Greater),
+        ordering => Some(ordering),
+    }
+}
+
+fn checked_integer(value: Option<i64>, operation: &str) -> Result<Value, String> {
+    value
+        .map(Value::Int)
+        .ok_or_else(|| format!("integer {operation} overflow"))
+}
+
+fn divide_integers(left: i64, right: i64) -> Result<Value, String> {
+    let quotient = left
+        .checked_div(right)
+        .ok_or_else(|| "integer division overflow".to_owned())?;
+    if left.checked_rem(right) == Some(0) {
+        Ok(Value::Int(quotient))
+    } else {
+        finite_float(left as f64 / right as f64)
+    }
+}
+
+fn finite_float(value: f64) -> Result<Value, String> {
+    value
+        .is_finite()
+        .then_some(Value::Float(value))
+        .ok_or_else(|| "numeric result is not finite".into())
+}
+
+fn number(value: f64) -> Result<Value, String> {
+    Value::from_finite_f64(value).ok_or_else(|| "numeric result is not finite".into())
 }
 
 #[cfg(test)]
@@ -366,5 +459,29 @@ mod tests {
             evaluate("名字 == '慧音'", &vars, &HashMap::new()),
             Ok(Value::Bool(true))
         );
+    }
+
+    #[test]
+    fn integer_arithmetic_and_comparisons_remain_exact_above_f64_precision() {
+        let vars = HashMap::new();
+        let globals = HashMap::new();
+
+        assert_eq!(
+            evaluate("9007199254740993 + 1", &vars, &globals),
+            Ok(Value::Int(9_007_199_254_740_994))
+        );
+        assert_eq!(
+            evaluate("9007199254740993 > 9007199254740992", &vars, &globals),
+            Ok(Value::Bool(true))
+        );
+        assert_eq!(
+            evaluate("9007199254740993 == 9007199254740992.0", &vars, &globals),
+            Ok(Value::Bool(false))
+        );
+        assert_eq!(
+            evaluate("9007199254740993 / 1", &vars, &globals),
+            Ok(Value::Int(9_007_199_254_740_993))
+        );
+        assert!(evaluate("9223372036854775807 + 1", &vars, &globals).is_err());
     }
 }
