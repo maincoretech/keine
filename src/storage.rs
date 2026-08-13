@@ -5,15 +5,63 @@ pub(crate) mod read_history;
 pub(crate) mod save;
 pub(crate) mod settings;
 
+use std::fs::{self, File};
+use std::io::{Read, Write};
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use bevy::prelude::*;
 use keine_core::State;
 
 use crate::runtime::GameSystemSet;
 
 pub(crate) struct StoragePlugin;
+
+pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .context("persistent data path has no parent")?;
+    fs::create_dir_all(parent)?;
+    let temporary = path.with_extension(match path.extension().and_then(|value| value.to_str()) {
+        Some(extension) => format!("{extension}.tmp"),
+        None => "tmp".to_owned(),
+    });
+    let mut file = File::create(&temporary)
+        .with_context(|| format!("failed to create {}", temporary.display()))?;
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .with_context(|| format!("failed to synchronize {}", temporary.display()))?;
+    drop(file);
+    fs::rename(&temporary, path)
+        .with_context(|| format!("failed to replace {}", path.display()))?;
+    sync_directory(parent)?;
+    Ok(())
+}
+
+pub(crate) fn read_limited(path: &Path, maximum: usize) -> Result<Vec<u8>> {
+    let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let declared = file.metadata()?.len();
+    if declared > maximum as u64 {
+        bail!(
+            "{} is {declared} bytes, exceeding the {maximum}-byte limit",
+            path.display()
+        );
+    }
+    let mut bytes = Vec::with_capacity(declared as usize);
+    file.take(maximum as u64 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > maximum {
+        bail!("{} grew beyond the {maximum}-byte limit", path.display());
+    }
+    Ok(bytes)
+}
+
+pub(crate) fn sync_directory(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    File::open(path)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
 
 impl Plugin for StoragePlugin {
     fn build(&self, app: &mut App) {
@@ -59,6 +107,24 @@ mod tests {
     use keine_core::state::DialogueKey;
 
     use super::*;
+
+    #[test]
+    fn atomic_write_replaces_existing_data_and_limited_read_rejects_oversize_files() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("keine-atomic-storage-{nonce}"));
+        let target = root.join("settings.bin");
+
+        write_atomically(&target, b"old").unwrap();
+        write_atomically(&target, b"replacement").unwrap();
+        assert_eq!(read_limited(&target, 11).unwrap(), b"replacement");
+        assert!(read_limited(&target, 10).is_err());
+        assert!(!target.with_extension("bin.tmp").exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
 
     #[test]
     fn reset_all_clears_disk_runtime_state_and_writer_caches() {

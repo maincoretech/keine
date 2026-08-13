@@ -1,8 +1,7 @@
 use std::collections::HashMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use bevy::app::AppExit;
 use bevy::prelude::*;
 use keine_core::Value;
@@ -12,11 +11,19 @@ use crate::runtime::resources::{EditorSyncSession, GameState, PersistenceDisable
 
 const VERSION: u32 = 1;
 const WRITE_DELAY_SECONDS: f32 = 0.5;
+const MAX_PROFILE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_PROFILE_ENTRIES: usize = 65_536;
 
 #[derive(Serialize, Deserialize)]
 struct ProfileFile {
     version: u32,
     global_vars: HashMap<String, Value>,
+}
+
+#[derive(Deserialize)]
+struct ProfileFileWire {
+    version: u32,
+    global_vars: Vec<(String, Value)>,
 }
 
 #[derive(Resource, Default)]
@@ -36,12 +43,11 @@ impl ProfileWriter {
 
 pub(crate) fn load(project_root: &Path) -> HashMap<String, Value> {
     let target = path(project_root);
-    fs::read(&target)
-        .map_err(anyhow::Error::from)
-        .and_then(|bytes| postcard::from_bytes::<ProfileFile>(&bytes).map_err(anyhow::Error::from))
+    super::read_limited(&target, MAX_PROFILE_BYTES)
+        .and_then(|bytes| decode(&bytes))
         .map(|file| {
             if file.version == VERSION {
-                file.global_vars
+                file.global_vars.into_iter().collect()
             } else {
                 HashMap::new()
             }
@@ -111,18 +117,21 @@ fn persist_now(values: &HashMap<String, Value>, project_root: &Path, writer: &mu
 
 fn save(values: &HashMap<String, Value>, project_root: &Path) -> Result<()> {
     let target = path(project_root);
-    let temporary = target.with_extension("tmp");
-    let parent = target.parent().context("profile path has no parent")?;
-    fs::create_dir_all(parent)?;
-    fs::write(
-        &temporary,
-        postcard::to_stdvec(&ProfileFile {
+    super::write_atomically(
+        &target,
+        &postcard::to_stdvec(&ProfileFile {
             version: VERSION,
             global_vars: values.clone(),
         })?,
-    )?;
-    fs::rename(&temporary, &target)?;
-    Ok(())
+    )
+}
+
+fn decode(bytes: &[u8]) -> Result<ProfileFileWire> {
+    let file: ProfileFileWire = postcard::from_bytes(bytes)?;
+    if file.global_vars.len() > MAX_PROFILE_ENTRIES {
+        anyhow::bail!("profile contains too many variables");
+    }
+    Ok(file)
 }
 
 fn path(project_root: &Path) -> PathBuf {
@@ -131,6 +140,7 @@ fn path(project_root: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
@@ -160,5 +170,14 @@ mod tests {
         assert_eq!(writer.dirty_seconds, 0.0);
         assert_eq!(load(&root), values);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_a_collection_length_that_exceeds_the_available_payload() {
+        let mut bytes = vec![VERSION as u8];
+        bytes.extend([0xff; 9]);
+        bytes.push(0x01);
+
+        assert!(decode(&bytes).is_err());
     }
 }

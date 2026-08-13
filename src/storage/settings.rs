@@ -1,7 +1,6 @@
-use std::fs;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -9,6 +8,7 @@ use crate::runtime::resources::{GameConfigResource, ProjectRoot};
 use crate::ui::control_bar::{SkipMode, ToggleStates};
 
 const SETTINGS_VERSION: u32 = 4;
+const MAX_SETTINGS_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UiLocale {
@@ -94,20 +94,15 @@ pub fn load_settings(
 
 pub fn persist(settings: &RuntimeSettings, project_root: &Path) -> Result<()> {
     let path = path(project_root);
-    let temporary = path.with_extension("bin.tmp");
-    let parent = path.parent().context("settings path has no parent")?;
-    fs::create_dir_all(parent)?;
     let file = SettingsFile {
         version: SETTINGS_VERSION,
         settings: settings.clone(),
     };
-    fs::write(&temporary, postcard::to_stdvec(&file)?)?;
-    fs::rename(&temporary, &path)?;
-    Ok(())
+    super::write_atomically(&path, &postcard::to_stdvec(&file)?)
 }
 
 pub(crate) fn load(project_root: &Path) -> Option<RuntimeSettings> {
-    let bytes = fs::read(path(project_root)).ok()?;
+    let bytes = super::read_limited(&path(project_root), MAX_SETTINGS_BYTES).ok()?;
     let file: SettingsFile = postcard::from_bytes(&bytes).ok()?;
     (file.version == SETTINGS_VERSION).then_some(file.settings)
 }
@@ -134,6 +129,7 @@ fn path(project_root: &Path) -> std::path::PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;

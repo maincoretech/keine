@@ -6,6 +6,9 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 const VERSION: u32 = 2;
+const MAX_BACKUP_BYTES: usize = 512 * 1024 * 1024;
+const MAX_BACKUP_FILES: usize = 4_096;
+const MAX_BACKUP_FILE_BYTES: usize = 128 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
 struct BackupBundle {
@@ -22,6 +25,7 @@ struct BackupFile {
 pub(crate) fn export(project_root: &Path, target: &Path) -> Result<()> {
     let directory = project_root.join("saves");
     let mut files = Vec::new();
+    let mut total_bytes = 0usize;
     match fs::read_dir(&directory) {
         Ok(entries) => {
             for entry in entries {
@@ -29,10 +33,21 @@ pub(crate) fn export(project_root: &Path, target: &Path) -> Result<()> {
                 if !entry.file_type()?.is_file() {
                     continue;
                 }
+                if files.len() >= MAX_BACKUP_FILES {
+                    bail!("save data contains too many files");
+                }
+                let file_size = usize::try_from(entry.metadata()?.len())
+                    .context("save data file size exceeds this platform")?;
+                total_bytes = total_bytes
+                    .checked_add(file_size)
+                    .context("backup size overflow")?;
+                if total_bytes > MAX_BACKUP_BYTES {
+                    bail!("save data exceeds the {MAX_BACKUP_BYTES}-byte backup limit");
+                }
                 let name = entry.file_name().to_string_lossy().into_owned();
                 files.push(BackupFile {
                     name,
-                    bytes: fs::read(entry.path())?,
+                    bytes: super::read_limited(&entry.path(), MAX_BACKUP_FILE_BYTES)?,
                 });
             }
         }
@@ -44,24 +59,30 @@ pub(crate) fn export(project_root: &Path, target: &Path) -> Result<()> {
         version: VERSION,
         files,
     })?;
-    let temporary = target.with_extension("tmp");
-    fs::write(&temporary, bytes)?;
-    #[cfg(windows)]
-    if target.exists() {
-        fs::remove_file(target)?;
+    if bytes.len() > MAX_BACKUP_BYTES {
+        bail!("backup exceeds the {MAX_BACKUP_BYTES}-byte limit");
     }
-    fs::rename(&temporary, target)?;
-    Ok(())
+    super::write_atomically(target, &bytes)
 }
 
 pub(crate) fn import(project_root: &Path, source: &Path) -> Result<()> {
-    let bytes = fs::read(source)?;
+    let bytes = super::read_limited(source, MAX_BACKUP_BYTES)?;
     let bundle: BackupBundle = postcard::from_bytes(&bytes).context("invalid backup file")?;
     if bundle.version != VERSION {
         bail!("unsupported backup version {}", bundle.version);
     }
+    if bundle.files.len() > MAX_BACKUP_FILES {
+        bail!("backup contains too many files");
+    }
     if bundle.files.iter().any(|file| !safe_name(&file.name)) {
         bail!("backup contains an unsafe file name");
+    }
+    if bundle
+        .files
+        .iter()
+        .any(|file| file.bytes.len() > MAX_BACKUP_FILE_BYTES)
+    {
+        bail!("backup contains an oversized file");
     }
 
     let target = project_root.join("saves");
@@ -71,18 +92,23 @@ pub(crate) fn import(project_root: &Path, source: &Path) -> Result<()> {
     remove_if_present(&previous)?;
     fs::create_dir_all(&incoming)?;
     for file in bundle.files {
-        fs::write(incoming.join(file.name), file.bytes)?;
+        super::write_atomically(&incoming.join(file.name), &file.bytes)?;
     }
+    let parent = target.parent().context("save directory has no parent")?;
     if target.exists() {
         fs::rename(&target, &previous)?;
+        super::sync_directory(parent)?;
     }
     if let Err(error) = fs::rename(&incoming, &target) {
         if previous.exists() {
             let _ = fs::rename(&previous, &target);
+            let _ = super::sync_directory(parent);
         }
         return Err(error).context("failed to install imported save data");
     }
+    super::sync_directory(parent)?;
     remove_if_present(&previous)?;
+    super::sync_directory(parent)?;
     Ok(())
 }
 

@@ -175,7 +175,7 @@ fn write_save_preview(job: SavePreviewJob) {
             crate::scene::images::encode_preview(rgba, job.image.width(), job.image.height())
                 .map_err(anyhow::Error::from)
         })
-        .and_then(|bytes| std::fs::write(&job.path, bytes).map_err(anyhow::Error::from));
+        .and_then(|bytes| crate::storage::write_atomically(&job.path, &bytes));
     if let Err(error) = result {
         log::error!("failed to save slot preview: {error:#}");
     }

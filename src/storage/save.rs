@@ -1,5 +1,5 @@
 use std::fs::{self, File};
-use std::io::{ErrorKind, Write};
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -30,29 +30,13 @@ pub fn save_game(
     project_root: &Path,
 ) -> Result<()> {
     let path = slot_path(store, project_root, slot);
-    let temporary_path = path.with_extension(format!("{}.tmp", store.extension()));
     let parent = path.parent().context("save slot path has no parent")?;
     fs::create_dir_all(parent)
         .with_context(|| format!("failed to create save directory {}", parent.display()))?;
 
     let bytes = store.encode(state)?;
 
-    let mut file = File::create(&temporary_path).with_context(|| {
-        format!(
-            "failed to create temporary save {}",
-            temporary_path.display()
-        )
-    })?;
-    file.write_all(&bytes)
-        .and_then(|()| file.sync_all())
-        .with_context(|| {
-            format!(
-                "failed to write temporary save {}",
-                temporary_path.display()
-            )
-        })?;
-    fs::rename(&temporary_path, &path)
-        .with_context(|| format!("failed to replace save {}", path.display()))?;
+    super::write_atomically(&path, &bytes)?;
     log::info!("saved slot {slot}");
     Ok(())
 }

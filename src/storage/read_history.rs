@@ -1,8 +1,7 @@
 use std::collections::HashSet;
-use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use bevy::prelude::*;
 use keine_core::state::DialogueKey;
 use serde::{Deserialize, Serialize};
@@ -10,11 +9,13 @@ use serde::{Deserialize, Serialize};
 use crate::runtime::resources::{EditorSyncSession, GameState, PersistenceDisabled, ProjectRoot};
 
 const VERSION: u32 = 1;
+const MAX_HISTORY_BYTES: usize = 64 * 1024 * 1024;
+const MAX_HISTORY_ENTRIES: usize = 1_000_000;
 
-#[derive(Serialize, Deserialize)]
-struct HistoryFile {
+#[derive(Deserialize)]
+struct HistoryFileWire {
     version: u32,
-    entries: HashSet<DialogueKey>,
+    entries: Vec<DialogueKey>,
 }
 
 #[derive(Serialize)]
@@ -40,12 +41,11 @@ impl ReadHistoryWriter {
 
 pub(crate) fn load(project_root: &Path) -> HashSet<DialogueKey> {
     let path = history_path(project_root);
-    fs::read(&path)
-        .map_err(anyhow::Error::from)
-        .and_then(|bytes| postcard::from_bytes::<HistoryFile>(&bytes).map_err(anyhow::Error::from))
+    super::read_limited(&path, MAX_HISTORY_BYTES)
+        .and_then(|bytes| decode(&bytes))
         .map(|file| {
             if file.version == VERSION {
-                file.entries
+                file.entries.into_iter().collect()
             } else {
                 HashSet::new()
             }
@@ -95,18 +95,21 @@ pub(super) fn reset_memory(state: &mut keine_core::State, writer: &mut ReadHisto
 
 fn save(history: &HashSet<DialogueKey>, project_root: &Path) -> Result<()> {
     let path = history_path(project_root);
-    let temporary = path.with_extension("bin.tmp");
-    let parent = path.parent().context("read history path has no parent")?;
-    fs::create_dir_all(parent)?;
-    fs::write(
-        &temporary,
-        postcard::to_stdvec(&HistoryFileRef {
+    super::write_atomically(
+        &path,
+        &postcard::to_stdvec(&HistoryFileRef {
             version: VERSION,
             entries: history,
         })?,
-    )?;
-    fs::rename(&temporary, &path)?;
-    Ok(())
+    )
+}
+
+fn decode(bytes: &[u8]) -> Result<HistoryFileWire> {
+    let file: HistoryFileWire = postcard::from_bytes(bytes)?;
+    if file.entries.len() > MAX_HISTORY_ENTRIES {
+        anyhow::bail!("read history contains too many entries");
+    }
+    Ok(file)
 }
 
 fn history_path(project_root: &Path) -> PathBuf {
@@ -115,6 +118,7 @@ fn history_path(project_root: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
