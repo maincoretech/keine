@@ -247,20 +247,27 @@ pub struct EffectState {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EffectCue {
+    pub id: Option<String>,
     pub file: String,
     pub volume: f32,
+    pub fade_in: f32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EffectEvent {
     Play(EffectCue),
     Stop,
+    StopOneShot { id: String, fade_out: f32 },
+    StartLoop { id: String, fade_in: f32 },
+    StopLoop { id: String, fade_out: f32 },
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct VocalCue {
     pub file: Option<String>,
     pub volume: f32,
+    pub fade_in: f32,
+    pub fade_out: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

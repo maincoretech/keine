@@ -11,7 +11,7 @@ use std::time::Duration;
 use bevy::asset::{AssetApp, AssetLoader, LoadContext, io::AssetSourceId, io::Reader};
 #[cfg(feature = "audio-opus")]
 use bevy::audio::{AddAudioSource, Decodable};
-use bevy::audio::{AudioPlayer, AudioSource};
+use bevy::audio::{AudioPlayer, AudioSource, PlaybackMode, PlaybackSettings};
 use bevy::ecs::system::EntityCommands;
 use bevy::prelude::*;
 #[cfg(feature = "audio-opus")]
@@ -46,6 +46,14 @@ use symphonia_adapter_libopus::OpusDecoder;
 pub(crate) struct OpusAudio {
     source: OpusSource,
     duration: Option<Duration>,
+}
+
+/// Ogg Opus source that rewinds its demuxer at EOF instead of asking Rodio to
+/// retain the first decoded pass in `Buffered`.
+#[derive(Asset, Clone, Debug, TypePath)]
+#[cfg(feature = "audio-opus")]
+struct LoopingOpusAudio {
+    source: OpusSource,
 }
 
 #[derive(Clone, Debug)]
@@ -168,8 +176,14 @@ impl AssetLoader for OpusAudioLoader {
             }
             OpusSource::Memory(bytes.into())
         };
-        let stream = OpusStream::new(source.open()?)
+        let stream = OpusStream::new(source.open()?, false)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
+        load_context.add_labeled_asset(
+            "looping".to_owned(),
+            LoopingOpusAudio {
+                source: source.clone(),
+            },
+        );
         Ok(OpusAudio {
             duration: stream.total_duration(),
             source,
@@ -201,7 +215,8 @@ impl Plugin for OpusAudioPlugin {
         app.register_asset_loader(OpusAudioLoader {
             mounts: self.mounts.clone(),
         })
-        .add_audio_source::<OpusAudio>();
+        .add_audio_source::<OpusAudio>()
+        .add_audio_source::<LoopingOpusAudio>();
     }
 }
 
@@ -213,11 +228,29 @@ impl Decodable for OpusAudio {
         self.source
             .open()
             .and_then(|source| {
-                OpusStream::new(source)
+                OpusStream::new(source, false)
                     .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
             })
             .unwrap_or_else(|error| {
                 log::error!("failed to decode Ogg Opus asset: {error}");
+                OpusStream::failed()
+            })
+    }
+}
+
+#[cfg(feature = "audio-opus")]
+impl Decodable for LoopingOpusAudio {
+    type Decoder = OpusStream;
+
+    fn decoder(&self) -> Self::Decoder {
+        self.source
+            .open()
+            .and_then(|source| {
+                OpusStream::new(source, true)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
+            })
+            .unwrap_or_else(|error| {
+                log::error!("failed to decode looping Ogg Opus asset: {error}");
                 OpusStream::failed()
             })
     }
@@ -230,17 +263,29 @@ pub(crate) fn insert_player(
     entity: &mut EntityCommands<'_>,
     asset_server: &AssetServer,
     path: String,
+    mut settings: PlaybackSettings,
 ) {
     if is_opus(&path) {
         #[cfg(feature = "audio-opus")]
         {
-            entity.insert(AudioPlayer::<OpusAudio>(asset_server.load(path)));
+            if matches!(settings.mode, PlaybackMode::Loop) {
+                settings.mode = PlaybackMode::Once;
+                entity.insert(AudioPlayer::<LoopingOpusAudio>(
+                    asset_server.load(format!("{path}#looping")),
+                ));
+            } else {
+                entity.insert(AudioPlayer::<OpusAudio>(asset_server.load(path)));
+            }
+            entity.insert(settings);
             return;
         }
         #[cfg(not(feature = "audio-opus"))]
         log::error!("Opus asset `{path}` requires the `audio-opus` feature");
     }
-    entity.insert(AudioPlayer::new(asset_server.load::<AudioSource>(path)));
+    entity.insert((
+        AudioPlayer::new(asset_server.load::<AudioSource>(path)),
+        settings,
+    ));
 }
 
 pub(crate) fn load_untyped(asset_server: &AssetServer, path: String) -> UntypedHandle {
@@ -270,11 +315,13 @@ pub(crate) struct OpusStream {
     ended: bool,
     duration: Option<Duration>,
     time_base: Option<TimeBase>,
+    looping: bool,
+    decoded_since_rewind: bool,
 }
 
 #[cfg(feature = "audio-opus")]
 impl OpusStream {
-    fn new(source: Box<dyn MediaSource>) -> Result<Self, SymphoniaError> {
+    fn new(source: Box<dyn MediaSource>, looping: bool) -> Result<Self, SymphoniaError> {
         let stream = MediaSourceStream::new(source, Default::default());
         let mut hint = Hint::new();
         hint.with_extension("opus");
@@ -322,6 +369,8 @@ impl OpusStream {
             ended: false,
             duration,
             time_base,
+            looping,
+            decoded_since_rewind: false,
         })
     }
 
@@ -337,23 +386,41 @@ impl OpusStream {
             ended: true,
             duration: None,
             time_base: None,
+            looping: false,
+            decoded_since_rewind: false,
         }
     }
 
     fn decode_next_packet(&mut self) -> bool {
-        let (Some(format), Some(decoder)) = (&mut self.format, &mut self.decoder) else {
+        if self.format.is_none() || self.decoder.is_none() {
             self.ended = true;
             return false;
-        };
+        }
         loop {
-            let packet = match format.next_packet() {
+            let packet = match self
+                .format
+                .as_mut()
+                .expect("format checked above")
+                .next_packet()
+            {
                 Ok(Some(packet)) => packet,
                 Ok(None) => {
+                    if self.looping && self.decoded_since_rewind {
+                        if let Err(error) = self.rewind() {
+                            log::warn!("Ogg Opus loop rewind failed: {error}");
+                            self.ended = true;
+                            return false;
+                        }
+                        continue;
+                    }
                     self.ended = true;
                     return false;
                 }
                 Err(SymphoniaError::ResetRequired) => {
-                    decoder.reset();
+                    self.decoder
+                        .as_mut()
+                        .expect("decoder checked above")
+                        .reset();
                     continue;
                 }
                 Err(error) => {
@@ -367,7 +434,12 @@ impl OpusStream {
             if packet.track_id != self.track_id {
                 continue;
             }
-            match decoder.decode(&packet) {
+            match self
+                .decoder
+                .as_mut()
+                .expect("decoder checked above")
+                .decode(&packet)
+            {
                 Ok(decoded) => {
                     self.channels = ChannelCount::new(decoded.spec().channels().count() as u16)
                         .unwrap_or(ChannelCount::MIN);
@@ -377,6 +449,7 @@ impl OpusStream {
                     decoded.copy_to_slice_interleaved(&mut self.samples);
                     self.position = 0;
                     if !self.samples.is_empty() {
+                        self.decoded_since_rewind = true;
                         return true;
                     }
                 }
@@ -388,6 +461,28 @@ impl OpusStream {
                 }
             }
         }
+    }
+
+    fn rewind(&mut self) -> Result<(), SymphoniaError> {
+        let format = self
+            .format
+            .as_mut()
+            .ok_or(SymphoniaError::Unsupported("opus: missing format reader"))?;
+        format.seek(
+            SeekMode::Accurate,
+            SeekTo::Time {
+                time: SymphoniaTime::ZERO,
+                track_id: Some(self.track_id),
+            },
+        )?;
+        if let Some(decoder) = self.decoder.as_mut() {
+            decoder.reset();
+        }
+        self.samples.clear();
+        self.position = 0;
+        self.ended = false;
+        self.decoded_since_rewind = false;
+        Ok(())
     }
 }
 
@@ -428,7 +523,7 @@ impl Source for OpusStream {
     }
 
     fn total_duration(&self) -> Option<Duration> {
-        self.duration
+        (!self.looping).then_some(self.duration).flatten()
     }
 
     fn try_seek(&mut self, position: Duration) -> Result<(), rodio::source::SeekError> {
@@ -465,6 +560,7 @@ impl Source for OpusStream {
         self.samples.clear();
         self.position = 0;
         self.ended = false;
+        self.decoded_since_rewind = false;
 
         // The demuxer seeks to the nearest packet before the target. Decode
         // and discard that short remainder so dragging lands on the requested
@@ -511,7 +607,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn opus_stream(bytes: Arc<[u8]>) -> Result<OpusStream, SymphoniaError> {
-        OpusStream::new(Box::new(Cursor::new(bytes)))
+        OpusStream::new(Box::new(Cursor::new(bytes)), false)
     }
 
     #[test]
@@ -577,6 +673,22 @@ mod tests {
         assert!(actual.iter().any(|sample| sample.abs() > f32::EPSILON));
     }
 
+    #[test]
+    fn looping_opus_stream_rewinds_without_buffering_a_decoded_pass() {
+        let bytes: Arc<[u8]> = include_bytes!("../assets/audio/click.opus")
+            .as_slice()
+            .into();
+        let one_pass = opus_stream(bytes.clone())
+            .expect("test Opus asset should open")
+            .count();
+        let mut looping = OpusStream::new(Box::new(Cursor::new(bytes)), true)
+            .expect("looping test Opus asset should open");
+        let samples = looping.by_ref().take(one_pass + 2_400).count();
+
+        assert_eq!(samples, one_pass + 2_400);
+        assert_eq!(looping.total_duration(), None);
+    }
+
     struct CountingSource {
         cursor: Cursor<Vec<u8>>,
         read: Arc<AtomicUsize>,
@@ -623,7 +735,8 @@ mod tests {
             cursor: Cursor::new(bytes),
             read: read.clone(),
         };
-        let mut stream = OpusStream::new(Box::new(source)).expect("test Opus asset should open");
+        let mut stream =
+            OpusStream::new(Box::new(source), false).expect("test Opus asset should open");
         assert_eq!(stream.by_ref().take(4_800).count(), 4_800);
         let bytes_read = read.load(Ordering::Relaxed);
         eprintln!("large Opus startup read: {bytes_read} / {total_len} bytes");

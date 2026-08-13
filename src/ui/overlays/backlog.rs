@@ -1,4 +1,3 @@
-use bevy::audio::{PlaybackMode, Volume};
 use bevy::camera::visibility::RenderLayers;
 use bevy::ecs::system::SystemParam;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
@@ -683,21 +682,14 @@ pub fn handle_backlog_action(mut context: BacklogActionContext) {
             for entity in &context.vocals {
                 context.commands.entity(entity).despawn();
             }
-            let mut entity = context.commands.spawn((
-                Name::new(format!("backlog_vocal::{dialogue:?}")),
-                VocalPlayer,
-                PlaybackSettings {
-                    mode: PlaybackMode::Despawn,
-                    volume: Volume::Linear(
-                        dialogue.1 * context.settings.master_volume * context.settings.vocal_volume,
-                    ),
-                    ..default()
-                },
-            ));
-            crate::runtime::audio::insert_player(
-                &mut entity,
+            crate::scene::audio::spawn_vocal(
+                &mut context.commands,
                 &context.asset_server,
-                context.config.voice_path(dialogue.0),
+                &context.config,
+                &context.settings,
+                dialogue.1,
+                dialogue.0,
+                0.0,
             );
         }
     }

@@ -1075,11 +1075,14 @@ pub(crate) fn handle_bgm(mut context: ExtraBgmContext) {
         seek.reset();
     }
     let volume = context.settings.master_volume * context.settings.bgm_volume;
-    let mut entity = context.commands.spawn((
-        ExtraBgmPlayer {
-            duration: None,
-            observed_audio: false,
-        },
+    let mut entity = context.commands.spawn(ExtraBgmPlayer {
+        duration: None,
+        observed_audio: false,
+    });
+    crate::runtime::audio::insert_player(
+        &mut entity,
+        &context.assets,
+        context.config.bgm_path(&file),
         PlaybackSettings {
             // Bevy's Loop mode wraps the source in rodio::Buffered, which is
             // intentionally not seekable. The lightweight restart above keeps
@@ -1088,11 +1091,6 @@ pub(crate) fn handle_bgm(mut context: ExtraBgmContext) {
             volume: Volume::Linear(volume),
             ..default()
         },
-    ));
-    crate::runtime::audio::insert_player(
-        &mut entity,
-        &context.assets,
-        context.config.bgm_path(&file),
     );
     context.ui.selected_bgm = Some(file);
 }

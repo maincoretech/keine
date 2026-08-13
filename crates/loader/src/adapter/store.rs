@@ -396,8 +396,10 @@ mod keine {
                 .unlocked_bgm
                 .insert("theme.opus".into(), "Theme".into());
             state.effect_queue.push(EffectEvent::Play(EffectCue {
+                id: None,
                 file: "bell.opus".into(),
                 volume: 0.4,
+                fade_in: 0.0,
             }));
 
             let decoded = KeineStore

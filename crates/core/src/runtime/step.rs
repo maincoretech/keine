@@ -649,8 +649,10 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                     (None, Some(file)) => {
                         state.effect_queue.push(crate::state::EffectEvent::Play(
                             crate::state::EffectCue {
+                                id: None,
                                 file,
                                 volume: volume.clamp(0.0, 1.0),
+                                fade_in: 0.0,
                             },
                         ));
                     }
@@ -663,6 +665,8 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                         .as_deref()
                         .map(|file| interpolate(file, &state.vars, &state.global_vars)),
                     volume: volume.clamp(0.0, 1.0),
+                    fade_in: 0.0,
+                    fade_out: 0.0,
                 });
             }
             Action::Set {
@@ -1519,6 +1523,8 @@ pub fn end_game(state: &mut State) {
     state.vocal_event = Some(crate::state::VocalCue {
         file: None,
         volume: 0.0,
+        fade_in: 0.0,
+        fade_out: 0.0,
     });
     state.vars.clear();
     state.cursor = state.program.scene_len(&state.current_scene).unwrap_or(0);
@@ -2565,6 +2571,8 @@ mod tests {
             Some(crate::state::VocalCue {
                 file: Some("line.ogg".into()),
                 volume: 0.6,
+                fade_in: 0.0,
+                fade_out: 0.0,
             })
         );
     }

@@ -137,7 +137,7 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 - [x] Replay — 控制栏当前语音重播与 Backlog 任意语音重播
 - [x] 主音量/BGM/vocal/SE 分总线实时更新；淡入生命周期保持事件驱动调度活跃
 - [x] 推荐 Ogg Opus 发行格式：BGM/vocal/SE/UI 共用加载入口和增量 Opus 解码器，同时兼容 WAV/MP3/Vorbis/FLAC
-- [x] WebGAL K UI 提示音：hover/click/switch 无损 remux 为内嵌 Opus，单通道替换播放并服从 UI 音量总线
+- [x] WebGAL K UI 提示音：hover/click/switch 无损 remux 为内嵌 Opus，短生命周期重叠播放并服从 UI 音量总线
 
 验收入口与逐步预期见 [`phases.md`](acceptance/phases.md)。
 

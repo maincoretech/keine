@@ -1578,19 +1578,27 @@ fn start_stage_audio(state: &mut State, cue: &keine_core::StageAudioCue, runtime
                     volume: cue.volume.clamp(0.0, 1.0),
                 },
             );
+            state.effect_queue.push(keine_core::EffectEvent::StartLoop {
+                id: runtime_id.to_owned(),
+                fade_in: cue.fade_in.max(0.0),
+            });
         }
         StageAudioKind::Effect => {
             state
                 .effect_queue
                 .push(keine_core::EffectEvent::Play(keine_core::EffectCue {
+                    id: Some(runtime_id.to_owned()),
                     file: cue.file.clone(),
                     volume: cue.volume.clamp(0.0, 1.0),
+                    fade_in: cue.fade_in.max(0.0),
                 }));
         }
         StageAudioKind::Vocal => {
             state.vocal_event = Some(keine_core::VocalCue {
                 file: (!cue.file.is_empty()).then(|| cue.file.clone()),
                 volume: cue.volume.clamp(0.0, 1.0),
+                fade_in: cue.fade_in.max(0.0),
+                fade_out: 0.0,
             });
         }
     }
@@ -1609,12 +1617,25 @@ fn stop_stage_audio(state: &mut State, cue: &keine_core::StageAudioCue, runtime_
         }
         StageAudioKind::Effect if cue.looped => {
             state.looping_effects.remove(runtime_id);
+            state.effect_queue.push(keine_core::EffectEvent::StopLoop {
+                id: runtime_id.to_owned(),
+                fade_out: cue.fade_out.max(0.0),
+            });
         }
-        StageAudioKind::Effect => {}
+        StageAudioKind::Effect => {
+            state
+                .effect_queue
+                .push(keine_core::EffectEvent::StopOneShot {
+                    id: runtime_id.to_owned(),
+                    fade_out: cue.fade_out.max(0.0),
+                });
+        }
         StageAudioKind::Vocal => {
             state.vocal_event = Some(keine_core::VocalCue {
                 file: None,
                 volume: 0.0,
+                fade_in: 0.0,
+                fade_out: cue.fade_out.max(0.0),
             });
         }
     }
@@ -2322,8 +2343,8 @@ mod tests {
                     volume: 0.35,
                     looped: true,
                     duration: 0.3,
-                    fade_in: 0.0,
-                    fade_out: 0.0,
+                    fade_in: 0.1,
+                    fade_out: 0.2,
                 }),
             }],
             repeat: 0,
@@ -2338,12 +2359,22 @@ mod tests {
             state.looping_effects["audio-fixture:audio:rain"].file,
             "audio/rain.opus"
         );
+        assert!(state.effect_queue.iter().any(|event| matches!(
+            event,
+            keine_core::EffectEvent::StartLoop { id, fade_in }
+                if id == "audio-fixture:audio:rain" && (*fade_in - 0.1).abs() < f32::EPSILON
+        )));
         advance_stage_animation(&mut state, 0.25);
         assert!(
             !state
                 .looping_effects
                 .contains_key("audio-fixture:audio:rain")
         );
+        assert!(state.effect_queue.iter().any(|event| matches!(
+            event,
+            keine_core::EffectEvent::StopLoop { id, fade_out }
+                if id == "audio-fixture:audio:rain" && (*fade_out - 0.2).abs() < f32::EPSILON
+        )));
     }
 
     #[test]

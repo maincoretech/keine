@@ -42,7 +42,7 @@ impl Plugin for ScenePlugin {
                     audio::sync_effects,
                     audio::sync_vocal,
                     audio::replay_vocal,
-                    audio::animate_bgm,
+                    audio::animate_audio,
                     audio::apply_bus_volumes,
                 )
                     .chain(),

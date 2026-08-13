@@ -142,7 +142,9 @@ cargo validate projects/test-project
 ```
 
 Video builds require the relevant native media libraries. Ogg Opus is the
-recommended distributed audio format.
+recommended distributed audio format: project Opus assets use a reopenable,
+seekable incremental decoder, including bounded-memory loops. WAV, MP3, Ogg
+Vorbis, and FLAC remain supported through Bevy's memory-backed `AudioSource`.
 
 ## Documentation
 

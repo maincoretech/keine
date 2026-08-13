@@ -478,3 +478,41 @@ regular `cargo bench --workspace` suite remains the image-preview performance
 guard and is run for this performance-changing commit; it is not an audio
 throughput benchmark. This result proves bounded startup I/O, not cold-storage
 latency or simultaneous multi-stream throughput.
+
+### 2026-08-13 bounded Opus loops
+
+Bevy's `PlaybackMode::Loop` delegates to Rodio's `repeat_infinite`. Rodio
+documents that this stores decoded samples and uses memory proportional to the
+sound length: <https://docs.rs/rodio/0.22.2/rodio/source/trait.Source.html#method.repeat_infinite>.
+That defeated the bounded project-Opus read path after the first pass even
+though the compressed source itself remained streamed.
+
+Project Opus loops now use a labeled Bevy sub-asset whose decoder seeks its
+reopenable `ContentFile` to zero at EOF. Bevy receives `PlaybackMode::Once`, so
+Rodio never wraps this source in `Buffered`. Non-looping playback and the Extra
+BGM seek path retain their existing duration and seek behavior. The regression
+test decodes one complete embedded cue plus another 2,400 samples and therefore
+crosses EOF without constructing a decoded-pass cache.
+
+At 48 kHz stereo `f32`, the removed cache grew by 384,000 bytes per second, or
+21.97 MiB per minute (109.86 MiB for a five-minute BGM). The replacement keeps
+only the current decoded Opus packet in `OpusStream.samples`; an Opus packet is
+limited to 120 ms by RFC 6716, so stereo decoded packet storage is at most
+46,080 bytes. Symphonia's bounded read-ahead and Hakutaku's current/previous
+256 KiB Streaming blocks remain separate bounded reader state. This is a
+structural allocation bound rather than an RSS estimate.
+
+The complete `cargo bench --workspace` suite passed on both the pre-change
+`HEAD` clone and the modified tree. Because the first full runs were affected by
+compile heat and ordering, the core runtime guard was immediately rerun in both
+trees with `cargo bench -p keine-core --bench script_runtime`:
+
+| Unrelated runtime guard | Before median | After median | Change |
+| --- | ---: | ---: | ---: |
+| 100,000 comment steps | 1.9498 ms | 1.9260 ms | -1.2% |
+| 1,000 mixed dialogue turns | 3.1857 ms | 3.1408 ms | -1.4% |
+
+These small changes are within the suite's noise threshold and are recorded
+only as a regression guard; they are not claimed as benefits of the audio
+change. Reproduce the loop invariant with `cargo test
+looping_opus_stream_rewinds_without_buffering_a_decoded_pass`.
