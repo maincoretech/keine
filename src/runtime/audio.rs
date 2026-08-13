@@ -1,17 +1,21 @@
 #[cfg(feature = "audio-opus")]
-use std::io::{self, Cursor};
+use std::io::{self, Cursor, Read, Seek, SeekFrom};
 #[cfg(feature = "audio-opus")]
-use std::sync::Arc;
+use std::path::PathBuf;
+#[cfg(feature = "audio-opus")]
+use std::sync::{Arc, Mutex};
 #[cfg(feature = "audio-opus")]
 use std::time::Duration;
 
 #[cfg(feature = "audio-opus")]
-use bevy::asset::{AssetApp, AssetLoader, LoadContext, io::Reader};
+use bevy::asset::{AssetApp, AssetLoader, LoadContext, io::AssetSourceId, io::Reader};
 #[cfg(feature = "audio-opus")]
 use bevy::audio::{AddAudioSource, Decodable};
 use bevy::audio::{AudioPlayer, AudioSource};
 use bevy::ecs::system::EntityCommands;
 use bevy::prelude::*;
+#[cfg(feature = "audio-opus")]
+use keine_loader::{ContentFile, ContentMount};
 #[cfg(feature = "audio-opus")]
 use rodio::{ChannelCount, SampleRate, Source};
 #[cfg(feature = "audio-opus")]
@@ -27,7 +31,7 @@ use symphonia::core::formats::{
     FormatOptions, FormatReader, SeekMode, SeekTo, TrackType, probe::Hint,
 };
 #[cfg(feature = "audio-opus")]
-use symphonia::core::io::MediaSourceStream;
+use symphonia::core::io::{MediaSource, MediaSourceStream};
 #[cfg(feature = "audio-opus")]
 use symphonia::core::meta::MetadataOptions;
 #[cfg(feature = "audio-opus")]
@@ -35,13 +39,92 @@ use symphonia::core::units::{Time as SymphoniaTime, TimeBase, Timestamp};
 #[cfg(feature = "audio-opus")]
 use symphonia_adapter_libopus::OpusDecoder;
 
-/// Compressed Ogg Opus data. Decoding remains incremental during playback so
-/// long voice and BGM assets never become full-size PCM allocations.
+/// Reopenable Ogg Opus data. Project assets retain only their logical source;
+/// each playback decoder reads and seeks the underlying file incrementally.
 #[derive(Asset, Clone, Debug, TypePath)]
 #[cfg(feature = "audio-opus")]
 pub(crate) struct OpusAudio {
-    bytes: Arc<[u8]>,
+    source: OpusSource,
     duration: Option<Duration>,
+}
+
+#[derive(Clone, Debug)]
+#[cfg(feature = "audio-opus")]
+enum OpusSource {
+    Mounted {
+        mounts: Arc<[ContentMount]>,
+        path: PathBuf,
+    },
+    Memory(Arc<[u8]>),
+}
+
+#[cfg(feature = "audio-opus")]
+impl OpusSource {
+    fn open(&self) -> io::Result<Box<dyn MediaSource>> {
+        match self {
+            Self::Mounted { mounts, path } => {
+                let file = mounts
+                    .iter()
+                    .rev()
+                    .find(|mount| mount.contains_file(path))
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::NotFound, path.display().to_string())
+                    })?
+                    .open_file(path)
+                    .map_err(|error| io::Error::other(error.to_string()))?;
+                Ok(Box::new(StreamingAudioFile::new(file)?))
+            }
+            Self::Memory(bytes) => Ok(Box::new(Cursor::new(bytes.clone()))),
+        }
+    }
+}
+
+#[cfg(feature = "audio-opus")]
+struct StreamingAudioFile {
+    file: Mutex<ContentFile>,
+    len: u64,
+}
+
+#[cfg(feature = "audio-opus")]
+impl StreamingAudioFile {
+    fn new(file: ContentFile) -> io::Result<Self> {
+        let len = file.len()?;
+        Ok(Self {
+            file: Mutex::new(file),
+            len,
+        })
+    }
+
+    fn file(&self) -> std::sync::MutexGuard<'_, ContentFile> {
+        self.file
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+#[cfg(feature = "audio-opus")]
+impl Read for StreamingAudioFile {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.file().read(buffer)
+    }
+}
+
+#[cfg(feature = "audio-opus")]
+impl Seek for StreamingAudioFile {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        self.file().seek(position)
+    }
+}
+
+#[cfg(feature = "audio-opus")]
+impl MediaSource for StreamingAudioFile {
+    fn is_seekable(&self) -> bool {
+        true
+    }
+
+    fn byte_len(&self) -> Option<u64> {
+        Some(self.len)
+    }
 }
 
 #[cfg(feature = "audio-opus")]
@@ -51,9 +134,11 @@ impl OpusAudio {
     }
 }
 
-#[derive(Default, TypePath)]
+#[derive(TypePath)]
 #[cfg(feature = "audio-opus")]
-struct OpusAudioLoader;
+struct OpusAudioLoader {
+    mounts: Arc<[ContentMount]>,
+}
 
 #[cfg(feature = "audio-opus")]
 impl AssetLoader for OpusAudioLoader {
@@ -65,20 +150,29 @@ impl AssetLoader for OpusAudioLoader {
         &self,
         reader: &mut dyn Reader,
         _settings: &Self::Settings,
-        _load_context: &mut LoadContext<'_>,
+        load_context: &mut LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
-        let mut bytes = Vec::new();
-        reader.read_to_end(&mut bytes).await?;
-        if bytes.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "empty Opus asset",
-            ));
-        }
-        let bytes: Arc<[u8]> = bytes.into();
+        let source = if matches!(load_context.path().source(), AssetSourceId::Default) {
+            OpusSource::Mounted {
+                mounts: self.mounts.clone(),
+                path: load_context.path().path().to_owned(),
+            }
+        } else {
+            let mut bytes = Vec::new();
+            reader.read_to_end(&mut bytes).await?;
+            if bytes.is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "empty Opus asset",
+                ));
+            }
+            OpusSource::Memory(bytes.into())
+        };
+        let stream = OpusStream::new(source.open()?)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
         Ok(OpusAudio {
-            duration: probe_opus_duration(bytes.clone()),
-            bytes,
+            duration: stream.total_duration(),
+            source,
         })
     }
 
@@ -88,13 +182,26 @@ impl AssetLoader for OpusAudioLoader {
 }
 
 #[cfg(feature = "audio-opus")]
-pub(crate) struct OpusAudioPlugin;
+pub(crate) struct OpusAudioPlugin {
+    mounts: Arc<[ContentMount]>,
+}
+
+#[cfg(feature = "audio-opus")]
+impl OpusAudioPlugin {
+    pub(crate) fn new(mounts: Vec<ContentMount>) -> Self {
+        Self {
+            mounts: mounts.into(),
+        }
+    }
+}
 
 #[cfg(feature = "audio-opus")]
 impl Plugin for OpusAudioPlugin {
     fn build(&self, app: &mut App) {
-        app.init_asset_loader::<OpusAudioLoader>()
-            .add_audio_source::<OpusAudio>();
+        app.register_asset_loader(OpusAudioLoader {
+            mounts: self.mounts.clone(),
+        })
+        .add_audio_source::<OpusAudio>();
     }
 }
 
@@ -103,10 +210,16 @@ impl Decodable for OpusAudio {
     type Decoder = OpusStream;
 
     fn decoder(&self) -> Self::Decoder {
-        OpusStream::new(self.bytes.clone()).unwrap_or_else(|error| {
-            log::error!("failed to decode Ogg Opus asset: {error}");
-            OpusStream::failed()
-        })
+        self.source
+            .open()
+            .and_then(|source| {
+                OpusStream::new(source)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
+            })
+            .unwrap_or_else(|error| {
+                log::error!("failed to decode Ogg Opus asset: {error}");
+                OpusStream::failed()
+            })
     }
 }
 
@@ -161,8 +274,7 @@ pub(crate) struct OpusStream {
 
 #[cfg(feature = "audio-opus")]
 impl OpusStream {
-    fn new(bytes: Arc<[u8]>) -> Result<Self, SymphoniaError> {
-        let source = Box::new(Cursor::new(bytes));
+    fn new(source: Box<dyn MediaSource>) -> Result<Self, SymphoniaError> {
         let stream = MediaSourceStream::new(source, Default::default());
         let mut hint = Hint::new();
         hint.with_extension("opus");
@@ -384,23 +496,6 @@ fn opus_seek_error(error: SymphoniaError) -> rodio::source::SeekError {
 }
 
 #[cfg(feature = "audio-opus")]
-fn probe_opus_duration(bytes: Arc<[u8]>) -> Option<Duration> {
-    let source = Box::new(Cursor::new(bytes));
-    let stream = MediaSourceStream::new(source, Default::default());
-    let mut hint = Hint::new();
-    hint.with_extension("opus");
-    let format = symphonia::default::get_probe()
-        .probe(
-            &hint,
-            stream,
-            FormatOptions::default(),
-            MetadataOptions::default(),
-        )
-        .ok()?;
-    track_duration(format.default_track(TrackType::Audio)?)
-}
-
-#[cfg(feature = "audio-opus")]
 fn track_duration(track: &symphonia::core::formats::Track) -> Option<Duration> {
     let time_base = track.time_base?;
     let ticks = i64::try_from(track.duration?.get()).ok()?;
@@ -413,13 +508,18 @@ fn track_duration(track: &symphonia::core::formats::Track) -> Option<Duration> {
 #[cfg(all(test, feature = "audio-opus"))]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn opus_stream(bytes: Arc<[u8]>) -> Result<OpusStream, SymphoniaError> {
+        OpusStream::new(Box::new(Cursor::new(bytes)))
+    }
 
     #[test]
     fn decodes_project_ogg_opus_incrementally() {
         let bytes: Arc<[u8]> = include_bytes!("../assets/audio/click.opus")
             .as_slice()
             .into();
-        let mut stream = OpusStream::new(bytes).expect("test Opus asset should open");
+        let mut stream = opus_stream(bytes).expect("test Opus asset should open");
         let duration = stream
             .total_duration()
             .expect("seekable Ogg Opus should expose its duration");
@@ -441,7 +541,7 @@ mod tests {
         ];
         for (cue, minimum_seconds) in cues {
             let bytes: Arc<[u8]> = cue.into();
-            let mut stream = OpusStream::new(bytes).expect("UI cue should open");
+            let mut stream = opus_stream(bytes).expect("UI cue should open");
             assert_eq!(stream.channels().get(), 2);
             assert_eq!(stream.sample_rate().get(), 48_000);
             let channels = stream.channels().get() as usize;
@@ -458,11 +558,11 @@ mod tests {
         let bytes: Arc<[u8]> = include_bytes!("../assets/audio/click.opus")
             .as_slice()
             .into();
-        let mut fresh = OpusStream::new(bytes.clone()).expect("test Opus asset should open");
+        let mut fresh = opus_stream(bytes.clone()).expect("test Opus asset should open");
         let duration = fresh.total_duration().expect("test Opus has a duration");
         let full_sample_count = fresh.by_ref().count();
 
-        let mut stream = OpusStream::new(bytes).expect("test Opus asset should open");
+        let mut stream = opus_stream(bytes).expect("test Opus asset should open");
         stream
             .try_seek(duration / 2)
             .expect("forward seek should be supported");
@@ -475,5 +575,61 @@ mod tests {
         let actual = stream.by_ref().take(2_400).collect::<Vec<_>>();
         assert_eq!(actual.len(), 2_400);
         assert!(actual.iter().any(|sample| sample.abs() > f32::EPSILON));
+    }
+
+    struct CountingSource {
+        cursor: Cursor<Vec<u8>>,
+        read: Arc<AtomicUsize>,
+    }
+
+    impl Read for CountingSource {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            let count = self.cursor.read(buffer)?;
+            self.read.fetch_add(count, Ordering::Relaxed);
+            Ok(count)
+        }
+    }
+
+    impl Seek for CountingSource {
+        fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+            self.cursor.seek(position)
+        }
+    }
+
+    impl MediaSource for CountingSource {
+        fn is_seekable(&self) -> bool {
+            true
+        }
+
+        fn byte_len(&self) -> Option<u64> {
+            Some(self.cursor.get_ref().len() as u64)
+        }
+    }
+
+    #[test]
+    fn initial_opus_playback_does_not_read_the_complete_asset() {
+        const MINIMUM_LEN: usize = 16 * 1024 * 1024;
+        let cue = include_bytes!("../assets/audio/click.opus");
+        let mut bytes = Vec::with_capacity(MINIMUM_LEN + cue.len());
+        while bytes.len() < MINIMUM_LEN {
+            // Ogg explicitly permits chained logical bitstreams. Repeating a
+            // complete valid stream produces a large valid container without
+            // checking a generated binary fixture into the repository.
+            bytes.extend_from_slice(cue);
+        }
+        let total_len = bytes.len();
+        let read = Arc::new(AtomicUsize::new(0));
+        let source = CountingSource {
+            cursor: Cursor::new(bytes),
+            read: read.clone(),
+        };
+        let mut stream = OpusStream::new(Box::new(source)).expect("test Opus asset should open");
+        assert_eq!(stream.by_ref().take(4_800).count(), 4_800);
+        let bytes_read = read.load(Ordering::Relaxed);
+        eprintln!("large Opus startup read: {bytes_read} / {total_len} bytes");
+        assert!(
+            bytes_read < 512 * 1024,
+            "startup read the complete padded asset"
+        );
     }
 }

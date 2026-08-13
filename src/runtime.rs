@@ -75,8 +75,6 @@ impl Plugin for GamePlugin {
             )
                 .chain(),
         );
-        #[cfg(feature = "audio-opus")]
-        app.add_plugins(audio::OpusAudioPlugin);
         app.add_plugins((RuntimePlugin, ScenePlugin, StoragePlugin, GameUiPlugin));
     }
 }

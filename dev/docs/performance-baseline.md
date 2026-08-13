@@ -450,3 +450,31 @@ rejected because its changes stayed at noise level while retaining more state.
 not yet call it speculatively. Existing Bevy asset loading already runs on its
 task system, while video decoders maintain their own read cadence; adding a
 second predictor without a cold-read trace could duplicate authentication work.
+
+### 2026-08-13 end-to-end Opus streaming
+
+The project Opus loader previously called `read_to_end` before constructing the
+incremental decoder. Playback avoided a full PCM allocation, but a large
+compressed source was still copied completely into an `Arc<[u8]>`. The loader
+now retains a reopenable logical source and gives each playback a seekable
+`ContentFile`; filesystem and Hakutaku assets therefore share the same bounded
+decoder path. Embedded UI cues remain memory-backed because they are small and
+have no project mount.
+
+The deterministic regression fixture chains valid Ogg Opus logical streams to
+slightly over 16 MiB and decodes the first 100 ms (4,800 samples). The former
+loader necessarily read the complete fixture before playback. The new probe
+reads only the container/packet data demanded by Symphonia:
+
+| Startup operation | Before | After |
+| --- | ---: | ---: |
+| Compressed bytes read before first 100 ms | 16,787,192 bytes | 96,027 bytes |
+| Persistent compressed allocation | complete asset | logical path + mounted reader state |
+| Decoder output | incremental PCM | incremental PCM |
+
+Reproduce the byte-bound assertion with `cargo test --release
+initial_opus_playback_does_not_read_the_complete_asset -- --nocapture`. The
+regular `cargo bench --workspace` suite remains the image-preview performance
+guard and is run for this performance-changing commit; it is not an audio
+throughput benchmark. This result proves bounded startup I/O, not cold-storage
+latency or simultaneous multi-stream throughput.

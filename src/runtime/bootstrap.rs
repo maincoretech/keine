@@ -259,7 +259,7 @@ fn build_opened_app(
     let mut app = App::new();
     app.register_asset_source(
         AssetSourceId::Default,
-        crate::runtime::asset_reader::overlay_source(asset_mounts),
+        crate::runtime::asset_reader::overlay_source(asset_mounts.clone()),
     );
     let mut initial_resolution = WindowResolution::new(DESIGN_WIDTH as u32, DESIGN_HEIGHT as u32);
     // Keep the native runtime on the engine's 1920x1080 design grid even on
@@ -289,15 +289,19 @@ fn build_opened_app(
             })
             .set(ImagePlugin::default())
             .set(super::platform::log_plugin()),
-    )
-    .add_plugins((webp, GamePlugin, BlurPlugin))
-    .insert_resource(ProjectRoot(project_root))
-    .insert_resource(ContentProjectResource(content))
-    .insert_resource(ScriptLanguages(languages))
-    .insert_resource(StoreCodec(store))
-    .insert_resource(GameConfigResource(config))
-    .add_systems(PreStartup, bootstrap_project)
-    .add_systems(PostStartup, set_primary_window_icon);
+    );
+    #[cfg(feature = "audio-opus")]
+    app.add_plugins(crate::runtime::audio::OpusAudioPlugin::new(
+        asset_mounts.clone(),
+    ));
+    app.add_plugins((webp, GamePlugin, BlurPlugin))
+        .insert_resource(ProjectRoot(project_root))
+        .insert_resource(ContentProjectResource(content))
+        .insert_resource(ScriptLanguages(languages))
+        .insert_resource(StoreCodec(store))
+        .insert_resource(GameConfigResource(config))
+        .add_systems(PreStartup, bootstrap_project)
+        .add_systems(PostStartup, set_primary_window_icon);
     if options.editor_sync {
         app.init_resource::<EditorSyncSession>();
     }
