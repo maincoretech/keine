@@ -1663,6 +1663,7 @@ fn parse_color(value: &str) -> [f32; 4] {
     let hex = value.trim().trim_start_matches('#');
     let parse = |range| u8::from_str_radix(&hex[range], 16).ok();
     if hex.len() == 6
+        && hex.is_ascii()
         && let (Some(r), Some(g), Some(b)) = (parse(0..2), parse(2..4), parse(4..6))
     {
         return [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0];
@@ -3351,6 +3352,15 @@ mod tests {
         assert_eq!(
             studio_dialogue_markup(&content),
             "[前](color=#ffffff;bold)[漢](ruby=かん)[wait=1000]\n[後](background=#315735)"
+        );
+    }
+
+    #[test]
+    fn color_parser_rejects_non_ascii_six_byte_input_without_panicking() {
+        assert_eq!(parse_color("aééa"), [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(
+            parse_color("#315735"),
+            [49.0 / 255.0, 87.0 / 255.0, 53.0 / 255.0, 1.0]
         );
     }
 
