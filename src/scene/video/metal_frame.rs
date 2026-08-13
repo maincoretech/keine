@@ -1,6 +1,7 @@
 //! Core Video to Bevy GPU upload without a CPU pixel copy.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 use std::ptr;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -64,11 +65,54 @@ impl NativeVideoFrame {
     }
 }
 
+struct LatestFrameQueue<K, V> {
+    pending: HashMap<K, V>,
+    discarded: HashSet<K>,
+}
+
+impl<K, V> Default for LatestFrameQueue<K, V> {
+    fn default() -> Self {
+        Self {
+            pending: HashMap::new(),
+            discarded: HashSet::new(),
+        }
+    }
+}
+
+impl<K: Copy + Eq + Hash, V> LatestFrameQueue<K, V> {
+    fn publish(&mut self, key: K, value: V) {
+        self.discarded.remove(&key);
+        self.pending.insert(key, value);
+    }
+
+    fn discard(&mut self, key: K) {
+        self.pending.remove(&key);
+        self.discarded.insert(key);
+    }
+
+    fn drain(&mut self) -> HashMap<K, V> {
+        // Tombstones older than this render extraction have no frame in
+        // flight. A discard racing after this point remains for `defer`.
+        self.discarded.clear();
+        std::mem::take(&mut self.pending)
+    }
+
+    fn defer(&mut self, key: K, value: V) -> bool {
+        if self.discarded.remove(&key) {
+            return false;
+        }
+        self.pending.insert(key, value);
+        true
+    }
+}
+
+type NativeFrameQueue = LatestFrameQueue<AssetId<Image>, NativeVideoFrame>;
+
 #[derive(Resource, Clone, Default)]
-pub(super) struct MetalFrameBridge(Arc<Mutex<HashMap<AssetId<Image>, NativeVideoFrame>>>);
+pub(super) struct MetalFrameBridge(Arc<Mutex<NativeFrameQueue>>);
 
 impl MetalFrameBridge {
-    fn pending(&self) -> MutexGuard<'_, HashMap<AssetId<Image>, NativeVideoFrame>> {
+    fn pending(&self) -> MutexGuard<'_, NativeFrameQueue> {
         self.0.lock().unwrap_or_else(|poisoned| {
             log::warn!("recovering poisoned native video frame queue");
             poisoned.into_inner()
@@ -76,15 +120,19 @@ impl MetalFrameBridge {
     }
 
     fn publish(&self, image: AssetId<Image>, frame: NativeVideoFrame) {
-        self.pending().insert(image, frame);
+        self.pending().publish(image, frame);
     }
 
     pub(super) fn discard(&self, image: AssetId<Image>) {
-        self.pending().remove(&image);
+        self.pending().discard(image);
     }
 
     fn drain(&self) -> HashMap<AssetId<Image>, NativeVideoFrame> {
-        std::mem::take(&mut *self.pending())
+        self.pending().drain()
+    }
+
+    fn defer(&self, image: AssetId<Image>, frame: NativeVideoFrame) {
+        let _ = self.pending().defer(image, frame);
     }
 }
 
@@ -210,7 +258,7 @@ fn upload_native_frames(
     // Asset extraction can trail main-world publication by one render pass.
     // Retain only the newest frame for any destination that is not ready yet.
     for (image_id, frame) in deferred {
-        bridge.publish(image_id, frame);
+        bridge.defer(image_id, frame);
     }
     if imported.is_empty() {
         return;
@@ -381,6 +429,30 @@ pub(super) fn validate_frame_import(frame: NativeVideoFrame) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discard_racing_with_a_drained_frame_prevents_requeue() {
+        let mut queue = LatestFrameQueue::default();
+        queue.publish(7, "frame");
+        let drained = queue.drain();
+        let frame = drained.into_values().next().unwrap();
+
+        queue.discard(7);
+
+        assert!(!queue.defer(7, frame));
+        assert!(queue.pending.is_empty());
+        assert!(queue.discarded.is_empty());
+    }
+
+    #[test]
+    fn a_new_active_publish_clears_an_old_tombstone() {
+        let mut queue = LatestFrameQueue::default();
+        queue.discard(7);
+
+        queue.publish(7, "new-frame");
+
+        assert_eq!(queue.drain().remove(&7), Some("new-frame"));
+    }
 
     #[test]
     fn native_placeholder_has_no_cpu_pixel_allocation() {
