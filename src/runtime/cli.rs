@@ -54,7 +54,7 @@ pub(super) enum CliCommand {
     RemapAssets {
         project: PathBuf,
         rules: Vec<(String, String)>,
-        apply: bool,
+        yes: bool,
     },
     Run {
         project: PathBuf,
@@ -98,14 +98,8 @@ const COMMANDS: &[CommandHelp] = &[
     CommandHelp {
         binary_name: "package",
         cargo_name: "bundle",
-        args: "<project> [--output <dir>]",
-        summary: "Package an encrypted release build",
-    },
-    CommandHelp {
-        binary_name: "remap-assets",
-        cargo_name: "remap-assets",
-        args: "<project> <old=new>... [--apply]",
-        summary: "Safely rewrite converted audio and image references",
+        args: "<project> [--output <dir>] | --remap-assets <project> <old=new>... [-y]",
+        summary: "Package a release or safely remap asset references",
     },
     CommandHelp {
         binary_name: "dev",
@@ -163,13 +157,7 @@ pub(super) fn parse(args: &[OsString]) -> Result<CliCommand> {
             require_no_extra_args(args, 2, "keine check <project>")?;
             Ok(CliCommand::Check { project })
         }
-        Some("package") => {
-            let project = required_path(args, 1, "keine package <project>")?;
-            let output = parse_output_option(&args[2..])?
-                .unwrap_or_else(|| PathBuf::from(DEFAULT_PACKAGE_OUTPUT));
-            Ok(CliCommand::Package { project, output })
-        }
-        Some("remap-assets") => parse_asset_remap(args),
+        Some("package") => parse_package(args),
         Some("dev") => parse_development(args),
         Some("benchmark") => parse_benchmark(args),
         Some("validate" | "perf") => anyhow::bail!(
@@ -184,17 +172,30 @@ pub(super) fn parse(args: &[OsString]) -> Result<CliCommand> {
     }
 }
 
+fn parse_package(args: &[OsString]) -> Result<CliCommand> {
+    if args
+        .get(1)
+        .is_some_and(|argument| argument == "--remap-assets")
+    {
+        return parse_asset_remap(args);
+    }
+    let project = required_path(args, 1, "keine package <project>")?;
+    let output =
+        parse_output_option(&args[2..])?.unwrap_or_else(|| PathBuf::from(DEFAULT_PACKAGE_OUTPUT));
+    Ok(CliCommand::Package { project, output })
+}
+
 fn parse_asset_remap(args: &[OsString]) -> Result<CliCommand> {
-    const USAGE: &str = "keine remap-assets <project> <old=new>... [--apply]";
-    let project = required_path(args, 1, USAGE)?;
+    const USAGE: &str = "keine package --remap-assets <project> <old=new>... [-y]";
+    let project = required_path(args, 2, USAGE)?;
     let mut rules = Vec::new();
-    let mut apply = false;
-    for argument in &args[2..] {
-        if argument == "--apply" {
-            if apply {
-                anyhow::bail!("--apply may only be specified once");
+    let mut yes = false;
+    for argument in &args[3..] {
+        if argument == "-y" {
+            if yes {
+                anyhow::bail!("-y may only be specified once");
             }
-            apply = true;
+            yes = true;
             continue;
         }
         let argument = argument
@@ -211,7 +212,7 @@ fn parse_asset_remap(args: &[OsString]) -> Result<CliCommand> {
     Ok(CliCommand::RemapAssets {
         project,
         rules,
-        apply,
+        yes,
     })
 }
 

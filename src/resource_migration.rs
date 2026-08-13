@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -32,11 +32,19 @@ struct Edit {
     replacements: usize,
 }
 
+#[derive(Debug)]
+struct AssetChange {
+    old: String,
+    new: String,
+    old_bytes: u64,
+    new_bytes: u64,
+}
+
 pub(crate) fn run(
     project_path: &Path,
     loader: &LoaderRegistry,
     raw_rules: &[(String, String)],
-    apply: bool,
+    yes: bool,
 ) -> Result<()> {
     let rules = parse_rules(raw_rules)?;
     let project_path = project_path
@@ -49,8 +57,15 @@ pub(crate) fn run(
     let scenes = load_scenes_with(&content, &languages)
         .context("failed to load project scenes before migration")?;
 
-    let asset_replacements = collect_asset_replacements(&content, &rules)?;
-    let mut replacements = asset_replacements.available;
+    let AssetReplacements {
+        mut available,
+        missing: unavailable,
+        changes,
+    } = collect_asset_replacements(&content, &rules)?;
+    let mut aliases = changes
+        .keys()
+        .map(|path| (path.clone(), BTreeSet::from([path.clone()])))
+        .collect::<BTreeMap<_, _>>();
     let mut missing = BTreeSet::new();
     for scene in &scenes {
         for resource in &scene.resources {
@@ -59,15 +74,16 @@ pub(crate) fn run(
                 &config,
                 &content,
                 &rules,
-                &mut replacements,
+                &mut available,
+                &mut aliases,
                 &mut missing,
             );
         }
     }
 
     let source_files = source_files(&project_path)?;
-    let edits = plan_edits(&source_files, &replacements)?;
-    for old in asset_replacements.missing {
+    let edits = plan_edits(&source_files, &available)?;
+    for old in unavailable {
         for path in &source_files {
             if file_contains_reference(path, &old)? {
                 missing.insert(old.clone());
@@ -90,15 +106,19 @@ pub(crate) fn run(
         println!("No matching asset references found.");
         return Ok(());
     }
-    print_plan(&edits, &project_path);
-    if !apply {
-        println!("\nDry run only. Re-run with --apply after reviewing this plan.");
+    let reference_counts = reference_counts(&source_files, &available)?;
+    print_plan(&edits, &project_path, &changes, &aliases, &reference_counts);
+    if !yes && !confirm_apply()? {
+        println!("Cancelled; no files were changed.");
         return Ok(());
+    }
+    if yes {
+        println!("\nConfirmation skipped (-y).");
     }
 
     let backup_root = create_backup(&project_path, &edits)?;
     if let Err(error) = apply_edits(&edits)
-        .and_then(|()| validate_after_apply(&project_path, loader, &rules, &replacements))
+        .and_then(|()| validate_after_apply(&project_path, loader, &rules, &available))
     {
         restore_edits(&edits, &backup_root).context("migration failed and rollback also failed")?;
         return Err(error).context("migration failed; original files were restored");
@@ -155,6 +175,7 @@ fn open_project(root: &Path, loader: &LoaderRegistry) -> Result<(GameConfig, Con
 struct AssetReplacements {
     available: BTreeMap<String, String>,
     missing: BTreeSet<String>,
+    changes: BTreeMap<String, AssetChange>,
 }
 
 fn collect_asset_replacements(
@@ -174,16 +195,45 @@ fn collect_asset_replacements(
     }
     let mut available = BTreeMap::new();
     let mut missing = BTreeSet::new();
+    let mut changes = BTreeMap::new();
     for old in old_assets {
         let rule = matching_rule(Path::new(&old), rules).expect("filtered above");
         let new = with_extension(&old, &rule.to)?;
         if content.contains_asset(Path::new(&new)) {
+            let old_bytes = asset_len(content, Path::new(&old))?;
+            let new_bytes = asset_len(content, Path::new(&new))?;
+            changes.insert(
+                old.clone(),
+                AssetChange {
+                    old: old.clone(),
+                    new: new.clone(),
+                    old_bytes,
+                    new_bytes,
+                },
+            );
             available.insert(old, new);
         } else {
             missing.insert(old);
         }
     }
-    Ok(AssetReplacements { available, missing })
+    Ok(AssetReplacements {
+        available,
+        missing,
+        changes,
+    })
+}
+
+fn asset_len(content: &ContentProject, path: &Path) -> Result<u64> {
+    let mount = content
+        .asset_mounts()
+        .into_iter()
+        .rev()
+        .find(|mount| mount.contains_file(path))
+        .with_context(|| format!("asset disappeared while planning: {}", path.display()))?;
+    mount
+        .open_file(path)?
+        .len()
+        .with_context(|| format!("failed to read asset size: {}", path.display()))
 }
 
 fn filesystem_asset_paths(root: &Path) -> Result<Vec<PathBuf>> {
@@ -217,6 +267,7 @@ fn collect_resource_replacement(
     content: &ContentProject,
     rules: &[ExtensionRule],
     replacements: &mut BTreeMap<String, String>,
+    aliases: &mut BTreeMap<String, BTreeSet<String>>,
     missing: &mut BTreeSet<String>,
 ) {
     let resolved = resource.resolved_path(config);
@@ -237,6 +288,10 @@ fn collect_resource_replacement(
         && let Ok(new_reference) = with_extension(&resource.path, &rule.to)
     {
         replacements.insert(resource.path.clone(), new_reference);
+        aliases
+            .entry(resource.path.clone())
+            .or_default()
+            .insert(resolved);
     }
 }
 
@@ -446,6 +501,10 @@ fn token_boundary(source: &str, start: usize, end: usize) -> bool {
 }
 
 fn file_contains_reference(path: &Path, reference: &str) -> Result<bool> {
+    Ok(file_reference_count(path, reference)? != 0)
+}
+
+fn file_reference_count(path: &Path, reference: &str) -> Result<usize> {
     let mut source = String::new();
     File::open(path)?.read_to_string(&mut source)?;
     let replacements = BTreeMap::from([(reference.to_owned(), String::new())]);
@@ -454,19 +513,160 @@ fn file_contains_reference(path: &Path, reference: &str) -> Result<bool> {
     } else {
         replace_path_tokens(&source, &replacements).1
     };
-    Ok(count != 0)
+    Ok(count)
 }
 
-fn print_plan(edits: &[Edit], root: &Path) {
+fn reference_counts(
+    files: &[PathBuf],
+    replacements: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, usize>> {
+    let mut counts = BTreeMap::new();
+    for reference in replacements.keys() {
+        let mut count = 0;
+        for path in files {
+            count += file_reference_count(path, reference)?;
+        }
+        counts.insert(reference.clone(), count);
+    }
+    Ok(counts)
+}
+
+fn print_plan(
+    edits: &[Edit],
+    root: &Path,
+    changes: &BTreeMap<String, AssetChange>,
+    aliases: &BTreeMap<String, BTreeSet<String>>,
+    reference_counts: &BTreeMap<String, usize>,
+) {
     let replacements = edits.iter().map(|edit| edit.replacements).sum::<usize>();
+    let rows = changes
+        .values()
+        .filter_map(|change| {
+            let references = aliases
+                .iter()
+                .filter(|(_, physical)| physical.contains(&change.old))
+                .map(|(reference, _)| reference_counts.get(reference).copied().unwrap_or(0))
+                .sum::<usize>();
+            (references != 0).then_some((change, references))
+        })
+        .collect::<Vec<_>>();
+
+    println!("Asset reference migration preview\n");
+    print_asset_table(&rows);
     println!(
-        "Will rewrite {replacements} reference(s) in {} file(s):",
+        "\nWill rewrite {replacements} reference(s) in {} source file(s):",
         edits.len()
     );
     for edit in edits {
         let path = edit.path.strip_prefix(root).unwrap_or(&edit.path);
         println!("  {} ({})", path.display(), edit.replacements);
     }
+}
+
+fn print_asset_table(rows: &[(&AssetChange, usize)]) {
+    let old_width = rows
+        .iter()
+        .map(|(change, _)| change.old.len())
+        .max()
+        .unwrap_or(8)
+        .max("Old path".len());
+    let new_width = rows
+        .iter()
+        .map(|(change, _)| change.new.len())
+        .max()
+        .unwrap_or(8)
+        .max("New path".len());
+    let before_width = rows
+        .iter()
+        .map(|(change, _)| human_bytes(change.old_bytes).len())
+        .max()
+        .unwrap_or(6)
+        .max("Before".len());
+    let after_width = rows
+        .iter()
+        .map(|(change, _)| human_bytes(change.new_bytes).len())
+        .max()
+        .unwrap_or(5)
+        .max("After".len());
+    let change_width = rows
+        .iter()
+        .map(|(change, _)| size_change(change.old_bytes, change.new_bytes).len())
+        .max()
+        .unwrap_or(6)
+        .max("Change".len());
+    let separator = format!(
+        "+-{:-<old_width$}-+-{:-<new_width$}-+-{:-<before_width$}-+-{:-<after_width$}-+-{:-<change_width$}-+------+",
+        "", "", "", "", ""
+    );
+    println!("{separator}");
+    println!(
+        "| {:<old_width$} | {:<new_width$} | {:>before_width$} | {:>after_width$} | {:>change_width$} | Refs |",
+        "Old path", "New path", "Before", "After", "Change"
+    );
+    println!("{separator}");
+    for (change, references) in rows {
+        println!(
+            "| {:<old_width$} | {:<new_width$} | {:>before_width$} | {:>after_width$} | {:>change_width$} | {:>4} |",
+            change.old,
+            change.new,
+            human_bytes(change.old_bytes),
+            human_bytes(change.new_bytes),
+            size_change(change.old_bytes, change.new_bytes),
+            references
+        );
+    }
+    println!("{separator}");
+    let old_total = rows.iter().map(|(change, _)| change.old_bytes).sum::<u64>();
+    let new_total = rows.iter().map(|(change, _)| change.new_bytes).sum::<u64>();
+    let reference_total = rows.iter().map(|(_, references)| references).sum::<usize>();
+    println!(
+        "Total: {} -> {} ({}) across {} referenced asset(s), {reference_total} reference(s)",
+        human_bytes(old_total),
+        human_bytes(new_total),
+        size_change(old_total, new_total),
+        rows.len()
+    );
+}
+
+fn human_bytes(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    let bytes = bytes as f64;
+    if bytes >= MIB {
+        format!("{:.2} MiB", bytes / MIB)
+    } else if bytes >= KIB {
+        format!("{:.1} KiB", bytes / KIB)
+    } else {
+        format!("{} B", bytes as u64)
+    }
+}
+
+fn size_change(before: u64, after: u64) -> String {
+    if before == 0 {
+        return if after == 0 {
+            "0.0%".to_owned()
+        } else {
+            "+inf".to_owned()
+        };
+    }
+    let percent = (after as f64 - before as f64) * 100.0 / before as f64;
+    format!("{percent:+.1}%")
+}
+
+fn confirm_apply() -> Result<bool> {
+    print!("\nApply these changes? [y/N]: ");
+    io::stdout()
+        .flush()
+        .context("failed to show confirmation")?;
+    let mut response = String::new();
+    io::stdin()
+        .read_line(&mut response)
+        .context("failed to read confirmation")?;
+    Ok(confirmation_accepted(&response))
+}
+
+fn confirmation_accepted(response: &str) -> bool {
+    matches!(response.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
 fn create_backup(root: &Path, edits: &[Edit]) -> Result<PathBuf> {
@@ -632,5 +832,22 @@ mod tests {
         assert!(
             parse_rules(&[("wav".into(), "opus".into()), ("wav".into(), "flac".into())]).is_err()
         );
+    }
+
+    #[test]
+    fn sizes_use_readable_units_and_signed_changes() {
+        assert_eq!(human_bytes(900), "900 B");
+        assert_eq!(human_bytes(1_536), "1.5 KiB");
+        assert_eq!(human_bytes(2 * 1024 * 1024), "2.00 MiB");
+        assert_eq!(size_change(1_000, 250), "-75.0%");
+        assert_eq!(size_change(1_000, 1_250), "+25.0%");
+    }
+
+    #[test]
+    fn confirmation_is_explicit_and_case_insensitive() {
+        assert!(confirmation_accepted("y\n"));
+        assert!(confirmation_accepted(" YES "));
+        assert!(!confirmation_accepted(""));
+        assert!(!confirmation_accepted("no"));
     }
 }

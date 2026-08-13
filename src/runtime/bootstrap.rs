@@ -134,21 +134,19 @@ fn execute_command(loader: LoaderRegistry, command: CliCommand) -> Result<()> {
         CliCommand::RemapAssets {
             project,
             rules,
-            apply,
+            yes,
         } => {
             #[cfg(feature = "publisher")]
             return crate::resource_migration::run(
                 &resolve_project_path(project),
                 &loader,
                 &rules,
-                apply,
+                yes,
             );
             #[cfg(not(feature = "publisher"))]
             {
-                let _ = (project, rules, apply);
-                anyhow::bail!(
-                    "asset migration tools are not compiled; run `cargo remap-assets --help`"
-                );
+                let _ = (project, rules, yes);
+                anyhow::bail!("asset migration tools are not compiled; run `cargo bundle --help`");
             }
         }
         CliCommand::Check { project } => (project, ProjectAction::Check),
@@ -950,8 +948,54 @@ mod tests {
     fn parser_rejects_alias_names_and_ignored_arguments() {
         assert!(parse_cli(&args(&["validate", "project"])).is_err());
         assert!(parse_cli(&args(&["perf", "project"])).is_err());
+        assert!(parse_cli(&args(&["remap-assets", "project", "wav=opus"])).is_err());
         assert!(parse_cli(&args(&["check", "project", "ignored"])).is_err());
         assert!(parse_cli(&args(&["dev", "project", "--sync", "--sync"])).is_err());
+    }
+
+    #[test]
+    fn bundle_asset_remap_accepts_rules_and_explicit_yes() {
+        let CliCommand::RemapAssets {
+            project,
+            rules,
+            yes,
+        } = parse_cli(&args(&[
+            "package",
+            "--remap-assets",
+            "/tmp/project",
+            "wav=opus",
+            "png=webp",
+            "-y",
+        ]))
+        .unwrap()
+        else {
+            panic!("expected asset remap command");
+        };
+        assert_eq!(project, PathBuf::from("/tmp/project"));
+        assert_eq!(
+            rules,
+            vec![
+                ("wav".to_owned(), "opus".to_owned()),
+                ("png".to_owned(), "webp".to_owned())
+            ]
+        );
+        assert!(yes);
+    }
+
+    #[test]
+    fn bundle_asset_remap_requires_rules_and_rejects_duplicate_yes() {
+        assert!(parse_cli(&args(&["package", "--remap-assets", "/tmp/project"])).is_err());
+        assert!(
+            parse_cli(&args(&[
+                "package",
+                "--remap-assets",
+                "/tmp/project",
+                "wav=opus",
+                "-y",
+                "-y",
+            ]))
+            .is_err()
+        );
     }
 
     #[test]

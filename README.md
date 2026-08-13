@@ -125,14 +125,15 @@ recommended distributed audio format.
 
 After converting source assets offline, references can be migrated without a
 runtime fallback. The command supports audio and image rules together, checks
-that every converted target exists, and previews without writing by default:
+that every converted target exists, and always previews before writing:
 
 ```bash
-cargo remap-assets path/to/project wav=opus png=webp
-cargo remap-assets path/to/project wav=opus png=webp --apply
+cargo bundle --remap-assets path/to/project wav=opus png=webp
+cargo bundle --remap-assets path/to/project wav=opus png=webp -y
 ```
 
-Apply mode backs up every changed source below
+The default mode prints a path/size/reference table and asks for confirmation;
+`-y` applies the reviewed plan without prompting. Apply mode backs up every changed source below
 `.keine/asset-remap-backups/`, uses same-directory atomic replacements, then
 reopens and validates the project. A failed validation restores the originals.
 
