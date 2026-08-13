@@ -508,6 +508,7 @@ fn sync_editor_position(
 }
 
 const MAX_EDITOR_REPLAY_STEPS: usize = 65_536;
+const MAX_EDITOR_PRESENTATION_STEPS: usize = 1_024;
 
 pub(crate) fn seek_editor_state(
     preview: &mut State,
@@ -540,13 +541,9 @@ pub(crate) fn seek_editor_state(
         match result {
             keine_core::StepResult::AwaitClick => step::advance(preview),
             keine_core::StepResult::AwaitPresentation => {
-                while preview.presentation_blocked() {
-                    // Prior sentence-tail deletions are deterministic editor
-                    // history, so finish them without manufacturing their
-                    // separate player click. A selected deletion returned
-                    // above and keeps its native animation/yield intact.
-                    step::update_dialogue_retraction(preview, 0.0, 0.0, false, true);
-                    update_transitions(preview, 86_400.0, true);
+                if !finish_editor_presentation(preview) {
+                    log::warn!("editor seek could not finish a prior presentation");
+                    return false;
                 }
             }
             keine_core::StepResult::AwaitInput => {
@@ -582,6 +579,25 @@ pub(crate) fn seek_editor_state(
     }
     log::warn!("editor seek exceeded the deterministic replay limit");
     false
+}
+
+fn finish_editor_presentation(preview: &mut State) -> bool {
+    for _ in 0..MAX_EDITOR_PRESENTATION_STEPS {
+        if !preview.presentation_blocked() {
+            return true;
+        }
+        // A headless editor replay has no decoder callback that can finish a
+        // blocking video. The selected block returns before this helper, so
+        // only playback belonging to earlier source blocks is retired here.
+        preview.videos.retain(|_, video| {
+            !video.spec.wait_for_finished || video.spec.looped || video.stopping
+        });
+        // Prior sentence-tail deletions are deterministic editor history, so
+        // finish them without manufacturing their separate player click.
+        step::update_dialogue_retraction(preview, 0.0, 0.0, false, true);
+        update_transitions(preview, 86_400.0, true);
+    }
+    !preview.presentation_blocked()
 }
 
 /// Re-enter one scene against the new Program without carrying presentation
@@ -1814,7 +1830,8 @@ mod tests {
     use keine_core::{
         Action, AnimationPreset, BlendMode, DialoguePause, Easing, Position, PostProcessPatch,
         SpriteTransform, StageAnimation, StageAudioCue, StageAudioKind, StageEvent, StageEventKind,
-        StageKeyframe, StageProperty, StageTarget, StageTrack, Transition, Value,
+        StageKeyframe, StageProperty, StageTarget, StageTrack, Transition, Value, VideoMode,
+        VideoSpec,
     };
 
     use super::*;
@@ -1964,6 +1981,45 @@ mod tests {
         assert_eq!(retained.speaker, "小夜");
         assert_eq!(retained.text, "被选中的对白");
         assert!(!state.textbox_hidden);
+    }
+
+    #[test]
+    fn editor_seek_retires_a_prior_blocking_video_without_spinning() {
+        let mut state = State::new();
+        state.install_program(Program::from_scenes([(
+            "main".into(),
+            vec![
+                Action::PlayVideo {
+                    video: VideoSpec {
+                        id: "opening".into(),
+                        file: "opening.mp4".into(),
+                        looped: false,
+                        muted: false,
+                        alpha: 1.0,
+                        skippable: true,
+                        wait_for_finished: true,
+                        mode: VideoMode::Fullscreen,
+                    },
+                },
+                Action::Say {
+                    speaker: "小夜".into(),
+                    text: "视频之后".into(),
+                    options: Default::default(),
+                },
+            ],
+        )]));
+        state.current_scene = "main".into();
+        state.ended = false;
+
+        assert!(seek_editor_state(&mut state, "main", 1, 2));
+        assert!(state.videos.is_empty());
+        assert_eq!(
+            state
+                .dialogue
+                .as_ref()
+                .map(|dialogue| dialogue.text.as_str()),
+            Some("视频之后")
+        );
     }
 
     #[test]

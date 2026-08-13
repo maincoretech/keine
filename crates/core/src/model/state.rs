@@ -312,6 +312,14 @@ pub struct RollbackSnapshot {
     pub textbox_hidden: bool,
     pub textbox_auto_hidden: bool,
     pub film_mode: bool,
+    #[serde(skip, default)]
+    pub curtain: CurtainState,
+    #[serde(skip, default)]
+    pub floating_text: Option<FloatingTextState>,
+    #[serde(skip, default)]
+    pub portrait_rule: Option<PortraitRuleState>,
+    #[serde(skip, default)]
+    pub dialogue_style: DialogueStyle,
     pub particle_effects: Arc<HashMap<String, ActiveParticleEffect>>,
     pub transition_rules: Arc<HashMap<String, TransitionRule>>,
     pub bgm: BgmState,
@@ -773,6 +781,10 @@ impl State {
                 textbox_hidden: self.textbox_hidden,
                 textbox_auto_hidden: self.textbox_auto_hidden,
                 film_mode: self.film_mode,
+                curtain: self.curtain.clone(),
+                floating_text: self.floating_text.clone(),
+                portrait_rule: self.portrait_rule.clone(),
+                dialogue_style: self.dialogue_style.clone(),
                 particle_effects,
                 transition_rules,
                 bgm: self.bgm.clone(),
@@ -812,6 +824,15 @@ impl State {
             return false;
         }
         let snapshot = entry.snapshot;
+        let next_bgm_revision = self.bgm.revision.wrapping_add(1);
+        let restored_vocal = VocalCue {
+            file: snapshot.dialogue.vocal.clone(),
+            volume: snapshot.dialogue.volume,
+            fade_in: 0.0,
+            fade_out: 0.0,
+        };
+        self.shell_events.clear();
+        self.host_commands.clear();
         self.current_scene = snapshot.current_scene;
         self.cursor = snapshot.cursor;
         self.scene_stack = snapshot.scene_stack;
@@ -843,9 +864,11 @@ impl State {
         self.user_input = None;
         self.mini_avatar_progress = if self.mini_avatar.is_some() { 1.0 } else { 0.0 };
         self.bgm = snapshot.bgm;
-        self.bgm.revision = self.bgm.revision.wrapping_add(1);
+        self.bgm.revision = next_bgm_revision;
         self.looping_effects = snapshot.looping_effects.as_ref().clone();
         self.effect_queue.clear();
+        self.effect_queue.push(EffectEvent::Stop);
+        self.vocal_event = Some(restored_vocal);
         self.vars = snapshot.vars.as_ref().clone();
         self.menu = None;
         self.wait_remaining = 0.0;
@@ -853,6 +876,10 @@ impl State {
         self.waiting_for_advance = false;
         self.intro = None;
         self.film_mode = snapshot.film_mode;
+        self.curtain = snapshot.curtain;
+        self.floating_text = snapshot.floating_text;
+        self.portrait_rule = snapshot.portrait_rule;
+        self.dialogue_style = snapshot.dialogue_style;
         self.particle_effects = snapshot.particle_effects.as_ref().clone();
         self.transition_rules = snapshot.transition_rules.as_ref().clone();
         self.ended = false;
@@ -1088,6 +1115,94 @@ mod tests {
         assert_eq!(state.vars["route"], Value::Int(1));
         assert_eq!(state.dialogue.as_ref().unwrap().text, "checkpoint");
         assert_eq!(state.mini_avatar_progress, 0.0);
+    }
+
+    #[test]
+    fn rollback_restores_presentation_and_retriggers_audio_deterministically() {
+        let mut state = State::new();
+        state.install_program(Program::from_scenes([(
+            "main".into(),
+            vec![Action::Comment; 2],
+        )]));
+        state.current_scene = "main".into();
+        state.cursor = 1;
+        state.curtain = CurtainState {
+            color: [0.1, 0.2, 0.3, 1.0],
+            current: 0.4,
+            from: 0.0,
+            target: 1.0,
+            elapsed: 0.2,
+            duration: 0.5,
+            blocking: false,
+        };
+        state.floating_text = Some(FloatingTextState {
+            text: "checkpoint".into(),
+            position: [0.25, 0.75],
+            font_size: 32.0,
+            color: [1.0, 0.5, 0.25, 1.0],
+            fade_in: 0.1,
+            hold: 1.0,
+            fade_out: 0.2,
+            elapsed: 0.3,
+            blocking: false,
+        });
+        state.portrait_rule = Some(PortraitRuleState {
+            enabled: true,
+            character_ids: HashSet::from(["hero".into()]),
+            speaking: PortraitStyle::default(),
+            others: PortraitStyle {
+                brightness: 0.5,
+                ..PortraitStyle::default()
+            },
+            narration: PortraitStyle::default(),
+            duration: 0.25,
+            easing: Easing::EaseInOut,
+        });
+        state.dialogue_style = DialogueStyle::CinematicCentered;
+        state.bgm = BgmState {
+            file: Some("checkpoint.opus".into()),
+            volume: 0.8,
+            fade_seconds: 0.4,
+            revision: 7,
+        };
+        let mut checkpoint = dialogue("checkpoint");
+        checkpoint.vocal = Some("checkpoint-vocal.opus".into());
+        checkpoint.volume = 0.6;
+        state.dialogue = Some(checkpoint);
+        state.record_dialogue(0);
+
+        let snapshot = state.backlog[0].snapshot.clone();
+        state.curtain = CurtainState::default();
+        state.floating_text = None;
+        state.portrait_rule = None;
+        state.dialogue_style = DialogueStyle::Default;
+        state.bgm.revision = 41;
+        state.effect_queue.push(EffectEvent::Play(EffectCue {
+            id: None,
+            file: "stale.wav".into(),
+            volume: 1.0,
+            fade_in: 0.0,
+        }));
+
+        assert!(state.restore_backlog(0));
+        assert_eq!(state.curtain, snapshot.curtain);
+        assert_eq!(state.floating_text, snapshot.floating_text);
+        assert_eq!(state.portrait_rule, snapshot.portrait_rule);
+        assert_eq!(state.dialogue_style, snapshot.dialogue_style);
+        assert_eq!(state.bgm.revision, 42);
+        assert_eq!(state.effect_queue, [EffectEvent::Stop]);
+        assert_eq!(
+            state.vocal_event,
+            Some(VocalCue {
+                file: Some("checkpoint-vocal.opus".into()),
+                volume: 0.6,
+                fade_in: 0.0,
+                fade_out: 0.0,
+            })
+        );
+
+        assert!(state.restore_backlog(0));
+        assert_eq!(state.bgm.revision, 43);
     }
 
     #[test]
