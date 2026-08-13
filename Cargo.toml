@@ -46,10 +46,13 @@ publisher = [
 ]
 audio-opus = ["dep:rodio", "dep:symphonia", "dep:symphonia-adapter-libopus"]
 bundled-opus = ["audio-opus", "symphonia-adapter-libopus/bundled"]
-audio-wav = ["bevy/wav"]
-audio-mp3 = ["bevy/mp3"]
-audio-vorbis = ["bevy/vorbis"]
-audio-flac = ["bevy/flac"]
+audio-seekable = ["dep:rodio"]
+audio-wav = ["audio-seekable", "bevy/wav"]
+audio-mp3 = ["audio-seekable", "bevy/mp3"]
+# Symphonia provides random access for the gallery player. Bevy's alternative
+# Lewton and Claxon backends can decode these formats but cannot seek them.
+audio-vorbis = ["audio-seekable", "bevy/symphonia-vorbis"]
+audio-flac = ["audio-seekable", "bevy/symphonia-flac"]
 video-ffmpeg = ["dep:ffmpeg-next", "dep:rodio"]
 video-native = [
     "dep:objc2-av-foundation",

@@ -1,23 +1,37 @@
+#[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+use std::io::{self, Cursor};
 #[cfg(feature = "audio-opus")]
-use std::io::{self, Cursor, Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom};
 #[cfg(feature = "audio-opus")]
 use std::path::PathBuf;
+#[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+use std::sync::Arc;
 #[cfg(feature = "audio-opus")]
-use std::sync::{Arc, Mutex};
-#[cfg(feature = "audio-opus")]
+use std::sync::Mutex;
+#[cfg(feature = "audio-seekable")]
+use std::sync::OnceLock;
+#[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
 use std::time::Duration;
 
 #[cfg(feature = "audio-opus")]
-use bevy::asset::{AssetApp, AssetLoader, LoadContext, io::AssetSourceId, io::Reader};
-#[cfg(feature = "audio-opus")]
+use bevy::asset::io::AssetSourceId;
+#[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+use bevy::asset::{AssetApp, AssetLoader, LoadContext, io::Reader};
+#[cfg(not(feature = "audio-seekable"))]
+use bevy::audio::AudioSource;
+#[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+use bevy::audio::PlaybackMode;
+#[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
 use bevy::audio::{AddAudioSource, Decodable};
-use bevy::audio::{AudioPlayer, AudioSource, PlaybackMode, PlaybackSettings};
+use bevy::audio::{AudioPlayer, PlaybackSettings};
 use bevy::ecs::system::EntityCommands;
 use bevy::prelude::*;
 #[cfg(feature = "audio-opus")]
 use keine_loader::{ContentFile, ContentMount};
+#[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+use rodio::Source;
 #[cfg(feature = "audio-opus")]
-use rodio::{ChannelCount, SampleRate, Source};
+use rodio::{ChannelCount, SampleRate};
 #[cfg(feature = "audio-opus")]
 use symphonia::core::audio::sample::Sample;
 #[cfg(feature = "audio-opus")]
@@ -220,6 +234,189 @@ impl Plugin for OpusAudioPlugin {
     }
 }
 
+/// Shared in-memory asset for non-Opus project audio. Every playback decoder
+/// receives the byte length Rodio requires for duration and reliable seeking;
+/// the gallery therefore reuses the same compressed allocation as the story.
+#[derive(Asset, Clone, Debug, TypePath)]
+#[cfg(feature = "audio-seekable")]
+pub(crate) struct SeekableAudio {
+    bytes: Arc<[u8]>,
+    duration: OnceLock<Option<Duration>>,
+    hint: &'static str,
+}
+
+#[derive(Asset, Clone, Debug, TypePath)]
+#[cfg(feature = "audio-seekable")]
+struct LoopingSeekableAudio {
+    bytes: Arc<[u8]>,
+    hint: &'static str,
+}
+
+#[cfg(feature = "audio-seekable")]
+impl SeekableAudio {
+    pub(crate) fn duration(&self) -> Option<Duration> {
+        *self.duration.get_or_init(|| match self.decoder() {
+            Ok(decoder) => decoder.total_duration(),
+            Err(error) => {
+                log::error!("failed to read audio duration: {error}");
+                None
+            }
+        })
+    }
+
+    fn decoder(&self) -> Result<rodio::Decoder<Cursor<Arc<[u8]>>>, rodio::decoder::DecoderError> {
+        seekable_decoder(self.bytes.clone(), self.hint)
+    }
+}
+
+#[derive(Default, TypePath)]
+#[cfg(feature = "audio-seekable")]
+struct SeekableAudioLoader;
+
+#[cfg(feature = "audio-seekable")]
+impl AssetLoader for SeekableAudioLoader {
+    type Asset = SeekableAudio;
+    type Settings = ();
+    type Error = io::Error;
+
+    async fn load(
+        &self,
+        reader: &mut dyn Reader,
+        _settings: &Self::Settings,
+        load_context: &mut LoadContext<'_>,
+    ) -> Result<Self::Asset, Self::Error> {
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).await?;
+        if bytes.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "empty audio asset",
+            ));
+        }
+        let hint = audio_hint(load_context.path().path())?;
+        let bytes: Arc<[u8]> = bytes.into();
+        load_context.add_labeled_asset(
+            "looping".to_owned(),
+            LoopingSeekableAudio {
+                bytes: bytes.clone(),
+                hint,
+            },
+        );
+        Ok(SeekableAudio {
+            bytes,
+            duration: OnceLock::new(),
+            hint,
+        })
+    }
+
+    fn extensions(&self) -> &[&str] {
+        &[
+            #[cfg(feature = "audio-wav")]
+            "wav",
+            #[cfg(feature = "audio-mp3")]
+            "mp3",
+            #[cfg(feature = "audio-vorbis")]
+            "ogg",
+            #[cfg(feature = "audio-vorbis")]
+            "oga",
+            #[cfg(feature = "audio-vorbis")]
+            "spx",
+            #[cfg(feature = "audio-flac")]
+            "flac",
+        ]
+    }
+}
+
+#[cfg(feature = "audio-seekable")]
+fn audio_hint(path: &std::path::Path) -> io::Result<&'static str> {
+    let extension = path.extension().and_then(|extension| extension.to_str());
+    match extension.map(str::to_ascii_lowercase).as_deref() {
+        #[cfg(feature = "audio-wav")]
+        Some("wav") => Ok("wav"),
+        #[cfg(feature = "audio-mp3")]
+        Some("mp3") => Ok("mp3"),
+        #[cfg(feature = "audio-vorbis")]
+        Some("ogg" | "oga" | "spx") => Ok("ogg"),
+        #[cfg(feature = "audio-flac")]
+        Some("flac") => Ok("flac"),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unsupported seekable audio path: {}", path.display()),
+        )),
+    }
+}
+
+#[cfg(feature = "audio-seekable")]
+fn seekable_decoder(
+    bytes: Arc<[u8]>,
+    hint: &str,
+) -> Result<rodio::Decoder<Cursor<Arc<[u8]>>>, rodio::decoder::DecoderError> {
+    let byte_len = bytes.len() as u64;
+    rodio::Decoder::builder()
+        .with_data(Cursor::new(bytes))
+        .with_byte_len(byte_len)
+        .with_hint(hint)
+        .build()
+}
+
+#[cfg(feature = "audio-seekable")]
+fn looping_seekable_decoder(
+    bytes: Arc<[u8]>,
+    hint: &str,
+) -> Result<rodio::decoder::LoopedDecoder<Cursor<Arc<[u8]>>>, rodio::decoder::DecoderError> {
+    let byte_len = bytes.len() as u64;
+    rodio::Decoder::builder()
+        .with_data(Cursor::new(bytes))
+        .with_byte_len(byte_len)
+        .with_hint(hint)
+        .build_looped()
+}
+
+#[cfg(feature = "audio-seekable")]
+impl Decodable for SeekableAudio {
+    type Decoder = Box<dyn Source + Send>;
+
+    fn decoder(&self) -> Self::Decoder {
+        match self.decoder() {
+            Ok(decoder) => Box::new(decoder),
+            Err(error) => {
+                // Keep a malformed project asset from taking down the audio
+                // thread; Bevy will naturally retire the empty source.
+                log::error!("failed to recreate seekable audio decoder: {error}");
+                Box::new(rodio::source::Empty::new())
+            }
+        }
+    }
+}
+
+#[cfg(feature = "audio-seekable")]
+impl Decodable for LoopingSeekableAudio {
+    type Decoder = Box<dyn Source + Send>;
+
+    fn decoder(&self) -> Self::Decoder {
+        match looping_seekable_decoder(self.bytes.clone(), self.hint) {
+            Ok(decoder) => Box::new(decoder),
+            Err(error) => {
+                log::error!("failed to recreate looping audio decoder: {error}");
+                Box::new(rodio::source::Empty::new())
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+#[cfg(feature = "audio-seekable")]
+pub(crate) struct SeekableAudioPlugin;
+
+#[cfg(feature = "audio-seekable")]
+impl Plugin for SeekableAudioPlugin {
+    fn build(&self, app: &mut App) {
+        app.register_asset_loader(SeekableAudioLoader)
+            .add_audio_source::<SeekableAudio>()
+            .add_audio_source::<LoopingSeekableAudio>();
+    }
+}
+
 #[cfg(feature = "audio-opus")]
 impl Decodable for OpusAudio {
     type Decoder = OpusStream;
@@ -263,8 +460,10 @@ pub(crate) fn insert_player(
     entity: &mut EntityCommands<'_>,
     asset_server: &AssetServer,
     path: String,
-    mut settings: PlaybackSettings,
+    settings: PlaybackSettings,
 ) {
+    #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+    let mut settings = settings;
     if is_opus(&path) {
         #[cfg(feature = "audio-opus")]
         {
@@ -282,8 +481,86 @@ pub(crate) fn insert_player(
         #[cfg(not(feature = "audio-opus"))]
         log::error!("Opus asset `{path}` requires the `audio-opus` feature");
     }
+    #[cfg(feature = "audio-seekable")]
+    {
+        if matches!(settings.mode, PlaybackMode::Loop) {
+            settings.mode = PlaybackMode::Once;
+            entity.insert(AudioPlayer::<LoopingSeekableAudio>(
+                asset_server.load(format!("{path}#looping")),
+            ));
+        } else {
+            entity.insert(AudioPlayer::<SeekableAudio>(asset_server.load(path)));
+        }
+        entity.insert(settings);
+    }
+    #[cfg(not(feature = "audio-seekable"))]
     entity.insert((
         AudioPlayer::new(asset_server.load::<AudioSource>(path)),
+        settings,
+    ));
+}
+
+/// Typed handle retained by the gallery so the UI can read format-independent
+/// duration metadata without inspecting player component types.
+#[derive(Component)]
+pub(crate) enum GalleryAudio {
+    #[cfg(feature = "audio-opus")]
+    Opus(Handle<OpusAudio>),
+    #[cfg(feature = "audio-seekable")]
+    Seekable(Handle<SeekableAudio>),
+    #[cfg(any(not(feature = "audio-opus"), not(feature = "audio-seekable")))]
+    Unavailable,
+}
+
+/// Adds a one-shot player whose decoder supports duration queries and random
+/// access. Opus retains its mount-backed streaming implementation; Bevy's
+/// other formats share their compressed bytes with a byte-length-aware decoder.
+pub(crate) fn insert_gallery_player(
+    entity: &mut EntityCommands<'_>,
+    asset_server: &AssetServer,
+    path: String,
+    settings: PlaybackSettings,
+) {
+    if is_opus(&path) {
+        #[cfg(feature = "audio-opus")]
+        {
+            let handle = asset_server.load::<OpusAudio>(path);
+            entity.insert((
+                AudioPlayer::<OpusAudio>(handle.clone()),
+                GalleryAudio::Opus(handle),
+                settings,
+            ));
+        }
+        #[cfg(not(feature = "audio-opus"))]
+        {
+            log::error!("Opus asset `{path}` requires the `audio-opus` feature");
+            insert_unavailable_gallery_player(entity, asset_server, path, settings);
+        }
+    } else {
+        #[cfg(feature = "audio-seekable")]
+        {
+            let handle = asset_server.load::<SeekableAudio>(path);
+            entity.insert((
+                AudioPlayer::<SeekableAudio>(handle.clone()),
+                GalleryAudio::Seekable(handle),
+                settings,
+            ));
+        }
+        #[cfg(not(feature = "audio-seekable"))]
+        insert_unavailable_gallery_player(entity, asset_server, path, settings);
+    }
+}
+
+#[cfg(any(not(feature = "audio-opus"), not(feature = "audio-seekable")))]
+fn insert_unavailable_gallery_player(
+    entity: &mut EntityCommands<'_>,
+    asset_server: &AssetServer,
+    path: String,
+    settings: PlaybackSettings,
+) {
+    entity.insert((
+        AudioPlayer::new(asset_server.load::<AudioSource>(path)),
+        GalleryAudio::Unavailable,
         settings,
     ));
 }
@@ -295,12 +572,70 @@ pub(crate) fn load_untyped(asset_server: &AssetServer, path: String) -> UntypedH
         #[cfg(not(feature = "audio-opus"))]
         log::error!("Opus asset `{path}` requires the `audio-opus` feature");
     }
+    #[cfg(feature = "audio-seekable")]
+    return asset_server.load::<SeekableAudio>(path).untyped();
+    #[cfg(not(feature = "audio-seekable"))]
     asset_server.load::<AudioSource>(path).untyped()
 }
 
 fn is_opus(path: &str) -> bool {
     path.rsplit_once('.')
         .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("opus"))
+}
+
+#[cfg(all(test, feature = "audio-seekable", feature = "audio-wav"))]
+mod seekable_tests {
+    use super::*;
+
+    fn silent_pcm_wav(sample_rate: u32, sample_count: u32) -> Arc<[u8]> {
+        let data_len = sample_count * 2;
+        let mut bytes = Vec::with_capacity(44 + data_len as usize);
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&sample_rate.to_le_bytes());
+        bytes.extend_from_slice(&(sample_rate * 2).to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_len.to_le_bytes());
+        bytes.resize(44 + data_len as usize, 0);
+        bytes.into()
+    }
+
+    #[test]
+    fn byte_length_aware_decoder_reports_duration_and_seeks() {
+        let bytes = silent_pcm_wav(8_000, 8_000);
+        let mut decoder = seekable_decoder(bytes, "wav").expect("test WAV should decode");
+
+        assert_eq!(decoder.total_duration(), Some(Duration::from_secs(1)));
+        decoder
+            .try_seek(Duration::from_millis(500))
+            .expect("test WAV should seek");
+        assert_eq!(decoder.next(), Some(0.0));
+    }
+
+    #[test]
+    fn looped_decoder_rewinds_without_buffering_a_decoded_pass() {
+        let bytes = silent_pcm_wav(8_000, 8_000);
+        let samples = looping_seekable_decoder(bytes, "wav")
+            .expect("test WAV should loop")
+            .take(10_000)
+            .count();
+
+        assert_eq!(samples, 10_000);
+    }
+
+    #[test]
+    fn audio_hint_is_case_insensitive() {
+        assert_eq!(
+            audio_hint(std::path::Path::new("BGM/TRACK.WAV")).unwrap(),
+            "wav"
+        );
+    }
 }
 
 #[cfg(feature = "audio-opus")]

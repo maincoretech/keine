@@ -312,6 +312,8 @@ fn build_opened_app(
     app.add_plugins(crate::runtime::audio::OpusAudioPlugin::new(
         asset_mounts.clone(),
     ));
+    #[cfg(feature = "audio-seekable")]
+    app.add_plugins(crate::runtime::audio::SeekableAudioPlugin);
     app.add_plugins((webp, GamePlugin, BlurPlugin))
         .insert_resource(ProjectRoot(project_root))
         .insert_resource(ContentProjectResource(content))

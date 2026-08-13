@@ -1,7 +1,5 @@
 use std::{collections::HashMap, time::Duration};
 
-#[cfg(feature = "audio-opus")]
-use bevy::audio::AudioPlayer;
 use bevy::audio::{AudioSink, AudioSinkPlayback, PlaybackMode, Volume};
 use bevy::camera::visibility::RenderLayers;
 use bevy::ecs::system::SystemParam;
@@ -9,6 +7,7 @@ use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
 
 use crate::render::blur::{DialogCamera, UiBlurCamera};
+use crate::runtime::audio::GalleryAudio;
 use crate::runtime::resources::{GameConfigResource, GameState};
 use crate::scene::audio::BgmPlayer;
 use crate::storage::settings::RuntimeSettings;
@@ -962,7 +961,7 @@ pub(crate) struct ExtraBgmContext<'w, 's> {
         (
             Entity,
             &'static mut ExtraBgmPlayer,
-            Option<&'static AudioSink>,
+            Option<&'static mut AudioSink>,
         ),
     >,
     stage_bgm: Query<'w, 's, &'static AudioSink, (With<BgmPlayer>, Without<ExtraBgmPlayer>)>,
@@ -970,16 +969,33 @@ pub(crate) struct ExtraBgmContext<'w, 's> {
     commands: Commands<'w, 's>,
 }
 
-#[cfg(feature = "audio-opus")]
-type ExtraOpusPlayerQuery<'w, 's> = Query<
-    'w,
-    's,
-    (
-        &'static mut ExtraBgmPlayer,
-        Option<&'static AudioSink>,
-        Option<&'static AudioPlayer<crate::runtime::audio::OpusAudio>>,
-    ),
->;
+#[derive(SystemParam)]
+pub(crate) struct ExtraAudioAssets<'w> {
+    #[cfg(feature = "audio-opus")]
+    opus: Res<'w, Assets<crate::runtime::audio::OpusAudio>>,
+    #[cfg(feature = "audio-seekable")]
+    seekable: Res<'w, Assets<crate::runtime::audio::SeekableAudio>>,
+    #[cfg(not(any(feature = "audio-opus", feature = "audio-seekable")))]
+    _fallback: Res<'w, AssetServer>,
+}
+
+impl ExtraAudioAssets<'_> {
+    fn duration(&self, audio: Option<&GalleryAudio>) -> Option<Duration> {
+        match audio {
+            #[cfg(feature = "audio-opus")]
+            Some(GalleryAudio::Opus(handle)) => self
+                .opus
+                .get(handle)
+                .and_then(crate::runtime::audio::OpusAudio::duration),
+            #[cfg(feature = "audio-seekable")]
+            Some(GalleryAudio::Seekable(handle)) => self
+                .seekable
+                .get(handle)
+                .and_then(crate::runtime::audio::SeekableAudio::duration),
+            _ => None,
+        }
+    }
+}
 
 pub(crate) fn handle_bgm(mut context: ExtraBgmContext) {
     let clicked = context.tracks.iter().find_map(|(interaction, track)| {
@@ -995,8 +1011,10 @@ pub(crate) fn handle_bgm(mut context: ExtraBgmContext) {
         .map(|(file, name)| (file.clone(), name.clone()))
         .collect::<Vec<_>>();
     ordered.sort_unstable_by(|left, right| left.1.cmp(&right.1));
+    let volume = context.settings.master_volume * context.settings.bgm_volume;
     let (ended, ready_player) = match context.players.single_mut() {
-        Ok((_, mut player, Some(sink))) => {
+        Ok((_, mut player, Some(mut sink))) => {
+            sink.set_volume(Volume::Linear(volume));
             if !sink.empty() {
                 player.observed_audio = true;
             }
@@ -1074,19 +1092,17 @@ pub(crate) fn handle_bgm(mut context: ExtraBgmContext) {
     for mut seek in &mut context.seek_bars {
         seek.reset();
     }
-    let volume = context.settings.master_volume * context.settings.bgm_volume;
     let mut entity = context.commands.spawn(ExtraBgmPlayer {
         duration: None,
         observed_audio: false,
     });
-    crate::runtime::audio::insert_player(
+    crate::runtime::audio::insert_gallery_player(
         &mut entity,
         &context.assets,
         context.config.bgm_path(&file),
         PlaybackSettings {
-            // Bevy's Loop mode wraps the source in rodio::Buffered, which is
-            // intentionally not seekable. The lightweight restart above keeps
-            // gallery playback looping while preserving native Opus seeking.
+            // A one-shot source stays seekable; end detection above advances
+            // the gallery playlist and wraps the last track to the first.
             mode: PlaybackMode::Once,
             volume: Volume::Linear(volume),
             ..default()
@@ -1207,42 +1223,24 @@ pub(crate) struct ExtraBgmProgressUi<'w, 's> {
 
 type BgmTimeDisplayKey = (Option<Entity>, u64, Option<u64>);
 
-#[cfg(feature = "audio-opus")]
 pub(crate) fn update_bgm_progress(
-    mut players: ExtraOpusPlayerQuery,
-    audio: Res<Assets<crate::runtime::audio::OpusAudio>>,
+    mut players: Query<(
+        &mut ExtraBgmPlayer,
+        Option<&AudioSink>,
+        Option<&GalleryAudio>,
+    )>,
+    audio: ExtraAudioAssets,
     seek: Query<&ExtraBgmSeekBar>,
     mut ui: ExtraBgmProgressUi,
     mut displayed_time: Local<Option<BgmTimeDisplayKey>>,
 ) {
-    let Ok((mut player, sink, opus_player)) = players.single_mut() else {
+    let Ok((mut player, sink, source)) = players.single_mut() else {
         set_bgm_progress(&mut ui, Duration::ZERO, None, &mut displayed_time);
         return;
     };
     if player.duration.is_none() {
-        player.duration = opus_player
-            .and_then(|source| audio.get(&source.0))
-            .and_then(crate::runtime::audio::OpusAudio::duration);
+        player.duration = audio.duration(source);
     }
-    let position = seek
-        .single()
-        .ok()
-        .and_then(|seek| seek.preview)
-        .unwrap_or_else(|| sink.map_or(Duration::ZERO, AudioSinkPlayback::position));
-    set_bgm_progress(&mut ui, position, player.duration, &mut displayed_time);
-}
-
-#[cfg(not(feature = "audio-opus"))]
-pub(crate) fn update_bgm_progress(
-    players: Query<(&ExtraBgmPlayer, Option<&AudioSink>)>,
-    seek: Query<&ExtraBgmSeekBar>,
-    mut ui: ExtraBgmProgressUi,
-    mut displayed_time: Local<Option<BgmTimeDisplayKey>>,
-) {
-    let Ok((player, sink)) = players.single() else {
-        set_bgm_progress(&mut ui, Duration::ZERO, None, &mut displayed_time);
-        return;
-    };
     let position = seek
         .single()
         .ok()

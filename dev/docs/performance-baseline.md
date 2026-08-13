@@ -489,10 +489,10 @@ though the compressed source itself remained streamed.
 
 Project Opus loops now use a labeled Bevy sub-asset whose decoder seeks its
 reopenable `ContentFile` to zero at EOF. Bevy receives `PlaybackMode::Once`, so
-Rodio never wraps this source in `Buffered`. Non-looping playback and the Extra
-BGM seek path retain their existing duration and seek behavior. The regression
-test decodes one complete embedded cue plus another 2,400 samples and therefore
-crosses EOF without constructing a decoded-pass cache.
+Rodio never wraps this source in `Buffered`. Non-looping Opus playback retains
+its existing duration and seek behavior. The regression test decodes one
+complete embedded cue plus another 2,400 samples and therefore crosses EOF
+without constructing a decoded-pass cache.
 
 At 48 kHz stereo `f32`, the removed cache grew by 384,000 bytes per second, or
 21.97 MiB per minute (109.86 MiB for a five-minute BGM). The replacement keeps
@@ -516,3 +516,47 @@ These small changes are within the suite's noise threshold and are recorded
 only as a regression guard; they are not claimed as benefits of the audio
 change. Reproduce the loop invariant with `cargo test
 looping_opus_stream_rewinds_without_buffering_a_decoded_pass`.
+
+### 2026-08-13 cross-format gallery seeking
+
+The Extra BGM player now uses one byte-length-aware asset for WAV, MP3, Ogg
+Vorbis, and FLAC. Story playback, asset prefetch, and the gallery resolve the
+same typed asset, so opening Extra does not retain a second copy of compressed
+audio. Each playback constructs an independent Rodio decoder over the shared
+`Arc<[u8]>`; duration and random-access seek therefore work for every supported
+gallery format. Duration metadata is initialized once on the first gallery
+query, so ordinary voice/effect asset loads do not construct an extra decoder.
+Opus remains on its mount-backed incremental path.
+
+Vorbis and FLAC switched from Bevy's Lewton and Claxon features to its
+Symphonia backends because the former decoders do not implement random-access
+seek. Looping non-Opus sources use Rodio's `LoopedDecoder`, which reconstructs
+the decoder at EOF instead of buffering a decoded pass. A deterministic WAV
+test crosses EOF and verifies that the source continues without Bevy's
+`PlaybackMode::Loop` buffer.
+
+One-second WAV, MP3, Ogg Vorbis, and FLAC files generated in `/tmp` were used
+for an acceptance probe. Every decoder reported at least 900 ms duration,
+successfully sought to 500 ms, and produced another sample. The files are not
+repository fixtures. The portable checked-in regression uses a generated PCM
+WAV and verifies duration, seek, case-insensitive extension routing, and
+bounded loop restart.
+
+The stripped macOS release binary was measured with
+`hardened,audio-all,ui-sounds` and release LTO:
+
+| All-format engine | Bytes | Change |
+| --- | ---: | ---: |
+| Before, mixed native backends | 45,260,784 | — |
+| After, seekable shared asset | 46,087,520 | +826,736 (+1.83%) |
+
+Project packaging still selects only extensions that occur in the staged
+project, so this is the all-format upper bound rather than the cost paid by an
+Opus-only release.
+
+`cargo bench --workspace` completed after the implementation. The generic
+preview, rollback, script, and program-load benchmarks all moved slower in the
+same post-LTO run despite having no changed code paths, with inconsistent
+follow-up results after cooling; those machine-state figures are not attributed
+to audio. The release-size A/B above and the format-specific decode/seek/loop
+checks are the reproducible measurements for this change.
