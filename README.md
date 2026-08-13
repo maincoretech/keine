@@ -41,6 +41,7 @@ are unavailable. The visual acceptance checklist is in
 | `cargo dev <project>` | Run a project with development tools and hot reload |
 | `cargo dev <project> --sync` | Follow an open LetsGal project |
 | `cargo bundle <project>` | Build a distributable game |
+| `cargo bundle --remap-assets <project> <old=new>...` | Safely migrate converted asset references |
 | `cargo adapters` | Configure built-in adapters |
 | `cargo perf <project>` | Capture a runtime performance sample |
 
@@ -84,6 +85,26 @@ Create a macOS application bundle with:
 dev/scripts/bundle-macos.sh path/to/project
 ```
 
+### Remap converted assets
+
+After converting audio or images offline, migrate their project references
+without adding a runtime fallback:
+
+```bash
+# Preview the path and size changes, then ask for confirmation.
+cargo bundle --remap-assets path/to/project wav=opus png=webp
+
+# Print the same preview and apply it without prompting.
+cargo bundle --remap-assets path/to/project wav=opus png=webp -y
+```
+
+Every converted target must already exist beside its source. The preview shows
+the old path in red, the new path in green, `old size → new size`, and the size
+change percentage. Apply mode backs up every changed source below
+`.keine/asset-remap-backups/`, replaces files atomically, and reopens the
+project for validation. Failed validation restores the originals. The command
+does not convert, rename, delete, or select fallback assets.
+
 ## Controls
 
 | Shortcut | Action |
@@ -122,20 +143,6 @@ cargo validate projects/test-project
 
 Video builds require the relevant native media libraries. Ogg Opus is the
 recommended distributed audio format.
-
-After converting source assets offline, references can be migrated without a
-runtime fallback. The command supports audio and image rules together, checks
-that every converted target exists, and always previews before writing:
-
-```bash
-cargo bundle --remap-assets path/to/project wav=opus png=webp
-cargo bundle --remap-assets path/to/project wav=opus png=webp -y
-```
-
-The default mode prints a path/size/reference table and asks for confirmation;
-`-y` applies the reviewed plan without prompting. Apply mode backs up every changed source below
-`.keine/asset-remap-backups/`, uses same-directory atomic replacements, then
-reopens and validates the project. A failed validation restores the originals.
 
 ## Documentation
 

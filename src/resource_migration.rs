@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -564,68 +564,73 @@ fn print_plan(
 }
 
 fn print_asset_table(rows: &[(&AssetChange, usize)]) {
-    let old_width = rows
+    let color = io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    print!("{}", render_asset_table(rows, color));
+}
+
+fn render_asset_table(rows: &[(&AssetChange, usize)], color: bool) -> String {
+    let path_width = rows
         .iter()
-        .map(|(change, _)| change.old.len())
+        .map(|(change, _)| format!("{} → {}", change.old, change.new).chars().count())
         .max()
-        .unwrap_or(8)
-        .max("Old path".len());
-    let new_width = rows
+        .unwrap_or("Path".len())
+        .max("Path".len());
+    let size_width = rows
         .iter()
-        .map(|(change, _)| change.new.len())
+        .map(|(change, _)| {
+            format!(
+                "{} → {}",
+                human_bytes(change.old_bytes),
+                human_bytes(change.new_bytes)
+            )
+            .len()
+        })
         .max()
-        .unwrap_or(8)
-        .max("New path".len());
-    let before_width = rows
-        .iter()
-        .map(|(change, _)| human_bytes(change.old_bytes).len())
-        .max()
-        .unwrap_or(6)
-        .max("Before".len());
-    let after_width = rows
-        .iter()
-        .map(|(change, _)| human_bytes(change.new_bytes).len())
-        .max()
-        .unwrap_or(5)
-        .max("After".len());
+        .unwrap_or("Size".len())
+        .max("Size".len());
     let change_width = rows
         .iter()
         .map(|(change, _)| size_change(change.old_bytes, change.new_bytes).len())
         .max()
         .unwrap_or(6)
         .max("Change".len());
-    let separator = format!(
-        "+-{:-<old_width$}-+-{:-<new_width$}-+-{:-<before_width$}-+-{:-<after_width$}-+-{:-<change_width$}-+------+",
-        "", "", "", "", ""
+    let mut output = format!(
+        "{:<path_width$}  {:<size_width$}  {:>change_width$}\n",
+        "Path", "Size", "Change"
     );
-    println!("{separator}");
-    println!(
-        "| {:<old_width$} | {:<new_width$} | {:>before_width$} | {:>after_width$} | {:>change_width$} | Refs |",
-        "Old path", "New path", "Before", "After", "Change"
-    );
-    println!("{separator}");
-    for (change, references) in rows {
-        println!(
-            "| {:<old_width$} | {:<new_width$} | {:>before_width$} | {:>after_width$} | {:>change_width$} | {:>4} |",
-            change.old,
-            change.new,
+    for (change, _) in rows {
+        let plain_path = format!("{} → {}", change.old, change.new);
+        let path = if color {
+            format!(
+                "\x1b[31m{}\x1b[0m → \x1b[32m{}\x1b[0m",
+                change.old, change.new
+            )
+        } else {
+            plain_path.clone()
+        };
+        let size = format!(
+            "{} → {}",
             human_bytes(change.old_bytes),
-            human_bytes(change.new_bytes),
-            size_change(change.old_bytes, change.new_bytes),
-            references
+            human_bytes(change.new_bytes)
         );
+        output.push_str(&format!(
+            "{path}{:<path_padding$}  {size:<size_width$}  {:>change_width$}\n",
+            "",
+            size_change(change.old_bytes, change.new_bytes),
+            path_padding = path_width - plain_path.chars().count()
+        ));
     }
-    println!("{separator}");
     let old_total = rows.iter().map(|(change, _)| change.old_bytes).sum::<u64>();
     let new_total = rows.iter().map(|(change, _)| change.new_bytes).sum::<u64>();
     let reference_total = rows.iter().map(|(_, references)| references).sum::<usize>();
-    println!(
-        "Total: {} -> {} ({}) across {} referenced asset(s), {reference_total} reference(s)",
+    output.push_str(&format!(
+        "Total: {} -> {} ({}) across {} referenced asset(s), {reference_total} reference(s)\n",
         human_bytes(old_total),
         human_bytes(new_total),
         size_change(old_total, new_total),
         rows.len()
-    );
+    ));
+    output
 }
 
 fn human_bytes(bytes: u64) -> String {
@@ -849,5 +854,31 @@ mod tests {
         assert!(confirmation_accepted(" YES "));
         assert!(!confirmation_accepted(""));
         assert!(!confirmation_accepted("no"));
+    }
+
+    #[test]
+    fn asset_preview_is_a_borderless_three_column_layout() {
+        let change = AssetChange {
+            old: "audio/voice.wav".to_owned(),
+            new: "audio/voice.opus".to_owned(),
+            old_bytes: 2_048,
+            new_bytes: 1_024,
+        };
+        let output = render_asset_table(&[(&change, 3)], false);
+        assert!(output.starts_with("Path"));
+        assert!(output.contains("Size"));
+        assert!(output.contains("Change"));
+        assert!(output.contains("audio/voice.wav → audio/voice.opus"));
+        assert!(output.contains("2.0 KiB → 1.0 KiB"));
+        assert!(output.contains("-50.0%"));
+        assert!(!output.contains('+'));
+        assert!(!output.contains("Refs"));
+        assert!(output.ends_with(
+            "Total: 2.0 KiB -> 1.0 KiB (-50.0%) across 1 referenced asset(s), 3 reference(s)\n"
+        ));
+
+        let colored = render_asset_table(&[(&change, 3)], true);
+        assert!(colored.contains("\x1b[31maudio/voice.wav\x1b[0m"));
+        assert!(colored.contains("\x1b[32maudio/voice.opus\x1b[0m"));
     }
 }
