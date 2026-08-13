@@ -38,7 +38,12 @@ ui-sounds = ["bundled-opus"]
 hardened = ["dep:libc", "dep:windows-sys"]
 # Publisher-only compiler and Hakutaku packer. Release game engines deliberately
 # omit this feature and link only hakutaku-core through keine-loader.
-publisher = ["dep:hakutaku-core", "dep:hakutaku-pack", "dep:noyalib", "dep:tempfile"]
+publisher = [
+    "dep:hakutaku-core",
+    "dep:hakutaku-pack",
+    "dep:noyalib",
+    "dep:tempfile",
+]
 audio-opus = ["dep:rodio", "dep:symphonia", "dep:symphonia-adapter-libopus"]
 bundled-opus = ["audio-opus", "symphonia-adapter-libopus/bundled"]
 audio-wav = ["bevy/wav"]

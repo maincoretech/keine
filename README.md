@@ -123,6 +123,19 @@ cargo validate projects/test-project
 Video builds require the relevant native media libraries. Ogg Opus is the
 recommended distributed audio format.
 
+After converting source assets offline, references can be migrated without a
+runtime fallback. The command supports audio and image rules together, checks
+that every converted target exists, and previews without writing by default:
+
+```bash
+cargo remap-assets path/to/project wav=opus png=webp
+cargo remap-assets path/to/project wav=opus png=webp --apply
+```
+
+Apply mode backs up every changed source below
+`.keine/asset-remap-backups/`, uses same-directory atomic replacements, then
+reopens and validates the project. A failed validation restores the originals.
+
 ## Documentation
 
 - [Project structure](dev/docs/PROJECT.md)

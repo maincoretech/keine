@@ -51,6 +51,11 @@ pub(super) enum CliCommand {
         project: PathBuf,
         output: PathBuf,
     },
+    RemapAssets {
+        project: PathBuf,
+        rules: Vec<(String, String)>,
+        apply: bool,
+    },
     Run {
         project: PathBuf,
         mode: InteractiveMode,
@@ -95,6 +100,12 @@ const COMMANDS: &[CommandHelp] = &[
         cargo_name: "bundle",
         args: "<project> [--output <dir>]",
         summary: "Package an encrypted release build",
+    },
+    CommandHelp {
+        binary_name: "remap-assets",
+        cargo_name: "remap-assets",
+        args: "<project> <old=new>... [--apply]",
+        summary: "Safely rewrite converted audio and image references",
     },
     CommandHelp {
         binary_name: "dev",
@@ -158,6 +169,7 @@ pub(super) fn parse(args: &[OsString]) -> Result<CliCommand> {
                 .unwrap_or_else(|| PathBuf::from(DEFAULT_PACKAGE_OUTPUT));
             Ok(CliCommand::Package { project, output })
         }
+        Some("remap-assets") => parse_asset_remap(args),
         Some("dev") => parse_development(args),
         Some("benchmark") => parse_benchmark(args),
         Some("validate" | "perf") => anyhow::bail!(
@@ -170,6 +182,37 @@ pub(super) fn parse(args: &[OsString]) -> Result<CliCommand> {
             Ok(run(PathBuf::from(command), InteractiveMode::Shipping))
         }
     }
+}
+
+fn parse_asset_remap(args: &[OsString]) -> Result<CliCommand> {
+    const USAGE: &str = "keine remap-assets <project> <old=new>... [--apply]";
+    let project = required_path(args, 1, USAGE)?;
+    let mut rules = Vec::new();
+    let mut apply = false;
+    for argument in &args[2..] {
+        if argument == "--apply" {
+            if apply {
+                anyhow::bail!("--apply may only be specified once");
+            }
+            apply = true;
+            continue;
+        }
+        let argument = argument
+            .to_str()
+            .with_context(|| format!("extension rule is not UTF-8; usage: {USAGE}"))?;
+        let Some((from, to)) = argument.split_once('=') else {
+            anyhow::bail!("invalid extension rule {argument:?}; usage: {USAGE}");
+        };
+        rules.push((from.to_owned(), to.to_owned()));
+    }
+    if rules.is_empty() {
+        anyhow::bail!("at least one extension rule is required; usage: {USAGE}");
+    }
+    Ok(CliCommand::RemapAssets {
+        project,
+        rules,
+        apply,
+    })
 }
 
 pub(super) fn resolve_project_path(path: impl AsRef<Path>) -> PathBuf {

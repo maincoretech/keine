@@ -17,3 +17,6 @@ validate = "run -- check"
 # running keine.exe when the child build produces the hardened game engine.
 # `bundle` deliberately avoids Cargo's built-in `package` command.
 bundle = "run --release --no-default-features --features publisher --target-dir target/package-runner -- package"
+# Safely rewrite project references after assets have been converted. The
+# command previews by default; pass `--apply` only after reviewing the plan.
+remap-assets = "run --features publisher -- remap-assets"

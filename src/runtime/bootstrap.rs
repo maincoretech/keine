@@ -131,6 +131,26 @@ fn execute_command(loader: LoaderRegistry, command: CliCommand) -> Result<()> {
                 anyhow::bail!("publisher tools are not compiled; run `cargo bundle <project>`");
             }
         }
+        CliCommand::RemapAssets {
+            project,
+            rules,
+            apply,
+        } => {
+            #[cfg(feature = "publisher")]
+            return crate::resource_migration::run(
+                &resolve_project_path(project),
+                &loader,
+                &rules,
+                apply,
+            );
+            #[cfg(not(feature = "publisher"))]
+            {
+                let _ = (project, rules, apply);
+                anyhow::bail!(
+                    "asset migration tools are not compiled; run `cargo remap-assets --help`"
+                );
+            }
+        }
         CliCommand::Check { project } => (project, ProjectAction::Check),
         CliCommand::Run {
             project,

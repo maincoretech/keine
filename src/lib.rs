@@ -5,6 +5,8 @@ mod compiler;
 #[cfg(feature = "publisher")]
 mod package;
 mod render;
+#[cfg(feature = "publisher")]
+mod resource_migration;
 mod runtime;
 mod scene;
 mod storage;
