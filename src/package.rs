@@ -314,11 +314,9 @@ fn build_engine(
         .current_dir(repo_root)
         .args(["build", "--release", "--locked", "--no-default-features"])
         .args(["--features", &all_features])
-        .env("KEINE_HAKUTAKU_KEY_SHARE_A", key_share_a)
-        .env("KEINE_HAKUTAKU_KEY_SHARE_B", key_share_b)
-        .env("KEINE_HAKUTAKU_PUBLIC_KEY", public_key)
         .arg("--target-dir")
         .arg(repo_root.join("target"));
+    configure_engine_environment(&mut command, key_share_a, key_share_b, public_key);
     let build_target = env::var("KEINE_BUILD_TARGET")
         .ok()
         .filter(|target| !target.is_empty());
@@ -334,6 +332,23 @@ fn build_engine(
         |target| repo_root.join("target").join(target).join("release"),
     );
     Ok(release.join(format!("keine{}", env::consts::EXE_SUFFIX)))
+}
+
+fn configure_engine_environment(
+    command: &mut Command,
+    key_share_a: &Path,
+    key_share_b: &Path,
+    public_key: &Path,
+) {
+    // The publisher identity signs the archive in this process. The nested
+    // Cargo build only needs the derived runtime shares embedded by loader's
+    // build script, so do not expose the signing key to dependencies/build.rs.
+    command
+        .env_remove("HAKUTAKU_IDENTITY_BASE64")
+        .env_remove("KEINE_HAKUTAKU_IDENTITY")
+        .env("KEINE_HAKUTAKU_KEY_SHARE_A", key_share_a)
+        .env("KEINE_HAKUTAKU_KEY_SHARE_B", key_share_b)
+        .env("KEINE_HAKUTAKU_PUBLIC_KEY", public_key);
 }
 
 fn pack_staging(staged: &Path, output: &Path, identity: &Identity) -> Result<()> {
@@ -583,6 +598,38 @@ mod tests {
         assert!(release_output_path(Path::new("/tmp/release")).is_err());
         assert!(release_output_path(Path::new("target/release")).is_err());
         assert!(release_output_path(Path::new("target/debug/package")).is_err());
+    }
+
+    #[test]
+    fn engine_build_receives_only_derived_runtime_keys() {
+        let mut command = Command::new("cargo");
+        configure_engine_environment(
+            &mut command,
+            Path::new("share-a"),
+            Path::new("share-b"),
+            Path::new("public-key"),
+        );
+        let value = |name: &str| {
+            command
+                .get_envs()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| value)
+        };
+
+        assert_eq!(value("HAKUTAKU_IDENTITY_BASE64"), Some(None));
+        assert_eq!(value("KEINE_HAKUTAKU_IDENTITY"), Some(None));
+        assert_eq!(
+            value("KEINE_HAKUTAKU_KEY_SHARE_A"),
+            Some(Some("share-a".as_ref()))
+        );
+        assert_eq!(
+            value("KEINE_HAKUTAKU_KEY_SHARE_B"),
+            Some(Some("share-b".as_ref()))
+        );
+        assert_eq!(
+            value("KEINE_HAKUTAKU_PUBLIC_KEY"),
+            Some(Some("public-key".as_ref()))
+        );
     }
 
     #[test]

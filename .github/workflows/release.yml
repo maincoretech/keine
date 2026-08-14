@@ -37,29 +37,44 @@ jobs:
             triplet: x64-windows
     runs-on: ${{ matrix.os }}
     env:
-      HAKUTAKU_IDENTITY_BASE64: ${{ secrets.HAKUTAKU_IDENTITY_BASE64 }}
       KEINE_BUILD_TARGET: ${{ matrix.target }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.97.1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
       - name: Install cross-compilation target
         if: matrix.target != ''
         run: rustup target add ${{ matrix.target }}
-      - name: Restore publisher identity
+      - name: Resolve project input
+        id: project
         shell: bash
+        env:
+          PROJECT_INPUT: ${{ inputs.project }}
         run: |
-          if [[ -z "$HAKUTAKU_IDENTITY_BASE64" ]]; then
-            echo "Configure the HAKUTAKU_IDENTITY_BASE64 repository secret" >&2
+          if [[ "$PROJECT_INPUT" == *$'\n'* || "$PROJECT_INPUT" == *$'\r'* ]]; then
+            echo 'Project path must not contain line breaks' >&2
             exit 2
           fi
-          mkdir -p target/release-secrets
-          printf '%s' "$HAKUTAKU_IDENTITY_BASE64" | openssl base64 -d -A -out target/release-secrets/publisher.hakutaku-key
-          echo "KEINE_HAKUTAKU_IDENTITY=$GITHUB_WORKSPACE/target/release-secrets/publisher.hakutaku-key" >> "$GITHUB_ENV"
+          if [[ ! -d "$PROJECT_INPUT" ]]; then
+            echo "Project directory does not exist: $PROJECT_INPUT" >&2
+            exit 2
+          fi
+          workspace="$(cd "$GITHUB_WORKSPACE" && pwd -P)"
+          project="$(cd "$PROJECT_INPUT" && pwd -P)"
+          case "$project" in
+            "$workspace"|"$workspace"/*) ;;
+            *)
+              echo "Project directory must stay inside the checkout: $project" >&2
+              exit 2
+              ;;
+          esac
+          echo "path=$project" >> "$GITHUB_OUTPUT"
       - name: Detect project media features
         shell: bash
+        env:
+          PROJECT_PATH: ${{ steps.project.outputs.path }}
         run: |
           source dev/scripts/audio-features.sh
-          features="$(detect_audio_features "${{ inputs.project }}")"
+          features="$(detect_audio_features "$PROJECT_PATH")"
           echo "KEINE_RELEASE_FEATURES=$features" >> "$GITHUB_ENV"
       - uses: ./.github/actions/setup-video
         with:
@@ -69,12 +84,31 @@ jobs:
         # A separate target dir keeps the running runner out of the engine
         # rebuild that `keine package` performs inside target/release.
         run: cargo build --release --locked --no-default-features --features publisher --target-dir target/runner
+      - name: Restore publisher identity
+        shell: bash
+        env:
+          HAKUTAKU_IDENTITY_BASE64: ${{ secrets.HAKUTAKU_IDENTITY_BASE64 }}
+        run: |
+          if [[ -z "$HAKUTAKU_IDENTITY_BASE64" ]]; then
+            echo "Configure the HAKUTAKU_IDENTITY_BASE64 repository secret" >&2
+            exit 2
+          fi
+          umask 077
+          mkdir -p target/release-secrets
+          printf '%s' "$HAKUTAKU_IDENTITY_BASE64" | openssl base64 -d -A -out target/release-secrets/publisher.hakutaku-key
       - name: Package encrypted release
         shell: bash
+        env:
+          PROJECT_PATH: ${{ steps.project.outputs.path }}
+          KEINE_HAKUTAKU_IDENTITY: ${{ github.workspace }}/target/release-secrets/publisher.hakutaku-key
         run: >-
           target/runner/release/keine package
-          "${{ inputs.project }}"
+          "$PROJECT_PATH"
           --output target/${{ matrix.artifact }}
+      - name: Remove publisher identity
+        if: always()
+        shell: bash
+        run: rm -f target/release-secrets/publisher.hakutaku-key
       - name: Verify Linux runtime closure
         if: runner.os == 'Linux' && contains(env.KEINE_RELEASE_FEATURES, 'video-ffmpeg')
         shell: bash
@@ -92,7 +126,7 @@ jobs:
           $root = 'target/${{ matrix.artifact }}'
           if (-not (Test-Path (Join-Path $root 'keine.exe'))) { throw 'keine.exe is missing' }
           if (-not (Get-ChildItem $root -Filter '*.dll')) { throw 'FFmpeg runtime DLLs are missing' }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.artifact }}
           path: target/${{ matrix.artifact }}/
