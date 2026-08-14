@@ -4,9 +4,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
-use keine_core::Program;
+use criterion::{BatchSize, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use keine_core::config::AssetSourceConfig;
+use keine_core::{Program, State, step};
 use keine_loader::{
     CompiledSceneV1, EncodeInput, IR_SCHEMA_VERSION, ProgramMetadataV1, decode, encode,
     load_project, load_scenes,
@@ -35,6 +35,10 @@ fn fixture() -> &'static Path {
 }
 
 fn load_and_build() -> u64 {
+    build_program().fingerprint()
+}
+
+fn build_program() -> Program {
     let project = load_project(
         fixture(),
         &[AssetSourceConfig {
@@ -48,8 +52,21 @@ fn load_and_build() -> u64 {
         .iter()
         .map(|scene| (scene.name.clone(), scene.actions.clone()))
         .collect::<Vec<_>>();
-    let program = Program::from_scenes(actions);
-    program.fingerprint()
+    Program::from_scenes(actions)
+}
+
+fn prepared_program() -> &'static Program {
+    static PROGRAM: OnceLock<Program> = OnceLock::new();
+    PROGRAM.get_or_init(build_program)
+}
+
+fn apply_prebuilt_program(program: Program) -> (u64, usize) {
+    let mut state = State::new();
+    state.install_program(program);
+    state.current_scene = "bench".to_owned();
+    state.ended = false;
+    let _ = step::step(&mut state);
+    (state.program_fingerprint, state.cursor)
 }
 
 fn compiled_fixture() -> &'static [u8] {
@@ -104,6 +121,13 @@ fn bench(c: &mut Criterion) {
     });
     group.bench_function(format!("decode_and_build_{ACTION_COUNT}"), |b| {
         b.iter(|| black_box(decode_and_build()));
+    });
+    group.bench_function(format!("frame_apply_prebuilt_{ACTION_COUNT}"), |b| {
+        b.iter_batched(
+            || prepared_program().clone(),
+            |program| black_box(apply_prebuilt_program(program)),
+            BatchSize::LargeInput,
+        );
     });
     group.finish();
 }

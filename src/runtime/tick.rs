@@ -2,7 +2,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use keine_core::step;
 use keine_core::{Program, State};
-use keine_loader::DiagnosticLevel;
+use keine_loader::{Diagnostic, DiagnosticLevel};
 
 use crate::runtime::platform::InputActions;
 use crate::runtime::resources::{
@@ -36,6 +36,24 @@ struct EditorCursorSync {
     poll_elapsed: f32,
     last: Option<keine_loader::ProjectDebugCursor>,
     force: bool,
+}
+
+#[derive(Default)]
+struct HotReloadPipeline {
+    running: Option<RunningHotReload>,
+    pending_change_count: usize,
+}
+
+struct RunningHotReload {
+    change_count: usize,
+    worker: std::thread::JoinHandle<anyhow::Result<HotReloadBuild>>,
+}
+
+struct HotReloadBuild {
+    config: Option<keine_core::config::GameConfig>,
+    manifest: LocalAssetManifest,
+    program: Program,
+    diagnostics: Vec<(std::path::PathBuf, Diagnostic)>,
 }
 
 const EDITOR_CURSOR_POLL_SECONDS: f32 = 0.2;
@@ -84,6 +102,7 @@ pub struct TickContext<'w, 's> {
     auto_timer: Local<'s, f64>,
     typewriter_clock: Local<'s, TypewriterClock>,
     editor_cursor_sync: Local<'s, EditorCursorSync>,
+    hot_reload: Local<'s, HotReloadPipeline>,
     commands: Commands<'w, 's>,
 }
 
@@ -281,21 +300,42 @@ fn reload_scripts_if_changed(context: &mut TickContext<'_, '_>, delta_seconds: f
 
     let mut changed = false;
     if source_change_count > 0 {
-        let reloaded = reload_project_sources(
-            &context.content,
-            &context.languages,
-            context.state.bypass_change_detection(),
-            &mut context.asset_manifest,
-            &mut context.config,
-        );
-        changed |= reloaded;
-        if reloaded {
-            log::info!("reloaded {source_change_count} changed project source(s)");
-            if editor_sync {
-                context.editor_cursor_sync.force = true;
-                context.editor_cursor_sync.remaining_frames = 8;
+        context.hot_reload.pending_change_count = context
+            .hot_reload
+            .pending_change_count
+            .saturating_add(source_change_count);
+    }
+    if let Some((change_count, result)) = take_completed_reload(&mut context.hot_reload) {
+        if context.hot_reload.pending_change_count > 0 {
+            log::debug!(
+                "discarded a completed hot reload because newer source changes are pending"
+            );
+        } else {
+            match result {
+                Ok(build) => {
+                    apply_hot_reload(
+                        build,
+                        context.state.bypass_change_detection(),
+                        &mut context.asset_manifest,
+                        &mut context.config,
+                    );
+                    changed = true;
+                    log::info!("reloaded {change_count} changed project source(s)");
+                    if editor_sync {
+                        context.editor_cursor_sync.force = true;
+                        context.editor_cursor_sync.remaining_frames = 8;
+                    }
+                }
+                Err(error) => log::error!("failed to reload project sources: {error:#}"),
             }
         }
+    }
+    if let Err(error) = start_pending_reload(
+        &mut context.hot_reload,
+        &context.content,
+        &context.languages,
+    ) {
+        log::error!("failed to start project hot reload: {error:#}");
     }
     if cursor_changed && editor_sync {
         context.editor_cursor_sync.remaining_frames = 8;
@@ -308,7 +348,9 @@ fn reload_scripts_if_changed(context: &mut TickContext<'_, '_>, delta_seconds: f
                 context.editor_cursor_sync.remaining_frames.max(1);
         }
     }
-    if context.editor_cursor_sync.remaining_frames > 0 {
+    let reload_in_flight =
+        context.hot_reload.running.is_some() || context.hot_reload.pending_change_count > 0;
+    if context.editor_cursor_sync.remaining_frames > 0 && !reload_in_flight {
         let force = context.editor_cursor_sync.force;
         match try_sync_editor_cursor(
             &context.content,
@@ -337,44 +379,73 @@ fn reload_scripts_if_changed(context: &mut TickContext<'_, '_>, delta_seconds: f
     changed
 }
 
-fn reload_project_sources(
+fn start_pending_reload(
+    pipeline: &mut HotReloadPipeline,
     content: &keine_loader::ContentProject,
     languages: &keine_loader::ScriptLanguageRegistry,
-    state: &mut State,
-    asset_manifest: &mut LocalAssetManifest,
-    config: &mut crate::runtime::resources::GameConfigResource,
-) -> bool {
-    let refreshed_config = match content.reload_config() {
-        Ok(config) => config,
-        Err(error) => {
-            log::error!("failed to reload project config: {error:#}");
-            return false;
-        }
-    };
-    let Ok(scenes) = keine_loader::load_scenes_with(content, languages) else {
-        log::error!("failed to reload scripts from configured content sources");
-        return false;
-    };
-    if let Some(refreshed_config) = refreshed_config {
-        config.0 = refreshed_config;
+) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+
+    if pipeline.running.is_some() || pipeline.pending_change_count == 0 {
+        return Ok(());
     }
-    asset_manifest.clear();
+    let change_count = std::mem::take(&mut pipeline.pending_change_count);
+    let content = content.clone();
+    let languages = languages.clone();
+    let worker = std::thread::Builder::new()
+        .name("keine-hot-reload".to_owned())
+        .spawn(move || build_hot_reload(&content, &languages))
+        .context("failed to spawn hot-reload worker")?;
+    pipeline.running = Some(RunningHotReload {
+        change_count,
+        worker,
+    });
+    Ok(())
+}
+
+fn take_completed_reload(
+    pipeline: &mut HotReloadPipeline,
+) -> Option<(usize, anyhow::Result<HotReloadBuild>)> {
+    // `JoinHandle::is_finished` is the standard-library non-blocking join
+    // probe. Only consume and join the worker after it reports completion, so
+    // source parsing never returns to Bevy's frame-critical Update path.
+    if !pipeline
+        .running
+        .as_ref()
+        .is_some_and(|running| running.worker.is_finished())
+    {
+        return None;
+    }
+    let running = pipeline.running.take()?;
+    let result = running
+        .worker
+        .join()
+        .unwrap_or_else(|_| Err(anyhow::anyhow!("hot-reload worker panicked")));
+    Some((running.change_count, result))
+}
+
+fn build_hot_reload(
+    content: &keine_loader::ContentProject,
+    languages: &keine_loader::ScriptLanguageRegistry,
+) -> anyhow::Result<HotReloadBuild> {
+    use anyhow::Context as _;
+
+    let config = content
+        .reload_config()
+        .context("failed to reload project config")?;
+    let scenes = keine_loader::load_scenes_with(content, languages)
+        .context("failed to reload scripts from configured content sources")?;
+    let mut manifest = LocalAssetManifest::default();
     let mut program_scenes = Vec::with_capacity(scenes.len());
+    let mut diagnostics = Vec::new();
     for scene in scenes {
-        for diagnostic in &scene.diagnostics {
-            let message = format!(
-                "{}:{}:{}: {}",
-                scene.path.display(),
-                diagnostic.span.line,
-                diagnostic.span.column,
-                diagnostic.message
-            );
-            match diagnostic.level {
-                DiagnosticLevel::Warning => log::warn!("{message}"),
-                DiagnosticLevel::Error => log::error!("{message}"),
-            }
-        }
-        asset_manifest.insert(
+        diagnostics.extend(
+            scene
+                .diagnostics
+                .into_iter()
+                .map(|diagnostic| (scene.path.clone(), diagnostic)),
+        );
+        manifest.insert(
             scene.name.clone(),
             LocalSceneAssets {
                 resources: scene.resources,
@@ -384,8 +455,38 @@ fn reload_project_sources(
         );
         program_scenes.push((scene.name, scene.actions));
     }
-    restart_after_program_reload(state, Program::from_scenes(program_scenes));
-    true
+    Ok(HotReloadBuild {
+        config,
+        manifest,
+        program: Program::from_scenes(program_scenes),
+        diagnostics,
+    })
+}
+
+fn apply_hot_reload(
+    build: HotReloadBuild,
+    state: &mut State,
+    asset_manifest: &mut LocalAssetManifest,
+    config: &mut crate::runtime::resources::GameConfigResource,
+) {
+    for (path, diagnostic) in build.diagnostics {
+        let message = format!(
+            "{}:{}:{}: {}",
+            path.display(),
+            diagnostic.span.line,
+            diagnostic.span.column,
+            diagnostic.message
+        );
+        match diagnostic.level {
+            DiagnosticLevel::Warning => log::warn!("{message}"),
+            DiagnosticLevel::Error => log::error!("{message}"),
+        }
+    }
+    if let Some(refreshed_config) = build.config {
+        config.0 = refreshed_config;
+    }
+    *asset_manifest = build.manifest;
+    restart_after_program_reload(state, build.program);
 }
 
 pub(crate) fn sync_editor_cursor(
@@ -1826,6 +1927,9 @@ fn preset_final_transform(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use keine_core::config::AssetSourceConfig;
     use keine_core::state::{Dialogue, KeyframeAnimation, TransformAnimation};
     use keine_core::{
         Action, AnimationPreset, BlendMode, DialoguePause, Easing, Position, PostProcessPatch,
@@ -1835,6 +1939,65 @@ mod tests {
     };
 
     use super::*;
+
+    struct ThreadRecordingLanguage(Arc<Mutex<Option<std::thread::ThreadId>>>);
+
+    impl keine_loader::ScriptLanguage for ThreadRecordingLanguage {
+        fn name(&self) -> &'static str {
+            "thread-recording"
+        }
+
+        fn extensions(&self) -> &'static [&'static str] {
+            &["reload"]
+        }
+
+        fn parse(&self, _source: &str) -> keine_loader::ParseReport {
+            *self.0.lock().unwrap() = Some(std::thread::current().id());
+            keine_loader::ParseReport::default()
+        }
+    }
+
+    #[test]
+    fn hot_reload_build_is_send_and_runs_off_the_calling_thread() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("keine-hot-reload-{nonce}"));
+        std::fs::create_dir_all(root.join("scripts")).unwrap();
+        std::fs::write(root.join("scripts/main.reload"), "reload").unwrap();
+        let content = keine_loader::load_project(
+            &root,
+            &[AssetSourceConfig {
+                path: ".".into(),
+                format: "fs".into(),
+            }],
+        )
+        .unwrap();
+        let parsed_on = Arc::new(Mutex::new(None));
+        let languages = keine_loader::ScriptLanguageRegistry::new()
+            .with(ThreadRecordingLanguage(Arc::clone(&parsed_on)));
+        let caller = std::thread::current().id();
+        let mut pipeline = HotReloadPipeline {
+            pending_change_count: 1,
+            ..default()
+        };
+
+        start_pending_reload(&mut pipeline, &content, &languages).unwrap();
+        let worker = pipeline.running.as_ref().unwrap().worker.thread().id();
+        let (_, result) = loop {
+            if let Some(completed) = take_completed_reload(&mut pipeline) {
+                break completed;
+            }
+            std::thread::yield_now();
+        };
+        let build = result.unwrap();
+
+        assert_eq!(build.program.scene_count(), 1);
+        assert_ne!(worker, caller);
+        assert_eq!(parsed_on.lock().unwrap().unwrap(), worker);
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn held_control_reasserts_skip_until_release() {

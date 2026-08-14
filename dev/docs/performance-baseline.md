@@ -591,3 +591,33 @@ The complete `cargo bench --workspace` suite passed after this benchmark was
 added. Unrelated render-preview, rollback, script-runtime, and program-load
 benchmarks were slower together in this post-LTO run despite having no changed
 code paths; those machine-state shifts are not attributed to backup decoding.
+
+### 2026-08-14 asynchronous project hot reload
+
+Before this change, any accepted source-watcher event synchronously rescanned,
+read, parsed, validated, and rebuilt the complete project inside Bevy `Update`.
+The 100,000-action `program_load/parse_and_build` fixture measured 33.366 ms in
+the pre-change quick run, already twice a 60 Hz frame budget.
+
+Hot reload now coalesces watcher events, performs the complete build on a named
+worker thread, and checks `JoinHandle::is_finished()` before joining and
+atomically replacing config, manifest, and `Program` at a frame boundary. If a
+new event arrives while a build is running, that completed result is discarded
+and rebuilt from the newer filesystem state. Kēne deliberately does not enable
+Bevy's global `multi_threaded` feature for this path.
+
+The post-change benchmark separates background construction from the remaining
+frame-boundary work:
+
+| Work | Median | Frame-critical |
+|---|---:|---|
+| Source parse + Program build, before | 33.366 ms | yes |
+| Source parse + Program build, after | 32.500 ms | no |
+| Apply prebuilt 100k-action Program | 459.43 µs | yes |
+
+The full post-change suite reported no parse performance change (`p = 0.39`);
+the improvement is scheduling, not parser throughput. The apply benchmark
+prepares the immutable `Program` outside Criterion's timed section, then
+measures fresh state install and the initial bounded runtime step. It is a
+conservative proxy for the frame-boundary swap; config and manifest ownership
+transfers are constant-time moves for this fixture.
