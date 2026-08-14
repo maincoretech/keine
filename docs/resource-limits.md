@@ -152,6 +152,7 @@ settings、gallery、profile、read history 和单槽 save 时也执行同一 en
 | read history | 64 MiB | 1,000,000 条记录 |
 | backup envelope | 128 MiB | 4,096 个文件 |
 | backup 内单文件 | 72 MiB | — |
+| 全局 `engine.conf` | 256 KiB | — |
 
 Backup V2 import 直接从已受限的 envelope 借用文件名和 payload，不再为每个文件复制一份完整
 数据。Export 仍会同时持有源文件集合和序列化 buffer，所以 128 MiB 是当前整体编码方案的
@@ -161,6 +162,9 @@ Backup V2 import 直接从已受限的 envelope 借用文件名和 payload，不
 内存前先检查 filesystem metadata 报告的文件长度，并以 `maximum + 1` 的 bounded read 防止并发增长；
 SAVE 也会拒绝 codec 写出超过同一上限的 payload。槽位列表使用格式自己的前缀检查，但
 adapter 的默认完整检查路径同样遵守该上限。
+
+全局引擎配置同样先经过 bounded read，再解析 adapter 与媒体策略；旧版
+`adapters.conf` 迁移入口也使用相同的 256 KiB 上限。
 
 ## 6. 确定性执行保护
 

@@ -54,10 +54,18 @@ VM、渲染器、UI 或原生 keine 工程的启动路径。
 library embedder 还可从 `LoaderRegistry::empty()` 开始只注册自己需要的 adapter；`Default`
 只是最终 keine 二进制采用的内置组合，并不是 runtime 的类型依赖。
 
-最终二进制可运行 `cargo adapters`，用方向键和空格启停默认 registry 中的具体实现，回车保存、
-Esc 取消。该选择保存在用户配置目录，只作用于默认 CLI 启动路径；项目内的 `config.yaml` 仍负责
-从已启用集合中选择格式，`run_with_loader` / `build_app_with_loader` 等嵌入接口也不会读取这份全局
-配置。缺少的新 adapter 默认启用，asset/script/store 三类至少各保留一个，避免保存出无法启动的组合。
+最终二进制可运行 `cargo configure`，用方向键和空格配置默认 registry 中的具体实现与已有的
+运行能力，回车保存、Esc 取消。配置保存在用户配置目录的 `engine.conf`，只作用于默认 CLI
+启动路径；项目内的 `config.yaml` 仍负责从已启用集合中选择格式，`run_with_loader` /
+`build_app_with_loader` 等嵌入接口也不会读取这份全局配置。缺少的新 adapter 默认启用，
+asset/script/store 三类至少各保留一个，避免保存出无法启动的组合。旧 `cargo adapters` 与
+`adapters.conf` 继续作为兼容入口，下一次保存时写入新的通用格式。
+
+配置界面按能力而不是实现技术分区：Content 下列出 project/asset/script adapter，Persistence
+下列出 store codec，Media 下提供视频 `automatic`/`disabled` 单选。`automatic` 显示当前二进制
+按 target/feature 实际解析到的 AVFoundation、FFmpeg 或 unavailable；关闭后仍安装稳定的拒绝
+实现，使包含视频指令的工程得到明确诊断，而不是留下半初始化播放器。只有一个实现、无法真正
+切换的 Presentation、Provider 或 Host 能力不会显示伪选项。
 
 ## 配置
 

@@ -1,5 +1,7 @@
 [alias]
-adapters = "run -- adapters"
+configure = "run -- configure"
+# Compatibility alias for the former adapter-only configuration screen.
+adapters = "configure"
 # Interactive preview; add `--sync` to follow an open LetsGal project the
 # same way the former `studio-sync` command did.
 # Machines without FFmpeg development libraries can use `cargo run -- dev`

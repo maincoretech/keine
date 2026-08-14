@@ -18,12 +18,20 @@ use bevy::prelude::*;
 
 use crate::runtime::GameSystemSet;
 
-pub(crate) struct ScenePlugin;
+pub(crate) struct ScenePlugin {
+    video: video::VideoSelection,
+}
+
+impl ScenePlugin {
+    pub(crate) const fn new(video: video::VideoSelection) -> Self {
+        Self { video }
+    }
+}
 
 impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(effects::StageEffectsPlugin)
-            .add_plugins(video::VideoPlugin)
+            .add_plugins(video::VideoPlugin::new(self.video))
             .insert_resource(audio::VocalPlayback::default())
             .init_resource::<audio::BgmPlayback>()
             .init_resource::<audio::EffectPlayback>()

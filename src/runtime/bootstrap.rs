@@ -40,6 +40,7 @@ struct LaunchOptions {
     development: bool,
     editor_sync: bool,
     benchmark: Option<BenchmarkOptions>,
+    video: crate::scene::video::VideoSelection,
 }
 
 #[derive(SystemParam)]
@@ -65,14 +66,14 @@ pub fn run_cli() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
-    let configure_adapters = matches!(&command, CliCommand::Adapters);
+    let configure_engine = matches!(&command, CliCommand::Configure);
     let uses_startup_error_page = command.uses_startup_error_page();
     let mut loader = LoaderRegistry::default();
-    let result = if configure_adapters {
-        super::adapter_tui::configure(&loader)
+    let result = if configure_engine {
+        super::configure::configure(&loader)
     } else {
-        super::adapter_tui::apply_saved_selection(&mut loader)
-            .and_then(|()| execute_command(loader, command))
+        super::configure::apply_saved_configuration(&mut loader)
+            .and_then(|video| execute_command(loader, command, video))
     };
 
     match result {
@@ -80,8 +81,8 @@ pub fn run_cli() -> std::process::ExitCode {
         Err(error) => {
             report_startup_error(
                 uses_startup_error_page,
-                if configure_adapters {
-                    "failed to configure adapters"
+                if configure_engine {
+                    "failed to configure engine"
                 } else {
                     "failed to open project"
                 },
@@ -98,7 +99,13 @@ pub fn run_with_loader(loader: LoaderRegistry) {
     let uses_startup_error_page = parsed
         .as_ref()
         .is_ok_and(CliCommand::uses_startup_error_page);
-    let result = parsed.and_then(|command| execute_command(loader, command));
+    let result = parsed.and_then(|command| {
+        execute_command(
+            loader,
+            command,
+            crate::scene::video::VideoSelection::Automatic,
+        )
+    });
     if let Err(error) = result {
         report_startup_error(uses_startup_error_page, "failed to open project", &error);
     }
@@ -111,12 +118,16 @@ fn report_startup_error(show_page: bool, stage: &str, error: &anyhow::Error) {
     }
 }
 
-fn execute_command(loader: LoaderRegistry, command: CliCommand) -> Result<()> {
+fn execute_command(
+    loader: LoaderRegistry,
+    command: CliCommand,
+    video: crate::scene::video::VideoSelection,
+) -> Result<()> {
     #[cfg(feature = "hardened")]
     super::platform::apply_hardening();
     let (project_path, action) = match command {
-        CliCommand::Adapters => {
-            anyhow::bail!("adapter configuration must run before project setup")
+        CliCommand::Configure => {
+            anyhow::bail!("engine configuration must run before project setup")
         }
         CliCommand::Package { project, output } => {
             #[cfg(feature = "publisher")]
@@ -183,6 +194,7 @@ fn execute_command(loader: LoaderRegistry, command: CliCommand) -> Result<()> {
             development: mode.development(),
             editor_sync,
             benchmark: mode.benchmark().cloned(),
+            video,
         },
     );
     app.run();
@@ -314,7 +326,7 @@ fn build_opened_app(
     ));
     #[cfg(feature = "audio-seekable")]
     app.add_plugins(crate::runtime::audio::SeekableAudioPlugin);
-    app.add_plugins((webp, GamePlugin, BlurPlugin))
+    app.add_plugins((webp, GamePlugin::new(options.video), BlurPlugin))
         .insert_resource(ProjectRoot(project_root))
         .insert_resource(ContentProjectResource(content))
         .insert_resource(ScriptLanguages(languages))
@@ -824,6 +836,19 @@ mod tests {
         };
         assert_eq!(project, Path::new("editor-project"));
         assert!(editor_sync);
+    }
+
+    #[test]
+    fn configure_replaces_the_adapter_command_without_breaking_compatibility() {
+        assert!(matches!(
+            parse_cli(&args(&["configure"])).unwrap(),
+            CliCommand::Configure
+        ));
+        assert!(matches!(
+            parse_cli(&args(&["adapters"])).unwrap(),
+            CliCommand::Configure
+        ));
+        assert!(parse_cli(&args(&["configure", "ignored"])).is_err());
     }
 
     #[test]

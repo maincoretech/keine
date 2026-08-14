@@ -24,8 +24,10 @@
 | Android/iOS | 无承诺 | — | — | 延期 |
 
 发行构建只启用目标平台所需的一个后端：macOS 使用 `video-native`，Windows/Linux 使用
-`video-ffmpeg`。开发别名可同时启用两个 feature；macOS 仍只选择 AVFoundation，其他平台
-只选择 FFmpeg，不会启动两套播放器。
+`video-ffmpeg`。开发别名可同时启用两个 feature；`cargo configure` 的 Media / Video 默认
+为 `automatic`，macOS 解析为 AVFoundation，其他平台解析为 FFmpeg，不会启动两套播放器；
+也可以显式选择 `disabled`，由缺失后端稳定拒绝视频指令。Cargo feature 表示实现是否编译可用，
+用户配置只在已编译能力之上选择运行策略。
 
 Windows CI 使用 `.github/actions/setup-video/vcpkg.json` 的完整 vcpkg baseline 固定 FFmpeg
 8.1.2，与 Rust `ffmpeg-next 8.1` binding 保持同一 release branch。升级任一侧时必须同步升级

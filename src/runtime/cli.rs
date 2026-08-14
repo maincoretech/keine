@@ -43,7 +43,7 @@ impl InteractiveMode {
 
 #[derive(Debug)]
 pub(super) enum CliCommand {
-    Adapters,
+    Configure,
     Check {
         project: PathBuf,
     },
@@ -84,10 +84,10 @@ struct CommandHelp {
 
 const COMMANDS: &[CommandHelp] = &[
     CommandHelp {
-        binary_name: "adapters",
-        cargo_name: "adapters",
+        binary_name: "configure",
+        cargo_name: "configure",
         args: "",
-        summary: "Enable or disable built-in adapters",
+        summary: "Configure built-in engine capabilities",
     },
     CommandHelp {
         binary_name: "check",
@@ -148,9 +148,9 @@ pub(super) fn parse(args: &[OsString]) -> Result<CliCommand> {
         return Ok(run(PathBuf::new(), InteractiveMode::Shipping));
     };
     match command.to_str() {
-        Some("adapters") => {
-            require_no_extra_args(args, 1, "keine adapters")?;
-            Ok(CliCommand::Adapters)
+        Some("configure" | "adapters") => {
+            require_no_extra_args(args, 1, "keine configure")?;
+            Ok(CliCommand::Configure)
         }
         Some("check") => {
             let project = required_path(args, 1, "keine check <project>")?;

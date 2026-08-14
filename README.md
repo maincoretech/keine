@@ -42,7 +42,7 @@ are unavailable. The visual acceptance checklist is in
 | `cargo dev <project> --sync` | Follow an open LetsGal project |
 | `cargo bundle <project>` | Build a distributable game |
 | `cargo bundle --remap-assets <project> <old=new>...` | Safely migrate converted asset references |
-| `cargo adapters` | Configure built-in adapters |
+| `cargo configure` | Configure built-in content adapters and runtime capabilities |
 | `cargo perf <project>` | Capture a runtime performance sample |
 
 ## Game projects

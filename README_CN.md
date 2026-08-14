@@ -40,7 +40,7 @@ cargo dev projects/test-project
 | `cargo dev <工程>` | 使用开发工具和热重载运行工程 |
 | `cargo dev <工程> --sync` | 跟随已打开的 LetsGal 工程 |
 | `cargo bundle <工程>` | 构建可分发游戏 |
-| `cargo adapters` | 配置内置适配器 |
+| `cargo configure` | 配置内置内容适配器与运行能力 |
 | `cargo perf <工程>` | 采集运行时性能样本 |
 
 ## 游戏工程

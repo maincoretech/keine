@@ -134,18 +134,78 @@ use missing_backend::BackendPlugin as SelectedVideoBackendPlugin;
 #[path = "video/ffmpeg_io.rs"]
 mod ffmpeg_io;
 
-pub(crate) struct VideoPlugin;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum VideoSelection {
+    #[default]
+    Automatic,
+    Disabled,
+}
 
-impl Plugin for VideoPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_plugins(SelectedVideoBackendPlugin);
+impl VideoSelection {
+    pub(crate) const fn id(self) -> &'static str {
+        match self {
+            Self::Automatic => "automatic",
+            Self::Disabled => "disabled",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> anyhow::Result<Self> {
+        match value {
+            "automatic" => Ok(Self::Automatic),
+            "disabled" => Ok(Self::Disabled),
+            _ => anyhow::bail!("expected automatic or disabled"),
+        }
     }
 }
 
-#[cfg(not(any(
-    feature = "video-ffmpeg",
-    all(feature = "video-native", target_os = "macos")
-)))]
+pub(crate) const fn automatic_video_backend_name() -> &'static str {
+    #[cfg(all(feature = "video-native", target_os = "macos"))]
+    return "AVFoundation";
+    #[cfg(all(
+        feature = "video-ffmpeg",
+        not(all(feature = "video-native", target_os = "macos"))
+    ))]
+    return "FFmpeg";
+    #[cfg(not(any(
+        feature = "video-ffmpeg",
+        all(feature = "video-native", target_os = "macos")
+    )))]
+    return "unavailable";
+}
+
+#[cfg(test)]
+mod video_selection_tests {
+    use super::*;
+
+    #[test]
+    fn persisted_video_selection_is_strict_and_stable() {
+        for selection in [VideoSelection::Automatic, VideoSelection::Disabled] {
+            assert_eq!(VideoSelection::parse(selection.id()).unwrap(), selection);
+        }
+        assert!(VideoSelection::parse("native").is_err());
+        assert!(!automatic_video_backend_name().is_empty());
+    }
+}
+
+pub(crate) struct VideoPlugin {
+    selection: VideoSelection,
+}
+
+impl VideoPlugin {
+    pub(crate) const fn new(selection: VideoSelection) -> Self {
+        Self { selection }
+    }
+}
+
+impl Plugin for VideoPlugin {
+    fn build(&self, app: &mut App) {
+        match self.selection {
+            VideoSelection::Automatic => app.add_plugins(SelectedVideoBackendPlugin),
+            VideoSelection::Disabled => app.add_plugins(missing_backend::BackendPlugin),
+        };
+    }
+}
+
 mod missing_backend {
     use super::*;
     use crate::runtime::resources::GameState;

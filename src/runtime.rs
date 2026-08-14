@@ -1,8 +1,8 @@
-mod adapter_tui;
 pub(crate) mod asset_reader;
 pub(crate) mod audio;
 pub(crate) mod bootstrap;
 mod cli;
+mod configure;
 pub(crate) mod host;
 pub(crate) mod platform;
 pub(crate) mod resources;
@@ -61,7 +61,15 @@ impl Plugin for RuntimePlugin {
     }
 }
 
-pub(crate) struct GamePlugin;
+pub(crate) struct GamePlugin {
+    video: crate::scene::video::VideoSelection,
+}
+
+impl GamePlugin {
+    pub(crate) const fn new(video: crate::scene::video::VideoSelection) -> Self {
+        Self { video }
+    }
+}
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
@@ -75,6 +83,11 @@ impl Plugin for GamePlugin {
             )
                 .chain(),
         );
-        app.add_plugins((RuntimePlugin, ScenePlugin, StoragePlugin, GameUiPlugin));
+        app.add_plugins((
+            RuntimePlugin,
+            ScenePlugin::new(self.video),
+            StoragePlugin,
+            GameUiPlugin,
+        ));
     }
 }
