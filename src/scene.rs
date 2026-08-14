@@ -6,6 +6,11 @@ pub(crate) mod images;
 pub mod sprites;
 pub(crate) mod video;
 
+#[cfg(all(
+    feature = "video-ffmpeg",
+    not(all(feature = "video-native", target_os = "macos"))
+))]
+pub(crate) use video::validate_ffmpeg_video;
 #[cfg(all(feature = "video-native", target_os = "macos"))]
 pub(crate) use video::validate_native_video;
 

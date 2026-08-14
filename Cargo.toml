@@ -26,7 +26,16 @@ bench = false
 [[bin]]
 name = "keine-video-acceptance"
 path = "dev/tools/video_acceptance.rs"
-required-features = ["publisher", "video-native"]
+required-features = ["publisher"]
+test = false
+bench = false
+
+[[bin]]
+name = "keine-video-source-benchmark"
+path = "dev/tools/video_source_benchmark.rs"
+required-features = ["publisher"]
+test = false
+bench = false
 
 [features]
 default = ["audio-all", "ui-sounds"]

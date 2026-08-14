@@ -330,9 +330,10 @@ decoder:
 | Legacy full copy | 122.682 ms | 32 MiB |
 | Direct random-access source | 292 ns | 0 bytes |
 
-The current equivalent command is `cargo test --no-default-features --features
-video-ffmpeg benchmark_hakutaku_video_direct_open_against_legacy_copy --
---ignored --nocapture`. It measures source preparation rather than decode throughput.
+The current equivalent command is `cargo run --release --no-default-features
+--features publisher --bin keine-video-source-benchmark`. It is an explicit
+developer benchmark rather than an ignored unit test, and measures source
+preparation rather than decode throughput.
 The committed H.264/AAC fixture separately passes the FFmpeg encrypted-Hakutaku
 decode/seek/loop test and the macOS AVFoundation filesystem/Hakutaku first-frame acceptance
 probe. The direct path removes the size-proportional startup copy and plaintext
@@ -370,6 +371,14 @@ not be extrapolated to those platforms. Directly sampling the imported Metal
 texture could remove the remaining GPU blit, but would trade a stable material
 binding for per-frame external-texture synchronization and is intentionally
 deferred.
+
+The same fixture can exercise the FFmpeg filesystem/Hakutaku decoder and audio
+path on Windows or Linux:
+
+```sh
+cargo run --no-default-features --features publisher,video-ffmpeg \
+  --bin keine-video-acceptance -- dev/fixtures/video/playback.mp4
+```
 
 ## 2026-08-11 Hakutaku v1 runtime baseline
 

@@ -28,3 +28,15 @@ pub fn validate_native_video(
 ) -> Result<(), String> {
     scene::validate_native_video(mounts, path)
 }
+
+#[doc(hidden)]
+#[cfg(all(
+    feature = "video-ffmpeg",
+    not(all(feature = "video-native", target_os = "macos"))
+))]
+pub fn validate_ffmpeg_video(
+    mounts: &[keine_loader::ContentMount],
+    path: &std::path::Path,
+) -> Result<(), String> {
+    scene::validate_ffmpeg_video(mounts, path)
+}

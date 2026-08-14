@@ -874,6 +874,48 @@ mod ffmpeg_backend {
         Ok((row_bytes, height, frame_bytes))
     }
 
+    /// Headless decoder acceptance used by CI and for checking arbitrary local
+    /// media without turning machine-specific fixtures into ignored tests.
+    pub(crate) fn validate_ffmpeg_video(
+        mounts: &[ContentMount],
+        path: &Path,
+    ) -> Result<(), String> {
+        ffmpeg::init().map_err(|error| error.to_string())?;
+        let source = Arc::new(prepare_source(mounts, path)?);
+        let mut decoder = open_decoder(&source).map_err(|error| error.to_string())?;
+        let has_audio = decoder.has_audio();
+        let mut converter = None;
+        let mut decoded_frames = 0;
+        while decoded_frames < 60 {
+            let Some(frame) = decoder.decode_raw().map_err(|error| error.to_string())? else {
+                break;
+            };
+            let (_, _, expected_bytes) = video_frame_layout(frame.width(), frame.height())?;
+            let rgba = convert_to_rgba(&frame, &mut converter)?;
+            if rgba.len() != expected_bytes {
+                return Err(format!(
+                    "FFmpeg produced {} RGBA bytes for a {}-byte frame",
+                    rgba.len(),
+                    expected_bytes
+                ));
+            }
+            decoded_frames += 1;
+        }
+        if decoded_frames == 0 {
+            return Err("FFmpeg did not produce a decoded video frame".to_owned());
+        }
+        if has_audio {
+            let samples = FfmpegAudioStream::open(source, false)
+                .map_err(|error| error.to_string())?
+                .take(4_096)
+                .count();
+            if samples == 0 {
+                return Err("FFmpeg did not produce decoded audio samples".to_owned());
+            }
+        }
+        Ok(())
+    }
+
     fn send_event(
         sender: &Sender<DecoderEvent>,
         event: DecoderEvent,
@@ -1142,57 +1184,6 @@ mod ffmpeg_backend {
 
         #[test]
         #[cfg(feature = "publisher")]
-        #[ignore = "manual source-preparation performance baseline"]
-        fn benchmark_hakutaku_video_direct_open_against_legacy_copy() {
-            use std::io::Write;
-            use std::time::Instant;
-
-            const MEDIA_BYTES: usize = 32 * 1024 * 1024;
-            let temporary = Scratch::new();
-            let source_dir = temporary.path().join("source");
-            fs::create_dir(&source_dir).unwrap();
-            let mut media = fs::File::create(source_dir.join("large.mp4")).unwrap();
-            let mut state = 0x4d59_5df4_d0f3_3173_u64;
-            let mut block = [0_u8; 64 * 1024];
-            for _ in 0..MEDIA_BYTES / block.len() {
-                for chunk in block.chunks_exact_mut(8) {
-                    state ^= state << 13;
-                    state ^= state >> 7;
-                    state ^= state << 17;
-                    chunk.copy_from_slice(&state.to_le_bytes());
-                }
-                media.write_all(&block).unwrap();
-            }
-            drop(media);
-            let mount = encrypted_mount(&source_dir, temporary.path());
-
-            let direct_start = Instant::now();
-            for _ in 0..1_000 {
-                let source =
-                    prepare_source(std::slice::from_ref(&mount), Path::new("large.mp4")).unwrap();
-                assert_eq!(source.len(), MEDIA_BYTES as u64);
-            }
-            let direct = direct_start.elapsed() / 1_000;
-
-            let legacy_start = Instant::now();
-            for iteration in 0..3 {
-                let mut source = mount.open_file(Path::new("large.mp4")).unwrap();
-                let mut output =
-                    fs::File::create(temporary.path().join(format!("legacy-{iteration}.bin")))
-                        .unwrap();
-                assert_eq!(
-                    std::io::copy(&mut source, &mut output).unwrap(),
-                    MEDIA_BYTES as u64
-                );
-            }
-            let legacy = legacy_start.elapsed() / 3;
-            eprintln!(
-                "32 MiB Hakutaku video source: legacy_copy={legacy:?}/open, direct_random_access={direct:?}/open, plaintext_write=32 MiB -> 0"
-            );
-        }
-
-        #[test]
-        #[cfg(feature = "publisher")]
         fn decodes_encrypted_hakutaku_video_through_random_access() {
             ffmpeg::init().unwrap();
             let temporary = Scratch::new();
@@ -1262,43 +1253,14 @@ mod ffmpeg_backend {
             assert_eq!(fallback_audio_clock(12.5, 100.0, 99.0), 12.5);
             assert_eq!(fallback_audio_clock(12.5, 100.0, 3_700.0), 3_612.5);
         }
-
-        #[test]
-        #[ignore = "set KEINE_TEST_VIDEO to a local video"]
-        fn decodes_video_frames_with_the_runtime_pipeline() {
-            ffmpeg::init().unwrap();
-            let path = std::env::var_os("KEINE_TEST_VIDEO")
-                .map(PathBuf::from)
-                .expect("KEINE_TEST_VIDEO is required");
-            let source = Arc::new(PreparedSource::filesystem(path));
-            let mut decoder = open_decoder(&source).unwrap();
-            let mut scaler = None;
-            for _ in 0..60 {
-                let frame = decoder.decode_raw().unwrap().unwrap();
-                let expected = frame.width() as usize * frame.height() as usize * 4;
-                assert_eq!(
-                    convert_to_rgba(&frame, &mut scaler).unwrap().len(),
-                    expected
-                );
-            }
-        }
-
-        #[test]
-        #[ignore = "set KEINE_TEST_VIDEO to a local video with an audio track"]
-        fn decodes_video_and_audio_incrementally() {
-            let path = std::env::var_os("KEINE_TEST_VIDEO")
-                .map(PathBuf::from)
-                .expect("KEINE_TEST_VIDEO is required");
-            let source = Arc::new(PreparedSource::filesystem(path.clone()));
-            let mut video = VideoDecoder::open(&source).unwrap();
-            let frame = video.decode_raw().unwrap().unwrap();
-            assert!(frame.width() > 0 && frame.height() > 0);
-
-            let mut audio = FfmpegAudioStream::open(source, false).unwrap();
-            assert!(audio.by_ref().take(4_096).any(|sample| sample != 0.0));
-        }
     }
 }
+
+#[cfg(all(
+    feature = "video-ffmpeg",
+    not(all(feature = "video-native", target_os = "macos"))
+))]
+pub(crate) use ffmpeg_backend::validate_ffmpeg_video;
 
 #[cfg(all(
     feature = "video-ffmpeg",

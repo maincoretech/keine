@@ -28,11 +28,23 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - name: Check publisher pipeline
-        run: cargo test --workspace --no-default-features --features publisher package::tests
-      - name: Check typed video backend
+        run: cargo test --workspace --no-default-features --features publisher
+      - name: Check FFmpeg video unit contracts
         if: runner.os == 'Linux' || runner.os == 'Windows'
-        run: cargo test --workspace --no-default-features --features publisher,video-ffmpeg decodes_encrypted_hakutaku_video_through_random_access
-      - name: Check AVFoundation video backend
+        run: >-
+          cargo test -p keine --no-default-features --features publisher,video-ffmpeg
+          scene::video::ffmpeg_backend::tests
+      - name: Check FFmpeg video acceptance
+        if: runner.os == 'Linux' || runner.os == 'Windows'
+        run: >-
+          cargo run --locked --no-default-features --features publisher,video-ffmpeg
+          --bin keine-video-acceptance -- dev/fixtures/video/playback.mp4
+      - name: Check native video unit contracts
+        if: runner.os == 'macOS'
+        run: >-
+          cargo test -p keine --no-default-features --features video-native
+          scene::video::
+      - name: Check AVFoundation video acceptance
         if: runner.os == 'macOS'
         run: >-
           cargo run --locked --no-default-features --features publisher,video-native

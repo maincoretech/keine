@@ -61,32 +61,6 @@ impl PreparedSource {
             .extension()
             .and_then(|value| value.to_str())
     }
-
-    #[cfg(all(
-        test,
-        feature = "video-ffmpeg",
-        not(all(feature = "video-native", target_os = "macos"))
-    ))]
-    pub(super) fn filesystem(path: PathBuf) -> Self {
-        use keine_loader::ContentBackend;
-
-        let root = path.parent().unwrap_or_else(|| Path::new(".")).to_owned();
-        let logical_path = path
-            .file_name()
-            .map(PathBuf::from)
-            .expect("test video path must name a file");
-        let mount = ContentMount::new(ContentBackend::FileSystem(root), "")
-            .expect("test video mount must be valid");
-        let length = std::fs::metadata(&path)
-            .expect("test video must exist")
-            .len();
-        Self {
-            mount,
-            logical_path,
-            physical_path: Some(path),
-            length,
-        }
-    }
 }
 
 pub(super) fn prepare_source(

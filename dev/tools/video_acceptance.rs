@@ -1,12 +1,10 @@
-#[cfg(target_os = "macos")]
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "macos")]
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[cfg(target_os = "macos")]
+use keine_loader::ContentMount;
+
 struct Scratch(PathBuf);
 
-#[cfg(target_os = "macos")]
 impl Scratch {
     fn new() -> std::io::Result<Self> {
         let nonce = SystemTime::now()
@@ -26,31 +24,84 @@ impl Scratch {
     }
 }
 
-#[cfg(target_os = "macos")]
 impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(feature = "video-native", target_os = "macos"))]
+fn validate_backend(mounts: &[ContentMount], path: &Path) -> Result<(), String> {
+    keine::validate_native_video(mounts, path)
+}
+
+#[cfg(all(feature = "video-native", target_os = "macos"))]
+fn backend_name() -> &'static str {
+    "AVFoundation"
+}
+
+#[cfg(all(
+    feature = "video-ffmpeg",
+    not(all(feature = "video-native", target_os = "macos"))
+))]
+fn validate_backend(mounts: &[ContentMount], path: &Path) -> Result<(), String> {
+    keine::validate_ffmpeg_video(mounts, path)
+}
+
+#[cfg(all(
+    feature = "video-ffmpeg",
+    not(all(feature = "video-native", target_os = "macos"))
+))]
+fn backend_name() -> &'static str {
+    "FFmpeg"
+}
+
+#[cfg(not(any(
+    all(feature = "video-native", target_os = "macos"),
+    all(
+        feature = "video-ffmpeg",
+        not(all(feature = "video-native", target_os = "macos"))
+    )
+)))]
+fn validate_backend(_mounts: &[ContentMount], _path: &Path) -> Result<(), String> {
+    Err("enable video-native on macOS or video-ffmpeg on Windows/Linux".to_owned())
+}
+
+#[cfg(not(any(
+    all(feature = "video-native", target_os = "macos"),
+    all(
+        feature = "video-ffmpeg",
+        not(all(feature = "video-native", target_os = "macos"))
+    )
+)))]
+fn backend_name() -> &'static str {
+    "unavailable video backend"
+}
+
 fn main() -> std::process::ExitCode {
     use hakutaku_pack::{Identity, PackOptions, pack_directory};
-    use keine_loader::{ContentBackend, ContentMount, HakutakuArchive};
+    use keine_loader::{ContentBackend, HakutakuArchive};
 
     let Some(fixture) = std::env::args_os().nth(1) else {
         eprintln!("usage: keine-video-acceptance <video>");
         return std::process::ExitCode::from(2);
     };
     let fixture = Path::new(&fixture);
+    let extension = fixture
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("mp4");
+    let logical_path = PathBuf::from(format!("playback.{extension}"));
     let result = (|| -> anyhow::Result<()> {
         let temporary = Scratch::new()?;
         let source_dir = temporary.path().join("source");
         std::fs::create_dir(&source_dir)?;
-        std::fs::copy(fixture, source_dir.join("playback.mp4"))?;
+        std::fs::copy(fixture, source_dir.join(&logical_path))?;
+
         let filesystem = ContentMount::new(ContentBackend::FileSystem(source_dir.clone()), "")?;
-        keine::validate_native_video(&[filesystem], Path::new("playback.mp4"))
-            .map_err(anyhow::Error::msg)?;
+        validate_backend(&[filesystem], &logical_path)
+            .map_err(|error| anyhow::anyhow!("filesystem source: {error}"))?;
+
         let release = temporary.path().join("release");
         let identity = Identity::generate()?;
         pack_directory(&PackOptions::new(&source_dir, &release), &identity)?;
@@ -60,23 +111,20 @@ fn main() -> std::process::ExitCode {
             identity.public_key(),
         )?;
         let mount = ContentMount::new(ContentBackend::Hakutaku(archive), "")?;
-        keine::validate_native_video(&[mount], Path::new("playback.mp4"))
-            .map_err(anyhow::Error::msg)
+        validate_backend(&[mount], &logical_path)
+            .map_err(|error| anyhow::anyhow!("Hakutaku source: {error}"))
     })();
     match result {
         Ok(()) => {
-            println!("AVFoundation decoded FS/Hakutaku video frames successfully");
+            println!(
+                "{} decoded filesystem and Hakutaku video successfully",
+                backend_name()
+            );
             std::process::ExitCode::SUCCESS
         }
         Err(error) => {
-            eprintln!("native video acceptance failed: {error:#}");
+            eprintln!("video acceptance failed: {error:#}");
             std::process::ExitCode::FAILURE
         }
     }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn main() -> std::process::ExitCode {
-    eprintln!("native video acceptance is available only on macOS");
-    std::process::ExitCode::from(2)
 }
