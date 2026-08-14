@@ -13,6 +13,7 @@ mod keine {
     const HEADER_SIZE: usize = 28;
     const MAX_METADATA_SIZE: usize = 64 * 1024;
     const MAX_STATE_SIZE: usize = 64 * 1024 * 1024;
+    const MAX_ENCODED_SIZE: usize = HEADER_SIZE + MAX_METADATA_SIZE + MAX_STATE_SIZE;
 
     #[derive(Clone, Copy, Debug, Default)]
     pub struct KeineStore;
@@ -24,6 +25,10 @@ mod keine {
 
         fn extension(&self) -> &'static str {
             "sav"
+        }
+
+        fn maximum_encoded_size(&self) -> usize {
+            MAX_ENCODED_SIZE
         }
 
         fn encode(&self, state: &State) -> Result<Vec<u8>> {
@@ -498,6 +503,11 @@ impl SavedState {
 pub trait StoreAdapter: Send + Sync {
     fn name(&self) -> &'static str;
     fn extension(&self) -> &'static str;
+    /// Maximum complete encoded payload accepted by this adapter.
+    ///
+    /// Storage backends use this value before allocation as well as after
+    /// encoding, so each format has one read/write size invariant.
+    fn maximum_encoded_size(&self) -> usize;
     fn encode(&self, state: &State) -> Result<Vec<u8>>;
     fn decode(&self, bytes: &[u8]) -> Result<SavedState>;
 
@@ -508,8 +518,14 @@ pub trait StoreAdapter: Send + Sync {
     /// payload. Formats with a self-describing metadata prefix should override
     /// this method and stop reading before the state payload.
     fn inspect(&self, reader: &mut dyn Read) -> Result<StoreStatus> {
+        let maximum = self.maximum_encoded_size();
         let mut bytes = Vec::new();
-        reader.read_to_end(&mut bytes)?;
+        reader
+            .take((maximum as u64).saturating_add(1))
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > maximum {
+            anyhow::bail!("store payload exceeds the {maximum}-byte limit");
+        }
         Ok(self.inspect_prefix(&bytes))
     }
 
@@ -517,4 +533,54 @@ pub trait StoreAdapter: Send + Sync {
     /// using the default reader implementation this is the complete payload;
     /// prefix-aware adapters may receive only their header and metadata.
     fn inspect_prefix(&self, prefix: &[u8]) -> StoreStatus;
+}
+
+#[cfg(test)]
+mod adapter_contract_tests {
+    use std::io::Cursor;
+
+    use super::*;
+
+    struct TinyStore;
+
+    impl StoreAdapter for TinyStore {
+        fn name(&self) -> &'static str {
+            "tiny"
+        }
+
+        fn extension(&self) -> &'static str {
+            "tiny"
+        }
+
+        fn maximum_encoded_size(&self) -> usize {
+            4
+        }
+
+        fn encode(&self, _state: &State) -> Result<Vec<u8>> {
+            unreachable!()
+        }
+
+        fn decode(&self, _bytes: &[u8]) -> Result<SavedState> {
+            unreachable!()
+        }
+
+        fn inspect_prefix(&self, _prefix: &[u8]) -> StoreStatus {
+            StoreStatus::Corrupt
+        }
+    }
+
+    #[test]
+    fn default_inspection_honors_the_adapter_size_limit() {
+        assert_eq!(
+            TinyStore.inspect(&mut Cursor::new([0_u8; 4])).unwrap(),
+            StoreStatus::Corrupt
+        );
+        assert!(
+            TinyStore
+                .inspect(&mut Cursor::new([0_u8; 5]))
+                .unwrap_err()
+                .to_string()
+                .contains("4-byte limit")
+        );
+    }
 }

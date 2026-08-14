@@ -48,7 +48,8 @@ pub(crate) fn read_limited(path: &Path, maximum: usize) -> Result<Vec<u8>> {
         );
     }
     let mut bytes = Vec::with_capacity(declared as usize);
-    file.take(maximum as u64 + 1).read_to_end(&mut bytes)?;
+    file.take((maximum as u64).saturating_add(1))
+        .read_to_end(&mut bytes)?;
     if bytes.len() > maximum {
         bail!("{} grew beyond the {maximum}-byte limit", path.display());
     }

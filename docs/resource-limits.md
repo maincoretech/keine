@@ -137,6 +137,7 @@ required 与 deferred 资源不会写入同一个 segment。上述值是滚段�
 |---|---:|---:|
 | 单个 save metadata | 64 KiB | — |
 | 单个 save state | 64 MiB | — |
+| 完整 save envelope | 67,174,428 bytes（28-byte header + 上述两段） | — |
 | settings | 64 KiB | — |
 | gallery | 16 MiB | 65,536 个 CG+BGM 条目 |
 | profile | 16 MiB | 65,536 个 global variables |
@@ -147,6 +148,11 @@ required 与 deferred 资源不会写入同一个 segment。上述值是滚段�
 Backup V2 import 直接从已受限的 envelope 借用文件名和 payload，不再为每个文件复制一份完整
 数据。Export 仍会同时持有源文件集合和序列化 buffer，所以 128 MiB 是当前整体编码方案的
 短期安全界限；若要进一步降低峰值，应升级为 streaming container，而不是重新放大该常量。
+
+`StoreAdapter::maximum_encoded_size()` 是单槽存档读写的共同上限。LOAD 会在为完整文件分配
+内存前先检查 filesystem metadata 报告的文件长度，并以 `maximum + 1` 的 bounded read 防止并发增长；
+SAVE 也会拒绝 codec 写出超过同一上限的 payload。槽位列表使用格式自己的前缀检查，但
+adapter 的默认完整检查路径同样遵守该上限。
 
 ## 6. 确定性执行保护
 

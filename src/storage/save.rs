@@ -2,7 +2,7 @@ use std::fs::{self, File};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use bevy::app::AppExit;
 use bevy::prelude::*;
 use keine_core::State;
@@ -35,6 +35,14 @@ pub fn save_game(
         .with_context(|| format!("failed to create save directory {}", parent.display()))?;
 
     let bytes = store.encode(state)?;
+    let maximum = store.maximum_encoded_size();
+    if bytes.len() > maximum {
+        bail!(
+            "{} store encoded {} bytes, exceeding its {maximum}-byte limit",
+            store.name(),
+            bytes.len()
+        );
+    }
 
     super::write_atomically(&path, &bytes)?;
     log::info!("saved slot {slot}");
@@ -43,8 +51,8 @@ pub fn save_game(
 
 pub fn load_game(store: &dyn StoreAdapter, slot: u32, project_root: &Path) -> Result<SavedState> {
     let path = slot_path(store, project_root, slot);
-    let bytes =
-        fs::read(&path).with_context(|| format!("failed to open save {}", path.display()))?;
+    let bytes = super::read_limited(&path, store.maximum_encoded_size())
+        .with_context(|| format!("failed to open save {}", path.display()))?;
     let state = store
         .decode(&bytes)
         .with_context(|| format!("failed to parse save {}", path.display()))?;
@@ -225,6 +233,22 @@ mod tests {
         ));
         assert!(load_game(&KeineStore, 1, &root).is_err());
         assert!(load_game(&KeineStore, 2, &root).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_oversized_slots_before_reading_the_payload() {
+        let root = temp_root("oversized");
+        let path = slot_path(&KeineStore, &root, 1);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let file = File::create(&path).unwrap();
+        file.set_len(KeineStore.maximum_encoded_size() as u64 + 1)
+            .unwrap();
+
+        let error = load_game(&KeineStore, 1, &root).unwrap_err();
+        assert!(error.to_string().contains("failed to open save"));
+        assert!(format!("{error:#}").contains("exceeding the"));
+
         let _ = fs::remove_dir_all(root);
     }
 

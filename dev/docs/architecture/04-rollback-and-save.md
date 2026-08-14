@@ -70,7 +70,10 @@ metadata 包含：
 - scene 与 cursor；
 - 当前 speaker 与纯文本对白预览。
 
-metadata 上限为 64 KiB，state payload 上限为 64 MiB；完整解码时 header 声明的两段长度必须与文件实际长度完全一致。metadata 与 state 各有一个 CRC32；槽位列表只读取并校验 header + metadata，真正 LOAD 时才读取、校验并反序列化 state payload。
+metadata 上限为 64 KiB，state payload 上限为 64 MiB，连同 28-byte header 后完整文件最多
+67,174,428 bytes。LOAD 在完整分配前先用该总上限执行 bounded read，再由 decoder 要求 header
+声明的两段长度与文件实际长度完全一致。metadata 与 state 各有一个 CRC32；槽位列表只读取并
+校验 header + metadata，真正 LOAD 时才读取、校验并反序列化 state payload。
 
 `State` 的 Serde payload 会跳过：
 
