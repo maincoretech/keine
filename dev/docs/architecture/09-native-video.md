@@ -30,7 +30,10 @@
 Windows CI 使用 `.github/actions/setup-video/vcpkg.json` 的完整 vcpkg baseline 固定 FFmpeg
 8.1.2，与 Rust `ffmpeg-next 8.1` binding 保持同一 release branch。升级任一侧时必须同步升级
 另一侧并通过 Windows feature-specific unit、acceptance 与 release build，不能依赖 runner
-预装 vcpkg registry 的最新 FFmpeg 主版本。
+预装 vcpkg registry 的最新 FFmpeg 主版本。Windows vcpkg、Linux development packages 与
+Rust crate features 都只启用解码所需的 `avcodec`、`avformat`、`swscale`、`swresample`
+（以及隐式 `avutil`）；不构建或安装未使用的 `avdevice`、`avfilter`。macOS 发行只使用
+AVFoundation，不携带 FFmpeg SDK。
 
 首选发行容器为 MP4/M4V，编码为 H.264 + AAC。MOV 可作为开发输入；WebM/MKV 只保证
 FFmpeg 后端。透明视频不进入第一阶段承诺，现有 `VideoMode::Mixed` 是黑底素材的 Screen

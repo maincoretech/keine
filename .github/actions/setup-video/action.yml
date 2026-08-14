@@ -22,7 +22,7 @@ runs:
         if [[ '${{ inputs.enabled }}' == 'true' ]]; then
           packages+=(
             pkg-config libavcodec-dev libavformat-dev libavutil-dev
-            libavdevice-dev libavfilter-dev libswscale-dev libswresample-dev
+            libswscale-dev libswresample-dev
           )
         fi
         sudo apt-get update
@@ -33,7 +33,7 @@ runs:
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         path: ${{ runner.temp }}/vcpkg-binary-cache
-        key: vcpkg-ffmpeg-8.1.2-${{ inputs.windows-triplet }}-v1
+        key: vcpkg-ffmpeg-8.1.2-decode-${{ inputs.windows-triplet }}-v1
 
     - name: Install Windows FFmpeg SDK
       if: runner.os == 'Windows' && inputs.enabled == 'true'
