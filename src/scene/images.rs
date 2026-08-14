@@ -4,6 +4,7 @@ use std::io;
 use bevy::asset::{AssetApp, AssetId, AssetLoader, LoadContext, RenderAssetUsages, io::Reader};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use futures_lite::io::AsyncReadExt;
 use libwebp_sys::{
     VP8StatusCode, WEBP_CSP_MODE, WebPDecode, WebPDecoderConfig, WebPEncodeRGBA, WebPFree,
     WebPFreeDecBuffer, WebPGetFeatures, WebPInitDecoderConfig, WebPRGBABuffer,
@@ -15,6 +16,10 @@ const BACKGROUND_LIMIT: UVec2 = UVec2::new(
     keine_core::DESIGN_WIDTH as u32,
     keine_core::DESIGN_HEIGHT as u32,
 );
+const MAX_WEBP_FILE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_WEBP_SOURCE_PIXELS: u64 = 64 * 1024 * 1024;
+const MAX_WEBP_OUTPUT_PIXELS: u64 = 16 * 1024 * 1024;
+const MAX_SPRITE_HEIGHT: f32 = keine_core::DESIGN_HEIGHT * 4.0;
 
 pub(crate) struct NativeWebpPlugin {
     sprite_height: f32,
@@ -50,8 +55,7 @@ impl AssetLoader for NativeWebpLoader {
         _settings: &Self::Settings,
         load_context: &mut LoadContext<'_>,
     ) -> Result<Image, Self::Error> {
-        let mut bytes = Vec::new();
-        reader.read_to_end(&mut bytes).await?;
+        let bytes = read_webp_input(reader).await?;
         let path = load_context.path().path().to_string_lossy();
         decode_webp(&bytes, |original| {
             target_size(&path, original, self.sprite_height)
@@ -60,6 +64,31 @@ impl AssetLoader for NativeWebpLoader {
 
     fn extensions(&self) -> &[&str] {
         &["webp"]
+    }
+}
+
+async fn read_webp_input(reader: &mut dyn Reader) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let mut chunk = [0_u8; 64 * 1024];
+    loop {
+        let read = reader.read(&mut chunk).await?;
+        if read == 0 {
+            return Ok(bytes);
+        }
+        let new_len = bytes
+            .len()
+            .checked_add(read)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "WebP size overflow"))?;
+        if new_len > MAX_WEBP_FILE_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("WebP exceeds the {MAX_WEBP_FILE_BYTES}-byte input limit"),
+            ));
+        }
+        bytes
+            .try_reserve_exact(read)
+            .map_err(|error| io::Error::other(format!("failed to reserve WebP input: {error}")))?;
+        bytes.extend_from_slice(&chunk[..read]);
     }
 }
 
@@ -177,6 +206,11 @@ fn is_resizeable(image: &Image) -> bool {
 
 fn target_size(path: &str, original: UVec2, sprite_height: f32) -> UVec2 {
     let limit = if is_figure_path(path) {
+        let sprite_height = if sprite_height.is_finite() && sprite_height > 0.0 {
+            sprite_height.min(MAX_SPRITE_HEIGHT)
+        } else {
+            keine_core::DESIGN_HEIGHT
+        };
         UVec2::new(keine_core::DESIGN_WIDTH as u32, sprite_height.ceil() as u32)
     } else if is_background_path(path) {
         BACKGROUND_LIMIT
@@ -208,6 +242,12 @@ fn decode_webp(bytes: &[u8], target: impl FnOnce(UVec2) -> UVec2) -> io::Result<
     if bytes.is_empty() {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "empty WebP"));
     }
+    if bytes.len() > MAX_WEBP_FILE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("WebP exceeds the {MAX_WEBP_FILE_BYTES}-byte input limit"),
+        ));
+    }
 
     // SAFETY: libwebp initializes every field before it is read. Input and
     // output buffers remain alive for the full native call, and all sizes are
@@ -229,7 +269,9 @@ fn decode_webp(bytes: &[u8], target: impl FnOnce(UVec2) -> UVec2) -> io::Result<
         }
 
         let original = UVec2::new(config.input.width as u32, config.input.height as u32);
+        check_pixel_budget("source", original, MAX_WEBP_SOURCE_PIXELS)?;
         let output = target(original).max(UVec2::ONE);
+        check_pixel_budget("output", output, MAX_WEBP_OUTPUT_PIXELS)?;
         let stride = output
             .x
             .checked_mul(4)
@@ -238,7 +280,11 @@ fn decode_webp(bytes: &[u8], target: impl FnOnce(UVec2) -> UVec2) -> io::Result<
         let output_len = (stride as usize)
             .checked_mul(output.y as usize)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "WebP output too large"))?;
-        let mut rgba = vec![0_u8; output_len];
+        let mut rgba = Vec::new();
+        rgba.try_reserve_exact(output_len).map_err(|error| {
+            io::Error::other(format!("failed to reserve WebP output buffer: {error}"))
+        })?;
+        rgba.resize(output_len, 0);
 
         config.options.use_threads = 1;
         if output != original {
@@ -275,6 +321,22 @@ fn decode_webp(bytes: &[u8], target: impl FnOnce(UVec2) -> UVec2) -> io::Result<
             RenderAssetUsages::RENDER_WORLD,
         ))
     }
+}
+
+fn check_pixel_budget(label: &str, size: UVec2, maximum: u64) -> io::Result<()> {
+    let pixels = u64::from(size.x)
+        .checked_mul(u64::from(size.y))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "WebP pixel count overflow"))?;
+    if pixels > maximum {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "WebP {label} dimensions {}x{} exceed the {maximum}-pixel limit",
+                size.x, size.y
+            ),
+        ));
+    }
+    Ok(())
 }
 
 const PREVIEW_WEBP_QUALITY: f32 = 80.0;
@@ -356,6 +418,20 @@ mod tests {
         assert_eq!(
             target_size("background/bg.webp", UVec2::new(1280, 720), 825.0),
             UVec2::new(1280, 720)
+        );
+    }
+
+    #[test]
+    fn bounds_invalid_sprite_heights_and_image_pixel_budgets() {
+        assert_eq!(
+            target_size("figure/stand.webp", UVec2::new(1920, 1080), f32::INFINITY),
+            UVec2::new(1920, 1080)
+        );
+        assert!(
+            check_pixel_budget("source", UVec2::new(8_192, 8_192), MAX_WEBP_SOURCE_PIXELS).is_ok()
+        );
+        assert!(
+            check_pixel_budget("source", UVec2::new(8_193, 8_192), MAX_WEBP_SOURCE_PIXELS).is_err()
         );
     }
 

@@ -157,6 +157,9 @@ mod ffmpeg_backend {
     use crate::scene::effects::material::{StageMaterial, StageQuad};
     use crate::storage::settings::RuntimeSettings;
 
+    const MAX_VIDEO_DIMENSION: u32 = 4_096;
+    const MAX_VIDEO_PIXELS: u64 = 4_096 * 2_304;
+
     #[derive(Resource, Default)]
     pub(super) struct VideoPlayback {
         sessions: HashMap<String, VideoSession>,
@@ -584,8 +587,7 @@ mod ffmpeg_backend {
                     }) as f32;
                     let width = frame.width() as usize;
                     let height = frame.height() as usize;
-                    let rgba = convert_to_rgba(&frame, &mut rgba_converter)
-                        .map_err(|error| error.to_string());
+                    let rgba = convert_to_rgba(&frame, &mut rgba_converter);
                     let rgba = match rgba {
                         Ok(rgba) => rgba,
                         Err(error) => {
@@ -630,9 +632,10 @@ mod ffmpeg_backend {
     fn convert_to_rgba(
         source: &ffmpeg::frame::Video,
         converter: &mut Option<RgbaConverter>,
-    ) -> Result<Vec<u8>, ffmpeg::Error> {
+    ) -> Result<Vec<u8>, String> {
         let width = source.width();
         let height = source.height();
+        let (row_bytes, row_count, frame_bytes) = video_frame_layout(width, height)?;
         let converter = match converter {
             Some(converter) => converter,
             slot @ None => slot.insert(RgbaConverter {
@@ -644,25 +647,84 @@ mod ffmpeg_backend {
                     width,
                     height,
                     Flags::FAST_BILINEAR,
-                )?,
+                )
+                .map_err(|error| error.to_string())?,
                 target: ffmpeg::frame::Video::empty(),
             }),
         };
-        converter.scaler.run(source, &mut converter.target)?;
+        converter
+            .scaler
+            .run(source, &mut converter.target)
+            .map_err(|error| error.to_string())?;
 
-        let row_bytes = width as usize * 4;
-        let height = height as usize;
         let stride = converter.target.stride(0);
         let data = converter.target.data(0);
-        if stride == row_bytes {
-            return Ok(data[..row_bytes * height].to_vec());
+        if stride < row_bytes {
+            return Err(format!(
+                "FFmpeg RGBA stride {stride} is smaller than row width {row_bytes}"
+            ));
+        }
+        let data_bytes = stride
+            .checked_mul(row_count)
+            .ok_or_else(|| "FFmpeg RGBA plane size overflow".to_owned())?;
+        if data.len() < data_bytes {
+            return Err(format!(
+                "FFmpeg RGBA plane is truncated: {} < {data_bytes}",
+                data.len()
+            ));
         }
 
-        let mut rgba = Vec::with_capacity(row_bytes * height);
-        for row in data.chunks(stride).take(height) {
-            rgba.extend_from_slice(&row[..row_bytes]);
+        let mut rgba = Vec::new();
+        rgba.try_reserve_exact(frame_bytes)
+            .map_err(|error| format!("failed to reserve FFmpeg RGBA frame: {error}"))?;
+        if stride == row_bytes {
+            rgba.extend_from_slice(
+                data.get(..frame_bytes)
+                    .ok_or_else(|| "FFmpeg RGBA frame is truncated".to_owned())?,
+            );
+            return Ok(rgba);
+        }
+
+        for row in 0..row_count {
+            let start = row
+                .checked_mul(stride)
+                .ok_or_else(|| "FFmpeg RGBA row offset overflow".to_owned())?;
+            let end = start
+                .checked_add(row_bytes)
+                .ok_or_else(|| "FFmpeg RGBA row size overflow".to_owned())?;
+            rgba.extend_from_slice(
+                data.get(start..end)
+                    .ok_or_else(|| "FFmpeg RGBA row is truncated".to_owned())?,
+            );
         }
         Ok(rgba)
+    }
+
+    fn video_frame_layout(width: u32, height: u32) -> Result<(usize, usize, usize), String> {
+        let pixels = u64::from(width)
+            .checked_mul(u64::from(height))
+            .ok_or_else(|| "video frame pixel count overflow".to_owned())?;
+        if width == 0
+            || height == 0
+            || width > MAX_VIDEO_DIMENSION
+            || height > MAX_VIDEO_DIMENSION
+            || pixels > MAX_VIDEO_PIXELS
+        {
+            return Err(format!(
+                "video frame {width}x{height} exceeds the {MAX_VIDEO_DIMENSION}-pixel dimension / {MAX_VIDEO_PIXELS}-pixel area limit"
+            ));
+        }
+        let width = usize::try_from(width)
+            .map_err(|_| "video frame width exceeds this platform".to_owned())?;
+        let height = usize::try_from(height)
+            .map_err(|_| "video frame height exceeds this platform".to_owned())?;
+        let row_bytes = width
+            .checked_mul(4)
+            .ok_or_else(|| "video frame row size overflow".to_owned())?;
+        let frame_bytes = row_bytes
+            .checked_mul(height)
+            .ok_or_else(|| "video frame byte size overflow".to_owned())?;
+        Ok((row_bytes, height, frame_bytes))
     }
 
     fn send_event(
@@ -900,6 +962,14 @@ mod ffmpeg_backend {
         use keine_loader::{ContentBackend, ContentMount, HakutakuArchive};
 
         use super::*;
+
+        #[test]
+        fn rejects_zero_sized_and_oversized_video_frames_before_allocation() {
+            assert!(video_frame_layout(4_096, 2_304).is_ok());
+            assert!(video_frame_layout(0, 1_080).is_err());
+            assert!(video_frame_layout(4_097, 2_160).is_err());
+            assert!(video_frame_layout(7_680, 4_320).is_err());
+        }
 
         #[cfg(feature = "publisher")]
         fn playback_fixture() -> PathBuf {
