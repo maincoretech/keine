@@ -94,12 +94,6 @@ mod cancellable_channel_tests {
 ))]
 use ffmpeg_next as _;
 
-#[cfg(not(any(
-    feature = "video-ffmpeg",
-    all(feature = "video-native", target_os = "macos")
-)))]
-use crate::runtime::resources::GameState;
-
 #[cfg(any(
     feature = "video-ffmpeg",
     all(feature = "video-native", target_os = "macos")
@@ -118,6 +112,21 @@ mod metal_frame;
 #[cfg(all(feature = "video-native", target_os = "macos"))]
 pub(crate) use avfoundation_backend::validate_native_video;
 
+#[cfg(all(feature = "video-native", target_os = "macos"))]
+use avfoundation_backend::BackendPlugin as SelectedVideoBackendPlugin;
+
+#[cfg(all(
+    feature = "video-ffmpeg",
+    not(all(feature = "video-native", target_os = "macos"))
+))]
+use ffmpeg_backend::BackendPlugin as SelectedVideoBackendPlugin;
+
+#[cfg(not(any(
+    feature = "video-ffmpeg",
+    all(feature = "video-native", target_os = "macos")
+)))]
+use missing_backend::BackendPlugin as SelectedVideoBackendPlugin;
+
 #[cfg(all(
     feature = "video-ffmpeg",
     not(all(feature = "video-native", target_os = "macos"))
@@ -129,44 +138,7 @@ pub(crate) struct VideoPlugin;
 
 impl Plugin for VideoPlugin {
     fn build(&self, app: &mut App) {
-        #[cfg(all(feature = "video-native", target_os = "macos"))]
-        app.init_non_send::<avfoundation_backend::VideoPlayback>();
-
-        #[cfg(all(feature = "video-native", target_os = "macos"))]
-        metal_frame::install(app);
-
-        #[cfg(all(feature = "video-native", target_os = "macos"))]
-        app.add_systems(
-            Update,
-            avfoundation_backend::sync_video_playback.in_set(crate::runtime::GameSystemSet::Sync),
-        );
-
-        #[cfg(all(
-            feature = "video-ffmpeg",
-            not(all(feature = "video-native", target_os = "macos"))
-        ))]
-        {
-            use bevy::audio::AddAudioSource;
-
-            if let Err(error) = ffmpeg_next::init() {
-                log::error!("failed to initialize FFmpeg video backend: {error}");
-            }
-            app.init_resource::<VideoPlayback>()
-                .init_asset::<ffmpeg_backend::FfmpegVideoAudio>()
-                .add_audio_source::<ffmpeg_backend::FfmpegVideoAudio>()
-                .add_systems(
-                    Update,
-                    sync_video_playback.in_set(crate::runtime::GameSystemSet::Sync),
-                );
-        }
-        #[cfg(not(any(
-            feature = "video-ffmpeg",
-            all(feature = "video-native", target_os = "macos")
-        )))]
-        app.init_resource::<MissingVideoBackend>().add_systems(
-            Update,
-            reject_unavailable_video.in_set(crate::runtime::GameSystemSet::Sync),
-        );
+        app.add_plugins(SelectedVideoBackendPlugin);
     }
 }
 
@@ -174,24 +146,39 @@ impl Plugin for VideoPlugin {
     feature = "video-ffmpeg",
     all(feature = "video-native", target_os = "macos")
 )))]
-#[derive(Resource, Default)]
-struct MissingVideoBackend(bool);
+mod missing_backend {
+    use super::*;
+    use crate::runtime::resources::GameState;
 
-#[cfg(not(any(
-    feature = "video-ffmpeg",
-    all(feature = "video-native", target_os = "macos")
-)))]
-fn reject_unavailable_video(mut state: ResMut<GameState>, mut warned: ResMut<MissingVideoBackend>) {
-    if state.videos.is_empty() {
-        return;
+    pub(super) struct BackendPlugin;
+
+    impl Plugin for BackendPlugin {
+        fn build(&self, app: &mut App) {
+            app.init_resource::<MissingVideoBackend>().add_systems(
+                Update,
+                reject_unavailable_video.in_set(crate::runtime::GameSystemSet::Sync),
+            );
+        }
     }
-    if !warned.0 {
-        warned.0 = true;
-        log::error!(
-            "video playback was requested, but this binary has no video backend for this platform"
-        );
+
+    #[derive(Resource, Default)]
+    struct MissingVideoBackend(bool);
+
+    fn reject_unavailable_video(
+        mut state: ResMut<GameState>,
+        mut warned: ResMut<MissingVideoBackend>,
+    ) {
+        if state.videos.is_empty() {
+            return;
+        }
+        if !warned.0 {
+            warned.0 = true;
+            log::error!(
+                "video playback was requested, but this binary has no video backend for this platform"
+            );
+        }
+        state.videos.clear();
     }
-    state.videos.clear();
 }
 
 #[cfg(all(
@@ -231,8 +218,27 @@ mod ffmpeg_backend {
     use crate::scene::effects::material::{StageMaterial, StageQuad};
     use crate::storage::settings::RuntimeSettings;
 
+    pub(super) struct BackendPlugin;
+
+    impl Plugin for BackendPlugin {
+        fn build(&self, app: &mut App) {
+            use bevy::audio::AddAudioSource;
+
+            if let Err(error) = ffmpeg::init() {
+                log::error!("failed to initialize FFmpeg video backend: {error}");
+            }
+            app.init_resource::<VideoPlayback>()
+                .init_asset::<FfmpegVideoAudio>()
+                .add_audio_source::<FfmpegVideoAudio>()
+                .add_systems(
+                    Update,
+                    sync_video_playback.in_set(crate::runtime::GameSystemSet::Sync),
+                );
+        }
+    }
+
     #[derive(Resource, Default)]
-    pub(super) struct VideoPlayback {
+    struct VideoPlayback {
         sessions: HashMap<String, VideoSession>,
         retired_decoders: Vec<thread::JoinHandle<()>>,
         memory_budget: VideoMemoryBudget,
@@ -325,7 +331,7 @@ mod ffmpeg_backend {
     }
 
     #[derive(Asset, TypePath, Clone, Debug)]
-    pub(super) struct FfmpegVideoAudio {
+    struct FfmpegVideoAudio {
         source: Arc<PreparedSource>,
         looped: bool,
     }
@@ -342,7 +348,7 @@ mod ffmpeg_backend {
     }
 
     #[derive(SystemParam)]
-    pub(super) struct VideoResources<'w> {
+    struct VideoResources<'w> {
         content: Res<'w, ContentProjectResource>,
         config: Res<'w, GameConfigResource>,
         settings: Res<'w, RuntimeSettings>,
@@ -352,7 +358,7 @@ mod ffmpeg_backend {
         audio: ResMut<'w, Assets<FfmpegVideoAudio>>,
     }
 
-    pub(super) fn sync_video_playback(
+    fn sync_video_playback(
         mut commands: Commands,
         mut state: ResMut<GameState>,
         windows: Query<Ref<Window>>,
@@ -924,7 +930,7 @@ mod ffmpeg_backend {
         super::send_cancellable(sender, event, cancelled, cancel_receiver)
     }
 
-    pub(super) struct FfmpegAudioStream {
+    struct FfmpegAudioStream {
         input: Option<MediaInput>,
         decoder: Option<ffmpeg::decoder::Audio>,
         resampler: Option<ffmpeg::software::resampling::Context>,

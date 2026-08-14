@@ -37,8 +37,21 @@ use crate::runtime::resources::{ContentProjectResource, GameConfigResource, Game
 use crate::scene::effects::material::{StageMaterial, StageQuad};
 use crate::storage::settings::RuntimeSettings;
 
+pub(super) struct BackendPlugin;
+
+impl Plugin for BackendPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_non_send::<VideoPlayback>();
+        super::metal_frame::install(app);
+        app.add_systems(
+            Update,
+            sync_video_playback.in_set(crate::runtime::GameSystemSet::Sync),
+        );
+    }
+}
+
 #[derive(Default)]
-pub(super) struct VideoPlayback {
+struct VideoPlayback {
     sessions: HashMap<String, VideoSession>,
     retired_sources: Vec<thread::JoinHandle<()>>,
     memory_budget: VideoMemoryBudget,
@@ -176,7 +189,7 @@ impl Drop for NativePlayer {
 }
 
 #[derive(SystemParam)]
-pub(super) struct VideoResources<'w> {
+struct VideoResources<'w> {
     content: Res<'w, ContentProjectResource>,
     config: Res<'w, GameConfigResource>,
     settings: Res<'w, RuntimeSettings>,
@@ -186,7 +199,7 @@ pub(super) struct VideoResources<'w> {
     frame_bridge: Res<'w, MetalFrameBridge>,
 }
 
-pub(super) fn sync_video_playback(
+fn sync_video_playback(
     mut commands: Commands,
     mut state: ResMut<GameState>,
     windows: Query<Ref<Window>>,

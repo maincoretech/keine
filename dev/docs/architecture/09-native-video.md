@@ -39,6 +39,20 @@ AVFoundation，不携带 FFmpeg SDK。
 FFmpeg 后端。透明视频不进入第一阶段承诺，现有 `VideoMode::Mixed` 是黑底素材的 Screen
 混合，不等同于 alpha channel。
 
+### 可插拔边界
+
+视频按两层插件边界组织，而不是让平台对象穿过整个运行时：
+
+- `keine-media` 是小型、无 Bevy 依赖的 codec crate，承接可独立测试和 fuzz 的有界原生
+  编解码入口；图片 loader 只负责把其输出适配成 Bevy `Image`；
+- 顶层 `VideoPlugin` 只按 target/feature 选择一个 backend `Plugin`。FFmpeg、
+  AVFoundation/Metal 和无后端降级插件分别注册自己的资源、线程模型和 Update systems。
+
+新后端应实现这一 backend plugin 形状，并复用 `video/shared.rs` 的 source、visual 和全局
+内存预算契约。这里有意不用动态 trait object：FFmpeg playback 是可发送的 worker/resource，
+AVFoundation playback 则必须是 macOS 主线程 `NonSend` 状态；构建期选择能保留这两个所有权
+不变量，也不会为每帧调用增加虚分派。
+
 ## 当前数据路径
 
 FS mount 保留平台快速路径，直接把真实文件路径交给播放器。Hakutaku 和其他虚拟 mount 则
