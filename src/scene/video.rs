@@ -1380,9 +1380,3 @@ mod ffmpeg_backend {
     not(all(feature = "video-native", target_os = "macos"))
 ))]
 pub(crate) use ffmpeg_backend::validate_ffmpeg_video;
-
-#[cfg(all(
-    feature = "video-ffmpeg",
-    not(all(feature = "video-native", target_os = "macos"))
-))]
-use ffmpeg_backend::{VideoPlayback, sync_video_playback};
