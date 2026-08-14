@@ -7,7 +7,6 @@ use std::task::{Context, Poll};
 use std::thread;
 use std::time::Duration;
 
-use bevy::asset::io::file::FileAssetReader;
 use bevy::asset::io::{
     AssetReader, AssetReaderError, AssetReaderFuture, AssetSourceBuilder, AssetSourceEvent,
     AssetWatcher, PathStream, Reader, ReaderNotSeekableError, STACK_FUTURE_SIZE, SeekableReader,
@@ -215,72 +214,53 @@ fn logical_asset_path(path: &Path, roots: &[PathBuf]) -> Option<(PathBuf, bool)>
 }
 
 fn watched_path(root: &Path, logical: &Path, is_meta: bool) -> PathBuf {
-    let mut path = root.join(logical);
     if is_meta {
-        let extension = path.extension().map_or_else(
-            || "meta".into(),
-            |value| format!("{}.meta", value.to_string_lossy()),
-        );
-        path.set_extension(extension);
+        root.join(metadata_path(logical))
+    } else {
+        root.join(logical)
     }
-    path
 }
 
-enum MountedReader {
-    FileSystem(FileAssetReader),
-    Content(ContentAssetReader),
+fn metadata_path(path: &Path) -> PathBuf {
+    let mut metadata = path.to_owned();
+    let extension = metadata.extension().map_or_else(
+        || "meta".into(),
+        |value| format!("{}.meta", value.to_string_lossy()),
+    );
+    metadata.set_extension(extension);
+    metadata
 }
+
+struct MountedReader(ContentAssetReader);
 
 impl MountedReader {
     fn new(mount: ContentMount) -> Self {
-        if let Some(root) = mount.filesystem_root() {
-            Self::FileSystem(FileAssetReader::new(root))
-        } else {
-            Self::Content(ContentAssetReader::new(mount))
-        }
+        Self(ContentAssetReader::new(mount))
     }
 
     async fn read<'a>(&'a self, path: &'a Path) -> Result<Box<dyn Reader + 'a>, AssetReaderError> {
-        match self {
-            Self::FileSystem(reader) => reader
-                .read(path)
-                .await
-                .map(|reader| Box::new(reader) as Box<dyn Reader>),
-            Self::Content(reader) => reader
-                .read(path)
-                .await
-                .map(|reader| Box::new(reader) as Box<dyn Reader>),
-        }
+        self.0
+            .read(path)
+            .await
+            .map(|reader| Box::new(reader) as Box<dyn Reader>)
     }
 
     async fn read_meta<'a>(
         &'a self,
         path: &'a Path,
     ) -> Result<Box<dyn Reader + 'a>, AssetReaderError> {
-        match self {
-            Self::FileSystem(reader) => reader
-                .read_meta(path)
-                .await
-                .map(|reader| Box::new(reader) as Box<dyn Reader>),
-            Self::Content(reader) => reader
-                .read_meta(path)
-                .await
-                .map(|reader| Box::new(reader) as Box<dyn Reader>),
-        }
+        self.0
+            .read_meta(path)
+            .await
+            .map(|reader| Box::new(reader) as Box<dyn Reader>)
     }
 
     async fn read_directory(&self, path: &Path) -> Result<Box<PathStream>, AssetReaderError> {
-        match self {
-            Self::FileSystem(reader) => reader.read_directory(path).await,
-            Self::Content(reader) => reader.read_directory(path).await,
-        }
+        self.0.read_directory(path).await
     }
 
     async fn is_directory(&self, path: &Path) -> Result<bool, AssetReaderError> {
-        match self {
-            Self::FileSystem(reader) => reader.is_directory(path).await,
-            Self::Content(reader) => reader.is_directory(path).await,
-        }
+        self.0.is_directory(path).await
     }
 }
 
@@ -371,7 +351,14 @@ impl AssetReader for ContentAssetReader {
     }
 
     async fn read_meta<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
-        Err::<ContentStreamReader, _>(AssetReaderError::NotFound(path.to_owned()))
+        let metadata = metadata_path(path);
+        if !self.mount.contains_file(&metadata) {
+            return Err(AssetReaderError::NotFound(path.to_owned()));
+        }
+        self.mount
+            .open_file(&metadata)
+            .map(ContentStreamReader::new)
+            .map_err(asset_io_error)
     }
 
     async fn read_directory<'a>(
@@ -458,7 +445,9 @@ mod tests {
         fs::create_dir_all(&base).unwrap();
         fs::create_dir_all(&patch).unwrap();
         fs::write(base.join("shared.txt"), "base").unwrap();
+        fs::write(base.join("shared.txt.meta"), "base-meta").unwrap();
         fs::write(patch.join("shared.txt"), "patch").unwrap();
+        fs::write(patch.join("shared.txt.meta"), "patch-meta").unwrap();
         let overlay = OverlayAssetReader::new(vec![
             keine_loader::SourceMount::assets("test", "base", base)
                 .asset
@@ -475,6 +464,13 @@ mod tests {
             bytes
         });
         assert_eq!(bytes, b"patch");
+        let metadata = block_on(async {
+            let mut reader = overlay.read_meta(Path::new("shared.txt")).await.unwrap();
+            let mut bytes = Vec::new();
+            Reader::read_to_end(&mut reader, &mut bytes).await.unwrap();
+            bytes
+        });
+        assert_eq!(metadata, b"patch-meta");
         let _ = fs::remove_dir_all(root);
     }
 
@@ -499,5 +495,30 @@ mod tests {
             watched_path(&root, Path::new("background/sea.png"), true),
             root.join("background/sea.png.meta")
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn overlay_reader_does_not_follow_assets_outside_a_filesystem_mount() {
+        use std::os::unix::fs::symlink;
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("keine-overlay-boundary-{nonce}"));
+        let assets = root.join("assets");
+        fs::create_dir_all(&assets).unwrap();
+        fs::write(root.join("secret.txt"), b"secret").unwrap();
+        symlink(root.join("secret.txt"), assets.join("escape.txt")).unwrap();
+        let overlay = OverlayAssetReader::new(vec![
+            keine_loader::SourceMount::assets("test", "assets", assets)
+                .asset
+                .unwrap(),
+        ]);
+
+        assert!(block_on(overlay.read(Path::new("escape.txt"))).is_err());
+
+        fs::remove_dir_all(root).unwrap();
     }
 }

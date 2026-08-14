@@ -301,4 +301,55 @@ mod tests {
         };
         assert!(load_project(Path::new("."), &[source]).is_err());
     }
+
+    #[test]
+    fn rejects_filesystem_sources_outside_the_project_root() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("keine-source-boundary-{nonce}"));
+        let project = root.join("project");
+        let outside = root.join("outside");
+        fs::create_dir_all(&project).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+
+        let parent_escape = AssetSourceConfig {
+            path: "../outside".into(),
+            format: "fs".into(),
+        };
+        let absolute_escape = AssetSourceConfig {
+            path: outside.to_string_lossy().into_owned(),
+            format: "fs".into(),
+        };
+        assert!(load_project(&project, &[parent_escape]).is_err());
+        assert!(load_project(&project, &[absolute_escape]).is_err());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn rejects_filesystem_source_symlinks_outside_the_project_root() {
+        use std::os::unix::fs::symlink;
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("keine-source-symlink-{nonce}"));
+        let project = root.join("project");
+        let outside = root.join("outside");
+        fs::create_dir_all(&project).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, project.join("escape")).unwrap();
+
+        let source = AssetSourceConfig {
+            path: "escape".into(),
+            format: "fs".into(),
+        };
+        assert!(load_project(&project, &[source]).is_err());
+
+        let _ = fs::remove_dir_all(root);
+    }
 }

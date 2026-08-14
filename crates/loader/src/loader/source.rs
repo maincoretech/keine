@@ -41,8 +41,12 @@ impl ContentBackend {
     pub fn read(&self, path: &Path) -> Result<Vec<u8>> {
         let path = safe_relative(path)?;
         match self {
-            Self::FileSystem(root) => fs::read(root.join(&path))
-                .with_context(|| format!("failed to read {}", root.join(path).display())),
+            Self::FileSystem(root) => {
+                let root = canonical_filesystem_root(root)?;
+                let physical = confined_path(&root, &path)?;
+                fs::read(&physical)
+                    .with_context(|| format!("failed to read {}", physical.display()))
+            }
             Self::Hakutaku(archive) => archive.read(&path),
         }
     }
@@ -52,7 +56,9 @@ impl ContentBackend {
             return false;
         };
         match self {
-            Self::FileSystem(root) => root.join(path).is_file(),
+            Self::FileSystem(root) => canonical_filesystem_root(root)
+                .and_then(|root| confined_path(&root, &path))
+                .is_ok_and(|path| path.is_file()),
             Self::Hakutaku(archive) => archive.contains_file(&path),
         }
     }
@@ -62,7 +68,9 @@ impl ContentBackend {
             return false;
         };
         match self {
-            Self::FileSystem(root) => root.join(path).is_dir(),
+            Self::FileSystem(root) => canonical_filesystem_root(root)
+                .and_then(|root| confined_path(&root, &path))
+                .is_ok_and(|path| path.is_dir()),
             Self::Hakutaku(archive) => archive.is_directory(&path),
         }
     }
@@ -71,11 +79,9 @@ impl ContentBackend {
         let path = safe_relative(path)?;
         match self {
             Self::FileSystem(root) => {
-                let directory = root.join(&path);
-                let mut entries = fs::read_dir(&directory)
-                    .with_context(|| format!("failed to read {}", directory.display()))?
-                    .map(|entry| entry.map(|entry| path.join(entry.file_name())))
-                    .collect::<std::io::Result<Vec<_>>>()?;
+                let root = canonical_filesystem_root(root)?;
+                let directory = confined_path(&root, &path)?;
+                let mut entries = confined_directory_entries(&root, &directory, &path)?;
                 entries.sort();
                 Ok(entries)
             }
@@ -96,13 +102,46 @@ impl ContentBackend {
 pub struct ContentMount {
     backend: ContentBackend,
     prefix: PathBuf,
+    filesystem_root: Option<PathBuf>,
 }
 
 impl ContentMount {
-    pub fn new(backend: ContentBackend, prefix: impl Into<PathBuf>) -> Result<Self> {
+    pub fn new(mut backend: ContentBackend, prefix: impl Into<PathBuf>) -> Result<Self> {
+        let prefix = safe_relative(&prefix.into())?;
+        let filesystem_root = match &mut backend {
+            ContentBackend::FileSystem(root) => {
+                let canonical_root = root.canonicalize().with_context(|| {
+                    format!("failed to resolve content backend {}", root.display())
+                })?;
+                let unresolved_mount = canonical_root.join(&prefix);
+                let mount_root = match unresolved_mount.canonicalize() {
+                    Ok(mount_root) => mount_root,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => unresolved_mount,
+                    Err(error) => {
+                        return Err(error).with_context(|| {
+                            format!(
+                                "failed to resolve content mount {}",
+                                unresolved_mount.display()
+                            )
+                        });
+                    }
+                };
+                if !mount_root.starts_with(&canonical_root) {
+                    bail!(
+                        "content mount escaped backend root {}: {}",
+                        canonical_root.display(),
+                        mount_root.display()
+                    );
+                }
+                *root = canonical_root;
+                Some(mount_root)
+            }
+            ContentBackend::Hakutaku(_) => None,
+        };
         Ok(Self {
             backend,
-            prefix: safe_relative(&prefix.into())?,
+            prefix,
+            filesystem_root,
         })
     }
 
@@ -119,21 +158,28 @@ impl ContentMount {
     }
 
     pub fn read(&self, path: &Path) -> Result<Vec<u8>> {
-        self.backend.read(&self.resolve(path)?)
+        match &self.backend {
+            ContentBackend::FileSystem(_) => {
+                let physical = self.confined_filesystem_path(path)?;
+                fs::read(&physical)
+                    .with_context(|| format!("failed to read {}", physical.display()))
+            }
+            ContentBackend::Hakutaku(archive) => archive.read(&self.resolve(path)?),
+        }
     }
 
     /// Opens one logical file as an adapter-neutral seekable stream.
     pub fn open_file(&self, path: &Path) -> Result<ContentFile> {
-        let path = self.resolve(path)?;
         let inner = match &self.backend {
-            ContentBackend::FileSystem(root) => {
-                let physical = root.join(&path);
+            ContentBackend::FileSystem(_) => {
+                let physical = self.confined_filesystem_path(path)?;
                 ContentFileInner::FileSystem(
                     fs::File::open(&physical)
                         .with_context(|| format!("failed to open {}", physical.display()))?,
                 )
             }
             ContentBackend::Hakutaku(archive) => {
+                let path = self.resolve(path)?;
                 ContentFileInner::Archive(Box::new(archive.open_file(&path)?))
             }
         };
@@ -141,27 +187,54 @@ impl ContentMount {
     }
 
     pub fn contains_file(&self, path: &Path) -> bool {
-        self.resolve(path)
-            .is_ok_and(|path| self.backend.contains_file(&path))
+        match &self.backend {
+            ContentBackend::FileSystem(_) => self
+                .confined_filesystem_path(path)
+                .is_ok_and(|path| path.is_file()),
+            ContentBackend::Hakutaku(archive) => self
+                .resolve(path)
+                .is_ok_and(|path| archive.contains_file(&path)),
+        }
     }
 
     pub fn read_directory(&self, path: &Path) -> Result<Vec<PathBuf>> {
-        let resolved = self.resolve(path)?;
-        self.backend
-            .read_directory(&resolved)?
-            .into_iter()
-            .map(|entry| {
-                entry
-                    .strip_prefix(&self.prefix)
-                    .map(Path::to_owned)
-                    .with_context(|| format!("entry {} escaped mount", entry.display()))
-            })
-            .collect()
+        match &self.backend {
+            ContentBackend::FileSystem(_) => {
+                let logical = safe_relative(path)?;
+                let directory = self.confined_filesystem_path(&logical)?;
+                let mount_root = self
+                    .filesystem_root
+                    .as_deref()
+                    .context("filesystem mount has no root")?;
+                let mut entries = confined_directory_entries(mount_root, &directory, &logical)?;
+                entries.sort();
+                Ok(entries)
+            }
+            ContentBackend::Hakutaku(archive) => {
+                let resolved = self.resolve(path)?;
+                archive
+                    .read_directory(&resolved)
+                    .into_iter()
+                    .map(|entry| {
+                        entry
+                            .strip_prefix(&self.prefix)
+                            .map(Path::to_owned)
+                            .with_context(|| format!("entry {} escaped mount", entry.display()))
+                    })
+                    .collect()
+            }
+        }
     }
 
     pub fn is_directory(&self, path: &Path) -> bool {
-        self.resolve(path)
-            .is_ok_and(|path| self.backend.is_directory(&path))
+        match &self.backend {
+            ContentBackend::FileSystem(_) => self
+                .confined_filesystem_path(path)
+                .is_ok_and(|path| path.is_dir()),
+            ContentBackend::Hakutaku(archive) => self
+                .resolve(path)
+                .is_ok_and(|path| archive.is_directory(&path)),
+        }
     }
 
     /// Recursively collects every file below this mount.
@@ -172,16 +245,70 @@ impl ContentMount {
     /// canonical directory identities prevent links from creating cycles.
     pub(crate) fn recursive_files(&self) -> Result<Vec<PathBuf>> {
         match &self.backend {
-            ContentBackend::FileSystem(root) => collect_filesystem_files(&root.join(&self.prefix)),
+            ContentBackend::FileSystem(_) => collect_filesystem_files(
+                self.filesystem_root
+                    .as_deref()
+                    .context("filesystem mount has no root")?,
+            ),
             ContentBackend::Hakutaku(archive) => Ok(archive.files_under(&self.prefix)),
         }
     }
 
     pub fn filesystem_root(&self) -> Option<PathBuf> {
-        self.backend
-            .filesystem_root()
-            .map(|root| root.join(&self.prefix))
+        self.filesystem_root.clone()
     }
+
+    fn confined_filesystem_path(&self, path: &Path) -> Result<PathBuf> {
+        let logical = safe_relative(path)?;
+        let mount_root = self
+            .filesystem_root
+            .as_deref()
+            .context("filesystem mount has no root")?;
+        confined_path(mount_root, &logical)
+    }
+}
+
+fn canonical_filesystem_root(root: &Path) -> Result<PathBuf> {
+    root.canonicalize()
+        .with_context(|| format!("failed to resolve content root {}", root.display()))
+}
+
+fn confined_path(root: &Path, path: &Path) -> Result<PathBuf> {
+    let unresolved = root.join(safe_relative(path)?);
+    let resolved = unresolved
+        .canonicalize()
+        .with_context(|| format!("failed to resolve content path {}", unresolved.display()))?;
+    if !resolved.starts_with(root) {
+        bail!(
+            "content path escaped mount {}: {}",
+            root.display(),
+            resolved.display()
+        );
+    }
+    Ok(resolved)
+}
+
+fn confined_directory_entries(
+    root: &Path,
+    directory: &Path,
+    logical: &Path,
+) -> Result<Vec<PathBuf>> {
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(directory)
+        .with_context(|| format!("failed to read {}", directory.display()))?
+    {
+        let entry = entry?;
+        match entry.path().canonicalize() {
+            Ok(target) if target.starts_with(root) => entries.push(logical.join(entry.file_name())),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to resolve {}", entry.path().display()));
+            }
+        }
+    }
+    Ok(entries)
 }
 
 /// Seekable logical content stream exposed without leaking its container
@@ -457,6 +584,30 @@ mod tests {
     fn rejects_paths_that_escape_a_source() {
         assert!(safe_relative(Path::new("../secret")).is_err());
         assert!(safe_relative(Path::new("assets/bg.webp")).is_ok());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn filesystem_mount_blocks_file_symlinks_outside_its_boundary() {
+        use std::os::unix::fs::symlink;
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("keine-mount-boundary-{nonce}"));
+        let assets = root.join("assets");
+        fs::create_dir_all(&assets).unwrap();
+        fs::write(root.join("secret.txt"), b"secret").unwrap();
+        symlink(root.join("secret.txt"), assets.join("escape.txt")).unwrap();
+        let mount = ContentMount::new(ContentBackend::FileSystem(root.clone()), "assets").unwrap();
+
+        assert!(!mount.contains_file(Path::new("escape.txt")));
+        assert!(mount.read(Path::new("escape.txt")).is_err());
+        assert!(mount.open_file(Path::new("escape.txt")).is_err());
+        assert!(mount.read_directory(Path::new("")).unwrap().is_empty());
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

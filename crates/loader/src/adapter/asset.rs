@@ -16,10 +16,21 @@ pub trait FormatAdapter: Send + Sync {
 }
 
 fn resolve_local(project_root: &Path, location: &str) -> Result<PathBuf> {
-    let unresolved = project_root.join(location);
-    unresolved
+    let project_root = project_root
         .canonicalize()
-        .with_context(|| format!("failed to resolve adapter source {}", unresolved.display()))
+        .with_context(|| format!("failed to resolve project root {}", project_root.display()))?;
+    let unresolved = project_root.join(location);
+    let resolved = unresolved
+        .canonicalize()
+        .with_context(|| format!("failed to resolve adapter source {}", unresolved.display()))?;
+    if !resolved.starts_with(&project_root) {
+        bail!(
+            "adapter source must stay inside project root {}: {}",
+            project_root.display(),
+            resolved.display()
+        );
+    }
+    Ok(resolved)
 }
 
 /// Development filesystem source with direct logical-path access and no unpack step.
