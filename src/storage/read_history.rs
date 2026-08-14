@@ -95,13 +95,15 @@ pub(super) fn reset_memory(state: &mut keine_core::State, writer: &mut ReadHisto
 
 fn save(history: &HashSet<DialogueKey>, project_root: &Path) -> Result<()> {
     let path = history_path(project_root);
-    super::write_atomically(
-        &path,
-        &postcard::to_stdvec(&HistoryFileRef {
+    let bytes = super::encode_postcard_limited(
+        &HistoryFileRef {
             version: VERSION,
             entries: history,
-        })?,
-    )
+        },
+        MAX_HISTORY_BYTES,
+        "read history",
+    )?;
+    super::write_atomically(&path, &bytes)
 }
 
 fn decode(bytes: &[u8]) -> Result<HistoryFileWire> {

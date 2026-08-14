@@ -12,6 +12,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use bevy::prelude::*;
 use keine_core::State;
+use serde::Serialize;
 
 use crate::runtime::GameSystemSet;
 
@@ -52,6 +53,24 @@ pub(crate) fn read_limited(path: &Path, maximum: usize) -> Result<Vec<u8>> {
         .read_to_end(&mut bytes)?;
     if bytes.len() > maximum {
         bail!("{} grew beyond the {maximum}-byte limit", path.display());
+    }
+    Ok(bytes)
+}
+
+/// Serialize a persistent postcard value while enforcing the same envelope
+/// limit used by its reader. This prevents the runtime from writing a file it
+/// will reject on the next launch.
+pub(crate) fn encode_postcard_limited<T: Serialize>(
+    value: &T,
+    maximum: usize,
+    label: &str,
+) -> Result<Vec<u8>> {
+    let bytes = postcard::to_stdvec(value)?;
+    if bytes.len() > maximum {
+        bail!(
+            "encoded {label} is {} bytes, exceeding the {maximum}-byte limit",
+            bytes.len()
+        );
     }
     Ok(bytes)
 }
@@ -125,6 +144,16 @@ mod tests {
         assert!(!target.with_extension("bin.tmp").exists());
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn postcard_writer_enforces_the_reader_envelope_limit() {
+        assert_eq!(
+            encode_postcard_limited(&"small", 6, "test data").unwrap(),
+            postcard::to_stdvec(&"small").unwrap()
+        );
+        let error = encode_postcard_limited(&"too large", 4, "test data").unwrap_err();
+        assert!(error.to_string().contains("encoded test data"));
     }
 
     #[test]

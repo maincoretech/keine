@@ -117,13 +117,15 @@ fn persist_now(values: &HashMap<String, Value>, project_root: &Path, writer: &mu
 
 fn save(values: &HashMap<String, Value>, project_root: &Path) -> Result<()> {
     let target = path(project_root);
-    super::write_atomically(
-        &target,
-        &postcard::to_stdvec(&ProfileFile {
+    let bytes = super::encode_postcard_limited(
+        &ProfileFile {
             version: VERSION,
             global_vars: values.clone(),
-        })?,
-    )
+        },
+        MAX_PROFILE_BYTES,
+        "profile",
+    )?;
+    super::write_atomically(&target, &bytes)
 }
 
 fn decode(bytes: &[u8]) -> Result<ProfileFileWire> {

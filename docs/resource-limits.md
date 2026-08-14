@@ -131,7 +131,9 @@ required 与 deferred 资源不会写入同一个 segment。上述值是滚段�
 
 ## 5. 存档与辅助持久化
 
-所有文件先通过 bounded read，再交给 postcard 或 save envelope decoder：
+所有文件先通过 bounded read，再交给 postcard 或 save envelope decoder。运行时写入
+settings、gallery、profile、read history 和单槽 save 时也执行同一 envelope 上限，因而
+不会生成下一次启动时被自身拒绝的持久化文件：
 
 | 文件/结构 | 字节上限 | 数量上限 |
 |---|---:|---:|

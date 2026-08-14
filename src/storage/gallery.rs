@@ -64,8 +64,7 @@ pub(crate) fn persist(
         bgm: state.unlocked_bgm.clone(),
     };
     let target = path(&project_root);
-    let result = postcard::to_stdvec(&file)
-        .map_err(anyhow::Error::from)
+    let result = super::encode_postcard_limited(&file, MAX_GALLERY_BYTES, "gallery")
         .and_then(|bytes| super::write_atomically(&target, &bytes));
     match result {
         Ok(()) => {

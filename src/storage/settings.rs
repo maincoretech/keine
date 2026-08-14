@@ -98,7 +98,8 @@ pub fn persist(settings: &RuntimeSettings, project_root: &Path) -> Result<()> {
         version: SETTINGS_VERSION,
         settings: settings.clone(),
     };
-    super::write_atomically(&path, &postcard::to_stdvec(&file)?)
+    let bytes = super::encode_postcard_limited(&file, MAX_SETTINGS_BYTES, "settings")?;
+    super::write_atomically(&path, &bytes)
 }
 
 pub(crate) fn load(project_root: &Path) -> Option<RuntimeSettings> {
