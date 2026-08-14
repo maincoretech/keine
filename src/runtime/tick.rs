@@ -401,13 +401,24 @@ fn start_pending_reload(
     if pipeline.running.is_some() || pipeline.pending_change_count == 0 {
         return Ok(());
     }
-    let change_count = std::mem::take(&mut pipeline.pending_change_count);
     let content = content.clone();
     let languages = languages.clone();
-    let worker = std::thread::Builder::new()
-        .name("keine-hot-reload".to_owned())
-        .spawn(move || build_hot_reload(&content, &languages))
-        .context("failed to spawn hot-reload worker")?;
+    install_pending_reload(pipeline, || {
+        std::thread::Builder::new()
+            .name("keine-hot-reload".to_owned())
+            .spawn(move || build_hot_reload(&content, &languages))
+            .context("failed to spawn hot-reload worker")
+    })
+}
+
+fn install_pending_reload(
+    pipeline: &mut HotReloadPipeline,
+    spawn_worker: impl FnOnce()
+        -> anyhow::Result<std::thread::JoinHandle<anyhow::Result<HotReloadBuild>>>,
+) -> anyhow::Result<()> {
+    let change_count = pipeline.pending_change_count;
+    let worker = spawn_worker()?;
+    pipeline.pending_change_count = 0;
     pipeline.running = Some(RunningHotReload {
         change_count,
         worker,
@@ -2010,6 +2021,27 @@ mod tests {
         assert_ne!(worker, caller);
         assert_eq!(parsed_on.lock().unwrap().unwrap(), worker);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn failed_hot_reload_worker_spawn_keeps_pending_changes() {
+        let mut pipeline = HotReloadPipeline {
+            pending_change_count: 3,
+            ..default()
+        };
+
+        let error = install_pending_reload(&mut pipeline, || {
+            Err(anyhow::anyhow!("simulated worker creation failure"))
+        })
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("simulated worker creation failure")
+        );
+        assert_eq!(pipeline.pending_change_count, 3);
+        assert!(pipeline.running.is_none());
     }
 
     #[test]
