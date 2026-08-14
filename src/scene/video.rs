@@ -214,6 +214,33 @@ mod ffmpeg_backend {
         target: ffmpeg::frame::Video,
     }
 
+    impl RgbaConverter {
+        fn new(source: &ffmpeg::frame::Video) -> Result<Self, String> {
+            let width = source.width();
+            let height = source.height();
+            Ok(Self {
+                scaler: VideoScaler::get(
+                    source.format(),
+                    width,
+                    height,
+                    ffmpeg::format::Pixel::RGBA,
+                    width,
+                    height,
+                    Flags::FAST_BILINEAR,
+                )
+                .map_err(|error| error.to_string())?,
+                target: ffmpeg::frame::Video::empty(),
+            })
+        }
+
+        fn accepts(&self, source: &ffmpeg::frame::Video) -> bool {
+            let input = self.scaler.input();
+            input.format == source.format()
+                && input.width == source.width()
+                && input.height == source.height()
+        }
+    }
+
     #[derive(Asset, TypePath, Clone, Debug)]
     pub(super) struct FfmpegVideoAudio {
         source: Arc<PreparedSource>,
@@ -636,22 +663,15 @@ mod ffmpeg_backend {
         let width = source.width();
         let height = source.height();
         let (row_bytes, row_count, frame_bytes) = video_frame_layout(width, height)?;
-        let converter = match converter {
-            Some(converter) => converter,
-            slot @ None => slot.insert(RgbaConverter {
-                scaler: VideoScaler::get(
-                    source.format(),
-                    width,
-                    height,
-                    ffmpeg::format::Pixel::RGBA,
-                    width,
-                    height,
-                    Flags::FAST_BILINEAR,
-                )
-                .map_err(|error| error.to_string())?,
-                target: ffmpeg::frame::Video::empty(),
-            }),
-        };
+        if converter
+            .as_ref()
+            .is_none_or(|converter| !converter.accepts(source))
+        {
+            *converter = Some(RgbaConverter::new(source)?);
+        }
+        let converter = converter
+            .as_mut()
+            .ok_or_else(|| "FFmpeg RGBA converter was not initialized".to_owned())?;
         converter
             .scaler
             .run(source, &mut converter.target)
