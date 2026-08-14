@@ -27,8 +27,9 @@ pub(super) struct MediaInput {
     custom: Option<CustomIo>,
 }
 
-// Each instance owns its AVFormatContext, AVIOContext, and cursor. FFmpeg uses
-// them only from the decoder thread that owns this value.
+// SAFETY: Each instance exclusively owns its AVFormatContext, AVIOContext, and
+// cursor. FFmpeg invokes the callbacks synchronously from the decoder thread
+// that owns this value; none of the raw pointers are shared independently.
 unsafe impl Send for MediaInput {}
 
 impl MediaInput {
@@ -189,11 +190,14 @@ unsafe extern "C" fn read_packet(opaque: *mut c_void, output: *mut u8, output_le
         if opaque.is_null() || output.is_null() || output_len <= 0 {
             return Err(io_error());
         }
+        // SAFETY: AVIO calls this callback with the ReaderState pointer passed
+        // to avio_alloc_context and a writable buffer of output_len bytes.
+        // Both are live for the duration of this synchronous callback.
         let reader = unsafe { &mut *opaque.cast::<ReaderState>() };
         let output = unsafe { std::slice::from_raw_parts_mut(output, output_len as usize) };
         match reader.stream.read(output) {
             Ok(0) => Ok(ffmpeg::ffi::AVERROR_EOF),
-            Ok(read) => Ok(read as c_int),
+            Ok(read) => c_int::try_from(read).map_err(|_| io_error()),
             Err(_) => Err(io_error()),
         }
     }));
@@ -207,6 +211,8 @@ unsafe extern "C" fn seek(opaque: *mut c_void, offset: i64, whence: c_int) -> i6
         if opaque.is_null() {
             return Err(io_error());
         }
+        // SAFETY: AVIO passes back the exclusive ReaderState pointer installed
+        // in avio_alloc_context, live for this synchronous callback.
         let reader = unsafe { &mut *opaque.cast::<ReaderState>() };
         if whence & ffmpeg::ffi::AVSEEK_SIZE != 0 {
             return i64::try_from(reader.length).map_err(|_| io_error());
@@ -232,6 +238,25 @@ unsafe extern "C" fn seek(opaque: *mut c_void, offset: i64, whence: c_int) -> i6
 fn io_error() -> ffmpeg::Error {
     ffmpeg::Error::Other {
         errno: ffmpeg::error::EIO,
+    }
+}
+
+#[cfg(test)]
+mod callback_contract_tests {
+    use std::ptr;
+
+    use super::{io_error, read_packet, seek};
+
+    #[test]
+    fn callbacks_reject_invalid_pointers_before_dereferencing_them() {
+        let expected = i32::from(io_error());
+        // SAFETY: Null pointers are deliberate contract probes. The callbacks
+        // must validate them and return before attempting any dereference.
+        assert_eq!(
+            unsafe { read_packet(ptr::null_mut(), ptr::null_mut(), 0) },
+            expected
+        );
+        assert_eq!(unsafe { seek(ptr::null_mut(), 0, 0) }, i64::from(expected));
     }
 }
 

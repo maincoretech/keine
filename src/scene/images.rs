@@ -5,10 +5,7 @@ use bevy::asset::{AssetApp, AssetId, AssetLoader, LoadContext, RenderAssetUsages
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use futures_lite::io::AsyncReadExt;
-use libwebp_sys::{
-    VP8StatusCode, WEBP_CSP_MODE, WebPDecode, WebPDecoderConfig, WebPEncodeRGBA, WebPFree,
-    WebPFreeDecBuffer, WebPGetFeatures, WebPInitDecoderConfig, WebPRGBABuffer,
-};
+use keine_media::{ImageSize, MAX_WEBP_FILE_BYTES};
 
 use crate::runtime::resources::{GameConfigResource, LocalAssetCache};
 
@@ -16,9 +13,6 @@ const BACKGROUND_LIMIT: UVec2 = UVec2::new(
     keine_core::DESIGN_WIDTH as u32,
     keine_core::DESIGN_HEIGHT as u32,
 );
-const MAX_WEBP_FILE_BYTES: usize = 64 * 1024 * 1024;
-const MAX_WEBP_SOURCE_PIXELS: u64 = 64 * 1024 * 1024;
-const MAX_WEBP_OUTPUT_PIXELS: u64 = 16 * 1024 * 1024;
 const MAX_SPRITE_HEIGHT: f32 = keine_core::DESIGN_HEIGHT * 4.0;
 
 pub(crate) struct NativeWebpPlugin {
@@ -239,147 +233,31 @@ pub(crate) fn decode_preview(bytes: &[u8]) -> io::Result<Image> {
 }
 
 fn decode_webp(bytes: &[u8], target: impl FnOnce(UVec2) -> UVec2) -> io::Result<Image> {
-    if bytes.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "empty WebP"));
-    }
-    if bytes.len() > MAX_WEBP_FILE_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("WebP exceeds the {MAX_WEBP_FILE_BYTES}-byte input limit"),
-        ));
-    }
-
-    // SAFETY: libwebp initializes every field before it is read. Input and
-    // output buffers remain alive for the full native call, and all sizes are
-    // checked before their pointers are exposed to C.
-    unsafe {
-        let mut config = std::mem::MaybeUninit::<WebPDecoderConfig>::zeroed().assume_init();
-        if !WebPInitDecoderConfig(&mut config) {
-            return Err(io::Error::other("libwebp ABI mismatch"));
-        }
-        let status = WebPGetFeatures(bytes.as_ptr(), bytes.len(), &mut config.input);
-        if status != VP8StatusCode::VP8_STATUS_OK
-            || config.input.width <= 0
-            || config.input.height <= 0
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("invalid WebP header ({status:?})"),
-            ));
-        }
-
-        let original = UVec2::new(config.input.width as u32, config.input.height as u32);
-        check_pixel_budget("source", original, MAX_WEBP_SOURCE_PIXELS)?;
-        let output = target(original).max(UVec2::ONE);
-        check_pixel_budget("output", output, MAX_WEBP_OUTPUT_PIXELS)?;
-        let stride = output
-            .x
-            .checked_mul(4)
-            .and_then(|value| i32::try_from(value).ok())
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "WebP row too wide"))?;
-        let output_len = (stride as usize)
-            .checked_mul(output.y as usize)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "WebP output too large"))?;
-        let mut rgba = Vec::new();
-        rgba.try_reserve_exact(output_len).map_err(|error| {
-            io::Error::other(format!("failed to reserve WebP output buffer: {error}"))
-        })?;
-        rgba.resize(output_len, 0);
-
-        config.options.use_threads = 1;
-        if output != original {
-            config.options.use_scaling = 1;
-            config.options.scaled_width = output.x as i32;
-            config.options.scaled_height = output.y as i32;
-        }
-        config.output.colorspace = WEBP_CSP_MODE::MODE_RGBA;
-        config.output.is_external_memory = 1;
-        config.output.u.RGBA = WebPRGBABuffer {
-            rgba: rgba.as_mut_ptr(),
-            stride,
-            size: rgba.len(),
-        };
-
-        let status = WebPDecode(bytes.as_ptr(), bytes.len(), &mut config);
-        WebPFreeDecBuffer(&mut config.output);
-        if status != VP8StatusCode::VP8_STATUS_OK {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("libwebp decode failed ({status:?})"),
-            ));
-        }
-
-        Ok(Image::new(
-            Extent3d {
-                width: output.x,
-                height: output.y,
-                depth_or_array_layers: 1,
-            },
-            TextureDimension::D2,
-            rgba,
-            TextureFormat::Rgba8UnormSrgb,
-            RenderAssetUsages::RENDER_WORLD,
-        ))
-    }
-}
-
-fn check_pixel_budget(label: &str, size: UVec2, maximum: u64) -> io::Result<()> {
-    let pixels = u64::from(size.x)
-        .checked_mul(u64::from(size.y))
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "WebP pixel count overflow"))?;
-    if pixels > maximum {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "WebP {label} dimensions {}x{} exceed the {maximum}-pixel limit",
-                size.x, size.y
-            ),
-        ));
-    }
-    Ok(())
+    let decoded = keine_media::decode_webp(bytes, |original| {
+        let output = target(UVec2::new(original.width, original.height));
+        ImageSize::new(output.x, output.y)
+    })?;
+    let output = decoded.size();
+    Ok(Image::new(
+        Extent3d {
+            width: output.width,
+            height: output.height,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        decoded.into_pixels(),
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    ))
 }
 
 const PREVIEW_WEBP_QUALITY: f32 = 80.0;
 
 pub(crate) fn encode_preview(rgba: &[u8], width: u32, height: u32) -> io::Result<Vec<u8>> {
-    let stride = width
-        .checked_mul(4)
-        .and_then(|value| i32::try_from(value).ok())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "preview row too wide"))?;
-    let expected = (stride as usize)
-        .checked_mul(height as usize)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "preview too large"))?;
-    if rgba.len() != expected {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "preview RGBA buffer has an invalid length",
-        ));
-    }
-
-    let mut encoded = std::ptr::null_mut();
     // Save-card previews are small display aids rather than archival artwork.
     // Lossy WebP at a fixed quality avoids spending CPU and disk on pixel-exact
     // output while retaining the alpha channel should a render target need it.
-    // SAFETY: `rgba` is validated as tightly packed RGBA8 and remains alive
-    // for the call. libwebp owns `encoded` until it is copied and freed below.
-    let len = unsafe {
-        WebPEncodeRGBA(
-            rgba.as_ptr(),
-            width as i32,
-            height as i32,
-            stride,
-            PREVIEW_WEBP_QUALITY,
-            &mut encoded,
-        )
-    };
-    if len == 0 || encoded.is_null() {
-        return Err(io::Error::other("libwebp preview encoding failed"));
-    }
-    // SAFETY: libwebp returned `len` initialized bytes at `encoded`.
-    let bytes = unsafe { std::slice::from_raw_parts(encoded, len).to_vec() };
-    // SAFETY: The allocation was returned by libwebp and has been copied.
-    unsafe { WebPFree(encoded.cast()) };
-    Ok(bytes)
+    keine_media::encode_webp_rgba(rgba, width, height, PREVIEW_WEBP_QUALITY)
 }
 
 fn fit_within(original: UVec2, limit: UVec2) -> UVec2 {
@@ -422,16 +300,10 @@ mod tests {
     }
 
     #[test]
-    fn bounds_invalid_sprite_heights_and_image_pixel_budgets() {
+    fn bounds_invalid_sprite_heights() {
         assert_eq!(
             target_size("figure/stand.webp", UVec2::new(1920, 1080), f32::INFINITY),
             UVec2::new(1920, 1080)
-        );
-        assert!(
-            check_pixel_budget("source", UVec2::new(8_192, 8_192), MAX_WEBP_SOURCE_PIXELS).is_ok()
-        );
-        assert!(
-            check_pixel_budget("source", UVec2::new(8_193, 8_192), MAX_WEBP_SOURCE_PIXELS).is_err()
         );
     }
 

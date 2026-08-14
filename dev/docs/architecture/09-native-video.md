@@ -74,6 +74,25 @@ session 清理也不会被阻塞发送卡住。所有 `Ready`、frame、end 和 
 实际复制。Windows 当前只发布并验证 x64；ARM64 原生构建暂缓，在具备明确发行需求和
 真实硬件验收条件后再恢复。
 
+`.github/workflows/media-safety.yml` 另外在媒体代码变化和每周计划任务中执行两层防御：
+
+- `cargo-fuzz` 将项目内真实 WebP 作为 seed，持续变异字节并调用生产 libwebp decoder；
+  libFuzzer 默认启用 AddressSanitizer，单次 CI smoke 限 60 秒、输入限 4 MiB、RSS 限 2 GiB，
+  这些是 CI 资源参数而不是运行时资源格式上限；
+- nightly Rust ASan 分别运行 Linux FFmpeg 与 macOS AVFoundation/Metal 的
+  `keine-video-acceptance`，同一次执行覆盖 filesystem 与加密 Hakutaku source。构建时
+  重编译并 instrument Rust 标准库；系统 FFmpeg、Apple framework 等预编译 native 库本身
+  不会因此获得完整 instrumentation，所以这属于 FFI ownership/buffer 防御纵深，不替代
+  codec 上游安全更新、平台真实播放验收或专门的 native-library sanitizer build。
+
+fuzz crash 输入会作为 workflow artifact 上传；本地复现使用 nightly 与固定的
+`cargo-fuzz 0.13.2`：
+
+```text
+cargo fuzz run webp_decode fuzz/corpus/webp_decode \
+  projects/test-project/assets/backgrounds -- -max_len=4194304
+```
+
 ## 可选后续优化
 
 - Windows 可在真实播放与发行稳定后评估 `IMFMediaEngine` + `IMFByteStream`，以利用系统

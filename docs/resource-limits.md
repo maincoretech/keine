@@ -187,7 +187,8 @@ revision，而不是从旧架构说明复制历史值。
 
 - 路径与 mount：[loader source](../crates/loader/src/loader/source.rs)、
   [runtime asset reader](../src/runtime/asset_reader.rs)；
-- 图片与视频：[images](../src/scene/images.rs)、[video](../src/scene/video.rs)；
+- 图片与视频：[bounded native codecs](../crates/media/src/lib.rs)、
+  [image integration](../src/scene/images.rs)、[video](../src/scene/video.rs)；
 - compiled program：[compiled](../crates/loader/src/compiled.rs)；
 - 存储：[storage](../src/storage.rs)、[backup](../src/storage/backup.rs)；
 - 确定性执行：[core step](../crates/core/src/runtime/step.rs)、

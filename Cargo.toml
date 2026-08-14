@@ -104,6 +104,7 @@ panic = "abort"
 [workspace.dependencies]
 keine-core = { path = "crates/core" }
 keine-loader = { path = "crates/loader" }
+keine-media = { path = "crates/media" }
 
 log = "0.4"
 anyhow = "1"
@@ -144,11 +145,11 @@ bevy_winit = { git = "https://github.com/maincoretech/keine", rev = "916ee960f9c
 [dependencies]
 keine-core = { workspace = true }
 keine-loader = { workspace = true }
+keine-media = { workspace = true }
 log = { workspace = true }
 postcard = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
-libwebp-sys = { workspace = true }
 futures-lite = { workspace = true }
 notify = { workspace = true }
 rfd = { workspace = true }
@@ -173,6 +174,7 @@ winresource = "0.1.31"
 [dev-dependencies]
 criterion = { workspace = true }
 crossbeam-channel = { workspace = true }
+libwebp-sys = { workspace = true }
 
 [[bench]]
 name = "save_preview"

@@ -1,0 +1,24 @@
+[package]
+name = "keine-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+keine-media = { path = "../crates/media" }
+
+# Keep libFuzzer/nightly tooling outside the normal workspace build and test
+# graph. The dedicated media-safety workflow owns this independent workspace.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "webp_decode"
+path = "fuzz_targets/webp_decode.rs"
+test = false
+doc = false
+bench = false

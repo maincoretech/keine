@@ -1,0 +1,9 @@
+[package]
+name = "keine-media"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Bounded native media codecs shared by Kēne runtime and fuzz targets"
+
+[dependencies]
+libwebp-sys = { workspace = true }

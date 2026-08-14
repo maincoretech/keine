@@ -2999,6 +2999,7 @@ dependencies = [
  "hakutaku-pack",
  "keine-core",
  "keine-loader",
+ "keine-media",
  "libc",
  "libwebp-sys",
  "log",
@@ -3052,6 +3053,13 @@ dependencies = [
  "postcard",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "keine-media"
+version = "0.8.1"
+dependencies = [
+ "libwebp-sys",
 ]
 
 [[package]]

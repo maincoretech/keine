@@ -1,0 +1,113 @@
+name: Media safety
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/media/**"
+      - "fuzz/**"
+      - "src/scene/images.rs"
+      - "src/scene/video.rs"
+      - "src/scene/video/**"
+      - ".github/actions/setup-video/**"
+      - ".github/workflows/media-safety.yml"
+  pull_request:
+    paths:
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/media/**"
+      - "fuzz/**"
+      - "src/scene/images.rs"
+      - "src/scene/video.rs"
+      - "src/scene/video/**"
+      - ".github/actions/setup-video/**"
+      - ".github/workflows/media-safety.yml"
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  webp-fuzz:
+    name: WebP libFuzzer smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_FUZZ_VERSION: 0.13.2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # nightly
+        with:
+          toolchain: nightly
+      - uses: ./.github/actions/setup-video
+        with:
+          enabled: "false"
+      - name: Cache cargo-fuzz
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.tool_cache }}/cargo-fuzz
+          key: cargo-fuzz-${{ runner.os }}-${{ env.CARGO_FUZZ_VERSION }}
+      - name: Install cargo-fuzz
+        shell: bash
+        run: |
+          echo "${{ runner.tool_cache }}/cargo-fuzz/bin" >> "$GITHUB_PATH"
+          cargo install --locked --root "${{ runner.tool_cache }}/cargo-fuzz" --version "$CARGO_FUZZ_VERSION" cargo-fuzz
+      - name: Fuzz the production WebP decoder
+        run: >-
+          cargo fuzz run webp_decode fuzz/corpus/webp_decode
+          projects/test-project/assets/backgrounds --
+          -max_total_time=60 -max_len=4194304 -rss_limit_mb=2048
+      - name: Upload reproducer
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: webp-fuzz-artifacts-${{ github.sha }}
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
+
+  native-media-asan:
+    name: ${{ matrix.name }} ASan acceptance
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux FFmpeg
+            os: ubuntu-latest
+            feature: video-ffmpeg
+            ffmpeg: "true"
+          - name: macOS AVFoundation and Metal
+            os: macos-latest
+            feature: video-native
+            ffmpeg: "false"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # nightly
+        with:
+          toolchain: nightly
+          components: rust-src
+      - uses: ./.github/actions/setup-video
+        with:
+          enabled: ${{ matrix.ffmpeg }}
+      - name: Resolve sanitizer target
+        shell: bash
+        run: |
+          host="$(rustc +nightly -vV | sed -n 's/^host: //p')"
+          test -n "$host"
+          echo "RUST_HOST=$host" >> "$GITHUB_ENV"
+      - name: Decode filesystem and Hakutaku media under ASan
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=0:halt_on_error=1
+          MEDIA_FEATURE: ${{ matrix.feature }}
+          RUSTFLAGS: -Zsanitizer=address
+          RUSTDOCFLAGS: -Zsanitizer=address
+        run: >-
+          cargo +nightly run -Zbuild-std --target "$RUST_HOST" --locked
+          --no-default-features --features "publisher,$MEDIA_FEATURE"
+          --bin keine-video-acceptance -- dev/fixtures/video/playback.mp4
