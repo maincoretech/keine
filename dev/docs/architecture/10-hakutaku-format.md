@@ -1,9 +1,10 @@
 # Hakutaku v1 游戏资源格式
 
-> 状态：v1 wire format 已冻结并在独立 Hakutaku workspace 实现（本机与 Kēne 同级）；Kēne loader
-> 迁移尚未开始。v1 不读取
-> Hexz、不保留 `.hxz` 回退，也不建立兼容层。规范字段与字节偏移以 Hakutaku workspace 内的
-> `FORMAT.md` 为准，本文件解释架构取舍。
+> 状态：v1 wire format 已冻结并由 Kēne loader/packer 使用；Kēne 当前固定 Hakutaku
+> revision `24c39ea`。v1 不读取 Hexz、不保留 `.hxz` 回退，也不建立兼容层。规范字段与
+> 字节偏移以 Hakutaku workspace 内的 `FORMAT.md` 为准，本文件解释架构取舍；当前部署所用
+> 的硬上限和运行时预算见
+> [资源、发行包与持久化限制](../../../docs/resource-limits.md)。
 
 ## 决策摘要
 

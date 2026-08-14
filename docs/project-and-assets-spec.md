@@ -135,10 +135,16 @@ assets:
 
 设计空间固定为 1920×1080：
 
-- 背景建议源图 ≤ 4K 并尽量使用 WebP，避免首次切换大图卡顿；
+- 背景建议源图 ≤ 4K 并尽量使用 WebP，避免首次切换大图卡顿。自定义 WebP loader
+  接受最多 64 MiB 压缩输入、64 Mi pixels 源图和 16 Mi pixels 输出；
 - 立绘为透明 WebP，站立高度按 `layout.sprite_height` 控制（原生项目默认；
-  LetsGal 导入项目强制 1080 全高以保持 Studio 比例）；
+  LetsGal 导入项目强制 1080 全高以保持 Studio 比例），运行时最高接受 4320；
+- FFmpeg 视频帧单边不超过 4096、总像素不超过 4096×2304；AVFoundation 不使用
+  这组 FFmpeg 常量；
 - 构建期资源约束优先于运行时处理：过大图片在打包前统一缩放/转 WebP。
+
+完整数值、适用 backend 与失败阶段见
+[资源、发行包与持久化限制](resource-limits.md)。
 
 ## 6. 命名与路径约束
 
@@ -147,7 +153,12 @@ assets:
 - 逻辑名（别名键）不含扩展名；文件路径含扩展名。
 - 推荐：小写 ASCII（`a-z0-9_-`）；中文文件名允许（UTF-8），但跨平台打包时
   必须一致编码。
-- 单文件大小与目录深度按打包器上限约束（program.bin 等编译产物另有独立上限）。
+- Hakutaku 单条逻辑路径最多 65,535 UTF-8 bytes，完整 path pool 最多 32 MiB；当前
+  没有单独的目录深度常量。
+- `adapter.asset.path` 和每次文件系统读取都必须保留在 canonical project/mount root 内；
+  `cargo bundle` 进一步拒绝所有 symlink 与 special file。
+- 包体、compiled program 和媒体解码的其它硬上限见
+  [资源、发行包与持久化限制](resource-limits.md)。
 
 ## 7. LetsGal → Kēne 转换规范
 
@@ -218,7 +229,11 @@ LetsGal 长期维护的原生项目（config.yaml + 规范目录 + 脚本）。
   见 program.bin v2 设计）。
 - 输出固定为签名 `game.haku` 快照和内容寻址 `data/*.taku` segment；按访问类型选择
   256 KiB streaming block、1 MiB bulk block 或 FastCDC，并用 zstd + AES-256-GCM。
-- 运行时用 `ResourceBudget::memory_constrained()`（16 MiB 明文块预算）打开，包句柄全周期保持。
+- 运行时用 `ResourceBudget::memory_constrained()` 打开：16 MiB plaintext block cache，
+  各 512 KiB map-page/prefetch cache、4 个 idle segment handles；这不是进程总内存预算。
+- 单 snapshot 最多引用 128 segments、1,000,000 files 和 10,000,000 blocks；完整
+  wire-format 与 packer 策略数值见
+  [资源、发行包与持久化限制](resource-limits.md)。
 
 ## 9. 版本与演进
 

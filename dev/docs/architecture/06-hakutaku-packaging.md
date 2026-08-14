@@ -41,3 +41,6 @@ loader 打开快照时一次建立文件/目录索引。`ContentFile` 直接包�
 - FS 来源仍把真实路径交给原生视频后端，Hakutaku 来源通过同一个 `Read + Seek` byte source。
 
 完整格式、安全边界和更新模型见 [10-hakutaku-format.md](10-hakutaku-format.md)。
+当前 Kēne/Hakutaku 的格式硬上限、打包滚段策略、运行时 cache budget 和媒体解码边界统一记录在
+[资源、发行包与持久化限制](../../../docs/resource-limits.md)；其中 cache budget 只约束可重建状态，
+不能作为进程总内存或最大包体积解读。

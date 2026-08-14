@@ -151,6 +151,7 @@ gallery without loading a second compressed copy.
 ## Documentation
 
 - [Project structure](dev/docs/PROJECT.md)
+- [Resource, package, and storage limits](docs/resource-limits.md)
 - [Content loader](dev/docs/architecture/07-content-loader.md)
 - [Rendering](dev/docs/architecture/03-render-pipeline.md)
 - [Saves and rollback](dev/docs/architecture/04-rollback-and-save.md)
