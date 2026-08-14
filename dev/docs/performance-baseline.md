@@ -680,3 +680,40 @@ The complete `cargo bench --workspace` suite passed. The two unchanged WebP
 save-preview targets moved about 2% slower together in that full post-LTO run;
 no save-preview, WebP, or storage code participates in this lookup change, so
 that machine-state shift is not attributed to the directory index.
+
+### 2026-08-14 low-frequency runtime hotspots
+
+Static audit found three small loops whose cost scaled with project or dialogue
+size. `handle_bgm` copied and sorted every unlocked track on every Extra-menu
+frame even without an interaction; sprite synchronization searched the complete
+rendered-node query once per desired sprite; and active dialogue paths decoded
+the full UTF-8 string to count characters on every rendered frame.
+
+The runtime now constructs a borrowed, deterministically ordered BGM list only
+for selection/previous/next/end-of-track actions. Sprite spawn/despawn maintains
+a persistent ID-to-entity index. Dialogue consumers cache the Unicode scalar
+count by complete text content, so save restore and same-cursor hot reload still
+invalidate correctly.
+
+`cargo bench --bench runtime_hotspots -- --quick` compares the previous and
+current algorithms on the same Apple M5 Pro release-bench build:
+
+| Hotspot | Workload | Before | After |
+|---|---|---:|---:|
+| Idle Extra BGM | 4,096 unlocked tracks | 209.43 µs copy + sort | no list construction; below timer resolution |
+| Sprite lookup | 256 desired/rendered sprites | 55.928 µs nested scan | 2.3285 µs indexed lookup |
+| Dialogue length | cached 3,072-scalar UTF-8 line | 282.45 ns decode | 173.48 ns content-cache hit |
+
+The sprite row is about 24 times faster at the deliberately large fixture. The
+dialogue cache still compares bytes to make invalidation content-safe, so its
+benefit is intentionally smaller than an identity-only cache. The BGM row
+measures only the work removed from an idle frame; interaction queries and
+audio sink maintenance remain in the production system.
+
+The complete `cargo bench --workspace` suite passed afterward. In that
+continuous post-LTO run, unchanged core rollback/script, loader parse/lookup,
+video-queue, and WebP targets moved slower together while the unchanged lossy
+WebP path moved faster. None of those crates or algorithms depend on the root
+UI/ECS code changed here, so the correlated machine-state drift is not
+attributed to these hotspot changes; the paired rows above are the relevant
+same-process comparison.

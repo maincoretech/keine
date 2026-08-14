@@ -7,7 +7,7 @@ use keine_core::config::{GameConfig, LayoutConfig, TextRevealConfig, TextRevealE
 use keine_core::{DESIGN_HEIGHT, DESIGN_WIDTH, DialogueStyle};
 
 use crate::render::blur::{DialogCamera, UiBlurCamera};
-use crate::runtime::resources::{GameConfigResource, GameState};
+use crate::runtime::resources::{DialogueLengthCache, GameConfigResource, GameState};
 use crate::storage::settings::RuntimeSettings;
 use crate::ui::control_bar::{
     AutoHideBar, AutoHideText, AutoHideTiming, BOTTOM_ITEMS, BlurSource, BlurStrength,
@@ -152,6 +152,7 @@ pub(crate) struct TextboxUpdateResources<'w> {
 pub(crate) struct TextboxRenderCache {
     speaker: String,
     dialogue: String,
+    dialogue_length: DialogueLengthCache,
     visible_chars: usize,
     left: Option<f32>,
     textbox_alpha: Option<f32>,
@@ -722,7 +723,7 @@ pub fn update_textbox(
             if state.dialogue.is_some() {
                 dialogue.visible_chars
             } else {
-                dialogue.text.chars().count()
+                cache.dialogue_length.count(&dialogue.text)
             },
         )
     });

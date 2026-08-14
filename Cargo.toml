@@ -177,6 +177,10 @@ harness = false
 name = "video_queue"
 harness = false
 
+[[bench]]
+name = "runtime_hotspots"
+harness = false
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSImage", "NSResponder", "NSRunningApplication"] }

@@ -12,6 +12,28 @@ use std::collections::{HashMap, HashSet};
 #[derive(Resource, Deref, DerefMut)]
 pub struct GameState(pub State);
 
+/// Caches the Unicode scalar count for one dialogue payload.
+///
+/// Dialogue text is normally stable for hundreds of rendered frames. Keeping
+/// the owned text here makes cache invalidation content-based, so save restore,
+/// hot reload, and same-cursor editor replacement cannot reuse a stale count.
+#[derive(Default)]
+pub(crate) struct DialogueLengthCache {
+    text: String,
+    characters: usize,
+}
+
+impl DialogueLengthCache {
+    pub(crate) fn count(&mut self, text: &str) -> usize {
+        if self.text != text {
+            self.text.clear();
+            self.text.push_str(text);
+            self.characters = text.chars().count();
+        }
+        self.characters
+    }
+}
+
 #[derive(Resource, Deref)]
 pub struct GameConfigResource(pub GameConfig);
 
@@ -86,5 +108,20 @@ pub struct AssetLoadingGate {
 impl Default for AssetLoadingGate {
     fn default() -> Self {
         Self { blocked: true }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DialogueLengthCache;
+
+    #[test]
+    fn dialogue_length_cache_tracks_content_changes() {
+        let mut cache = DialogueLengthCache::default();
+
+        assert_eq!(cache.count("我a🙂"), 3);
+        assert_eq!(cache.count("我a🙂"), 3);
+        assert_eq!(cache.count("same bytes"), 10);
+        assert_eq!(cache.count(""), 0);
     }
 }

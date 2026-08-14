@@ -1004,13 +1004,6 @@ pub(crate) fn handle_bgm(mut context: ExtraBgmContext) {
     let control = context.controls.iter().find_map(|(interaction, control)| {
         (*interaction == Interaction::Pressed).then_some(*control)
     });
-    let mut ordered = context
-        .state
-        .unlocked_bgm
-        .iter()
-        .map(|(file, name)| (file.clone(), name.clone()))
-        .collect::<Vec<_>>();
-    ordered.sort_unstable_by(|left, right| left.1.cmp(&right.1));
     let volume = context.settings.master_volume * context.settings.bgm_volume;
     let (ended, ready_player) = match context.players.single_mut() {
         Ok((_, mut player, Some(mut sink))) => {
@@ -1048,13 +1041,14 @@ pub(crate) fn handle_bgm(mut context: ExtraBgmContext) {
             if ready_player {
                 return;
             }
-            context
-                .ui
-                .selected_bgm
-                .clone()
-                .or_else(|| ordered.first().map(|item| item.0.clone()))
+            context.ui.selected_bgm.clone().or_else(|| {
+                ordered_bgm(&context.state)
+                    .first()
+                    .map(|(file, _)| (*file).to_owned())
+            })
         }
         Some(ExtraBgmControl::Previous) | Some(ExtraBgmControl::Next) => {
+            let ordered = ordered_bgm(&context.state);
             if ordered.is_empty() {
                 return;
             }
@@ -1062,23 +1056,27 @@ pub(crate) fn handle_bgm(mut context: ExtraBgmContext) {
                 .ui
                 .selected_bgm
                 .as_ref()
-                .and_then(|file| ordered.iter().position(|candidate| &candidate.0 == file))
+                .and_then(|file| ordered.iter().position(|candidate| candidate.0 == file))
                 .unwrap_or(0);
             let next = if matches!(control, Some(ExtraBgmControl::Previous)) {
                 (current + ordered.len() - 1) % ordered.len()
             } else {
                 (current + 1) % ordered.len()
             };
-            Some(ordered[next].0.clone())
+            Some(ordered[next].0.to_owned())
         }
-        _ if ended && !ordered.is_empty() => {
+        _ if ended => {
+            let ordered = ordered_bgm(&context.state);
+            if ordered.is_empty() {
+                return;
+            }
             let current = context
                 .ui
                 .selected_bgm
                 .as_ref()
-                .and_then(|file| ordered.iter().position(|candidate| &candidate.0 == file))
+                .and_then(|file| ordered.iter().position(|candidate| candidate.0 == file))
                 .unwrap_or(0);
-            Some(ordered[(current + 1) % ordered.len()].0.clone())
+            Some(ordered[(current + 1) % ordered.len()].0.to_owned())
         }
         _ => clicked,
     };
@@ -1109,6 +1107,16 @@ pub(crate) fn handle_bgm(mut context: ExtraBgmContext) {
         },
     );
     context.ui.selected_bgm = Some(file);
+}
+
+fn ordered_bgm(state: &GameState) -> Vec<(&str, &str)> {
+    let mut ordered = state
+        .unlocked_bgm
+        .iter()
+        .map(|(file, name)| (file.as_str(), name.as_str()))
+        .collect::<Vec<_>>();
+    ordered.sort_unstable_by(|left, right| left.1.cmp(right.1).then_with(|| left.0.cmp(right.0)));
+    ordered
 }
 
 pub(crate) fn sync_bgm_selection(
@@ -1413,5 +1421,24 @@ mod tests {
     #[test]
     fn formats_bgm_time_without_fractional_jitter() {
         assert_eq!(format_bgm_time(Duration::from_millis(62_999)), "01:02");
+    }
+
+    #[test]
+    fn orders_bgm_by_display_name_then_file() {
+        let mut state = GameState(keine_core::State::new());
+        state.unlocked_bgm.insert("z.opus".into(), "Same".into());
+        state.unlocked_bgm.insert("a.opus".into(), "Same".into());
+        state
+            .unlocked_bgm
+            .insert("middle.opus".into(), "Before".into());
+
+        assert_eq!(
+            ordered_bgm(&state),
+            vec![
+                ("middle.opus", "Before"),
+                ("a.opus", "Same"),
+                ("z.opus", "Same"),
+            ]
+        );
     }
 }

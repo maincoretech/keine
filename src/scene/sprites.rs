@@ -17,6 +17,9 @@ use crate::scene::images::ImageDimensions;
 pub(crate) struct SpriteNode(pub(crate) String);
 
 #[derive(Default)]
+struct SpriteEntityIndex(HashMap<String, Entity>);
+
+#[derive(Default)]
 pub(crate) struct SpriteRenderCache {
     initialized: bool,
     sprites: HashMap<String, keine_core::state::Sprite>,
@@ -165,10 +168,10 @@ type RenderedSpriteQuery<'w, 's> = Query<
 #[derive(SystemParam)]
 pub(crate) struct SpriteEntityContext<'w, 's> {
     commands: Commands<'w, 's>,
-    nodes: Query<'w, 's, (Entity, &'static SpriteNode)>,
     rendered: RenderedSpriteQuery<'w, 's>,
     windows: Query<'w, 's, Ref<'static, Window>>,
     cache: Local<'s, SpriteRenderCache>,
+    index: Local<'s, SpriteEntityIndex>,
 }
 
 /// Synchronizes character sprites with the engine state via stable sprite IDs.
@@ -193,11 +196,14 @@ pub(crate) fn sync_sprites(
         entities.cache.capture(&state);
     }
     let viewport = DesignViewport::from_window(&window);
-    for (entity, node) in &entities.nodes {
-        if !state.sprites.contains_key(&node.0) {
-            entities.commands.entity(entity).despawn();
+    let commands = &mut entities.commands;
+    entities.index.0.retain(|id, entity| {
+        let retained = state.sprites.contains_key(id);
+        if !retained {
+            commands.entity(*entity).despawn();
         }
-    }
+        retained
+    });
 
     for (id, data) in &state.sprites {
         let handle: Handle<Image> = render.asset_server.load(config.figure_path(&data.image));
@@ -302,75 +308,75 @@ pub(crate) fn sync_sprites(
             || !post.is_identity()
             || animation.z > 0.0;
 
-        if let Some(entity) = entities
-            .nodes
-            .iter()
-            .find_map(|(entity, node)| (node.0 == *id).then_some(entity))
-        {
-            let Ok((mut current_transform, current_sprite, existing_material)) =
+        if let Some(entity) = entities.index.0.get(id).copied() {
+            if let Ok((mut current_transform, current_sprite, existing_material)) =
                 entities.rendered.get_mut(entity)
-            else {
-                continue;
-            };
-            if uses_material {
-                let material =
-                    StageMaterial::new(handle, alpha, filter, data.blend, animation, &post, lut);
-                let material_handle = if let Some(existing_material) = existing_material {
-                    if let Some(mut current) = render.materials.get_mut(&existing_material.0) {
-                        *current = material;
-                    }
-                    existing_material.0.clone()
-                } else {
-                    render.materials.add(material)
-                };
-                let mesh_transform = entity_transform.with_scale(Vec3::new(
-                    width * viewport.scale,
-                    height * viewport.scale,
-                    1.0,
-                ));
-                *current_transform = mesh_transform;
-                if existing_material.is_none() {
-                    entities.commands.entity(entity).remove::<Sprite>().insert((
-                        Mesh2d(render.quad.0.clone()),
-                        MeshMaterial2d(material_handle),
-                    ));
-                }
-            } else {
-                *current_transform = entity_transform;
-                if let Some(mut current_sprite) = current_sprite {
-                    *current_sprite = sprite;
-                } else {
-                    entities
-                        .commands
-                        .entity(entity)
-                        .remove::<Mesh2d>()
-                        .remove::<MeshMaterial2d<StageMaterial>>()
-                        .insert(sprite);
-                }
-            }
-        } else {
-            let mut entity = entities.commands.spawn((
-                Name::new(format!("sprite::{id}")),
-                SpriteNode(id.clone()),
-                RenderLayers::layer(0),
-            ));
-            if uses_material {
-                let material = render.materials.add(StageMaterial::new(
-                    handle, alpha, filter, data.blend, animation, &post, lut,
-                ));
-                entity.insert((
-                    Mesh2d(render.quad.0.clone()),
-                    MeshMaterial2d(material),
-                    entity_transform.with_scale(Vec3::new(
+            {
+                if uses_material {
+                    let material = StageMaterial::new(
+                        handle, alpha, filter, data.blend, animation, &post, lut,
+                    );
+                    let material_handle = if let Some(existing_material) = existing_material {
+                        if let Some(mut current) = render.materials.get_mut(&existing_material.0) {
+                            *current = material;
+                        }
+                        existing_material.0.clone()
+                    } else {
+                        render.materials.add(material)
+                    };
+                    let mesh_transform = entity_transform.with_scale(Vec3::new(
                         width * viewport.scale,
                         height * viewport.scale,
                         1.0,
-                    )),
-                ));
-            } else {
-                entity.insert((sprite, entity_transform));
+                    ));
+                    *current_transform = mesh_transform;
+                    if existing_material.is_none() {
+                        entities.commands.entity(entity).remove::<Sprite>().insert((
+                            Mesh2d(render.quad.0.clone()),
+                            MeshMaterial2d(material_handle),
+                        ));
+                    }
+                } else {
+                    *current_transform = entity_transform;
+                    if let Some(mut current_sprite) = current_sprite {
+                        *current_sprite = sprite;
+                    } else {
+                        entities
+                            .commands
+                            .entity(entity)
+                            .remove::<Mesh2d>()
+                            .remove::<MeshMaterial2d<StageMaterial>>()
+                            .insert(sprite);
+                    }
+                }
+                continue;
             }
+            entities.index.0.remove(id);
         }
+
+        let mut entity = entities.commands.spawn((
+            Name::new(format!("sprite::{id}")),
+            SpriteNode(id.clone()),
+            RenderLayers::layer(0),
+        ));
+        let entity_id = entity.id();
+        if uses_material {
+            let material = render.materials.add(StageMaterial::new(
+                handle, alpha, filter, data.blend, animation, &post, lut,
+            ));
+            entity.insert((
+                Mesh2d(render.quad.0.clone()),
+                MeshMaterial2d(material),
+                entity_transform.with_scale(Vec3::new(
+                    width * viewport.scale,
+                    height * viewport.scale,
+                    1.0,
+                )),
+            ));
+        } else {
+            entity.insert((sprite, entity_transform));
+        }
+        entities.index.0.insert(id.clone(), entity_id);
     }
 }
 

@@ -19,7 +19,9 @@ use bevy::winit::{UpdateMode, WinitSettings};
 use keine_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
 use crate::render::blur::{DialogCamera, SceneBlurCamera, UiBlurCamera};
-use crate::runtime::resources::{AssetLoadingGate, EditorSyncSession, GameState};
+use crate::runtime::resources::{
+    AssetLoadingGate, DialogueLengthCache, EditorSyncSession, GameState,
+};
 use crate::scene::audio::AudioAnimationActivity;
 use crate::ui::activity::UiAnimationActivity;
 use crate::ui::control_bar::{AutoHideTiming, ButtonAction, QuickPreviewSurface, ToggleStates};
@@ -269,6 +271,7 @@ pub(crate) fn update_lifecycle(
     mut activity: ResMut<RuntimeActivity>,
     mut winit: ResMut<WinitSettings>,
     mut virtual_time: ResMut<Time<Virtual>>,
+    mut dialogue_length: Local<DialogueLengthCache>,
 ) {
     let focused = context.windows.single().is_ok_and(|window| window.focused);
     let studio_sync = context.editor_sync.is_some();
@@ -290,7 +293,7 @@ pub(crate) fn update_lifecycle(
         RuntimeActivity::Background
     } else if context.loading.blocked {
         RuntimeActivity::Loading
-    } else if core_is_animating(&context.state)
+    } else if core_is_animating(&context.state, &mut dialogue_length)
         || context.ui.0
         || context.audio.0
         || context.toggles.auto
@@ -375,11 +378,11 @@ pub(crate) fn sync_background_audio(
     }
 }
 
-fn core_is_animating(state: &GameState) -> bool {
+fn core_is_animating(state: &GameState, dialogue_length: &mut DialogueLengthCache) -> bool {
     state
         .dialogue
         .as_ref()
-        .is_some_and(|dialogue| dialogue.visible_chars < dialogue.text.chars().count())
+        .is_some_and(|dialogue| dialogue.visible_chars < dialogue_length.count(&dialogue.text))
         || state
             .dialogue_retraction
             .as_ref()
@@ -610,6 +613,10 @@ mod tests {
     use super::*;
     use bevy::window::WindowResolution;
 
+    fn is_animating(state: &GameState) -> bool {
+        core_is_animating(state, &mut DialogueLengthCache::default())
+    }
+
     #[test]
     fn application_shortcuts_require_control() {
         let mut keys = ButtonInput::default();
@@ -759,20 +766,20 @@ mod tests {
     #[test]
     fn time_based_film_effects_keep_the_render_loop_active() {
         let mut state = GameState(keine_core::State::new());
-        assert!(!core_is_animating(&state));
+        assert!(!is_animating(&state));
         assert!(state.bg_films.apply(&keine_core::AnimationPreset::OldFilm));
-        assert!(core_is_animating(&state));
+        assert!(is_animating(&state));
         state.bg_films.clear();
         assert!(state.bg_films.apply(&keine_core::AnimationPreset::DotFilm));
-        assert!(!core_is_animating(&state));
+        assert!(!is_animating(&state));
         state.bg_films.clear();
         state.camera_effect.godray_intensity = 0.8;
         state.camera_effect.godray_speed = 0.2;
-        assert!(core_is_animating(&state));
+        assert!(is_animating(&state));
         state.camera_effect.godray_speed = 0.0;
-        assert!(!core_is_animating(&state));
+        assert!(!is_animating(&state));
         state.camera_effect.film_grain_intensity = 0.5;
-        assert!(core_is_animating(&state));
+        assert!(is_animating(&state));
     }
 
     #[test]
@@ -780,12 +787,12 @@ mod tests {
         let mut state = GameState(keine_core::State::new());
         state.waiting_for_advance = true;
         assert!(
-            !core_is_animating(&state),
+            !is_animating(&state),
             "waiting for a player input is script blocking, not an animation"
         );
 
         state.wait_remaining = 0.5;
-        assert!(core_is_animating(&state));
+        assert!(is_animating(&state));
         state.wait_remaining = 0.0;
         state.dialogue_retraction = Some(keine_core::state::DialogueRetraction {
             keep: "line".into(),
@@ -793,9 +800,9 @@ mod tests {
             fractional_chars: 0.0,
             awaiting_advance: true,
         });
-        assert!(!core_is_animating(&state));
+        assert!(!is_animating(&state));
         state.dialogue_retraction.as_mut().unwrap().awaiting_advance = false;
-        assert!(core_is_animating(&state));
+        assert!(is_animating(&state));
     }
 
     #[test]
@@ -822,7 +829,7 @@ mod tests {
             },
         );
 
-        assert!(core_is_animating(&state));
+        assert!(is_animating(&state));
     }
 
     #[test]

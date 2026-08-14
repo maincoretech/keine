@@ -6,8 +6,8 @@ use keine_loader::{Diagnostic, DiagnosticLevel};
 
 use crate::runtime::platform::InputActions;
 use crate::runtime::resources::{
-    AssetLoadingGate, ContentProjectResource, EditorSyncSession, GameState, LocalAssetManifest,
-    LocalSceneAssets, ScriptLanguages, ScriptWatcherResource,
+    AssetLoadingGate, ContentProjectResource, DialogueLengthCache, EditorSyncSession, GameState,
+    LocalAssetManifest, LocalSceneAssets, ScriptLanguages, ScriptWatcherResource,
 };
 use crate::storage::settings::RuntimeSettings;
 use crate::ui::control_bar::{ButtonAction, SkipMode, ToggleStates};
@@ -17,6 +17,7 @@ use crate::ui::input_scope::UiInputScope;
 struct TypewriterClock {
     scene: String,
     cursor: usize,
+    dialogue_length: DialogueLengthCache,
     fractional_chars: f64,
     next_pause: usize,
     pause: TypewriterPause,
@@ -209,14 +210,17 @@ pub fn tick(mut context: TickContext) {
         }
         return;
     }
-    let notend = update_notend(context.state.bypass_change_detection());
+    let target_chars = dialogue_target(&context.state, &mut context.typewriter_clock);
+    let notend = update_notend(context.state.bypass_change_detection(), target_chars);
     state_changed |= notend.changed;
+    let target_chars = dialogue_target(&context.state, &mut context.typewriter_clock);
     let auto = update_auto_mode(
         context.state.bypass_change_detection(),
         context.toggles.auto,
         delta_seconds,
         context.settings.auto_delay,
         &mut context.auto_timer,
+        target_chars,
     );
     state_changed |= auto.changed;
     if notend.return_to_title || auto.return_to_title {
@@ -252,10 +256,18 @@ fn request_return_to_title(commands: &mut Commands) {
     commands.insert_resource(crate::ui::title::ReturnToTitleTransition::default());
 }
 
-fn update_notend(state: &mut State) -> TickProgress {
-    let should_advance = state.dialogue.as_ref().is_some_and(|dialogue| {
-        dialogue.auto_advance && dialogue.visible_chars >= dialogue.text.chars().count()
-    });
+fn dialogue_target(state: &State, clock: &mut TypewriterClock) -> usize {
+    state
+        .dialogue
+        .as_ref()
+        .map_or(0, |dialogue| clock.dialogue_length.count(&dialogue.text))
+}
+
+fn update_notend(state: &mut State, target_chars: usize) -> TickProgress {
+    let should_advance = state
+        .dialogue
+        .as_ref()
+        .is_some_and(|dialogue| dialogue.auto_advance && dialogue.visible_chars >= target_chars);
     if should_advance {
         return advance_once(state);
     }
@@ -764,7 +776,7 @@ fn update_typewriter(
         clock.fractional_chars = 0.0;
         return false;
     };
-    let target = dialogue.text.chars().count();
+    let target = clock.dialogue_length.count(&dialogue.text);
     if dialogue.visible_chars >= target {
         clock.next_pause = dialogue.pauses.len();
         clock.pause = TypewriterPause::Idle;
@@ -871,6 +883,7 @@ fn update_auto_mode(
     delta_seconds: f64,
     delay: f64,
     timer: &mut f64,
+    target_chars: usize,
 ) -> TickProgress {
     if !enabled {
         *timer = 0.0;
@@ -880,7 +893,7 @@ fn update_auto_mode(
     let ready = state
         .dialogue
         .as_ref()
-        .is_none_or(|dialogue| dialogue.visible_chars >= dialogue.text.chars().count());
+        .is_none_or(|dialogue| dialogue.visible_chars >= target_chars);
     if !ready {
         *timer = 0.0;
         return TickProgress::default();
