@@ -72,29 +72,17 @@ jobs:
           path: fuzz/artifacts/
           if-no-files-found: ignore
 
-  native-media-asan:
-    name: ${{ matrix.name }} ASan acceptance
+  ffmpeg-asan:
+    name: Linux FFmpeg ASan acceptance
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Linux FFmpeg
-            os: ubuntu-latest
-            feature: video-ffmpeg
-            ffmpeg: "true"
-          - name: macOS AVFoundation and Metal
-            os: macos-latest
-            feature: video-native
-            ffmpeg: "false"
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Install nightly Rust and rust-src
         run: rustup toolchain install nightly --profile minimal --component rust-src
       - uses: ./.github/actions/setup-video
         with:
-          enabled: ${{ matrix.ffmpeg }}
+          enabled: "true"
       - name: Resolve sanitizer target
         shell: bash
         run: |
@@ -105,10 +93,9 @@ jobs:
         shell: bash
         env:
           ASAN_OPTIONS: detect_leaks=0:halt_on_error=1
-          MEDIA_FEATURE: ${{ matrix.feature }}
           RUSTFLAGS: -Zsanitizer=address
           RUSTDOCFLAGS: -Zsanitizer=address
         run: >-
           cargo +nightly run -Zbuild-std --target "$RUST_HOST" --locked
-          --no-default-features --features "publisher,$MEDIA_FEATURE"
+          --no-default-features --features publisher,video-ffmpeg
           --bin keine-video-acceptance -- dev/fixtures/video/playback.mp4

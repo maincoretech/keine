@@ -93,11 +93,18 @@ session 清理也不会被阻塞发送卡住。所有 `Ready`、frame、end 和 
 - `cargo-fuzz` 将项目内真实 WebP 作为 seed，持续变异字节并调用生产 libwebp decoder；
   libFuzzer 默认启用 AddressSanitizer，单次 CI smoke 限 60 秒、输入限 4 MiB、RSS 限 2 GiB，
   这些是 CI 资源参数而不是运行时资源格式上限；
-- nightly Rust ASan 分别运行 Linux FFmpeg 与 macOS AVFoundation/Metal 的
-  `keine-video-acceptance`，同一次执行覆盖 filesystem 与加密 Hakutaku source。构建时
-  重编译并 instrument Rust 标准库；系统 FFmpeg、Apple framework 等预编译 native 库本身
-  不会因此获得完整 instrumentation，所以这属于 FFI ownership/buffer 防御纵深，不替代
-  codec 上游安全更新、平台真实播放验收或专门的 native-library sanitizer build。
+- nightly Rust ASan 运行 Linux FFmpeg 的 `keine-video-acceptance`，同一次执行覆盖
+  filesystem 与加密 Hakutaku source。构建时重编译并 instrument Rust 标准库；系统 FFmpeg
+  等预编译 native 库本身不会因此获得完整 instrumentation，所以这属于 FFI
+  ownership/buffer 防御纵深，不替代 codec 上游安全更新或专门的 native-library sanitizer
+  build。具体工具链用法遵循
+  [Rust sanitizer 文档](https://doc.rust-lang.org/beta/unstable-book/compiler-flags/sanitizer.html)。
+
+macOS 的 native unit、filesystem/Hakutaku 首帧和 Metal 导入仍由常规 CI acceptance 强制
+通过，但不把完整 Bevy binary 的 ASan 链接设为 gate：当前 nightly + macOS runner 的 `ld`
+会在链接大量 instrumented Bevy archive 时以 `initializer pointer has no target` 失败，尚未
+生成可执行文件。工具链升级后应重新评估；在此之前依靠收紧的 unsafe invariants、竞态测试
+和真实 native acceptance，而不是用 `continue-on-error` 制造虚假的 sanitizer 绿灯。
 
 fuzz crash 输入会作为 workflow artifact 上传；本地复现使用 nightly 与固定的
 `cargo-fuzz 0.13.2`：
