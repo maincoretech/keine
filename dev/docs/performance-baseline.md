@@ -766,3 +766,27 @@ It measured 1.617 ns/call. The previous implementation had no global budget
 check; this is the complete added steady-frame CPU cost, well below decoder,
 copy, upload, and frame-scheduling work. Resolution changes take the mutex and
 checked arithmetic once, while session teardown releases its reservation.
+
+### 2026-08-14 sprite render revision
+
+`SpriteRenderCache` previously compared its cloned sprite `HashMap` with the
+complete live map on every frame before checking camera scalars. Core `State`
+now carries a transient stage revision that script actions, animated
+presentation updates, rollback/save restore, and whole-state replacement all
+invalidate. The idle render check is one integer comparison and the cache no
+longer owns a second sprite map.
+
+`cargo bench --bench runtime_hotspots -- --quick` measured the two idle checks
+on the same 256-sprite maps in one Apple M5 Pro release/LTO process:
+
+| Sprite state check | Median |
+|---|---:|
+| Full `HashMap` equality | 2.3190 µs |
+| `u64` stage revision | 602.81 ps |
+
+The synthetic token comparison is roughly 3,847 times faster. Script actions
+conservatively bump the token even when an action does not touch the stage;
+those events are low-frequency compared with rendered frames and this avoids
+mutation branches silently omitting invalidation. Active animations already
+perform stage work each frame and bump only after that work changes render
+inputs.

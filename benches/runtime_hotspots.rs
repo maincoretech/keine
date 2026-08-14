@@ -54,6 +54,17 @@ fn indexed_sprite_lookup(ids: &[String], index: &HashMap<String, usize>) -> usiz
     ids.iter().map(|id| index[id]).sum()
 }
 
+fn legacy_sprite_state_matches(
+    cached: &HashMap<String, usize>,
+    current: &HashMap<String, usize>,
+) -> bool {
+    cached == current
+}
+
+fn revisioned_sprite_state_matches(cached: u64, current: u64) -> bool {
+    cached == current
+}
+
 #[derive(Default)]
 struct TextLengthCache {
     text: String,
@@ -89,6 +100,27 @@ fn bench(c: &mut Criterion) {
         b.iter(|| black_box(indexed_sprite_lookup(black_box(&ids), black_box(&index))))
     });
     sprites.finish();
+
+    let cached = index.clone();
+    let current = index.clone();
+    let mut state = c.benchmark_group("runtime_hotspots/sprite_state_compare_256");
+    state.bench_function("legacy_hash_map_equality", |b| {
+        b.iter(|| {
+            black_box(legacy_sprite_state_matches(
+                black_box(&cached),
+                black_box(&current),
+            ))
+        })
+    });
+    state.bench_function("revision_token", |b| {
+        b.iter(|| {
+            black_box(revisioned_sprite_state_matches(
+                black_box(42),
+                black_box(42),
+            ))
+        })
+    });
+    state.finish();
 
     let text = "我🙂a".repeat(1_024);
     let mut cache = TextLengthCache::default();

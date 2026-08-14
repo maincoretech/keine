@@ -627,6 +627,7 @@ fn sync_editor_position(
         scene_name,
         source_step
     );
+    preview.stage_revision = state.stage_revision.wrapping_add(1);
     *state = preview;
     true
 }
@@ -732,6 +733,7 @@ fn finish_editor_presentation(preview: &mut State) -> bool {
 /// read positions, backlog, stage, audio and open UI interactions are rebuilt
 /// from the beginning of the selected scene.
 fn restart_after_program_reload(state: &mut State, program: Program) {
+    let next_stage_revision = state.stage_revision.wrapping_add(1);
     let previous_scene = state.current_scene.clone();
     let was_ended = state.ended;
     let vars = std::mem::take(&mut state.vars);
@@ -754,6 +756,7 @@ fn restart_after_program_reload(state: &mut State, program: Program) {
     };
     restarted.ended = was_ended || restarted.current_scene.is_empty();
     restarted.effect_queue.push(keine_core::EffectEvent::Stop);
+    restarted.stage_revision = next_stage_revision;
     if !restarted.ended {
         step::step(&mut restarted);
     }
@@ -1002,6 +1005,7 @@ fn finish_step(state: &mut State, restore_previous_dialogue: bool) -> TickProgre
 
 fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool) -> bool {
     let mut changed = false;
+    let mut stage_changed = false;
     if state.waiting_for_advance && advance_intro {
         state.waiting_for_advance = false;
         changed = true;
@@ -1060,6 +1064,7 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
 
     if let Some(mut animation) = state.camera_effect_animation.take() {
         changed = true;
+        stage_changed = true;
         animation.elapsed = (animation.elapsed + delta_seconds).min(animation.duration);
         let progress = animation
             .easing
@@ -1074,6 +1079,7 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
 
     if let Some(mut animation) = state.camera_transform_animation.take() {
         changed = true;
+        stage_changed = true;
         animation.elapsed = (animation.elapsed + delta_seconds).min(animation.duration);
         let progress = animation
             .easing
@@ -1090,6 +1096,7 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
         use keine_core::{CameraShakeAxis, CameraShakeFalloff};
 
         changed = true;
+        stage_changed = true;
         shake.elapsed = (shake.elapsed + delta_seconds).min(shake.spec.duration);
         let progress = shake.elapsed / shake.spec.duration.max(f32::EPSILON);
         let envelope = match shake.spec.falloff {
@@ -1129,7 +1136,9 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
     changed |= state.videos.len() != video_count;
 
     for sprite in state.sprites.values_mut() {
-        changed |= sprite.keyframe_animation.is_some();
+        let keyframes_active = sprite.keyframe_animation.is_some();
+        changed |= keyframes_active;
+        stage_changed |= keyframes_active;
         let keyframes_finished = sprite.keyframe_animation.as_mut().is_some_and(|animation| {
             advance_keyframes(&mut sprite.transform, animation, delta_seconds)
         });
@@ -1138,6 +1147,7 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
         }
         if let Some(animation) = &mut sprite.transform_animation {
             changed = true;
+            stage_changed = true;
             animation.elapsed = (animation.elapsed + delta_seconds).min(animation.duration);
             let progress = animation
                 .easing
@@ -1149,6 +1159,7 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
         }
         if let Some(animation) = &mut sprite.animation {
             changed = true;
+            stage_changed = true;
             animation.elapsed = (animation.elapsed + delta_seconds).min(animation.duration);
             let progress = (animation.elapsed / animation.duration).clamp(0.0, 1.0);
             sprite.transform = sample_preset(animation.base, &animation.preset, progress);
@@ -1175,11 +1186,13 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
         if sprite.entering {
             if sprite.transition_progress < 1.0 {
                 changed = true;
+                stage_changed = true;
                 sprite.transition_progress = (sprite.transition_progress + delta).min(1.0);
             }
         } else {
             if sprite.transition_progress > 0.0 {
                 changed = true;
+                stage_changed = true;
                 sprite.transition_progress = (sprite.transition_progress - delta).max(0.0);
             }
         }
@@ -1188,7 +1201,9 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
     state
         .sprites
         .retain(|_, sprite| sprite.entering || sprite.transition_progress > 0.0);
-    changed |= state.sprites.len() != sprite_count;
+    let sprites_removed = state.sprites.len() != sprite_count;
+    changed |= sprites_removed;
+    stage_changed |= sprites_removed;
 
     let transition_finished = if let Some(transition) = &mut state.bg_transition {
         changed = true;
@@ -1252,6 +1267,7 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
 
     if state.stage_animation.is_some() {
         changed = true;
+        stage_changed = true;
         advance_stage_animation(state, delta_seconds);
     }
 
@@ -1266,6 +1282,9 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
             changed = true;
             state.mini_avatar_progress = (state.mini_avatar_progress - avatar_delta).max(0.0);
         }
+    }
+    if stage_changed {
+        state.invalidate_stage();
     }
     changed
 }
@@ -2670,21 +2689,27 @@ mod tests {
             ],
         )]));
         state.current_scene = "main".into();
+        let initial_revision = state.stage_revision;
 
         assert_eq!(
             step::step(&mut state),
             keine_core::StepResult::AwaitPresentation
         );
         assert!(state.sprites.contains_key("hero"));
+        let started_revision = state.stage_revision;
+        assert_ne!(started_revision, initial_revision);
 
         update_transitions(&mut state, 0.5, false);
         let halfway = &state.sprites["hero"];
         assert!(halfway.animation.is_some());
         assert!(halfway.transform.alpha > 0.0);
+        let halfway_revision = state.stage_revision;
+        assert_ne!(halfway_revision, started_revision);
 
         update_transitions(&mut state, 0.5, false);
         assert!(!state.sprites.contains_key("hero"));
         assert!(!state.presentation_blocked());
+        assert_ne!(state.stage_revision, halfway_revision);
     }
 
     #[test]

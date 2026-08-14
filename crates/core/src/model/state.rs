@@ -75,6 +75,10 @@ pub struct State {
     pub videos: HashMap<String, VideoState>,
     #[serde(skip, default)]
     pub video_revision_counter: u64,
+    /// Monotonic invalidation token for sprite/camera render inputs. Hosts use
+    /// this instead of comparing the complete sprite map every frame.
+    #[serde(skip, default)]
+    pub stage_revision: u64,
     /// Active sprites, keyed by id.
     pub sprites: HashMap<String, Sprite>,
     /// Current dialogue text (if any).
@@ -670,6 +674,11 @@ impl State {
         Self::default()
     }
 
+    /// Mark sprite or camera presentation data as changed.
+    pub fn invalidate_stage(&mut self) {
+        self.stage_revision = self.stage_revision.wrapping_add(1);
+    }
+
     /// Install a freshly compiled program and clamp every persisted cursor to
     /// the new scene boundaries. Replacing the `Arc` keeps hot reload atomic.
     pub fn install_program(&mut self, program: Program) {
@@ -722,6 +731,7 @@ impl State {
             });
         }
         saved.program = Arc::clone(&self.program);
+        saved.stage_revision = self.stage_revision.wrapping_add(1);
         saved.global_vars = std::mem::take(&mut self.global_vars);
         saved.read_dialogues = std::mem::take(&mut self.read_dialogues);
         saved.unlocked_cg = std::mem::take(&mut self.unlocked_cg);
@@ -884,6 +894,7 @@ impl State {
         self.transition_rules = snapshot.transition_rules.as_ref().clone();
         self.ended = false;
         self.backlog.truncate(index + 1);
+        self.invalidate_stage();
         true
     }
 

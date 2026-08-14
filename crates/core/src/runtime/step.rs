@@ -113,6 +113,10 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
             action => (action, false),
         };
 
+        // Script actions are infrequent relative to rendered frames. One
+        // conservative revision bump here covers every sprite/camera mutation
+        // branch without scattering an easy-to-miss manual invalidation.
+        state.invalidate_stage();
         match action {
             Action::ShowBg {
                 image,
@@ -1475,6 +1479,7 @@ fn finish_dialogue_retraction(state: &mut State) {
 }
 
 pub fn end_game(state: &mut State) {
+    state.invalidate_stage();
     state.shell_events.clear();
     state.host_commands.clear();
     state.scene_stack.clear();

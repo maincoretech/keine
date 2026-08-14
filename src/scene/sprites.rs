@@ -22,33 +22,17 @@ struct SpriteEntityIndex(HashMap<String, Entity>);
 #[derive(Default)]
 pub(crate) struct SpriteRenderCache {
     initialized: bool,
-    sprites: HashMap<String, keine_core::state::Sprite>,
-    camera_transform: keine_core::SpriteTransform,
-    camera_targets: keine_core::CameraTargets,
-    camera_shake: Option<keine_core::state::CameraShakeState>,
-    camera_effect: keine_core::PostProcessEffect,
-    camera_effect_targets: keine_core::CameraTargets,
+    stage_revision: u64,
 }
 
 impl SpriteRenderCache {
     fn matches(&self, state: &GameState) -> bool {
-        self.initialized
-            && self.sprites == state.sprites
-            && self.camera_transform == state.camera_transform
-            && self.camera_targets == state.camera_targets
-            && self.camera_shake == state.camera_shake
-            && self.camera_effect == state.camera_effect
-            && self.camera_effect_targets == state.camera_effect_targets
+        self.initialized && self.stage_revision == state.stage_revision
     }
 
     fn capture(&mut self, state: &GameState) {
         self.initialized = true;
-        self.sprites.clone_from(&state.sprites);
-        self.camera_transform = state.camera_transform;
-        self.camera_targets = state.camera_targets;
-        self.camera_shake.clone_from(&state.camera_shake);
-        self.camera_effect.clone_from(&state.camera_effect);
-        self.camera_effect_targets = state.camera_effect_targets;
+        self.stage_revision = state.stage_revision;
     }
 }
 
@@ -382,9 +366,22 @@ pub(crate) fn sync_sprites(
 
 #[cfg(test)]
 mod tests {
-    use super::{scene_layer_size, sprite_center_y, sprite_geometry};
+    use super::{SpriteRenderCache, scene_layer_size, sprite_center_y, sprite_geometry};
     use bevy::prelude::*;
-    use keine_core::{Position, SceneFit, SceneLayerLayout, SpriteLayout};
+    use keine_core::{Position, SceneFit, SceneLayerLayout, SpriteLayout, State};
+
+    use crate::runtime::resources::GameState;
+
+    #[test]
+    fn render_cache_uses_the_stage_revision_token() {
+        let mut state = GameState(State::new());
+        let mut cache = SpriteRenderCache::default();
+        assert!(!cache.matches(&state));
+        cache.capture(&state);
+        assert!(cache.matches(&state));
+        state.invalidate_stage();
+        assert!(!cache.matches(&state));
+    }
 
     #[test]
     fn project_offset_moves_the_shared_sprite_baseline() {
