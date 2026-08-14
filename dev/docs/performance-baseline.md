@@ -560,3 +560,34 @@ same post-LTO run despite having no changed code paths, with inconsistent
 follow-up results after cooling; those machine-state figures are not attributed
 to audio. The release-size A/B above and the format-specific decode/seek/loop
 checks are the reproducible measurements for this change.
+
+### 2026-08-14 backup import allocation bound
+
+Backup import now deserializes V2 file names and payloads as slices borrowed
+from the already bounded envelope. The former owned representation copied each
+payload while the complete input buffer was still resident. The accepted
+envelope limit also dropped from 512 MiB to 128 MiB because export still holds
+the collected files and its serialized output at the same time; a streaming
+container remains the long-term route to a lower bound.
+
+The `backup_decode` target in `cargo bench --workspace` decodes the same 32 MiB,
+single-file V2 envelope with the old owned representation and the current
+borrowed representation. This run used the same Apple M5 Pro development
+machine and release bench profile as the other local baselines.
+
+| Representation | Median decode time | Payload allocation while input is resident |
+| --- | ---: | ---: |
+| Owned V2 | 18.450 ms | 32 MiB copy |
+| Borrowed V2 | 18.436 ns | 0 payload bytes |
+
+The borrowed timing is effectively constant-time envelope validation for this
+shape because postcard can return the encoded byte range directly; it is not a
+general storage-throughput claim. At the 128 MiB envelope limit, the structural
+import bound removes up to another envelope-sized payload copy. Export can
+still approach two envelope-sized buffers, but its new limit caps that payload
+component near 256 MiB instead of the former near-1-GiB worst case.
+
+The complete `cargo bench --workspace` suite passed after this benchmark was
+added. Unrelated render-preview, rollback, script-runtime, and program-load
+benchmarks were slower together in this post-LTO run despite having no changed
+code paths; those machine-state shifts are not attributed to backup decoding.

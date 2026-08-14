@@ -166,6 +166,10 @@ criterion = { workspace = true }
 name = "save_preview"
 harness = false
 
+[[bench]]
+name = "backup_decode"
+harness = false
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSImage", "NSResponder", "NSRunningApplication"] }
