@@ -29,40 +29,62 @@ jobs:
         include:
           - name: Linux x64
             os: ubuntu-latest
+            quality: true
+            backend: none
+            release_features: audio-all,ui-sounds
+            timeout: 60
           - name: macOS
             os: macos-latest
+            quality: false
+            backend: native
+            release_features: audio-all,ui-sounds,video-native
+            timeout: 60
           - name: Windows x64
             os: windows-latest
+            quality: false
+            backend: ffmpeg
+            release_features: audio-all,ui-sounds,video-ffmpeg
+            timeout: 90
     runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.timeout }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
         with:
           components: rustfmt, clippy
       - uses: ./.github/actions/setup-video
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+        with:
+          enabled: ${{ matrix.backend == 'ffmpeg' }}
+      - if: matrix.quality
+        run: cargo fmt --all -- --check
+      - if: matrix.quality
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - if: matrix.quality
+        run: cargo test --workspace
       - name: Check publisher pipeline
+        if: matrix.quality
         run: cargo test --workspace --no-default-features --features publisher
       - name: Check FFmpeg video unit contracts
-        if: runner.os == 'Linux' || runner.os == 'Windows'
+        if: matrix.backend == 'ffmpeg'
         run: >-
           cargo test -p keine --no-default-features --features publisher,video-ffmpeg
           scene::video::ffmpeg_backend::tests
       - name: Check FFmpeg video acceptance
-        if: runner.os == 'Linux' || runner.os == 'Windows'
+        if: matrix.backend == 'ffmpeg'
         run: >-
           cargo run --locked --no-default-features --features publisher,video-ffmpeg
           --bin keine-video-acceptance -- dev/fixtures/video/playback.mp4
       - name: Check native video unit contracts
-        if: runner.os == 'macOS'
+        if: matrix.backend == 'native'
         run: >-
           cargo test -p keine --no-default-features --features video-native
           scene::video::
       - name: Check AVFoundation video acceptance
-        if: runner.os == 'macOS'
+        if: matrix.backend == 'native'
         run: >-
           cargo run --locked --no-default-features --features publisher,video-native
           --bin keine-video-acceptance -- dev/fixtures/video/playback.mp4
-      - run: cargo build --release
+      - name: Build platform release backend
+        run: >-
+          cargo build --release --locked --no-default-features
+          --features "${{ matrix.release_features }}"

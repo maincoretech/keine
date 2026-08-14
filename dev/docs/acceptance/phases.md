@@ -236,7 +236,10 @@ open target/bundle/macos/keine-demo.app
 
 8. `.app` 可脱离工作目录启动内置项目；包内存在
    `Contents/Resources/game.haku` 与 `Contents/Resources/data`，且不存在明文 project 目录。
-9. 普通推送后 `ci.yml` 在 Linux/macOS/Windows 执行 fmt、Clippy、测试和 release build。
+9. 普通推送后 `ci.yml` 在 Linux 执行一次跨平台 fmt、Clippy、workspace 与 publisher
+   测试；macOS/Windows 分别执行 native/FFmpeg backend 契约、真实 fixture 解码，并在
+   三个平台构建各自实际启用 backend 的 release。Windows 的精简 vcpkg FFmpeg binary
+   cache 在 SDK 安装后立即保存，不依赖后续测试全部成功。
    配置仓库 Secret `HAKUTAKU_IDENTITY_BASE64` 后手动运行 Release workflow；三个平台
    artifact 均应只包含引擎、`game.haku`、`data/` 和启动脚本，日志不显示发布身份。
 

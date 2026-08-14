@@ -180,7 +180,8 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 - [x] Hakutaku `.haku` + `.taku`、受限缓存、配置/脚本直读与 seekable Bevy `AssetReader`
 - [x] Ed25519 快照签名 + AES-256-GCM；目录启动验证、page/block 懒验证
 - [x] macOS .app bundle 脚本
-- [x] Linux / macOS / Windows fmt、Clippy、测试与 release CI
+- [x] Linux 统一 fmt、Clippy、workspace/publisher 测试；macOS / Windows backend 契约、
+  真实媒体 acceptance 与三平台实际 backend release CI
 - [x] CI 加密发布 — 通过 `HAKUTAKU_IDENTITY_BASE64` Secret 复用发布身份，并确保
   日志与 artifact 不泄露私钥
 
