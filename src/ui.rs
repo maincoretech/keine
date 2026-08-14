@@ -56,7 +56,10 @@ impl Plugin for GameUiPlugin {
                 .chain()
                 .after(bevy::ui::UiSystems::Layout),
         );
-        app.add_systems(PostUpdate, dialog::spawn_dialog);
+        app.add_systems(
+            PostUpdate,
+            (dialog::sync_system_message, dialog::spawn_dialog).chain(),
+        );
         app.add_systems(
             Last,
             activity::update.before(crate::runtime::platform::update_lifecycle),

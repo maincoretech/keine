@@ -477,9 +477,11 @@ fn action_name(action: &Action) -> &'static str {
         Action::Unlock { .. } => "unlock",
         Action::Curtain { .. } => "curtain",
         Action::FloatingText { .. } => "floating-text",
+        Action::HideFloatingText { .. } => "hide-floating-text",
         Action::ConfigurePortraits { .. } => "configure-portraits",
         Action::FocusPortrait { .. } => "focus-portrait",
         Action::SetDialogueStyle { .. } => "set-dialogue-style",
+        Action::SetParagraphStyle { .. } => "set-paragraph-style",
         Action::AnimateKeyframes { .. } => "animate-keyframes",
         Action::HideSprites { .. } => "hide-sprites",
         Action::SetAutoplay { .. } => "set-autoplay",
@@ -493,6 +495,7 @@ fn action_name(action: &Action) -> &'static str {
         Action::HostCommand { .. } => "host-command",
         Action::Vocal { .. } => "vocal",
         Action::RequestInput { .. } => "request-input",
+        Action::SystemMessage { .. } => "system-message",
         // LetsGal owns this adapter-native fixture; the WebGAL showcase
         // intentionally does not need to manufacture Studio timeline JSON.
         Action::StageAnimation { .. } => "stage-animation",

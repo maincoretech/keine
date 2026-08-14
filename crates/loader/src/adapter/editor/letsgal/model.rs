@@ -204,7 +204,37 @@ pub(super) struct CharacterGlobalSettings {
     #[serde(default)]
     pub default_position_id: String,
     #[serde(default)]
+    pub distance_presets: Vec<PortraitDistancePreset>,
+    #[serde(default)]
+    pub default_distance_id: String,
+    #[serde(default)]
     pub graphics: CharacterGraphics,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct CharacterPortraitLayout {
+    #[serde(default)]
+    pub distance_presets: Vec<PortraitDistancePreset>,
+    #[serde(default)]
+    pub default_distance_id: String,
+    #[serde(default)]
+    pub default_position_id: String,
+    #[serde(default)]
+    pub graphics: CharacterGraphics,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(super) struct PortraitDistancePreset {
+    pub id: String,
+    #[serde(default = "default_scale")]
+    pub scale: f32,
+    #[serde(default)]
+    pub positions: Vec<CharacterPosition>,
+}
+
+const fn default_scale() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -236,6 +266,8 @@ pub(super) struct CharacterDefinition {
     pub attribute_values: HashMap<String, Value>,
     #[serde(default)]
     pub portrait_skin_config: Option<PortraitSkinConfig>,
+    #[serde(default)]
+    pub portrait_layout: Option<CharacterPortraitLayout>,
     #[serde(flatten)]
     pub extras: Map<String, Value>,
 }

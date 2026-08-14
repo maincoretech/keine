@@ -450,6 +450,19 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                 text,
                 options,
             } => {
+                state.active_text_style = if options.paragraph {
+                    state.paragraph_style.clone()
+                } else {
+                    state.dialogue_style.clone()
+                };
+                state.active_typewriter_speed = options
+                    .paragraph
+                    .then_some(state.paragraph_typewriter_speed)
+                    .flatten();
+                state.active_text_reveal = options
+                    .paragraph
+                    .then_some(state.paragraph_text_reveal)
+                    .flatten();
                 if state.textbox_auto_hidden {
                     state.textbox_hidden = false;
                     state.textbox_auto_hidden = false;
@@ -851,6 +864,7 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                 }
             }
             Action::FloatingText {
+                id,
                 text,
                 position,
                 font_size,
@@ -859,9 +873,11 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                 hold,
                 fade_out,
                 blocking,
+                infinite,
             } => {
                 let state_blocking = *blocking && !next;
                 state.floating_text = Some(crate::state::FloatingTextState {
+                    id: id.clone(),
                     text: interpolate(text, &state.vars, &state.global_vars),
                     position: *position,
                     font_size: *font_size,
@@ -871,9 +887,23 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                     fade_out: fade_out.max(0.0),
                     elapsed: 0.0,
                     blocking: state_blocking,
+                    infinite: *infinite,
                 });
                 if state_blocking {
                     return StepResult::AwaitPresentation;
+                }
+            }
+            Action::HideFloatingText { id } => {
+                let matches = state.floating_text.as_ref().is_some_and(|active| {
+                    id.as_ref().is_none_or(|id| active.id.as_ref() == Some(id))
+                });
+                if matches && let Some(active) = &mut state.floating_text {
+                    if active.fade_out > f32::EPSILON {
+                        active.infinite = false;
+                        active.elapsed = active.fade_in + active.hold;
+                    } else {
+                        state.floating_text = None;
+                    }
                 }
             }
             Action::ConfigurePortraits {
@@ -938,6 +968,15 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
             }
             Action::SetDialogueStyle { style } => {
                 state.dialogue_style.clone_from(style);
+            }
+            Action::SetParagraphStyle {
+                style,
+                typewriter_speed,
+                text_reveal,
+            } => {
+                state.paragraph_style.clone_from(style);
+                state.paragraph_typewriter_speed = *typewriter_speed;
+                state.paragraph_text_reveal = *text_reveal;
             }
             Action::AnimateKeyframes {
                 target,
@@ -1254,6 +1293,21 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                 });
                 return StepResult::AwaitInput;
             }
+            Action::SystemMessage { spec } => {
+                state.system_message = Some(crate::state::SystemMessageState {
+                    mode: spec.mode,
+                    title: interpolate(&spec.title, &state.vars, &state.global_vars),
+                    message: interpolate(&spec.message, &state.vars, &state.global_vars),
+                    confirm_text: interpolate(&spec.confirm_text, &state.vars, &state.global_vars),
+                    cancel_text: interpolate(&spec.cancel_text, &state.vars, &state.global_vars),
+                    result_variable: spec
+                        .result_variable
+                        .as_deref()
+                        .map(|value| interpolate(value, &state.vars, &state.global_vars))
+                        .filter(|value| !value.is_empty()),
+                });
+                return StepResult::AwaitPresentation;
+            }
             Action::StageAnimation { animation } => {
                 // A timeline may reference a character expression before a
                 // separate show-character block. Prepare only missing targets;
@@ -1509,6 +1563,7 @@ pub fn end_game(state: &mut State) {
     state.textbox_hidden = false;
     state.textbox_auto_hidden = false;
     state.user_input = None;
+    state.system_message = None;
     state.wait_remaining = 0.0;
     state.wait_blocking = false;
     state.waiting_for_advance = false;
@@ -1518,6 +1573,12 @@ pub fn end_game(state: &mut State) {
     state.floating_text = None;
     state.portrait_rule = None;
     state.dialogue_style = Default::default();
+    state.paragraph_style = Default::default();
+    state.active_text_style = Default::default();
+    state.paragraph_typewriter_speed = None;
+    state.paragraph_text_reveal = None;
+    state.active_typewriter_speed = None;
+    state.active_text_reveal = None;
     state.particle_effects.clear();
     state.transition_rules.clear();
     state.bgm.file = None;
@@ -1585,6 +1646,17 @@ pub fn submit_user_input(state: &mut State) -> bool {
     let variable = input.variable.clone();
     state.user_input = None;
     state.vars.insert(variable, value);
+    true
+}
+
+/// Resolve the active script-owned alert or confirmation.
+pub fn resolve_system_message(state: &mut State, confirmed: bool) -> bool {
+    let Some(message) = state.system_message.take() else {
+        return false;
+    };
+    if let Some(variable) = message.result_variable {
+        state.vars.insert(variable, crate::Value::Bool(confirmed));
+    }
     true
 }
 
@@ -2910,5 +2982,51 @@ mod tests {
         assert!(state.curtain.blocking);
         assert_eq!(state.curtain.target, 1.0);
         assert_eq!(state.curtain.color, [0.1, 0.2, 0.3, 1.0]);
+    }
+
+    #[test]
+    fn system_confirmation_blocks_and_stores_the_native_boolean_result() {
+        let mut state = state_with(vec![Action::SystemMessage {
+            spec: crate::SystemMessageSpec {
+                mode: crate::SystemMessageMode::Confirm,
+                title: "Confirm".into(),
+                message: "Continue?".into(),
+                confirm_text: "Yes".into(),
+                cancel_text: "No".into(),
+                result_variable: Some("accepted".into()),
+            },
+        }]);
+
+        assert_eq!(step(&mut state), StepResult::AwaitPresentation);
+        assert!(state.presentation_blocked());
+        assert!(resolve_system_message(&mut state, true));
+        assert_eq!(state.vars["accepted"], Value::Bool(true));
+        assert!(!state.presentation_blocked());
+    }
+
+    #[test]
+    fn named_infinite_floating_text_uses_its_authored_exit() {
+        let mut state = state_with(vec![
+            Action::FloatingText {
+                id: Some("notice".into()),
+                text: "persistent".into(),
+                position: [0.5, 0.5],
+                font_size: 40.0,
+                color: [1.0; 4],
+                fade_in: 0.1,
+                hold: 0.0,
+                fade_out: 0.2,
+                blocking: false,
+                infinite: true,
+            },
+            Action::HideFloatingText {
+                id: Some("notice".into()),
+            },
+        ]);
+
+        assert_eq!(step(&mut state), StepResult::EndOfScene);
+        let floating = state.floating_text.as_ref().unwrap();
+        assert!(!floating.infinite);
+        assert_eq!(floating.elapsed, floating.fade_in + floating.hold);
     }
 }

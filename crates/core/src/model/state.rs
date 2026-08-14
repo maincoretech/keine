@@ -8,7 +8,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
-use crate::action::{ChoiceTarget, Program, StageAnimation, SystemUiSlot};
+use crate::action::{ChoiceTarget, Program, StageAnimation, SystemMessageMode, SystemUiSlot};
+use crate::config::TextRevealConfig;
 use crate::types::{
     AnimationPreset, BlendMode, CameraShakeSpec, CameraTargets, DialogueStyle, Easing, FilmEffects,
     InputValueType, ParticleEffect, PortraitStyle, Position, PostProcessEffect, SpriteLayout,
@@ -96,6 +97,9 @@ pub struct State {
     pub textbox_hidden: bool,
     pub textbox_auto_hidden: bool,
     pub user_input: Option<UserInputState>,
+    /// Active engine-owned alert/confirmation emitted by a script adapter.
+    #[serde(skip, default)]
+    pub system_message: Option<SystemMessageState>,
 
     // ── Presentation state ──
     pub wait_remaining: f32,
@@ -115,6 +119,18 @@ pub struct State {
     /// replaying source actions up to the selected block.
     #[serde(skip, default)]
     pub dialogue_style: DialogueStyle,
+    #[serde(skip, default)]
+    pub paragraph_style: DialogueStyle,
+    #[serde(skip, default)]
+    pub active_text_style: DialogueStyle,
+    #[serde(skip, default)]
+    pub paragraph_typewriter_speed: Option<f64>,
+    #[serde(skip, default)]
+    pub paragraph_text_reveal: Option<TextRevealConfig>,
+    #[serde(skip, default)]
+    pub active_typewriter_speed: Option<f64>,
+    #[serde(skip, default)]
+    pub active_text_reveal: Option<TextRevealConfig>,
     pub particle_effects: HashMap<String, ActiveParticleEffect>,
     pub transition_rules: HashMap<String, TransitionRule>,
 
@@ -324,6 +340,18 @@ pub struct RollbackSnapshot {
     pub portrait_rule: Option<PortraitRuleState>,
     #[serde(skip, default)]
     pub dialogue_style: DialogueStyle,
+    #[serde(skip, default)]
+    pub paragraph_style: DialogueStyle,
+    #[serde(skip, default)]
+    pub active_text_style: DialogueStyle,
+    #[serde(skip, default)]
+    pub paragraph_typewriter_speed: Option<f64>,
+    #[serde(skip, default)]
+    pub paragraph_text_reveal: Option<TextRevealConfig>,
+    #[serde(skip, default)]
+    pub active_typewriter_speed: Option<f64>,
+    #[serde(skip, default)]
+    pub active_text_reveal: Option<TextRevealConfig>,
     pub particle_effects: Arc<HashMap<String, ActiveParticleEffect>>,
     pub transition_rules: Arc<HashMap<String, TransitionRule>>,
     pub bgm: BgmState,
@@ -461,6 +489,7 @@ impl Default for CurtainState {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FloatingTextState {
+    pub id: Option<String>,
     pub text: String,
     pub position: [f32; 2],
     pub font_size: f32,
@@ -470,6 +499,7 @@ pub struct FloatingTextState {
     pub fade_out: f32,
     pub elapsed: f32,
     pub blocking: bool,
+    pub infinite: bool,
 }
 
 impl FloatingTextState {
@@ -481,12 +511,25 @@ impl FloatingTextState {
         if self.elapsed < self.fade_in && self.fade_in > f32::EPSILON {
             return (self.elapsed / self.fade_in).clamp(0.0, 1.0);
         }
+        if self.infinite {
+            return 1.0;
+        }
         let fade_out_start = self.fade_in + self.hold;
         if self.elapsed > fade_out_start && self.fade_out > f32::EPSILON {
             return (1.0 - (self.elapsed - fade_out_start) / self.fade_out).clamp(0.0, 1.0);
         }
         1.0
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SystemMessageState {
+    pub mode: SystemMessageMode,
+    pub title: String,
+    pub message: String,
+    pub confirm_text: String,
+    pub cancel_text: String,
+    pub result_variable: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -795,6 +838,12 @@ impl State {
                 floating_text: self.floating_text.clone(),
                 portrait_rule: self.portrait_rule.clone(),
                 dialogue_style: self.dialogue_style.clone(),
+                paragraph_style: self.paragraph_style.clone(),
+                active_text_style: self.active_text_style.clone(),
+                paragraph_typewriter_speed: self.paragraph_typewriter_speed,
+                paragraph_text_reveal: self.paragraph_text_reveal,
+                active_typewriter_speed: self.active_typewriter_speed,
+                active_text_reveal: self.active_text_reveal,
                 particle_effects,
                 transition_rules,
                 bgm: self.bgm.clone(),
@@ -872,6 +921,7 @@ impl State {
         self.textbox_hidden = snapshot.textbox_hidden;
         self.textbox_auto_hidden = snapshot.textbox_auto_hidden;
         self.user_input = None;
+        self.system_message = None;
         self.mini_avatar_progress = if self.mini_avatar.is_some() { 1.0 } else { 0.0 };
         self.bgm = snapshot.bgm;
         self.bgm.revision = next_bgm_revision;
@@ -890,6 +940,12 @@ impl State {
         self.floating_text = snapshot.floating_text;
         self.portrait_rule = snapshot.portrait_rule;
         self.dialogue_style = snapshot.dialogue_style;
+        self.paragraph_style = snapshot.paragraph_style;
+        self.active_text_style = snapshot.active_text_style;
+        self.paragraph_typewriter_speed = snapshot.paragraph_typewriter_speed;
+        self.paragraph_text_reveal = snapshot.paragraph_text_reveal;
+        self.active_typewriter_speed = snapshot.active_typewriter_speed;
+        self.active_text_reveal = snapshot.active_text_reveal;
         self.particle_effects = snapshot.particle_effects.as_ref().clone();
         self.transition_rules = snapshot.transition_rules.as_ref().clone();
         self.ended = false;
@@ -902,6 +958,7 @@ impl State {
         self.dialogue_retraction.is_some()
             || (self.wait_blocking && self.wait_remaining > 0.0)
             || self.waiting_for_advance
+            || self.system_message.is_some()
             || self.intro.as_ref().is_some_and(|intro| intro.blocking)
             || self.curtain.blocking
             || self
@@ -1147,6 +1204,7 @@ mod tests {
             blocking: false,
         };
         state.floating_text = Some(FloatingTextState {
+            id: Some("checkpoint".into()),
             text: "checkpoint".into(),
             position: [0.25, 0.75],
             font_size: 32.0,
@@ -1156,6 +1214,7 @@ mod tests {
             fade_out: 0.2,
             elapsed: 0.3,
             blocking: false,
+            infinite: false,
         });
         state.portrait_rule = Some(PortraitRuleState {
             enabled: true,

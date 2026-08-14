@@ -547,6 +547,7 @@ fn say_options(args: &ScriptArgs, inherit_speaker: bool) -> SayOptions {
         concat: args.boolean("concat"),
         auto_advance: args.boolean("notend"),
         inherit_speaker,
+        paragraph: false,
     }
 }
 

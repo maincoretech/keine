@@ -45,7 +45,7 @@ keine 源码/二进制和 LetsGal 工程目录。不带 `--sync` 的 `cargo dev`
 | assets 文件 | Bevy asset handle | FS watcher 原位热重载 |
 | project variables | slot/shared 默认值 | 每次确定性重放重新注入 |
 | character attributes | `<character-id>.<attribute>` 默认值 | 每次确定性重放重新注入 |
-| chapterFolders / chapterTreeOrder | 1.9.1 虚拟目录展开后的章节执行顺序 | project 保存后重编译 |
+| chapterFolders / chapterTreeOrder | 1.9.x 虚拟目录展开后的章节执行顺序 | project 保存后重编译 |
 | dialogueBehavior | 打字间隔、字符淡入、10 种文字出现效果；1.9.2 的等待光标字段明确不支持 | 对话框样式保存后刷新 config |
 | `.studio/state.json` | fragment UUID + 一基 source step | 选择 block 后立即重放 |
 
@@ -71,7 +71,7 @@ runtime 以所有 `line <= selected_step` 的 Action 为目标，因此不会把
 
 ## 完整性与边界
 
-- 1.9.1 当前内置的 34 种 runtime block 必须全部编译为 typed core Action；未知内置类型报错；
+- 1.9.8 当前内置的 37 种 runtime block 必须全部编译为 typed core Action；未知内置类型报错；
 - 1.9.1 的 `chapterTreeOrder` 为章节执行顺序主来源：根章节按 tree entry 排列，目录 entry 按
   对应 `chapterFolders[].chapterIds` 展开；缺少新字段的旧项目继续回退 `chapterOrder`；
 - 默认壳 `dialogue-box.json` 的 `text_speed`、`char_fade_in_duration`、
@@ -98,6 +98,20 @@ runtime 以所有 `line <= selected_step` 的 Action 为目标，因此不会把
   兼容基线文档（见 `12-letsgal-studio-extension-api.md`）。
 - 1.9.2 工程仍可带 `chapterFolders` / `chapterTreeOrder`、`scenes.json`（版本 3 视差层）与
   `characters.json`（版本 2 全局位置/高度比），这些字段的解析保持兼容。
+
+## 1.9.5–1.9.8 增量
+
+- 1.9.5 新增的 `switchParagraphStyle`、`hideFloatingText`、`systemMessage` 已加入内置类型
+  合同并降级为 typed core Action：故事段落使用独立样式，命名/无限浮字可按 id 播放退场并
+  清理，alert/confirm 使用原生模态框且 confirm 可把布尔结果写回变量。
+- 1.9.6 的默认渲染 FPS/质量是 Studio Player/构建策略，不进入 Kēne 工程 IR；Kēne 继续使用
+  自身渲染与帧调度设置。
+- 1.9.7 的立绘布局按“距离预设 × 位置”解析；角色级 `portraitLayout` 优先于全局布局，距离
+  `scale` 与布局自身 `heightRatio` 都进入通用 sprite layout/transform。
+- 1.9.8 的 sequence、Spine、Live2D 动态立绘目前**明确不支持**。含 `presentation` 且没有静态
+  `assetPath` 的表情会产生带具体类型的 error diagnostic，不会静默隐藏或伪装成静态支持。
+- 1.9.8 的内置数据集、UI HTML/选择器、按钮音效、扩展方法返回值与 `enabledWhen` 属于 Studio
+  编辑器、壳层或扩展 SDK；adapter 保留开放 JSON 的未知字段，但 Kēne 不加载 Studio 扩展。
 - 新增 `stageAnimation` 编译为 adapter-neutral 共享舞台时间轴：camera、character、scene layer
   共用真实时间时钟，支持关键帧、循环、倍率、等待，以及 camera/scene/particle/shake/audio
   事件；

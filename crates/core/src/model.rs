@@ -7,7 +7,7 @@ pub mod types;
 pub use action::{
     Action, ChoiceTarget, Program, SayOptions, StageAnimation, StageAudioCue, StageAudioKind,
     StageEvent, StageEventKind, StageKeyframe, StageProperty, StageSceneCue, StageSceneLayer,
-    StageTarget, StageTrack, SystemUiSlot, TransformKeyframe,
+    StageTarget, StageTrack, SystemMessageMode, SystemMessageSpec, SystemUiSlot, TransformKeyframe,
 };
 pub use state::{
     ActiveParticleEffect, BgmState, CameraShakeState, DialoguePause, EffectCue, EffectEvent,

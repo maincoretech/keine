@@ -1,9 +1,9 @@
-# LetsGal 1.9.2 默认工程分步验收
+# LetsGal 1.9.8 默认工程分步验收
 
 ## 0. 启动
 
 1. 运行 `cargo validate projects/test-project`，应报告工程有效且无错误。
-2. 运行 `cargo dev projects/test-project`，应进入 `Kēne LetsGal 1.9.2 Timeline Lab` 标题页。
+2. 运行 `cargo dev projects/test-project`，应进入 `Kēne LetsGal 1.9.8 Timeline Lab` 标题页。
 3. 点击 `START`。日景、绫、textbox 与左侧姓名框应同步出现，不得先闪黑、闪 blur 或漏出视口。
 4. 首句字符应按 `dialogue-box.json` 的 30 ms 间隔逐字出现，并在 100 ms 内从下方 8 px
    柔和上浮；已显示文字、读档恢复和调试重放不得重复闪动。
@@ -59,7 +59,7 @@
 播放控制。WebGAL adapter 的命令与原生 Action 覆盖由 `tests/fixtures/webgal-showcase/` 独立
 验证；fixture 不构成第二个可运行项目。
 
-## 5. LetsGal 1.9.2 兼容
+## 5. LetsGal 1.9.8 兼容
 
 1. 默认壳 `dialogue-box.json` 采用 1.9.2 形态：`canvas` + `elements` UI 布局与
    `dialogueBehavior` 并存。加载与热重载不得报错，且原有 30 ms 打字间隔、100 ms 上浮、
@@ -67,7 +67,7 @@
 2. 等待光标（`dialogue-wait-cursor` 元素、`wait_for_icon_delay` 与
    `styles.dialogue.showWaitForIcon`）**明确不支持**：fixture 不包含这些字段与元素；
    遇到含它们的 1.9.2 工程，适配器应忽略且不报错，但绝不渲染任何等待指示器。
-3. `engineVersion` 更新为 `1.9.2`，工程仍必须完整通过第 1–4 节全部验收项。
+3. `engineVersion` 更新为 `1.9.8`，工程仍必须完整通过第 1–4 节全部验收项。
 
 反馈格式：`编号 + 现象 + 是否稳定复现`，例如：
 

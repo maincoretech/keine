@@ -13,8 +13,8 @@ use keine_core::{
     PostProcessEffect, PostProcessPatch, SayOptions, SceneFit, SceneLayerLayout, SpriteLayout,
     SpriteTransform, StageAnimation, StageAudioCue, StageAudioKind, StageEvent, StageEventKind,
     StageKeyframe, StageProperty, StageSceneCue, StageSceneLayer, StageTarget, StageTrack,
-    SystemUiSlot, TransformKeyframe, TransformPatch, Transition, UserInputSpec, VideoMode,
-    VideoSpec,
+    SystemMessageMode, SystemMessageSpec, SystemUiSlot, TransformKeyframe, TransformPatch,
+    Transition, UserInputSpec, VideoMode, VideoSpec,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -93,7 +93,7 @@ fn core_value(value: &Value) -> Option<keine_core::Value> {
     }
 }
 
-/// Runtime-facing block registry observed in LetsGal Studio 1.9.1's bundled
+/// Runtime-facing block registry observed in LetsGal Studio 1.9.8's bundled
 /// editor schema. `cmdDraft` is editor-only and therefore intentionally not in
 /// this compatibility contract.
 pub(super) const BUILTIN_BLOCK_TYPES: &[&str] = &[
@@ -110,6 +110,7 @@ pub(super) const BUILTIN_BLOCK_TYPES: &[&str] = &[
     "enterAutoPlay",
     "exitAutoPlay",
     "floatingText",
+    "hideFloatingText",
     "hideExtensionUI",
     "if",
     "narration",
@@ -129,6 +130,8 @@ pub(super) const BUILTIN_BLOCK_TYPES: &[&str] = &[
     "stopVideo",
     "storyParagraph",
     "switchDialogueStyle",
+    "switchParagraphStyle",
+    "systemMessage",
     "video",
     "wait",
 ];
@@ -389,12 +392,7 @@ pub(super) fn compile_project(
         .iter()
         .map(|(hash, entry)| (hash.as_str(), entry.path.as_str()))
         .collect::<HashMap<_, _>>();
-    let positions = characters
-        .global_settings
-        .positions
-        .iter()
-        .map(|position| (position.id.as_str(), (position.left, position.top)))
-        .collect::<HashMap<_, _>>();
+    let positions = portrait_positions(characters);
     let context = CompileContext {
         entry: &entry,
         chapter_next: &chapter_next,
@@ -444,7 +442,7 @@ struct CompileContext<'a> {
     characters: &'a HashMap<&'a str, &'a CharacterDefinition>,
     scenes: &'a HashMap<&'a str, &'a SceneDefinition>,
     voices: &'a HashMap<&'a str, &'a str>,
-    positions: &'a HashMap<&'a str, (f32, f32)>,
+    positions: &'a HashMap<String, (f32, f32, f32)>,
     portrait_height_ratio: Option<f32>,
 }
 
@@ -494,12 +492,14 @@ fn compile_block(
     match block.kind.as_str() {
         "dialogue" => compile_dialogue(block, context, span, report),
         "narration" | "storyParagraph" => {
+            let mut options = say_options(block, context);
+            options.paragraph = block.kind == "storyParagraph";
             report.push(Action::FocusPortrait { speaker_id: None }, span);
             report.push(
                 Action::Say {
                     speaker: String::new(),
                     text: studio_dialogue_markup(&block.content),
-                    options: say_options(block, context),
+                    options,
                 },
                 span,
             );
@@ -597,11 +597,32 @@ fn compile_block(
             },
             span,
         ),
+        "switchParagraphStyle" => report.push(
+            Action::SetParagraphStyle {
+                style: keine_core::DialogueStyle::from_id(prop_string_or(
+                    &block.props,
+                    "targetId",
+                    "default",
+                )),
+                typewriter_speed: optional_f32(&block.props, "textSpeed")
+                    .filter(|speed| *speed > f32::EPSILON)
+                    .map(|milliseconds| (1000.0 / f64::from(milliseconds)).clamp(10.0, 120.0)),
+                text_reveal: paragraph_text_reveal(&block.props),
+            },
+            span,
+        ),
         "portraitStyleRule" => compile_portrait_rule(block, context, span, report),
         "floatingText" => compile_floating_text(block, span, report),
+        "hideFloatingText" => report.push(
+            Action::HideFloatingText {
+                id: non_empty(prop_string(&block.props, "floatingTextId")),
+            },
+            span,
+        ),
+        "systemMessage" => compile_system_message(block, span, report),
         "enterAutoPlay" => report.push(Action::SetAutoplay { enabled: true }, span),
         "exitAutoPlay" => report.push(Action::SetAutoplay { enabled: false }, span),
-        _ => unreachable!("the 1.9.1 block registry is exhaustively matched"),
+        _ => unreachable!("the 1.9.8 block registry is exhaustively matched"),
     }
 }
 
@@ -699,6 +720,23 @@ fn show_character(
     let Some(expression) = expression else {
         return;
     };
+    if let Some(kind) = expression
+        .extras
+        .get("presentation")
+        .and_then(Value::as_object)
+        .and_then(|presentation| presentation.get("type"))
+        .and_then(Value::as_str)
+    {
+        report.diagnostics.push(Diagnostic {
+            level: DiagnosticLevel::Error,
+            span,
+            message: format!(
+                "unsupported LetsGal 1.9.8 dynamic portrait type {kind:?}; \
+                 Kēne currently supports static portrait assets only"
+            ),
+        });
+        return;
+    }
     let locked_skin = prop_string(&block.props, "skin");
     let skin_config = character.portrait_skin_config.as_ref();
     let default_skin = skin_config
@@ -722,29 +760,51 @@ fn show_character(
     if image.is_empty() {
         return;
     }
+    let layout = character.portrait_layout.as_ref();
     let position_id = prop_string_or(
         &block.props,
         "position",
-        if character.default_position.is_empty() {
-            "center"
-        } else {
+        if !character.default_position.is_empty() {
             &character.default_position
+        } else if let Some(position) = layout
+            .map(|layout| layout.default_position_id.as_str())
+            .filter(|position| !position.is_empty())
+        {
+            position
+        } else {
+            "center"
         },
     );
+    let distance_id = prop_string_or(
+        &block.props,
+        "distance",
+        layout
+            .map(|layout| layout.default_distance_id.as_str())
+            .filter(|distance| !distance.is_empty())
+            .unwrap_or_default(),
+    );
+    let (position, distance_scale) =
+        studio_position(&character.id, &distance_id, &position_id, context);
+    let transform = SpriteTransform {
+        scale_x: distance_scale,
+        scale_y: distance_scale,
+        ..SpriteTransform::default()
+    };
     report.push(
         Action::ShowSprite {
             id: character.id.clone(),
             image: image.clone(),
-            position: studio_position(&position_id, context),
+            position,
             layout: expression
                 .graphics_override
                 .height_ratio
+                .or_else(|| layout.and_then(|layout| layout.graphics.height_ratio))
                 .or(context.portrait_height_ratio)
                 .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
                 .map(SpriteLayout::ViewportHeight)
                 .unwrap_or(SpriteLayout::Natural),
             transition: fade(block, "animated", 0.2),
-            transform: SpriteTransform::default(),
+            transform,
             z_index: 100,
             blend: BlendMode::Alpha,
         },
@@ -781,17 +841,93 @@ fn show_character(
     }
 }
 
-fn studio_position(id: &str, context: &CompileContext<'_>) -> Position {
-    if let Some((left, top)) = context.positions.get(id) {
-        return Position {
-            x: Anchor::Left(keine_core::DESIGN_WIDTH * *left / 100.0),
-            y: keine_core::DESIGN_HEIGHT * *top / 100.0,
-        };
+fn studio_position(
+    character_id: &str,
+    distance_id: &str,
+    position_id: &str,
+    context: &CompileContext<'_>,
+) -> (Position, f32) {
+    let keys = [
+        format!("{character_id}\0{distance_id}\0{position_id}"),
+        format!("\0{distance_id}\0{position_id}"),
+        position_id.to_owned(),
+    ];
+    if let Some((left, top, scale)) = keys.iter().find_map(|key| context.positions.get(key)) {
+        return (
+            Position {
+                x: Anchor::Left(keine_core::DESIGN_WIDTH * *left / 100.0),
+                y: keine_core::DESIGN_HEIGHT * *top / 100.0,
+            },
+            scale.max(f32::EPSILON),
+        );
     }
-    match id {
-        "left" | "center-left" => Position::left(0.0),
-        "right" | "center-right" => Position::right(0.0),
-        _ => Position::center(0.0),
+    (
+        match position_id {
+            "left" | "center-left" => Position::left(0.0),
+            "right" | "center-right" => Position::right(0.0),
+            _ => Position::center(0.0),
+        },
+        1.0,
+    )
+}
+
+fn portrait_positions(characters: &CharactersDocument) -> HashMap<String, (f32, f32, f32)> {
+    let mut positions = characters
+        .global_settings
+        .positions
+        .iter()
+        .map(|position| (position.id.clone(), (position.left, position.top, 1.0)))
+        .collect::<HashMap<_, _>>();
+    insert_portrait_layout(
+        &mut positions,
+        "",
+        &characters.global_settings.distance_presets,
+    );
+    if let Some(default) = characters
+        .global_settings
+        .distance_presets
+        .iter()
+        .find(|preset| preset.id == characters.global_settings.default_distance_id)
+    {
+        for position in &default.positions {
+            positions.insert(
+                format!("\0\0{}", position.id),
+                (position.left, position.top, default.scale),
+            );
+        }
+    }
+    for character in &characters.characters {
+        if let Some(layout) = &character.portrait_layout {
+            insert_portrait_layout(&mut positions, &character.id, &layout.distance_presets);
+            if let Some(default) = layout
+                .distance_presets
+                .iter()
+                .find(|preset| preset.id == layout.default_distance_id)
+            {
+                for position in &default.positions {
+                    positions.insert(
+                        format!("{}\0\0{}", character.id, position.id),
+                        (position.left, position.top, default.scale),
+                    );
+                }
+            }
+        }
+    }
+    positions
+}
+
+fn insert_portrait_layout(
+    positions: &mut HashMap<String, (f32, f32, f32)>,
+    character_id: &str,
+    presets: &[super::model::PortraitDistancePreset],
+) {
+    for preset in presets {
+        for position in &preset.positions {
+            positions.insert(
+                format!("{character_id}\0{}\0{}", preset.id, position.id),
+                (position.left, position.top, preset.scale),
+            );
+        }
     }
 }
 
@@ -1521,8 +1657,10 @@ fn compile_curtain(block: &StoryBlock, span: SourceSpan, report: &mut ParseRepor
 }
 
 fn compile_floating_text(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport) {
+    let infinite = prop_bool(&block.props, "infinite", false);
     report.push(
         Action::FloatingText {
+            id: non_empty(prop_string(&block.props, "floatingTextId")),
             text: plain_text(&block.content),
             position: parse_position(&prop_string(&block.props, "position")),
             font_size: prop_f32(&block.props, "fontSize", 50.0),
@@ -1530,10 +1668,61 @@ fn compile_floating_text(block: &StoryBlock, span: SourceSpan, report: &mut Pars
             fade_in: prop_f32(&block.props, "inDuration", 0.0) / 1000.0,
             hold: prop_f32(&block.props, "duration", 0.0) / 1000.0,
             fade_out: prop_f32(&block.props, "outDuration", 0.0) / 1000.0,
-            blocking: prop_bool(&block.props, "blocking", false),
+            blocking: !infinite && prop_bool(&block.props, "blocking", false),
+            infinite,
         },
         span,
     );
+}
+
+fn compile_system_message(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport) {
+    let mode = if prop_string(&block.props, "mode") == "confirm" {
+        SystemMessageMode::Confirm
+    } else {
+        SystemMessageMode::Alert
+    };
+    report.push(
+        Action::SystemMessage {
+            spec: SystemMessageSpec {
+                mode,
+                title: prop_string(&block.props, "title"),
+                message: prop_string(&block.props, "message"),
+                confirm_text: prop_string_or(&block.props, "confirmText", "确认"),
+                cancel_text: prop_string_or(&block.props, "cancelText", "取消"),
+                result_variable: non_empty(prop_string(&block.props, "resultVariable")),
+            },
+        },
+        span,
+    );
+}
+
+fn paragraph_text_reveal(props: &Map<String, Value>) -> Option<TextRevealConfig> {
+    let effect = prop_string(props, "revealEffect");
+    let duration = optional_f32(props, "charFadeIn").filter(|value| *value >= 0.0);
+    let distance = optional_f32(props, "revealDistance").filter(|value| *value >= 0.0);
+    let scale = optional_f32(props, "revealScale").filter(|value| *value >= 0.0);
+    let rotation = optional_f32(props, "revealRotation").filter(|value| *value >= 0.0);
+    let blur = optional_f32(props, "revealBlur").filter(|value| *value >= 0.0);
+    if effect.is_empty()
+        && duration.is_none()
+        && distance.is_none()
+        && scale.is_none()
+        && rotation.is_none()
+        && blur.is_none()
+    {
+        return None;
+    }
+    let defaults = TextRevealConfig::default();
+    Some(TextRevealConfig {
+        duration: duration.map_or(defaults.duration, |value| value / 1000.0),
+        effect: serde_json::from_value(Value::String(effect)).unwrap_or(defaults.effect),
+        distance: distance.unwrap_or(defaults.distance).clamp(0.0, 48.0),
+        scale: scale
+            .map_or(defaults.scale, |value| value / 100.0)
+            .clamp(0.3, 1.0),
+        rotation: rotation.unwrap_or(defaults.rotation).clamp(0.0, 180.0),
+        blur: blur.unwrap_or(defaults.blur).clamp(0.0, 12.0),
+    })
 }
 
 fn compile_portrait_rule(
@@ -2640,6 +2829,10 @@ fn prop_string_or(props: &Map<String, Value>, key: &str, fallback: &str) -> Stri
     }
 }
 
+fn non_empty(value: String) -> Option<String> {
+    (!value.is_empty()).then_some(value)
+}
+
 fn prop_bool(props: &Map<String, Value>, key: &str, fallback: bool) -> bool {
     match props.get(key) {
         Some(Value::Bool(value)) => *value,
@@ -2745,17 +2938,213 @@ mod tests {
     use super::*;
 
     #[test]
-    fn studio_180_registry_is_exhaustively_matched() {
-        assert_eq!(BUILTIN_BLOCK_TYPES.len(), 34);
+    fn studio_198_registry_is_exhaustively_matched() {
+        assert_eq!(BUILTIN_BLOCK_TYPES.len(), 37);
         for required in [
             "playerInput",
             "enterAutoPlay",
             "callExtensionFunction",
             "stageAnimation",
             "video",
+            "hideFloatingText",
+            "switchParagraphStyle",
+            "systemMessage",
         ] {
             assert!(BUILTIN_BLOCK_TYPES.contains(&required));
         }
+    }
+
+    #[test]
+    fn studio_198_blocks_lower_to_native_ir() {
+        let chapter = ChapterDocument {
+            id: "chapter".into(),
+            name: "chapter".into(),
+            disabled: false,
+            fragments: Vec::new(),
+            extras: Map::new(),
+        };
+        let chapter_next = HashMap::new();
+        let characters = HashMap::new();
+        let scenes = HashMap::new();
+        let voices = HashMap::new();
+        let positions = HashMap::new();
+        let context = CompileContext {
+            entry: "entry",
+            chapter_next: &chapter_next,
+            characters: &characters,
+            scenes: &scenes,
+            voices: &voices,
+            positions: &positions,
+            portrait_height_ratio: None,
+        };
+        let blocks = [
+            StoryBlock {
+                id: None,
+                kind: "floatingText".into(),
+                content: json!("persistent"),
+                props: Map::from_iter([
+                    ("floatingTextId".into(), json!("notice")),
+                    ("infinite".into(), json!(true)),
+                ]),
+                children: Vec::new(),
+                extras: Map::new(),
+            },
+            StoryBlock {
+                id: None,
+                kind: "hideFloatingText".into(),
+                content: Value::Null,
+                props: Map::from_iter([("floatingTextId".into(), json!("notice"))]),
+                children: Vec::new(),
+                extras: Map::new(),
+            },
+            StoryBlock {
+                id: None,
+                kind: "switchParagraphStyle".into(),
+                content: Value::Null,
+                props: Map::from_iter([("targetId".into(), json!("literary"))]),
+                children: Vec::new(),
+                extras: Map::new(),
+            },
+            StoryBlock {
+                id: None,
+                kind: "systemMessage".into(),
+                content: Value::Null,
+                props: Map::from_iter([
+                    ("mode".into(), json!("confirm")),
+                    ("title".into(), json!("Continue?")),
+                    ("message".into(), json!("Choose")),
+                    ("resultVariable".into(), json!("accepted")),
+                ]),
+                children: Vec::new(),
+                extras: Map::new(),
+            },
+        ];
+        let mut report = ParseReport::default();
+        for (index, block) in blocks.iter().enumerate() {
+            compile_block(
+                block,
+                &chapter,
+                &context,
+                SourceSpan {
+                    line: index + 1,
+                    column: 1,
+                },
+                &mut report,
+            );
+        }
+
+        assert!(matches!(
+            &report.actions[0],
+            Action::FloatingText {
+                id: Some(id),
+                infinite: true,
+                ..
+            } if id == "notice"
+        ));
+        assert!(matches!(
+            &report.actions[1],
+            Action::HideFloatingText { id: Some(id) } if id == "notice"
+        ));
+        assert!(matches!(
+            &report.actions[2],
+            Action::SetParagraphStyle {
+                style: keine_core::DialogueStyle::Literary,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &report.actions[3],
+            Action::SystemMessage { spec }
+                if spec.mode == SystemMessageMode::Confirm
+                    && spec.result_variable.as_deref() == Some("accepted")
+        ));
+        assert!(report.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn studio_198_dynamic_portraits_are_rejected_explicitly() {
+        for kind in ["sequence", "spine", "live2d"] {
+            let character: CharacterDefinition = serde_json::from_value(json!({
+                "id": "hero",
+                "name": "Hero",
+                "expressions": [{
+                    "name": "dynamic",
+                    "assetPath": "characters/fallback.png",
+                    "presentation": {"type": kind}
+                }]
+            }))
+            .unwrap();
+            let characters = HashMap::from([("hero", &character)]);
+            let chapter_next = HashMap::new();
+            let scenes = HashMap::new();
+            let voices = HashMap::new();
+            let positions = HashMap::new();
+            let context = CompileContext {
+                entry: "entry",
+                chapter_next: &chapter_next,
+                characters: &characters,
+                scenes: &scenes,
+                voices: &voices,
+                positions: &positions,
+                portrait_height_ratio: None,
+            };
+            let block = StoryBlock {
+                id: None,
+                kind: "showCharacter".into(),
+                content: Value::Null,
+                props: Map::from_iter([
+                    ("characterId".into(), json!("hero")),
+                    ("expression".into(), json!("dynamic")),
+                ]),
+                children: Vec::new(),
+                extras: Map::new(),
+            };
+            let mut report = ParseReport::default();
+
+            show_character(
+                &block,
+                &context,
+                SourceSpan { line: 1, column: 1 },
+                &mut report,
+            );
+
+            assert!(report.actions.is_empty());
+            assert!(report.diagnostics.iter().any(|diagnostic| {
+                diagnostic.level == DiagnosticLevel::Error && diagnostic.message.contains(kind)
+            }));
+        }
+    }
+
+    #[test]
+    fn studio_197_character_distance_layout_overrides_global_layout() {
+        let characters: CharactersDocument = serde_json::from_value(json!({
+            "globalSettings": {
+                "defaultDistanceId": "near",
+                "distancePresets": [{
+                    "id": "near",
+                    "scale": 1.2,
+                    "positions": [{"id": "center", "left": 30, "top": 4}]
+                }]
+            },
+            "characters": [{
+                "id": "hero",
+                "name": "Hero",
+                "portraitLayout": {
+                    "defaultDistanceId": "close",
+                    "defaultPositionId": "center",
+                    "distancePresets": [{
+                        "id": "close",
+                        "scale": 1.5,
+                        "positions": [{"id": "center", "left": 42, "top": 7}]
+                    }]
+                }
+            }]
+        }))
+        .unwrap();
+
+        let positions = portrait_positions(&characters);
+        assert_eq!(positions["\0\0center"], (30.0, 4.0, 1.2));
+        assert_eq!(positions["hero\0\0center"], (42.0, 7.0, 1.5));
     }
 
     #[test]

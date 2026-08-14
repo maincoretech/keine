@@ -208,10 +208,10 @@ Flowchart 仍保留为可选适配工作，不能用静态占位或实验依赖�
 - Steam 集成与 Flowchart 内容页
 - SafeArea、横竖屏、响应式断点及 Android / iOS / Web 设备验收
 
-## LetsGal Studio 1.9.1 adapter（DONE — 待用户验收）
+## LetsGal Studio 1.9.8 adapter（DONE — 待用户验收）
 
 - [x] 原生 `project.json`、章节、角色、场景与 `assets/.manifest.json` 多文件读取
-- [x] 34 种已知内置 block 穷举编译；未知字段保留，未知 block 明确报错
+- [x] 37 种已知内置 block 穷举编译；未知字段保留，未知 block 明确报错
 - [x] Studio 原生资源目录直接挂载，hash 与逻辑路径均可解析
 - [x] 内容/清单变化热重载；`.studio/state.json` 调试位置变化只做 fragment/block seek
 - [x] 多来源 FS 资源热重载、覆盖层删除 fallback、manifest alias 刷新与静态资源存在性校验
@@ -231,6 +231,8 @@ Flowchart 仍保留为可选适配工作，不能用静态占位或实验依赖�
   版本声明并保留官方兼容的统一 method 实现
 - [x] 1.9.1 `chapterFolders` / `chapterTreeOrder` 作为章节树执行顺序，缺失时回退旧
   `chapterOrder`；默认壳对话框打字间隔、淡入时长、10 种出现效果及参数进入原生 config/UI
+- [x] 1.9.5–1.9.8 的段落样式、命名无限浮字/清理、系统 alert/confirm、距离×位置立绘布局
+  进入 typed core；sequence、Spine、Live2D 动态立绘明确报 unsupported diagnostic
 - [x] 视频和完整相机后处理进入 typed core、原生运行状态与 Bevy backend；内置 block
   不得经 `HostCommand` 降级，流式视频由项目特征按需启用
 - [x] Godray 八字段进入稀疏 IR、状态插值和单通道 GPU 材质；动态 `callFragment`

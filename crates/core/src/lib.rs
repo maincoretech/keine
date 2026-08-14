@@ -18,8 +18,8 @@ pub use model::{
     EffectCue, EffectEvent, EffectState, HostCommandEvent, MenuChoice, MenuState,
     PostProcessAnimation, Program, RestoreError, SayOptions, SceneFrame, StageAnimation,
     StageAnimationState, StageAudioCue, StageAudioKind, StageEvent, StageEventKind, StageKeyframe,
-    StageProperty, StageSceneCue, StageSceneLayer, StageTarget, StageTrack, State, SystemUiSlot,
-    TransformKeyframe, VideoState, VocalCue,
+    StageProperty, StageSceneCue, StageSceneLayer, StageTarget, StageTrack, State,
+    SystemMessageMode, SystemMessageSpec, SystemUiSlot, TransformKeyframe, VideoState, VocalCue,
 };
 pub use runtime::StepResult;
 

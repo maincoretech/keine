@@ -41,6 +41,7 @@ pub(crate) enum DialogAction {
     ClearAll,
     BackToTitle,
     Noop,
+    SystemMessage,
     ExitGame,
 }
 
@@ -48,6 +49,9 @@ pub(crate) enum DialogAction {
 #[derive(Resource, Clone)]
 pub(crate) struct DialogRequest {
     pub title: String,
+    pub message: String,
+    pub confirm_text: Option<String>,
+    pub cancel_text: Option<String>,
     pub action: DialogAction,
 }
 
@@ -55,8 +59,34 @@ impl DialogRequest {
     pub fn confirmation(title: impl Into<String>, action: DialogAction) -> Self {
         Self {
             title: title.into(),
+            message: String::new(),
+            confirm_text: None,
+            cancel_text: None,
             action,
         }
+    }
+
+    fn system_message(message: &keine_core::state::SystemMessageState) -> Self {
+        Self {
+            title: message.title.clone(),
+            message: message.message.clone(),
+            confirm_text: Some(message.confirm_text.clone()),
+            cancel_text: (message.mode == keine_core::SystemMessageMode::Confirm)
+                .then(|| message.cancel_text.clone()),
+            action: DialogAction::SystemMessage,
+        }
+    }
+}
+
+pub fn sync_system_message(
+    mut commands: Commands,
+    state: Res<crate::runtime::resources::GameState>,
+    request: Option<Res<DialogRequest>>,
+) {
+    if request.is_none()
+        && let Some(message) = &state.system_message
+    {
+        commands.insert_resource(DialogRequest::system_message(message));
     }
 }
 
@@ -295,7 +325,16 @@ pub fn spawn_dialog(
                 DialogBackground { alpha: PANEL_ALPHA },
                 children![
                     // Title
-                    dialog_text(req.title.clone(), font.clone(), 48.0, 0.9),
+                    dialog_text(
+                        if req.message.is_empty() {
+                            req.title.clone()
+                        } else {
+                            format!("{}\n{}", req.title, req.message)
+                        },
+                        font.clone(),
+                        48.0,
+                        0.9,
+                    ),
                     // Button row — wide spacing
                     (
                         Node {
@@ -306,13 +345,23 @@ pub fn spawn_dialog(
                         children![
                             spawn_dialog_button(
                                 DialogButton::Confirm,
-                                tr(settings.locale, UiText::Confirm),
+                                req.confirm_text.clone().unwrap_or_else(|| tr(
+                                    settings.locale,
+                                    UiText::Confirm
+                                )
+                                .into()),
                                 font.clone(),
+                                true,
                             ),
                             spawn_dialog_button(
                                 DialogButton::Cancel,
-                                tr(settings.locale, UiText::Cancel),
+                                req.cancel_text.clone().unwrap_or_else(|| tr(
+                                    settings.locale,
+                                    UiText::Cancel
+                                )
+                                .into()),
                                 font,
+                                req.cancel_text.is_some() || req.confirm_text.is_none(),
                             ),
                         ],
                     ),
@@ -350,6 +399,7 @@ fn spawn_dialog_button(
     action: DialogButton,
     text: impl Into<String>,
     font: Handle<Font>,
+    visible: bool,
 ) -> impl Bundle {
     (
         Button,
@@ -357,6 +407,11 @@ fn spawn_dialog_button(
         action,
         HoverSweep::default(),
         Node {
+            display: if visible {
+                Display::Flex
+            } else {
+                Display::None
+            },
             min_width: Val::Px(112.5),
             padding: UiRect::axes(Val::Px(24.0), Val::Px(6.0)),
             justify_content: JustifyContent::Center,
@@ -436,7 +491,10 @@ pub fn handle_dialog_click(
 
     if left_clicked {
         if context.editor_sync.is_some()
-            && !matches!(req.action, DialogAction::Noop | DialogAction::ExitGame)
+            && !matches!(
+                req.action,
+                DialogAction::Noop | DialogAction::SystemMessage | DialogAction::ExitGame
+            )
         {
             log::debug!("ignored persistent UI action during Studio synchronization");
             return;
@@ -592,6 +650,9 @@ pub fn handle_dialog_click(
                 context.save_load.set_changed();
             }
             DialogAction::Noop => {}
+            DialogAction::SystemMessage => {
+                keine_core::step::resolve_system_message(&mut context.state, true);
+            }
             DialogAction::ExitGame => {
                 if let Ok(window) = context.primary_window.single() {
                     commands.write_message(WindowCloseRequested { window });
@@ -602,7 +663,9 @@ pub fn handle_dialog_click(
             }
         }
     }
-    // right button = cancel, do nothing
+    if right_clicked && matches!(req.action, DialogAction::SystemMessage) {
+        keine_core::step::resolve_system_message(&mut context.state, false);
+    }
 }
 
 pub(crate) fn capture_save_preview(

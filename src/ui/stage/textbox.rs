@@ -729,8 +729,8 @@ pub fn update_textbox(
     });
 
     let layout = &config.layout;
-    let centered = state.dialogue_style.is_centered();
-    let style_changed = cache.dialogue_style.as_ref() != Some(&state.dialogue_style);
+    let centered = state.active_text_style.is_centered();
+    let style_changed = cache.dialogue_style.as_ref() != Some(&state.active_text_style);
     let film_mode_changed = cache.film_mode != Some(state.film_mode);
     let film_offset = if state.film_mode {
         FILM_MODE_TEXTBOX_OFFSET
@@ -815,7 +815,7 @@ pub fn update_textbox(
         2 => 1.16,
         _ => 1.0,
     };
-    let style_scale = match state.dialogue_style {
+    let style_scale = match state.active_text_style {
         DialogueStyle::CinematicCentered => 34.0 / 30.0,
         DialogueStyle::Literary | DialogueStyle::Sharp => 28.0 / 30.0,
         _ => 1.0,
@@ -829,7 +829,7 @@ pub fn update_textbox(
             JustifyContent::FlexStart
         };
     }
-    if (dialogue_changed || dialogue_size_changed)
+    if (dialogue_changed || dialogue_size_changed || style_changed)
         && let Ok((root, _)) = dialogue_root.single_mut()
     {
         commands.entity(root).despawn_related::<Children>();
@@ -841,7 +841,10 @@ pub fn update_textbox(
                 visible_chars,
                 font_size: dialogue_size,
                 font: &resources.fonts.text,
-                reveal: &config.styles.text_reveal,
+                reveal: state
+                    .active_text_reveal
+                    .as_ref()
+                    .unwrap_or(&config.styles.text_reveal),
                 animate_latest: should_animate_latest_glyph(
                     dialogue_changed,
                     state.dialogue.is_some(),
@@ -879,7 +882,7 @@ pub fn update_textbox(
     cache.left = Some(left);
     cache.textbox_alpha = Some(textbox_alpha);
     cache.dialogue_size = Some(dialogue_size);
-    cache.dialogue_style = Some(state.dialogue_style.clone());
+    cache.dialogue_style = Some(state.active_text_style.clone());
     cache.film_mode = Some(state.film_mode);
 }
 

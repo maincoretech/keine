@@ -1,8 +1,8 @@
 {
   "id": "keine-letsgal-1.9-showcase",
-  "name": "Kēne LetsGal 1.9.2 Timeline Lab",
-  "description": "A runnable visual acceptance project for native LetsGal Studio 1.9.2 chapter-tree, dialogue-reveal, wait-icon, timeline, portrait and input-wait semantics supported by Kēne.",
-  "engineVersion": "1.9.2",
+  "name": "Kēne LetsGal 1.9.8 Timeline Lab",
+  "description": "A runnable visual acceptance project for native LetsGal Studio 1.9.8 chapter-tree, paragraph, message, floating-text, timeline, portrait-layout and input-wait semantics supported by Kēne.",
+  "engineVersion": "1.9.8",
   "chapterOrder": ["Stage 1.9", "Cross Chapter 1.9"],
   "chapterFolders": [
     {
@@ -23,6 +23,8 @@
   },
   "extensions": {},
   "extensionSettings": {},
-  "systemBindings": {},
+  "systemBindings": {
+    "internal.system.message": "ui:@avg.internal.default-shell/message-box"
+  },
   "actionBindings": {}
 }

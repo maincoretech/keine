@@ -152,10 +152,14 @@ pub fn tick(mut context: TickContext) {
             &context.windows,
             context.toggles.hide,
         );
+    let typewriter_speed = context
+        .state
+        .active_typewriter_speed
+        .unwrap_or(context.settings.typewriter_speed);
     state_changed |= step::update_dialogue_retraction(
         context.state.bypass_change_detection(),
         delta_seconds,
-        dialogue_retraction_speed(context.settings.typewriter_speed),
+        dialogue_retraction_speed(typewriter_speed),
         presentation_advance,
         context.toggles.skip,
     );
@@ -195,7 +199,7 @@ pub fn tick(mut context: TickContext) {
     state_changed |= update_typewriter(
         context.state.bypass_change_detection(),
         delta_seconds,
-        context.settings.typewriter_speed,
+        typewriter_speed,
         &mut context.typewriter_clock,
     );
     if context.editor_sync.is_some() {
@@ -1046,7 +1050,7 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
     if let Some(text) = &mut state.floating_text {
         changed = true;
         text.elapsed += delta_seconds;
-        if text.elapsed >= text.duration() {
+        if !text.infinite && text.elapsed >= text.duration() {
             state.floating_text = None;
         }
     }

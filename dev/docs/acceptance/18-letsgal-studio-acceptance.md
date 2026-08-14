@@ -1,4 +1,4 @@
-# LetsGal Studio 1.9.1 完全同步验收
+# LetsGal Studio 1.9.8 原生同步验收
 
 本轮只验收原生工程同步，不安装或启用任何 Studio 扩展。Studio 原版 Player 可以关闭；
 画面以独立 keine 窗口为准。
@@ -44,7 +44,7 @@
 18. 快速连续保存 chapter 和 `.studio/state.json`。预期没有永久停留在旧画面；短暂 JSON 读取
     冲突会自动跨帧恢复；即使文件通知被系统合并，200 ms 调试位置轮询也会兜底。
 
-## D. 规定动作与 1.9.1 新语义覆盖
+## D. 规定动作与 1.9.8 新语义覆盖
 
 19. 创建两个虚拟章节目录并交错放置根章节，令 `chapterTreeOrder` 与旧 `chapterOrder` 不同。
     预期 keine 严格按树中目录/章节顺序运行；删掉新字段后仍按旧顺序兼容运行。
@@ -52,7 +52,8 @@
     `slide-left`、`slide-right`、`pop`、`flip`、`swing`、`blur`，并调整淡入时长、距离、缩放、
     角度与模糊参数。预期保存后无需重启即可刷新；跳过/读档后的既有文字不重复播放入场效果。
 21. 逐项覆盖：`dialogue`、`narration`、`storyParagraph`、`showCharacter`、
-    `removeCharacter`、`switchDialogueStyle`、`portraitStyleRule`、`floatingText`、`scene`、
+    `removeCharacter`、`switchDialogueStyle`、`switchParagraphStyle`、`portraitStyleRule`、
+    `floatingText`、`hideFloatingText`、`systemMessage`、`scene`、
     `destroyScene`、`curtain`、`camera`、`resetCamera`、`animateSprite`、`particle`、`sound`、
     `stopSound`、`video`、`stopVideo`、`wait`、`setver`、`if`、`branch`、`callFragment`、
     `endChapter`、`returnToEntry`、`enterAutoPlay`、`exitAutoPlay`、`playerInput`、`comment`、
@@ -78,14 +79,20 @@
     block 明确指定 `skin` 时固定使用该皮肤。
 27. 从一个章节调用另一个章节的 fragment。预期按稳定 fragment id 进入并在结束后返回原调用点，
     不依赖当前文件名或 Studio 的运行对象。
+28. 配置全局和角色级 distance preset，并让相同 position 在不同距离使用不同坐标/scale。预期
+    角色级布局优先，未显式指定 distance 时使用各自默认值。
+29. 测试命名无限浮字后以相同 id 执行 `hideFloatingText`；预期先保持显示，再播放退场并清理。
+    分别测试 alert 与 confirm；confirm 结果应以 bool 写入 `resultVariable`。
+30. 给表情仅配置 sequence、Spine 或 Live2D `presentation`。预期 loader 给出明确 unsupported
+    dynamic portrait error；当前不得把它计为已支持或静默吞掉。
 
 ## E. 同步控制权与窗口
 
-28. 在 keine 窗口单击、滚轮、按 Enter/Space。预期打字和动画可以继续，但剧情执行位置不会
+31. 在 keine 窗口单击、滚轮、按 Enter/Space。预期打字和动画可以继续，但剧情执行位置不会
     脱离 Studio 当前 block；推进必须在 Studio 选择新 block。
-29. 调整 keine 窗口大小并移动到另一显示器。预期 1920×1080 逻辑视口等比居中，背景、
+32. 调整 keine 窗口大小并移动到另一显示器。预期 1920×1080 逻辑视口等比居中，背景、
     scene layer、角色、粒子、textbox 使用同一裁切区。
-30. 打开/关闭 SAVE、LOAD、CONFIG、BACKLOG。预期不改变 Studio block；返回后画面仍是同一
+33. 打开/关闭 SAVE、LOAD、CONFIG、BACKLOG。预期不改变 Studio block；返回后画面仍是同一
     确定性预览状态；确认存档/清除/设置等持久化操作不应在工程中产生新文件。
 
 ## F. 自动回归

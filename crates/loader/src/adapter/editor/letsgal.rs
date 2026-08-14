@@ -382,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn checked_in_180_fixture_covers_every_runtime_block() {
+    fn checked_in_180_fixture_covers_every_legacy_runtime_block() {
         use keine_core::Action;
 
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/letsgal-1.8.0");
@@ -396,6 +396,12 @@ mod tests {
         let expected = compile::BUILTIN_BLOCK_TYPES
             .iter()
             .copied()
+            .filter(|kind| {
+                !matches!(
+                    *kind,
+                    "hideFloatingText" | "switchParagraphStyle" | "systemMessage"
+                )
+            })
             .collect::<BTreeSet<_>>();
         assert_eq!(actual, expected);
 

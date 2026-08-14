@@ -14,7 +14,7 @@ Studio 内置工程内容，不加载扩展 bundle、不实现 `@avg-studio/sdk`
 
 ## 0. 结论先行
 
-工程 adapter 当前以 **LetsGal Studio 1.9.1 原生工程格式**为兼容基线；本章的扩展 ABI
+工程 adapter 当前以 **LetsGal Studio 1.9.8 原生工程格式**为兼容基线；本章的扩展 ABI
 仅用于历史研究，不是 keine 的实现目标。
 
 1.9.0 仍未提供 keine 所需的“当前选中剧情块”（editor cursor）、run interception 或 preview backend API。当前公开
@@ -67,10 +67,11 @@ flowchart LR
 | 对象 | 版本/提交 | 结论 |
 |---|---|---|
 | 本机当前安装 | Studio 1.9.2 | 原生工程格式主基线；keine 不执行扩展 |
+| 已校验更新包 | Studio 1.9.8 | 工程格式兼容基线；官方更新缓存 SHA-256 已核对 |
 | 前一实测稳定版 | Studio 1.6.3 | 用于宿主行为差异对照 |
 | 本机旧对照包 | Studio 1.6.2 | 用于 SDK 字节级差异 |
 | 已校验的历史包 | `Studio-1.6.3-mac.zip` | 保留历史 SHA-256 证据 |
-| 扩展 SDK | `SDK_VERSION = "1.9.2-beta"` | 1.9.2 提升 SDK 合同；新 API 使用者声明 `>=1.9.2-beta` |
+| 扩展 SDK | `SDK_VERSION = "1.9.2-beta"` | 1.9.8 包内常量仍未提升；新 API 使用者仍声明 `>=1.9.2-beta` |
 | `avg.renderer` | `d69d1681fe07e6273f99ed329fb01503cb3f3394`，2020-08-31 | 仅作历史语义参考 |
 | `avgplus-asarmor` | `3a95e627831268207b5da81310c5e9f4e4e1829b`，2025-01-26 | 仅用于判断 ASAR 保护方式 |
 
@@ -82,8 +83,9 @@ flowchart LR
 1f8ca44870142f222e25034297f436477d12cc202e229840251ab7402ca3c661
 ```
 
-本机 1.9.1 的 `dist/sdk/constants.ts` 声明 `SDK_VERSION = "1.9.0"`；1.9.2 的
-`dist/sdk/constants.ts` 声明 `SDK_VERSION = "1.9.2-beta"`。1.9.2 的 `FlowAPI` 仍含
+本机 1.9.1 的 `dist/sdk/constants.ts` 声明 `SDK_VERSION = "1.9.0"`；1.9.2 与已校验
+1.9.8 更新包均声明 `SDK_VERSION = "1.9.2-beta"`。1.9.8 新增方法返回值与 `enabledWhen`
+类型合同，但 keine 仍不执行扩展。1.9.2 的 `FlowAPI` 仍含
 `signal`、跨章节 `callFragment()`、`unsafe_goToFragment()` 和 `restart()`；
 `ExtensionContext` 仍没有编辑器/preview backend 命名空间。工程格式层面 1.9.2 新增
 ui-2.0 槽位（`systemBindings` → `ui:@avg.internal.default-shell/*`）、`config/` 与
