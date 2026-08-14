@@ -83,8 +83,9 @@
     角色级布局优先，未显式指定 distance 时使用各自默认值。
 29. 测试命名无限浮字后以相同 id 执行 `hideFloatingText`；预期先保持显示，再播放退场并清理。
     分别测试 alert 与 confirm；confirm 结果应以 bool 写入 `resultVariable`。
-30. 给表情仅配置 sequence、Spine 或 Live2D `presentation`。预期 loader 给出明确 unsupported
-    dynamic portrait error；当前不得把它计为已支持或静默吞掉。
+30. 给表情配置 sequence `presentation`，分别使用 `frames` 与 `frameExpressionNames`。预期按
+    authored FPS/loop 原生换帧且首帧立即可见；再配置 Spine 或 Live2D，预期 loader 给出明确
+    unsupported dynamic portrait error，当前不得把这两类计为已支持或静默吞掉。
 
 ## E. 同步控制权与窗口
 

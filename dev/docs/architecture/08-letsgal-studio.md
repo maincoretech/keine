@@ -108,8 +108,9 @@ runtime 以所有 `line <= selected_step` 的 Action 为目标，因此不会把
   自身渲染与帧调度设置。
 - 1.9.7 的立绘布局按“距离预设 × 位置”解析；角色级 `portraitLayout` 优先于全局布局，距离
   `scale` 与布局自身 `heightRatio` 都进入通用 sprite layout/transform。
-- 1.9.8 的 sequence、Spine、Live2D 动态立绘目前**明确不支持**。含 `presentation` 且没有静态
-  `assetPath` 的表情会产生带具体类型的 error diagnostic，不会静默隐藏或伪装成静态支持。
+- 1.9.8 的 sequence 立绘按 `frames` / `frameExpressionNames`、FPS 与循环设置进入原生逐帧
+  播放，并预热全部帧资源。Spine、Live2D 目前**明确不支持**，会产生带具体类型的 error
+  diagnostic，不会静默隐藏或伪装成静态支持。
 - 1.9.8 的内置数据集、UI HTML/选择器、按钮音效、扩展方法返回值与 `enabledWhen` 属于 Studio
   编辑器、壳层或扩展 SDK；adapter 保留开放 JSON 的未知字段，但 Kēne 不加载 Studio 扩展。
 - 新增 `stageAnimation` 编译为 adapter-neutral 共享舞台时间轴：camera、character、scene layer

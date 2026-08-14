@@ -402,6 +402,10 @@ fn core_is_animating(state: &GameState, dialogue_length: &mut DialogueLengthCach
         || state.camera_shake.is_some()
         || state.stage_animation.is_some()
         || state.camera_effect.is_time_varying()
+        || state.sprite_sequences.values().any(|sequence| {
+            sequence.frames.len() > 1
+                && (sequence.looped || sequence.frame + 1 < sequence.frames.len())
+        })
         || state.sprites.values().any(|sprite| {
             sprite.films.is_time_varying()
                 || sprite.animation.is_some()

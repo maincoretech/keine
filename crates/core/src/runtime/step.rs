@@ -320,6 +320,7 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                 let initial_transform = rule_animation.as_ref().map_or(transform, |animation| {
                     preset_initial_transform(animation.base, &animation.preset)
                 });
+                state.sprite_sequences.remove(&id);
                 state.sprites.insert(
                     id,
                     Sprite {
@@ -344,6 +345,34 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                 );
                 if rule_blocks || (!next && transition != Transition::Instant) {
                     return StepResult::AwaitPresentation;
+                }
+            }
+            Action::ConfigureSpriteSequence {
+                id,
+                frames,
+                fps,
+                looped,
+            } => {
+                let id = interpolate(id, &state.vars, &state.global_vars);
+                let frames = frames
+                    .iter()
+                    .map(|frame| interpolate(frame, &state.vars, &state.global_vars))
+                    .filter(|frame| !frame.is_empty())
+                    .collect::<Vec<_>>();
+                if let Some(first) = frames.first()
+                    && let Some(sprite) = state.sprites.get_mut(&id)
+                {
+                    sprite.image.clone_from(first);
+                    state.sprite_sequences.insert(
+                        id,
+                        crate::state::SpriteSequenceState {
+                            frames,
+                            fps: fps.max(f32::EPSILON),
+                            looped: *looped,
+                            elapsed: 0.0,
+                            frame: 0,
+                        },
+                    );
                 }
             }
             Action::SelectSpriteImage {
@@ -450,19 +479,17 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                 text,
                 options,
             } => {
-                state.active_text_style = if options.paragraph {
+                let paragraph = std::mem::take(&mut state.next_text_is_paragraph);
+                state.active_text_style = if paragraph {
                     state.paragraph_style.clone()
                 } else {
                     state.dialogue_style.clone()
                 };
-                state.active_typewriter_speed = options
-                    .paragraph
+                state.active_typewriter_speed = paragraph
                     .then_some(state.paragraph_typewriter_speed)
                     .flatten();
-                state.active_text_reveal = options
-                    .paragraph
-                    .then_some(state.paragraph_text_reveal)
-                    .flatten();
+                state.active_text_reveal =
+                    paragraph.then_some(state.paragraph_text_reveal).flatten();
                 if state.textbox_auto_hidden {
                     state.textbox_hidden = false;
                     state.textbox_auto_hidden = false;
@@ -864,7 +891,6 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                 }
             }
             Action::FloatingText {
-                id,
                 text,
                 position,
                 font_size,
@@ -873,11 +899,10 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                 hold,
                 fade_out,
                 blocking,
-                infinite,
             } => {
                 let state_blocking = *blocking && !next;
                 state.floating_text = Some(crate::state::FloatingTextState {
-                    id: id.clone(),
+                    id: None,
                     text: interpolate(text, &state.vars, &state.global_vars),
                     position: *position,
                     font_size: *font_size,
@@ -887,10 +912,16 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                     fade_out: fade_out.max(0.0),
                     elapsed: 0.0,
                     blocking: state_blocking,
-                    infinite: *infinite,
+                    infinite: false,
                 });
                 if state_blocking {
                     return StepResult::AwaitPresentation;
+                }
+            }
+            Action::ConfigureFloatingText { id, infinite } => {
+                if let Some(active) = &mut state.floating_text {
+                    active.id.clone_from(id);
+                    active.infinite = *infinite;
                 }
             }
             Action::HideFloatingText { id } => {
@@ -977,6 +1008,9 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                 state.paragraph_style.clone_from(style);
                 state.paragraph_typewriter_speed = *typewriter_speed;
                 state.paragraph_text_reveal = *text_reveal;
+            }
+            Action::SelectTextPresentation { paragraph } => {
+                state.next_text_is_paragraph = *paragraph;
             }
             Action::AnimateKeyframes {
                 target,
@@ -1559,6 +1593,7 @@ pub fn end_game(state: &mut State) {
     state.videos.clear();
     state.video_revision_counter = 0;
     state.sprites.clear();
+    state.sprite_sequences.clear();
     state.mini_avatar = None;
     state.textbox_hidden = false;
     state.textbox_auto_hidden = false;
@@ -1579,6 +1614,7 @@ pub fn end_game(state: &mut State) {
     state.paragraph_text_reveal = None;
     state.active_typewriter_speed = None;
     state.active_text_reveal = None;
+    state.next_text_is_paragraph = false;
     state.particle_effects.clear();
     state.transition_rules.clear();
     state.bgm.file = None;
@@ -3008,7 +3044,6 @@ mod tests {
     fn named_infinite_floating_text_uses_its_authored_exit() {
         let mut state = state_with(vec![
             Action::FloatingText {
-                id: Some("notice".into()),
                 text: "persistent".into(),
                 position: [0.5, 0.5],
                 font_size: 40.0,
@@ -3017,6 +3052,9 @@ mod tests {
                 hold: 0.0,
                 fade_out: 0.2,
                 blocking: false,
+            },
+            Action::ConfigureFloatingText {
+                id: Some("notice".into()),
                 infinite: true,
             },
             Action::HideFloatingText {

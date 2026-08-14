@@ -1139,6 +1139,27 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
     state.videos.retain(|_, video| video.opacity > 0.0);
     changed |= state.videos.len() != video_count;
 
+    for (id, sequence) in &mut state.sprite_sequences {
+        if sequence.frames.len() < 2 || !state.sprites.contains_key(id) {
+            continue;
+        }
+        sequence.elapsed += delta_seconds;
+        let sampled = (sequence.elapsed * sequence.fps).floor() as usize;
+        let frame = if sequence.looped {
+            sampled % sequence.frames.len()
+        } else {
+            sampled.min(sequence.frames.len() - 1)
+        };
+        if frame != sequence.frame {
+            sequence.frame = frame;
+            if let Some(sprite) = state.sprites.get_mut(id) {
+                sprite.image.clone_from(&sequence.frames[frame]);
+                changed = true;
+                stage_changed = true;
+            }
+        }
+    }
+
     for sprite in state.sprites.values_mut() {
         let keyframes_active = sprite.keyframe_animation.is_some();
         changed |= keyframes_active;
@@ -1206,6 +1227,9 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
         .sprites
         .retain(|_, sprite| sprite.entering || sprite.transition_progress > 0.0);
     let sprites_removed = state.sprites.len() != sprite_count;
+    state
+        .sprite_sequences
+        .retain(|id, _| state.sprites.contains_key(id));
     changed |= sprites_removed;
     stage_changed |= sprites_removed;
 
@@ -2772,5 +2796,43 @@ mod tests {
         );
         assert!(state.read_dialogues.is_empty());
         assert_eq!(state.effect_queue, [keine_core::EffectEvent::Stop]);
+    }
+
+    #[test]
+    fn sprite_sequence_samples_authored_fps_and_loops() {
+        let mut state = State::new();
+        state.install_program(Program::from_scenes([(
+            "main".into(),
+            vec![
+                Action::ShowSprite {
+                    id: "hero".into(),
+                    image: "frame-1.webp".into(),
+                    position: Position::center(0.0),
+                    layout: Default::default(),
+                    transition: Transition::Instant,
+                    transform: SpriteTransform::default(),
+                    z_index: 0,
+                    blend: BlendMode::Alpha,
+                },
+                Action::ConfigureSpriteSequence {
+                    id: "hero".into(),
+                    frames: vec!["frame-1.webp".into(), "frame-2.webp".into()],
+                    fps: 8.0,
+                    looped: true,
+                },
+                Action::Say {
+                    speaker: String::new(),
+                    text: "wait".into(),
+                    options: Default::default(),
+                },
+            ],
+        )]));
+        state.current_scene = "main".into();
+        assert_eq!(step::step(&mut state), keine_core::StepResult::AwaitClick);
+
+        update_transitions(&mut state, 0.13, false);
+        assert_eq!(state.sprites["hero"].image, "frame-2.webp");
+        update_transitions(&mut state, 0.13, false);
+        assert_eq!(state.sprites["hero"].image, "frame-1.webp");
     }
 }

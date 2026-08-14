@@ -23,9 +23,6 @@ pub struct SayOptions {
     pub concat: bool,
     pub auto_advance: bool,
     pub inherit_speaker: bool,
-    /// Apply the paragraph presentation selected by structured editor adapters.
-    #[serde(default)]
-    pub paragraph: bool,
 }
 
 impl Default for SayOptions {
@@ -36,7 +33,6 @@ impl Default for SayOptions {
             concat: false,
             auto_advance: false,
             inherit_speaker: false,
-            paragraph: false,
         }
     }
 }
@@ -433,8 +429,6 @@ pub enum Action {
     },
     /// Timed overlay text authored by an editor adapter.
     FloatingText {
-        #[serde(default)]
-        id: Option<String>,
         text: String,
         position: [f32; 2],
         font_size: f32,
@@ -443,12 +437,6 @@ pub enum Action {
         hold: f32,
         fade_out: f32,
         blocking: bool,
-        #[serde(default)]
-        infinite: bool,
-    },
-    /// Hide one named floating text, or the active text when `id` is absent.
-    HideFloatingText {
-        id: Option<String>,
     },
     ConfigurePortraits {
         enabled: bool,
@@ -466,12 +454,6 @@ pub enum Action {
     /// to a concrete UI toolkit.
     SetDialogueStyle {
         style: DialogueStyle,
-    },
-    /// Select the presentation used by later story-paragraph actions.
-    SetParagraphStyle {
-        style: DialogueStyle,
-        typewriter_speed: Option<f64>,
-        text_reveal: Option<TextRevealConfig>,
     },
     /// Timeline animation used by structured editor adapters.
     AnimateKeyframes {
@@ -549,10 +531,6 @@ pub enum Action {
     RequestInput {
         spec: crate::types::UserInputSpec,
     },
-    /// Open an engine-owned alert/confirmation surface and suspend execution.
-    SystemMessage {
-        spec: SystemMessageSpec,
-    },
     /// Drive camera, characters, scene layers and timed effects from one
     /// frame-rate-independent clock.
     StageAnimation {
@@ -577,6 +555,36 @@ pub enum Action {
         variable: String,
         default_image: String,
         variants: Vec<(String, String)>,
+    },
+    /// Hide one named floating text, or the active text when `id` is absent.
+    HideFloatingText {
+        id: Option<String>,
+    },
+    /// Select the presentation used by later story-paragraph actions.
+    SetParagraphStyle {
+        style: DialogueStyle,
+        typewriter_speed: Option<f64>,
+        text_reveal: Option<TextRevealConfig>,
+    },
+    /// Open an engine-owned alert/confirmation surface and suspend execution.
+    SystemMessage {
+        spec: SystemMessageSpec,
+    },
+    /// Animate one visible sprite by swapping authored image frames.
+    ConfigureSpriteSequence {
+        id: String,
+        frames: Vec<String>,
+        fps: f32,
+        looped: bool,
+    },
+    /// Select paragraph or ordinary dialogue presentation for the next `Say`.
+    SelectTextPresentation {
+        paragraph: bool,
+    },
+    /// Attach 1.9.5 identity/lifetime semantics to the active floating text.
+    ConfigureFloatingText {
+        id: Option<String>,
+        infinite: bool,
     },
 }
 

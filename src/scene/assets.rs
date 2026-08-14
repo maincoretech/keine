@@ -178,6 +178,11 @@ pub fn prefetch_local_assets(
     for sprite in state.sprites.values() {
         plan.require(config.figure_path(&sprite.image), ResourceKind::Figure);
     }
+    for sequence in state.sprite_sequences.values() {
+        for frame in &sequence.frames {
+            plan.warm(config.figure_path(frame), ResourceKind::Figure);
+        }
+    }
     if let Some(avatar) = &state.mini_avatar {
         plan.require(config.figure_path(avatar), ResourceKind::MiniAvatar);
     }

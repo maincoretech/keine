@@ -492,14 +492,15 @@ fn compile_block(
     match block.kind.as_str() {
         "dialogue" => compile_dialogue(block, context, span, report),
         "narration" | "storyParagraph" => {
-            let mut options = say_options(block, context);
-            options.paragraph = block.kind == "storyParagraph";
+            if block.kind == "storyParagraph" {
+                report.push(Action::SelectTextPresentation { paragraph: true }, span);
+            }
             report.push(Action::FocusPortrait { speaker_id: None }, span);
             report.push(
                 Action::Say {
                     speaker: String::new(),
                     text: studio_dialogue_markup(&block.content),
-                    options,
+                    options: say_options(block, context),
                 },
                 span,
             );
@@ -720,29 +721,56 @@ fn show_character(
     let Some(expression) = expression else {
         return;
     };
-    if let Some(kind) = expression
+    let presentation = expression
         .extras
         .get("presentation")
-        .and_then(Value::as_object)
+        .and_then(Value::as_object);
+    let presentation_kind = presentation
         .and_then(|presentation| presentation.get("type"))
-        .and_then(Value::as_str)
-    {
-        report.diagnostics.push(Diagnostic {
-            level: DiagnosticLevel::Error,
-            span,
-            message: format!(
-                "unsupported LetsGal 1.9.8 dynamic portrait type {kind:?}; \
-                 Kēne currently supports static portrait assets only"
-            ),
-        });
-        return;
-    }
+        .and_then(Value::as_str);
+    let sequence = match (presentation_kind, presentation) {
+        (Some("sequence"), Some(presentation)) => {
+            match portrait_sequence(presentation, character) {
+                Some(sequence) => Some(sequence),
+                None => {
+                    report.diagnostics.push(Diagnostic {
+                        level: DiagnosticLevel::Error,
+                        span,
+                        message: "LetsGal sequence portrait has no resolvable static frames".into(),
+                    });
+                    return;
+                }
+            }
+        }
+        (Some(kind @ ("spine" | "live2d")), _) => {
+            report.diagnostics.push(Diagnostic {
+                level: DiagnosticLevel::Error,
+                span,
+                message: format!(
+                    "unsupported LetsGal 1.9.8 dynamic portrait type {kind:?}; \
+                     Kēne currently supports static and sequence portraits only"
+                ),
+            });
+            return;
+        }
+        (Some(kind), _) => {
+            report.diagnostics.push(Diagnostic {
+                level: DiagnosticLevel::Error,
+                span,
+                message: format!("unsupported LetsGal portrait presentation type {kind:?}"),
+            });
+            return;
+        }
+        (None, _) => None,
+    };
     let locked_skin = prop_string(&block.props, "skin");
     let skin_config = character.portrait_skin_config.as_ref();
     let default_skin = skin_config
         .map(|config| config.default_skin.as_str())
         .unwrap_or_default();
-    let image = if !locked_skin.is_empty() {
+    let image = if let Some(sequence) = &sequence {
+        sequence.frames[0].clone()
+    } else if !locked_skin.is_empty() {
         expression
             .skin_assets
             .get(&locked_skin)
@@ -810,7 +838,17 @@ fn show_character(
         },
         span,
     );
-    if locked_skin.is_empty()
+    if let Some(sequence) = sequence {
+        report.push(
+            Action::ConfigureSpriteSequence {
+                id: character.id.clone(),
+                frames: sequence.frames,
+                fps: sequence.fps,
+                looped: sequence.looped,
+            },
+            span,
+        );
+    } else if locked_skin.is_empty()
         && let Some(config) = skin_config
         && !config.attribute_name.is_empty()
         && !expression.skin_assets.is_empty()
@@ -839,6 +877,46 @@ fn show_character(
             span,
         );
     }
+}
+
+struct PortraitSequence {
+    frames: Vec<String>,
+    fps: f32,
+    looped: bool,
+}
+
+fn portrait_sequence(
+    presentation: &Map<String, Value>,
+    character: &CharacterDefinition,
+) -> Option<PortraitSequence> {
+    let frame_values = presentation
+        .get("frames")
+        .or_else(|| presentation.get("frameExpressionNames"))
+        .and_then(Value::as_array)?;
+    let frames = frame_values
+        .iter()
+        .filter_map(Value::as_str)
+        .filter_map(|frame| {
+            character
+                .expressions
+                .iter()
+                .find(|expression| expression.name == frame && !expression.asset_path.is_empty())
+                .map(|expression| expression.asset_path.clone())
+                .or_else(|| (!frame.is_empty()).then(|| frame.to_owned()))
+        })
+        .collect::<Vec<_>>();
+    (!frames.is_empty()).then(|| PortraitSequence {
+        frames,
+        fps: presentation
+            .get("fps")
+            .and_then(Value::as_f64)
+            .map_or(12.0, |fps| fps as f32)
+            .clamp(1.0, 120.0),
+        looped: presentation
+            .get("loop")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+    })
 }
 
 fn studio_position(
@@ -1660,7 +1738,6 @@ fn compile_floating_text(block: &StoryBlock, span: SourceSpan, report: &mut Pars
     let infinite = prop_bool(&block.props, "infinite", false);
     report.push(
         Action::FloatingText {
-            id: non_empty(prop_string(&block.props, "floatingTextId")),
             text: plain_text(&block.content),
             position: parse_position(&prop_string(&block.props, "position")),
             font_size: prop_f32(&block.props, "fontSize", 50.0),
@@ -1669,10 +1746,13 @@ fn compile_floating_text(block: &StoryBlock, span: SourceSpan, report: &mut Pars
             hold: prop_f32(&block.props, "duration", 0.0) / 1000.0,
             fade_out: prop_f32(&block.props, "outDuration", 0.0) / 1000.0,
             blocking: !infinite && prop_bool(&block.props, "blocking", false),
-            infinite,
         },
         span,
     );
+    let id = non_empty(prop_string(&block.props, "floatingTextId"));
+    if id.is_some() || infinite {
+        report.push(Action::ConfigureFloatingText { id, infinite }, span);
+    }
 }
 
 fn compile_system_message(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport) {
@@ -3033,27 +3113,27 @@ mod tests {
             );
         }
 
+        assert!(matches!(&report.actions[0], Action::FloatingText { .. }));
         assert!(matches!(
-            &report.actions[0],
-            Action::FloatingText {
+            &report.actions[1],
+            Action::ConfigureFloatingText {
                 id: Some(id),
-                infinite: true,
-                ..
+                infinite: true
             } if id == "notice"
         ));
         assert!(matches!(
-            &report.actions[1],
+            &report.actions[2],
             Action::HideFloatingText { id: Some(id) } if id == "notice"
         ));
         assert!(matches!(
-            &report.actions[2],
+            &report.actions[3],
             Action::SetParagraphStyle {
                 style: keine_core::DialogueStyle::Literary,
                 ..
             }
         ));
         assert!(matches!(
-            &report.actions[3],
+            &report.actions[4],
             Action::SystemMessage { spec }
                 if spec.mode == SystemMessageMode::Confirm
                     && spec.result_variable.as_deref() == Some("accepted")
@@ -3063,7 +3143,7 @@ mod tests {
 
     #[test]
     fn studio_198_dynamic_portraits_are_rejected_explicitly() {
-        for kind in ["sequence", "spine", "live2d"] {
+        for kind in ["spine", "live2d"] {
             let character: CharacterDefinition = serde_json::from_value(json!({
                 "id": "hero",
                 "name": "Hero",
@@ -3113,6 +3193,74 @@ mod tests {
                 diagnostic.level == DiagnosticLevel::Error && diagnostic.message.contains(kind)
             }));
         }
+    }
+
+    #[test]
+    fn studio_198_sequence_portraits_compile_to_native_frame_playback() {
+        let character: CharacterDefinition = serde_json::from_value(json!({
+            "id": "hero",
+            "name": "Hero",
+            "expressions": [
+                {
+                    "name": "animated",
+                    "presentation": {
+                        "type": "sequence",
+                        "frameExpressionNames": ["frame-1", "frame-2"],
+                        "fps": 8,
+                        "loop": true
+                    }
+                },
+                {"name": "frame-1", "assetPath": "characters/frame-1.webp"},
+                {"name": "frame-2", "assetPath": "characters/frame-2.webp"}
+            ]
+        }))
+        .unwrap();
+        let characters = HashMap::from([("hero", &character)]);
+        let chapter_next = HashMap::new();
+        let scenes = HashMap::new();
+        let voices = HashMap::new();
+        let positions = HashMap::new();
+        let context = CompileContext {
+            entry: "entry",
+            chapter_next: &chapter_next,
+            characters: &characters,
+            scenes: &scenes,
+            voices: &voices,
+            positions: &positions,
+            portrait_height_ratio: None,
+        };
+        let block = StoryBlock {
+            id: None,
+            kind: "showCharacter".into(),
+            content: Value::Null,
+            props: Map::from_iter([
+                ("characterId".into(), json!("hero")),
+                ("expression".into(), json!("animated")),
+            ]),
+            children: Vec::new(),
+            extras: Map::new(),
+        };
+        let mut report = ParseReport::default();
+
+        show_character(
+            &block,
+            &context,
+            SourceSpan { line: 1, column: 1 },
+            &mut report,
+        );
+
+        assert!(matches!(
+            &report.actions[0],
+            Action::ShowSprite { image, .. } if image == "characters/frame-1.webp"
+        ));
+        assert!(matches!(
+            &report.actions[1],
+            Action::ConfigureSpriteSequence { frames, fps, looped, .. }
+                if frames == &["characters/frame-1.webp", "characters/frame-2.webp"]
+                    && *fps == 8.0
+                    && *looped
+        ));
+        assert!(report.diagnostics.is_empty());
     }
 
     #[test]

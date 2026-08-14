@@ -101,6 +101,11 @@ fn collect_references(
     match action {
         Action::ShowBg { image, .. } => resource(image, ResourceKind::Background),
         Action::ShowSprite { image, .. } => resource(image, ResourceKind::Figure),
+        Action::ConfigureSpriteSequence { frames, .. } => {
+            for frame in frames {
+                resource(frame, ResourceKind::Figure);
+            }
+        }
         Action::Say { options, .. } => {
             if let Some(vocal) = &options.vocal {
                 resource(vocal, ResourceKind::Voice);

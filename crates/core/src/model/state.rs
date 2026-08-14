@@ -82,6 +82,8 @@ pub struct State {
     pub stage_revision: u64,
     /// Active sprites, keyed by id.
     pub sprites: HashMap<String, Sprite>,
+    #[serde(skip, default)]
+    pub sprite_sequences: HashMap<String, SpriteSequenceState>,
     /// Current dialogue text (if any).
     pub dialogue: Option<Dialogue>,
     /// Last settled dialogue, used by WebGAL `-concat`.
@@ -131,6 +133,8 @@ pub struct State {
     pub active_typewriter_speed: Option<f64>,
     #[serde(skip, default)]
     pub active_text_reveal: Option<TextRevealConfig>,
+    #[serde(skip, default)]
+    pub next_text_is_paragraph: bool,
     pub particle_effects: HashMap<String, ActiveParticleEffect>,
     pub transition_rules: HashMap<String, TransitionRule>,
 
@@ -327,6 +331,8 @@ pub struct RollbackSnapshot {
     #[serde(default)]
     pub camera_effect_targets: CameraTargets,
     pub sprites: Arc<HashMap<String, Sprite>>,
+    #[serde(skip, default)]
+    pub sprite_sequences: HashMap<String, SpriteSequenceState>,
     pub dialogue: Dialogue,
     pub mini_avatar: Option<String>,
     pub textbox_hidden: bool,
@@ -352,6 +358,8 @@ pub struct RollbackSnapshot {
     pub active_typewriter_speed: Option<f64>,
     #[serde(skip, default)]
     pub active_text_reveal: Option<TextRevealConfig>,
+    #[serde(skip, default)]
+    pub next_text_is_paragraph: bool,
     pub particle_effects: Arc<HashMap<String, ActiveParticleEffect>>,
     pub transition_rules: Arc<HashMap<String, TransitionRule>>,
     pub bgm: BgmState,
@@ -434,6 +442,15 @@ pub struct Sprite {
     /// Camera-space distance when this sprite participates in camera moves.
     #[serde(default)]
     pub camera_distance: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SpriteSequenceState {
+    pub frames: Vec<String>,
+    pub fps: f32,
+    pub looped: bool,
+    pub elapsed: f32,
+    pub frame: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -829,6 +846,7 @@ impl State {
                 camera_targets: self.camera_targets,
                 camera_effect_targets: self.camera_effect_targets,
                 sprites,
+                sprite_sequences: self.sprite_sequences.clone(),
                 dialogue,
                 mini_avatar: self.mini_avatar.clone(),
                 textbox_hidden: self.textbox_hidden,
@@ -844,6 +862,7 @@ impl State {
                 paragraph_text_reveal: self.paragraph_text_reveal,
                 active_typewriter_speed: self.active_typewriter_speed,
                 active_text_reveal: self.active_text_reveal,
+                next_text_is_paragraph: self.next_text_is_paragraph,
                 particle_effects,
                 transition_rules,
                 bgm: self.bgm.clone(),
@@ -914,6 +933,7 @@ impl State {
         self.bg_keyframe_animation = None;
         self.bg_animation = None;
         self.sprites = snapshot.sprites.as_ref().clone();
+        self.sprite_sequences = snapshot.sprite_sequences;
         self.dialogue = Some(snapshot.dialogue);
         self.previous_dialogue = None;
         self.dialogue_retraction = None;
@@ -946,6 +966,7 @@ impl State {
         self.paragraph_text_reveal = snapshot.paragraph_text_reveal;
         self.active_typewriter_speed = snapshot.active_typewriter_speed;
         self.active_text_reveal = snapshot.active_text_reveal;
+        self.next_text_is_paragraph = snapshot.next_text_is_paragraph;
         self.particle_effects = snapshot.particle_effects.as_ref().clone();
         self.transition_rules = snapshot.transition_rules.as_ref().clone();
         self.ended = false;
