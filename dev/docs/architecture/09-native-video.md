@@ -103,7 +103,7 @@ fuzz crash 输入会作为 workflow artifact 上传；本地复现使用 nightly
 `cargo-fuzz 0.13.2`：
 
 ```text
-cargo fuzz run webp_decode fuzz/corpus/webp_decode \
+cargo +nightly fuzz run webp_decode fuzz/corpus/webp_decode \
   projects/test-project/assets/backgrounds -- -max_len=4194304
 ```
 
