@@ -1,0 +1,7 @@
+# Keep the policy intentionally narrow: this gate answers whether any package
+# selected by every shipping feature is covered by RustSec or has been yanked.
+# License and duplicate-version policy are separate maintenance decisions and
+# must not be silently conflated with a security advisory gate.
+
+[advisories]
+ignore = []
