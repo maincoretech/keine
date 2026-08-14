@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
@@ -367,7 +367,7 @@ pub struct HakutakuArchive {
     path: Arc<PathBuf>,
     package: Package,
     files: Arc<HashSet<PathBuf>>,
-    directories: Arc<HashSet<PathBuf>>,
+    directory_entries: Arc<HashMap<PathBuf, Vec<PathBuf>>>,
 }
 
 impl fmt::Debug for HakutakuArchive {
@@ -376,7 +376,7 @@ impl fmt::Debug for HakutakuArchive {
             .debug_struct("HakutakuArchive")
             .field("path", &self.path)
             .field("files", &self.files.len())
-            .field("directories", &self.directories.len())
+            .field("directories", &self.directory_entries.len())
             .finish()
     }
 }
@@ -409,15 +409,12 @@ impl HakutakuArchive {
             .into_iter()
             .map(|asset| safe_relative(Path::new(&asset.path)))
             .collect::<Result<HashSet<_>>>()?;
-        let directories = files
-            .iter()
-            .flat_map(|file| file.ancestors().skip(1).map(Path::to_owned))
-            .collect::<HashSet<_>>();
+        let directory_entries = build_directory_entries(&files);
         Ok(Self {
             path: Arc::new(path),
             package,
             files: Arc::new(files),
-            directories: Arc::new(directories),
+            directory_entries: Arc::new(directory_entries),
         })
     }
 
@@ -450,29 +447,38 @@ impl HakutakuArchive {
         let Ok(path) = safe_relative(path) else {
             return false;
         };
-        path.as_os_str().is_empty() || self.directories.contains(&path)
+        path.as_os_str().is_empty() || self.directory_entries.contains_key(&path)
     }
 
     pub fn read_directory(&self, path: &Path) -> Vec<PathBuf> {
         let Ok(path) = safe_relative(path) else {
             return Vec::new();
         };
-        let depth = path.components().count();
-        self.files
-            .iter()
-            .filter(|file| file.starts_with(&path) && file.components().count() > depth)
-            .filter_map(|file| {
-                let component = file.components().nth(depth)?;
-                Some(path.join(component.as_os_str()))
-            })
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect()
+        self.directory_entries
+            .get(&path)
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn files_under(&self, prefix: &Path) -> Vec<PathBuf> {
         relative_files_under(&self.files, prefix)
     }
+}
+
+fn build_directory_entries(files: &HashSet<PathBuf>) -> HashMap<PathBuf, Vec<PathBuf>> {
+    let mut entries = HashMap::<PathBuf, BTreeSet<PathBuf>>::new();
+    for file in files {
+        let mut child = file.clone();
+        while let Some(parent) = child.parent() {
+            let parent = parent.to_owned();
+            entries.entry(parent.clone()).or_default().insert(child);
+            child = parent;
+        }
+    }
+    entries
+        .into_iter()
+        .map(|(directory, children)| (directory, children.into_iter().collect()))
+        .collect()
 }
 
 fn relative_files_under(files: &HashSet<PathBuf>, prefix: &Path) -> Vec<PathBuf> {
@@ -632,6 +638,37 @@ mod tests {
                 PathBuf::from("chapter/act/scene.txt"),
                 PathBuf::from("chapter/notes.md"),
                 PathBuf::from("main.txt"),
+            ]
+        );
+    }
+
+    #[test]
+    fn hakutaku_directory_index_keeps_sorted_direct_children() {
+        let files = [
+            "chapter/b/scene.txt",
+            "chapter/a/first.txt",
+            "chapter/a/second.txt",
+            "root.txt",
+        ]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<HashSet<_>>();
+
+        let entries = build_directory_entries(&files);
+
+        assert_eq!(
+            entries.get(Path::new("")).unwrap(),
+            &[PathBuf::from("chapter"), PathBuf::from("root.txt")]
+        );
+        assert_eq!(
+            entries.get(Path::new("chapter")).unwrap(),
+            &[PathBuf::from("chapter/a"), PathBuf::from("chapter/b")]
+        );
+        assert_eq!(
+            entries.get(Path::new("chapter/a")).unwrap(),
+            &[
+                PathBuf::from("chapter/a/first.txt"),
+                PathBuf::from("chapter/a/second.txt"),
             ]
         );
     }

@@ -109,8 +109,9 @@ Kēne 使用 `ResourceBudget::memory_constrained()` 打开资源包：
 | idle segment handles | 4 |
 | Normal block probation entries | 64 |
 
-这约束的是 Hakutaku 可丢弃并重建的 cache。常驻 catalog、当前/前一个 streaming block、
-独占 transient buffer、媒体 decoder buffer、GPU texture 和 Kēne 自身状态都不包含在这些数值中，
+这约束的是 Hakutaku 可丢弃并重建的 cache。常驻 catalog、Kēne 的文件集合/direct-children
+目录索引、当前/前一个 streaming block、独占 transient buffer、媒体 decoder buffer、
+GPU texture 和 Kēne 自身状态都不包含在这些数值中，
 因此不能把 `17 MiB` 误写成进程或资源系统总内存上限。
 
 ### 当前打包策略

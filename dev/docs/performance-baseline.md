@@ -646,3 +646,37 @@ periodic wakeups and handoff delay without raising its memory budget. The
 complete `cargo bench --workspace` suite passed afterward; existing backup,
 save-preview, rollback, script-runtime, and program-load targets showed no
 regression attributable to this change.
+
+### 2026-08-14 content layer and package directory lookup
+
+`OverlayAssetReader::read_meta` previously opened and discarded the asset file
+while choosing the highest-priority layer, then opened its metadata. It now
+uses the mount's containment-aware existence probe and still reads metadata
+only from the layer that actually supplies the asset. A filesystem fixture
+measured the two layer-selection primitives as follows:
+
+| Filesystem layer probe | Median |
+|---|---:|
+| Open asset and discard reader | 16.328 µs |
+| Containment/existence probe | 8.996 µs |
+
+Hakutaku already retained the snapshot's file set, but each `read_directory`
+filtered the complete set and rebuilt a `BTreeSet`. The archive now constructs
+a sorted parent-to-direct-children table once at open. On an 8,192-file package
+with 128 files in the queried directory:
+
+| Hakutaku directory query | Median |
+|---|---:|
+| Full file-set scan | 151.18 µs |
+| Direct-children index lookup and clone | 1.701 µs |
+
+The index intentionally trades persistent memory proportional to canonical
+path components for query time; it is not part of Hakutaku's evictable block
+cache budget. `content_lookup` builds and opens a real signed Hakutaku package
+outside Criterion's timed loops, then measures only the public archive/mount
+operations.
+
+The complete `cargo bench --workspace` suite passed. The two unchanged WebP
+save-preview targets moved about 2% slower together in that full post-LTO run;
+no save-preview, WebP, or storage code participates in this lookup change, so
+that machine-state shift is not attributed to the directory index.

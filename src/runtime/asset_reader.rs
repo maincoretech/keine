@@ -255,6 +255,10 @@ impl MountedReader {
             .map(|reader| Box::new(reader) as Box<dyn Reader>)
     }
 
+    fn contains_file(&self, path: &Path) -> bool {
+        self.0.contains_file(path)
+    }
+
     async fn read_directory(&self, path: &Path) -> Result<Box<PathStream>, AssetReaderError> {
         self.0.read_directory(path).await
     }
@@ -293,10 +297,8 @@ impl AssetReader for OverlayAssetReader {
     fn read_meta<'a>(&'a self, path: &'a Path) -> impl AssetReaderFuture<Value: Reader + 'a> {
         async move {
             for reader in &self.readers {
-                match reader.read(path).await {
-                    Ok(_) => return reader.read_meta(path).await,
-                    Err(AssetReaderError::NotFound(_)) => {}
-                    Err(error) => return Err(error),
+                if reader.contains_file(path) {
+                    return reader.read_meta(path).await;
                 }
             }
             Err(AssetReaderError::NotFound(path.to_owned()))
@@ -336,6 +338,10 @@ struct ContentAssetReader {
 impl ContentAssetReader {
     fn new(mount: ContentMount) -> Self {
         Self { mount }
+    }
+
+    fn contains_file(&self, path: &Path) -> bool {
+        self.mount.contains_file(path)
     }
 }
 
@@ -471,6 +477,33 @@ mod tests {
             bytes
         });
         assert_eq!(metadata, b"patch-meta");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn metadata_stays_with_the_layer_that_supplies_the_asset() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("keine-overlay-meta-{nonce}"));
+        let base = root.join("base");
+        let patch = root.join("patch");
+        fs::create_dir_all(&base).unwrap();
+        fs::create_dir_all(&patch).unwrap();
+        fs::write(base.join("shared.txt"), "base").unwrap();
+        fs::write(base.join("shared.txt.meta"), "base-meta").unwrap();
+        fs::write(patch.join("shared.txt"), "patch").unwrap();
+        let overlay = OverlayAssetReader::new(vec![
+            keine_loader::SourceMount::assets("test", "base", base)
+                .asset
+                .unwrap(),
+            keine_loader::SourceMount::assets("test", "patch", patch)
+                .asset
+                .unwrap(),
+        ]);
+
+        assert!(block_on(overlay.read_meta(Path::new("shared.txt"))).is_err());
         let _ = fs::remove_dir_all(root);
     }
 

@@ -22,3 +22,7 @@ hakutaku-pack = { workspace = true }
 [[bench]]
 name = "program_load"
 harness = false
+
+[[bench]]
+name = "content_lookup"
+harness = false

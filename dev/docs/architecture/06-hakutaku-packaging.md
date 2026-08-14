@@ -31,7 +31,9 @@ Ed25519 发布身份，必须备份且不得随游戏发布。也可用 `KEINE_H
 
 ## 运行时读取
 
-loader 打开快照时一次建立文件/目录索引。`ContentFile` 直接包装 Hakutaku `AssetCursor`，
+loader 打开快照时一次建立文件集合和排序的 parent → direct children 目录索引；后续
+`read_directory` 只克隆目标目录的直接子项，不随包内总文件数线性扫描。`ContentFile`
+直接包装 Hakutaku `AssetCursor`，
 图片、音频、视频和 Bevy `AssetReader` 共用同一个随机读取实现：
 
 - 先验证签名目录，再按需验证并解密 page/block；

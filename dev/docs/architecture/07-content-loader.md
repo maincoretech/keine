@@ -107,7 +107,9 @@ adapter:
 
 - `keine-loader` 从统一 `ContentMount` 合并脚本并生成最终 scene/resource manifest。
 - `OverlayAssetReader` 只做 Bevy 接口桥接，按相反顺序查找资产，只消费通用
-  `ContentMount/ContentFile`；它不知道底层容器格式，也不会复制或落盘 archive entry。
+  `ContentMount/ContentFile`；metadata 查询先用 containment 选出实际提供资产的最高优先级
+  layer，再只从同一 layer 读取 `.meta`，不会为选择 layer 额外打开资产文件。它不知道底层
+  容器格式，也不会复制或落盘 archive entry。
 - 资源预取继续使用统一逻辑路径，因此来源数量不会增加业务层分支。
 - FS 脚本/结构化工程由 `notify` 递归监控；变更后先完整解析到临时 Program，再一次替换，
   并从当前 scene 开头重建瞬态演出/交互状态。变量和图库等持久数据保留。
@@ -116,7 +118,9 @@ adapter:
   限制与 CPU 像素释放。Hakutaku 是只读发行来源，不创建 watcher。
 - macOS/Windows/Linux 使用同一 `notify::RecommendedWatcher` 生命周期与相同逻辑路径，差异仅在
   notify 选择的系统后端；Windows 的反斜杠不会进入 IR 或资源键。
-- Hakutaku 使用受限 block cache 和 seekable `AssetCursor`；配置、脚本、图片、字体与音频共享一个快照索引。
+- Hakutaku 使用受限 block cache 和 seekable `AssetCursor`；配置、脚本、图片、字体与音频共享
+  一个快照索引。打开快照时同时生成排序的 parent → direct children 表，列目录不再扫描
+  全部文件。
 
 ## 约束
 
