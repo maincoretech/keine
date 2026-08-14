@@ -11,6 +11,79 @@ use std::collections::HashMap;
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 
+#[cfg(any(
+    test,
+    all(
+        feature = "video-ffmpeg",
+        not(all(feature = "video-native", target_os = "macos"))
+    )
+))]
+fn send_cancellable<T>(
+    sender: &crossbeam_channel::Sender<T>,
+    event: T,
+    cancelled: &std::sync::atomic::AtomicBool,
+    cancel_receiver: &crossbeam_channel::Receiver<()>,
+) -> bool {
+    use std::sync::atomic::Ordering;
+
+    if cancelled.load(Ordering::Acquire) {
+        return false;
+    }
+    // Prefer cancellation if queue capacity and shutdown become ready at the
+    // same instant. Unlike timed try_send polling, this parks the producer
+    // without periodic wakeups while the bounded queue is full.
+    crossbeam_channel::select_biased! {
+        recv(cancel_receiver) -> _ => false,
+        send(sender, event) -> result => result.is_ok(),
+    }
+}
+
+#[cfg(test)]
+mod cancellable_channel_tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    use crossbeam_channel::bounded;
+
+    use super::send_cancellable;
+
+    #[test]
+    fn full_queue_wakes_immediately_for_cancellation() {
+        let (sender, _receiver) = bounded(1);
+        sender.send(0_u8).unwrap();
+        let (cancel_sender, cancel_receiver) = bounded(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let started = Arc::new(Barrier::new(2));
+        let worker_cancelled = Arc::clone(&cancelled);
+        let worker_started = Arc::clone(&started);
+        let worker = thread::spawn(move || {
+            worker_started.wait();
+            send_cancellable(&sender, 1, &worker_cancelled, &cancel_receiver)
+        });
+
+        started.wait();
+        cancelled.store(true, Ordering::Release);
+        cancel_sender.send(()).unwrap();
+
+        assert!(!worker.join().unwrap());
+    }
+
+    #[test]
+    fn full_queue_resumes_when_the_consumer_frees_capacity() {
+        let (sender, receiver) = bounded(1);
+        sender.send(0_u8).unwrap();
+        let (_cancel_sender, cancel_receiver) = bounded(1);
+        let cancelled = AtomicBool::new(false);
+        let worker =
+            thread::spawn(move || send_cancellable(&sender, 1, &cancelled, &cancel_receiver));
+
+        assert_eq!(receiver.recv().unwrap(), 0);
+        assert!(worker.join().unwrap());
+        assert_eq!(receiver.recv().unwrap(), 1);
+    }
+}
+
 // On macOS the native backend wins when both developer features are enabled,
 // but Cargo still links the optional FFmpeg dependency. Keep that intentional
 // dependency visible to the workspace's unused-crate lint.
@@ -128,7 +201,6 @@ fn reject_unavailable_video(mut state: ResMut<GameState>, mut warned: ResMut<Mis
 mod ffmpeg_backend {
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel};
     use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
@@ -140,6 +212,7 @@ mod ffmpeg_backend {
     use bevy::ecs::system::SystemParam;
     use bevy::prelude::*;
     use bevy::render::render_resource::TextureFormat;
+    use crossbeam_channel::{Receiver, Sender, TryRecvError, bounded};
     use ffmpeg_next as ffmpeg;
     use ffmpeg_next::software::scaling::{context::Context as VideoScaler, flag::Flags};
     use keine_core::VideoMode;
@@ -169,6 +242,7 @@ mod ffmpeg_backend {
     struct VideoSession {
         receiver: Mutex<Receiver<DecoderEvent>>,
         cancelled: Arc<AtomicBool>,
+        cancel_sender: Sender<()>,
         decoder: Option<thread::JoinHandle<()>>,
         pending: Option<DecodedFrame>,
         visual: VideoVisual,
@@ -188,7 +262,17 @@ mod ffmpeg_backend {
 
     impl Drop for VideoSession {
         fn drop(&mut self) {
+            self.cancel();
+        }
+    }
+
+    impl VideoSession {
+        fn cancel(&self) {
             self.cancelled.store(true, Ordering::Release);
+            // The channel wakes a decoder blocked on a full frame queue. It is
+            // bounded because cancellation is a level-triggered state; one
+            // pending notification is sufficient.
+            let _ = self.cancel_sender.try_send(());
         }
     }
 
@@ -463,7 +547,7 @@ mod ffmpeg_backend {
         materials: &mut Assets<StageMaterial>,
         audio_assets: &mut Assets<FfmpegVideoAudio>,
     ) -> Option<thread::JoinHandle<()>> {
-        session.cancelled.store(true, Ordering::Release);
+        session.cancel();
         cleanup_visual(&mut session.visual, commands, images, materials);
         if let Some(entity) = session.audio_entity {
             commands.entity(entity).try_despawn();
@@ -498,12 +582,22 @@ mod ffmpeg_backend {
     ) -> VideoSession {
         // Two frames cover normal decoder jitter without retaining another
         // 8 MiB 1080p RGBA allocation or adding a visible frame of latency.
-        let (sender, receiver) = sync_channel(2);
+        let (sender, receiver) = bounded(2);
+        let (cancel_sender, cancel_receiver) = bounded(1);
         let cancelled = Arc::new(AtomicBool::new(false));
         let thread_cancelled = cancelled.clone();
         let decoder = thread::Builder::new()
             .name("keine-video-decode".into())
-            .spawn(move || decode_video(mounts, &path, looped, thread_cancelled, sender))
+            .spawn(move || {
+                decode_video(
+                    mounts,
+                    &path,
+                    looped,
+                    thread_cancelled,
+                    sender,
+                    cancel_receiver,
+                )
+            })
             .unwrap_or_else(|error| {
                 log::error!("failed to start video decoder thread: {error}");
                 thread::spawn(|| {})
@@ -511,6 +605,7 @@ mod ffmpeg_backend {
         VideoSession {
             receiver: Mutex::new(receiver),
             cancelled,
+            cancel_sender,
             decoder: Some(decoder),
             pending: None,
             visual: VideoVisual::default(),
@@ -575,19 +670,30 @@ mod ffmpeg_backend {
         logical_path: &str,
         looped: bool,
         cancelled: Arc<AtomicBool>,
-        sender: SyncSender<DecoderEvent>,
+        sender: Sender<DecoderEvent>,
+        cancel_receiver: Receiver<()>,
     ) {
         let source = match prepare_source(&mounts, Path::new(logical_path)) {
             Ok(source) => Arc::new(source),
             Err(error) => {
-                let _ = sender.send(DecoderEvent::Error(error));
+                let _ = send_event(
+                    &sender,
+                    DecoderEvent::Error(error),
+                    &cancelled,
+                    &cancel_receiver,
+                );
                 return;
             }
         };
         let mut decoder = match open_decoder(&source) {
             Ok(decoder) => decoder,
             Err(error) => {
-                let _ = sender.send(DecoderEvent::Error(error.to_string()));
+                let _ = send_event(
+                    &sender,
+                    DecoderEvent::Error(error.to_string()),
+                    &cancelled,
+                    &cancel_receiver,
+                );
                 return;
             }
         };
@@ -597,6 +703,7 @@ mod ffmpeg_backend {
             &sender,
             DecoderEvent::Ready { source, has_audio },
             &cancelled,
+            &cancel_receiver,
         ) {
             return;
         }
@@ -618,7 +725,12 @@ mod ffmpeg_backend {
                     let rgba = match rgba {
                         Ok(rgba) => rgba,
                         Err(error) => {
-                            let _ = sender.send(DecoderEvent::Error(error));
+                            let _ = send_event(
+                                &sender,
+                                DecoderEvent::Error(error),
+                                &cancelled,
+                                &cancel_receiver,
+                            );
                             return;
                         }
                     };
@@ -628,23 +740,38 @@ mod ffmpeg_backend {
                         height: height as u32,
                         rgba,
                     };
-                    if !send_event(&sender, DecoderEvent::Frame(frame), &cancelled) {
+                    if !send_event(
+                        &sender,
+                        DecoderEvent::Frame(frame),
+                        &cancelled,
+                        &cancel_receiver,
+                    ) {
                         return;
                     }
                 }
                 Ok(None) if looped => {
                     loop_offset += duration;
                     if let Err(error) = decoder.seek_to_start() {
-                        let _ = sender.send(DecoderEvent::Error(error.to_string()));
+                        let _ = send_event(
+                            &sender,
+                            DecoderEvent::Error(error.to_string()),
+                            &cancelled,
+                            &cancel_receiver,
+                        );
                         return;
                     }
                 }
                 Ok(None) => {
-                    let _ = sender.send(DecoderEvent::End);
+                    let _ = send_event(&sender, DecoderEvent::End, &cancelled, &cancel_receiver);
                     return;
                 }
                 Err(error) => {
-                    let _ = sender.send(DecoderEvent::Error(error.to_string()));
+                    let _ = send_event(
+                        &sender,
+                        DecoderEvent::Error(error.to_string()),
+                        &cancelled,
+                        &cancel_receiver,
+                    );
                     return;
                 }
             }
@@ -748,23 +875,12 @@ mod ffmpeg_backend {
     }
 
     fn send_event(
-        sender: &SyncSender<DecoderEvent>,
-        mut event: DecoderEvent,
+        sender: &Sender<DecoderEvent>,
+        event: DecoderEvent,
         cancelled: &AtomicBool,
+        cancel_receiver: &Receiver<()>,
     ) -> bool {
-        loop {
-            if cancelled.load(Ordering::Acquire) {
-                return false;
-            }
-            match sender.try_send(event) {
-                Ok(()) => return true,
-                Err(TrySendError::Full(returned)) => {
-                    event = returned;
-                    thread::sleep(Duration::from_millis(2));
-                }
-                Err(TrySendError::Disconnected(_)) => return false,
-            }
-        }
+        super::send_cancellable(sender, event, cancelled, cancel_receiver)
     }
 
     pub(super) struct FfmpegAudioStream {

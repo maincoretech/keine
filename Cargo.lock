@@ -2999,6 +2999,7 @@ dependencies = [
  "anyhow",
  "bevy",
  "criterion",
+ "crossbeam-channel",
  "crossterm",
  "dispatch2",
  "ffmpeg-next",

@@ -621,3 +621,28 @@ prepares the immutable `Program` outside Criterion's timed section, then
 measures fresh state install and the initial bounded runtime step. It is a
 conservative proxy for the frame-boundary swap; config and manifest ownership
 transfers are constant-time moves for this fixture.
+
+### 2026-08-14 cancellable FFmpeg frame queue
+
+The FFmpeg decoder previously retried a full two-frame `sync_channel` every
+2 ms. A paused frame consumer could therefore wake each decoder about 500 times
+per second, while a newly available slot still waited for the next polling
+interval. The queue now uses a blocking Crossbeam selection between frame
+capacity and a dedicated bounded cancellation signal. Cancellation is biased
+over delivery when both become ready together.
+
+`video_queue/full_queue_handoff` fills a one-entry queue, confirms backpressure,
+then releases a consumer and measures producer completion plus thread handoff.
+It isolates the old fixed polling delay from media decode time:
+
+| Full-queue handoff | Median |
+|---|---:|
+| Legacy 2 ms polling | 2.9778 ms |
+| Selectable blocking send | 21.380 µs |
+
+The benchmark is a scheduling microbenchmark, not decoded-frame throughput.
+The production queue remains bounded at two RGBA frames; the change removes
+periodic wakeups and handoff delay without raising its memory budget. The
+complete `cargo bench --workspace` suite passed afterward; existing backup,
+save-preview, rollback, script-runtime, and program-load targets showed no
+regression attributable to this change.

@@ -50,10 +50,13 @@ FFmpeg backend 对每个解码帧应用：
 |---|---:|
 | 单边宽或高 | 4,096 pixels |
 | 总像素数 | `4,096 × 2,304 = 9,437,184` pixels |
+| decoder → frame thread 队列 | 2 个 RGBA 帧 |
 
 行宽、stride、源数据范围和 RGBA 总字节数都在复制前检查。后续帧的像素格式、宽或高
 发生变化时，scaler 会按当前帧重建。此表只描述 FFmpeg backend；macOS AVFoundation
 backend 使用平台原生像素缓冲路径，不套用这两个 FFmpeg 常量。
+两帧队列满后 decoder 会阻塞等待容量，但同时监听 session cancellation；取消不会等定时
+轮询，也不会因消费者停止取帧而把 decoder 永久卡在发送操作中。
 
 ## 3. 编译脚本产物
 
@@ -67,8 +70,9 @@ backend 使用平台原生像素缓冲路径，不套用这两个 FFmpeg 常量�
 | actions | 100,000,000 |
 | 单个字符串或资源路径 | 16 MiB |
 
-这些是编译产物 envelope 的防御边界，不是建议的工程规模。源脚本热重载仍会受单帧解析
-时间约束，大项目应通过基准决定是否需要增量或异步构建。
+这些是编译产物 envelope 的防御边界，不是建议的工程规模。源脚本热重载会在独立 worker
+完成全量解析和 Program 构建，再在帧边界安装结果；大项目仍会占用后台 CPU，但不再把完整
+解析时间直接压进单帧预算。
 
 ## 4. Hakutaku 发行包
 

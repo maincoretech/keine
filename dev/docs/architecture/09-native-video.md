@@ -55,6 +55,12 @@ FFmpeg 后端只负责解码。存在音轨且未静音时，rodio sink 的实�
 时间戳倒退暴露给画面调度；音频流也在 EOF 后重新打开随机读取源，不使用 rodio 会缓存
 整段解码 PCM 的通用循环器。
 
+软件 decoder 与 Bevy 帧线程之间使用容量为 2 的 bounded channel，避免额外保留第三个
+1080p RGBA buffer。队列满时 decoder 通过 Crossbeam `select_biased!` 同时等待发送容量和
+session cancellation，并优先处理取消；因此暂停消费不会产生原先每 2ms 一次的轮询唤醒，
+session 清理也不会被阻塞发送卡住。所有 `Ready`、frame、end 和 error event 都经过同一
+可取消发送路径。
+
 自动化覆盖加密 Hakutaku 随机读取、音视频时长误差、三次循环单调性、暂停/恢复、无音频长时
 回退时钟，以及 macOS AVFoundation 的 FS/Hakutaku 首帧解码和 Core Video → Metal → wgpu
 实际复制。Windows 当前只发布并验证 x64；ARM64 原生构建暂缓，在具备明确发行需求和
