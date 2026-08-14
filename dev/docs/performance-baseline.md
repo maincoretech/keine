@@ -752,3 +752,17 @@ Commands placed `-ss 570` after `-i` for the decode/discard control and before
 work now scales with the demuxer's seek preroll rather than the complete media
 prefix. The pinned FFmpeg 8 CI feature job supplies the real Kēne decode,
 encrypted random-access, exact remaining-duration, and loop regression tests.
+
+### 2026-08-14 global video surface budget
+
+Both video backends now reserve four RGBA surface equivalents per active
+session from a shared 256 MiB pool. The reservation is recomputed only when a
+stream changes resolution; normal same-size frames compare the cached
+dimensions and return before touching the shared mutex.
+
+A temporary 20,000,000-iteration harness called the production 1920×1080
+same-size fast path under the optimized development profile on Apple M5 Pro.
+It measured 1.617 ns/call. The previous implementation had no global budget
+check; this is the complete added steady-frame CPU cost, well below decoder,
+copy, upload, and frame-scheduling work. Resolution changes take the mutex and
+checked arithmetic once, while session teardown releases its reservation.

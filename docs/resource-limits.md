@@ -42,21 +42,27 @@ RGBA buffer 大小使用 checked arithmetic，并在写入前进行 fallible all
 这些限制只覆盖自定义 WebP 路径。PNG/JPEG 仍由 Bevy 通用 loader 处理，目前没有同一套
 Kēne 压缩字节/像素硬上限。
 
-### FFmpeg 视频
+### 视频
 
-FFmpeg backend 对每个解码帧应用：
+FFmpeg 与 macOS AVFoundation backend 对每个解码帧应用同一尺寸边界；FFmpeg 另有显式
+decoder queue：
 
 | 项目 | 上限 |
 |---|---:|
 | 单边宽或高 | 4,096 pixels |
 | 总像素数 | `4,096 × 2,304 = 9,437,184` pixels |
 | decoder → frame thread 队列 | 2 个 RGBA 帧 |
+| 全局 video surface-equivalent 预算 | 256 MiB |
 
 行宽、stride、源数据范围和 RGBA 总字节数都在复制前检查。后续帧的像素格式、宽或高
-发生变化时，scaler 会按当前帧重建。此表只描述 FFmpeg backend；macOS AVFoundation
-backend 使用平台原生像素缓冲路径，不套用这两个 FFmpeg 常量。
+发生变化时，scaler 会按当前帧重建。
 两帧队列满后 decoder 会阻塞等待容量，但同时监听 session cancellation；取消不会等定时
 轮询，也不会因消费者停止取帧而把 decoder 永久卡在发送操作中。
+
+每个活跃视频按 4 份 RGBA surface 预留全局预算，覆盖当前 GPU surface、decoder/scaler
+surface 和至多两个 queued frames；同分辨率帧复用 reservation，动态分辨率变化会重新核算。
+超出预算的 session 终止而不会继续分配。该预算覆盖 Kēne 可见的 surface，不包含 FFmpeg 或
+AVFoundation 内部无法由调用方精确计量的 codec working set。
 
 ## 3. 编译脚本产物
 

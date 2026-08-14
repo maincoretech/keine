@@ -29,8 +29,8 @@ use super::metal_frame::{
     MetalFrameBridge, NativeVideoFrame, present_native_frame, validate_frame_import,
 };
 use super::shared::{
-    PreparedSource, VideoNode, VideoPresentation, VideoVisual, VisualResources, cleanup_visual,
-    prepare_source, update_visual,
+    PreparedSource, VideoMemoryBudget, VideoMemoryReservation, VideoNode, VideoPresentation,
+    VideoVisual, VisualResources, cleanup_visual, prepare_source, update_visual,
 };
 use crate::runtime::platform::DesignViewport;
 use crate::runtime::resources::{ContentProjectResource, GameConfigResource, GameState};
@@ -41,6 +41,7 @@ use crate::storage::settings::RuntimeSettings;
 pub(super) struct VideoPlayback {
     sessions: HashMap<String, VideoSession>,
     retired_sources: Vec<thread::JoinHandle<()>>,
+    memory_budget: VideoMemoryBudget,
 }
 
 struct VideoSession {
@@ -64,6 +65,7 @@ struct NativePlayer {
     output: Retained<AVPlayerItemVideoOutput>,
     volume: f32,
     muted: bool,
+    memory_reservation: VideoMemoryReservation,
 }
 
 struct ResourceLoaderIvars {
@@ -248,6 +250,7 @@ pub(super) fn sync_video_playback(
         });
     }
 
+    let memory_budget = playback.memory_budget.clone();
     let mut ended = Vec::new();
     for (id, session) in &mut playback.sessions {
         let Some(video) = state.videos.get(id) else {
@@ -260,6 +263,7 @@ pub(super) fn sync_video_playback(
                     source,
                     session.muted,
                     resources.settings.master_volume,
+                    memory_budget.reservation(),
                 ) {
                     Ok(player) => session.player = Some(player),
                     Err(error) => {
@@ -334,7 +338,12 @@ pub(super) fn sync_video_playback(
 }
 
 impl NativePlayer {
-    fn open(source: Arc<PreparedSource>, muted: bool, volume: f32) -> Result<Self, String> {
+    fn open(
+        source: Arc<PreparedSource>,
+        muted: bool,
+        volume: f32,
+        memory_reservation: VideoMemoryReservation,
+    ) -> Result<Self, String> {
         let mtm = MainThreadMarker::new().ok_or_else(|| {
             "AVFoundation video must be initialized on the main thread".to_owned()
         })?;
@@ -415,6 +424,7 @@ impl NativePlayer {
             output,
             volume,
             muted,
+            memory_reservation,
         })
     }
 
@@ -431,7 +441,7 @@ impl NativePlayer {
         }
     }
 
-    fn next_frame(&self) -> Result<Option<NativeVideoFrame>, String> {
+    fn next_frame(&mut self) -> Result<Option<NativeVideoFrame>, String> {
         let item_time = unsafe { self.player.currentTime() };
         if !unsafe { self.output.hasNewPixelBufferForItemTime(item_time) } {
             return Ok(None);
@@ -442,7 +452,10 @@ impl NativePlayer {
         }) else {
             return Ok(None);
         };
-        NativeVideoFrame::new(pixel_buffer).map(Some)
+        let frame = NativeVideoFrame::new(pixel_buffer)?;
+        let (width, height) = frame.dimensions();
+        self.memory_reservation.reserve_frame(width, height)?;
+        Ok(Some(frame))
     }
 
     fn playback_end(&self) -> Result<bool, String> {
@@ -526,7 +539,12 @@ fn reap_source_workers(workers: &mut Vec<thread::JoinHandle<()>>) {
 /// the engine runtime.
 pub(crate) fn validate_native_video(mounts: &[ContentMount], path: &Path) -> Result<(), String> {
     let source = Arc::new(prepare_source(mounts, path)?);
-    let player = NativePlayer::open(source, false, 0.0)?;
+    let mut player = NativePlayer::open(
+        source,
+        false,
+        0.0,
+        VideoMemoryBudget::default().reservation(),
+    )?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let run_loop = NSRunLoop::currentRunLoop();
     while std::time::Instant::now() < deadline {

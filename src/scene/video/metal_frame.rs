@@ -25,7 +25,8 @@ use objc2_metal::{MTLPixelFormat, MTLTextureType};
 use wgpu::hal::{CopyExtent, api::Metal};
 
 use super::shared::{
-    VideoPresentation, VideoVisual, VisualResources, present_image, video_image_placeholder,
+    VideoPresentation, VideoVisual, VisualResources, present_image, video_frame_bytes,
+    video_image_placeholder,
 };
 
 /// A retained AVFoundation frame moving exactly once from the main world to
@@ -54,14 +55,16 @@ impl NativeVideoFrame {
             .map_err(|_| "video width exceeds u32".to_owned())?;
         let height = u32::try_from(CVPixelBufferGetHeight(&pixel_buffer))
             .map_err(|_| "video height exceeds u32".to_owned())?;
-        if width == 0 || height == 0 {
-            return Err("AVFoundation returned an empty video frame".to_owned());
-        }
+        video_frame_bytes(width, height)?;
         Ok(Self {
             pixel_buffer,
             width,
             height,
         })
+    }
+
+    pub(super) const fn dimensions(&self) -> (u32, u32) {
+        (self.width, self.height)
     }
 }
 

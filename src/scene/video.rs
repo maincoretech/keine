@@ -221,8 +221,9 @@ mod ffmpeg_backend {
 
     use super::ffmpeg_io::{MediaInput, VideoDecoder};
     use super::shared::{
-        PreparedSource, VideoFrame, VideoNode, VideoPresentation, VideoVisual, VisualResources,
-        cleanup_visual, prepare_source, present_frame, update_visual,
+        PreparedSource, VideoFrame, VideoMemoryBudget, VideoMemoryReservation, VideoNode,
+        VideoPresentation, VideoVisual, VisualResources, cleanup_visual, prepare_source,
+        present_frame, update_visual, video_frame_bytes,
     };
     use super::{HashMap, RenderLayers};
     use crate::runtime::platform::DesignViewport;
@@ -230,13 +231,11 @@ mod ffmpeg_backend {
     use crate::scene::effects::material::{StageMaterial, StageQuad};
     use crate::storage::settings::RuntimeSettings;
 
-    const MAX_VIDEO_DIMENSION: u32 = 4_096;
-    const MAX_VIDEO_PIXELS: u64 = 4_096 * 2_304;
-
     #[derive(Resource, Default)]
     pub(super) struct VideoPlayback {
         sessions: HashMap<String, VideoSession>,
         retired_decoders: Vec<thread::JoinHandle<()>>,
+        memory_budget: VideoMemoryBudget,
     }
 
     struct VideoSession {
@@ -402,6 +401,7 @@ mod ffmpeg_backend {
             }
         }
 
+        let memory_budget = playback.memory_budget.clone();
         for (id, video) in &state.videos {
             playback.sessions.entry(id.clone()).or_insert_with(|| {
                 spawn_decoder(
@@ -411,6 +411,7 @@ mod ffmpeg_backend {
                     video.spec.mode,
                     video.spec.muted,
                     video.revision,
+                    memory_budget.reservation(),
                 )
             });
         }
@@ -457,7 +458,7 @@ mod ffmpeg_backend {
                                     AudioPlayer(asset.clone()),
                                     PlaybackSettings {
                                         // The FFmpeg source handles looping by
-                                        // reopening its random-access input.
+                                        // seeking its random-access input.
                                         // Rodio's generic loop buffers the
                                         // complete decoded PCM stream.
                                         mode: PlaybackMode::Despawn,
@@ -579,6 +580,7 @@ mod ffmpeg_backend {
         mode: VideoMode,
         muted: bool,
         revision: u64,
+        memory_reservation: VideoMemoryReservation,
     ) -> VideoSession {
         // Two frames cover normal decoder jitter without retaining another
         // 8 MiB 1080p RGBA allocation or adding a visible frame of latency.
@@ -596,6 +598,7 @@ mod ffmpeg_backend {
                     thread_cancelled,
                     sender,
                     cancel_receiver,
+                    memory_reservation,
                 )
             })
             .unwrap_or_else(|error| {
@@ -672,6 +675,7 @@ mod ffmpeg_backend {
         cancelled: Arc<AtomicBool>,
         sender: Sender<DecoderEvent>,
         cancel_receiver: Receiver<()>,
+        mut memory_reservation: VideoMemoryReservation,
     ) {
         let source = match prepare_source(&mounts, Path::new(logical_path)) {
             Ok(source) => Arc::new(source),
@@ -719,8 +723,17 @@ mod ffmpeg_backend {
                         timestamp as f64 * f64::from(decoder.time_base().numerator())
                             / f64::from(decoder.time_base().denominator())
                     }) as f32;
-                    let width = frame.width() as usize;
-                    let height = frame.height() as usize;
+                    let width = frame.width();
+                    let height = frame.height();
+                    if let Err(error) = memory_reservation.reserve_frame(width, height) {
+                        let _ = send_event(
+                            &sender,
+                            DecoderEvent::Error(error),
+                            &cancelled,
+                            &cancel_receiver,
+                        );
+                        return;
+                    }
                     let rgba = convert_to_rgba(&frame, &mut rgba_converter);
                     let rgba = match rgba {
                         Ok(rgba) => rgba,
@@ -736,8 +749,8 @@ mod ffmpeg_backend {
                     };
                     let frame = DecodedFrame {
                         timestamp: loop_offset + timestamp.max(0.0),
-                        width: width as u32,
-                        height: height as u32,
+                        width,
+                        height,
                         rgba,
                     };
                     if !send_event(
@@ -848,19 +861,7 @@ mod ffmpeg_backend {
     }
 
     fn video_frame_layout(width: u32, height: u32) -> Result<(usize, usize, usize), String> {
-        let pixels = u64::from(width)
-            .checked_mul(u64::from(height))
-            .ok_or_else(|| "video frame pixel count overflow".to_owned())?;
-        if width == 0
-            || height == 0
-            || width > MAX_VIDEO_DIMENSION
-            || height > MAX_VIDEO_DIMENSION
-            || pixels > MAX_VIDEO_PIXELS
-        {
-            return Err(format!(
-                "video frame {width}x{height} exceeds the {MAX_VIDEO_DIMENSION}-pixel dimension / {MAX_VIDEO_PIXELS}-pixel area limit"
-            ));
-        }
+        let frame_bytes = video_frame_bytes(width, height)?;
         let width = usize::try_from(width)
             .map_err(|_| "video frame width exceeds this platform".to_owned())?;
         let height = usize::try_from(height)
@@ -868,9 +869,7 @@ mod ffmpeg_backend {
         let row_bytes = width
             .checked_mul(4)
             .ok_or_else(|| "video frame row size overflow".to_owned())?;
-        let frame_bytes = row_bytes
-            .checked_mul(height)
-            .ok_or_else(|| "video frame byte size overflow".to_owned())?;
+        debug_assert_eq!(row_bytes.checked_mul(height), Some(frame_bytes));
         Ok((row_bytes, height, frame_bytes))
     }
 
