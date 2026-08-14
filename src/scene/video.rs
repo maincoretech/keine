@@ -337,7 +337,7 @@ mod ffmpeg_backend {
         fn decoder(&self) -> Self::Decoder {
             FfmpegAudioStream::open(self.source.clone(), self.looped).unwrap_or_else(|error| {
                 log::warn!("video audio track is unavailable: {error}");
-                FfmpegAudioStream::failed(self.source.clone(), self.looped)
+                FfmpegAudioStream::failed(self.looped)
             })
         }
     }
@@ -926,11 +926,13 @@ mod ffmpeg_backend {
     }
 
     pub(super) struct FfmpegAudioStream {
-        source: Arc<PreparedSource>,
         input: Option<MediaInput>,
         decoder: Option<ffmpeg::decoder::Audio>,
         resampler: Option<ffmpeg::software::resampling::Context>,
         stream_index: usize,
+        stream_time_base: ffmpeg::Rational,
+        stream_start_time: i64,
+        seek_target: Option<i64>,
         samples: Vec<f32>,
         position: usize,
         sample_rate: SampleRate,
@@ -948,6 +950,11 @@ mod ffmpeg_backend {
                 .best(ffmpeg::media::Type::Audio)
                 .ok_or(ffmpeg::Error::StreamNotFound)?;
             let stream_index = stream.index();
+            let stream_time_base = stream.time_base();
+            let stream_start_time = match stream.start_time() {
+                ffmpeg::ffi::AV_NOPTS_VALUE => 0,
+                value => value,
+            };
             let duration = (stream.duration() > 0).then(|| {
                 let base = stream.time_base();
                 Duration::from_secs_f64(
@@ -957,26 +964,16 @@ mod ffmpeg_backend {
             });
             let context = ffmpeg::codec::context::Context::from_parameters(stream.parameters())?;
             let decoder = context.decoder().audio()?;
-            let source_layout = if decoder.channel_layout().is_empty() {
-                ffmpeg::ChannelLayout::default(i32::from(decoder.channels()))
-            } else {
-                decoder.channel_layout()
-            };
             let rate = decoder.rate().max(1);
-            let resampler = ffmpeg::software::resampling::Context::get(
-                decoder.format(),
-                source_layout,
-                rate,
-                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
-                ffmpeg::ChannelLayout::STEREO,
-                rate,
-            )?;
+            let resampler = audio_resampler(&decoder)?;
             Ok(Self {
-                source,
                 input: Some(input),
                 decoder: Some(decoder),
                 resampler: Some(resampler),
                 stream_index,
+                stream_time_base,
+                stream_start_time,
+                seek_target: None,
                 samples: Vec::new(),
                 position: 0,
                 sample_rate: SampleRate::new(rate).unwrap_or(SampleRate::MIN),
@@ -987,13 +984,15 @@ mod ffmpeg_backend {
             })
         }
 
-        fn failed(source: Arc<PreparedSource>, looped: bool) -> Self {
+        fn failed(looped: bool) -> Self {
             Self {
-                source,
                 input: None,
                 decoder: None,
                 resampler: None,
                 stream_index: 0,
+                stream_time_base: ffmpeg::Rational(1, 1),
+                stream_start_time: 0,
+                seek_target: None,
                 samples: Vec::new(),
                 position: 0,
                 sample_rate: SampleRate::new(48_000).unwrap_or(SampleRate::MIN),
@@ -1014,11 +1013,26 @@ mod ffmpeg_backend {
             let mut received = false;
             let mut decoded = ffmpeg::frame::Audio::empty();
             while decoder.receive_frame(&mut decoded).is_ok() {
+                let frame_timestamp = decoded.timestamp();
                 let mut converted = ffmpeg::frame::Audio::empty();
                 resampler.run(&decoded, &mut converted)?;
                 self.samples.clear();
                 self.position = 0;
-                for &(left, right) in converted.plane::<(f32, f32)>(0) {
+                let stereo = converted.plane::<(f32, f32)>(0);
+                let skip_frames = self.seek_target.map_or(0, |target| {
+                    let skip = seek_preroll_frames(
+                        frame_timestamp,
+                        target,
+                        self.stream_time_base,
+                        self.sample_rate.get(),
+                        stereo.len(),
+                    );
+                    if skip < stereo.len() || frame_timestamp.is_none() {
+                        self.seek_target = None;
+                    }
+                    skip
+                });
+                for &(left, right) in &stereo[skip_frames..] {
                     self.samples.extend_from_slice(&[left, right]);
                 }
                 if !self.samples.is_empty() {
@@ -1036,12 +1050,8 @@ mod ffmpeg_backend {
                 }
                 if self.eof_sent {
                     if self.looped {
-                        match Self::open(self.source.clone(), true) {
-                            Ok(reopened) => {
-                                *self = reopened;
-                                continue;
-                            }
-                            Err(_) => self.ended = true,
+                        if self.seek_to(Duration::ZERO).is_ok() {
+                            continue;
                         }
                     }
                     self.ended = true;
@@ -1074,6 +1084,25 @@ mod ffmpeg_backend {
                     }
                 }
             }
+        }
+
+        fn seek_to(&mut self, position: Duration) -> Result<(), ffmpeg::Error> {
+            let timestamp = duration_to_stream_timestamp(
+                position,
+                self.stream_time_base,
+                self.stream_start_time,
+            )?;
+            let input = self.input.as_mut().ok_or(ffmpeg::Error::InvalidData)?;
+            input.seek_stream_before(self.stream_index, timestamp)?;
+            let decoder = self.decoder.as_mut().ok_or(ffmpeg::Error::InvalidData)?;
+            decoder.flush();
+            self.resampler = Some(audio_resampler(decoder)?);
+            self.samples.clear();
+            self.position = 0;
+            self.seek_target = Some(timestamp);
+            self.eof_sent = false;
+            self.ended = false;
+            Ok(())
         }
     }
 
@@ -1111,19 +1140,79 @@ mod ffmpeg_backend {
         }
 
         fn try_seek(&mut self, position: Duration) -> Result<(), rodio::source::SeekError> {
-            let mut reopened = Self::open(self.source.clone(), self.looped).map_err(|error| {
+            self.seek_to(position).map_err(|error| {
                 rodio::source::SeekError::Other(Arc::new(std::io::Error::other(error.to_string())))
-            })?;
-            let samples =
-                (position.as_secs_f64() * f64::from(reopened.sample_rate.get()) * 2.0) as usize;
-            for _ in 0..samples {
-                if reopened.next().is_none() {
-                    break;
-                }
-            }
-            *self = reopened;
-            Ok(())
+            })
         }
+    }
+
+    fn audio_resampler(
+        decoder: &ffmpeg::decoder::Audio,
+    ) -> Result<ffmpeg::software::resampling::Context, ffmpeg::Error> {
+        let source_layout = if decoder.channel_layout().is_empty() {
+            ffmpeg::ChannelLayout::default(i32::from(decoder.channels()))
+        } else {
+            decoder.channel_layout()
+        };
+        let rate = decoder.rate().max(1);
+        ffmpeg::software::resampling::Context::get(
+            decoder.format(),
+            source_layout,
+            rate,
+            ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+            ffmpeg::ChannelLayout::STEREO,
+            rate,
+        )
+    }
+
+    fn duration_to_stream_timestamp(
+        position: Duration,
+        time_base: ffmpeg::Rational,
+        start_time: i64,
+    ) -> Result<i64, ffmpeg::Error> {
+        let numerator =
+            u128::try_from(time_base.numerator()).map_err(|_| ffmpeg::Error::InvalidData)?;
+        let denominator =
+            u128::try_from(time_base.denominator()).map_err(|_| ffmpeg::Error::InvalidData)?;
+        if numerator == 0 || denominator == 0 {
+            return Err(ffmpeg::Error::InvalidData);
+        }
+        let divisor = 1_000_000_000_u128
+            .checked_mul(numerator)
+            .ok_or(ffmpeg::Error::InvalidData)?;
+        let ticks = position
+            .as_nanos()
+            .checked_mul(denominator)
+            .and_then(|value| value.checked_div(divisor))
+            .and_then(|value| i64::try_from(value).ok())
+            .ok_or(ffmpeg::Error::InvalidData)?;
+        start_time
+            .checked_add(ticks)
+            .ok_or(ffmpeg::Error::InvalidData)
+    }
+
+    fn seek_preroll_frames(
+        frame_timestamp: Option<i64>,
+        target: i64,
+        time_base: ffmpeg::Rational,
+        sample_rate: u32,
+        frame_count: usize,
+    ) -> usize {
+        let Some(delta_ticks) = frame_timestamp.and_then(|timestamp| target.checked_sub(timestamp))
+        else {
+            return 0;
+        };
+        if delta_ticks <= 0 || time_base.numerator() <= 0 || time_base.denominator() <= 0 {
+            return 0;
+        }
+        let numerator = (delta_ticks as u128)
+            .saturating_mul(time_base.numerator() as u128)
+            .saturating_mul(u128::from(sample_rate));
+        let denominator = time_base.denominator() as u128;
+        let frames = numerator.div_ceil(denominator);
+        usize::try_from(frames)
+            .unwrap_or(usize::MAX)
+            .min(frame_count)
     }
 
     #[cfg(test)]
@@ -1223,6 +1312,13 @@ mod ffmpeg_backend {
             audio.try_seek(Duration::ZERO).unwrap();
             assert!(audio.by_ref().take(4_096).any(|sample| sample != 0.0));
 
+            let mut seeked_audio = FfmpegAudioStream::open(source.clone(), false).unwrap();
+            let seek_position = Duration::from_millis(500);
+            seeked_audio.try_seek(seek_position).unwrap();
+            let sample_rate = seeked_audio.sample_rate().get() as f32;
+            let remaining = seeked_audio.count() as f32 / (sample_rate * 2.0);
+            assert!((remaining - (video_duration - seek_position.as_secs_f32())).abs() < 0.05);
+
             let mut looped_audio = FfmpegAudioStream::open(source.clone(), true).unwrap();
             let two_seconds = looped_audio.sample_rate().get() as usize * 2 * 2;
             assert_eq!(looped_audio.by_ref().take(two_seconds).count(), two_seconds);
@@ -1252,6 +1348,24 @@ mod ffmpeg_backend {
             assert_eq!(fallback_audio_clock(12.5, 100.0, 100.0), 12.5);
             assert_eq!(fallback_audio_clock(12.5, 100.0, 99.0), 12.5);
             assert_eq!(fallback_audio_clock(12.5, 100.0, 3_700.0), 3_612.5);
+        }
+
+        #[test]
+        fn audio_seek_math_uses_stream_time_base_and_bounds_preroll() {
+            let time_base = ffmpeg::Rational(1, 48_000);
+            assert_eq!(
+                duration_to_stream_timestamp(Duration::from_millis(500), time_base, 1_024).unwrap(),
+                25_024
+            );
+            assert_eq!(
+                seek_preroll_frames(Some(24_000), 25_024, time_base, 48_000, 2_048),
+                1_024
+            );
+            assert_eq!(
+                seek_preroll_frames(Some(0), 48_000, time_base, 48_000, 960),
+                960
+            );
+            assert_eq!(seek_preroll_frames(None, 48_000, time_base, 48_000, 960), 0);
         }
     }
 }

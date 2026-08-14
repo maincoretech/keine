@@ -118,6 +118,35 @@ impl MediaInput {
             }),
         })
     }
+
+    /// Seek using the selected stream's time base. Constraining the upper
+    /// bound to the target makes FFmpeg choose the closest decodable point at
+    /// or before it, so the decoder can discard the short preroll precisely.
+    pub(super) fn seek_stream_before(
+        &mut self,
+        stream_index: usize,
+        timestamp: i64,
+    ) -> Result<(), ffmpeg::Error> {
+        let stream_index = c_int::try_from(stream_index).map_err(|_| ffmpeg::Error::InvalidData)?;
+        // SAFETY: `self.input` owns a live AVFormatContext for this call, the
+        // stream index came from that same context, and avformat_seek_file does
+        // not retain any of the scalar arguments.
+        let result = unsafe {
+            ffmpeg::ffi::avformat_seek_file(
+                self.input.as_mut_ptr(),
+                stream_index,
+                i64::MIN,
+                timestamp,
+                timestamp,
+                0,
+            )
+        };
+        if result >= 0 {
+            Ok(())
+        } else {
+            Err(ffmpeg::Error::from(result))
+        }
+    }
 }
 
 impl std::ops::Deref for MediaInput {

@@ -726,3 +726,29 @@ WebP path moved faster. None of those crates or algorithms depend on the root
 UI/ECS code changed here, so the correlated machine-state drift is not
 attributed to these hotspot changes; the paired rows above are the relevant
 same-process comparison.
+
+### 2026-08-14 FFmpeg timestamp audio seek
+
+The former `FfmpegAudioStream::try_seek` reopened the asset and decoded every
+sample from the beginning to the requested position. The replacement asks the
+demuxer for the closest decodable position at or before the target, flushes the
+audio decoder and resampler, then discards only timestamped preroll frames.
+Loop wrap uses the same seek path instead of reopening the media.
+
+The local macOS release backend is AVFoundation, while the installed FFmpeg 9
+is newer than the project's pinned FFmpeg 8 Rust binding. A command-line proxy
+therefore isolated the same two FFmpeg algorithms without claiming end-to-end
+Kēne timings: a 10-minute stream-copy expansion of
+`dev/fixtures/video/playback.mp4` was sought to 09:30 and one audio frame was
+decoded. Three warm Apple M5 Pro / FFmpeg 9.0.1 runs produced:
+
+| Seek algorithm | Wall time | User CPU | System CPU |
+|---|---:|---:|---:|
+| Decode and discard from start | 0.21–0.22 s | 0.24–0.25 s | 0.12 s |
+| Demux timestamp seek + preroll | 0.02 s | 0.01 s | 0.00 s |
+
+Commands placed `-ss 570` after `-i` for the decode/discard control and before
+`-i` for demux seeking. The important production invariant is complexity:
+work now scales with the demuxer's seek preroll rather than the complete media
+prefix. The pinned FFmpeg 8 CI feature job supplies the real Kēne decode,
+encrypted random-access, exact remaining-duration, and loop regression tests.
