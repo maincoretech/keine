@@ -286,11 +286,10 @@ fn parse_asset_remap(args: &[OsString]) -> Result<CliCommand> {
 pub(super) fn resolve_project_path(path: impl AsRef<Path>) -> PathBuf {
     let path = path.as_ref();
     if path.as_os_str().is_empty() {
-        return std::env::current_exe()
-            .ok()
-            .and_then(|executable| executable.parent().map(Path::to_owned))
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("game.haku");
+        return std::env::current_exe().ok().map_or_else(
+            || PathBuf::from(".").join("game.haku"),
+            |executable| packaged_project_path(&executable),
+        );
     }
     if path.is_absolute() {
         return path.to_owned();
@@ -301,6 +300,23 @@ pub(super) fn resolve_project_path(path: impl AsRef<Path>) -> PathBuf {
             PathBuf::from(".")
         })
         .join(path)
+}
+
+fn packaged_project_path(executable: &Path) -> PathBuf {
+    let executable_dir = executable.parent().unwrap_or_else(|| Path::new("."));
+    let sibling = executable_dir.join("game.haku");
+    if sibling.is_file() {
+        return sibling;
+    }
+    // A native macOS app launches Contents/MacOS/keine directly while its
+    // signed content belongs in Contents/Resources. Keeping this fallback in
+    // the executable removes the need for an app-bundle shell launcher.
+    let app_resource = executable_dir
+        .parent()
+        .map(|contents| contents.join("Resources/game.haku"));
+    app_resource
+        .filter(|path| path.is_file())
+        .unwrap_or(sibling)
 }
 
 fn run(project: PathBuf, mode: InteractiveMode) -> CliCommand {
@@ -520,5 +536,23 @@ mod tests {
             benchmark_output_path(Path::new("target/game-benchmark")).unwrap(),
             Path::new("target/game-benchmark")
         );
+    }
+
+    #[test]
+    fn packaged_project_supports_a_script_free_macos_bundle() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let app = std::env::temp_dir().join(format!("keine-cli-{nonce}.app/Contents"));
+        let executable = app.join("MacOS/keine");
+        let project = app.join("Resources/game.haku");
+        std::fs::create_dir_all(project.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        std::fs::write(&project, b"test").unwrap();
+
+        assert_eq!(packaged_project_path(&executable), project);
+
+        std::fs::remove_dir_all(app.parent().unwrap()).unwrap();
     }
 }

@@ -42,7 +42,7 @@ sed -e "s/__NAME__/$name/g" -e "s/__VERSION__/$version/g" > "$staging/Contents/I
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleExecutable</key><string>launch</string>
+<key>CFBundleExecutable</key><string>keine</string>
 <key>CFBundleIdentifier</key><string>moe.maincore.keine</string>
 <key>CFBundleName</key><string>__NAME__</string>
 <key>CFBundlePackageType</key><string>APPL</string>
@@ -51,12 +51,7 @@ sed -e "s/__NAME__/$name/g" -e "s/__VERSION__/$version/g" > "$staging/Contents/I
 </dict></plist>
 PLIST
 
-cat > "$staging/Contents/MacOS/launch" <<'LAUNCH'
-#!/usr/bin/env bash
-launcher_dir="$(cd "$(dirname "$0")" && pwd)"
-exec "$launcher_dir/keine" "$launcher_dir/../Resources/game.haku"
-LAUNCH
-chmod +x "$staging/Contents/MacOS/keine" "$staging/Contents/MacOS/launch"
+chmod +x "$staging/Contents/MacOS/keine"
 
 if [[ -e "$backup" ]]; then
     echo "stale bundle backup blocks publication: $backup" >&2

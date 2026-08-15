@@ -69,10 +69,13 @@ The default release is written to `target/release-package/`:
 target/release-package/
 ├── keine[.exe]
 ├── game.haku
-├── data/
-│   └── <content-id>.taku
-└── run.sh | run.bat
+└── data/
+    └── <content-id>.taku
 ```
+
+Start the release directly: double-click `keine.exe` on Windows, or run
+`./keine` on macOS/Linux. The executable locates the sibling `game.haku`
+without depending on the current working directory.
 
 `cargo bundle` invokes Hakutaku automatically; game developers do not need to
 run a separate packer. The first bundle creates

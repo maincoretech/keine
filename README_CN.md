@@ -65,10 +65,12 @@ cargo dev projects/test-project
 target/release-package/
 ├── keine[.exe]
 ├── game.haku
-├── data/
-│   └── <content-id>.taku
-└── run.sh | run.bat
+└── data/
+    └── <content-id>.taku
 ```
+
+直接启动发行版：Windows 双击 `keine.exe`，macOS/Linux 在终端运行 `./keine`。
+可执行文件会按自身位置寻找同目录的 `game.haku`，不依赖当前工作目录。
 
 `cargo bundle` 会自动调用 Hakutaku，游戏开发者不需要单独运行打包器。第一次打包会
 创建 `.keine/publisher.hakutaku-key`；请备份它，并且不要随游戏分发。保留上一版

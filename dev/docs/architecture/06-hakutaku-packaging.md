@@ -10,12 +10,13 @@
 release/
 ├── keine[.exe]
 ├── game.haku
-├── data/
-│   └── <content-id>.taku
-└── run.sh | run.bat
+└── data/
+    └── <content-id>.taku
 ```
 
 `game.haku` 是签名快照与加密目录，`data/*.taku` 是不可变、内容寻址的加密 segment。
+发行物不包含启动脚本：Windows 将 FFmpeg DLL 放在程序目录，Linux 视频发行版则在引擎的
+ELF `DT_RPATH` 中固定 `$ORIGIN/lib`，因此可以从任意工作目录直接运行引擎。
 更新时 Kēne 先将上一版快照和 segment 以硬链接（失败时复制）放进临时发布目录，Hakutaku
 只写新增块，并在新快照提交后清理未引用 segment。最终目录仍通过同目录 rename 事务发布。
 

@@ -14,9 +14,9 @@ cargo bundle projects/test-project --benchmark
 ```
 
 The output directory is always suffixed `-benchmark` (the default is
-`target/release-package-benchmark`). Run `run.bat` once on Windows or `run.sh`
-once on macOS/Linux. The package writes `keine-benchmark-report.txt` beside the
-launcher after completing:
+`target/release-package-benchmark`). Double-click `keine.exe` once on Windows,
+or run `./keine` once on macOS/Linux. The package writes
+`keine-benchmark-report.txt` beside the executable after completing:
 
 - seven isolated process-start samples with median/p95 and peak RSS;
 - seven settled five-second rendering samples after three-second warm-ups:

@@ -330,6 +330,10 @@ fn build_engine(
     if let Some(target) = build_target.as_deref() {
         command.args(["--target", target]);
     }
+    #[cfg(target_os = "linux")]
+    if has_feature(features, "video-ffmpeg") {
+        configure_linux_bundle_rpath(&mut command);
+    }
     let status = command.status().context("failed to run cargo build")?;
     if !status.success() {
         bail!("engine build failed with status {status}");
@@ -339,6 +343,27 @@ fn build_engine(
         |target| repo_root.join("target").join(target).join("release"),
     );
     Ok(release.join(format!("keine{}", env::consts::EXE_SUFFIX)))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn configure_linux_bundle_rpath(command: &mut Command) {
+    const LINKER_FLAG: &str = "link-arg=-Wl,--disable-new-dtags,-rpath,$ORIGIN/lib";
+    if let Some(mut flags) = env::var_os("CARGO_ENCODED_RUSTFLAGS") {
+        if !flags.is_empty() {
+            flags.push("\u{1f}");
+        }
+        flags.push("-C\u{1f}");
+        flags.push(LINKER_FLAG);
+        command.env("CARGO_ENCODED_RUSTFLAGS", flags);
+        return;
+    }
+    let mut flags = env::var_os("RUSTFLAGS").unwrap_or_default();
+    if !flags.is_empty() {
+        flags.push(" ");
+    }
+    flags.push("-C ");
+    flags.push(LINKER_FLAG);
+    command.env("RUSTFLAGS", flags);
 }
 
 fn configure_engine_environment(
@@ -403,14 +428,6 @@ fn assemble(output: &Path, _features: &str, engine: &Path, benchmark: bool) -> R
         if has_feature(_features, "video-ffmpeg") {
             bundle_ffmpeg_runtime(output)?;
         }
-        fs::write(
-            output.join("run.bat"),
-            if benchmark {
-                RUN_BENCHMARK_BAT
-            } else {
-                RUN_BAT
-            },
-        )?;
     }
     #[cfg(not(windows))]
     {
@@ -419,15 +436,9 @@ fn assemble(output: &Path, _features: &str, engine: &Path, benchmark: bool) -> R
         if has_feature(_features, "video-ffmpeg") {
             bundle_linux_runtime(output, engine)?;
         }
-        fs::write(
-            output.join("run.sh"),
-            if benchmark { RUN_BENCHMARK_SH } else { RUN_SH },
-        )?;
         {
             use std::os::unix::fs::PermissionsExt;
-            for name in ["keine", "run.sh"] {
-                fs::set_permissions(output.join(name), fs::Permissions::from_mode(0o755))?;
-            }
+            fs::set_permissions(output.join("keine"), fs::Permissions::from_mode(0o755))?;
         }
     }
     fs::copy(
@@ -566,16 +577,7 @@ fn has_feature(features: &str, wanted: &str) -> bool {
     features.split(',').any(|feature| feature == wanted)
 }
 
-#[cfg(windows)]
-const RUN_BAT: &str = "@echo off\n\"%~dp0keine.exe\" \"%~dp0game.haku\"\n";
-#[cfg(windows)]
-const RUN_BENCHMARK_BAT: &str = "@echo off\n\"%~dp0keine.exe\"\nif errorlevel 1 pause\n";
-#[cfg(not(windows))]
-const RUN_SH: &str = "#!/usr/bin/env bash\nset -euo pipefail\nroot=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\nif [[ -d \"$root/lib\" ]]; then\n  export LD_LIBRARY_PATH=\"$root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\"\nfi\nexec \"$root/keine\" \"$root/game.haku\"\n";
-#[cfg(not(windows))]
-const RUN_BENCHMARK_SH: &str = "#!/usr/bin/env bash\nset -euo pipefail\nroot=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\nif [[ -d \"$root/lib\" ]]; then\n  export LD_LIBRARY_PATH=\"$root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\"\nfi\nexec \"$root/keine\"\n";
-
-const BENCHMARK_README: &str = "Kēne performance benchmark\n\nWindows: double-click run.bat once.\nmacOS/Linux: run ./run.sh once.\n\nThe package measures seven isolated startup runs, four standard scene workloads,\nand three camera-composition comparisons after three-second warm-ups. It uses an\ninvisible real window and GPU surface, not a headless renderer, so window and\npresentation costs remain in the results without interrupting normal desktop\nuse. Persistence is disabled. When complete, send keine-benchmark-report.txt\nfrom this directory to the developer. Do not move the executable away from\ngame.haku or the data directory.\n";
+const BENCHMARK_README: &str = "Kēne performance benchmark\n\nWindows: double-click keine.exe once.\nmacOS/Linux: run ./keine once in a terminal.\n\nThe package measures seven isolated startup runs, four standard scene workloads,\nand three camera-composition comparisons after three-second warm-ups. It uses an\ninvisible real window and GPU surface, not a headless renderer, so window and\npresentation costs remain in the results without interrupting normal desktop\nuse. Persistence is disabled. When complete, send keine-benchmark-report.txt\nfrom this directory to the developer. Do not move the executable away from\ngame.haku or the data directory.\n";
 
 #[cfg(test)]
 mod tests {
@@ -657,6 +659,39 @@ mod tests {
             value("KEINE_HAKUTAKU_PUBLIC_KEY"),
             Some(Some("public-key".as_ref()))
         );
+    }
+
+    #[test]
+    fn linux_bundle_rpath_preserves_direct_executable_launches() {
+        let mut command = Command::new("cargo");
+        configure_linux_bundle_rpath(&mut command);
+        let configured = command
+            .get_envs()
+            .filter_map(|(key, value)| {
+                if matches!(key.to_str(), Some("RUSTFLAGS" | "CARGO_ENCODED_RUSTFLAGS")) {
+                    value.map(|value| value.to_string_lossy().into_owned())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(configured.contains("--disable-new-dtags,-rpath,$ORIGIN/lib"));
+    }
+
+    #[test]
+    fn assembled_release_has_no_launcher_scripts() {
+        let root = tempdir().unwrap();
+        let output = root.path().join("release");
+        let engine = root.path().join("engine");
+        fs::create_dir(&output).unwrap();
+        fs::write(&engine, b"engine").unwrap();
+
+        assemble(&output, "", &engine, true).unwrap();
+
+        assert!(!output.join("run.sh").exists());
+        assert!(!output.join("run.bat").exists());
+        assert!(output.join(crate::runtime::BENCHMARK_MARKER).is_file());
     }
 
     #[test]

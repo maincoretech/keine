@@ -135,10 +135,12 @@ jobs:
         run: |
           test -x "target/${{ steps.artifact.outputs.name }}/keine"
           test -d "target/${{ steps.artifact.outputs.name }}/lib"
-          if LD_LIBRARY_PATH="target/${{ steps.artifact.outputs.name }}/lib" ldd "target/${{ steps.artifact.outputs.name }}/keine" | grep -q 'not found'; then
+          readelf -d "target/${{ steps.artifact.outputs.name }}/keine" | grep -F '(RPATH)' | grep -F '$ORIGIN/lib'
+          if ldd "target/${{ steps.artifact.outputs.name }}/keine" | grep -q 'not found'; then
             echo 'Linux release has unresolved dynamic libraries' >&2
             exit 1
           fi
+          (cd /tmp && "$GITHUB_WORKSPACE/target/${{ steps.artifact.outputs.name }}/keine" --version)
       - name: Verify Windows FFmpeg runtime
         if: runner.os == 'Windows' && contains(env.KEINE_RELEASE_FEATURES, 'video-ffmpeg')
         shell: pwsh
