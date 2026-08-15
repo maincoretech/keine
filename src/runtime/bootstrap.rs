@@ -35,6 +35,8 @@ use crate::runtime::resources::{
 };
 use crate::ui::performance::BenchmarkTarget;
 
+const MAX_PROJECT_CONFIG_BYTES: usize = 256 * 1024;
+
 #[derive(Clone, Default)]
 struct LaunchOptions {
     development: bool,
@@ -497,9 +499,11 @@ pub(crate) fn open_project(
 
     ensure_project_directory(project_path)?;
     let config_path = project_path.join("config.yaml");
-    let yaml = std::fs::read_to_string(&config_path)
+    let bytes = crate::storage::read_limited(&config_path, MAX_PROJECT_CONFIG_BYTES)
         .with_context(|| format!("failed to read {}", config_path.display()))?;
-    let config = GameConfig::from_yaml(&yaml)
+    let yaml = std::str::from_utf8(&bytes)
+        .with_context(|| format!("project config is not UTF-8: {}", config_path.display()))?;
+    let config = GameConfig::from_yaml(yaml)
         .with_context(|| format!("invalid project config {}", config_path.display()))?;
     let content = load_project_with(project_path, &config.adapter.asset, loader)?;
     Ok((content.root.clone(), config, content))
@@ -694,11 +698,13 @@ fn bootstrap_project(
         content.sources.len(),
     );
     let profile_writer = crate::storage::profile::ProfileWriter::loaded(&state.global_vars);
+    let gallery_snapshot = crate::storage::gallery::GallerySnapshot::loaded(&state);
     commands.insert_resource(GameState(state));
     commands.insert_resource(crate::storage::read_history::ReadHistoryWriter::loaded(
         read_history_count,
     ));
     commands.insert_resource(profile_writer);
+    commands.insert_resource(gallery_snapshot);
     commands.insert_resource(manifest);
     commands.insert_resource(LocalAssetCache::default());
 
@@ -813,6 +819,19 @@ mod tests {
         assert!(!path.join("scripts").exists());
         assert!(!path.join("assets").exists());
         std::fs::remove_dir(&path).unwrap();
+    }
+
+    #[test]
+    fn oversized_project_config_is_rejected_before_reading_its_payload() {
+        let path = unique_temp_path("oversized-config");
+        std::fs::create_dir_all(&path).unwrap();
+        let config = std::fs::File::create(path.join("config.yaml")).unwrap();
+        config.set_len(MAX_PROJECT_CONFIG_BYTES as u64 + 1).unwrap();
+
+        let error = open_project(&path, &LoaderRegistry::default()).unwrap_err();
+
+        assert!(format!("{error:#}").contains("exceeding the 262144-byte limit"));
+        std::fs::remove_dir_all(&path).unwrap();
     }
 
     fn args(values: &[&str]) -> Vec<OsString> {

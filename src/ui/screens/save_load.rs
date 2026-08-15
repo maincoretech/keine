@@ -1188,9 +1188,10 @@ fn request_preview(
     {
         return Some(cached.handle.clone());
     }
+    let project_root = project_root.to_path_buf();
     cache.pending.entry(slot).or_insert_with(|| {
         IoTaskPool::get().spawn(async move {
-            let bytes = std::fs::read(path).ok()?;
+            let bytes = crate::storage::save::read_preview(&project_root, slot).ok()?;
             let image = crate::scene::images::decode_preview(&bytes).ok()?;
             Some(LoadedPreview { modified, image })
         })

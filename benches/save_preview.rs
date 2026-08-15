@@ -1,6 +1,10 @@
 //! Save-card WebP encoding cost and output size at the runtime thumbnail size.
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use std::io::Cursor;
+
+use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use keine_core::{State, Value};
+use keine_loader::{KeineStore, StoreAdapter};
 use libwebp_sys::{WebPEncodeLosslessRGB, WebPEncodeRGBA, WebPFree};
 
 const WIDTH: usize = 480;
@@ -85,6 +89,29 @@ fn bench(c: &mut Criterion) {
     });
     group.bench_function("lossy_rgba_q80_480x270", |b| {
         b.iter(|| black_box(encode_lossy(black_box(&rgba))))
+    });
+    group.finish();
+
+    let mut state = State::new();
+    for index in 0..50_000 {
+        state.vars.insert(
+            format!("startup-variable-{index}"),
+            Value::Str("representative persisted value".repeat(2)),
+        );
+    }
+    let store = KeineStore;
+    let encoded = store.encode(&state).unwrap();
+    eprintln!("startup quick-save bytes · {}", encoded.len());
+    let mut group = c.benchmark_group("startup_quick_save");
+    group.throughput(Throughput::Bytes(encoded.len() as u64));
+    group.bench_function("full_state_decode", |b| {
+        b.iter(|| black_box(store.decode(black_box(&encoded))).unwrap())
+    });
+    group.bench_function("metadata_inspect", |b| {
+        b.iter(|| {
+            let mut input = Cursor::new(black_box(encoded.as_slice()));
+            black_box(store.inspect(&mut input)).unwrap()
+        })
     });
     group.finish();
 }

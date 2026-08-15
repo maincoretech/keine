@@ -101,6 +101,16 @@ pub fn preview_path(project_root: &Path, slot: u32) -> PathBuf {
     project_root.join("saves").join(format!("slot_{slot}.webp"))
 }
 
+/// Reads a save-card sidecar under the same compressed-input ceiling as every
+/// other WebP path. Keeping this beside [`preview_path`] prevents UI callers
+/// from accidentally allocating an untrusted sidecar before the decoder can
+/// enforce its own limit.
+pub(crate) fn read_preview(project_root: &Path, slot: u32) -> Result<Vec<u8>> {
+    let path = preview_path(project_root, slot);
+    super::read_limited(&path, keine_media::MAX_WEBP_FILE_BYTES)
+        .with_context(|| format!("failed to read save preview {}", path.display()))
+}
+
 pub fn delete_game(store: &dyn StoreAdapter, slot: u32, project_root: &Path) -> Result<()> {
     for path in [
         slot_path(store, project_root, slot),
@@ -247,6 +257,21 @@ mod tests {
 
         let error = load_game(&KeineStore, 1, &root).unwrap_err();
         assert!(error.to_string().contains("failed to open save"));
+        assert!(format!("{error:#}").contains("exceeding the"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_oversized_preview_sidecars_before_reading_the_payload() {
+        let root = temp_root("oversized-preview");
+        let path = preview_path(&root, 1);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let file = File::create(&path).unwrap();
+        file.set_len(keine_media::MAX_WEBP_FILE_BYTES as u64 + 1)
+            .unwrap();
+
+        let error = read_preview(&root, 1).unwrap_err();
         assert!(format!("{error:#}").contains("exceeding the"));
 
         let _ = fs::remove_dir_all(root);

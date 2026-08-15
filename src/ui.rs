@@ -73,6 +73,7 @@ fn init_resources(app: &mut App) {
         .init_resource::<control_bar::ToggleStates>()
         .init_resource::<control_bar::AutoHideTiming>()
         .init_resource::<control_bar::QuickSavePreview>()
+        .init_resource::<control_bar::QuickSavePreviewLoad>()
         .init_resource::<dialog::SavePreviewWriter>()
         .init_resource::<textbox::TextboxOverlayFade>()
         .init_resource::<textbox::InitialTextboxFade>()
@@ -197,6 +198,7 @@ fn add_overlay_systems(app: &mut App) {
                 .chain(),
             (
                 title::animate_return_to_title,
+                title::hydrate_quick_save_preview.run_if(input_scope::title_allowed),
                 title::sync_title,
                 title::handle_title_input
                     .run_if(loading::assets_ready)
@@ -277,7 +279,7 @@ fn add_menu_systems(app: &mut App) {
             )
                 .chain(),
             (
-                save_load::poll_preview_tasks,
+                save_load::poll_preview_tasks.run_if(save_load::save_load_open),
                 settings_panel::sync_settings,
                 menu::sync_header,
                 menu::sync_tabs,

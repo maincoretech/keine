@@ -14,6 +14,7 @@
 | 边界 | 当前行为 | 生效阶段 |
 |---|---|---|
 | `adapter.asset.path` | 必须解析为项目根目录内的现有目录；绝对路径和 `..` 逃逸均拒绝 | 项目加载 |
+| `config.yaml` | 解析前最多读取 256 KiB；超过时拒绝项目 | 项目加载 |
 | 文件系统 mount 内的读取 | 每次访问都解析真实路径，并确认仍位于该 mount 根目录内；指向外部的文件或目录 symlink 拒绝 | 运行时读取 |
 | Hakutaku 打包输入 | 只接受普通目录和普通文件；任何 symlink 或 special file 均拒绝 | `cargo bundle` |
 | 包内逻辑路径 | 非空 UTF-8 相对路径，使用 `/`；禁止前后 `/`、反斜杠、NUL、空段、`.` 和 `..` | Hakutaku 打包与读取 |
@@ -152,6 +153,7 @@ settings、gallery、profile、read history 和单槽 save 时也执行同一 en
 | read history | 64 MiB | 1,000,000 条记录 |
 | backup envelope | 128 MiB | 4,096 个文件 |
 | backup 内单文件 | 72 MiB | — |
+| 单项目 `config.yaml` | 256 KiB | — |
 | 全局 `engine.conf` | 256 KiB | — |
 
 Backup V2 import 直接从已受限的 envelope 借用文件名和 payload，不再为每个文件复制一份完整
@@ -163,7 +165,7 @@ Backup V2 import 直接从已受限的 envelope 借用文件名和 payload，不
 SAVE 也会拒绝 codec 写出超过同一上限的 payload。槽位列表使用格式自己的前缀检查，但
 adapter 的默认完整检查路径同样遵守该上限。
 
-全局引擎配置同样先经过 bounded read，再解析 adapter 与媒体策略；旧版
+项目配置和全局引擎配置均先经过 bounded read，再解析；旧版
 `adapters.conf` 迁移入口也使用相同的 256 KiB 上限。
 
 ## 6. 确定性执行保护

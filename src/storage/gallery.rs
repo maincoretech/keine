@@ -30,6 +30,15 @@ pub(crate) struct GallerySnapshot {
     pub(super) bgm: HashMap<String, String>,
 }
 
+impl GallerySnapshot {
+    pub(crate) fn loaded(state: &keine_core::State) -> Self {
+        Self {
+            cg: state.unlocked_cg.clone(),
+            bgm: state.unlocked_bgm.clone(),
+        }
+    }
+}
+
 pub(crate) fn load(state: &mut keine_core::State, project_root: &Path) {
     let Ok(bytes) = super::read_limited(&path(project_root), MAX_GALLERY_BYTES) else {
         return;
@@ -110,5 +119,20 @@ mod tests {
         let decoded = decode(&encoded).unwrap();
         assert_eq!(decoded.cg, [("memory.webp".into(), "Memory".into())]);
         assert_eq!(decoded.bgm, [("theme.opus".into(), "Theme".into())]);
+    }
+
+    #[test]
+    fn loaded_snapshot_matches_persisted_state() {
+        let mut state = keine_core::State::new();
+        state
+            .unlocked_cg
+            .insert("memory.webp".into(), "Memory".into());
+        state
+            .unlocked_bgm
+            .insert("theme.opus".into(), "Theme".into());
+
+        let snapshot = GallerySnapshot::loaded(&state);
+        assert_eq!(snapshot.cg, state.unlocked_cg);
+        assert_eq!(snapshot.bgm, state.unlocked_bgm);
     }
 }

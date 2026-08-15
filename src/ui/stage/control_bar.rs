@@ -1,8 +1,13 @@
 // WebGAL-style control bar icon definitions and interaction.
 // Both top and bottom bars spawn as children of TextBoxRoot in textbox.rs.
-use bevy::{ecs::system::SystemParam, prelude::*};
+use bevy::{
+    ecs::system::SystemParam,
+    prelude::*,
+    tasks::{IoTaskPool, Task, futures_lite::future},
+};
 use keine_core::State;
-use std::time::Duration;
+use keine_loader::StoreMetadata;
+use std::{path::Path, time::Duration};
 
 use crate::runtime::resources::ProjectRoot;
 use crate::storage::save::QUICK_SAVE_SLOT;
@@ -64,6 +69,43 @@ pub(crate) struct QuickSavePreview {
     pub(crate) image: Option<Handle<Image>>,
 }
 
+#[derive(Resource, Default)]
+pub(crate) struct QuickSavePreviewLoad {
+    task: Option<Task<QuickSaveDetails>>,
+    resolved: bool,
+}
+
+pub(crate) struct QuickSaveDetails {
+    pub(crate) image: Option<Image>,
+}
+
+impl QuickSavePreviewLoad {
+    pub(crate) fn request(&mut self, project_root: &Path) {
+        if self.task.is_some() || self.resolved {
+            return;
+        }
+        let project_root = project_root.to_owned();
+        self.task = Some(IoTaskPool::get().spawn(async move {
+            let image = crate::storage::save::read_preview(&project_root, QUICK_SAVE_SLOT)
+                .ok()
+                .and_then(|bytes| crate::scene::images::decode_preview(&bytes).ok());
+            QuickSaveDetails { image }
+        }));
+    }
+
+    pub(crate) fn poll(&mut self) -> Option<QuickSaveDetails> {
+        let result = self
+            .task
+            .as_mut()
+            .and_then(|task| future::block_on(future::poll_once(task)));
+        if result.is_some() {
+            self.task = None;
+            self.resolved = true;
+        }
+        result
+    }
+}
+
 impl QuickSavePreview {
     pub(crate) fn can_continue(&self, program_fingerprint: u64) -> bool {
         self.state
@@ -93,6 +135,20 @@ impl From<&State> for QuickSaveSnapshot {
             background: state.bg.clone(),
             speaker,
             dialogue,
+        }
+    }
+}
+
+impl From<StoreMetadata> for QuickSaveSnapshot {
+    fn from(metadata: StoreMetadata) -> Self {
+        // Slot 0 is only written by quick_save_on_exit while gameplay is active.
+        // Full state validation still occurs when the player actually continues.
+        Self {
+            program_fingerprint: metadata.program_fingerprint,
+            playable: true,
+            background: None,
+            speaker: metadata.speaker,
+            dialogue: metadata.text,
         }
     }
 }
@@ -452,30 +508,17 @@ fn perform_button_action(
 pub fn load_quick_save_preview(
     project_root: Res<ProjectRoot>,
     store: Res<crate::runtime::resources::StoreCodec>,
-    state: Option<Res<crate::runtime::resources::GameState>>,
-    mut images: ResMut<Assets<Image>>,
     mut preview: ResMut<QuickSavePreview>,
 ) {
-    let current_fingerprint = state.as_ref().map(|state| state.program_fingerprint);
-    preview.state =
-        crate::storage::save::load_game(store.0.as_ref(), QUICK_SAVE_SLOT, &project_root)
-            .ok()
-            .filter(|saved| {
-                !saved.snapshot().ended
-                    && Some(saved.snapshot().program_fingerprint) == current_fingerprint
-            })
-            .map(|saved| QuickSaveSnapshot::from(saved.snapshot()));
-    preview.image = preview.state.as_ref().and_then(|_| {
-        let path = crate::storage::save::preview_path(&project_root, QUICK_SAVE_SLOT);
-        std::fs::read(&path)
-            .map_err(anyhow::Error::from)
-            .and_then(|bytes| {
-                crate::scene::images::decode_preview(&bytes).map_err(anyhow::Error::from)
-            })
-            .map(|image| images.add(image))
-            .map_err(|error| log::debug!("quick-save preview unavailable: {error:#}"))
-            .ok()
-    });
+    preview.state = match crate::storage::save::inspect_slot(
+        store.0.as_ref(),
+        QUICK_SAVE_SLOT,
+        &project_root,
+    ) {
+        crate::storage::save::SlotStatus::Ready(metadata) => Some(metadata.into()),
+        _ => None,
+    };
+    preview.image = None;
 }
 
 pub fn show_quick_preview(
@@ -844,6 +887,24 @@ mod auto_hide_tests {
     fn settled_auto_hide_alpha_stays_bitwise_stable() {
         assert_eq!(approach_alpha(1.0, 1.0, 0.25), 1.0);
         assert_eq!(approach_alpha(0.0005, 0.0, 0.25), 0.0);
+    }
+
+    #[test]
+    fn quick_save_metadata_is_enough_to_enable_continue() {
+        let preview = QuickSaveSnapshot::from(StoreMetadata {
+            saved_at_unix: 1,
+            program_fingerprint: 42,
+            scene: "main".into(),
+            cursor: 7,
+            speaker: "A".into(),
+            text: "hello".into(),
+        });
+
+        assert!(preview.playable);
+        assert_eq!(preview.program_fingerprint, 42);
+        assert_eq!(preview.speaker, "A");
+        assert_eq!(preview.dialogue, "hello");
+        assert!(preview.background.is_none());
     }
 }
 

@@ -8,7 +8,7 @@ use crate::render::blur::{DialogCamera, UiBlurCamera};
 use crate::runtime::platform::DesignViewport;
 use crate::runtime::platform::InputActions;
 use crate::runtime::resources::{GameConfigResource, GameState, ProjectRoot};
-use crate::ui::control_bar::{BlurSource, BlurStrength, QuickSavePreview};
+use crate::ui::control_bar::{BlurSource, BlurStrength, QuickSavePreview, QuickSavePreviewLoad};
 use crate::ui::dialog::{DialogAction, DialogRequest};
 use crate::ui::foundation::{
     SURFACE_HOVER_ALPHA, UiFonts, button_surface, dark_surface, exp_lerp, smoothstep, text,
@@ -355,6 +355,24 @@ pub fn sync_title(state: Res<GameState>, mut context: TitleSyncContext) {
                     spawn_title_button(menu, "EXIT", Some(TitleAction::Exit), &font, None);
                 });
         });
+}
+
+pub fn hydrate_quick_save_preview(
+    buttons: Query<(&Interaction, &TitleAction), Changed<Interaction>>,
+    project_root: Res<ProjectRoot>,
+    mut load: ResMut<QuickSavePreviewLoad>,
+    mut preview: ResMut<QuickSavePreview>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    if let Some(details) = load.poll() {
+        preview.image = details.image.map(|image| images.add(image));
+    }
+    let requested = buttons.iter().any(|(interaction, action)| {
+        *interaction == Interaction::Hovered && matches!(action, TitleAction::Continue)
+    });
+    if requested && preview.state.is_some() && preview.image.is_none() {
+        load.request(&project_root);
+    }
 }
 
 fn spawn_extra_button(menu: &mut ChildSpawnerCommands, font: &Handle<Font>, extra_enabled: bool) {

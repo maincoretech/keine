@@ -790,3 +790,27 @@ those events are low-frequency compared with rendered frames and this avoids
 mutation branches silently omitting invalidation. Active animations already
 perform stage work each frame and bump only after that work changes render
 inputs.
+
+### 2026-08-15 metadata-first quick-save startup
+
+The title screen formerly decoded the complete quick-save state before its first
+frame merely to decide whether CONTINUE was available and populate its hover
+card. Startup now reads the bounded metadata prefix only. The preview WebP is
+loaded on the I/O task pool only after the player first hovers CONTINUE; a save
+without a preview keeps the text-only card instead of decoding state for a
+background fallback. Clicking CONTINUE remains the point where the complete
+state is decoded and restored.
+
+`cargo bench --bench save_preview -- --quick` compared both codec paths over the
+same 4,239,346-byte save containing 50,000 representative local variables:
+
+| Startup save operation | Median |
+|---|---:|
+| Complete state decode | 3.6236 ms |
+| Metadata prefix inspection | 46.491 ns |
+
+The roughly 77,900-fold codec difference excludes filesystem I/O because both
+inputs were already memory-resident. On disk, the new path additionally avoids
+reading the state payload at startup, so its absolute benefit scales with save
+size and storage speed. No renderer quality, frame-rate, or asset-prefetch
+policy changed in this pass.
