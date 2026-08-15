@@ -39,6 +39,8 @@ cargo dev projects/test-project
 | `cargo validate <工程>` | 不打开窗口校验工程 |
 | `cargo dev <工程>` | 使用开发工具和热重载运行工程 |
 | `cargo dev <工程> --sync` | 跟随已打开的 LetsGal 工程 |
+| `cargo assets --pack <工程>` | 只构建加密 Hakutaku 资源包 |
+| `cargo assets --remap <工程> <旧=新>...` | 安全迁移转换后的资源引用 |
 | `cargo bundle <工程>` | 构建可分发游戏 |
 | `cargo configure` | 配置内置内容适配器与运行能力 |
 | `cargo perf <工程>` | 采集运行时性能样本 |
@@ -59,10 +61,10 @@ cargo dev projects/test-project
 4. 使用 `cargo bundle <工程>` 构建发行版。
 5. 运行生成的发行版验收，再分发完整输出目录。
 
-默认发行目录是 `target/release-package/`：
+默认发行目录是 `target/bundle/`：
 
 ```text
-target/release-package/
+target/bundle/
 ├── keine[.exe]
 ├── game.haku
 └── data/
@@ -72,9 +74,10 @@ target/release-package/
 直接启动发行版：Windows 双击 `keine.exe`，macOS/Linux 在终端运行 `./keine`。
 可执行文件会按自身位置寻找同目录的 `game.haku`，不依赖当前工作目录。
 
-`cargo bundle` 会自动调用 Hakutaku，游戏开发者不需要单独运行打包器。第一次打包会
-创建 `.keine/publisher.hakutaku-key`；请备份它，并且不要随游戏分发。保留上一版
-输出时，后续打包会复用未变化的内容 segment。
+`cargo assets --pack` 只在 `target/package/` 下生成 `game.haku` 与
+`data/*.taku`，不会构建或复制引擎。`cargo bundle` 复用同一资源打包流程，再构建并
+组装匹配的运行时。首次需要发布身份时会创建 `.keine/publisher.hakutaku-key`；请备份
+它，并且不要随游戏分发。保留上一版输出时，后续打包会复用未变化的内容 segment。
 
 生成 macOS 应用包：
 

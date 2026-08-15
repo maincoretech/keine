@@ -1,7 +1,7 @@
 //! Embeds the two Hakutaku runtime key shares and publisher public key.
 //!
 //! Development builds use all-zero placeholders and cannot open release
-//! packages. `keine package` supplies all three files to the hardened engine
+//! packages. `keine bundle` supplies all three files to the hardened engine
 //! build; neither file contains the complete AES root key by itself.
 
 use std::env;

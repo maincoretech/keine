@@ -3,7 +3,7 @@
 #[cfg(feature = "publisher")]
 mod compiler;
 #[cfg(feature = "publisher")]
-mod package;
+mod publisher;
 mod render;
 #[cfg(feature = "publisher")]
 mod resource_migration;

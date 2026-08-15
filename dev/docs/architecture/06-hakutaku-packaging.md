@@ -2,6 +2,25 @@
 
 > 状态：Kēne 直接固定依赖 `maincoretech/hakutaku`。不保留 Hexz 回退或兼容层。
 
+## 命令边界
+
+`cargo assets --pack <project>` 只编译项目内容并生成 Hakutaku 资源包：
+
+```text
+target/package/
+├── game.haku
+└── data/
+    └── <content-id>.taku
+```
+
+它不生成运行时 key shares、不调用 Cargo 构建引擎，也不复制可执行文件、图标或平台动态库。
+`cargo assets --remap` 只负责事务化迁移项目内的资源引用。`cargo bundle <project>` 才复用
+资源打包阶段、构建与身份匹配的 hardened 引擎，并组装完整可运行发行目录；benchmark 也只属于
+bundle。
+
+独立资源包仍绑定 publisher identity；它只能由嵌入同一 identity 运行时材料的发行引擎打开，
+并不是可由普通开发版引擎通用加载的无密钥归档。
+
 ## 发布布局
 
 `cargo bundle <project>` 生成：

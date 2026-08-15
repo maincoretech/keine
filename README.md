@@ -40,9 +40,10 @@ are unavailable. The visual acceptance checklist is in
 | `cargo validate <project>` | Validate a project without opening a window |
 | `cargo dev <project>` | Run a project with development tools and hot reload |
 | `cargo dev <project> --sync` | Follow an open LetsGal project |
+| `cargo assets --pack <project>` | Build only the encrypted Hakutaku resource package |
+| `cargo assets --remap <project> <old=new>...` | Safely migrate converted asset references |
 | `cargo bundle <project>` | Build a distributable game |
 | `cargo bundle <project> --benchmark` | Build a separate `-benchmark` performance package |
-| `cargo bundle --remap-assets <project> <old=new>...` | Safely migrate converted asset references |
 | `cargo configure` | Configure built-in content adapters and runtime capabilities |
 | `cargo perf <project>` | Capture a runtime performance sample |
 
@@ -63,10 +64,10 @@ workflow is:
 4. Build the release with `cargo bundle <project>`.
 5. Run the generated release before distributing the complete output directory.
 
-The default release is written to `target/release-package/`:
+The default release is written to `target/bundle/`:
 
 ```text
-target/release-package/
+target/bundle/
 ├── keine[.exe]
 ├── game.haku
 └── data/
@@ -77,8 +78,10 @@ Start the release directly: double-click `keine.exe` on Windows, or run
 `./keine` on macOS/Linux. The executable locates the sibling `game.haku`
 without depending on the current working directory.
 
-`cargo bundle` invokes Hakutaku automatically; game developers do not need to
-run a separate packer. The first bundle creates
+`cargo assets --pack` writes only `game.haku` and `data/*.taku` under
+`target/package/`; it never builds or copies an engine. `cargo bundle` reuses
+the same asset-pack pipeline and then builds and assembles the matching
+runtime. The first operation that needs a publisher identity creates
 `.keine/publisher.hakutaku-key`. Back up this file and keep it outside the
 distributed game. Later bundles reuse unchanged content segments when the
 previous output is available.
@@ -96,10 +99,10 @@ without adding a runtime fallback:
 
 ```bash
 # Preview the path and size changes, then ask for confirmation.
-cargo bundle --remap-assets path/to/project wav=opus png=webp
+cargo assets --remap path/to/project wav=opus png=webp
 
 # Print the same preview and apply it without prompting.
-cargo bundle --remap-assets path/to/project wav=opus png=webp -y
+cargo assets --remap path/to/project wav=opus png=webp -y
 ```
 
 Every converted target must already exist beside its source. The preview shows

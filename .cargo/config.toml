@@ -18,7 +18,9 @@ perf = "run --release --features video-native,video-ffmpeg -- benchmark"
 # and report startup medians/p95 without including Cargo in the measurements.
 startup-perf = "run --release --features startup-metrics -- benchmark-startup"
 validate = "run -- check"
+# Publisher-only asset operations. Packing writes Hakutaku content without
+# building an engine; remapping updates project references transactionally.
+assets = "run --release --no-default-features --features publisher --target-dir target/publisher-runner -- assets"
 # Keep the bundle runner outside target/release: Windows cannot replace a
 # running keine.exe when the child build produces the hardened game engine.
-# `bundle` deliberately avoids Cargo's built-in `package` command.
-bundle = "run --release --no-default-features --features publisher --target-dir target/package-runner -- package"
+bundle = "run --release --no-default-features --features publisher --target-dir target/publisher-runner -- bundle"

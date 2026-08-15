@@ -30,7 +30,7 @@ use crate::ui::user_input::UserInputCaretBlink;
 
 /// Raises the cost of runtime extraction for packaged builds.
 ///
-/// Only the `keine package` engine build compiles with the `hardened`
+/// Only the `keine bundle` engine build compiles with the `hardened`
 /// feature, so `cargo dev` and CI runner builds remain fully debuggable.
 /// None of this is DRM — a determined attacker can patch the binary or dump
 /// memory another way — it only closes the trivial "attach a debugger and

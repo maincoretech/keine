@@ -14,7 +14,7 @@ cargo bundle projects/test-project --benchmark
 ```
 
 The output directory is always suffixed `-benchmark` (the default is
-`target/release-package-benchmark`). Double-click `keine.exe` once on Windows,
+`target/bundle-benchmark`). Double-click `keine.exe` once on Windows,
 or run `./keine` once on macOS/Linux. The package writes
 `keine-benchmark-report.txt` beside the executable after completing:
 
@@ -42,7 +42,7 @@ option disabled and do not build or publish benchmark packages.
 
 ### 2026-08-15 portable-package verification
 
-The first complete `release-package-benchmark` run on the M5 Pro reference
+The first complete portable benchmark run on the M5 Pro reference
 machine produced the report successfully. Startup median/p95 was 0.86/0.89 ms
 for project open, 127.38/165.21 ms for app build, 233.44/751.07 ms for first
 frame, and 236.24/754.34 ms for the interactive title frame; the retained first

@@ -8,7 +8,8 @@ use anyhow::{Context, Result};
 
 use crate::ui::performance::BenchmarkTarget;
 
-const DEFAULT_PACKAGE_OUTPUT: &str = "target/release-package";
+const DEFAULT_ASSET_PACKAGE_OUTPUT: &str = "target/package";
+const DEFAULT_BUNDLE_OUTPUT: &str = "target/bundle";
 pub(crate) const BENCHMARK_MARKER: &str = "keine-benchmark.conf";
 pub(crate) const BENCHMARK_REPORT_FILE: &str = "keine-benchmark-report.txt";
 
@@ -62,7 +63,11 @@ pub(super) enum CliCommand {
     Check {
         project: PathBuf,
     },
-    Package {
+    AssetsPack {
+        project: PathBuf,
+        output: PathBuf,
+    },
+    Bundle {
         project: PathBuf,
         output: PathBuf,
         benchmark: bool,
@@ -117,10 +122,16 @@ const COMMANDS: &[CommandHelp] = &[
         summary: "Validate without opening a window",
     },
     CommandHelp {
-        binary_name: "package",
+        binary_name: "assets",
+        cargo_name: "assets",
+        args: "--pack <project> [--output <dir>] | --remap <project> <old=new>... [-y]",
+        summary: "Pack project assets or remap their references",
+    },
+    CommandHelp {
+        binary_name: "bundle",
         cargo_name: "bundle",
-        args: "<project> [--output <dir>] [--benchmark] | --remap-assets <project> <old=new>... [-y]",
-        summary: "Package a release or safely remap asset references",
+        args: "<project> [--output <dir>] [--benchmark]",
+        summary: "Build a complete distributable game",
     },
     CommandHelp {
         binary_name: "dev",
@@ -184,7 +195,11 @@ pub(super) fn parse(args: &[OsString]) -> Result<CliCommand> {
             require_no_extra_args(args, 2, "keine check <project>")?;
             Ok(CliCommand::Check { project })
         }
-        Some("package") => parse_package(args),
+        Some("assets") => parse_assets(args),
+        Some("bundle") => parse_bundle(args),
+        Some("package") => anyhow::bail!(
+            "`keine package` was split by responsibility; use `keine assets --pack <project>` for a resource package or `keine bundle <project>` for a complete game"
+        ),
         Some("dev") => parse_development(args),
         Some("benchmark") => parse_benchmark(args),
         Some("benchmark-startup") => parse_startup_benchmark(args),
@@ -200,14 +215,45 @@ pub(super) fn parse(args: &[OsString]) -> Result<CliCommand> {
     }
 }
 
-fn parse_package(args: &[OsString]) -> Result<CliCommand> {
-    if args
-        .get(1)
-        .is_some_and(|argument| argument == "--remap-assets")
-    {
-        return parse_asset_remap(args);
+fn parse_assets(args: &[OsString]) -> Result<CliCommand> {
+    match args.get(1).and_then(|argument| argument.to_str()) {
+        Some("--pack") => parse_asset_pack(args),
+        Some("--remap") => parse_asset_remap(args),
+        Some(argument) => anyhow::bail!(
+            "unknown assets operation {argument:?}; use `keine assets --pack ...` or `keine assets --remap ...`"
+        ),
+        None => anyhow::bail!(
+            "missing assets operation; use `keine assets --pack ...` or `keine assets --remap ...`"
+        ),
     }
-    const USAGE: &str = "keine package <project> [--output <dir>] [--benchmark]";
+}
+
+fn parse_asset_pack(args: &[OsString]) -> Result<CliCommand> {
+    const USAGE: &str = "keine assets --pack <project> [--output <dir>]";
+    let project = required_path(args, 2, USAGE)?;
+    let mut output = None;
+    let mut index = 3;
+    while index < args.len() {
+        match args[index].to_str() {
+            Some("--output") if output.is_none() => {
+                let value = args.get(index + 1).filter(|value| !value.is_empty());
+                output = Some(PathBuf::from(value.with_context(|| {
+                    format!("--output requires a path argument; usage: {USAGE}")
+                })?));
+                index += 2;
+            }
+            Some(argument) => anyhow::bail!("unexpected argument {argument:?}; usage: {USAGE}"),
+            None => anyhow::bail!("assets argument is not UTF-8; usage: {USAGE}"),
+        }
+    }
+    Ok(CliCommand::AssetsPack {
+        project,
+        output: output.unwrap_or_else(|| PathBuf::from(DEFAULT_ASSET_PACKAGE_OUTPUT)),
+    })
+}
+
+fn parse_bundle(args: &[OsString]) -> Result<CliCommand> {
+    const USAGE: &str = "keine bundle <project> [--output <dir>] [--benchmark]";
     let project = required_path(args, 1, USAGE)?;
     let mut output = None;
     let mut benchmark = false;
@@ -226,14 +272,14 @@ fn parse_package(args: &[OsString]) -> Result<CliCommand> {
                 index += 1;
             }
             Some(argument) => anyhow::bail!("unexpected argument {argument:?}; usage: {USAGE}"),
-            None => anyhow::bail!("package argument is not UTF-8; usage: {USAGE}"),
+            None => anyhow::bail!("bundle argument is not UTF-8; usage: {USAGE}"),
         }
     }
-    let mut output = output.unwrap_or_else(|| PathBuf::from(DEFAULT_PACKAGE_OUTPUT));
+    let mut output = output.unwrap_or_else(|| PathBuf::from(DEFAULT_BUNDLE_OUTPUT));
     if benchmark {
         output = benchmark_output_path(&output)?;
     }
-    Ok(CliCommand::Package {
+    Ok(CliCommand::Bundle {
         project,
         output,
         benchmark,
@@ -253,7 +299,7 @@ fn benchmark_output_path(output: &Path) -> Result<PathBuf> {
 }
 
 fn parse_asset_remap(args: &[OsString]) -> Result<CliCommand> {
-    const USAGE: &str = "keine package --remap-assets <project> <old=new>... [-y]";
+    const USAGE: &str = "keine assets --remap <project> <old=new>... [-y]";
     let project = required_path(args, 2, USAGE)?;
     let mut rules = Vec::new();
     let mut yes = false;
@@ -498,9 +544,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn benchmark_package_uses_a_separate_suffixed_directory() {
+    fn benchmark_bundle_uses_a_separate_suffixed_directory() {
         let command = parse(&[
-            "package".into(),
+            "bundle".into(),
             "projects/test-project".into(),
             "--output".into(),
             "target/colleague".into(),
@@ -509,7 +555,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             command,
-            CliCommand::Package {
+            CliCommand::Bundle {
                 output,
                 benchmark: true,
                 ..
@@ -518,16 +564,45 @@ mod tests {
     }
 
     #[test]
-    fn normal_package_keeps_its_original_directory() {
-        let command = parse(&["package".into(), "projects/test-project".into()]).unwrap();
+    fn normal_bundle_keeps_its_original_directory() {
+        let command = parse(&["bundle".into(), "projects/test-project".into()]).unwrap();
         assert!(matches!(
             command,
-            CliCommand::Package {
+            CliCommand::Bundle {
                 output,
                 benchmark: false,
                 ..
-            } if output == Path::new(DEFAULT_PACKAGE_OUTPUT)
+            } if output == Path::new(DEFAULT_BUNDLE_OUTPUT)
         ));
+    }
+
+    #[test]
+    fn assets_pack_has_a_resource_only_default_output() {
+        let command = parse(&[
+            "assets".into(),
+            "--pack".into(),
+            "projects/test-project".into(),
+        ])
+        .unwrap();
+        assert!(matches!(
+            command,
+            CliCommand::AssetsPack { output, .. }
+                if output == Path::new(DEFAULT_ASSET_PACKAGE_OUTPUT)
+        ));
+    }
+
+    #[test]
+    fn assets_modes_are_explicit_and_mutually_exclusive() {
+        assert!(parse(&["assets".into()]).is_err());
+        assert!(
+            parse(&[
+                "assets".into(),
+                "--pack".into(),
+                "projects/test-project".into(),
+                "--remap".into(),
+            ])
+            .is_err()
+        );
     }
 
     #[test]

@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       project:
-        description: Project directory to package
+        description: Project directory to bundle
         required: true
         default: projects/test-project
       benchmark:
@@ -19,7 +19,7 @@ permissions:
   contents: read
 
 jobs:
-  package:
+  bundle:
     name: ${{ matrix.name }}
     strategy:
       fail-fast: false
@@ -97,9 +97,9 @@ jobs:
         with:
           enabled: ${{ contains(env.KEINE_RELEASE_FEATURES, 'video-ffmpeg') }}
           windows-triplet: ${{ matrix.triplet }}
-      - name: Build package runner
-        # A separate target dir keeps the running runner out of the engine
-        # rebuild that `keine package` performs inside target/release.
+      - name: Build publisher runner
+        # A separate target dir keeps the running publisher out of the engine
+        # rebuild that `keine bundle` performs inside target/release.
         run: cargo build --release --locked --no-default-features --features publisher --target-dir target/runner
       - name: Restore publisher identity
         shell: bash
@@ -113,14 +113,14 @@ jobs:
           umask 077
           mkdir -p target/release-secrets
           printf '%s' "$HAKUTAKU_IDENTITY_BASE64" | openssl base64 -d -A -out target/release-secrets/publisher.hakutaku-key
-      - name: Package encrypted release
+      - name: Bundle encrypted release
         shell: bash
         env:
           PROJECT_PATH: ${{ steps.project.outputs.path }}
           KEINE_HAKUTAKU_IDENTITY: ${{ github.workspace }}/target/release-secrets/publisher.hakutaku-key
           BENCHMARK_PACKAGE: ${{ inputs.benchmark }}
         run: |
-          args=(package "$PROJECT_PATH" --output "target/${{ matrix.artifact }}")
+          args=(bundle "$PROJECT_PATH" --output "target/${{ matrix.artifact }}")
           if [[ "$BENCHMARK_PACKAGE" == "true" ]]; then
             args+=(--benchmark)
           fi
@@ -158,7 +158,7 @@ jobs:
   publish-benchmark:
     name: Publish benchmark release
     if: inputs.benchmark
-    needs: package
+    needs: bundle
     runs-on: ubuntu-latest
     permissions:
       actions: read

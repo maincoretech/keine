@@ -1,7 +1,8 @@
-//! `cargo bundle` — the single command-based packaging pipeline shared by
-//! local builds and CI. It stages a project (native or LetsGal), compiles
-//! `.keine/compiled/program.bin`, builds a content-trimmed release engine,
-//! packs an encrypted Hakutaku release, and assembles a runnable output directory.
+//! Publisher asset-pack and distributable-bundle pipelines.
+//!
+//! Asset packing writes only compiled Hakutaku content. Bundling remains a
+//! separate operation that builds a content-trimmed engine and assembles it
+//! with those resources.
 
 use std::env;
 use std::fs;
@@ -29,12 +30,59 @@ fn project_manifest_error(project: &Path) -> String {
     )
 }
 
-pub fn package_project(
+struct PreparedProject {
+    _staging: TempDir,
+    staged: PathBuf,
+    identity: Identity,
+}
+
+pub fn pack_project(
+    project: &Path,
+    loader: &keine_loader::LoaderRegistry,
+    output: &Path,
+) -> Result<()> {
+    let output = publisher_output_path(output)?;
+    let prepared = prepare_project(project, loader)?;
+    publish_prepared(&prepared.staged, &prepared.identity, &output, |_| Ok(()))?;
+    println!("{}", output.display());
+    Ok(())
+}
+
+pub fn bundle_project(
     project: &Path,
     loader: &keine_loader::LoaderRegistry,
     output: &Path,
     benchmark: bool,
 ) -> Result<()> {
+    let output = publisher_output_path(output)?;
+    let prepared = prepare_project(project, loader)?;
+    let mut features = detect_features(&prepared.staged)?;
+    if benchmark {
+        if !features.is_empty() {
+            features.push(',');
+        }
+        features.push_str("startup-metrics");
+    }
+    println!("content features: {features}");
+    let runtime_keys = prepared.identity.runtime_key_material()?;
+    let key_share_a = prepared._staging.path().join("hakutaku-key-share-a.bin");
+    let key_share_b = prepared._staging.path().join("hakutaku-key-share-b.bin");
+    let public_key = prepared._staging.path().join("hakutaku-public-key.bin");
+    fs::write(&key_share_a, runtime_keys.key_share_a)?;
+    fs::write(&key_share_b, runtime_keys.key_share_b)?;
+    fs::write(&public_key, runtime_keys.public_key)?;
+    let engine = build_engine(&features, &key_share_a, &key_share_b, &public_key)?;
+    publish_prepared(&prepared.staged, &prepared.identity, &output, |assembled| {
+        assemble(assembled, &features, &engine, benchmark)
+    })?;
+    println!("{}", output.display());
+    Ok(())
+}
+
+fn prepare_project(
+    project: &Path,
+    loader: &keine_loader::LoaderRegistry,
+) -> Result<PreparedProject> {
     if !project.join("config.yaml").is_file() && !project.join("project.json").is_file() {
         bail!("{}", project_manifest_error(project));
     }
@@ -42,7 +90,6 @@ pub fn package_project(
         bail!("project directory does not exist: {}", project.display());
     }
     let identity = load_or_create_identity(project)?;
-    let output = release_output_path(output)?;
 
     let staging = tempdir().context("failed to create staging directory")?;
     let staged = staging.path().join("project");
@@ -63,35 +110,29 @@ pub fn package_project(
         .languages(&config.adapter.script)
         .context("failed to select script adapter")?;
     build_program(&config, &content, &languages)?;
+    Ok(PreparedProject {
+        _staging: staging,
+        staged,
+        identity,
+    })
+}
 
-    let mut features = detect_features(&staged)?;
-    if benchmark {
-        if !features.is_empty() {
-            features.push(',');
-        }
-        features.push_str("startup-metrics");
-    }
-    println!("content features: {features}");
-    let runtime_keys = identity.runtime_key_material()?;
-    let key_share_a = staging.path().join("hakutaku-key-share-a.bin");
-    let key_share_b = staging.path().join("hakutaku-key-share-b.bin");
-    let public_key = staging.path().join("hakutaku-public-key.bin");
-    fs::write(&key_share_a, runtime_keys.key_share_a)?;
-    fs::write(&key_share_b, runtime_keys.key_share_b)?;
-    fs::write(&public_key, runtime_keys.public_key)?;
-    let engine = build_engine(&features, &key_share_a, &key_share_b, &public_key)?;
-
-    let output_parent = output.parent().context("release output has no parent")?;
+fn publish_prepared(
+    staged: &Path,
+    identity: &Identity,
+    output: &Path,
+    finish: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
+    let output_parent = output.parent().context("publisher output has no parent")?;
     fs::create_dir_all(output_parent)?;
     let assembled = Builder::new()
-        .prefix(".keine-package-")
+        .prefix(".keine-publisher-")
         .tempdir_in(output_parent)
-        .context("failed to create release assembly directory")?;
-    seed_previous_release(&output, assembled.path())?;
-    pack_staging(&staged, assembled.path(), &identity)?;
-    assemble(assembled.path(), &features, &engine, benchmark)?;
-    publish_directory(assembled, &output)?;
-    println!("{}", output.display());
+        .context("failed to create publisher assembly directory")?;
+    seed_previous_release(output, assembled.path())?;
+    pack_staging(staged, assembled.path(), identity)?;
+    finish(assembled.path())?;
+    publish_directory(assembled, output)?;
     Ok(())
 }
 
@@ -117,14 +158,14 @@ fn load_or_create_identity_at(path: &Path) -> Result<Identity> {
     Ok(identity)
 }
 
-fn release_output_path(output: &Path) -> Result<PathBuf> {
+fn publisher_output_path(output: &Path) -> Result<PathBuf> {
     let mut relative = PathBuf::new();
     for component in output.components() {
         match component {
             Component::CurDir => {}
             Component::Normal(part) => relative.push(part),
             _ => bail!(
-                "release output must be a relative child of target/: {}",
+                "publisher output must be a relative child of target/: {}",
                 output.display()
             ),
         }
@@ -134,17 +175,20 @@ fn release_output_path(output: &Path) -> Result<PathBuf> {
     let first_directory = components.next();
     if !below_target || first_directory.is_none() {
         bail!(
-            "release output must be a named directory below target/, not {}",
+            "publisher output must be a named directory below target/, not {}",
             output.display()
         );
     }
     if matches!(
         first_directory,
         Some(Component::Normal(name))
-            if matches!(name.to_str(), Some("debug" | "release" | "package-runner" | "runner"))
+            if matches!(
+                name.to_str(),
+                Some("debug" | "release" | "package-runner" | "publisher-runner" | "runner")
+            )
     ) {
         bail!(
-            "release output overlaps a Cargo build directory: {}",
+            "publisher output overlaps a Cargo build directory: {}",
             output.display()
         );
     }
@@ -620,13 +664,15 @@ mod tests {
     }
 
     #[test]
-    fn release_output_cannot_select_target_itself_or_escape_it() {
-        assert!(release_output_path(Path::new("target/release-package")).is_ok());
-        assert!(release_output_path(Path::new("target")).is_err());
-        assert!(release_output_path(Path::new("target/../outside")).is_err());
-        assert!(release_output_path(Path::new("/tmp/release")).is_err());
-        assert!(release_output_path(Path::new("target/release")).is_err());
-        assert!(release_output_path(Path::new("target/debug/package")).is_err());
+    fn publisher_output_cannot_select_target_itself_or_escape_it() {
+        assert!(publisher_output_path(Path::new("target/bundle")).is_ok());
+        assert!(publisher_output_path(Path::new("target/package")).is_ok());
+        assert!(publisher_output_path(Path::new("target")).is_err());
+        assert!(publisher_output_path(Path::new("target/../outside")).is_err());
+        assert!(publisher_output_path(Path::new("/tmp/release")).is_err());
+        assert!(publisher_output_path(Path::new("target/release")).is_err());
+        assert!(publisher_output_path(Path::new("target/debug/package")).is_err());
+        assert!(publisher_output_path(Path::new("target/publisher-runner/output")).is_err());
     }
 
     #[test]
@@ -692,6 +738,24 @@ mod tests {
         assert!(!output.join("run.sh").exists());
         assert!(!output.join("run.bat").exists());
         assert!(output.join(crate::runtime::BENCHMARK_MARKER).is_file());
+    }
+
+    #[test]
+    fn asset_pack_contains_no_engine_or_bundle_metadata() {
+        let root = tempdir().unwrap();
+        let staged = root.path().join("staged");
+        let output = root.path().join("package");
+        fs::create_dir(&staged).unwrap();
+        fs::write(staged.join("asset.txt"), b"asset").unwrap();
+        let identity = Identity::generate().unwrap();
+
+        publish_prepared(&staged, &identity, &output, |_| Ok(())).unwrap();
+
+        assert!(output.join("game.haku").is_file());
+        assert!(!output.join("keine").exists());
+        assert!(!output.join("keine.exe").exists());
+        assert!(!output.join("keine.png").exists());
+        assert!(!output.join(crate::runtime::BENCHMARK_MARKER).exists());
     }
 
     #[test]

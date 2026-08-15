@@ -41,7 +41,7 @@ bench = false
 default = ["audio-all", "ui-sounds"]
 audio-all = ["bundled-opus", "audio-wav", "audio-mp3", "audio-vorbis", "audio-flac"]
 ui-sounds = ["bundled-opus"]
-# Only the `keine package` engine build enables this: developer builds stay
+# Only the `keine bundle` engine build enables this: developer builds stay
 # fully debuggable. Raises the cost of runtime key extraction (debugger
 # attach, core dumps), see `platform::apply_hardening`.
 hardened = ["dep:libc", "dep:windows-sys"]
@@ -206,7 +206,7 @@ objc2-metal = { version = "0.3.2", default-features = false, optional = true, fe
 dispatch2 = { version = "0.3.1", optional = true }
 wgpu = { workspace = true, optional = true }
 
-# Hardening is compiled in only by `keine package` (feature `hardened`); the
+# Hardening is compiled in only by `keine bundle` (feature `hardened`); the
 # dependencies stay target-gated so unused-crate-dependencies never fires on
 # platforms that cannot use them.
 [target.'cfg(unix)'.dependencies]

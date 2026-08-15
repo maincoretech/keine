@@ -148,13 +148,28 @@ fn execute_command(
         CliCommand::Configure => {
             anyhow::bail!("engine configuration must run before project setup")
         }
-        CliCommand::Package {
+        CliCommand::AssetsPack { project, output } => {
+            #[cfg(feature = "publisher")]
+            return crate::publisher::pack_project(
+                &resolve_project_path(project),
+                &loader,
+                &output,
+            );
+            #[cfg(not(feature = "publisher"))]
+            {
+                let _ = (project, output);
+                anyhow::bail!(
+                    "publisher tools are not compiled; run `cargo assets --pack <project>`"
+                );
+            }
+        }
+        CliCommand::Bundle {
             project,
             output,
             benchmark,
         } => {
             #[cfg(feature = "publisher")]
-            return crate::package::package_project(
+            return crate::publisher::bundle_project(
                 &resolve_project_path(project),
                 &loader,
                 &output,
@@ -186,7 +201,7 @@ fn execute_command(
             #[cfg(not(feature = "publisher"))]
             {
                 let _ = (project, rules, yes);
-                anyhow::bail!("asset migration tools are not compiled; run `cargo bundle --help`");
+                anyhow::bail!("asset migration tools are not compiled; run `cargo assets --help`");
             }
         }
         CliCommand::Check { project } => (project, ProjectAction::Check),
@@ -1274,14 +1289,14 @@ mod tests {
     }
 
     #[test]
-    fn bundle_asset_remap_accepts_rules_and_explicit_yes() {
+    fn assets_remap_accepts_rules_and_explicit_yes() {
         let CliCommand::RemapAssets {
             project,
             rules,
             yes,
         } = parse_cli(&args(&[
-            "package",
-            "--remap-assets",
+            "assets",
+            "--remap",
             "/tmp/project",
             "wav=opus",
             "png=webp",
@@ -1303,12 +1318,12 @@ mod tests {
     }
 
     #[test]
-    fn bundle_asset_remap_requires_rules_and_rejects_duplicate_yes() {
-        assert!(parse_cli(&args(&["package", "--remap-assets", "/tmp/project"])).is_err());
+    fn assets_remap_requires_rules_and_rejects_duplicate_yes() {
+        assert!(parse_cli(&args(&["assets", "--remap", "/tmp/project"])).is_err());
         assert!(
             parse_cli(&args(&[
-                "package",
-                "--remap-assets",
+                "assets",
+                "--remap",
                 "/tmp/project",
                 "wav=opus",
                 "-y",

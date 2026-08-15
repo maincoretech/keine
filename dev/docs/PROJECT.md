@@ -114,7 +114,7 @@ keine/
 `assets/icons/keine.png` 是唯一高清透明母版。运行时嵌入 256 px PNG，供 Windows 与
 Linux/X11 窗口使用；macOS 裸二进制开发运行通过 AppKit 设置同一 PNG 的 Dock 图标；
 Windows 构建由 `build.rs` 将 ICO 嵌入可执行文件；macOS app bundle 由
-`bundle-macos.sh` 在 `cargo bundle` 的加密发行产物外安装 ICNS。`keine package`
+`bundle-macos.sh` 在 `cargo bundle` 的加密发行产物外安装 ICNS。`keine bundle`
 只携带 256 px PNG，供 Linux
 `.desktop`/hicolor 使用；Android adaptive icon 与 iOS asset catalog 的后续平台 launcher
 应从仓库内母版生成自己的尺寸集合。
