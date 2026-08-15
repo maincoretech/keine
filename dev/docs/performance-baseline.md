@@ -32,7 +32,12 @@ memory-counter feature, hidden-window mode, automatic exit, and disabled
 persistence exist only in the separately built benchmark package. Ordinary
 releases and tests follow their existing paths unchanged. GitHub's manual
 Release workflow exposes the same `benchmark` switch and uploads artifacts such
-as `keine-windows-x64-benchmark`.
+as `keine-windows-x64-benchmark`. On GitHub, open **Actions**, select the
+specific **Release** workflow (the **All workflows** page does not show its run
+button), choose **Run workflow**, and leave `benchmark` enabled. After all three
+platform jobs pass, CI updates the rolling `benchmark-latest` prerelease with
+one ZIP per platform; testers do not need access to the workflow-run artifact
+page.
 
 ### 2026-08-15 portable-package verification
 

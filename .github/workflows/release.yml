@@ -13,7 +13,7 @@ on:
         description: Build a separate self-running performance benchmark package
         required: true
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: read
@@ -154,3 +154,57 @@ jobs:
           path: target/${{ steps.artifact.outputs.name }}/
           if-no-files-found: error
           retention-days: 14
+
+  publish-benchmark:
+    name: Publish benchmark release
+    if: inputs.benchmark
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: '*-benchmark'
+          path: dist
+      - name: Create standalone downloads
+        shell: bash
+        run: |
+          shopt -s nullglob
+          packages=(dist/*-benchmark)
+          if [[ "${#packages[@]}" -ne 3 ]]; then
+            echo "Expected three benchmark packages, found ${#packages[@]}" >&2
+            exit 1
+          fi
+          mkdir bundles
+          for directory in "${packages[@]}"; do
+            name="$(basename "$directory")"
+            (cd "$directory" && zip -q -r "$GITHUB_WORKSPACE/bundles/$name.zip" .)
+          done
+      - name: Move rolling benchmark tag
+        id: release
+        shell: bash
+        run: |
+          git tag --force benchmark-latest "$GITHUB_SHA"
+          git push --force origin refs/tags/benchmark-latest
+          echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - name: Update rolling benchmark release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
+        with:
+          tag_name: benchmark-latest
+          target_commitish: ${{ github.sha }}
+          name: Kēne benchmark · ${{ steps.release.outputs.short_sha }}
+          body: |
+            Automated performance packages built from commit ${{ github.sha }}.
+
+            Download the package for your platform, extract it, and run
+            `keine.exe` on Windows or `keine` on macOS/Linux. The report is
+            written beside the executable.
+          prerelease: true
+          files: bundles/*-benchmark.zip
+          fail_on_unmatched_files: true
+          overwrite_files: true
