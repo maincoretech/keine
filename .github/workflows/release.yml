@@ -13,7 +13,7 @@ on:
         description: Build a separate self-running performance benchmark package
         required: true
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: read
