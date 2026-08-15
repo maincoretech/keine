@@ -7,6 +7,10 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
 
+use crate::runtime::GameSystemSet;
+use crate::runtime::resources::AssetLoadingGate;
+use crate::ui::title::TitleRoot;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BenchmarkTarget {
     Cursor(usize),
@@ -58,6 +62,196 @@ struct RenderSampleData {
 
 #[derive(Resource, Clone, Default)]
 struct RenderCaptureSamples(Arc<Mutex<RenderSampleData>>);
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct StartupSample {
+    pub(crate) project_ms: f64,
+    pub(crate) app_ms: f64,
+    pub(crate) first_frame_ms: f64,
+    pub(crate) interactive_ms: f64,
+    pub(crate) peak_rss_mib: Option<f64>,
+}
+
+struct StartupCaptureData {
+    process_started: Instant,
+    project_opened: Instant,
+    app_built: Option<Instant>,
+    first_frame: Option<Instant>,
+    latest_frame: Option<Instant>,
+    ready_after: Option<Instant>,
+    finished: bool,
+}
+
+#[derive(Resource, Clone)]
+pub(crate) struct StartupCapture(Arc<Mutex<StartupCaptureData>>);
+
+impl StartupCapture {
+    pub(crate) fn new(process_started: Instant, project_opened: Instant) -> Self {
+        Self(Arc::new(Mutex::new(StartupCaptureData {
+            process_started,
+            project_opened,
+            app_built: None,
+            first_frame: None,
+            latest_frame: None,
+            ready_after: None,
+            finished: false,
+        })))
+    }
+
+    pub(crate) fn mark_app_built(&self) {
+        self.0
+            .lock()
+            .expect("startup capture lock poisoned")
+            .app_built = Some(Instant::now());
+    }
+}
+
+pub(crate) fn install_startup_capture(app: &mut App, capture: StartupCapture) {
+    app.insert_resource(WinitSettings::continuous())
+        .insert_resource(capture.clone())
+        .add_systems(Update, capture_startup_performance.after(GameSystemSet::Ui));
+    if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+        render_app.insert_resource(capture).add_systems(
+            Render,
+            capture_startup_frame.in_set(RenderSystems::PostCleanup),
+        );
+    }
+}
+
+fn capture_startup_frame(capture: Res<StartupCapture>) {
+    let now = Instant::now();
+    let mut capture = capture.0.lock().expect("startup capture lock poisoned");
+    capture.first_frame.get_or_insert(now);
+    capture.latest_frame = Some(now);
+}
+
+fn capture_startup_performance(
+    capture: Res<StartupCapture>,
+    gate: Res<AssetLoadingGate>,
+    titles: Query<(), With<TitleRoot>>,
+    mut commands: Commands,
+) {
+    let now = Instant::now();
+    let mut capture = capture.0.lock().expect("startup capture lock poisoned");
+    if capture.finished {
+        return;
+    }
+    if capture.ready_after.is_none() {
+        if !gate.blocked && !titles.is_empty() {
+            capture.ready_after = Some(now);
+        }
+        return;
+    }
+    let ready_after = capture.ready_after.expect("ready timestamp was checked");
+    let Some(interactive) = capture.latest_frame.filter(|frame| *frame > ready_after) else {
+        return;
+    };
+    let sample = StartupSample::from_capture(&capture, interactive);
+    capture.finished = true;
+    drop(capture);
+    eprintln!("{}", sample.machine_line());
+    commands.write_message(AppExit::Success);
+}
+
+impl StartupSample {
+    fn from_capture(capture: &StartupCaptureData, interactive: Instant) -> Self {
+        let started = capture.process_started;
+        let elapsed_ms = |instant: Instant| instant.duration_since(started).as_secs_f64() * 1_000.0;
+        Self {
+            project_ms: elapsed_ms(capture.project_opened),
+            app_ms: elapsed_ms(capture.app_built.expect("app build must be recorded")),
+            first_frame_ms: elapsed_ms(capture.first_frame.expect("first frame must be recorded")),
+            interactive_ms: elapsed_ms(interactive),
+            peak_rss_mib: peak_rss_bytes().map(|bytes| bytes as f64 / 1_048_576.0),
+        }
+    }
+
+    pub(crate) fn machine_line(self) -> String {
+        format!(
+            "KEINE_STARTUP_SAMPLE project_ms={:.3} app_ms={:.3} first_frame_ms={:.3} interactive_ms={:.3} peak_rss_mib={:.3}",
+            self.project_ms,
+            self.app_ms,
+            self.first_frame_ms,
+            self.interactive_ms,
+            self.peak_rss_mib.unwrap_or_default(),
+        )
+    }
+
+    pub(crate) fn parse(output: &str) -> Option<Self> {
+        let line = output
+            .lines()
+            .find(|line| line.starts_with("KEINE_STARTUP_SAMPLE "))?;
+        let mut values = [None; 5];
+        for field in line.split_whitespace().skip(1) {
+            let (key, value) = field.split_once('=')?;
+            let value = value.parse::<f64>().ok()?;
+            match key {
+                "project_ms" => values[0] = Some(value),
+                "app_ms" => values[1] = Some(value),
+                "first_frame_ms" => values[2] = Some(value),
+                "interactive_ms" => values[3] = Some(value),
+                "peak_rss_mib" => values[4] = Some(value),
+                _ => return None,
+            }
+        }
+        Some(Self {
+            project_ms: values[0]?,
+            app_ms: values[1]?,
+            first_frame_ms: values[2]?,
+            interactive_ms: values[3]?,
+            peak_rss_mib: values[4].filter(|value| *value > 0.0),
+        })
+    }
+}
+
+#[cfg(all(feature = "startup-metrics", unix))]
+fn peak_rss_bytes() -> Option<u64> {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    // SAFETY: `getrusage` initializes the provided `rusage` when it returns 0.
+    let result = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+    if result != 0 {
+        return None;
+    }
+    // SAFETY: A successful `getrusage` call initialized the complete value.
+    let usage = unsafe { usage.assume_init() };
+    #[cfg(target_os = "macos")]
+    return u64::try_from(usage.ru_maxrss).ok();
+    #[cfg(not(target_os = "macos"))]
+    u64::try_from(usage.ru_maxrss)
+        .ok()
+        .and_then(|kib| kib.checked_mul(1_024))
+}
+
+#[cfg(all(feature = "startup-metrics", windows))]
+fn peak_rss_bytes() -> Option<u64> {
+    use windows_sys::Win32::System::ProcessStatus::{
+        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+    };
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+    let mut counters = PROCESS_MEMORY_COUNTERS {
+        cb: std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: The pseudo-handle is valid for this process and `counters`
+    // points to a correctly sized writable structure for the duration of the call.
+    let result = unsafe {
+        GetProcessMemoryInfo(
+            GetCurrentProcess(),
+            &mut counters,
+            std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+        )
+    };
+    (result != 0).then_some(counters.PeakWorkingSetSize as u64)
+}
+
+#[cfg(not(any(
+    all(feature = "startup-metrics", unix),
+    all(feature = "startup-metrics", windows)
+)))]
+fn peak_rss_bytes() -> Option<u64> {
+    None
+}
 
 pub(crate) fn install_runtime_capture(
     app: &mut App,
@@ -168,6 +362,13 @@ fn capture_runtime_performance(
         fonts.len(),
         font_bytes as f64 / 1_048_576.0,
     );
+    if let Some(bytes) = peak_rss_bytes() {
+        log::info!(
+            target: "keine::performance",
+            "MEMORY   | peak RSS {:.1} MiB",
+            bytes as f64 / 1_048_576.0,
+        );
+    }
     let mut render_passes = diagnostics
         .iter()
         .filter_map(|diagnostic| {
@@ -200,4 +401,29 @@ fn percentile(sorted: &[f64], percentile: f64) -> f64 {
     }
     let index = ((sorted.len() - 1) as f64 * percentile).round() as usize;
     sorted[index]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn startup_sample_line_round_trips_with_and_without_memory_metrics() {
+        let sample = StartupSample {
+            project_ms: 1.25,
+            app_ms: 132.5,
+            first_frame_ms: 263.75,
+            interactive_ms: 267.0,
+            peak_rss_mib: Some(205.5),
+        };
+        assert_eq!(StartupSample::parse(&sample.machine_line()), Some(sample));
+
+        let without_memory = "KEINE_STARTUP_SAMPLE project_ms=1 app_ms=2 first_frame_ms=3 interactive_ms=4 peak_rss_mib=0";
+        assert_eq!(
+            StartupSample::parse(without_memory)
+                .expect("valid startup sample")
+                .peak_rss_mib,
+            None
+        );
+    }
 }

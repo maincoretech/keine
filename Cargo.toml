@@ -45,6 +45,9 @@ ui-sounds = ["bundled-opus"]
 # fully debuggable. Raises the cost of runtime key extraction (debugger
 # attach, core dumps), see `platform::apply_hardening`.
 hardened = ["dep:libc", "dep:windows-sys"]
+# Benchmark-only process memory counters. Normal game builds do not include
+# the platform APIs or execute their sampling path.
+startup-metrics = ["dep:libc", "dep:windows-sys"]
 # Publisher-only compiler and Hakutaku packer. Release game engines deliberately
 # omit this feature and link only hakutaku-core through keine-loader.
 publisher = [
@@ -120,7 +123,7 @@ noyalib = { version = "0.0.15", default-features = false, features = ["std", "fa
 hakutaku-core = { git = "https://github.com/maincoretech/hakutaku", rev = "24c39ea" }
 hakutaku-pack = { git = "https://github.com/maincoretech/hakutaku", rev = "24c39ea" }
 libc = "0.2"
-windows-sys = { version = "0.61.2", default-features = false, features = ["Win32_System_Diagnostics_Debug"] }
+windows-sys = { version = "0.61.2", default-features = false, features = ["Win32_System_Diagnostics_Debug", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
 bevy = { version = "0.19", default-features = false }
 libwebp-sys = "0.14.4"
 futures-lite = "2"

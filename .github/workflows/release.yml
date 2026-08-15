@@ -9,6 +9,11 @@ on:
         description: Project directory to package
         required: true
         default: projects/test-project
+      benchmark:
+        description: Build a separate self-running performance benchmark package
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -76,6 +81,18 @@ jobs:
           source dev/scripts/audio-features.sh
           features="$(detect_audio_features "$PROJECT_PATH")"
           echo "KEINE_RELEASE_FEATURES=$features" >> "$GITHUB_ENV"
+      - name: Resolve artifact name
+        id: artifact
+        shell: bash
+        env:
+          BENCHMARK_PACKAGE: ${{ inputs.benchmark }}
+          ARTIFACT_BASE: ${{ matrix.artifact }}
+        run: |
+          artifact="$ARTIFACT_BASE"
+          if [[ "$BENCHMARK_PACKAGE" == "true" ]]; then
+            artifact="${artifact}-benchmark"
+          fi
+          echo "name=$artifact" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/setup-video
         with:
           enabled: ${{ contains(env.KEINE_RELEASE_FEATURES, 'video-ffmpeg') }}
@@ -101,10 +118,13 @@ jobs:
         env:
           PROJECT_PATH: ${{ steps.project.outputs.path }}
           KEINE_HAKUTAKU_IDENTITY: ${{ github.workspace }}/target/release-secrets/publisher.hakutaku-key
-        run: >-
-          target/runner/release/keine package
-          "$PROJECT_PATH"
-          --output target/${{ matrix.artifact }}
+          BENCHMARK_PACKAGE: ${{ inputs.benchmark }}
+        run: |
+          args=(package "$PROJECT_PATH" --output "target/${{ matrix.artifact }}")
+          if [[ "$BENCHMARK_PACKAGE" == "true" ]]; then
+            args+=(--benchmark)
+          fi
+          target/runner/release/keine "${args[@]}"
       - name: Remove publisher identity
         if: always()
         shell: bash
@@ -113,9 +133,9 @@ jobs:
         if: runner.os == 'Linux' && contains(env.KEINE_RELEASE_FEATURES, 'video-ffmpeg')
         shell: bash
         run: |
-          test -x "target/${{ matrix.artifact }}/keine"
-          test -d "target/${{ matrix.artifact }}/lib"
-          if LD_LIBRARY_PATH="target/${{ matrix.artifact }}/lib" ldd "target/${{ matrix.artifact }}/keine" | grep -q 'not found'; then
+          test -x "target/${{ steps.artifact.outputs.name }}/keine"
+          test -d "target/${{ steps.artifact.outputs.name }}/lib"
+          if LD_LIBRARY_PATH="target/${{ steps.artifact.outputs.name }}/lib" ldd "target/${{ steps.artifact.outputs.name }}/keine" | grep -q 'not found'; then
             echo 'Linux release has unresolved dynamic libraries' >&2
             exit 1
           fi
@@ -123,12 +143,12 @@ jobs:
         if: runner.os == 'Windows' && contains(env.KEINE_RELEASE_FEATURES, 'video-ffmpeg')
         shell: pwsh
         run: |
-          $root = 'target/${{ matrix.artifact }}'
+          $root = 'target/${{ steps.artifact.outputs.name }}'
           if (-not (Test-Path (Join-Path $root 'keine.exe'))) { throw 'keine.exe is missing' }
           if (-not (Get-ChildItem $root -Filter '*.dll')) { throw 'FFmpeg runtime DLLs are missing' }
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
-          name: ${{ matrix.artifact }}
-          path: target/${{ matrix.artifact }}/
+          name: ${{ steps.artifact.outputs.name }}
+          path: target/${{ steps.artifact.outputs.name }}/
           if-no-files-found: error
           retention-days: 14

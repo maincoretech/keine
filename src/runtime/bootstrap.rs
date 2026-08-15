@@ -2,7 +2,9 @@ use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use bevy::asset::io::AssetSourceId;
@@ -25,8 +27,8 @@ use keine_loader::{
 use crate::render::blur::{BlurCamera, BlurPlugin, DialogCamera, SceneBlurCamera, UiBlurCamera};
 use crate::runtime::GamePlugin;
 use crate::runtime::cli::{
-    BenchmarkOptions, CliCommand, InteractiveMode, help_or_version, parse as parse_cli,
-    resolve_project_path,
+    BenchmarkOptions, CliCommand, InteractiveMode, help_or_version, packaged_benchmark_command,
+    parse as parse_cli, resolve_project_path,
 };
 use crate::runtime::resources::{
     ContentProjectResource, DevelopmentSession, EditorSyncSession, GameConfigResource, GameState,
@@ -42,6 +44,8 @@ struct LaunchOptions {
     development: bool,
     editor_sync: bool,
     benchmark: Option<BenchmarkOptions>,
+    startup_capture: Option<crate::ui::performance::StartupCapture>,
+    hidden_window: bool,
     video: crate::scene::video::VideoSelection,
 }
 
@@ -57,11 +61,21 @@ pub fn run() {
 }
 
 pub fn run_cli() -> std::process::ExitCode {
+    let process_started = Instant::now();
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
     if let Some(code) = help_or_version(&args) {
         return code;
     }
-    let command = match parse_cli(&args) {
+    let parsed = if args.is_empty() {
+        match packaged_benchmark_command() {
+            Ok(Some(command)) => Ok(command),
+            Ok(None) => parse_cli(&args),
+            Err(error) => Err(error),
+        }
+    } else {
+        parse_cli(&args)
+    };
+    let command = match parsed {
         Ok(command) => command,
         Err(error) => {
             eprintln!("{error:#}\nrun `keine --help` for usage");
@@ -75,7 +89,7 @@ pub fn run_cli() -> std::process::ExitCode {
         super::configure::configure(&loader)
     } else {
         super::configure::apply_saved_configuration(&mut loader)
-            .and_then(|video| execute_command(loader, command, video))
+            .and_then(|video| execute_command(loader, command, video, process_started))
     };
 
     match result {
@@ -96,6 +110,7 @@ pub fn run_cli() -> std::process::ExitCode {
 }
 
 pub fn run_with_loader(loader: LoaderRegistry) {
+    let process_started = Instant::now();
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
     let parsed = parse_cli(&args);
     let uses_startup_error_page = parsed
@@ -106,6 +121,7 @@ pub fn run_with_loader(loader: LoaderRegistry) {
             loader,
             command,
             crate::scene::video::VideoSelection::Automatic,
+            process_started,
         )
     });
     if let Err(error) = result {
@@ -124,6 +140,7 @@ fn execute_command(
     loader: LoaderRegistry,
     command: CliCommand,
     video: crate::scene::video::VideoSelection,
+    process_started: Instant,
 ) -> Result<()> {
     #[cfg(feature = "hardened")]
     super::platform::apply_hardening();
@@ -131,19 +148,29 @@ fn execute_command(
         CliCommand::Configure => {
             anyhow::bail!("engine configuration must run before project setup")
         }
-        CliCommand::Package { project, output } => {
+        CliCommand::Package {
+            project,
+            output,
+            benchmark,
+        } => {
             #[cfg(feature = "publisher")]
             return crate::package::package_project(
                 &resolve_project_path(project),
                 &loader,
                 &output,
+                benchmark,
             );
             #[cfg(not(feature = "publisher"))]
             {
-                let _ = (project, output);
+                let _ = (project, output, benchmark);
                 anyhow::bail!("publisher tools are not compiled; run `cargo bundle <project>`");
             }
         }
+        CliCommand::BenchmarkReport {
+            project,
+            runs,
+            report_path,
+        } => return run_benchmark_report(&project, runs, &report_path),
         CliCommand::RemapAssets {
             project,
             rules,
@@ -169,8 +196,19 @@ fn execute_command(
             editor_sync,
         } => (project, ProjectAction::Run { mode, editor_sync }),
     };
-    let (project_root, config, content) =
-        open_project(&resolve_project_path(project_path), &loader)?;
+    let project_path = resolve_project_path(project_path);
+    if let ProjectAction::Run { mode, editor_sync } = &action
+        && let Some(options) = mode.startup_benchmark()
+        && std::env::var_os(STARTUP_BENCHMARK_CHILD_ENV).is_none()
+    {
+        if *editor_sync {
+            anyhow::bail!("startup benchmark cannot run in editor-sync mode");
+        }
+        run_startup_suite(&project_path, options.runs)?;
+        return Ok(());
+    }
+    let (project_root, config, content) = open_project(&project_path, &loader)?;
+    let project_opened = Instant::now();
     let languages = loader
         .languages(&config.adapter.script)
         .context("failed to select script adapter")?;
@@ -181,6 +219,9 @@ fn execute_command(
     let store = loader
         .store(&config.adapter.store)
         .context("failed to select store adapter")?;
+    let startup_capture = mode
+        .startup_benchmark()
+        .map(|_| crate::ui::performance::StartupCapture::new(process_started, project_opened));
     let _instance = mode.requires_single_instance().then(|| {
         SingleInstanceGuard::acquire(&project_root)
             .context("another instance of this project is already running")
@@ -196,11 +237,216 @@ fn execute_command(
             development: mode.development(),
             editor_sync,
             benchmark: mode.benchmark().cloned(),
+            startup_capture: startup_capture.clone(),
+            hidden_window: startup_capture.is_some()
+                || std::env::var_os(RUNTIME_BENCHMARK_CHILD_ENV).is_some(),
             video,
         },
     );
+    if let Some(capture) = startup_capture {
+        capture.mark_app_built();
+    }
     app.run();
     Ok(())
+}
+
+const STARTUP_BENCHMARK_CHILD_ENV: &str = "KEINE_STARTUP_BENCHMARK_CHILD";
+const RUNTIME_BENCHMARK_CHILD_ENV: &str = "KEINE_RUNTIME_BENCHMARK_CHILD";
+
+fn run_startup_suite(project_path: &Path, runs: usize) -> Result<String> {
+    let executable =
+        std::env::current_exe().context("failed to locate the benchmark executable")?;
+    let mut samples = Vec::with_capacity(runs);
+    let logical_threads = std::thread::available_parallelism().map_or(0, std::num::NonZero::get);
+    let profile = if cfg!(debug_assertions) {
+        "development"
+    } else {
+        "release"
+    };
+    let mut report = String::new();
+    emit_report_line(
+        &mut report,
+        format!(
+            "startup baseline · Kēne {} · {profile} · {} / {} · {logical_threads} logical thread(s) · {runs} isolated process run(s) · hidden surface-backed window",
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+        ),
+    );
+    for run in 1..=runs {
+        let output = Command::new(&executable)
+            .arg("benchmark-startup")
+            .arg(project_path)
+            .arg("1")
+            .env(STARTUP_BENCHMARK_CHILD_ENV, "1")
+            .output()
+            .with_context(|| format!("failed to start benchmark child {run}"))?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if run == 1
+            && let Some(gpu) = stderr.lines().find(|line| line.contains("GPU      │"))
+        {
+            emit_report_line(&mut report, gpu.trim());
+        }
+        let sample = crate::ui::performance::StartupSample::parse(&format!("{stdout}\n{stderr}"));
+        if !output.status.success() || sample.is_none() {
+            anyhow::bail!(
+                "startup child {run} failed with {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+                output.status,
+            );
+        }
+        let sample = sample.expect("sample presence was checked");
+        let peak_rss = sample
+            .peak_rss_mib
+            .map_or_else(|| "n/a".to_owned(), |value| format!("{value:.1} MiB"));
+        emit_report_line(
+            &mut report,
+            format!(
+                "run {run:>2} · project {:>7.2} ms · app {:>7.2} ms · first frame {:>7.2} ms · interactive {:>7.2} ms · peak RSS {peak_rss}",
+                sample.project_ms, sample.app_ms, sample.first_frame_ms, sample.interactive_ms,
+            ),
+        );
+        samples.push(sample);
+        if run != runs {
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    }
+    append_startup_summary(&samples, &mut report);
+    Ok(report)
+}
+
+fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) -> Result<()> {
+    let executable = std::env::current_exe().context("failed to locate benchmark executable")?;
+    let mut report = run_startup_suite(project_path, runs)?;
+    let workloads = [
+        ("initial stage · full composition", "0", "full"),
+        (
+            "blur family · full composition",
+            "10-04 blur family",
+            "full",
+        ),
+        (
+            "atmosphere effects · full composition",
+            "10-05 atmosphere effects",
+            "full",
+        ),
+        (
+            "all timeline events · full composition",
+            "10-07 all event types",
+            "full",
+        ),
+        ("initial stage · scene + UI", "0", "scene-ui"),
+        ("initial stage · scene + dialog", "0", "scene-dialog"),
+        ("initial stage · scene only", "0", "scene"),
+    ];
+    for (label, target, profile) in workloads {
+        emit_report_line(&mut report, "");
+        emit_report_line(
+            &mut report,
+            format!("settled render · {label} · 3.0s warm-up + 5.0s sample"),
+        );
+        let output = Command::new(&executable)
+            .arg("benchmark")
+            .arg(project_path)
+            .arg("5")
+            .arg(target)
+            .arg(profile)
+            .env(RUNTIME_BENCHMARK_CHILD_ENV, "1")
+            .output()
+            .with_context(|| format!("failed to start {label} benchmark"))?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !output.status.success() {
+            anyhow::bail!(
+                "{label} benchmark failed with {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+                output.status,
+            );
+        }
+        if target != "0" && !stderr.contains("resolved cursor Some(") {
+            anyhow::bail!("{label} benchmark did not resolve timeline {target:?}\n{stderr}");
+        }
+        let mut captured = 0;
+        for line in stdout.lines().chain(stderr.lines()) {
+            if benchmark_report_line(line) {
+                emit_report_line(&mut report, line.trim());
+                captured += 1;
+            }
+        }
+        if captured == 0 {
+            anyhow::bail!("{label} benchmark completed without performance output");
+        }
+    }
+    crate::storage::write_atomically(report_path, report.as_bytes())?;
+    println!("benchmark report written to {}", report_path.display());
+    Ok(())
+}
+
+fn benchmark_report_line(line: &str) -> bool {
+    [
+        "GPU      │",
+        "START    |",
+        "CAPTURE  |",
+        "FRAME    |",
+        "SCENE    |",
+        "ASSETS   |",
+        "MEMORY   |",
+        "RENDER   |",
+        " ERROR ",
+    ]
+    .iter()
+    .any(|marker| line.contains(marker))
+}
+
+fn emit_report_line(report: &mut String, line: impl AsRef<str>) {
+    let line = line.as_ref();
+    println!("{line}");
+    report.push_str(line);
+    report.push('\n');
+}
+
+fn append_startup_summary(samples: &[crate::ui::performance::StartupSample], report: &mut String) {
+    let summarize = |select: fn(&crate::ui::performance::StartupSample) -> f64| {
+        let mut values = samples.iter().map(select).collect::<Vec<_>>();
+        values.sort_by(f64::total_cmp);
+        let median = values[(values.len() - 1) / 2];
+        let p95 = values[((values.len() - 1) as f64 * 0.95).round() as usize];
+        (median, p95)
+    };
+    let (project_median, project_p95) = summarize(|sample| sample.project_ms);
+    let (app_median, app_p95) = summarize(|sample| sample.app_ms);
+    let (frame_median, frame_p95) = summarize(|sample| sample.first_frame_ms);
+    let (interactive_median, interactive_p95) = summarize(|sample| sample.interactive_ms);
+    let peak_rss = samples
+        .iter()
+        .filter_map(|sample| sample.peak_rss_mib)
+        .max_by(f64::total_cmp);
+    emit_report_line(report, "median / p95 (cumulative from process entry)");
+    emit_report_line(
+        report,
+        format!("project     · {project_median:.2} / {project_p95:.2} ms"),
+    );
+    emit_report_line(
+        report,
+        format!("app built   · {app_median:.2} / {app_p95:.2} ms"),
+    );
+    emit_report_line(
+        report,
+        format!("first frame · {frame_median:.2} / {frame_p95:.2} ms"),
+    );
+    emit_report_line(
+        report,
+        format!("interactive · {interactive_median:.2} / {interactive_p95:.2} ms"),
+    );
+    if let Some(peak_rss) = peak_rss {
+        emit_report_line(
+            report,
+            format!("peak RSS    · {peak_rss:.1} MiB maximum across runs"),
+        );
+    }
+    emit_report_line(
+        report,
+        "cache note  · every sample is a new process; filesystem/GPU caches are intentionally not claimed cold",
+    );
 }
 
 enum ProjectAction {
@@ -309,7 +555,11 @@ fn build_opened_app(
                 primary_window: Some(Window {
                     title: config.title.clone(),
                     resolution: initial_resolution,
-                    visible: true,
+                    // Startup reports keep the real winit window and wgpu
+                    // surface but hide them from the desktop/taskbar. A truly
+                    // headless render target would omit the startup costs this
+                    // benchmark is intended to measure.
+                    visible: !options.hidden_window,
                     ..default()
                 }),
                 // Keep the native window alive until the shutdown pipeline has
@@ -352,6 +602,10 @@ fn build_opened_app(
             benchmark.target.clone(),
             benchmark.cameras,
         );
+    }
+    if let Some(capture) = options.startup_capture {
+        app.init_resource::<PersistenceDisabled>();
+        crate::ui::performance::install_startup_capture(&mut app, capture);
     }
     super::platform::install_runtime_diagnostics(&mut app);
     app
@@ -882,6 +1136,12 @@ mod tests {
             })
             .requires_single_instance()
         );
+        assert!(
+            !InteractiveMode::StartupBenchmark(crate::runtime::cli::StartupBenchmarkOptions {
+                runs: 7
+            })
+            .requires_single_instance()
+        );
     }
 
     #[test]
@@ -923,6 +1183,20 @@ mod tests {
             options.cameras,
             crate::ui::performance::BenchmarkCameras::Full
         );
+    }
+
+    #[test]
+    fn startup_benchmark_command_has_bounded_repeatable_runs() {
+        let CliCommand::Run {
+            mode: InteractiveMode::StartupBenchmark(options),
+            ..
+        } = parse_cli(&args(&["benchmark-startup", "/tmp/project"])).unwrap()
+        else {
+            panic!("expected startup benchmark command");
+        };
+        assert_eq!(options.runs, 7);
+        assert!(parse_cli(&args(&["benchmark-startup", "/tmp/project", "0"])).is_err());
+        assert!(parse_cli(&args(&["benchmark-startup", "/tmp/project", "51"])).is_err());
     }
 
     #[test]

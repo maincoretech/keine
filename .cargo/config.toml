@@ -14,6 +14,9 @@ dev = "run --features video-native,video-ffmpeg -- dev"
 # (`full`, `scene-ui`, `scene-dialog`, or `scene`) is reserved for measuring
 # per-camera render overhead without changing normal runtime composition.
 perf = "run --release --features video-native,video-ffmpeg -- benchmark"
+# Builds once, then lets the release executable spawn isolated child processes
+# and report startup medians/p95 without including Cargo in the measurements.
+startup-perf = "run --release --features startup-metrics -- benchmark-startup"
 validate = "run -- check"
 # Keep the bundle runner outside target/release: Windows cannot replace a
 # running keine.exe when the child build produces the hardened game engine.

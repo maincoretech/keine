@@ -41,6 +41,7 @@ are unavailable. The visual acceptance checklist is in
 | `cargo dev <project>` | Run a project with development tools and hot reload |
 | `cargo dev <project> --sync` | Follow an open LetsGal project |
 | `cargo bundle <project>` | Build a distributable game |
+| `cargo bundle <project> --benchmark` | Build a separate `-benchmark` performance package |
 | `cargo bundle --remap-assets <project> <old=new>...` | Safely migrate converted asset references |
 | `cargo configure` | Configure built-in content adapters and runtime capabilities |
 | `cargo perf <project>` | Capture a runtime performance sample |

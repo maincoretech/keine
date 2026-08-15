@@ -15,6 +15,8 @@ use crate::storage::StoragePlugin;
 use crate::ui::GameUiPlugin;
 
 pub use bootstrap::{build_app_with_loader, run, run_cli, run_with_loader};
+#[cfg(feature = "publisher")]
+pub(crate) use cli::BENCHMARK_MARKER;
 
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub(crate) enum GameSystemSet {

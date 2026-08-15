@@ -198,6 +198,14 @@ pub(super) fn game_config(
             insert_aliases(&mut config.assets.voices, hash, &path);
         } else if is_effect(&path) {
             insert_aliases(&mut config.assets.effects, hash, &path);
+        } else if normalized_head(&path).eq_ignore_ascii_case("audio") {
+            // LetsGal projects commonly keep every audio class in one generic
+            // directory. The authored action still supplies the semantic
+            // BGM/voice/effect class, so make the same canonical path
+            // resolvable through each class-specific runtime map.
+            insert_aliases(&mut config.assets.bgm, hash, &path);
+            insert_aliases(&mut config.assets.voices, hash, &path);
+            insert_aliases(&mut config.assets.effects, hash, &path);
         } else if is_video(&path) {
             insert_aliases(&mut config.assets.videos, hash, &path);
         } else if is_lut(&path) {
@@ -4594,6 +4602,33 @@ mod tests {
         assert_eq!(config.bg_path("hash"), "backgrounds/sea.png");
         assert_eq!(config.bg_path("backgrounds/sea.png"), "backgrounds/sea.png");
         assert_eq!(config.layout.anchor_offset, 0.0);
+    }
+
+    #[test]
+    fn maps_generic_audio_directories_for_each_authored_audio_class() {
+        let project: ProjectDocument = serde_json::from_value(json!({
+            "id":"p", "name":"n", "engineVersion":"1", "chapterOrder":[]
+        }))
+        .unwrap();
+        let manifest: AssetManifest = serde_json::from_value(json!({
+            "entries":{"click":{"path":"audio/timeline-click.opus"}}
+        }))
+        .unwrap();
+
+        let config = game_config(&project, &manifest, None);
+
+        assert_eq!(
+            config.bgm_path("audio/timeline-click.opus"),
+            "audio/timeline-click.opus"
+        );
+        assert_eq!(
+            config.voice_path("audio/timeline-click.opus"),
+            "audio/timeline-click.opus"
+        );
+        assert_eq!(
+            config.effect_path("audio/timeline-click.opus"),
+            "audio/timeline-click.opus"
+        );
     }
 
     #[test]

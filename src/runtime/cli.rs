@@ -9,6 +9,8 @@ use anyhow::{Context, Result};
 use crate::ui::performance::BenchmarkTarget;
 
 const DEFAULT_PACKAGE_OUTPUT: &str = "target/release-package";
+pub(crate) const BENCHMARK_MARKER: &str = "keine-benchmark.conf";
+pub(crate) const BENCHMARK_REPORT_FILE: &str = "keine-benchmark-report.txt";
 
 #[derive(Debug, Clone)]
 pub(super) struct BenchmarkOptions {
@@ -17,11 +19,17 @@ pub(super) struct BenchmarkOptions {
     pub(super) cameras: crate::ui::performance::BenchmarkCameras,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(super) struct StartupBenchmarkOptions {
+    pub(super) runs: usize,
+}
+
 #[derive(Debug, Clone)]
 pub(super) enum InteractiveMode {
     Shipping,
     Development,
     Benchmark(BenchmarkOptions),
+    StartupBenchmark(StartupBenchmarkOptions),
 }
 
 impl InteractiveMode {
@@ -32,6 +40,13 @@ impl InteractiveMode {
     pub(super) const fn benchmark(&self) -> Option<&BenchmarkOptions> {
         match self {
             Self::Benchmark(options) => Some(options),
+            _ => None,
+        }
+    }
+
+    pub(super) const fn startup_benchmark(&self) -> Option<StartupBenchmarkOptions> {
+        match self {
+            Self::StartupBenchmark(options) => Some(*options),
             _ => None,
         }
     }
@@ -50,6 +65,12 @@ pub(super) enum CliCommand {
     Package {
         project: PathBuf,
         output: PathBuf,
+        benchmark: bool,
+    },
+    BenchmarkReport {
+        project: PathBuf,
+        runs: usize,
+        report_path: PathBuf,
     },
     RemapAssets {
         project: PathBuf,
@@ -98,7 +119,7 @@ const COMMANDS: &[CommandHelp] = &[
     CommandHelp {
         binary_name: "package",
         cargo_name: "bundle",
-        args: "<project> [--output <dir>] | --remap-assets <project> <old=new>... [-y]",
+        args: "<project> [--output <dir>] [--benchmark] | --remap-assets <project> <old=new>... [-y]",
         summary: "Package a release or safely remap asset references",
     },
     CommandHelp {
@@ -112,6 +133,12 @@ const COMMANDS: &[CommandHelp] = &[
         cargo_name: "perf",
         args: "<project> [seconds] [timeline|cursor] [profile]",
         summary: "Record a performance sample",
+    },
+    CommandHelp {
+        binary_name: "benchmark-startup",
+        cargo_name: "startup-perf",
+        args: "<project> [runs]",
+        summary: "Repeat process-cold startup measurements",
     },
 ];
 
@@ -160,7 +187,8 @@ pub(super) fn parse(args: &[OsString]) -> Result<CliCommand> {
         Some("package") => parse_package(args),
         Some("dev") => parse_development(args),
         Some("benchmark") => parse_benchmark(args),
-        Some("validate" | "perf") => anyhow::bail!(
+        Some("benchmark-startup") => parse_startup_benchmark(args),
+        Some("validate" | "perf" | "startup-perf") => anyhow::bail!(
             "{command:?} is a Cargo alias, not a keine subcommand; run `cargo {}` or `keine --help`",
             command.to_string_lossy()
         ),
@@ -179,10 +207,49 @@ fn parse_package(args: &[OsString]) -> Result<CliCommand> {
     {
         return parse_asset_remap(args);
     }
-    let project = required_path(args, 1, "keine package <project>")?;
-    let output =
-        parse_output_option(&args[2..])?.unwrap_or_else(|| PathBuf::from(DEFAULT_PACKAGE_OUTPUT));
-    Ok(CliCommand::Package { project, output })
+    const USAGE: &str = "keine package <project> [--output <dir>] [--benchmark]";
+    let project = required_path(args, 1, USAGE)?;
+    let mut output = None;
+    let mut benchmark = false;
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].to_str() {
+            Some("--output") if output.is_none() => {
+                let value = args.get(index + 1).filter(|value| !value.is_empty());
+                output = Some(PathBuf::from(value.with_context(|| {
+                    format!("--output requires a path argument; usage: {USAGE}")
+                })?));
+                index += 2;
+            }
+            Some("--benchmark") if !benchmark => {
+                benchmark = true;
+                index += 1;
+            }
+            Some(argument) => anyhow::bail!("unexpected argument {argument:?}; usage: {USAGE}"),
+            None => anyhow::bail!("package argument is not UTF-8; usage: {USAGE}"),
+        }
+    }
+    let mut output = output.unwrap_or_else(|| PathBuf::from(DEFAULT_PACKAGE_OUTPUT));
+    if benchmark {
+        output = benchmark_output_path(&output)?;
+    }
+    Ok(CliCommand::Package {
+        project,
+        output,
+        benchmark,
+    })
+}
+
+fn benchmark_output_path(output: &Path) -> Result<PathBuf> {
+    let name = output
+        .file_name()
+        .context("benchmark output directory must have a final component")?;
+    if name.to_string_lossy().ends_with("-benchmark") {
+        return Ok(output.to_owned());
+    }
+    let mut benchmark_name = name.to_os_string();
+    benchmark_name.push("-benchmark");
+    Ok(output.with_file_name(benchmark_name))
 }
 
 fn parse_asset_remap(args: &[OsString]) -> Result<CliCommand> {
@@ -301,6 +368,53 @@ fn parse_benchmark(args: &[OsString]) -> Result<CliCommand> {
     ))
 }
 
+fn parse_startup_benchmark(args: &[OsString]) -> Result<CliCommand> {
+    const USAGE: &str = "keine benchmark-startup <project> [runs]";
+    let project = required_path(args, 1, USAGE)?;
+    require_no_extra_args(args, 3, USAGE)?;
+    let runs = match args.get(2) {
+        Some(value) => value
+            .to_string_lossy()
+            .parse::<usize>()
+            .context("startup benchmark runs must be an integer")?,
+        None => 7,
+    };
+    if !(1..=50).contains(&runs) {
+        anyhow::bail!("startup benchmark runs must be between 1 and 50");
+    }
+    Ok(run(
+        project,
+        InteractiveMode::StartupBenchmark(StartupBenchmarkOptions { runs }),
+    ))
+}
+
+pub(super) fn packaged_benchmark_command() -> Result<Option<CliCommand>> {
+    let Some(root) = std::env::current_exe()
+        .ok()
+        .and_then(|executable| executable.parent().map(Path::to_owned))
+    else {
+        return Ok(None);
+    };
+    let marker = root.join(BENCHMARK_MARKER);
+    if !marker.is_file() {
+        return Ok(None);
+    }
+    let bytes = crate::storage::read_limited(&marker, 32)?;
+    let runs = std::str::from_utf8(&bytes)
+        .context("benchmark marker is not UTF-8")?
+        .trim()
+        .parse::<usize>()
+        .context("benchmark marker does not contain a startup run count")?;
+    if !(1..=50).contains(&runs) {
+        anyhow::bail!("benchmark marker run count must be between 1 and 50");
+    }
+    Ok(Some(CliCommand::BenchmarkReport {
+        project: root.join("game.haku"),
+        runs,
+        report_path: root.join(BENCHMARK_REPORT_FILE),
+    }))
+}
+
 fn required_path(args: &[OsString], index: usize, usage: &str) -> Result<PathBuf> {
     let value = args
         .get(index)
@@ -314,15 +428,6 @@ fn require_no_extra_args(args: &[OsString], expected: usize, usage: &str) -> Res
         anyhow::bail!("unexpected argument {argument:?}; usage: {usage}");
     }
     Ok(())
-}
-
-fn parse_output_option(args: &[OsString]) -> Result<Option<PathBuf>> {
-    match args {
-        [] => Ok(None),
-        [flag, value] if flag == "--output" && !value.is_empty() => Ok(Some(PathBuf::from(value))),
-        [flag] if flag == "--output" => anyhow::bail!("--output requires a path argument"),
-        [argument, ..] => anyhow::bail!("unexpected argument {argument:?}"),
-    }
 }
 
 fn cargo_invocation() -> bool {
@@ -370,4 +475,50 @@ fn print_command_help(name: &str) {
     println!("Kēne {VERSION}");
     println!("\nUsage: {}", command_usage(command, cargo_invocation()));
     println!("\n{}", command.summary);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn benchmark_package_uses_a_separate_suffixed_directory() {
+        let command = parse(&[
+            "package".into(),
+            "projects/test-project".into(),
+            "--output".into(),
+            "target/colleague".into(),
+            "--benchmark".into(),
+        ])
+        .unwrap();
+        assert!(matches!(
+            command,
+            CliCommand::Package {
+                output,
+                benchmark: true,
+                ..
+            } if output == Path::new("target/colleague-benchmark")
+        ));
+    }
+
+    #[test]
+    fn normal_package_keeps_its_original_directory() {
+        let command = parse(&["package".into(), "projects/test-project".into()]).unwrap();
+        assert!(matches!(
+            command,
+            CliCommand::Package {
+                output,
+                benchmark: false,
+                ..
+            } if output == Path::new(DEFAULT_PACKAGE_OUTPUT)
+        ));
+    }
+
+    #[test]
+    fn benchmark_suffix_is_idempotent() {
+        assert_eq!(
+            benchmark_output_path(Path::new("target/game-benchmark")).unwrap(),
+            Path::new("target/game-benchmark")
+        );
+    }
 }

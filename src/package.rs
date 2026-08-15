@@ -33,6 +33,7 @@ pub fn package_project(
     project: &Path,
     loader: &keine_loader::LoaderRegistry,
     output: &Path,
+    benchmark: bool,
 ) -> Result<()> {
     if !project.join("config.yaml").is_file() && !project.join("project.json").is_file() {
         bail!("{}", project_manifest_error(project));
@@ -63,7 +64,13 @@ pub fn package_project(
         .context("failed to select script adapter")?;
     build_program(&config, &content, &languages)?;
 
-    let features = detect_features(&staged)?;
+    let mut features = detect_features(&staged)?;
+    if benchmark {
+        if !features.is_empty() {
+            features.push(',');
+        }
+        features.push_str("startup-metrics");
+    }
     println!("content features: {features}");
     let runtime_keys = identity.runtime_key_material()?;
     let key_share_a = staging.path().join("hakutaku-key-share-a.bin");
@@ -82,7 +89,7 @@ pub fn package_project(
         .context("failed to create release assembly directory")?;
     seed_previous_release(&output, assembled.path())?;
     pack_staging(&staged, assembled.path(), &identity)?;
-    assemble(assembled.path(), &features, &engine)?;
+    assemble(assembled.path(), &features, &engine, benchmark)?;
     publish_directory(assembled, &output)?;
     println!("{}", output.display());
     Ok(())
@@ -388,7 +395,7 @@ fn link_or_copy(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-fn assemble(output: &Path, _features: &str, engine: &Path) -> Result<()> {
+fn assemble(output: &Path, _features: &str, engine: &Path, benchmark: bool) -> Result<()> {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     #[cfg(windows)]
     {
@@ -396,7 +403,14 @@ fn assemble(output: &Path, _features: &str, engine: &Path) -> Result<()> {
         if has_feature(_features, "video-ffmpeg") {
             bundle_ffmpeg_runtime(output)?;
         }
-        fs::write(output.join("run.bat"), RUN_BAT)?;
+        fs::write(
+            output.join("run.bat"),
+            if benchmark {
+                RUN_BENCHMARK_BAT
+            } else {
+                RUN_BAT
+            },
+        )?;
     }
     #[cfg(not(windows))]
     {
@@ -405,7 +419,10 @@ fn assemble(output: &Path, _features: &str, engine: &Path) -> Result<()> {
         if has_feature(_features, "video-ffmpeg") {
             bundle_linux_runtime(output, engine)?;
         }
-        fs::write(output.join("run.sh"), RUN_SH)?;
+        fs::write(
+            output.join("run.sh"),
+            if benchmark { RUN_BENCHMARK_SH } else { RUN_SH },
+        )?;
         {
             use std::os::unix::fs::PermissionsExt;
             for name in ["keine", "run.sh"] {
@@ -417,6 +434,10 @@ fn assemble(output: &Path, _features: &str, engine: &Path) -> Result<()> {
         repo_root.join("assets/icons/keine-256.png"),
         output.join("keine.png"),
     )?;
+    if benchmark {
+        fs::write(output.join(crate::runtime::BENCHMARK_MARKER), b"7\n")?;
+        fs::write(output.join("BENCHMARK.txt"), BENCHMARK_README)?;
+    }
     Ok(())
 }
 
@@ -547,8 +568,14 @@ fn has_feature(features: &str, wanted: &str) -> bool {
 
 #[cfg(windows)]
 const RUN_BAT: &str = "@echo off\n\"%~dp0keine.exe\" \"%~dp0game.haku\"\n";
+#[cfg(windows)]
+const RUN_BENCHMARK_BAT: &str = "@echo off\n\"%~dp0keine.exe\"\nif errorlevel 1 pause\n";
 #[cfg(not(windows))]
 const RUN_SH: &str = "#!/usr/bin/env bash\nset -euo pipefail\nroot=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\nif [[ -d \"$root/lib\" ]]; then\n  export LD_LIBRARY_PATH=\"$root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\"\nfi\nexec \"$root/keine\" \"$root/game.haku\"\n";
+#[cfg(not(windows))]
+const RUN_BENCHMARK_SH: &str = "#!/usr/bin/env bash\nset -euo pipefail\nroot=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\nif [[ -d \"$root/lib\" ]]; then\n  export LD_LIBRARY_PATH=\"$root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\"\nfi\nexec \"$root/keine\"\n";
+
+const BENCHMARK_README: &str = "Kēne performance benchmark\n\nWindows: double-click run.bat once.\nmacOS/Linux: run ./run.sh once.\n\nThe package measures seven isolated startup runs, four standard scene workloads,\nand three camera-composition comparisons after three-second warm-ups. It uses an\ninvisible real window and GPU surface, not a headless renderer, so window and\npresentation costs remain in the results without interrupting normal desktop\nuse. Persistence is disabled. When complete, send keine-benchmark-report.txt\nfrom this directory to the developer. Do not move the executable away from\ngame.haku or the data directory.\n";
 
 #[cfg(test)]
 mod tests {

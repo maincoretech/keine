@@ -1,8 +1,109 @@
 # Performance baseline
 
 This file records repeatable engine measurements, not visual acceptance results.
-All runtime captures disable persistence, warm up for three seconds, use the
-1920x1080 design resolution, and sample raw frame intervals in a release build.
+Settled runtime captures disable persistence, warm up for three seconds, use
+the 1920x1080 design resolution, and sample raw frame intervals in a release
+build. The process-start protocol below intentionally has no warm-up.
+
+## Portable benchmark release
+
+Build a benchmark edition without replacing the normal release:
+
+```text
+cargo bundle projects/test-project --benchmark
+```
+
+The output directory is always suffixed `-benchmark` (the default is
+`target/release-package-benchmark`). Run `run.bat` once on Windows or `run.sh`
+once on macOS/Linux. The package writes `keine-benchmark-report.txt` beside the
+launcher after completing:
+
+- seven isolated process-start samples with median/p95 and peak RSS;
+- seven settled five-second rendering samples after three-second warm-ups:
+  the initial, blur, atmosphere, and complete-event workloads plus scene + UI,
+  scene + dialog, and scene-only camera comparisons;
+- average FPS, 1% low, frame-time percentiles, entity/asset counts, peak RSS,
+  GPU identification, and available render diagnostics.
+
+The window is invisible, but this is deliberately not a headless benchmark:
+the normal winit window, wgpu surface, render schedule, and presentation path
+remain active so results retain the costs paid by the shipped game. The marker,
+memory-counter feature, hidden-window mode, automatic exit, and disabled
+persistence exist only in the separately built benchmark package. Ordinary
+releases and tests follow their existing paths unchanged. GitHub's manual
+Release workflow exposes the same `benchmark` switch and uploads artifacts such
+as `keine-windows-x64-benchmark`.
+
+### 2026-08-15 portable-package verification
+
+The first complete `release-package-benchmark` run on the M5 Pro reference
+machine produced the report successfully. Startup median/p95 was 0.86/0.89 ms
+for project open, 127.38/165.21 ms for app build, 233.44/751.07 ms for first
+frame, and 236.24/754.34 ms for the interactive title frame; the retained first
+GPU initialization accounts for the high p95. Peak RSS was 209.2 MiB.
+
+| Hidden surface-backed profile | Avg FPS | 1% low | P95 | P99 | Peak RSS |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Initial stage · full | 60.0 | 52.8 | 18.62 ms | 18.94 ms | 204.3 MiB |
+| Blur family · full | 60.0 | 53.2 | 18.41 ms | 18.81 ms | 209.3 MiB |
+| Atmosphere effects · full | 60.0 | 52.9 | 18.46 ms | 18.92 ms | 209.2 MiB |
+| All timeline events · full | 60.0 | 52.4 | 18.62 ms | 19.09 ms | 209.1 MiB |
+| Initial stage · scene + UI | 60.0 | 53.5 | 18.21 ms | 18.68 ms | 203.5 MiB |
+| Initial stage · scene + dialog | 60.0 | 53.7 | 18.31 ms | 18.62 ms | 201.2 MiB |
+| Initial stage · scene only | 60.0 | 54.5 | 17.86 ms | 18.34 ms | 199.3 MiB |
+
+## Repeatable process-start baseline
+
+`cargo perf` measures settled frame delivery and deliberately excludes startup.
+Cold-start work uses a separate process-level harness:
+
+```text
+cargo startup-perf projects/test-project 7
+```
+
+Cargo builds the release executable once. That executable then launches seven
+isolated child processes, waits until the title exists, all blocking assets are
+ready, and a subsequent frame has completed the Bevy render schedule, then exits
+the child automatically. `Instant` supplies one monotonic clock for cumulative
+milestones from process entry:
+
+- project: saved engine configuration plus project/config/content opening;
+- app built: plugin and ECS application construction before `App::run`;
+- first frame: first render completed through `RenderSystems::PostCleanup`;
+- interactive: first completed frame after the title and blocking asset gate are ready;
+- peak RSS: platform process high-water mark, compiled only by `startup-metrics`.
+
+Every row starts a new process. The harness intentionally does not claim that the OS
+filesystem cache, shader cache, or GPU driver cache is cold: clearing those
+globally requires platform-specific privileges and would make the command less
+portable. Compare median/p95 across all runs, and
+record hardware, RAM, OS, power mode, display target, commit and feature set.
+Do not emulate a low-end machine by lowering process priority; establish the
+low-end gate by running this exact command on the actual reference device.
+
+### 2026-08-15 reference capture
+
+- Machine: 15-core Apple M5 Pro MacBook Pro, 24 GiB unified memory, Metal
+- OS: macOS 27.0 (26A5406e), arm64, AC power
+- Project: `projects/test-project`, 1920×1080
+- Build: release/LTO, default audio/UI features plus benchmark-only
+  `startup-metrics`; no video backend
+- Runs: seven new visible-window processes; filesystem/GPU cache state uncontrolled
+
+| Cumulative milestone | Median | P95 |
+|---|---:|---:|
+| Project open | 0.34 ms | 0.89 ms |
+| App built | 125.09 ms | 140.99 ms |
+| First completed frame | 235.82 ms | 254.11 ms |
+| First interactive title frame | 238.09 ms | 256.94 ms |
+
+Peak RSS reached 210.1 MiB across the seven runs. This is the high-end reference,
+not the low-end acceptance result; a low-end row becomes authoritative only
+after the same release command is run on the selected physical 8 GiB-class
+device. This capture predates the portable package's invisible-window protocol,
+so it remains a historical reference rather than a direct comparison point.
+Normal game runs do not install either capture system, and normal builds do not
+enable the platform memory-counter feature.
 
 ## 2026-07-22 baseline
 
@@ -172,9 +273,9 @@ cargo perf projects/test-project
 cargo perf projects/test-project 10
 
 # Sustained authored timelines (stable authored ids)
-cargo perf projects/test-project 10 10-04-blur-family
-cargo perf projects/test-project 10 10-05-atmosphere
-cargo perf projects/test-project 10 10-07-event-track
+cargo perf projects/test-project 10 "10-04 blur family"
+cargo perf projects/test-project 10 "10-05 atmosphere effects"
+cargo perf projects/test-project 10 "10-07 all event types"
 
 # Benchmark-only camera composition A/B. A target is required before the final
 # profile argument; cursor 0 is the explicit initial-stage escape hatch.

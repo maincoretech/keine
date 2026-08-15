@@ -263,6 +263,7 @@ pub(crate) struct LifecycleContext<'w, 's> {
     real_time: Res<'w, Time<Real>>,
     windows: Query<'w, 's, &'static Window>,
     benchmark: Option<Res<'w, crate::ui::performance::RuntimeCaptureConfig>>,
+    startup_capture: Option<Res<'w, crate::ui::performance::StartupCapture>>,
     editor_sync: Option<Res<'w, EditorSyncSession>>,
 }
 
@@ -284,7 +285,8 @@ pub(crate) fn update_lifecycle(
             .input_caret
             .next_toggle_in(context.real_time.elapsed_secs()),
     );
-    let next = if context.benchmark.is_some() || (studio_sync && !focused) {
+    let benchmark_active = context.benchmark.is_some() || context.startup_capture.is_some();
+    let next = if benchmark_active || (studio_sync && !focused) {
         // A benchmark must keep measuring the render loop even when the
         // current visual-novel frame itself is static. Studio synchronization
         // likewise remains fully live while the user works in another window.
@@ -305,9 +307,7 @@ pub(crate) fn update_lifecycle(
         RuntimeActivity::Idle
     };
 
-    let benchmark_mode = context
-        .benchmark
-        .is_some()
+    let benchmark_mode = benchmark_active
         .then(|| UpdateMode::reactive_low_power(std::time::Duration::from_secs_f64(1.0 / 60.0)));
     let focused_mode = match (benchmark_mode, next) {
         (Some(mode), _) => mode,
