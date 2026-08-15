@@ -36,6 +36,7 @@ fn sprite(id: usize) -> Sprite {
         transition_blocking: false,
         transform: SpriteTransform::default(),
         transform_animation: None,
+        position_animation: None,
         keyframe_animation: None,
         filter: VisualFilter::default(),
         films: FilmEffects::default(),

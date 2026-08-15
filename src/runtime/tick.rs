@@ -1182,6 +1182,14 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
                 sprite.transform_animation = None;
             }
         }
+        if let Some(animation) = &mut sprite.position_animation {
+            changed = true;
+            stage_changed = true;
+            animation.elapsed = (animation.elapsed + delta_seconds).min(animation.duration);
+            if animation.elapsed >= animation.duration {
+                sprite.position_animation = None;
+            }
+        }
         if let Some(animation) = &mut sprite.animation {
             changed = true;
             stage_changed = true;
@@ -1867,6 +1875,7 @@ fn apply_stage_scene_cue(state: &mut State, cue: &keine_core::StageSceneCue) {
                 transition_blocking: false,
                 transform,
                 transform_animation: None,
+                position_animation: None,
                 keyframe_animation: None,
                 filter: Default::default(),
                 films: Default::default(),

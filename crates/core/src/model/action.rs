@@ -586,6 +586,20 @@ pub enum Action {
         id: Option<String>,
         infinite: bool,
     },
+    /// Replace and reposition a sprite only when it is already visible.
+    ///
+    /// Structured editors use this for portrait updates that must never make
+    /// an absent character enter the stage. Kept at the tail for stable tags.
+    UpdateSprite {
+        id: String,
+        image: String,
+        position: Position,
+        layout: SpriteLayout,
+        scale: f32,
+        duration: f32,
+        easing: Easing,
+        blocking: bool,
+    },
 }
 
 /// Fixed system surfaces owned by the engine shell, never by a script adapter.

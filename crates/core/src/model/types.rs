@@ -543,6 +543,11 @@ pub enum Easing {
     EaseIn,
     EaseOut,
     EaseInOut,
+    InOutQuad,
+    OutCubic,
+    InOutCubic,
+    OutBack,
+    OutBounce,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -1312,6 +1317,42 @@ impl Easing {
             Self::EaseIn => progress * progress,
             Self::EaseOut => 1.0 - (1.0 - progress) * (1.0 - progress),
             Self::EaseInOut => progress * progress * (3.0 - 2.0 * progress),
+            Self::InOutQuad => {
+                if progress < 0.5 {
+                    2.0 * progress * progress
+                } else {
+                    1.0 - (-2.0 * progress + 2.0).powi(2) / 2.0
+                }
+            }
+            Self::OutCubic => 1.0 - (1.0 - progress).powi(3),
+            Self::InOutCubic => {
+                if progress < 0.5 {
+                    4.0 * progress.powi(3)
+                } else {
+                    1.0 - (-2.0 * progress + 2.0).powi(3) / 2.0
+                }
+            }
+            Self::OutBack => {
+                const OVERSHOOT: f32 = 1.70158;
+                const SCALE: f32 = OVERSHOOT + 1.0;
+                1.0 + SCALE * (progress - 1.0).powi(3) + OVERSHOOT * (progress - 1.0).powi(2)
+            }
+            Self::OutBounce => {
+                const SCALE: f32 = 7.5625;
+                const DIVISOR: f32 = 2.75;
+                if progress < 1.0 / DIVISOR {
+                    SCALE * progress * progress
+                } else if progress < 2.0 / DIVISOR {
+                    let offset = progress - 1.5 / DIVISOR;
+                    SCALE * offset * offset + 0.75
+                } else if progress < 2.5 / DIVISOR {
+                    let offset = progress - 2.25 / DIVISOR;
+                    SCALE * offset * offset + 0.9375
+                } else {
+                    let offset = progress - 2.625 / DIVISOR;
+                    SCALE * offset * offset + 0.984375
+                }
+            }
         }
     }
 }

@@ -71,7 +71,7 @@ runtime 以所有 `line <= selected_step` 的 Action 为目标，因此不会把
 
 ## 完整性与边界
 
-- 1.9.8 当前内置的 37 种 runtime block 必须全部编译为 typed core Action；未知内置类型报错；
+- 1.9.9 当前内置的 38 种 runtime block 必须全部编译为 typed core Action；未知内置类型报错；
 - 1.9.1 的 `chapterTreeOrder` 为章节执行顺序主来源：根章节按 tree entry 排列，目录 entry 按
   对应 `chapterFolders[].chapterIds` 展开；缺少新字段的旧项目继续回退 `chapterOrder`；
 - 默认壳 `dialogue-box.json` 的 `text_speed`、`char_fade_in_duration`、
@@ -99,7 +99,7 @@ runtime 以所有 `line <= selected_step` 的 Action 为目标，因此不会把
 - 1.9.2 工程仍可带 `chapterFolders` / `chapterTreeOrder`、`scenes.json`（版本 3 视差层）与
   `characters.json`（版本 2 全局位置/高度比），这些字段的解析保持兼容。
 
-## 1.9.5–1.9.8 增量
+## 1.9.5–1.9.9 增量
 
 - 1.9.5 新增的 `switchParagraphStyle`、`hideFloatingText`、`systemMessage` 已加入内置类型
   合同并降级为 typed core Action：故事段落使用独立样式，命名/无限浮字可按 id 播放退场并
@@ -113,6 +113,11 @@ runtime 以所有 `line <= selected_step` 的 Action 为目标，因此不会把
   diagnostic，不会静默隐藏或伪装成静态支持。
 - 1.9.8 的内置数据集、UI HTML/选择器、按钮音效、扩展方法返回值与 `enabledWhen` 属于 Studio
   编辑器、壳层或扩展 SDK；adapter 保留开放 JSON 的未知字段，但 Kēne 不加载 Studio 扩展。
+- 1.9.9 新增 `updateCharacter`：只更新已在场角色的表情/锁定皮肤、距离和位置，缺席角色不会
+  因此入场；换位时长、阻塞与 `linear` / `inOutQuad` / `outCubic` 缓动进入 typed core。
+  同版动画面板新增的 `inOutCubic`、`outBack`、`outBounce` 也由 core 原生采样。
+- 1.9.9 的资源加密、可视化 UI 深度定制、扩展自带资源和大包上传属于构建器、壳层或扩展
+  SDK，不进入剧情 IR。Spine、Live2D 即使新增翻转能力仍然**明确不支持**。
 - 新增 `stageAnimation` 编译为 adapter-neutral 共享舞台时间轴：camera、character、scene layer
   共用真实时间时钟，支持关键帧、循环、倍率、等待，以及 camera/scene/particle/shake/audio
   事件；

@@ -1,4 +1,4 @@
-# LetsGal Studio 1.9.8 原生同步验收
+# LetsGal Studio 1.9.9 原生同步验收
 
 本轮只验收原生工程同步，不安装或启用任何 Studio 扩展。Studio 原版 Player 可以关闭；
 画面以独立 keine 窗口为准。
@@ -44,14 +44,14 @@
 18. 快速连续保存 chapter 和 `.studio/state.json`。预期没有永久停留在旧画面；短暂 JSON 读取
     冲突会自动跨帧恢复；即使文件通知被系统合并，200 ms 调试位置轮询也会兜底。
 
-## D. 规定动作与 1.9.8 新语义覆盖
+## D. 规定动作与 1.9.9 新语义覆盖
 
 19. 创建两个虚拟章节目录并交错放置根章节，令 `chapterTreeOrder` 与旧 `chapterOrder` 不同。
     预期 keine 严格按树中目录/章节顺序运行；删掉新字段后仍按旧顺序兼容运行。
 20. 在默认壳对话框依次选择 `smooth-rise`、`classic`、`instant`、`smooth-drop`、
     `slide-left`、`slide-right`、`pop`、`flip`、`swing`、`blur`，并调整淡入时长、距离、缩放、
     角度与模糊参数。预期保存后无需重启即可刷新；跳过/读档后的既有文字不重复播放入场效果。
-21. 逐项覆盖：`dialogue`、`narration`、`storyParagraph`、`showCharacter`、
+21. 逐项覆盖：`dialogue`、`narration`、`storyParagraph`、`showCharacter`、`updateCharacter`、
     `removeCharacter`、`switchDialogueStyle`、`switchParagraphStyle`、`portraitStyleRule`、
     `floatingText`、`hideFloatingText`、`systemMessage`、`scene`、
     `destroyScene`、`curtain`、`camera`、`resetCamera`、`animateSprite`、`particle`、`sound`、
@@ -86,14 +86,16 @@
 30. 给表情配置 sequence `presentation`，分别使用 `frames` 与 `frameExpressionNames`。预期按
     authored FPS/loop 原生换帧且首帧立即可见；再配置 Spine 或 Live2D，预期 loader 给出明确
     unsupported dynamic portrait error，当前不得把这两类计为已支持或静默吞掉。
+31. 让角色入场后用 `updateCharacter` 切换表情/皮肤、距离与位置，分别检查立即、阻塞和非阻塞
+    换位以及三种换位缓动；移除角色后再次更新必须跳过，绝不能让缺席角色重新入场。
 
 ## E. 同步控制权与窗口
 
-31. 在 keine 窗口单击、滚轮、按 Enter/Space。预期打字和动画可以继续，但剧情执行位置不会
+32. 在 keine 窗口单击、滚轮、按 Enter/Space。预期打字和动画可以继续，但剧情执行位置不会
     脱离 Studio 当前 block；推进必须在 Studio 选择新 block。
-32. 调整 keine 窗口大小并移动到另一显示器。预期 1920×1080 逻辑视口等比居中，背景、
+33. 调整 keine 窗口大小并移动到另一显示器。预期 1920×1080 逻辑视口等比居中，背景、
     scene layer、角色、粒子、textbox 使用同一裁切区。
-33. 打开/关闭 SAVE、LOAD、CONFIG、BACKLOG。预期不改变 Studio block；返回后画面仍是同一
+34. 打开/关闭 SAVE、LOAD、CONFIG、BACKLOG。预期不改变 Studio block；返回后画面仍是同一
     确定性预览状态；确认存档/清除/设置等持久化操作不应在工程中产生新文件。
 
 ## F. 自动回归

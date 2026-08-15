@@ -410,6 +410,7 @@ fn core_is_animating(state: &GameState, dialogue_length: &mut DialogueLengthCach
             sprite.films.is_time_varying()
                 || sprite.animation.is_some()
                 || sprite.transform_animation.is_some()
+                || sprite.position_animation.is_some()
                 || sprite.keyframe_animation.is_some()
                 || (sprite.entering && sprite.transition_progress < 1.0)
                 || (!sprite.entering && sprite.transition_progress > 0.0)

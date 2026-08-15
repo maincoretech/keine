@@ -26,6 +26,18 @@
           "props": { "characterId": "aya", "expression": "smile", "position": "center", "showCharacter": "false", "keepCharacter": "true" }
         },
         {
+          "id": "10-00-update-thinking",
+          "type": "updateCharacter",
+          "content": null,
+          "props": { "characterId": "aya", "characterName": "绫", "expression": "thinking", "position": "right", "placementTransitionEnabled": true, "placementTransitionDuration": 500, "placementTransitionEasing": "outCubic", "placementTransitionBlocking": true }
+        },
+        {
+          "id": "10-00-update-smile",
+          "type": "updateCharacter",
+          "content": null,
+          "props": { "characterId": "aya", "characterName": "绫", "expression": "smile", "position": "center", "placementTransitionEnabled": true, "placementTransitionDuration": 350, "placementTransitionEasing": "inOutQuad", "placementTransitionBlocking": true }
+        },
+        {
           "id": "10-00-skin-winter",
           "type": "setver",
           "content": null,

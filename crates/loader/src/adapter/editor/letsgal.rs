@@ -399,7 +399,10 @@ mod tests {
             .filter(|kind| {
                 !matches!(
                     *kind,
-                    "hideFloatingText" | "switchParagraphStyle" | "systemMessage"
+                    "hideFloatingText"
+                        | "switchParagraphStyle"
+                        | "systemMessage"
+                        | "updateCharacter"
                 )
             })
             .collect::<BTreeSet<_>>();

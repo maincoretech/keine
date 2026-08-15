@@ -196,7 +196,7 @@ pub(crate) fn sync_sprites(
             .size(&handle)
             .unwrap_or(UVec2::new(756, 1080));
         let texture_aspect = render.dimensions.aspect(&handle).unwrap_or(0.7);
-        let (base_size, base_center) = sprite_geometry(
+        let (base_size, mut base_center) = sprite_geometry(
             data.layout,
             texture_aspect,
             texture_size.as_vec2(),
@@ -205,6 +205,24 @@ pub(crate) fn sync_sprites(
             config.layout.anchor_offset,
             config.layout.sprite_y_offset,
         );
+        if let Some(animation) = &data.position_animation {
+            let center_for = |position| {
+                sprite_geometry(
+                    data.layout,
+                    texture_aspect,
+                    texture_size.as_vec2(),
+                    config.layout.sprite_height,
+                    position,
+                    config.layout.anchor_offset,
+                    config.layout.sprite_y_offset,
+                )
+                .1
+            };
+            let progress = animation
+                .easing
+                .sample(animation.elapsed / animation.duration.max(f32::EPSILON));
+            base_center = center_for(animation.from).lerp(center_for(animation.to), progress);
+        }
         let group = if id.starts_with("scene-layer:") {
             "scene"
         } else {

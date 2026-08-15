@@ -505,6 +505,7 @@ fn action_name(action: &Action) -> &'static str {
         Action::RetractDialogue { .. } => "retract-dialogue",
         Action::WaitForAdvance => "wait-for-advance",
         Action::SelectSpriteImage { .. } => "select-sprite-image",
+        Action::UpdateSprite { .. } => "update-sprite",
     }
 }
 
@@ -514,6 +515,11 @@ fn easing_name(easing: Easing) -> &'static str {
         Easing::EaseIn => "ease-in",
         Easing::EaseOut => "ease-out",
         Easing::EaseInOut => "ease-in-out",
+        Easing::InOutQuad => "in-out-quad",
+        Easing::OutCubic => "out-cubic",
+        Easing::InOutCubic => "in-out-cubic",
+        Easing::OutBack => "out-back",
+        Easing::OutBounce => "out-bounce",
     }
 }
 

@@ -432,6 +432,8 @@ pub struct Sprite {
     pub transform: SpriteTransform,
     pub transform_animation: Option<TransformAnimation>,
     #[serde(skip, default)]
+    pub position_animation: Option<PositionAnimation>,
+    #[serde(skip, default)]
     pub keyframe_animation: Option<KeyframeAnimation>,
     pub filter: VisualFilter,
     #[serde(default)]
@@ -649,6 +651,16 @@ impl ActiveParticleEffect {
 pub struct TransformAnimation {
     pub from: SpriteTransform,
     pub to: SpriteTransform,
+    pub elapsed: f32,
+    pub duration: f32,
+    pub easing: Easing,
+    pub blocking: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PositionAnimation {
+    pub from: Position,
+    pub to: Position,
     pub elapsed: f32,
     pub duration: f32,
     pub easing: Easing,
@@ -1033,6 +1045,10 @@ impl State {
                     .transform_animation
                     .as_ref()
                     .is_some_and(|animation| animation.blocking)
+                    || sprite
+                        .position_animation
+                        .as_ref()
+                        .is_some_and(|animation| animation.blocking)
                     || sprite
                         .keyframe_animation
                         .as_ref()

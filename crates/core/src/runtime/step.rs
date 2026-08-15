@@ -334,6 +334,7 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                         transition_blocking: !next,
                         transform: initial_transform,
                         transform_animation: None,
+                        position_animation: None,
                         keyframe_animation: None,
                         filter: Default::default(),
                         films: Default::default(),
@@ -924,6 +925,59 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                     active.infinite = *infinite;
                 }
             }
+            Action::UpdateSprite {
+                id,
+                image,
+                position,
+                layout,
+                scale,
+                duration,
+                easing,
+                blocking,
+            } => {
+                let id = interpolate(id, &state.vars, &state.global_vars);
+                let image = interpolate(image, &state.vars, &state.global_vars);
+                let duration = duration.max(0.0);
+                let state_blocking = *blocking && !next;
+                let Some(sprite) = state.sprites.get_mut(&id) else {
+                    continue;
+                };
+                let from_position = sprite.position;
+                let mut target_transform = sprite.transform;
+                target_transform.scale_x = scale.max(f32::EPSILON);
+                target_transform.scale_y = scale.max(f32::EPSILON);
+                sprite.image = image;
+                sprite.layout = *layout;
+                sprite.position = *position;
+                sprite.keyframe_animation = None;
+                sprite.animation = None;
+                state.sprite_sequences.remove(&id);
+                if duration > f32::EPSILON {
+                    sprite.transform_animation = Some(TransformAnimation {
+                        from: sprite.transform,
+                        to: target_transform,
+                        elapsed: 0.0,
+                        duration,
+                        easing: *easing,
+                        blocking: state_blocking,
+                    });
+                    sprite.position_animation = Some(crate::state::PositionAnimation {
+                        from: from_position,
+                        to: *position,
+                        elapsed: 0.0,
+                        duration,
+                        easing: *easing,
+                        blocking: state_blocking,
+                    });
+                    if state_blocking {
+                        return StepResult::AwaitPresentation;
+                    }
+                } else {
+                    sprite.transform = target_transform;
+                    sprite.transform_animation = None;
+                    sprite.position_animation = None;
+                }
+            }
             Action::HideFloatingText { id } => {
                 let matches = state.floating_text.as_ref().is_some_and(|active| {
                     id.as_ref().is_none_or(|id| active.id.as_ref() == Some(id))
@@ -1370,6 +1424,7 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                             transition_blocking: false,
                             transform: Default::default(),
                             transform_animation: None,
+                            position_animation: None,
                             keyframe_animation: None,
                             filter: Default::default(),
                             films: Default::default(),
@@ -2157,6 +2212,64 @@ mod tests {
 
         assert_eq!(step(&mut state), StepResult::EndOfScene);
         assert!(!state.sprites.contains_key("hero"));
+    }
+
+    #[test]
+    fn sprite_update_skips_absent_targets() {
+        let mut state = state_with(vec![Action::UpdateSprite {
+            id: "hero".into(),
+            image: "smile.webp".into(),
+            position: Position::right(0.0),
+            layout: crate::SpriteLayout::Natural,
+            scale: 1.2,
+            duration: 0.5,
+            easing: Easing::EaseOut,
+            blocking: true,
+        }]);
+
+        assert_eq!(step(&mut state), StepResult::EndOfScene);
+        assert!(!state.sprites.contains_key("hero"));
+    }
+
+    #[test]
+    fn sprite_update_replaces_visible_image_and_animates_placement() {
+        let mut state = state_with(vec![
+            Action::ShowSprite {
+                id: "hero".into(),
+                image: "calm.webp".into(),
+                position: Position::left(0.0),
+                layout: crate::SpriteLayout::Natural,
+                transition: Transition::Instant,
+                transform: SpriteTransform::default(),
+                z_index: 100,
+                blend: BlendMode::Alpha,
+            },
+            Action::UpdateSprite {
+                id: "hero".into(),
+                image: "smile.webp".into(),
+                position: Position::right(20.0),
+                layout: crate::SpriteLayout::ViewportHeight(0.8),
+                scale: 1.25,
+                duration: 0.5,
+                easing: Easing::EaseOut,
+                blocking: true,
+            },
+        ]);
+
+        assert_eq!(step(&mut state), StepResult::AwaitPresentation);
+        let sprite = &state.sprites["hero"];
+        assert_eq!(sprite.image, "smile.webp");
+        assert_eq!(sprite.position, Position::right(20.0));
+        assert_eq!(sprite.layout, crate::SpriteLayout::ViewportHeight(0.8));
+        assert_eq!(
+            sprite.transform_animation.as_ref().unwrap().to.scale_x,
+            1.25
+        );
+        assert_eq!(
+            sprite.position_animation.as_ref().unwrap().from,
+            Position::left(0.0)
+        );
+        assert!(sprite.position_animation.as_ref().unwrap().blocking);
     }
 
     #[test]

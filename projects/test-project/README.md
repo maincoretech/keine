@@ -1,6 +1,6 @@
-# Kēne LetsGal 1.9.8 Feature Lab
+# Kēne LetsGal 1.9.9 Feature Lab
 
-默认验收工程现已收敛为一个原生 LetsGal 1.9.8 项目，直接覆盖 Kēne 已接入的完整时间轴、
+默认验收工程现已收敛为一个原生 LetsGal 1.9.9 项目，直接覆盖 Kēne 已接入的完整时间轴、
 立绘皮肤、视口相对高度、玩家确认等待、跨章节调用与播放控制。它不依赖 LetsGal Studio、
 扩展、注入或 `dev --sync`。
 
@@ -22,6 +22,7 @@ cargo dev projects/test-project
 - `chapterFolders` / `chapterTreeOrder` 虚拟目录执行顺序；
 - 默认壳 `dialogueBehavior` 的打字间隔、字符淡入和文字出现效果；
 - 角色皮肤属性、block 锁定皮肤和全局/表情级视口高度；
+- `updateCharacter` 在场换表情、换位缓动及缺席不入场语义；
 - 跨章节 fragment 调用与返回；
 - muted、repeat、playbackRate、blocking；
 - 原生句尾退格、连续退格和删完后等待一次新点击；

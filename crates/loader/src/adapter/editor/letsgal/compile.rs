@@ -93,7 +93,7 @@ fn core_value(value: &Value) -> Option<keine_core::Value> {
     }
 }
 
-/// Runtime-facing block registry observed in LetsGal Studio 1.9.8's bundled
+/// Runtime-facing block registry observed in LetsGal Studio 1.9.9's bundled
 /// editor schema. `cmdDraft` is editor-only and therefore intentionally not in
 /// this compatibility contract.
 pub(super) const BUILTIN_BLOCK_TYPES: &[&str] = &[
@@ -132,6 +132,7 @@ pub(super) const BUILTIN_BLOCK_TYPES: &[&str] = &[
     "switchDialogueStyle",
     "switchParagraphStyle",
     "systemMessage",
+    "updateCharacter",
     "video",
     "wait",
 ];
@@ -515,6 +516,7 @@ fn compile_block(
             push_dialogue_lifetime(block, span, report);
         }
         "showCharacter" => show_character(block, context, span, report),
+        "updateCharacter" => update_character(block, context, span, report),
         "removeCharacter" => report.push(
             Action::HideSprite {
                 id: character_id(block),
@@ -631,7 +633,7 @@ fn compile_block(
         "systemMessage" => compile_system_message(block, span, report),
         "enterAutoPlay" => report.push(Action::SetAutoplay { enabled: true }, span),
         "exitAutoPlay" => report.push(Action::SetAutoplay { enabled: false }, span),
-        _ => unreachable!("the 1.9.8 block registry is exhaustively matched"),
+        _ => unreachable!("the 1.9.9 block registry is exhaustively matched"),
     }
 }
 
@@ -712,6 +714,25 @@ fn show_character(
     span: SourceSpan,
     report: &mut ParseReport,
 ) {
+    compile_character(block, context, span, report, false);
+}
+
+fn update_character(
+    block: &StoryBlock,
+    context: &CompileContext<'_>,
+    span: SourceSpan,
+    report: &mut ParseReport,
+) {
+    compile_character(block, context, span, report, true);
+}
+
+fn compile_character(
+    block: &StoryBlock,
+    context: &CompileContext<'_>,
+    span: SourceSpan,
+    report: &mut ParseReport,
+    update: bool,
+) {
     let Some(character) = character(block, context) else {
         report.diagnostics.push(Diagnostic {
             level: DiagnosticLevel::Warning,
@@ -755,7 +776,7 @@ fn show_character(
                 level: DiagnosticLevel::Error,
                 span,
                 message: format!(
-                    "unsupported LetsGal 1.9.8 dynamic portrait type {kind:?}; \
+                    "unsupported LetsGal 1.9.9 dynamic portrait type {kind:?}; \
                      Kēne currently supports static and sequence portraits only"
                 ),
             });
@@ -826,7 +847,30 @@ fn show_character(
         scale_y: distance_scale,
         ..SpriteTransform::default()
     };
-    report.push(
+    let action = if update {
+        let duration = if prop_bool(&block.props, "placementTransitionEnabled", true) {
+            prop_f32(&block.props, "placementTransitionDuration", 350.0).max(0.0) / 1000.0
+        } else {
+            0.0
+        };
+        Action::UpdateSprite {
+            id: character.id.clone(),
+            image: image.clone(),
+            position,
+            layout: expression
+                .graphics_override
+                .height_ratio
+                .or_else(|| layout.and_then(|layout| layout.graphics.height_ratio))
+                .or(context.portrait_height_ratio)
+                .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
+                .map(SpriteLayout::ViewportHeight)
+                .unwrap_or(SpriteLayout::Natural),
+            scale: distance_scale,
+            duration,
+            easing: easing(&prop_string(&block.props, "placementTransitionEasing")),
+            blocking: prop_bool(&block.props, "placementTransitionBlocking", false),
+        }
+    } else {
         Action::ShowSprite {
             id: character.id.clone(),
             image: image.clone(),
@@ -843,9 +887,9 @@ fn show_character(
             transform,
             z_index: 100,
             blend: BlendMode::Alpha,
-        },
-        span,
-    );
+        }
+    };
+    report.push(action, span);
     if let Some(sequence) = sequence {
         report.push(
             Action::ConfigureSpriteSequence {
@@ -875,7 +919,7 @@ fn show_character(
             span,
         );
     }
-    if prop_bool(&block.props, "cameraBound", false) {
+    if !update && prop_bool(&block.props, "cameraBound", false) {
         report.push(
             Action::SetCameraBinding {
                 target: character.id.clone(),
@@ -2721,10 +2765,15 @@ fn easing(value: &str) -> Easing {
     match value.to_ascii_lowercase().as_str() {
         "in" | "easein" | "ease-in" | "inquad" | "incubic" | "inquart" | "inquint" | "insine"
         | "incirc" | "inexpo" => Easing::EaseIn,
-        "out" | "easeout" | "ease-out" | "outquad" | "outcubic" | "outquart" | "outquint"
-        | "outsine" | "outcirc" | "outexpo" => Easing::EaseOut,
-        "inout" | "easeinout" | "ease-in-out" | "inoutquad" | "inoutcubic" | "inoutquart"
-        | "inoutquint" | "inoutsine" | "inoutcirc" | "inoutexpo" => Easing::EaseInOut,
+        "outcubic" => Easing::OutCubic,
+        "outback" => Easing::OutBack,
+        "outbounce" => Easing::OutBounce,
+        "out" | "easeout" | "ease-out" | "outquad" | "outquart" | "outquint" | "outsine"
+        | "outcirc" | "outexpo" => Easing::EaseOut,
+        "inoutquad" => Easing::InOutQuad,
+        "inoutcubic" => Easing::InOutCubic,
+        "inout" | "easeinout" | "ease-in-out" | "inoutquart" | "inoutquint" | "inoutsine"
+        | "inoutcirc" | "inoutexpo" => Easing::EaseInOut,
         _ => Easing::Linear,
     }
 }
@@ -3026,8 +3075,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn studio_198_registry_is_exhaustively_matched() {
-        assert_eq!(BUILTIN_BLOCK_TYPES.len(), 37);
+    fn studio_199_registry_is_exhaustively_matched() {
+        assert_eq!(BUILTIN_BLOCK_TYPES.len(), 38);
         for required in [
             "playerInput",
             "enterAutoPlay",
@@ -3037,6 +3086,7 @@ mod tests {
             "hideFloatingText",
             "switchParagraphStyle",
             "systemMessage",
+            "updateCharacter",
         ] {
             assert!(BUILTIN_BLOCK_TYPES.contains(&required));
         }
@@ -3201,6 +3251,89 @@ mod tests {
                 diagnostic.level == DiagnosticLevel::Error && diagnostic.message.contains(kind)
             }));
         }
+    }
+
+    #[test]
+    fn studio_199_portrait_update_compiles_image_layout_and_motion() {
+        let character: CharacterDefinition = serde_json::from_value(json!({
+            "id": "hero",
+            "name": "Hero",
+            "expressions": [
+                {"name": "calm", "assetPath": "characters/calm.webp"},
+                {"name": "smile", "assetPath": "characters/smile.webp"}
+            ],
+            "portraitLayout": {
+                "defaultDistanceId": "middle",
+                "defaultPositionId": "center",
+                "distancePresets": [{
+                    "id": "near",
+                    "scale": 1.25,
+                    "positions": [{"id": "right", "left": 70, "top": 5}]
+                }]
+            }
+        }))
+        .unwrap();
+        let characters_document = CharactersDocument {
+            characters: vec![character.clone()],
+            ..CharactersDocument::default()
+        };
+        let positions = portrait_positions(&characters_document);
+        let characters = HashMap::from([("hero", &character)]);
+        let chapter_next = HashMap::new();
+        let scenes = HashMap::new();
+        let voices = HashMap::new();
+        let context = CompileContext {
+            entry: "entry",
+            chapter_next: &chapter_next,
+            characters: &characters,
+            scenes: &scenes,
+            voices: &voices,
+            positions: &positions,
+            portrait_height_ratio: None,
+        };
+        let block = StoryBlock {
+            id: None,
+            kind: "updateCharacter".into(),
+            content: Value::Null,
+            props: Map::from_iter([
+                ("characterId".into(), json!("hero")),
+                ("expression".into(), json!("smile")),
+                ("distance".into(), json!("near")),
+                ("position".into(), json!("right")),
+                ("placementTransitionEnabled".into(), json!(true)),
+                ("placementTransitionDuration".into(), json!(500)),
+                ("placementTransitionEasing".into(), json!("outCubic")),
+                ("placementTransitionBlocking".into(), json!(true)),
+            ]),
+            children: Vec::new(),
+            extras: Map::new(),
+        };
+        let mut report = ParseReport::default();
+
+        update_character(
+            &block,
+            &context,
+            SourceSpan { line: 1, column: 1 },
+            &mut report,
+        );
+
+        assert!(matches!(
+            &report.actions[0],
+            Action::UpdateSprite {
+                image,
+                position: Position { x: keine_core::Anchor::Left(x), y },
+                scale,
+                duration,
+                easing: Easing::OutCubic,
+                blocking: true,
+                ..
+            } if image == "characters/smile.webp"
+                && (*x - 1344.0).abs() < f32::EPSILON
+                && (*y - 54.0).abs() < f32::EPSILON
+                && (*scale - 1.25).abs() < f32::EPSILON
+                && (*duration - 0.5).abs() < f32::EPSILON
+        ));
+        assert!(report.diagnostics.is_empty());
     }
 
     #[test]
