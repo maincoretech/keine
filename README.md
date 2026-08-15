@@ -86,6 +86,14 @@ runtime. The first operation that needs a publisher identity creates
 distributed game. Later bundles reuse unchanged content segments when the
 previous output is available.
 
+The manual GitHub **Release** workflow defaults to a temporary publisher
+identity, so forks, `test-project`, and benchmark bundles need no secret setup.
+Temporary identities are deleted with the runner and are not suitable for
+shipping updates. For a stable production lineage, run `cargo assets --pack`
+once on a trusted machine, base64-encode the generated identity, store it as
+the `HAKUTAKU_IDENTITY_BASE64` repository secret, and select `stable` in the
+workflow. Never commit either form of the identity.
+
 Create a macOS application bundle with:
 
 ```bash

@@ -45,6 +45,20 @@ ELF `DT_RPATH` 中固定 `$ORIGIN/lib`，因此可以从任意工作目录直接
 Ed25519 发布身份，必须备份且不得随游戏发布。也可用 `KEINE_HAKUTAKU_IDENTITY` 指向外部
 身份文件；CI 使用 base64 的 `HAKUTAKU_IDENTITY_BASE64` secret 还原同一身份。
 
+GitHub 手动构建明确分成两种身份模式：
+
+- `temporary`（默认）：每个平台 runner 在其受限临时目录创建独立 identity，完成后删除；适合
+  fork、`test-project`、验收和 benchmark，不承诺跨平台或跨构建更新兼容；
+- `stable`：从仓库 Secret `HAKUTAKU_IDENTITY_BASE64` 恢复同一 identity；只用于正式发行和
+  后续更新。缺少 Secret 时在 checkout、工具链和媒体依赖安装之前失败。
+
+正式项目的 identity 在可信开发机首次执行 `cargo assets --pack <project>` 时自动生成。可用
+`openssl base64 -A -in <project>/.keine/publisher.hakutaku-key` 转成单行文本并添加到
+**Settings → Secrets and variables → Actions → Repository secrets**。Windows PowerShell 等价命令为
+`[Convert]::ToBase64String([IO.File]::ReadAllBytes('<path>'))`。这些输出都是完整私钥，不能进入
+Git、workflow 输入、日志或 Actions artifact。fork 不继承上游 Secret，必须使用 temporary 或
+配置自己的 stable identity。
+
 打包器为每次引擎构建产生随机 XOR key shares。loader build script 分别嵌入两份 share 和
 发布公钥，运行时才重组 AES-256 根密钥。这样不会让完整密钥以连续常量落入二进制，但离线
 客户端中的密钥仍可能被逆向提取；这是分发保护，不是不可破解的 DRM。

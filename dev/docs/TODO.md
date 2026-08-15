@@ -182,8 +182,8 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 - [x] macOS .app bundle 脚本
 - [x] Linux 统一 fmt、Clippy、workspace/publisher 测试；macOS / Windows backend 契约、
   真实媒体 acceptance 与三平台实际 backend release CI
-- [x] CI 加密发布 — 通过 `HAKUTAKU_IDENTITY_BASE64` Secret 复用发布身份，并确保
-  日志与 artifact 不泄露私钥
+- [x] CI 加密发布 — temporary 验收构建零配置，stable 构建通过
+  `HAKUTAKU_IDENTITY_BASE64` Secret 复用发布身份，并确保日志与 artifact 不泄露私钥
 
 Phase 7 已完成不依赖第三方专有 SDK 的工程主线。Live2D、Spine、Steam 和
 Flowchart 仍保留为可选适配工作，不能用静态占位或实验依赖冒充完成。逐步验收见

@@ -240,8 +240,9 @@ open target/bundle/macos/keine-demo.app
    测试；macOS/Windows 分别执行 native/FFmpeg backend 契约、真实 fixture 解码，并在
    三个平台构建各自实际启用 backend 的 release。Windows 的精简 vcpkg FFmpeg binary
    cache 在 SDK 安装后立即保存，不依赖后续测试全部成功。
-   配置仓库 Secret `HAKUTAKU_IDENTITY_BASE64` 后手动运行 Release workflow；三个平台
-   artifact 均应只包含引擎、`game.haku` 和 `data/`，不得包含启动脚本，日志不显示发布身份。
+   手动运行 Release workflow 时，temporary 模式无需 Secret，stable 模式必须配置仓库 Secret
+   `HAKUTAKU_IDENTITY_BASE64`；三个平台 artifact 均应只包含引擎、`game.haku` 和 `data/`，
+   不得包含启动脚本，日志不显示发布身份。temporary artifact 只用于验收，不参与更新链。
 
 ### 外部媒体适配边界
 

@@ -32,10 +32,11 @@ memory-counter feature, hidden-window mode, automatic exit, and disabled
 persistence exist only in the separately built benchmark package. Ordinary
 releases and tests follow their existing paths unchanged. GitHub's manual
 Release workflow exposes the same `benchmark` switch and uploads artifacts such
-as `keine-windows-x64-benchmark`. On GitHub, open **Actions**, select the
+as `keine-windows-x64-temporary-benchmark`. On GitHub, open **Actions**, select the
 specific **Release** workflow (the **All workflows** page does not show its run
-button), choose **Run workflow**, and enable `benchmark` only when a performance
-package is needed. After all three platform jobs pass, CI updates the rolling
+button), choose **Run workflow**, keep publisher identity set to `temporary`,
+and enable `benchmark` only when a performance package is needed. No repository
+secret is required for this path. After all three platform jobs pass, CI updates the rolling
 `benchmark-latest` prerelease with one ZIP per platform; testers do not need
 access to the workflow-run artifact page. Ordinary release runs leave the
 option disabled and do not build or publish benchmark packages.

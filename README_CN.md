@@ -79,6 +79,11 @@ target/bundle/
 组装匹配的运行时。首次需要发布身份时会创建 `.keine/publisher.hakutaku-key`；请备份
 它，并且不要随游戏分发。保留上一版输出时，后续打包会复用未变化的内容 segment。
 
+GitHub 手动 **Release** workflow 默认使用临时发布身份，因此 fork、`test-project` 和
+benchmark 构建不需要预配 Secret；临时身份随 runner 删除，不适合正式更新。正式发行时，先在
+可信机器运行一次 `cargo assets --pack`，把生成的 identity 转成 base64 后保存为仓库 Secret
+`HAKUTAKU_IDENTITY_BASE64`，再在 workflow 中选择 `stable`。两种形态都不得提交到 Git。
+
 生成 macOS 应用包：
 
 ```bash
