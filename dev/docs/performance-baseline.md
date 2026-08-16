@@ -20,9 +20,9 @@ or run `./keine` once on macOS/Linux. The package writes
 
 - seven isolated process-start samples with the first launch separated from
   the repeat-launch median, plus peak RSS;
-- three settled five-second rendering samples after three-second warm-ups:
-  an ordinary dialogue composition, a single portrait movement, and a normal
-  background crossfade;
+- twelve settled five-second rendering samples after three-second warm-ups:
+  three daily workloads, all eight authored feature-coverage timelines, and
+  one intentionally combined stress workload;
 - average FPS, 1% low, frame-time percentiles, entity/asset counts, peak RSS,
   GPU identification, and available render diagnostics.
 
@@ -42,10 +42,16 @@ secret is required for this path. After all three platform jobs pass, CI updates
 access to the workflow-run artifact page. Ordinary release runs leave the
 option disabled and do not build or publish benchmark packages.
 
-The portable package deliberately excludes exhaustive effect coverage and
-camera-composition A/B probes. Those remain available through `cargo perf` for
-developer diagnosis, while the one-click package represents operations a
-player routinely sees.
+The report separates daily, feature-coverage, and stress results so an extreme
+number cannot be mistaken for normal gameplay. The coverage group exercises all
+79 StageProperty values and all five timed event families authored by the
+`test-project`; the stress group deliberately combines expensive effects,
+portrait/background motion, 256 rain particles, camera shake, and a crossfade.
+Instant control-flow, input, and persistence actions stay in the workspace
+correctness suite: treating their completed static frame as a five-second
+render workload would claim performance coverage without measuring their work.
+Benchmark-only camera-composition A/B probes remain available through
+`cargo perf` for developer diagnosis.
 
 ### 2026-08-16 representative-workload baseline
 
@@ -54,27 +60,43 @@ The portable suite moved its render phase into a dedicated, unreachable
 feature, while benchmark reconstruction enters a compact dialogue scene with a
 background, portrait, textbox, and name box. It then measures ordinary dialogue
 composition, one portrait move, and one 550 ms background crossfade. This
-replaces the previous mixture of exhaustive effect timelines and benchmark-only
-camera ablations.
+daily group replaces the previous mixture of ordinary and diagnostic workloads;
+the complete authored timelines now follow in their own coverage group, with a
+separate combined stress result last.
 
 The final self-running Release/LTO package with `startup-metrics` on the M5 Pro
-reference machine produced a 1,057.14 ms first interactive launch and a
-277.59 ms repeat-launch median. App construction took 295.35 ms on the first
-run and 127.94 ms subsequently; first-use GPU/pipeline initialization accounts
-for most of the remaining difference. The report now exposes that launch
-directly instead of hiding it in a seven-sample percentile.
+reference machine produced a 1,892.78 ms first interactive launch and a
+273.73 ms repeat-launch median. App construction took 1,742.29 ms on the first
+run and 127.66 ms subsequently; first-use linking/cache/GPU work therefore must
+remain visible rather than being hidden in a seven-sample percentile.
 
 | Representative workload | Avg FPS | 1% low | P95 | P99 | Max | Peak RSS |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Dialogue composition | 60.0 | 56.5 | 17.36 ms | 17.69 ms | 17.98 ms | 213.7 MiB |
-| Portrait movement | 60.0 | 56.8 | 17.47 ms | 17.61 ms | 17.74 ms | 213.6 MiB |
-| Background crossfade | 60.0 | 56.6 | 17.39 ms | 17.67 ms | 23.54 ms | 214.0 MiB |
+| Dialogue composition | 60.0 | 56.8 | 17.40 ms | 17.61 ms | 17.63 ms | 214.4 MiB |
+| Portrait movement | 60.0 | 56.4 | 17.59 ms | 17.73 ms | 17.96 ms | 214.6 MiB |
+| Background crossfade | 60.0 | 53.5 | 17.73 ms | 18.69 ms | 23.31 ms | 214.6 MiB |
 
 Each workload rendered 371 entities and retained 10 decoded images / 5.0 MiB
-of CPU pixels plus two fonts / 9.8 MiB of source data. These results are the new
-portable comparison baseline. The older table below is retained as historical
-evidence for the superseded diagnostic-heavy suite and must not be compared
-row-for-row with this one.
+of CPU pixels plus two fonts / 9.8 MiB of source data.
+
+| Feature-coverage workload | Avg FPS | 1% low | P95 | P99 | Max | Peak RSS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Shared transforms | 60.0 | 57.1 | 17.18 ms | 17.51 ms | 17.84 ms | 211.5 MiB |
+| Classic camera | 60.0 | 56.5 | 17.52 ms | 17.70 ms | 17.97 ms | 212.0 MiB |
+| Optical effects | 60.0 | 56.7 | 17.35 ms | 17.64 ms | 17.81 ms | 210.3 MiB |
+| Blur family | 60.0 | 56.6 | 17.42 ms | 17.66 ms | 17.73 ms | 210.7 MiB |
+| Atmosphere effects | 60.0 | 58.8 | 16.88 ms | 16.99 ms | 17.96 ms | 210.6 MiB |
+| Retro and mask effects | 60.0 | 55.0 | 17.65 ms | 18.20 ms | 19.48 ms | 210.3 MiB |
+| Timed event types | 60.0 | 52.1 | 17.91 ms | 19.21 ms | 24.58 ms | 209.2 MiB |
+| Playback controls | 60.0 | 58.3 | 16.99 ms | 17.15 ms | 17.61 ms | 210.9 MiB |
+| Combined stress | 60.0 | 58.0 | 16.96 ms | 17.24 ms | 17.47 ms | 215.2 MiB |
+
+The timed-event row, not the sustained combined-stress row, has the worst tail
+latency in this capture. That points follow-up profiling toward event-triggered
+resource/state changes rather than continuous multi-effect rendering. These
+results are the new portable comparison baseline. The older table below is
+retained as historical evidence for the superseded diagnostic-heavy suite and
+must not be compared row-for-row with this one.
 
 ### 2026-08-15 portable-package verification (legacy workload suite)
 

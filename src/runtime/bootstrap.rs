@@ -38,6 +38,49 @@ use crate::runtime::resources::{
 use crate::ui::performance::BenchmarkTarget;
 
 const MAX_PROJECT_CONFIG_BYTES: usize = 256 * 1024;
+type BenchmarkWorkload = (&'static str, &'static str);
+type BenchmarkSection = (&'static str, &'static [BenchmarkWorkload]);
+
+const DAILY_BENCHMARK_WORKLOADS: &[BenchmarkWorkload] = &[
+    (
+        "representative dialogue · full composition",
+        "benchmark representative dialogue",
+    ),
+    (
+        "representative portrait motion · full composition",
+        "benchmark representative portrait motion",
+    ),
+    (
+        "representative scene transition · full composition",
+        "benchmark representative scene transition",
+    ),
+];
+const FEATURE_BENCHMARK_WORKLOADS: &[BenchmarkWorkload] = &[
+    ("shared transforms", "10-01 shared transform clock"),
+    ("classic camera", "10-02 classic camera properties"),
+    ("optical effects", "10-03 optical effects"),
+    ("blur family", "10-04 blur family"),
+    ("atmosphere effects", "10-05 atmosphere effects"),
+    ("retro and mask effects", "10-06 retro and eyelid mask"),
+    ("timed event types", "10-07 all event types"),
+    ("playback controls", "10-08 playback options"),
+];
+const STRESS_BENCHMARK_WORKLOADS: &[BenchmarkWorkload] =
+    &[("stress composition", "benchmark stress composition")];
+const PORTABLE_BENCHMARK_SECTIONS: &[BenchmarkSection] = &[
+    (
+        "daily workloads · representative player-facing actions",
+        DAILY_BENCHMARK_WORKLOADS,
+    ),
+    (
+        "feature coverage · every authored timeline property and event family",
+        FEATURE_BENCHMARK_WORKLOADS,
+    ),
+    (
+        "stress workload · intentionally combined peak load",
+        STRESS_BENCHMARK_WORKLOADS,
+    ),
+];
 
 #[derive(Clone, Default)]
 struct LaunchOptions {
@@ -333,62 +376,60 @@ fn run_startup_suite(project_path: &Path, runs: usize) -> Result<String> {
 fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) -> Result<()> {
     let executable = std::env::current_exe().context("failed to locate benchmark executable")?;
     let mut report = run_startup_suite(project_path, runs)?;
-    let workloads = [
-        (
-            "representative dialogue · full composition",
-            "benchmark representative dialogue",
-            "full",
-        ),
-        (
-            "representative portrait motion · full composition",
-            "benchmark representative portrait motion",
-            "full",
-        ),
-        (
-            "representative scene transition · full composition",
-            "benchmark representative scene transition",
-            "full",
-        ),
-    ];
-    for (label, target, profile) in workloads {
+    for (section, workloads) in PORTABLE_BENCHMARK_SECTIONS {
         emit_report_line(&mut report, "");
-        emit_report_line(
-            &mut report,
-            format!("settled render · {label} · 3.0s warm-up + 5.0s sample"),
-        );
-        let output = Command::new(&executable)
-            .arg("benchmark")
-            .arg(project_path)
-            .arg("5")
-            .arg(target)
-            .arg(profile)
-            .env(RUNTIME_BENCHMARK_CHILD_ENV, "1")
-            .output()
-            .with_context(|| format!("failed to start {label} benchmark"))?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if !output.status.success() {
-            anyhow::bail!(
-                "{label} benchmark failed with {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
-                output.status,
-            );
-        }
-        if target != "0" && !stderr.contains("resolved cursor Some(") {
-            anyhow::bail!("{label} benchmark did not resolve timeline {target:?}\n{stderr}");
-        }
-        let mut captured = 0;
-        for line in stdout.lines().chain(stderr.lines()) {
-            if benchmark_report_line(line) {
-                emit_report_line(&mut report, line.trim());
-                captured += 1;
-            }
-        }
-        if captured == 0 {
-            anyhow::bail!("{label} benchmark completed without performance output");
+        emit_report_line(&mut report, section);
+        for (label, target) in *workloads {
+            run_benchmark_workload(&executable, project_path, label, target, &mut report)?;
         }
     }
     crate::storage::write_atomically(report_path, report.as_bytes())?;
     println!("benchmark report written to {}", report_path.display());
+    Ok(())
+}
+
+fn run_benchmark_workload(
+    executable: &Path,
+    project_path: &Path,
+    label: &str,
+    target: &str,
+    report: &mut String,
+) -> Result<()> {
+    emit_report_line(report, "");
+    emit_report_line(
+        report,
+        format!("settled render · {label} · 3.0s warm-up + 5.0s sample"),
+    );
+    let output = Command::new(executable)
+        .arg("benchmark")
+        .arg(project_path)
+        .arg("5")
+        .arg(target)
+        .arg("full")
+        .env(RUNTIME_BENCHMARK_CHILD_ENV, "1")
+        .output()
+        .with_context(|| format!("failed to start {label} benchmark"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        anyhow::bail!(
+            "{label} benchmark failed with {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+            output.status,
+        );
+    }
+    if !stderr.contains("resolved cursor Some(") {
+        anyhow::bail!("{label} benchmark did not resolve timeline {target:?}\n{stderr}");
+    }
+    let mut captured = 0;
+    for line in stdout.lines().chain(stderr.lines()) {
+        if benchmark_report_line(line) {
+            emit_report_line(report, line.trim());
+            captured += 1;
+        }
+    }
+    if captured == 0 {
+        anyhow::bail!("{label} benchmark completed without performance output");
+    }
     Ok(())
 }
 
@@ -1193,6 +1234,19 @@ mod tests {
         assert!(report.contains("first run / repeat median"));
         assert!(report.contains("app built   · 1400.00 / 130.00 ms"));
         assert!(report.contains("interactive · 1600.00 / 290.00 ms"));
+    }
+
+    #[test]
+    fn portable_benchmark_keeps_daily_coverage_and_stress_groups_distinct() {
+        let targets = PORTABLE_BENCHMARK_SECTIONS
+            .iter()
+            .flat_map(|(_, workloads)| workloads.iter().map(|(_, target)| *target))
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(DAILY_BENCHMARK_WORKLOADS.len(), 3);
+        assert_eq!(FEATURE_BENCHMARK_WORKLOADS.len(), 8);
+        assert_eq!(STRESS_BENCHMARK_WORKLOADS.len(), 1);
+        assert_eq!(targets.len(), 12);
     }
 
     #[test]

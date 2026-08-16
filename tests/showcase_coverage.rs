@@ -219,7 +219,7 @@ fn letsgal_1_9_showcase_exercises_every_timeline_property_and_event() {
                 Action::RetractDialogue { .. } => retractions += 1,
                 Action::StageAnimation { animation } => {
                     animations += 1;
-                    if animation.id.starts_with("benchmark representative ") {
+                    if animation.id.starts_with("benchmark ") {
                         benchmark_timelines.insert(animation.id.clone());
                     }
                     has_repeated_fast_blocking_clip |= animation.repeat == 1
@@ -249,7 +249,7 @@ fn letsgal_1_9_showcase_exercises_every_timeline_property_and_event() {
         }
     }
 
-    assert_eq!(animations, 11);
+    assert_eq!(animations, 12);
     assert_eq!(retractions, 3);
     assert_eq!(
         targets,
@@ -351,6 +351,7 @@ fn letsgal_1_9_showcase_exercises_every_timeline_property_and_event() {
             "benchmark representative dialogue".into(),
             "benchmark representative portrait motion".into(),
             "benchmark representative scene transition".into(),
+            "benchmark stress composition".into(),
         ])
     );
 }

@@ -621,7 +621,7 @@ fn has_feature(features: &str, wanted: &str) -> bool {
     features.split(',').any(|feature| feature == wanted)
 }
 
-const BENCHMARK_README: &str = "Kēne performance benchmark\n\nWindows: double-click keine.exe once.\nmacOS/Linux: run ./keine once in a terminal.\n\nThe package measures seven isolated startup runs followed by three representative\nvisual-novel workloads: ordinary dialogue composition, portrait movement, and a\nbackground crossfade. It uses an invisible real window and GPU surface, not a\nheadless renderer, so rendering costs remain in the results without interrupting\nnormal desktop use. Persistence is disabled. When complete, send\nkeine-benchmark-report.txt from this directory to the developer. Do not move the\nexecutable away from game.haku or the data directory.\n";
+const BENCHMARK_README: &str = "Kēne performance benchmark\n\nWindows: double-click keine.exe once.\nmacOS/Linux: run ./keine once in a terminal.\n\nThe package measures seven isolated startup runs, three representative daily\nvisual-novel workloads, all eight authored feature-coverage timelines, and one\nintentionally combined stress workload. Daily, coverage, and stress results are\nreported separately. It uses an invisible real window and GPU surface, not a\nheadless renderer, so rendering costs remain in the results without interrupting\nnormal desktop use. Persistence is disabled. When complete, send\nkeine-benchmark-report.txt from this directory to the developer. Do not move the\nexecutable away from game.haku or the data directory.\n";
 
 #[cfg(test)]
 mod tests {

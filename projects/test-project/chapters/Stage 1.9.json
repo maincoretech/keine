@@ -515,6 +515,41 @@
               ]
             }
           }
+        },
+        {
+          "id": "benchmark-90-stress-composition",
+          "type": "stageAnimation",
+          "content": null,
+          "props": {
+            "name": "benchmark stress composition",
+            "loop": "0",
+            "playbackRate": "1",
+            "waitForComplete": "true",
+            "clipJson": {
+              "version": 1,
+              "duration": 5000,
+              "tracks": [
+                { "target": { "kind": "camera" }, "property": "zoom", "keyframes": [{ "time": 0, "value": 1 }, { "time": 2500, "value": 1.08, "easing": "easeInOut" }, { "time": 5000, "value": 1, "easing": "easeInOut" }] },
+                { "target": { "kind": "camera" }, "property": "bloomIntensity", "keyframes": [{ "time": 0, "value": 0.2 }, { "time": 2500, "value": 0.75 }, { "time": 5000, "value": 0.2 }] },
+                { "target": { "kind": "camera" }, "property": "radialBlurStrength", "keyframes": [{ "time": 0, "value": 0.1 }, { "time": 2500, "value": 0.65 }, { "time": 5000, "value": 0.1 }] },
+                { "target": { "kind": "camera" }, "property": "motionBlurStrength", "keyframes": [{ "time": 0, "value": 0.1 }, { "time": 2500, "value": 0.6 }, { "time": 5000, "value": 0.1 }] },
+                { "target": { "kind": "camera" }, "property": "zoomBlurStrength", "keyframes": [{ "time": 0, "value": 0.1 }, { "time": 2500, "value": 0.6 }, { "time": 5000, "value": 0.1 }] },
+                { "target": { "kind": "camera" }, "property": "heatHazeIntensity", "keyframes": [{ "time": 0, "value": 0.15 }, { "time": 2500, "value": 0.7 }, { "time": 5000, "value": 0.15 }] },
+                { "target": { "kind": "camera" }, "property": "waterRippleIntensity", "keyframes": [{ "time": 0, "value": 0.1 }, { "time": 2500, "value": 0.65 }, { "time": 5000, "value": 0.1 }] },
+                { "target": { "kind": "camera" }, "property": "fogIntensity", "keyframes": [{ "time": 0, "value": 0.15 }, { "time": 2500, "value": 0.7 }, { "time": 5000, "value": 0.15 }] },
+                { "target": { "kind": "camera" }, "property": "filmGrainIntensity", "keyframes": [{ "time": 0, "value": 0.15 }, { "time": 2500, "value": 0.7 }, { "time": 5000, "value": 0.15 }] },
+                { "target": { "kind": "camera" }, "property": "vignetteIntensity", "keyframes": [{ "time": 0, "value": 0.15 }, { "time": 2500, "value": 0.7 }, { "time": 5000, "value": 0.15 }] },
+                { "target": { "kind": "character", "characterId": "aya", "expressionName": "smile" }, "property": "x", "keyframes": [{ "time": 0, "value": -140 }, { "time": 2500, "value": 140, "easing": "easeInOut" }, { "time": 5000, "value": -140, "easing": "easeInOut" }] },
+                { "target": { "kind": "character", "characterId": "aya", "expressionName": "smile" }, "property": "scaleY", "keyframes": [{ "time": 0, "value": 0.95 }, { "time": 2500, "value": 1.08, "easing": "easeInOut" }, { "time": 5000, "value": 0.95, "easing": "easeInOut" }] },
+                { "target": { "kind": "sceneLayer", "layerId": "main" }, "property": "x", "keyframes": [{ "time": 0, "value": -40 }, { "time": 2500, "value": 40, "easing": "easeInOut" }, { "time": 5000, "value": -40, "easing": "easeInOut" }] }
+              ],
+              "events": [
+                { "type": "particleCue", "time": 250, "data": { "id": "benchmark-heavy-rain", "preset": "HEAVY_RAIN", "duration": 4500, "fadeInDuration": 150, "fadeOutDuration": 350, "options": { "count": 256, "wind": 0.45, "gravity": 1.4 } } },
+                { "type": "cameraShake", "time": 1200, "data": { "amplitude": 14, "frequency": 24, "duration": 900, "axis": "both", "falloff": "expo" } },
+                { "type": "sceneCue", "time": 2500, "data": { "sceneId": "scene-sunset", "resetCamera": false, "transition": "crossfade", "transitionDuration": 700 } }
+              ]
+            }
+          }
         }
       ]
     }
