@@ -98,6 +98,30 @@ results are the new portable comparison baseline. The older table below is
 retained as historical evidence for the superseded diagnostic-heavy suite and
 must not be compared row-for-row with this one.
 
+#### 2026-08-16 timeline resource-prefetch optimization
+
+The loader resource manifest previously omitted assets nested in
+`StageAnimation`, and the runtime lookahead started at the already-advanced
+cursor. Scene-cue layers, particle textures, character targets, and timed audio
+could therefore enter Bevy's asynchronous load queue only when their event
+fired. The manifest now includes those resources and retains the currently
+running action in the lookahead window. This follows Bevy's strong-handle model:
+request the load early and keep its handle alive so event execution can reuse
+the loaded asset instead of starting work on the trigger frame.
+
+The pre-change values below are from the final portable package report above.
+The post-change values are medians of three consecutive five-second Release/LTO
+captures on the same M5 Pro, each after the standard three-second warm-up.
+
+| Hotspot | 1% low before | 1% low after | P99 before | P99 after | Max before | Max after |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Background crossfade | 53.5 | 56.1 | 18.69 ms | 17.81 ms | 23.31 ms | 19.00 ms |
+| All timed event types | 52.1 | 56.2 | 19.21 ms | 17.78 ms | 24.58 ms | 18.09 ms |
+
+Both workloads remained at 60.0 average FPS. The event-triggered maximum fell
+by 26.4%, and neither three-run verification reproduced the original 23–25 ms
+spike.
+
 ### 2026-08-15 portable-package verification (legacy workload suite)
 
 The first complete portable benchmark run on the M5 Pro reference

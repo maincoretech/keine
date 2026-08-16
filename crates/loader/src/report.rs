@@ -124,6 +124,40 @@ fn collect_references(
                 resource(texture, ResourceKind::Particle);
             }
         }
+        Action::StageAnimation { animation } => {
+            for track in &animation.tracks {
+                if let keine_core::StageTarget::Character {
+                    image: Some(image), ..
+                } = &track.target
+                {
+                    resource(image, ResourceKind::Figure);
+                }
+            }
+            for event in &animation.events {
+                match &event.kind {
+                    keine_core::StageEventKind::Particle { effect, .. } => {
+                        if let Some(texture) = &effect.texture {
+                            resource(texture, ResourceKind::Particle);
+                        }
+                    }
+                    keine_core::StageEventKind::Scene(cue) => {
+                        for layer in &cue.layers {
+                            resource(&layer.image, ResourceKind::Figure);
+                        }
+                    }
+                    keine_core::StageEventKind::Audio(cue) => resource(
+                        &cue.file,
+                        match cue.kind {
+                            keine_core::StageAudioKind::Bgm => ResourceKind::Bgm,
+                            keine_core::StageAudioKind::Effect => ResourceKind::Effect,
+                            keine_core::StageAudioKind::Vocal => ResourceKind::Voice,
+                        },
+                    ),
+                    keine_core::StageEventKind::CameraShake(_)
+                    | keine_core::StageEventKind::CameraPatch { .. } => {}
+                }
+            }
+        }
         Action::PlayVideo { video } => resource(&video.file, ResourceKind::Video),
         Action::MiniAvatar { image } => resource(image, ResourceKind::MiniAvatar),
         Action::Unlock { kind, file, .. } => resource(

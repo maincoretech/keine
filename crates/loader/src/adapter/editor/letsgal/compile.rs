@@ -3835,7 +3835,7 @@ mod tests {
                         "events": [
                             {"type":"cameraShake","time":100,"data":{"amplitude":7,"frequency":15,"duration":250,"axis":"x","falloff":"expo"}},
                             {"type":"cameraPatch","time":200,"data":{"targets":["scene"],"patch":{"fogIntensity":0.4}}},
-                            {"type":"particleCue","time":300,"data":{"id":"snow","preset":"LIGHT_SNOW","duration":600,"fadeOutDuration":100,"options":{"count":24,"wind":2,"gravity":3}}},
+                            {"type":"particleCue","time":300,"data":{"id":"snow","preset":"LIGHT_SNOW","texture":"particles/snow.png","duration":600,"fadeOutDuration":100,"options":{"count":24,"wind":2,"gravity":3}}},
                             {"type":"sceneCue","time":400,"data":{"sceneId":"winter","resetCamera":true,"layers":[{"id":"fog","assetPath":"background/fog.png","distance":2,"offset":"(12,24)"}]}},
                             {"type":"audioCue","time":500,"duration":750,"soundType":"SE","uri":"audio/bell.opus","volume":0.4,"loop":false,"fadeInDuration":25,"fadeOutDuration":80,"soundId":"bell"},
                             {"type":"audioCue","time":600,"muted":true,"soundType":"BGM","uri":"audio/muted.opus"}
@@ -3900,6 +3900,19 @@ mod tests {
                     && (cue.volume - 0.4).abs() <= f32::EPSILON
                     && (cue.duration - 0.75).abs() <= f32::EPSILON
         ));
+        assert_eq!(
+            report
+                .resources
+                .iter()
+                .map(|resource| (resource.path.as_str(), resource.kind))
+                .collect::<Vec<_>>(),
+            vec![
+                ("characters/smile.png", crate::ResourceKind::Figure),
+                ("particles/snow.png", crate::ResourceKind::Particle),
+                ("background/fog.png", crate::ResourceKind::Figure),
+                ("audio/bell.opus", crate::ResourceKind::Effect),
+            ]
+        );
     }
 
     #[test]

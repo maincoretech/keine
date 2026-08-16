@@ -11,6 +11,13 @@ use crate::ui::foundation::UiFonts;
 
 const LOOKAHEAD_ACTIONS: usize = 20;
 
+fn prefetch_action_window(cursor: usize) -> std::ops::RangeInclusive<usize> {
+    // Script execution advances the cursor as soon as an action starts. Keep
+    // that active action in the warm set so long timelines can load embedded
+    // event assets before their authored trigger time.
+    cursor.saturating_sub(1)..=cursor.saturating_add(LOOKAHEAD_ACTIONS)
+}
+
 #[derive(Default)]
 struct AssetPlan {
     retained: HashMap<String, ResourceKind>,
@@ -133,9 +140,12 @@ pub fn prefetch_local_assets(
         (state.current_scene.clone(), state.cursor)
     };
     if let Some(scene) = manifest.get(&scene_name) {
-        for resource in scene.resources.iter().filter(|resource| {
-            resource.action_index >= cursor && resource.action_index <= cursor + LOOKAHEAD_ACTIONS
-        }) {
+        let window = prefetch_action_window(cursor);
+        for resource in scene
+            .resources
+            .iter()
+            .filter(|resource| window.contains(&resource.action_index))
+        {
             let path = resource.resolved_path(&config);
             plan.warm(path, resource.kind);
         }
@@ -285,6 +295,16 @@ mod tests {
         assert!(previous.matches(&GameState(state.clone())));
         state.cursor += 1;
         assert!(!previous.matches(&GameState(state)));
+    }
+
+    #[test]
+    fn prefetch_window_keeps_the_action_that_advanced_the_cursor() {
+        let window = prefetch_action_window(12);
+
+        assert!(window.contains(&11));
+        assert!(window.contains(&12));
+        assert!(window.contains(&(12 + LOOKAHEAD_ACTIONS)));
+        assert!(!window.contains(&10));
     }
 
     #[test]
