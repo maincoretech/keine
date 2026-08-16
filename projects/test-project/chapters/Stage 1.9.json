@@ -438,6 +438,85 @@
           "props": {}
         }
       ]
+    },
+    {
+      "id": "fragment-benchmark-journey",
+      "name": "Portable benchmark representative journey",
+      "blocks": [
+        {
+          "id": "benchmark-00-scene",
+          "type": "scene",
+          "content": null,
+          "props": { "sceneId": "scene-day", "transitionType": "instant", "transitionDuration": "0", "waitForComplete": "false", "resetCamera": "true" }
+        },
+        {
+          "id": "benchmark-00-character",
+          "type": "showCharacter",
+          "content": null,
+          "props": { "characterId": "aya", "expression": "smile", "position": "center", "animated": "false" }
+        },
+        {
+          "id": "benchmark-00-dialogue",
+          "type": "dialogue",
+          "content": [{ "type": "text", "text": "放学后的教室安静下来。她站在窗边，等着下一句话。" }],
+          "props": { "characterId": "aya", "expression": "smile", "position": "center", "showCharacter": "false", "keepCharacter": "true" }
+        },
+        {
+          "id": "benchmark-01-dialogue-render",
+          "type": "stageAnimation",
+          "content": null,
+          "props": {
+            "name": "benchmark representative dialogue",
+            "loop": "0",
+            "playbackRate": "1",
+            "waitForComplete": "true",
+            "clipJson": {
+              "version": 1,
+              "duration": 5000,
+              "tracks": [],
+              "events": []
+            }
+          }
+        },
+        {
+          "id": "benchmark-02-portrait-motion",
+          "type": "stageAnimation",
+          "content": null,
+          "props": {
+            "name": "benchmark representative portrait motion",
+            "loop": "0",
+            "playbackRate": "1",
+            "waitForComplete": "true",
+            "clipJson": {
+              "version": 1,
+              "duration": 5000,
+              "tracks": [
+                { "target": { "kind": "character", "characterId": "aya", "expressionName": "smile" }, "property": "x", "keyframes": [{ "time": 0, "value": 0 }, { "time": 2500, "value": 180, "easing": "easeInOut" }, { "time": 5000, "value": 0, "easing": "easeInOut" }] }
+              ],
+              "events": []
+            }
+          }
+        },
+        {
+          "id": "benchmark-03-scene-transition",
+          "type": "stageAnimation",
+          "content": null,
+          "props": {
+            "name": "benchmark representative scene transition",
+            "loop": "0",
+            "playbackRate": "1",
+            "waitForComplete": "true",
+            "clipJson": {
+              "version": 1,
+              "duration": 8000,
+              "tracks": [],
+              "events": [
+                { "type": "sceneCue", "time": 4000, "data": { "sceneId": "scene-sunset", "resetCamera": true, "transition": "crossfade", "transitionDuration": 550 } }
+              ]
+            }
+          }
+        }
+      ]
     }
   ]
 }

@@ -206,6 +206,7 @@ fn letsgal_1_9_showcase_exercises_every_timeline_property_and_event() {
     let mut retractions = 0;
     let mut has_muted_track = false;
     let mut has_repeated_fast_blocking_clip = false;
+    let mut benchmark_timelines = BTreeSet::new();
     for scene in scenes {
         assert!(
             scene.diagnostics.is_empty(),
@@ -218,6 +219,9 @@ fn letsgal_1_9_showcase_exercises_every_timeline_property_and_event() {
                 Action::RetractDialogue { .. } => retractions += 1,
                 Action::StageAnimation { animation } => {
                     animations += 1;
+                    if animation.id.starts_with("benchmark representative ") {
+                        benchmark_timelines.insert(animation.id.clone());
+                    }
                     has_repeated_fast_blocking_clip |= animation.repeat == 1
                         && (animation.playback_rate - 1.5).abs() <= f32::EPSILON
                         && animation.blocking;
@@ -245,7 +249,7 @@ fn letsgal_1_9_showcase_exercises_every_timeline_property_and_event() {
         }
     }
 
-    assert_eq!(animations, 8);
+    assert_eq!(animations, 11);
     assert_eq!(retractions, 3);
     assert_eq!(
         targets,
@@ -341,6 +345,14 @@ fn letsgal_1_9_showcase_exercises_every_timeline_property_and_event() {
     );
     assert!(has_muted_track);
     assert!(has_repeated_fast_blocking_clip);
+    assert_eq!(
+        benchmark_timelines,
+        BTreeSet::from([
+            "benchmark representative dialogue".into(),
+            "benchmark representative portrait motion".into(),
+            "benchmark representative scene transition".into(),
+        ])
+    );
 }
 
 fn record(action: &Action, coverage: &mut Coverage) {

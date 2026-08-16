@@ -18,10 +18,11 @@ The output directory is always suffixed `-benchmark` (the default is
 or run `./keine` once on macOS/Linux. The package writes
 `keine-benchmark-report.txt` beside the executable after completing:
 
-- seven isolated process-start samples with median/p95 and peak RSS;
-- seven settled five-second rendering samples after three-second warm-ups:
-  the initial, blur, atmosphere, and complete-event workloads plus scene + UI,
-  scene + dialog, and scene-only camera comparisons;
+- seven isolated process-start samples with the first launch separated from
+  the repeat-launch median, plus peak RSS;
+- three settled five-second rendering samples after three-second warm-ups:
+  an ordinary dialogue composition, a single portrait movement, and a normal
+  background crossfade;
 - average FPS, 1% low, frame-time percentiles, entity/asset counts, peak RSS,
   GPU identification, and available render diagnostics.
 
@@ -41,7 +42,41 @@ secret is required for this path. After all three platform jobs pass, CI updates
 access to the workflow-run artifact page. Ordinary release runs leave the
 option disabled and do not build or publish benchmark packages.
 
-### 2026-08-15 portable-package verification
+The portable package deliberately excludes exhaustive effect coverage and
+camera-composition A/B probes. Those remain available through `cargo perf` for
+developer diagnosis, while the one-click package represents operations a
+player routinely sees.
+
+### 2026-08-16 representative-workload baseline
+
+The portable suite moved its render phase into a dedicated, unreachable
+`test-project` fragment. The normal acceptance story still covers every engine
+feature, while benchmark reconstruction enters a compact dialogue scene with a
+background, portrait, textbox, and name box. It then measures ordinary dialogue
+composition, one portrait move, and one 550 ms background crossfade. This
+replaces the previous mixture of exhaustive effect timelines and benchmark-only
+camera ablations.
+
+The final self-running Release/LTO package with `startup-metrics` on the M5 Pro
+reference machine produced a 1,057.14 ms first interactive launch and a
+277.59 ms repeat-launch median. App construction took 295.35 ms on the first
+run and 127.94 ms subsequently; first-use GPU/pipeline initialization accounts
+for most of the remaining difference. The report now exposes that launch
+directly instead of hiding it in a seven-sample percentile.
+
+| Representative workload | Avg FPS | 1% low | P95 | P99 | Max | Peak RSS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Dialogue composition | 60.0 | 56.5 | 17.36 ms | 17.69 ms | 17.98 ms | 213.7 MiB |
+| Portrait movement | 60.0 | 56.8 | 17.47 ms | 17.61 ms | 17.74 ms | 213.6 MiB |
+| Background crossfade | 60.0 | 56.6 | 17.39 ms | 17.67 ms | 23.54 ms | 214.0 MiB |
+
+Each workload rendered 371 entities and retained 10 decoded images / 5.0 MiB
+of CPU pixels plus two fonts / 9.8 MiB of source data. These results are the new
+portable comparison baseline. The older table below is retained as historical
+evidence for the superseded diagnostic-heavy suite and must not be compared
+row-for-row with this one.
+
+### 2026-08-15 portable-package verification (legacy workload suite)
 
 The first complete portable benchmark run on the M5 Pro reference
 machine produced the report successfully. Startup median/p95 was 0.86/0.89 ms
@@ -83,8 +118,9 @@ milestones from process entry:
 Every row starts a new process. The harness intentionally does not claim that the OS
 filesystem cache, shader cache, or GPU driver cache is cold: clearing those
 globally requires platform-specific privileges and would make the command less
-portable. Compare median/p95 across all runs, and
-record hardware, RAM, OS, power mode, display target, commit and feature set.
+portable. Treat the first run as the first-use observation and compare the
+median of subsequent launches separately. Also record hardware, RAM, OS, power
+mode, display target, commit and feature set.
 Do not emulate a low-end machine by lowering process priority; establish the
 low-end gate by running this exact command on the actual reference device.
 

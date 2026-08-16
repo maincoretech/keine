@@ -334,25 +334,21 @@ fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) ->
     let executable = std::env::current_exe().context("failed to locate benchmark executable")?;
     let mut report = run_startup_suite(project_path, runs)?;
     let workloads = [
-        ("initial stage · full composition", "0", "full"),
         (
-            "blur family · full composition",
-            "10-04 blur family",
+            "representative dialogue · full composition",
+            "benchmark representative dialogue",
             "full",
         ),
         (
-            "atmosphere effects · full composition",
-            "10-05 atmosphere effects",
+            "representative portrait motion · full composition",
+            "benchmark representative portrait motion",
             "full",
         ),
         (
-            "all timeline events · full composition",
-            "10-07 all event types",
+            "representative scene transition · full composition",
+            "benchmark representative scene transition",
             "full",
         ),
-        ("initial stage · scene + UI", "0", "scene-ui"),
-        ("initial stage · scene + dialog", "0", "scene-dialog"),
-        ("initial stage · scene only", "0", "scene"),
     ];
     for (label, target, profile) in workloads {
         emit_report_line(&mut report, "");
@@ -412,6 +408,51 @@ fn benchmark_report_line(line: &str) -> bool {
     .any(|marker| line.contains(marker))
 }
 
+fn benchmark_timelines(state: &State) -> Vec<(String, usize, String)> {
+    let mut timelines = state
+        .program
+        .scene_names()
+        .flat_map(|scene| {
+            state
+                .program
+                .scene(scene)
+                .into_iter()
+                .flatten()
+                .enumerate()
+                .filter_map(move |(index, action)| match action {
+                    Action::StageAnimation { animation } => {
+                        Some((scene.to_owned(), index, animation.id.clone()))
+                    }
+                    _ => None,
+                })
+        })
+        .collect::<Vec<_>>();
+    timelines.sort();
+    timelines
+}
+
+fn resolve_benchmark_target(state: &State, target: &BenchmarkTarget) -> Option<(String, usize)> {
+    match target {
+        BenchmarkTarget::Cursor(cursor) => Some((state.current_scene.clone(), *cursor)),
+        BenchmarkTarget::Timeline(wanted) => {
+            let mut matches = benchmark_timelines(state)
+                .into_iter()
+                .filter(|(_, _, timeline)| timeline == wanted)
+                .map(|(scene, cursor, _)| (scene, cursor));
+            let resolved = matches.next();
+            if matches.next().is_some() {
+                log::error!(
+                    target: "keine::performance",
+                    "benchmark timeline {wanted:?} is ambiguous across fragments",
+                );
+                None
+            } else {
+                resolved
+            }
+        }
+    }
+}
+
 fn emit_report_line(report: &mut String, line: impl AsRef<str>) {
     let line = line.as_ref();
     println!("{line}");
@@ -420,37 +461,64 @@ fn emit_report_line(report: &mut String, line: impl AsRef<str>) {
 }
 
 fn append_startup_summary(samples: &[crate::ui::performance::StartupSample], report: &mut String) {
-    let summarize = |select: fn(&crate::ui::performance::StartupSample) -> f64| {
-        let mut values = samples.iter().map(select).collect::<Vec<_>>();
-        values.sort_by(f64::total_cmp);
-        let median = values[(values.len() - 1) / 2];
-        let p95 = values[((values.len() - 1) as f64 * 0.95).round() as usize];
-        (median, p95)
+    let Some(first) = samples.first() else {
+        return;
     };
-    let (project_median, project_p95) = summarize(|sample| sample.project_ms);
-    let (app_median, app_p95) = summarize(|sample| sample.app_ms);
-    let (frame_median, frame_p95) = summarize(|sample| sample.first_frame_ms);
-    let (interactive_median, interactive_p95) = summarize(|sample| sample.interactive_ms);
+    let repeat_median = |select: fn(&crate::ui::performance::StartupSample) -> f64| {
+        let mut values = samples.iter().skip(1).map(select).collect::<Vec<_>>();
+        if values.is_empty() {
+            return None;
+        }
+        values.sort_by(f64::total_cmp);
+        Some(values[(values.len() - 1) / 2])
+    };
+    let format_pair = |first: f64, repeat: Option<f64>| {
+        repeat.map_or_else(
+            || format!("{first:.2} / n/a ms"),
+            |repeat| format!("{first:.2} / {repeat:.2} ms"),
+        )
+    };
     let peak_rss = samples
         .iter()
         .filter_map(|sample| sample.peak_rss_mib)
         .max_by(f64::total_cmp);
-    emit_report_line(report, "median / p95 (cumulative from process entry)");
     emit_report_line(
         report,
-        format!("project     · {project_median:.2} / {project_p95:.2} ms"),
+        "first run / repeat median (cumulative from process entry)",
     );
     emit_report_line(
         report,
-        format!("app built   · {app_median:.2} / {app_p95:.2} ms"),
+        format!(
+            "project     · {}",
+            format_pair(first.project_ms, repeat_median(|sample| sample.project_ms))
+        ),
     );
     emit_report_line(
         report,
-        format!("first frame · {frame_median:.2} / {frame_p95:.2} ms"),
+        format!(
+            "app built   · {}",
+            format_pair(first.app_ms, repeat_median(|sample| sample.app_ms))
+        ),
     );
     emit_report_line(
         report,
-        format!("interactive · {interactive_median:.2} / {interactive_p95:.2} ms"),
+        format!(
+            "first frame · {}",
+            format_pair(
+                first.first_frame_ms,
+                repeat_median(|sample| sample.first_frame_ms),
+            )
+        ),
+    );
+    emit_report_line(
+        report,
+        format!(
+            "interactive · {}",
+            format_pair(
+                first.interactive_ms,
+                repeat_median(|sample| sample.interactive_ms),
+            )
+        ),
     );
     if let Some(peak_rss) = peak_rss {
         emit_report_line(
@@ -874,16 +942,9 @@ fn bootstrap_project(
         // cheap title screen, and never require synthetic keyboard input.
         state.ended = false;
         keine_core::step::step(&mut state);
-        let timelines = state
-            .program
-            .scene(&state.current_scene)
+        let timelines = benchmark_timelines(&state)
             .into_iter()
-            .flatten()
-            .enumerate()
-            .filter_map(|(index, action)| match action {
-                Action::StageAnimation { animation } => Some(format!("{index}:{}", animation.id)),
-                _ => None,
-            })
+            .map(|(scene, index, timeline)| format!("{scene}:{index}:{timeline}"))
             .collect::<Vec<_>>()
             .join(", ");
         log::info!(target: "keine::performance", "TIMELINE | {timelines}");
@@ -891,51 +952,50 @@ fn bootstrap_project(
             .benchmark
             .as_ref()
             .and_then(|capture| capture.target.as_ref());
-        let resolved_cursor = requested_target.and_then(|target| match target {
-            BenchmarkTarget::Cursor(cursor) => Some(*cursor),
-            BenchmarkTarget::Timeline(name) => state
-                .program
-                .scene(&state.current_scene)
-                .into_iter()
-                .flatten()
-                .enumerate()
-                .find_map(|(index, action)| match action {
-                    Action::StageAnimation { animation } if animation.id == *name => Some(index),
-                    _ => None,
-                }),
-        });
+        let resolved_target =
+            requested_target.and_then(|target| resolve_benchmark_target(&state, target));
         if let Some(BenchmarkTarget::Timeline(name)) = requested_target
-            && resolved_cursor.is_none()
+            && resolved_target.is_none()
         {
             log::error!(
                 target: "keine::performance",
-                "benchmark timeline {name:?} does not exist in {:?}; available timelines: {timelines}",
-                state.current_scene,
+                "benchmark timeline {name:?} does not exist; available timelines: {timelines}",
             );
         }
-        if let Some(cursor) = resolved_cursor {
-            let target_scene = state.current_scene.clone();
-            let mut preview = State {
+        if let Some((target_scene, cursor)) = &resolved_target {
+            let new_preview = || State {
                 program: state.program.clone(),
                 program_fingerprint: state.program_fingerprint,
                 vars: state.vars.clone(),
                 global_vars: state.global_vars.clone(),
                 ..State::new()
             };
+            let mut preview = new_preview();
             preview.current_scene = crate::scene::entry_scene(&preview);
             preview.ended = false;
             if crate::runtime::tick::seek_editor_state(
                 &mut preview,
-                &target_scene,
-                cursor,
+                target_scene,
+                *cursor,
                 cursor.saturating_add(1),
-            ) {
+            ) || {
+                // Benchmark fixtures may live in a dedicated fragment that is
+                // deliberately unreachable from the playable acceptance flow.
+                // Reconstruct that fragment directly, matching editor preview
+                // behavior, so benchmark-only content stays out of the story.
+                preview = new_preview();
+                preview.current_scene.clone_from(target_scene);
+                preview.ended = false;
+                crate::runtime::tick::seek_editor_state(
+                    &mut preview,
+                    target_scene,
+                    *cursor,
+                    cursor.saturating_add(1),
+                )
+            } {
                 state = preview;
             } else {
-                log::warn!(
-                    target: "keine::performance",
-                    "benchmark cursor {cursor} could not be replayed in {target_scene:?}",
-                );
+                log::warn!(target: "keine::performance", "benchmark cursor {cursor} could not be replayed in {target_scene:?}");
             }
             if let Some(animation) = state.stage_animation.as_mut() {
                 // A selected timeline is looped only inside the benchmark so
@@ -949,7 +1009,9 @@ fn bootstrap_project(
             target: "keine::performance",
             "START    | requested target {:?} · resolved cursor {:?} · running cursor {} · timeline {}",
             requested_target,
-            resolved_cursor,
+            resolved_target
+                .as_ref()
+                .map(|(scene, cursor)| format!("{scene}:{cursor}")),
             state.cursor,
             state
                 .stage_animation
@@ -1105,6 +1167,32 @@ mod tests {
 
     fn args(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn startup_summary_separates_first_launch_from_repeat_median() {
+        let sample = |app_ms, interactive_ms| crate::ui::performance::StartupSample {
+            project_ms: 1.0,
+            app_ms,
+            first_frame_ms: interactive_ms - 5.0,
+            interactive_ms,
+            peak_rss_mib: Some(200.0),
+        };
+        let mut report = String::new();
+
+        append_startup_summary(
+            &[
+                sample(1_400.0, 1_600.0),
+                sample(120.0, 280.0),
+                sample(140.0, 300.0),
+                sample(130.0, 290.0),
+            ],
+            &mut report,
+        );
+
+        assert!(report.contains("first run / repeat median"));
+        assert!(report.contains("app built   · 1400.00 / 130.00 ms"));
+        assert!(report.contains("interactive · 1600.00 / 290.00 ms"));
     }
 
     #[test]

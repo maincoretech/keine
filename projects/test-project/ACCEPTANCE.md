@@ -58,7 +58,8 @@
 
 `tests/showcase_coverage.rs` 会检查默认工程是否覆盖全部 StageProperty、三类目标、五类事件和
 播放控制。WebGAL adapter 的命令与原生 Action 覆盖由 `tests/fixtures/webgal-showcase/` 独立
-验证；fixture 不构成第二个可运行项目。
+验证；fixture 不构成第二个可运行项目。`fragment-benchmark-journey` 不接入章节调用链，
+仅由 portable benchmark 直接重建，因此手工执行 `10-00` 至 `10-10` 时不得进入它。
 
 ## 5. LetsGal 1.9.9 兼容
 
