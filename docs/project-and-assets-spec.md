@@ -130,7 +130,7 @@ assets:
 
 | 类型 | 规范格式 | 兼容格式 | 说明 |
 |---|---|---|---|
-| 背景 / 立绘 / 粒子 | WebP | PNG、JPEG | WebP 走 libwebp 专用解码（支持解码期缩放）；PNG/JPEG 走 Bevy 通用 loader（png/jpeg feature 已启用） |
+| 背景 / 立绘 / 粒子 | WebP | PNG、JPEG | WebP 是生产资源目标并走 libwebp 专用解码（支持解码期缩放）；PNG/JPEG 仅保留 Bevy 通用 loader 兼容能力 |
 | LUT | PNG | WebP | 默认回退路径为 `luts/{name}.png` |
 | 语音 / BGM / 音效 | Ogg Opus（`.opus`） | WAV、MP3、Vorbis（`.ogg/.oga/.spx`）、FLAC | 默认 `bundled-opus` 静态 libopus；发布脚本按项目实际扩展名自动裁剪 audio features |
 | 视频 | MP4（H.264） | WebM、MOV、MKV | FFmpeg 后端全格式；macOS native 后端走 AVFoundation（MP4/MOV） |
@@ -144,6 +144,7 @@ assets:
   LetsGal 导入项目强制 1080 全高以保持 Studio 比例），运行时最高接受 4320；
 - FFmpeg 视频帧单边不超过 4096、总像素不超过 4096×2304；AVFoundation 不使用
   这组 FFmpeg 常量；
+- 必须整文件驻留以支持 seek/loop 的兼容音频最多 128 MiB；项目 Opus 继续流式读取；
 - 构建期资源约束优先于运行时处理：过大图片在打包前统一缩放/转 WebP。
 
 完整数值、适用 backend 与失败阶段见

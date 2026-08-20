@@ -19,12 +19,12 @@
 | 已修 | transient SFX 批处理保留命令顺序 | P1 |
 | 已修 | `ExecutionLimit` 不再作为普通 yield 静默返回 | P1 |
 | 已修 | 直接资源路径不再重复添加目录；裸 Effect 进入迁移期 | P1 |
-| 待复核 | source-project 统一有界读取 | P1/P2 |
-| 待复核 | 兼容音频 encoded-input 上限 | P1/P2 |
-| 待复核 | PNG/JPEG 与 WebP 对称的输入和像素预算 | P2 |
-| 待复核 | looped FFmpeg 音视频 no-progress guard | P2 |
-| 待复核 | LetsGal 源工程 confinement 与 native 内容层一致 | P2 |
-| 待复核 | backup/publisher commit 后 cleanup 只告警 | P2 |
+| 已修 | source-project 统一有界读取 | P1/P2 |
+| 已修 | 兼容音频 encoded-input 上限 | P1/P2 |
+| 暂缓 | PNG/JPEG 保持兼容 loader，发行资源目标仍为 WebP | P2 |
+| 已修 | looped FFmpeg 音视频 no-progress guard | P2 |
+| 已修 | LetsGal 源工程 confinement 与 native 内容层一致 | P2 |
+| 已修 | backup/publisher commit 后 cleanup 只告警 | P2 |
 | 待复核 | compiled payload 分配前结构预算与 fuzz | P2/P3 |
 | 待复核 | overlay 目录枚举合并所有 mount | P3 |
 | 待复核 | user input 严格截断到最大 Unicode scalar 数 | P3 |
@@ -72,9 +72,12 @@ containment 仍由内容挂载层执行。为避免破坏旧工程，裸 Effect 
 **验收**：所有资源类别的显式路径保持原样；单段逻辑名保留既有默认；不安全路径不被
 识别为显式路径；`cargo validate` 和发布编译对裸 Effect 发出一次迁移警告。
 
-## 待复核 hardening
+## 已完成 hardening
 
 ### 4. source-project 有界读取
+
+**状态**：已实现每文件 32 MiB、每次加载 4,096 文件和合计 256 MiB 的共同预算；
+native mount 与 LetsGal JSON 共用同一个预算类型，LetsGal 同时检查 canonical project root。
 
 **问题**：native script、LetsGal JSON 和迁移工具存在整文件读取入口，文件数和总源码量
 也缺少一套统一预算。
@@ -87,6 +90,9 @@ LetsGal 和 tooling 复用同一个 bounded reader，错误包含路径、实际
 
 ### 5. 兼容音频输入预算
 
+**状态**：已为必须驻留 encoded input 的兼容音频和非 mount Opus 增加 128 MiB 上限；项目
+Opus 继续使用流式 ContentFile，不受该内存输入路径影响。
+
 **问题**：MP3/WAV/Vorbis/FLAC 为支持 seek/loop 会把完整 encoded file 留在内存中，
 与流式 Opus 的内存模型不一致。
 
@@ -98,6 +104,9 @@ LetsGal 和 tooling 复用同一个 bounded reader，错误包含路径、实际
 
 ### 6. PNG/JPEG 预算
 
+**状态**：暂缓。PNG/JPEG 只保留 Bevy 兼容 loader；Kēne 的生产资源方向仍是打包前转换为
+WebP，因此不为兼容格式复制一套长期 codec 预算架构。现有文档继续明确这一边界。
+
 **问题**：WebP 有压缩字节、源像素、输出像素三层限制，generic PNG/JPEG 路径没有同等
 Kēne 级别的硬约束。
 
@@ -107,6 +116,9 @@ Kēne 级别的硬约束。
 **验收**：超大维度、压缩炸弹、乘法溢出和正常边界图均有测试；文档同步准确数值。
 
 ### 7. looped FFmpeg 进度不变量
+
+**状态**：已实现。每个循环必须产出 frame/sample；视频还要求有限、正的 duration。音频
+decode/resample error 不再被当成“暂时没有 sample”吞掉。
 
 **问题**：可成功 open/seek、但一个循环周期没有产出 frame/sample 的媒体可能高速反复
 seek，且不受 bounded output queue 的背压。
@@ -118,6 +130,9 @@ flush 尾帧不能被误判；错误必须终止 worker 并可观测。
 
 ### 8. LetsGal confinement
 
+**状态**：已随 source reader 完成。所有实际读取的 LetsGal JSON 都检查 canonical target
+仍在 canonical project root 内，并应用同一文件数/字节预算。
+
 **问题**：LetsGal adapter 的直接 filesystem JSON 读取尚未确认复用了 native
 `ContentMount` 的 canonical containment。
 
@@ -128,6 +143,9 @@ publisher 的 symlink 拒绝不能代替开发态边界。
 
 ### 9. commit 后 cleanup 语义
 
+**状态**：已完成。正式 rename 与必要目录同步仍可返回错误；其后的旧副本删除/同步失败只
+记录 warning，不再覆盖已经成功的 import/publish 结果。
+
 **问题**：backup import 或 publisher 在正式 rename 已成功后，旧 backup 删除失败仍可能
 返回整体失败，造成“显示失败但实际已切换”。
 
@@ -136,6 +154,8 @@ publisher 的 symlink 拒绝不能代替开发态边界。
 
 **验收**：对 rename 前失败、正式 rename 失败、commit 后 cleanup 失败分别注入故障并检查
 最终目录和返回状态。
+
+## 待复核 hardening、一致性与 UX
 
 ### 10. compiled payload 分配前预算
 
@@ -146,8 +166,6 @@ depth/count-aware decoder 或更小的 envelope 分段，避免为低风险边�
 
 **验收**：恶意 length prefix、深层 action、超长 string、超量 scene/action 在预算内失败，
 并持续运行 fuzz/sanitizer smoke。
-
-## 待复核一致性与 UX
 
 ### 11. overlay directory union
 

@@ -15,6 +15,8 @@
 |---|---|---|
 | `adapter.asset.path` | 必须解析为项目根目录内的现有目录；绝对路径和 `..` 逃逸均拒绝 | 项目加载 |
 | `config.yaml` | 解析前最多读取 256 KiB；超过时拒绝项目 | 项目加载 |
+| 单个原生脚本或 LetsGal JSON | 32 MiB | 源码加载、校验与打包编译 |
+| 一次完整源码加载 | 最多 4,096 个输入、合计 256 MiB | 源码加载、校验与打包编译 |
 | 文件系统 mount 内的读取 | 每次访问都解析真实路径，并确认仍位于该 mount 根目录内；指向外部的文件或目录 symlink 拒绝 | 运行时读取 |
 | Hakutaku 打包输入 | 只接受普通目录和普通文件；任何 symlink 或 special file 均拒绝 | `cargo bundle` |
 | 包内逻辑路径 | 非空 UTF-8 相对路径，使用 `/`；禁止前后 `/`、反斜杠、NUL、空段、`.` 和 `..` | Hakutaku 打包与读取 |
@@ -23,6 +25,11 @@
 文件系统 mount 的逐次 canonical containment 可以阻止静态工程中的 symlink escape。
 它不是 capability/openat 模型；如果本机另一个进程能在检查与打开之间并发替换路径，仍属于
 更严格的本地 TOCTOU 威胁边界。
+
+源码 reader 会先检查文件报告的长度，再最多读取“单文件上限 + 1”字节并复核实际长度，
+因此读取期间增长不能绕过限制。LetsGal 的 project、chapter、character、manifest、Studio state
+和 shell JSON 共用同一预算与项目根 containment；这些限制只在开发态加载、校验和打包编译时
+产生常数级计数开销，不进入游戏逐帧路径。
 
 ## 2. 图片与视频
 
@@ -64,6 +71,17 @@ decoder queue：
 surface 和至多两个 queued frames；同分辨率帧复用 reservation，动态分辨率变化会重新核算。
 超出预算的 session 终止而不会继续分配。该预算覆盖 Kēne 可见的 surface，不包含 FFmpeg 或
 AVFoundation 内部无法由调用方精确计量的 codec working set。
+
+Looped FFmpeg 音视频的每个循环周期必须至少产出一个 frame/sample；视频周期还必须具有
+有限且为正的 timeline duration。无输出或无时间进度的媒体会终止 decoder，而不会反复 seek
+形成空转。
+
+### 音频
+
+项目挂载中的 Ogg Opus 使用可重开的 `ContentFile` 流式解码，不整文件驻留。为提供统一的
+seek/loop，WAV、MP3、Vorbis 和 FLAC 兼容格式会共享一份 encoded input，其单文件硬上限为
+128 MiB；非项目挂载来源中必须退化为内存输入的 Opus 也应用同一上限。读取按 64 KiB 分块，
+在扩容前检查上限并使用 fallible allocation。
 
 ## 3. 编译脚本产物
 
@@ -165,6 +183,10 @@ Backup V2 import 直接从已受限的 envelope 借用文件名和 payload，不
 SAVE 也会拒绝 codec 写出超过同一上限的 payload。槽位列表使用格式自己的前缀检查，但
 adapter 的默认完整检查路径同样遵守该上限。
 
+Backup import 和 publisher 的正式目录 rename（以及要求的目录同步）是事务 commit point。
+Commit 之后删除旧副本失败只记录明确 warning，并留待下次操作重试清理；它不会把已经成功
+安装的存档或发行目录报告成整体失败。Commit 之前或正式 rename/同步失败仍返回错误。
+
 项目配置和全局引擎配置均先经过 bounded read，再解析；旧版
 `adapters.conf` 迁移入口也使用相同的 256 KiB 上限。
 
@@ -195,6 +217,9 @@ revision，而不是从旧架构说明复制历史值。
   [runtime asset reader](../src/runtime/asset_reader.rs)；
 - 图片与视频：[bounded native codecs](../crates/media/src/lib.rs)、
   [image integration](../src/scene/images.rs)、[video](../src/scene/video.rs)；
+- 源码输入：[source input](../crates/loader/src/source_input.rs)、
+  [LetsGal adapter](../crates/loader/src/adapter/editor/letsgal.rs)；
+- 内存音频：[audio integration](../src/runtime/audio.rs)；
 - compiled program：[compiled](../crates/loader/src/compiled.rs)；
 - 存储：[storage](../src/storage.rs)、[backup](../src/storage/backup.rs)；
 - 确定性执行：[core step](../crates/core/src/runtime/step.rs)、
