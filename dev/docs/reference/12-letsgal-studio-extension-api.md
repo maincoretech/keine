@@ -1,6 +1,6 @@
 # LetsGal Studio 1.9.x 扩展 API 历史参考
 
-> 状态：2026-08-01 本机 1.9.1 复核；公开 `SDK_VERSION` 仍为 `1.9.0`。keine 明确不加载或执行
+> 状态：2026-08-20 本机 1.11.0 复核；包内 `SDK_VERSION` 为 `1.9.9`。keine 明确不加载或执行
 > Studio 扩展，本文只作为外部格式与历史 ABI 的证据记录，具体实现边界见
 > [`08-letsgal-studio.md`](../architecture/08-letsgal-studio.md)。
 
@@ -14,7 +14,7 @@ Studio 内置工程内容，不加载扩展 bundle、不实现 `@avg-studio/sdk`
 
 ## 0. 结论先行
 
-工程 adapter 当前以 **LetsGal Studio 1.9.9 原生工程格式**为兼容基线；本章的扩展 ABI
+工程 adapter 当前以 **LetsGal Studio 1.11.0 原生工程格式**为兼容基线；本章的扩展 ABI
 仅用于历史研究，不是 keine 的实现目标。
 
 1.9.0 仍未提供 keine 所需的“当前选中剧情块”（editor cursor）、run interception 或 preview backend API。当前公开
@@ -66,12 +66,12 @@ flowchart LR
 
 | 对象 | 版本/提交 | 结论 |
 |---|---|---|
-| 本机当前安装 | Studio 1.9.2 | 原生工程格式主基线；keine 不执行扩展 |
-| 已校验更新包 | Studio 1.9.9 | 工程格式兼容基线；官方更新缓存 SHA-256 已核对 |
+| 本机当前安装 | Studio 1.11.0 | 原生工程格式主基线；keine 不执行扩展 |
+| 已校验更新包 | Studio 1.11.0 | 工程格式兼容基线；官方更新缓存 SHA-256 已核对 |
 | 前一实测稳定版 | Studio 1.6.3 | 用于宿主行为差异对照 |
 | 本机旧对照包 | Studio 1.6.2 | 用于 SDK 字节级差异 |
 | 已校验的历史包 | `Studio-1.6.3-mac.zip` | 保留历史 SHA-256 证据 |
-| 扩展 SDK | `SDK_VERSION = "1.9.9"` | 1.9.9 包内常量；keine 仍不执行扩展 |
+| 扩展 SDK | `SDK_VERSION = "1.9.9"` | 1.11.0 包内常量仍为 1.9.9；keine 仍不执行扩展 |
 | `avg.renderer` | `d69d1681fe07e6273f99ed329fb01503cb3f3394`，2020-08-31 | 仅作历史语义参考 |
 | `avgplus-asarmor` | `3a95e627831268207b5da81310c5e9f4e4e1829b`，2025-01-26 | 仅用于判断 ASAR 保护方式 |
 
@@ -84,7 +84,8 @@ flowchart LR
 ```
 
 本机 1.9.1 的 `dist/sdk/constants.ts` 声明 `SDK_VERSION = "1.9.0"`；1.9.2 与已校验
-1.9.8 更新包声明 `SDK_VERSION = "1.9.2-beta"`，已校验的 1.9.9 包提升为 `1.9.9`。
+1.9.8 更新包声明 `SDK_VERSION = "1.9.2-beta"`，1.9.9 提升为 `1.9.9`，已校验的 1.11.0
+包仍保持 `1.9.9`。
 这些扩展合同变化不改变 keine 的隔离边界。1.9.2 的 `FlowAPI` 仍含
 `signal`、跨章节 `callFragment()`、`unsafe_goToFragment()` 和 `restart()`；
 `ExtensionContext` 仍没有编辑器/preview backend 命名空间。工程格式层面 1.9.2 新增

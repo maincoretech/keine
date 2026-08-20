@@ -1,9 +1,9 @@
-# LetsGal 1.9.9 默认工程分步验收
+# LetsGal 1.11.0 默认工程分步验收
 
 ## 0. 启动
 
 1. 运行 `cargo validate projects/test-project`，应报告工程有效且无错误。
-2. 运行 `cargo dev projects/test-project`，应进入 `Kēne LetsGal 1.9.9 Timeline Lab` 标题页。
+2. 运行 `cargo dev projects/test-project`，应进入 `Kēne LetsGal 1.11.0 Timeline Lab` 标题页。
 3. 点击 `START`。日景、绫、textbox 与左侧姓名框应同步出现，不得先闪黑、闪 blur 或漏出视口。
 4. 首句字符应按 `dialogue-box.json` 的 30 ms 间隔逐字出现，并在 100 ms 内从下方 8 px
    柔和上浮；已显示文字、读档恢复和调试重放不得重复闪动。
@@ -62,15 +62,14 @@
 仅由 portable benchmark 直接重建，其中日常场景和组合极限场景都不得出现在手工执行的
 `10-00` 至 `10-10` 流程中。
 
-## 5. LetsGal 1.9.9 兼容
+## 5. LetsGal 1.11.0 兼容
 
 1. 默认壳 `dialogue-box.json` 采用 1.9.2 形态：`canvas` + `elements` UI 布局与
    `dialogueBehavior` 并存。加载与热重载不得报错，且原有 30 ms 打字间隔、100 ms 上浮、
    smooth-rise 参数不变。
-2. 等待光标（`dialogue-wait-cursor` 元素、`wait_for_icon_delay` 与
-   `styles.dialogue.showWaitForIcon`）**明确不支持**：fixture 不包含这些字段与元素；
-   遇到含它们的 1.9.2 工程，适配器应忽略且不报错，但绝不渲染任何等待指示器。
-3. `engineVersion` 更新为 `1.9.9`，工程仍必须完整通过第 1–4 节全部验收项。
+2. 普通等待光标，以及 1.11.0 独立的自动播放等待指示器（图片、位置、尺寸、动画）都
+   **明确不支持**：适配器应忽略相关 UI JSON 且不报错，但绝不渲染替代指示器。
+3. `engineVersion` 更新为 `1.11.0`，工程仍必须完整通过第 1–4 节全部验收项。
 4. `updateCharacter` 只修改已在场的立绘；移除后再执行同类 block 时不得重新入场。Spine、
    Live2D 仍明确不支持，不能用静态图伪装为已兼容。
 

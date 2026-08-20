@@ -1,4 +1,4 @@
-# LetsGal Studio 1.9.x 原生同步
+# LetsGal Studio 1.x 原生同步
 
 keine 把 LetsGal 当作一种开放的编辑器工程格式，而不是运行宿主。Studio 与 keine 是两个
 独立进程；同步只通过工程目录中的开放 JSON 完成，不安装扩展、不注入 DOM、不修改 ASAR，
@@ -10,7 +10,7 @@ keine 把 LetsGal 当作一种开放的编辑器工程格式，而不是运行�
 > 始终使用操作系统默认鼠标指针。
 
 ```text
-LetsGal Studio 1.9
+LetsGal Studio 1.x
   ├─ project.json
   ├─ chapters/*.json
   ├─ extensions/avg.internal.default-shell/ui/dialogue-box.json
@@ -46,7 +46,7 @@ keine 源码/二进制和 LetsGal 工程目录。不带 `--sync` 的 `cargo dev`
 | project variables | slot/shared 默认值 | 每次确定性重放重新注入 |
 | character attributes | `<character-id>.<attribute>` 默认值 | 每次确定性重放重新注入 |
 | chapterFolders / chapterTreeOrder | 1.9.x 虚拟目录展开后的章节执行顺序 | project 保存后重编译 |
-| dialogueBehavior | 打字间隔、字符淡入、10 种文字出现效果；1.9.2 的等待光标字段明确不支持 | 对话框样式保存后刷新 config |
+| dialogueBehavior | 打字间隔、字符淡入、10 种文字出现效果；普通/自动播放等待指示器明确不支持 | 对话框样式保存后刷新 config |
 | `.studio/state.json` | fragment UUID + 一基 source step | 选择 block 后立即重放 |
 
 Studio 的 block index 是零基；loader 转成一基 `SourceSpan.line`。一个 block 可编译成多个 Action，
@@ -71,7 +71,7 @@ runtime 以所有 `line <= selected_step` 的 Action 为目标，因此不会把
 
 ## 完整性与边界
 
-- 1.9.9 当前内置的 38 种 runtime block 必须全部编译为 typed core Action；未知内置类型报错；
+- 1.11.0 当前内置的 38 种 runtime block 必须全部编译为 typed core Action；未知内置类型报错；
 - 1.9.1 的 `chapterTreeOrder` 为章节执行顺序主来源：根章节按 tree entry 排列，目录 entry 按
   对应 `chapterFolders[].chapterIds` 展开；缺少新字段的旧项目继续回退 `chapterOrder`；
 - 默认壳 `dialogue-box.json` 的 `text_speed`、`char_fade_in_duration`、
@@ -99,7 +99,7 @@ runtime 以所有 `line <= selected_step` 的 Action 为目标，因此不会把
 - 1.9.2 工程仍可带 `chapterFolders` / `chapterTreeOrder`、`scenes.json`（版本 3 视差层）与
   `characters.json`（版本 2 全局位置/高度比），这些字段的解析保持兼容。
 
-## 1.9.5–1.9.9 增量
+## 1.9.5–1.11.0 增量
 
 - 1.9.5 新增的 `switchParagraphStyle`、`hideFloatingText`、`systemMessage` 已加入内置类型
   合同并降级为 typed core Action：故事段落使用独立样式，命名/无限浮字可按 id 播放退场并
@@ -118,6 +118,12 @@ runtime 以所有 `line <= selected_step` 的 Action 为目标，因此不会把
   同版动画面板新增的 `inOutCubic`、`outBack`、`outBounce` 也由 core 原生采样。
 - 1.9.9 的资源加密、可视化 UI 深度定制、扩展自带资源和大包上传属于构建器、壳层或扩展
   SDK，不进入剧情 IR。Spine、Live2D 即使新增翻转能力仍然**明确不支持**。
+- 1.11.0 没有新增 runtime block，38 种合同与 `updateCharacter` schema 保持不变。Android APK、
+  真机联调、开发者的信、主题色与素材页属于 Studio 构建器/壳层，不进入剧情 IR；移动端安全区
+  也不改变 Kēne 当前桌面运行合同。
+- 1.11.0 把自动播放等待指示器从普通等待光标中独立出来，可配置图片、位置、尺寸与动画。
+  Kēne 当前对普通和自动播放等待指示器都**明确不支持**：相关 UI JSON 字段安全忽略，不渲染
+  替代物。Spine、Live2D 的不支持边界不变。
 - 新增 `stageAnimation` 编译为 adapter-neutral 共享舞台时间轴：camera、character、scene layer
   共用真实时间时钟，支持关键帧、循环、倍率、等待，以及 camera/scene/particle/shake/audio
   事件；

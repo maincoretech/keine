@@ -263,7 +263,7 @@ mod tests {
         fs::create_dir_all(root.join("extensions/avg.internal.default-shell/ui")).unwrap();
         fs::write(
             root.join("extensions/avg.internal.default-shell/ui/dialogue-box.json"),
-            r#"{"version":2,"dialogueBehavior":{"text_speed":50,"char_fade_in_duration":120,"text_reveal_effect":"slide-left"}}"#,
+            r#"{"version":2,"dialogueBehavior":{"text_speed":50,"char_fade_in_duration":120,"text_reveal_effect":"slide-left","wait_for_icon_delay":600,"styles":{"dialogue":{"show_wait_for_icon":true}}},"appearance":{"auto_wait_cursor":{"visible":true,"source":"builtin","text":"Auto","size":30,"duration_ms":2500}}}"#,
         )
         .unwrap();
         let adapter = LetsGalProjectAdapter;

@@ -93,7 +93,7 @@ fn core_value(value: &Value) -> Option<keine_core::Value> {
     }
 }
 
-/// Runtime-facing block registry observed in LetsGal Studio 1.9.9's bundled
+/// Runtime-facing block registry observed in LetsGal Studio 1.11.0's bundled
 /// editor schema. `cmdDraft` is editor-only and therefore intentionally not in
 /// this compatibility contract.
 pub(super) const BUILTIN_BLOCK_TYPES: &[&str] = &[
@@ -633,7 +633,7 @@ fn compile_block(
         "systemMessage" => compile_system_message(block, span, report),
         "enterAutoPlay" => report.push(Action::SetAutoplay { enabled: true }, span),
         "exitAutoPlay" => report.push(Action::SetAutoplay { enabled: false }, span),
-        _ => unreachable!("the 1.9.9 block registry is exhaustively matched"),
+        _ => unreachable!("the 1.11.0 block registry is exhaustively matched"),
     }
 }
 
@@ -776,7 +776,7 @@ fn compile_character(
                 level: DiagnosticLevel::Error,
                 span,
                 message: format!(
-                    "unsupported LetsGal 1.9.9 dynamic portrait type {kind:?}; \
+                    "unsupported LetsGal 1.11.0 dynamic portrait type {kind:?}; \
                      Kēne currently supports static and sequence portraits only"
                 ),
             });
@@ -3075,7 +3075,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn studio_199_registry_is_exhaustively_matched() {
+    fn studio_1110_registry_is_exhaustively_matched() {
         assert_eq!(BUILTIN_BLOCK_TYPES.len(), 38);
         for required in [
             "playerInput",
