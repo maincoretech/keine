@@ -995,7 +995,16 @@ fn step_once(state: &mut State) -> TickProgress {
 
 fn finish_step(state: &mut State, restore_previous_dialogue: bool) -> TickProgress {
     let result = step::step_preserving_presentation(state);
-    let return_to_title = matches!(result, keine_core::StepResult::EndOfScene);
+    let execution_limited = matches!(result, keine_core::StepResult::ExecutionLimit);
+    if execution_limited {
+        log::error!(
+            target: "keine::runtime",
+            "script execution stopped at {}:{} after reaching the forward-action safety limit; returning to title",
+            state.current_scene,
+            state.cursor,
+        );
+    }
+    let return_to_title = execution_limited || matches!(result, keine_core::StepResult::EndOfScene);
     if return_to_title && restore_previous_dialogue && state.dialogue.is_none() {
         // `advance` moves the settled line here before stepping. Moving it
         // back retains the final text without cloning the complete State.
@@ -2498,6 +2507,28 @@ mod tests {
             state.dialogue.as_ref().map(|line| line.text.as_str()),
             Some("最后一句")
         );
+    }
+
+    #[test]
+    fn execution_limit_fails_closed_to_the_title_transition() {
+        let mut actions = vec![Action::Comment; 1_025];
+        actions.push(Action::Say {
+            speaker: "unreachable".into(),
+            text: "must not require another click".into(),
+            options: Default::default(),
+        });
+        let mut state = State::new();
+        state.install_program(Program::from_scenes([("main".into(), actions)]));
+        state.current_scene = "main".into();
+        state.ended = false;
+
+        let progress = step_once(&mut state);
+
+        assert!(progress.changed);
+        assert!(progress.return_to_title);
+        assert_eq!(state.cursor, 1_024);
+        assert!(state.dialogue.is_none());
+        assert!(!state.ended, "the title fade owns destructive cleanup");
     }
 
     #[test]
