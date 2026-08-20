@@ -20,6 +20,7 @@ pub(crate) const SURFACE_IDLE_ALPHA: f32 = 0.025;
 pub(crate) const SURFACE_ACTIVE_ALPHA: f32 = 0.045;
 pub(crate) const SURFACE_HOVER_ALPHA: f32 = SURFACE_ACTIVE_ALPHA;
 pub(crate) const UI_MOTION_RATE: f32 = 16.0;
+pub(crate) const SHELL_TRANSITION_WIDTH: f32 = DESIGN_WIDTH * 0.95;
 
 const BUTTON_HIGHLIGHT_RED: f32 = 0.82;
 const BUTTON_HIGHLIGHT_GREEN: f32 = 0.84;
@@ -103,6 +104,12 @@ pub(crate) fn fill_node() -> Node {
         height: Val::Px(DESIGN_HEIGHT),
         ..default()
     }
+}
+
+/// Returns a computed physical width in the logical units accepted by
+/// `Val::Px` and `Val2::px` under the node's active UI scale.
+pub(crate) fn logical_node_width(node: &ComputedNode) -> f32 {
+    node.size().x * node.inverse_scale_factor()
 }
 
 /// Shared left-to-right hover fill used by compact shell buttons.
@@ -290,5 +297,18 @@ mod tests {
         assert!(idle.is_animating(Interaction::Hovered));
         assert_eq!(hover_sweep_target(Interaction::None), 0.0);
         assert_eq!(hover_sweep_target(Interaction::Pressed), 100.0);
+    }
+
+    #[test]
+    fn logical_node_width_is_independent_of_output_scale() {
+        for scale in [2.0 / 3.0, 1.0, 4.0 / 3.0, 2.0] {
+            let node = ComputedNode {
+                size: Vec2::new(SHELL_TRANSITION_WIDTH * scale, 100.0 * scale),
+                inverse_scale_factor: scale.recip(),
+                ..default()
+            };
+
+            assert!((logical_node_width(&node) - SHELL_TRANSITION_WIDTH).abs() < 0.001);
+        }
     }
 }

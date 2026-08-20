@@ -13,8 +13,9 @@ use crate::runtime::resources::ProjectRoot;
 use crate::ui::control_bar::{BlurStrength, ButtonAction, ControlInput, HoverAlpha, UiBlurSource};
 use crate::ui::dialog::{DialogAction, DialogRequest};
 use crate::ui::foundation::{
-    SURFACE_ACTIVE_ALPHA, SURFACE_HOVER_ALPHA, UiFonts, UiSoundStyle, button_surface,
-    ease_in_out_cubic, empty_slot_surface, exp_lerp, fill_node, smoothstep, text, text_weight,
+    SHELL_TRANSITION_WIDTH, SURFACE_ACTIVE_ALPHA, SURFACE_HOVER_ALPHA, UiFonts, UiSoundStyle,
+    button_surface, ease_in_out_cubic, empty_slot_surface, exp_lerp, fill_node, logical_node_width,
+    smoothstep, text, text_weight,
 };
 use crate::ui::menu::{
     MenuBack, MenuBlur, MenuFade, MenuRouteTransition, MenuSurface, MenuSurfaceState,
@@ -769,7 +770,6 @@ pub fn animate_save_load_content(
 pub fn animate_save_load_grid_track(
     transition: Res<SaveLoadPageTransition>,
     mut commands: Commands,
-    windows: Query<&Window>,
     mut grids: Query<(
         Entity,
         &mut SaveLoadSlotGrid,
@@ -791,9 +791,8 @@ pub fn animate_save_load_grid_track(
     let progress = ease_in_out_cubic(transition.elapsed / SaveLoadPageTransition::SECONDS);
     let width = grids
         .iter()
-        .map(|(_, _, _, node)| node.size().x)
-        .fold(0.0_f32, f32::max)
-        .max(windows.single().map_or(1.0, |window| window.width() * 0.95));
+        .map(|(_, _, _, node)| logical_node_width(node))
+        .fold(SHELL_TRANSITION_WIDTH, f32::max);
     for (_, grid, mut transform, _) in &mut grids {
         let x = match grid.phase {
             SaveLoadGridPhase::Incoming => transition.direction * width * (1.0 - progress),

@@ -10,8 +10,8 @@ use keine_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 use crate::render::blur::DialogCamera;
 use crate::ui::control_bar::{BlurStrength, ButtonAction, HoverAlpha};
 use crate::ui::foundation::{
-    SURFACE_ACTIVE_ALPHA, SURFACE_HOVER_ALPHA, UiFonts, UiSoundStyle, button_surface,
-    ease_in_out_cubic, exp_lerp, smoothstep, text,
+    SHELL_TRANSITION_WIDTH, SURFACE_ACTIVE_ALPHA, SURFACE_HOVER_ALPHA, UiFonts, UiSoundStyle,
+    button_surface, ease_in_out_cubic, exp_lerp, logical_node_width, smoothstep, text,
 };
 use crate::ui::save_load::{SaveLoadContent, SaveLoadMode, SaveLoadRoot, SaveLoadUi};
 use crate::ui::settings_panel::{SettingsContent, SettingsRoot, SettingsUi};
@@ -679,7 +679,6 @@ pub(crate) struct MenuRouteContext<'w, 's> {
     settings_roots: SettingsRouteRootQuery<'w, 's>,
     save_contents: SaveRouteContentQuery<'w, 's>,
     settings_contents: SettingsRouteContentQuery<'w, 's>,
-    windows: Query<'w, 's, &'static Window>,
 }
 
 pub(crate) fn animate_route_transition(
@@ -717,20 +716,14 @@ pub(crate) fn animate_route_transition(
         transition.width = context
             .save_contents
             .iter()
-            .map(|(_, node)| node.size().x)
+            .map(|(_, node)| logical_node_width(node))
             .chain(
                 context
                     .settings_contents
                     .iter()
-                    .map(|(_, node)| node.size().x),
+                    .map(|(_, node)| logical_node_width(node)),
             )
-            .fold(0.0_f32, f32::max)
-            .max(
-                context
-                    .windows
-                    .single()
-                    .map_or(1.0, |window| window.width() * 0.95),
-            );
+            .fold(SHELL_TRANSITION_WIDTH, f32::max);
     }
     let width = transition.width.max(1.0);
     let incoming_x = direction * width * (1.0 - progress);
