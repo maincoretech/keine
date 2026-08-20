@@ -125,8 +125,17 @@ impl EffectEventBatch {
         for event in std::mem::take(queue) {
             match event {
                 EffectEvent::Play(cue) => batch.plays.push(cue),
-                EffectEvent::Stop => batch.stop_all_one_shots = true,
+                EffectEvent::Stop => {
+                    // Commands spawn players only after this system flushes.
+                    // Remove plays queued before the stop, while preserving
+                    // later plays in their authored order.
+                    batch.plays.clear();
+                    batch.stop_all_one_shots = true;
+                }
                 EffectEvent::StopOneShot { id, fade_out } => {
+                    batch
+                        .plays
+                        .retain(|cue| cue.id.as_deref() != Some(id.as_str()));
                     batch.one_shot_fade_outs.insert(id, fade_out.max(0.0));
                 }
                 EffectEvent::StartLoop { id, fade_in } => {
@@ -317,14 +326,6 @@ pub fn sync_effects(
         loop_fade_outs,
     } = EffectEventBatch::drain(&mut state.effect_queue);
     for cue in plays {
-        if stop_all_one_shots
-            || cue
-                .id
-                .as_ref()
-                .is_some_and(|id| one_shot_fade_outs.contains_key(id))
-        {
-            continue;
-        }
         spawn_effect(
             &mut commands,
             &asset_server,
@@ -648,7 +649,44 @@ mod tests {
     }
 
     #[test]
-    fn effect_event_batch_keeps_every_one_shot_and_authored_envelope() {
+    fn effect_event_batch_preserves_stop_then_play() {
+        let mut queue = vec![
+            EffectEvent::Stop,
+            EffectEvent::Play(EffectCue {
+                id: None,
+                file: "click.opus".into(),
+                volume: 1.0,
+                fade_in: 0.0,
+            }),
+        ];
+
+        let batch = EffectEventBatch::drain(&mut queue);
+
+        assert!(batch.stop_all_one_shots);
+        assert_eq!(batch.plays.len(), 1);
+        assert_eq!(batch.plays[0].file, "click.opus");
+    }
+
+    #[test]
+    fn effect_event_batch_drops_play_before_stop() {
+        let mut queue = vec![
+            EffectEvent::Play(EffectCue {
+                id: None,
+                file: "old.opus".into(),
+                volume: 1.0,
+                fade_in: 0.0,
+            }),
+            EffectEvent::Stop,
+        ];
+
+        let batch = EffectEventBatch::drain(&mut queue);
+
+        assert!(batch.stop_all_one_shots);
+        assert!(batch.plays.is_empty());
+    }
+
+    #[test]
+    fn effect_event_batch_keeps_only_play_after_global_stop() {
         let mut queue = vec![
             EffectEvent::Play(EffectCue {
                 id: None,
@@ -662,18 +700,44 @@ mod tests {
                 volume: 0.7,
                 fade_in: 0.2,
             }),
-            EffectEvent::StopOneShot {
-                id: "timeline:second".into(),
-                fade_out: 0.3,
-            },
+            EffectEvent::Stop,
+            EffectEvent::Play(EffectCue {
+                id: Some("timeline:third".into()),
+                file: "third.opus".into(),
+                volume: 0.9,
+                fade_in: 0.0,
+            }),
         ];
 
         let batch = EffectEventBatch::drain(&mut queue);
 
         assert!(queue.is_empty());
-        assert_eq!(batch.plays.len(), 2);
-        assert_eq!(batch.plays[0].file, "first.opus");
-        assert_eq!(batch.plays[1].file, "second.opus");
-        assert_eq!(batch.one_shot_fade_outs["timeline:second"], 0.3);
+        assert!(batch.stop_all_one_shots);
+        assert_eq!(batch.plays.len(), 1);
+        assert_eq!(batch.plays[0].file, "third.opus");
+    }
+
+    #[test]
+    fn effect_event_batch_keeps_named_play_after_named_stop() {
+        let id = "timeline:second";
+        let mut queue = vec![
+            EffectEvent::StopOneShot {
+                id: id.into(),
+                fade_out: 0.3,
+            },
+            EffectEvent::Play(EffectCue {
+                id: Some(id.into()),
+                file: "replacement.opus".into(),
+                volume: 0.7,
+                fade_in: 0.2,
+            }),
+        ];
+
+        let batch = EffectEventBatch::drain(&mut queue);
+
+        assert!(queue.is_empty());
+        assert_eq!(batch.plays.len(), 1);
+        assert_eq!(batch.plays[0].file, "replacement.opus");
+        assert_eq!(batch.one_shot_fade_outs[id], 0.3);
     }
 }
