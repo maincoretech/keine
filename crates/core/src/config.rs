@@ -408,65 +408,73 @@ impl GameConfig {
 
     /// Resolve a background asset name to its file path.
     pub fn bg_path(&self, name: &str) -> String {
-        self.assets
-            .backgrounds
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| format!("background/{}", name))
+        resolve_asset_path(&self.assets.backgrounds, name, |name| {
+            format!("background/{name}")
+        })
     }
 
     /// Resolve a figure asset name to its file path.
     pub fn figure_path(&self, name: &str) -> String {
-        self.assets
-            .figures
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| format!("figure/{}", name))
+        resolve_asset_path(&self.assets.figures, name, |name| format!("figure/{name}"))
     }
 
     /// Resolve a voice asset name to its path below the local asset root.
     pub fn voice_path(&self, name: &str) -> String {
-        self.assets
-            .voices
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| format!("vocal/{name}"))
+        resolve_asset_path(&self.assets.voices, name, |name| format!("vocal/{name}"))
     }
 
     /// Resolve a sound effect below the local asset root.
     pub fn effect_path(&self, name: &str) -> String {
-        self.assets
-            .effects
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| format!("vocal/{name}"))
+        resolve_asset_path(&self.assets.effects, name, |name| format!("vocal/{name}"))
+    }
+
+    /// Whether a sound effect still depends on the historical `vocal/`
+    /// single-name fallback. Callers can use this to guide projects towards
+    /// the canonical `se/` directory without silently breaking old content.
+    pub fn uses_legacy_effect_fallback(&self, name: &str) -> bool {
+        !self.assets.effects.contains_key(name) && !is_direct_asset_path(name)
     }
 
     /// Resolve background music below the local asset root.
     pub fn bgm_path(&self, name: &str) -> String {
-        self.assets
-            .bgm
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| format!("bgm/{name}"))
+        resolve_asset_path(&self.assets.bgm, name, |name| format!("bgm/{name}"))
     }
 
     /// Resolve video below the local asset root.
     pub fn video_path(&self, name: &str) -> String {
-        self.assets
-            .videos
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| format!("video/{name}"))
+        resolve_asset_path(&self.assets.videos, name, |name| format!("video/{name}"))
     }
 
     pub fn lut_path(&self, name: &str) -> String {
-        self.assets
-            .luts
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| format!("luts/{name}.png"))
+        resolve_asset_path(&self.assets.luts, name, |name| format!("luts/{name}.png"))
     }
+}
+
+fn resolve_asset_path(
+    aliases: &HashMap<String, String>,
+    name: &str,
+    fallback: impl FnOnce(&str) -> String,
+) -> String {
+    aliases
+        .get(name)
+        .cloned()
+        .or_else(|| is_direct_asset_path(name).then(|| name.to_owned()))
+        .unwrap_or_else(|| fallback(name))
+}
+
+/// Accept portable, root-relative paths with at least one directory segment.
+/// The content mount remains the final containment boundary; this check only
+/// distinguishes explicit paths from logical asset names consistently across
+/// host operating systems.
+fn is_direct_asset_path(name: &str) -> bool {
+    let mut segments = 0usize;
+    for segment in name.split('/') {
+        if segment.is_empty() || matches!(segment, "." | "..") || segment.contains(['\\', ':']) {
+            return false;
+        }
+        segments += 1;
+    }
+    segments > 1
 }
 
 #[cfg(test)]
@@ -562,5 +570,54 @@ adapter:
     fn ignores_the_removed_compiled_program_policy() {
         let cfg = GameConfig::from_yaml("compiled_program: require\n").unwrap();
         assert_eq!(cfg.title, default_title());
+    }
+
+    #[test]
+    fn aliases_take_priority_over_direct_paths() {
+        let mut cfg = GameConfig::default();
+        cfg.assets
+            .backgrounds
+            .insert("background/day.webp".into(), "packs/day.webp".into());
+
+        assert_eq!(cfg.bg_path("background/day.webp"), "packs/day.webp");
+    }
+
+    #[test]
+    fn explicit_relative_asset_paths_are_preserved() {
+        let cfg = GameConfig::default();
+
+        assert_eq!(cfg.bg_path("background/day.webp"), "background/day.webp");
+        assert_eq!(cfg.figure_path("figure/a.webp"), "figure/a.webp");
+        assert_eq!(cfg.voice_path("vocal/a.opus"), "vocal/a.opus");
+        assert_eq!(cfg.effect_path("se/a.opus"), "se/a.opus");
+        assert_eq!(cfg.bgm_path("bgm/a.opus"), "bgm/a.opus");
+        assert_eq!(cfg.video_path("video/a.mp4"), "video/a.mp4");
+        assert_eq!(cfg.lut_path("luts/night.png"), "luts/night.png");
+    }
+
+    #[test]
+    fn logical_asset_names_keep_compatible_fallbacks() {
+        let cfg = GameConfig::default();
+
+        assert_eq!(cfg.bg_path("day.webp"), "background/day.webp");
+        assert_eq!(cfg.figure_path("a.webp"), "figure/a.webp");
+        assert_eq!(cfg.voice_path("a.opus"), "vocal/a.opus");
+        assert_eq!(cfg.effect_path("a.opus"), "vocal/a.opus");
+        assert_eq!(cfg.bgm_path("a.opus"), "bgm/a.opus");
+        assert_eq!(cfg.video_path("a.mp4"), "video/a.mp4");
+        assert_eq!(cfg.lut_path("night"), "luts/night.png");
+        assert!(cfg.uses_legacy_effect_fallback("a.opus"));
+        assert!(!cfg.uses_legacy_effect_fallback("se/a.opus"));
+    }
+
+    #[test]
+    fn parent_and_platform_specific_paths_are_not_treated_as_direct() {
+        let cfg = GameConfig::default();
+
+        assert_eq!(cfg.bg_path("../day.webp"), "background/../day.webp");
+        assert_eq!(
+            cfg.bg_path("C:\\assets\\day.webp"),
+            "background/C:\\assets\\day.webp"
+        );
     }
 }

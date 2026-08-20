@@ -92,8 +92,9 @@ assets:
   `[{ path: ".", format: "fs" }]`。
 - `assets` 别名表（`backgrounds/figures/bgm/voices/effects/videos/luts`）
   是 **Kēne 原生项目的唯一权威别名来源**：逻辑名 → 相对路径。
-- 脚本既可以直接写相对路径（`background/day.webp`），也可以写逻辑名
-  （`day`，通过别名表解析）。
+- 脚本既可以直接写安全的、多段相对路径（`background/day.webp`），也可以写逻辑名
+  （`day`，通过别名表或默认目录解析）。别名始终优先；显式路径会原样传给内容挂载层，
+  不会再次添加类别目录。路径必须使用 `/`，且不能含空段、`.`、`..`、反斜杠或盘符。
 - 未在别名表中的名称按第 4 节的默认回退目录解析。
 - 目录工程始终解析源脚本；发布流水线在 staging 内生成
   `.keine/compiled/program.bin`，打包后的 `.haku` 缺少或损坏该产物时拒绝启动。
@@ -107,17 +108,19 @@ assets:
 | 立绘 | Figure / MiniAvatar | `ShowSprite image` | `figure/` | `figures/`、`character/`、`characters/` | `figure/{name}` |
 | 语音 | Voice | `Say vocal` / `Vocal` | `vocal/` | `voice/`、`voices/` | `vocal/{name}` |
 | BGM | Bgm | `Bgm file` | `bgm/` | `bgm` | `bgm/{name}` |
-| 音效 | Effect | `Effect file` | `se/` | `se`、`sound/`、`sounds/`、`effect/`、`effects/` | `vocal/{name}`（现状） |
+| 音效 | Effect | `Effect file` | `se/` | `se`、`sound/`、`sounds/`、`effect/`、`effects/` | `vocal/{name}`（弃用中的兼容行为） |
 | 粒子 | Particle | `ShowParticles texture` | `particle/` | 任意 | 路径原样使用 |
 | 视频 | Video | `PlayVideo` | `video/` | `videos/` + 扩展名识别 | `video/{name}` |
 | LUT | — | 后处理 preset | `luts/` | `lut/`、`luts/` | `luts/{name}.png` |
 | 字体 | — | 预留 | `font/` | — | 内置 MavenPro-CJK |
 | UI | — | 预留 | `ui/` | — | 内置 |
 
-已知现状细节（规范不改变，只记录）：
+兼容与迁移细节：
 
-- 音效的默认回退目前是 `vocal/{name}`，与规范目录 `se/` 不一致；使用 `se/` 的
-  原生项目必须在 `assets.effects` 中登记别名。
+- 显式音效路径（如 `se/click.opus`）无需登记别名。只有裸名称（如 `click.opus`）
+  暂时沿用旧版 `vocal/{name}` 回退；`cargo validate` 与发布编译会发出迁移警告。
+  新工程应直接写 `se/...`，或在 `assets.effects` 中登记别名。后续不兼容版本可将
+  裸名称回退切换到规范目录 `se/`。
 - `cg/` 目录兼容背景：LetsGal 场景可用多个背景层，第一层走背景渲染器，其余层
   走通用 sprite 路径（同一资产同时登记为背景与立绘别名）。
 - 图库（`features.extra`）解锁来自实际播放过的场景背景，不需要单独的 `cg/`

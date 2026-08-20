@@ -20,8 +20,8 @@ use bevy::winit::WINIT_WINDOWS;
 use keine_core::config::GameConfig;
 use keine_core::{Action, DESIGN_HEIGHT, DESIGN_WIDTH, Program, State};
 use keine_loader::{
-    ContentProject, DiagnosticLevel, LoaderRegistry, ScriptWatcher, load_project_with,
-    load_scenes_with,
+    ContentProject, DiagnosticLevel, LoaderRegistry, ResourceKind, ScriptWatcher,
+    load_project_with, load_scenes_with,
 };
 
 use crate::render::blur::{BlurCamera, BlurPlugin, DialogCamera, SceneBlurCamera, UiBlurCamera};
@@ -818,6 +818,7 @@ fn check_project(
     let mut warnings = 0usize;
     let mut errors = 0usize;
     let mut missing_resources = HashSet::new();
+    let mut legacy_effects = HashSet::new();
     for scene in &scenes {
         actions += scene.actions.len();
         for diagnostic in &scene.diagnostics {
@@ -841,7 +842,23 @@ fn check_project(
         }
         for resource in &scene.resources {
             let path = resource.resolved_path(config);
-            if path.contains('{') || !missing_resources.insert(path.clone()) {
+            if path.contains('{') {
+                continue;
+            }
+            if resource.kind == ResourceKind::Effect
+                && config.uses_legacy_effect_fallback(&resource.path)
+                && legacy_effects.insert(resource.path.clone())
+            {
+                warnings += 1;
+                eprintln!(
+                    "warning: {}:{}:{}: bare sound effect {:?} uses the deprecated vocal/ fallback; use se/... or an assets.effects alias",
+                    scene.path.display(),
+                    resource.span.line,
+                    resource.span.column,
+                    resource.path,
+                );
+            }
+            if !missing_resources.insert(path.clone()) {
                 continue;
             }
             if !content.contains_asset(Path::new(&path)) {
