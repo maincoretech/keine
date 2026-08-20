@@ -38,6 +38,23 @@ fn send_cancellable<T>(
     }
 }
 
+#[cfg(any(
+    test,
+    all(
+        feature = "video-ffmpeg",
+        not(all(feature = "video-native", target_os = "macos"))
+    )
+))]
+fn validate_loop_cycle(produced_output: bool, duration: Option<f32>) -> Result<(), String> {
+    if !produced_output {
+        return Err("FFmpeg loop cycle produced no decoded output".to_owned());
+    }
+    if duration.is_some_and(|duration| !duration.is_finite() || duration <= 0.0) {
+        return Err("FFmpeg loop cycle has no positive timeline duration".to_owned());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod cancellable_channel_tests {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -81,6 +98,21 @@ mod cancellable_channel_tests {
         assert_eq!(receiver.recv().unwrap(), 0);
         assert!(worker.join().unwrap());
         assert_eq!(receiver.recv().unwrap(), 1);
+    }
+}
+
+#[cfg(test)]
+mod loop_progress_tests {
+    use super::validate_loop_cycle;
+
+    #[test]
+    fn loop_cycle_requires_output_and_video_timeline_progress() {
+        assert!(validate_loop_cycle(true, Some(1.0)).is_ok());
+        assert!(validate_loop_cycle(true, None).is_ok());
+        assert!(validate_loop_cycle(false, Some(1.0)).is_err());
+        assert!(validate_loop_cycle(false, None).is_err());
+        assert!(validate_loop_cycle(true, Some(0.0)).is_err());
+        assert!(validate_loop_cycle(true, Some(f32::NAN)).is_err());
     }
 }
 
@@ -272,7 +304,7 @@ mod ffmpeg_backend {
         VideoPresentation, VideoVisual, VisualResources, cleanup_visual, prepare_source,
         present_frame, update_visual, video_frame_bytes,
     };
-    use super::{HashMap, RenderLayers};
+    use super::{HashMap, RenderLayers, validate_loop_cycle};
     use crate::runtime::platform::DesignViewport;
     use crate::runtime::resources::{ContentProjectResource, GameConfigResource, GameState};
     use crate::scene::effects::material::{StageMaterial, StageQuad};
@@ -778,6 +810,7 @@ mod ffmpeg_backend {
             return;
         }
         let mut loop_offset = 0.0;
+        let mut cycle_produced_frame = false;
         let mut rgba_converter = None;
         loop {
             if cancelled.load(Ordering::Acquire) {
@@ -827,8 +860,18 @@ mod ffmpeg_backend {
                     ) {
                         return;
                     }
+                    cycle_produced_frame = true;
                 }
                 Ok(None) if looped => {
+                    if let Err(error) = validate_loop_cycle(cycle_produced_frame, Some(duration)) {
+                        let _ = send_event(
+                            &sender,
+                            DecoderEvent::Error(error),
+                            &cancelled,
+                            &cancel_receiver,
+                        );
+                        return;
+                    }
                     loop_offset += duration;
                     if let Err(error) = decoder.seek_to_start() {
                         let _ = send_event(
@@ -839,6 +882,7 @@ mod ffmpeg_backend {
                         );
                         return;
                     }
+                    cycle_produced_frame = false;
                 }
                 Ok(None) => {
                     let _ = send_event(&sender, DecoderEvent::End, &cancelled, &cancel_receiver);
@@ -1005,6 +1049,7 @@ mod ffmpeg_backend {
         looped: bool,
         eof_sent: bool,
         ended: bool,
+        decoded_since_seek: bool,
     }
 
     impl FfmpegAudioStream {
@@ -1046,6 +1091,7 @@ mod ffmpeg_backend {
                 looped,
                 eof_sent: false,
                 ended: false,
+                decoded_since_seek: false,
             })
         }
 
@@ -1065,6 +1111,7 @@ mod ffmpeg_backend {
                 looped,
                 eof_sent: true,
                 ended: true,
+                decoded_since_seek: false,
             }
         }
 
@@ -1077,7 +1124,13 @@ mod ffmpeg_backend {
             };
             let mut received = false;
             let mut decoded = ffmpeg::frame::Audio::empty();
-            while decoder.receive_frame(&mut decoded).is_ok() {
+            loop {
+                match decoder.receive_frame(&mut decoded) {
+                    Ok(()) => {}
+                    Err(ffmpeg::Error::Eof) => break,
+                    Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => break,
+                    Err(error) => return Err(error),
+                }
                 let frame_timestamp = decoded.timestamp();
                 let mut converted = ffmpeg::frame::Audio::empty();
                 resampler.run(&decoded, &mut converted)?;
@@ -1102,6 +1155,7 @@ mod ffmpeg_backend {
                 }
                 if !self.samples.is_empty() {
                     received = true;
+                    self.decoded_since_seek = true;
                     break;
                 }
             }
@@ -1110,13 +1164,25 @@ mod ffmpeg_backend {
 
         fn decode_next(&mut self) -> bool {
             loop {
-                if self.receive_frames().unwrap_or(false) {
-                    return true;
+                match self.receive_frames() {
+                    Ok(true) => return true,
+                    Ok(false) => {}
+                    Err(error) => {
+                        log::warn!("FFmpeg audio decode failed: {error}");
+                        self.ended = true;
+                        return false;
+                    }
                 }
                 if self.eof_sent {
                     if self.looped {
-                        if self.seek_to(Duration::ZERO).is_ok() {
-                            continue;
+                        if let Err(error) = validate_loop_cycle(self.decoded_since_seek, None) {
+                            log::warn!("{error}");
+                            self.ended = true;
+                            return false;
+                        }
+                        match self.seek_to(Duration::ZERO) {
+                            Ok(()) => continue,
+                            Err(error) => log::warn!("FFmpeg audio loop rewind failed: {error}"),
                         }
                     }
                     self.ended = true;
@@ -1167,6 +1233,7 @@ mod ffmpeg_backend {
             self.seek_target = Some(timestamp);
             self.eof_sent = false;
             self.ended = false;
+            self.decoded_since_seek = false;
             Ok(())
         }
     }
