@@ -19,12 +19,12 @@ use keine_core::{
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
+use super::ProjectSourceReader;
 use super::model::{
     AssetManifest, ChapterDocument, CharacterDefinition, CharactersDocument, DialogueBehavior,
     ProjectDocument, SceneDefinition, ScenesDocument, StoryBlock, StoryFragment,
     VariableDeclaration, VariablesDocument,
 };
-use super::read_json;
 use crate::{Diagnostic, DiagnosticLevel, LoadedScene, ParseReport, SourceSpan};
 
 pub(super) fn initial_state(
@@ -279,6 +279,7 @@ fn is_lut(path: &str) -> bool {
 pub(super) fn load_chapters(
     project_root: &Path,
     project: &ProjectDocument,
+    sources: &mut ProjectSourceReader,
 ) -> Result<Vec<(PathBuf, ChapterDocument)>> {
     let directory = project_root.join("chapters");
     let mut by_name = BTreeMap::new();
@@ -289,7 +290,7 @@ pub(super) fn load_chapters(
         if path.extension().and_then(|value| value.to_str()) != Some("json") {
             continue;
         }
-        let chapter: ChapterDocument = read_json(&path)?;
+        let chapter: ChapterDocument = sources.read_json(&path)?;
         if by_name
             .insert(chapter.name.clone(), (path.clone(), chapter))
             .is_some()

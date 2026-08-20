@@ -1,11 +1,14 @@
 mod compile;
 mod model;
 
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+#[cfg(test)]
+use std::fs;
+
 use super::{ProjectDebugCursor, ProjectInitialState, StructuredSceneLoader, structured_project};
+use crate::source_input::SourceBudget;
 use crate::{AdaptedProject, LoadedScene, ProjectAdapter, SourceMount};
 use anyhow::{Context, Result, bail};
 
@@ -32,7 +35,8 @@ impl ProjectAdapter for LetsGalProjectAdapter {
         if !path.is_file() {
             return Ok(false);
         }
-        let value: serde_json::Value = read_json(&path)?;
+        let mut sources = ProjectSourceReader::new(project_root)?;
+        let value: serde_json::Value = sources.read_json(&path)?;
         Ok(value.get("chapterOrder").is_some()
             && value.get("engineVersion").is_some()
             && project_root.join("chapters").is_dir())
@@ -45,10 +49,11 @@ impl ProjectAdapter for LetsGalProjectAdapter {
                 project_root.display()
             )
         })?;
-        let project: ProjectDocument = read_json(&root.join(PROJECT_FILE))?;
+        let mut sources = ProjectSourceReader::new(&root)?;
+        let project: ProjectDocument = sources.read_json(&root.join(PROJECT_FILE))?;
         validate_project(&root, &project)?;
-        let manifest: AssetManifest = read_json(&root.join("assets/.manifest.json"))?;
-        let dialogue_behavior = load_dialogue_behavior(&root)?;
+        let manifest: AssetManifest = sources.read_json(&root.join("assets/.manifest.json"))?;
+        let dialogue_behavior = load_dialogue_behavior(&root, &mut sources)?;
         let config = compile::game_config(&project, &manifest, dialogue_behavior.as_ref());
         let assets = root.join("assets");
         let source = SourceMount::assets("letsgal", assets.display().to_string(), assets);
@@ -68,13 +73,15 @@ impl StructuredSceneLoader for LetsGalProjectAdapter {
     }
 
     fn load(&self, project_root: &Path) -> Result<Vec<LoadedScene>> {
-        let project: ProjectDocument = read_json(&project_root.join(PROJECT_FILE))?;
+        let mut sources = ProjectSourceReader::new(project_root)?;
+        let project: ProjectDocument = sources.read_json(&project_root.join(PROJECT_FILE))?;
         let characters: CharactersDocument =
-            read_json_or_default(&project_root.join("characters.json"))?;
-        let scenes: ScenesDocument = read_json_or_default(&project_root.join("scenes.json"))?;
+            sources.read_json_or_default(&project_root.join("characters.json"))?;
+        let scenes: ScenesDocument =
+            sources.read_json_or_default(&project_root.join("scenes.json"))?;
         let manifest: AssetManifest =
-            read_json_or_default(&project_root.join("assets/.manifest.json"))?;
-        let chapters = compile::load_chapters(project_root, &project)?;
+            sources.read_json_or_default(&project_root.join("assets/.manifest.json"))?;
+        let chapters = compile::load_chapters(project_root, &project, &mut sources)?;
         compile::compile_project(
             project_root,
             &project,
@@ -109,9 +116,11 @@ impl StructuredSceneLoader for LetsGalProjectAdapter {
     }
 
     fn load_config(&self, project_root: &Path) -> Result<Option<keine_core::config::GameConfig>> {
-        let project: ProjectDocument = read_json(&project_root.join(PROJECT_FILE))?;
-        let manifest: AssetManifest = read_json(&project_root.join("assets/.manifest.json"))?;
-        let dialogue_behavior = load_dialogue_behavior(project_root)?;
+        let mut sources = ProjectSourceReader::new(project_root)?;
+        let project: ProjectDocument = sources.read_json(&project_root.join(PROJECT_FILE))?;
+        let manifest: AssetManifest =
+            sources.read_json(&project_root.join("assets/.manifest.json"))?;
+        let dialogue_behavior = load_dialogue_behavior(project_root, &mut sources)?;
         Ok(Some(compile::game_config(
             &project,
             &manifest,
@@ -128,7 +137,8 @@ impl StructuredSceneLoader for LetsGalProjectAdapter {
         if !path.is_file() {
             return Ok(None);
         }
-        let state: model::StudioState = read_json(&path)?;
+        let mut sources = ProjectSourceReader::new(project_root)?;
+        let state: model::StudioState = sources.read_json(&path)?;
         if state.active_fragment_id.is_empty() {
             return Ok(None);
         }
@@ -144,8 +154,10 @@ impl StructuredSceneLoader for LetsGalProjectAdapter {
     }
 
     fn initial_state(&self, project_root: &Path) -> Result<ProjectInitialState> {
-        let variables = read_json_or_default(&project_root.join("project.variables.json"))?;
-        let characters = read_json_or_default(&project_root.join("characters.json"))?;
+        let mut sources = ProjectSourceReader::new(project_root)?;
+        let variables =
+            sources.read_json_or_default(&project_root.join("project.variables.json"))?;
+        let characters = sources.read_json_or_default(&project_root.join("characters.json"))?;
         Ok(compile::initial_state(&variables, &characters))
     }
 }
@@ -166,25 +178,44 @@ fn validate_project(root: &Path, project: &ProjectDocument) -> Result<()> {
     Ok(())
 }
 
-fn load_dialogue_behavior(root: &Path) -> Result<Option<DialogueBehavior>> {
+fn load_dialogue_behavior(
+    root: &Path,
+    sources: &mut ProjectSourceReader,
+) -> Result<Option<DialogueBehavior>> {
     let path = root.join("extensions/avg.internal.default-shell/ui/dialogue-box.json");
     if !path.is_file() {
         return Ok(None);
     }
-    let document: DialogueBoxDocument = read_json(&path)?;
+    let document: DialogueBoxDocument = sources.read_json(&path)?;
     Ok(Some(document.dialogue_behavior))
 }
 
-pub(super) fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
-    let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    serde_json::from_slice(&bytes).with_context(|| format!("invalid JSON in {}", path.display()))
+pub(super) struct ProjectSourceReader {
+    budget: SourceBudget,
 }
 
-fn read_json_or_default<T: serde::de::DeserializeOwned + Default>(path: &Path) -> Result<T> {
-    if !path.is_file() {
-        return Ok(T::default());
+impl ProjectSourceReader {
+    fn new(root: &Path) -> Result<Self> {
+        Ok(Self {
+            budget: SourceBudget::for_filesystem(root)?,
+        })
     }
-    read_json(path)
+
+    pub(super) fn read_json<T: serde::de::DeserializeOwned>(&mut self, path: &Path) -> Result<T> {
+        let bytes = self.budget.read_file(path)?;
+        serde_json::from_slice(&bytes)
+            .with_context(|| format!("invalid JSON in {}", path.display()))
+    }
+
+    fn read_json_or_default<T: serde::de::DeserializeOwned + Default>(
+        &mut self,
+        path: &Path,
+    ) -> Result<T> {
+        if !path.is_file() {
+            return Ok(T::default());
+        }
+        self.read_json(path)
+    }
 }
 
 #[cfg(test)]
@@ -386,8 +417,10 @@ mod tests {
         use keine_core::Action;
 
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/letsgal-1.8.0");
-        let chapter: model::ChapterDocument =
-            read_json(&root.join("chapters/Compatibility.json")).unwrap();
+        let chapter: model::ChapterDocument = ProjectSourceReader::new(&root)
+            .unwrap()
+            .read_json(&root.join("chapters/Compatibility.json"))
+            .unwrap();
         let actual = chapter.fragments[0]
             .blocks
             .iter()

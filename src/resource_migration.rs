@@ -6,16 +6,16 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, IsTerminal, Read, Write};
+use std::fs::{self, OpenOptions};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use keine_core::config::GameConfig;
 use keine_loader::{
-    ContentProject, DiagnosticLevel, LoaderRegistry, ResourceRef, load_project_with,
-    load_scenes_with,
+    ContentProject, DiagnosticLevel, LoaderRegistry, MAX_SOURCE_FILE_BYTES, MAX_SOURCE_FILES,
+    MAX_SOURCE_TOTAL_BYTES, ResourceRef, load_project_with, load_scenes_with,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,9 +164,14 @@ fn open_project(root: &Path, loader: &LoaderRegistry) -> Result<(GameConfig, Con
         return Ok((project.config, project.content));
     }
     let config_path = root.join("config.yaml");
-    let yaml = fs::read_to_string(&config_path)
-        .with_context(|| format!("failed to read {}", config_path.display()))?;
-    let config = GameConfig::from_yaml(&yaml)
+    let bytes = crate::storage::read_limited(
+        &config_path,
+        crate::runtime::bootstrap::MAX_PROJECT_CONFIG_BYTES,
+    )
+    .with_context(|| format!("failed to read {}", config_path.display()))?;
+    let yaml = std::str::from_utf8(&bytes)
+        .with_context(|| format!("project config is not UTF-8: {}", config_path.display()))?;
+    let config = GameConfig::from_yaml(yaml)
         .with_context(|| format!("invalid project config {}", config_path.display()))?;
     let content = load_project_with(root, &config.adapter.asset, loader)?;
     Ok((config, content))
@@ -335,12 +340,18 @@ fn portable_path(path: &Path) -> Result<String> {
 
 fn source_files(root: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
-    collect_source_files(root, root, &mut files)?;
+    let mut total_bytes = 0usize;
+    collect_source_files(root, root, &mut files, &mut total_bytes)?;
     files.sort();
     Ok(files)
 }
 
-fn collect_source_files(root: &Path, directory: &Path, output: &mut Vec<PathBuf>) -> Result<()> {
+fn collect_source_files(
+    root: &Path,
+    directory: &Path,
+    output: &mut Vec<PathBuf>,
+    total_bytes: &mut usize,
+) -> Result<()> {
     for entry in fs::read_dir(directory)
         .with_context(|| format!("failed to read {}", directory.display()))?
     {
@@ -361,11 +372,30 @@ fn collect_source_files(root: &Path, directory: &Path, output: &mut Vec<PathBuf>
                 }
                 continue;
             }
-            collect_source_files(root, &path, output)?;
+            collect_source_files(root, &path, output, total_bytes)?;
         } else if file_type.is_file() && is_source_file(&path) {
             let canonical = path.canonicalize()?;
             if !canonical.starts_with(root) {
                 anyhow::bail!("source file escapes project root: {}", path.display());
+            }
+            if output.len() >= MAX_SOURCE_FILES {
+                anyhow::bail!("source project exceeds the {MAX_SOURCE_FILES}-file limit");
+            }
+            let length = usize::try_from(entry.metadata()?.len())
+                .context("source file size exceeds this platform")?;
+            if length > MAX_SOURCE_FILE_BYTES {
+                anyhow::bail!(
+                    "source {} exceeds the {MAX_SOURCE_FILE_BYTES}-byte per-file limit",
+                    path.display()
+                );
+            }
+            *total_bytes = total_bytes
+                .checked_add(length)
+                .context("source project byte count overflow")?;
+            if *total_bytes > MAX_SOURCE_TOTAL_BYTES {
+                anyhow::bail!(
+                    "source project exceeds the {MAX_SOURCE_TOTAL_BYTES}-byte total limit"
+                );
             }
             output.push(path);
         }
@@ -394,7 +424,7 @@ fn is_source_file(path: &Path) -> bool {
 fn plan_edits(files: &[PathBuf], replacements: &BTreeMap<String, String>) -> Result<Vec<Edit>> {
     let mut edits = Vec::new();
     for path in files {
-        let original = fs::read(path)?;
+        let original = crate::storage::read_limited(path, MAX_SOURCE_FILE_BYTES)?;
         let source = std::str::from_utf8(&original)
             .with_context(|| format!("source file is not UTF-8: {}", path.display()))?;
         let (replacement, count) = if path.extension() == Some(OsStr::new("json")) {
@@ -505,13 +535,14 @@ fn file_contains_reference(path: &Path, reference: &str) -> Result<bool> {
 }
 
 fn file_reference_count(path: &Path, reference: &str) -> Result<usize> {
-    let mut source = String::new();
-    File::open(path)?.read_to_string(&mut source)?;
+    let bytes = crate::storage::read_limited(path, MAX_SOURCE_FILE_BYTES)?;
+    let source = std::str::from_utf8(&bytes)
+        .with_context(|| format!("source file is not UTF-8: {}", path.display()))?;
     let replacements = BTreeMap::from([(reference.to_owned(), String::new())]);
     let count = if path.extension() == Some(OsStr::new("json")) {
-        replace_json_strings(&source, &replacements).1
+        replace_json_strings(source, &replacements).1
     } else {
-        replace_path_tokens(&source, &replacements).1
+        replace_path_tokens(source, &replacements).1
     };
     Ok(count)
 }

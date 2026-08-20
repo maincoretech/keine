@@ -37,7 +37,7 @@ use crate::runtime::resources::{
 };
 use crate::ui::performance::BenchmarkTarget;
 
-const MAX_PROJECT_CONFIG_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_PROJECT_CONFIG_BYTES: usize = 256 * 1024;
 type BenchmarkWorkload = (&'static str, &'static str);
 type BenchmarkSection = (&'static str, &'static [BenchmarkWorkload]);
 
