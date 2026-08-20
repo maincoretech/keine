@@ -5,6 +5,62 @@ Settled runtime captures disable persistence, warm up for three seconds, use
 the 1920x1080 design resolution, and sample raw frame intervals in a release
 build. The process-start protocol below intentionally has no warm-up.
 
+## 2026-08-21 official LetsGal sample baseline
+
+This local baseline uses the complete `letsgal-template` bundled with LetsGal
+Studio, copied to the ignored `projects/letsgal` directory and renamed
+`letsgal`. Its commercial media is not redistributed through this repository.
+At this capture it contains 9 compiled scenes, 896 actions, 145 files, and
+about 258 MiB on disk. The adapter acceptance resolves every static resource
+and confirms that the sample still exercises JPG, PNG, MP3, WAV, and MP4
+compatibility paths:
+
+```text
+cargo letsgal-test
+```
+
+The same test runs automatically as part of the workspace suite whenever the
+local sample is present. CI and clean clones without the commercial sample
+print an explicit skip; setting `KEINE_LETSGAL_PROJECT` makes a missing or
+invalid configured path fail instead. The tracked `test-project` remains the
+always-present CI contract.
+
+Loader measurements use Criterion's normal warm-up and sampling protocol:
+
+```text
+cargo letsgal-perf
+```
+
+The process-start measurement reuses the release-mode hidden surface-backed
+window harness:
+
+```text
+cargo startup-perf projects/letsgal 7
+```
+
+Reference environment: commit `74e9520`, 15-core Apple M5 Pro, 24 GiB unified
+memory, macOS/arm64, Metal, AC power. The filesystem and GPU caches were not
+globally cleared. The first process is reported separately from the median of
+the following six processes.
+
+| Loader operation | Median estimate | Throughput |
+| --- | ---: | ---: |
+| Adapter detection + project/manifest open | 130.57 µs | — |
+| Parse 9 scenes / 896 actions | 845.60 µs | 1.060 M actions/s |
+| Open + parse + program fingerprint | 1.0473 ms | 855.6 K actions/s |
+
+| Cumulative startup milestone | First process | Repeat median |
+| --- | ---: | ---: |
+| Project open | 0.76 ms | 0.69 ms |
+| App built | 248.25 ms | 122.75 ms |
+| First completed frame | 1015.44 ms | 292.75 ms |
+| First interactive title frame | 1032.55 ms | 307.11 ms |
+
+Peak RSS was 341.2 MiB. The first-use gap is dominated by app/GPU/frame setup,
+not adapter work: the source project itself opened below 1 ms in every isolated
+process. This baseline is intentionally about a real imported project; the
+synthetic 100k-action benchmark remains the scale/throughput stress case.
+
 ## Portable benchmark release
 
 Build a benchmark edition without replacing the normal release:

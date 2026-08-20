@@ -17,6 +17,11 @@ perf = "run --release --features video-native,video-ffmpeg -- benchmark"
 # Builds once, then lets the release executable spawn isolated child processes
 # and report startup medians/p95 without including Cargo in the measurements.
 startup-perf = "run --release --features startup-metrics -- benchmark-startup"
+# Local official LetsGal sample acceptance and loader/compiler baseline. The
+# commercial sample itself stays outside Git; both commands explain how to
+# install it when projects/letsgal is absent.
+letsgal-test = "test --test letsgal_sample_acceptance"
+letsgal-perf = "bench -p keine-loader --bench letsgal_project"
 validate = "run -- check"
 # Publisher-only asset operations. Packing writes Hakutaku content without
 # building an engine; remapping updates project references transactionally.

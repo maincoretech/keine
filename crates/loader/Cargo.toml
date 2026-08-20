@@ -26,3 +26,7 @@ harness = false
 [[bench]]
 name = "content_lookup"
 harness = false
+
+[[bench]]
+name = "letsgal_project"
+harness = false
