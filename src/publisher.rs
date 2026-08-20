@@ -230,10 +230,18 @@ fn publish_directory(assembled: TempDir, output: &Path) -> Result<()> {
         return Err(error).with_context(|| format!("failed to publish {}", output.display()));
     }
     if had_previous {
-        fs::remove_dir_all(&backup)
-            .with_context(|| format!("failed to remove old release {}", backup.display()))?;
+        cleanup_old_release_after_commit(&backup);
     }
     Ok(())
+}
+
+fn cleanup_old_release_after_commit(backup: &Path) {
+    if let Err(error) = fs::remove_dir_all(backup) {
+        eprintln!(
+            "warning: release committed, but the previous release could not be removed from {}: {error}",
+            backup.display()
+        );
+    }
 }
 
 fn copy_tree(from: &Path, to: &Path) -> Result<()> {
@@ -816,5 +824,16 @@ mod tests {
             b"segment"
         );
         assert!(!assembled.join("data/ignored.txt").exists());
+    }
+
+    #[test]
+    fn cleanup_failure_does_not_turn_a_committed_release_into_an_error() {
+        let root = tempdir().unwrap();
+        let backup = root.path().join("old-release");
+        fs::write(&backup, b"not a directory").unwrap();
+
+        cleanup_old_release_after_commit(&backup);
+
+        assert!(backup.is_file());
     }
 }

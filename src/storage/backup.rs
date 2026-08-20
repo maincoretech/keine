@@ -126,9 +126,16 @@ pub(crate) fn import(project_root: &Path, source: &Path) -> Result<()> {
         return Err(error).context("failed to install imported save data");
     }
     super::sync_directory(parent)?;
-    remove_if_present(&previous)?;
-    super::sync_directory(parent)?;
+    cleanup_previous_after_commit(&previous, parent);
     Ok(())
+}
+
+fn cleanup_previous_after_commit(previous: &Path, parent: &Path) {
+    if let Err(error) = remove_if_present(previous).and_then(|()| super::sync_directory(parent)) {
+        log::warn!(
+            "save import committed, but the previous save directory could not be cleaned up: {error:#}"
+        );
+    }
 }
 
 fn safe_name(name: &str) -> bool {
@@ -174,6 +181,23 @@ mod tests {
             b"settings"
         );
         assert_eq!(fs::read(root.join("saves/slot_1.keine")).unwrap(), b"save");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cleanup_failure_does_not_turn_a_committed_import_into_an_error() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("keine-backup-cleanup-{nonce}"));
+        fs::create_dir_all(&root).unwrap();
+        let previous = root.join("saves.previous");
+        fs::write(&previous, b"not a directory").unwrap();
+
+        cleanup_previous_after_commit(&previous, &root);
+
+        assert!(previous.is_file());
         let _ = fs::remove_dir_all(root);
     }
 
