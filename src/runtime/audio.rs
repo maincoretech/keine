@@ -26,6 +26,8 @@ use bevy::audio::{AddAudioSource, Decodable};
 use bevy::audio::{AudioPlayer, PlaybackSettings};
 use bevy::ecs::system::EntityCommands;
 use bevy::prelude::*;
+#[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+use futures_lite::io::AsyncReadExt;
 #[cfg(feature = "audio-opus")]
 use keine_loader::{ContentFile, ContentMount};
 #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
@@ -52,6 +54,38 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::units::{Time as SymphoniaTime, TimeBase, Timestamp};
 #[cfg(feature = "audio-opus")]
 use symphonia_adapter_libopus::OpusDecoder;
+
+/// Compatibility formats are retained in compressed form for seek/loop.
+/// Opus assets from the project mount stay streaming and do not consume this
+/// allowance; this bounds only paths that must become one in-memory asset.
+#[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+pub(crate) const MAX_IN_MEMORY_AUDIO_BYTES: usize = 128 * 1024 * 1024;
+
+#[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+async fn read_in_memory_audio(reader: &mut dyn Reader, maximum: usize) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let mut chunk = [0_u8; 64 * 1024];
+    loop {
+        let read = AsyncReadExt::read(reader, &mut chunk).await?;
+        if read == 0 {
+            return Ok(bytes);
+        }
+        let new_len = bytes
+            .len()
+            .checked_add(read)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "audio size overflow"))?;
+        if new_len > maximum {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("audio exceeds the {maximum}-byte in-memory input limit"),
+            ));
+        }
+        bytes
+            .try_reserve_exact(read)
+            .map_err(|error| io::Error::other(format!("failed to reserve audio input: {error}")))?;
+        bytes.extend_from_slice(&chunk[..read]);
+    }
+}
 
 /// Reopenable Ogg Opus data. Project assets retain only their logical source;
 /// each playback decoder reads and seeks the underlying file incrementally.
@@ -180,8 +214,7 @@ impl AssetLoader for OpusAudioLoader {
                 path: load_context.path().path().to_owned(),
             }
         } else {
-            let mut bytes = Vec::new();
-            reader.read_to_end(&mut bytes).await?;
+            let bytes = read_in_memory_audio(reader, MAX_IN_MEMORY_AUDIO_BYTES).await?;
             if bytes.is_empty() {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -285,8 +318,7 @@ impl AssetLoader for SeekableAudioLoader {
         _settings: &Self::Settings,
         load_context: &mut LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
-        let mut bytes = Vec::new();
-        reader.read_to_end(&mut bytes).await?;
+        let bytes = read_in_memory_audio(reader, MAX_IN_MEMORY_AUDIO_BYTES).await?;
         if bytes.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -324,6 +356,31 @@ impl AssetLoader for SeekableAudioLoader {
             #[cfg(feature = "audio-flac")]
             "flac",
         ]
+    }
+}
+
+#[cfg(all(test, any(feature = "audio-opus", feature = "audio-seekable")))]
+mod bounded_input_tests {
+    use bevy::asset::io::VecReader;
+
+    use super::*;
+
+    #[test]
+    fn in_memory_audio_accepts_the_boundary_and_rejects_one_more_byte() {
+        let accepted = futures_lite::future::block_on(read_in_memory_audio(
+            &mut VecReader::new(vec![1; 4]),
+            4,
+        ))
+        .unwrap();
+        assert_eq!(accepted, vec![1; 4]);
+
+        let error = futures_lite::future::block_on(read_in_memory_audio(
+            &mut VecReader::new(vec![1; 5]),
+            4,
+        ))
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("in-memory input limit"));
     }
 }
 
