@@ -6,7 +6,7 @@ use keine_core::Action;
 
 use crate::{
     ContentMount, ContentProject, Diagnostic, DiagnosticLevel, ResourceRef, SceneRef,
-    ScriptLanguageRegistry, source_input::SourceBudget,
+    ScriptLanguageRegistry, source_input::SourceReader,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -36,9 +36,9 @@ pub fn load_scenes_with(
         return loader.load(&project.root);
     }
     let mut merged = BTreeMap::new();
-    let mut source_budget = SourceBudget::for_mounts();
+    let source_reader = SourceReader::for_mounts();
     for script_mount in project.script_mounts() {
-        for mut scene in load_directory(&script_mount, languages, &mut source_budget)? {
+        for mut scene in load_directory(&script_mount, languages, &source_reader)? {
             if let Some(previous) = merged.insert(scene.name.clone(), scene.clone()) {
                 scene.diagnostics.push(Diagnostic {
                     level: DiagnosticLevel::Warning,
@@ -61,13 +61,13 @@ pub fn load_scenes_with(
 fn load_directory(
     scripts: &ContentMount,
     languages: &ScriptLanguageRegistry,
-    source_budget: &mut SourceBudget,
+    source_reader: &SourceReader,
 ) -> Result<Vec<LoadedScene>> {
     let paths = script_paths(scripts, languages)?;
 
     let mut scenes = Vec::with_capacity(paths.len());
     for path in paths {
-        scenes.push(load_scene(scripts, path, languages, source_budget)?);
+        scenes.push(load_scene(scripts, path, languages, source_reader)?);
     }
     let mut names = HashSet::with_capacity(scenes.len());
     for scene in &scenes {
@@ -86,7 +86,7 @@ fn script_paths(
     scripts: &ContentMount,
     languages: &ScriptLanguageRegistry,
 ) -> Result<Vec<PathBuf>> {
-    let mut paths = scripts.recursive_files(crate::MAX_SOURCE_FILES)?;
+    let mut paths = scripts.recursive_files()?;
     paths.retain(|path| languages.supports(path));
     paths.sort();
     Ok(paths)
@@ -114,12 +114,12 @@ fn load_scene(
     scripts: &ContentMount,
     path: PathBuf,
     languages: &ScriptLanguageRegistry,
-    source_budget: &mut SourceBudget,
+    source_reader: &SourceReader,
 ) -> Result<LoadedScene> {
     let language = languages
         .language_for(&path)
         .with_context(|| format!("unsupported script format: {}", path.display()))?;
-    let bytes = source_budget
+    let bytes = source_reader
         .read_mount(scripts, &path)
         .with_context(|| format!("failed to read script {}", path.display()))?;
     let source = String::from_utf8(bytes)

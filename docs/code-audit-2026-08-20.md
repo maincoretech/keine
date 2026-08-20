@@ -76,11 +76,12 @@ containment 仍由内容挂载层执行。为避免破坏旧工程，裸 Effect 
 
 ### 4. source-project 有界读取
 
-**状态**：已实现每文件 32 MiB、每次加载 4,096 文件和合计 256 MiB 的共同预算；
-native mount 与 LetsGal JSON 共用同一个预算类型，LetsGal 同时检查 canonical project root。
+**状态**：已实现单文件 32 MiB 的有界 reader，native mount 与 LetsGal JSON 复用读取逻辑，
+LetsGal 同时检查 canonical project root。工程文件数与总源码量不设硬上限，因为它们不等价于
+峰值内存，且会误伤大型或高度拆分的合法工程。
 
-**问题**：native script、LetsGal JSON 和迁移工具存在整文件读取入口，文件数和总源码量
-也缺少一套统一预算。
+**问题**：native script、LetsGal JSON 和迁移工具存在单文件无界读取入口。最初审查同时
+建议限制文件数和总源码量；复核后确认这两项不是有效的峰值内存模型，因此不采用。
 
 **实施约束**：先统计真实大工程的单文件、文件数和总字节分布，再确定默认值；native、
 LetsGal 和 tooling 复用同一个 bounded reader，错误包含路径、实际值和上限。

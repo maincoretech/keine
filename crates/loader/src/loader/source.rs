@@ -243,15 +243,14 @@ impl ContentMount {
     /// rescanning the complete package for every directory. Filesystem mounts
     /// follow links only when their canonical target stays inside the mount;
     /// canonical directory identities prevent links from creating cycles.
-    pub(crate) fn recursive_files(&self, maximum: usize) -> Result<Vec<PathBuf>> {
+    pub(crate) fn recursive_files(&self) -> Result<Vec<PathBuf>> {
         match &self.backend {
             ContentBackend::FileSystem(_) => collect_filesystem_files(
                 self.filesystem_root
                     .as_deref()
                     .context("filesystem mount has no root")?,
-                maximum,
             ),
-            ContentBackend::Hakutaku(archive) => archive.files_under(&self.prefix, maximum),
+            ContentBackend::Hakutaku(archive) => Ok(archive.files_under(&self.prefix)),
         }
     }
 
@@ -461,8 +460,8 @@ impl HakutakuArchive {
             .unwrap_or_default()
     }
 
-    fn files_under(&self, prefix: &Path, maximum: usize) -> Result<Vec<PathBuf>> {
-        relative_files_under(&self.files, prefix, maximum)
+    fn files_under(&self, prefix: &Path) -> Vec<PathBuf> {
+        relative_files_under(&self.files, prefix)
     }
 }
 
@@ -482,25 +481,16 @@ fn build_directory_entries(files: &HashSet<PathBuf>) -> HashMap<PathBuf, Vec<Pat
         .collect()
 }
 
-fn relative_files_under(
-    files: &HashSet<PathBuf>,
-    prefix: &Path,
-    maximum: usize,
-) -> Result<Vec<PathBuf>> {
-    let relative = files
+fn relative_files_under(files: &HashSet<PathBuf>, prefix: &Path) -> Vec<PathBuf> {
+    files
         .iter()
         .filter_map(|file| file.strip_prefix(prefix).ok())
         .filter(|path| !path.as_os_str().is_empty())
-        .take(maximum.saturating_add(1))
         .map(Path::to_owned)
-        .collect::<Vec<_>>();
-    if relative.len() > maximum {
-        bail!("content mount exceeds the {maximum}-file source limit");
-    }
-    Ok(relative)
+        .collect()
 }
 
-fn collect_filesystem_files(mount_root: &Path, maximum: usize) -> Result<Vec<PathBuf>> {
+fn collect_filesystem_files(mount_root: &Path) -> Result<Vec<PathBuf>> {
     let mount_root = mount_root
         .canonicalize()
         .with_context(|| format!("failed to resolve content mount {}", mount_root.display()))?;
@@ -526,9 +516,6 @@ fn collect_filesystem_files(mount_root: &Path, maximum: usize) -> Result<Vec<Pat
             let logical_path = logical_directory.join(entry.file_name());
 
             if file_type.is_file() {
-                if files.len() >= maximum {
-                    bail!("content mount exceeds the {maximum}-file source limit");
-                }
                 files.push(logical_path);
                 continue;
             }
@@ -558,9 +545,6 @@ fn collect_filesystem_files(mount_root: &Path, maximum: usize) -> Result<Vec<Pat
                 format!("failed to inspect symlink target {}", canonical.display())
             })?;
             if metadata.is_file() {
-                if files.len() >= maximum {
-                    bail!("content mount exceeds the {maximum}-file source limit");
-                }
                 files.push(logical_path);
             } else if metadata.is_dir() && visited.insert(canonical.clone()) {
                 directories.push((logical_path, canonical));
@@ -643,8 +627,7 @@ mod tests {
         .map(PathBuf::from)
         .collect::<HashSet<_>>();
 
-        let mut relative =
-            relative_files_under(&files, Path::new("project/scripts"), usize::MAX).unwrap();
+        let mut relative = relative_files_under(&files, Path::new("project/scripts"));
         relative.sort();
 
         assert_eq!(
@@ -654,21 +637,6 @@ mod tests {
                 PathBuf::from("chapter/notes.md"),
                 PathBuf::from("main.txt"),
             ]
-        );
-    }
-
-    #[test]
-    fn source_enumeration_stops_at_its_file_limit() {
-        let files = HashSet::from([
-            PathBuf::from("project/scripts/a.txt"),
-            PathBuf::from("project/scripts/b.txt"),
-        ]);
-
-        assert!(
-            relative_files_under(&files, Path::new("project/scripts"), 1)
-                .unwrap_err()
-                .to_string()
-                .contains("1-file source limit")
         );
     }
 

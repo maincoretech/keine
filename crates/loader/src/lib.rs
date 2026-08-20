@@ -29,7 +29,7 @@ pub use loader::{
 pub use report::{
     Diagnostic, DiagnosticLevel, ParseReport, ResourceKind, ResourceRef, SceneRef, SourceSpan,
 };
-pub use source_input::{MAX_SOURCE_FILE_BYTES, MAX_SOURCE_FILES, MAX_SOURCE_TOTAL_BYTES};
+pub use source_input::MAX_SOURCE_FILE_BYTES;
 
 // Criterion is a bench-only dev-dependency; the lib-test build sees it as
 // available and the crate-level lint would otherwise report it as unused.

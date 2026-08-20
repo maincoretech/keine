@@ -279,7 +279,7 @@ fn is_lut(path: &str) -> bool {
 pub(super) fn load_chapters(
     project_root: &Path,
     project: &ProjectDocument,
-    sources: &mut ProjectSourceReader,
+    sources: &ProjectSourceReader,
 ) -> Result<Vec<(PathBuf, ChapterDocument)>> {
     let directory = project_root.join("chapters");
     let mut by_name = BTreeMap::new();

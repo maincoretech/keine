@@ -14,8 +14,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use keine_core::config::GameConfig;
 use keine_loader::{
-    ContentProject, DiagnosticLevel, LoaderRegistry, MAX_SOURCE_FILE_BYTES, MAX_SOURCE_FILES,
-    MAX_SOURCE_TOTAL_BYTES, ResourceRef, load_project_with, load_scenes_with,
+    ContentProject, DiagnosticLevel, LoaderRegistry, MAX_SOURCE_FILE_BYTES, ResourceRef,
+    load_project_with, load_scenes_with,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -340,18 +340,12 @@ fn portable_path(path: &Path) -> Result<String> {
 
 fn source_files(root: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
-    let mut total_bytes = 0usize;
-    collect_source_files(root, root, &mut files, &mut total_bytes)?;
+    collect_source_files(root, root, &mut files)?;
     files.sort();
     Ok(files)
 }
 
-fn collect_source_files(
-    root: &Path,
-    directory: &Path,
-    output: &mut Vec<PathBuf>,
-    total_bytes: &mut usize,
-) -> Result<()> {
+fn collect_source_files(root: &Path, directory: &Path, output: &mut Vec<PathBuf>) -> Result<()> {
     for entry in fs::read_dir(directory)
         .with_context(|| format!("failed to read {}", directory.display()))?
     {
@@ -372,14 +366,11 @@ fn collect_source_files(
                 }
                 continue;
             }
-            collect_source_files(root, &path, output, total_bytes)?;
+            collect_source_files(root, &path, output)?;
         } else if file_type.is_file() && is_source_file(&path) {
             let canonical = path.canonicalize()?;
             if !canonical.starts_with(root) {
                 anyhow::bail!("source file escapes project root: {}", path.display());
-            }
-            if output.len() >= MAX_SOURCE_FILES {
-                anyhow::bail!("source project exceeds the {MAX_SOURCE_FILES}-file limit");
             }
             let length = usize::try_from(entry.metadata()?.len())
                 .context("source file size exceeds this platform")?;
@@ -387,14 +378,6 @@ fn collect_source_files(
                 anyhow::bail!(
                     "source {} exceeds the {MAX_SOURCE_FILE_BYTES}-byte per-file limit",
                     path.display()
-                );
-            }
-            *total_bytes = total_bytes
-                .checked_add(length)
-                .context("source project byte count overflow")?;
-            if *total_bytes > MAX_SOURCE_TOTAL_BYTES {
-                anyhow::bail!(
-                    "source project exceeds the {MAX_SOURCE_TOTAL_BYTES}-byte total limit"
                 );
             }
             output.push(path);

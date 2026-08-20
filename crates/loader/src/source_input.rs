@@ -7,38 +7,20 @@ use anyhow::{Context, Result, bail};
 use crate::ContentMount;
 
 pub const MAX_SOURCE_FILE_BYTES: usize = 32 * 1024 * 1024;
-pub const MAX_SOURCE_FILES: usize = 4_096;
-pub const MAX_SOURCE_TOTAL_BYTES: usize = 256 * 1024 * 1024;
 
-#[derive(Debug, Clone, Copy)]
-struct SourceLimits {
-    file_bytes: usize,
-    files: usize,
-    total_bytes: usize,
-}
-
-const SOURCE_LIMITS: SourceLimits = SourceLimits {
-    file_bytes: MAX_SOURCE_FILE_BYTES,
-    files: MAX_SOURCE_FILES,
-    total_bytes: MAX_SOURCE_TOTAL_BYTES,
-};
-
-/// Per-project source ingress budget. Raw source bytes are not retained here;
-/// the counters bound one complete parse operation across all of its inputs.
-pub(crate) struct SourceBudget {
+/// Reads one source document without imposing an arbitrary project-wide scale
+/// limit. The filesystem variant also keeps direct adapter reads inside the
+/// canonical project root.
+pub(crate) struct SourceReader {
     root: Option<PathBuf>,
-    files: usize,
-    bytes: usize,
-    limits: SourceLimits,
+    maximum: usize,
 }
 
-impl SourceBudget {
+impl SourceReader {
     pub(crate) fn for_mounts() -> Self {
         Self {
             root: None,
-            files: 0,
-            bytes: 0,
-            limits: SOURCE_LIMITS,
+            maximum: MAX_SOURCE_FILE_BYTES,
         }
     }
 
@@ -55,7 +37,7 @@ impl SourceBudget {
         })
     }
 
-    pub(crate) fn read_mount(&mut self, mount: &ContentMount, path: &Path) -> Result<Vec<u8>> {
+    pub(crate) fn read_mount(&self, mount: &ContentMount, path: &Path) -> Result<Vec<u8>> {
         let file = mount
             .open_file(path)
             .with_context(|| format!("failed to open source {}", path.display()))?;
@@ -65,7 +47,7 @@ impl SourceBudget {
         self.read_stream(file, length, path)
     }
 
-    pub(crate) fn read_file(&mut self, path: &Path) -> Result<Vec<u8>> {
+    pub(crate) fn read_file(&self, path: &Path) -> Result<Vec<u8>> {
         let root = self
             .root
             .as_deref()
@@ -89,57 +71,32 @@ impl SourceBudget {
         self.read_stream(file, length, &resolved)
     }
 
-    fn read_stream<R: Read>(&mut self, reader: R, declared: u64, path: &Path) -> Result<Vec<u8>> {
-        if self.files >= self.limits.files {
-            bail!(
-                "source project exceeds the {}-file limit while reading {}",
-                self.limits.files,
-                path.display()
-            );
-        }
+    fn read_stream<R: Read>(&self, reader: R, declared: u64, path: &Path) -> Result<Vec<u8>> {
         let declared = usize::try_from(declared)
             .with_context(|| format!("source size exceeds this platform: {}", path.display()))?;
         self.check_size(declared, path)?;
 
         let read_limit = self
-            .limits
-            .file_bytes
+            .maximum
             .checked_add(1)
             .context("source read limit overflow")?;
         let mut bytes = Vec::new();
         bytes
-            .try_reserve_exact(declared.min(self.limits.file_bytes))
+            .try_reserve_exact(declared.min(self.maximum))
             .with_context(|| format!("failed to reserve source input for {}", path.display()))?;
         Read::take(reader, read_limit as u64)
             .read_to_end(&mut bytes)
             .with_context(|| format!("failed to read source {}", path.display()))?;
         self.check_size(bytes.len(), path)?;
-
-        self.files += 1;
-        self.bytes = self
-            .bytes
-            .checked_add(bytes.len())
-            .context("source project byte count overflow")?;
         Ok(bytes)
     }
 
     fn check_size(&self, length: usize, path: &Path) -> Result<()> {
-        if length > self.limits.file_bytes {
+        if length > self.maximum {
             bail!(
                 "source {} exceeds the {}-byte per-file limit",
                 path.display(),
-                self.limits.file_bytes
-            );
-        }
-        let total = self
-            .bytes
-            .checked_add(length)
-            .context("source project byte count overflow")?;
-        if total > self.limits.total_bytes {
-            bail!(
-                "source project exceeds the {}-byte total limit while reading {}",
-                self.limits.total_bytes,
-                path.display()
+                self.maximum
             );
         }
         Ok(())
@@ -153,25 +110,19 @@ mod tests {
 
     use super::*;
 
-    fn budget(file_bytes: usize, files: usize, total_bytes: usize) -> SourceBudget {
-        SourceBudget {
+    fn reader(maximum: usize) -> SourceReader {
+        SourceReader {
             root: None,
-            files: 0,
-            bytes: 0,
-            limits: SourceLimits {
-                file_bytes,
-                files,
-                total_bytes,
-            },
+            maximum,
         }
     }
 
     #[test]
     fn accepts_exact_source_limits() {
-        let mut budget = budget(4, 1, 4);
+        let reader = reader(4);
 
         assert_eq!(
-            budget
+            reader
                 .read_stream(Cursor::new(b"1234"), 4, Path::new("scene.txt"))
                 .unwrap(),
             b"1234"
@@ -180,7 +131,7 @@ mod tests {
 
     #[test]
     fn rejects_declared_and_growing_sources_before_unbounded_allocation() {
-        let mut declared = budget(4, 2, 8);
+        let declared = reader(4);
         assert!(
             declared
                 .read_stream(Cursor::new(b"12345"), 5, Path::new("declared.txt"))
@@ -189,7 +140,7 @@ mod tests {
                 .contains("per-file limit")
         );
 
-        let mut growing = budget(4, 2, 8);
+        let growing = reader(4);
         assert!(
             growing
                 .read_stream(Cursor::new(b"12345"), 4, Path::new("growing.txt"))
@@ -200,30 +151,13 @@ mod tests {
     }
 
     #[test]
-    fn enforces_file_count_and_total_bytes_across_one_load() {
-        let mut count = budget(4, 1, 8);
-        count
-            .read_stream(Cursor::new(b"1"), 1, Path::new("one.txt"))
-            .unwrap();
-        assert!(
-            count
-                .read_stream(Cursor::new(b"2"), 1, Path::new("two.txt"))
-                .unwrap_err()
-                .to_string()
-                .contains("file limit")
-        );
-
-        let mut total = budget(4, 2, 5);
-        total
-            .read_stream(Cursor::new(b"123"), 3, Path::new("one.txt"))
-            .unwrap();
-        assert!(
-            total
-                .read_stream(Cursor::new(b"456"), 3, Path::new("two.txt"))
-                .unwrap_err()
-                .to_string()
-                .contains("total limit")
-        );
+    fn project_scale_is_not_limited_by_the_document_reader() {
+        let reader = reader(4);
+        for index in 0..10_000 {
+            reader
+                .read_stream(Cursor::new(b"1234"), 4, Path::new("scene.txt"))
+                .unwrap_or_else(|error| panic!("document {index} was rejected: {error}"));
+        }
     }
 
     #[test]
@@ -238,14 +172,14 @@ mod tests {
         std::fs::write(root.join("inside.json"), b"inside").unwrap();
         let outside = base.join("outside.json");
         std::fs::write(&outside, b"outside").unwrap();
-        let mut budget = SourceBudget::for_filesystem(&root).unwrap();
+        let reader = SourceReader::for_filesystem(&root).unwrap();
 
         assert_eq!(
-            budget.read_file(&root.join("inside.json")).unwrap(),
+            reader.read_file(&root.join("inside.json")).unwrap(),
             b"inside"
         );
         assert!(
-            budget
+            reader
                 .read_file(&outside)
                 .unwrap_err()
                 .to_string()
