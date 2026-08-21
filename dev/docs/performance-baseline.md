@@ -1131,3 +1131,22 @@ second complete key/value map at persistence time. The synthetic audio row is a
 lower bound for the loop that production now skips, not an end-to-end frame-time
 claim. No serialized schema, resource budget, or background-audio behavior
 changed.
+
+### 2026-08-21 Hakutaku archive inventory
+
+`HakutakuArchive` no longer keeps a second `HashSet<PathBuf>` beside the signed
+Hakutaku catalog. It retains the compact path vector required by recursive
+source enumeration and the existing direct-children directory index; file
+existence now queries Hakutaku's authenticated path index. Every package open
+also has to choose `TrustFirstRelease` or a persisted release floor explicitly.
+
+The 8,192-file `content_lookup` fixture measured the intentional tradeoff:
+
+| Operation | Before | After |
+|---|---:|---:|
+| Hakutaku file existence | 96.455 ns | 257.26 ns |
+| 128-entry directory query | 1.7312 µs | 1.6713 µs |
+
+The existence probe remains below 0.3 µs and avoids a second hash table whose
+capacity scales with every asset. Directory lookup is unchanged within quick
+benchmark noise. No block read, decoder, or rendered-frame path was changed.

@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 
 use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use hakutaku_pack::{Identity, PackOptions, pack_directory};
-use keine_loader::{ContentBackend, ContentMount, HakutakuArchive};
+use keine_loader::{ContentBackend, ContentMount, HakutakuArchive, OpenPolicy};
 
 const DIRECTORY_COUNT: usize = 64;
 const FILES_PER_DIRECTORY: usize = 128;
@@ -33,6 +33,7 @@ fn fixture() -> &'static LookupFixture {
             &release.join("game.haku"),
             identity.root_key(),
             identity.public_key(),
+            OpenPolicy::TrustFirstRelease,
         )
         .unwrap();
         let filesystem = ContentMount::new(ContentBackend::FileSystem(input), "").unwrap();
@@ -56,6 +57,9 @@ fn bench(c: &mut Criterion) {
         b.iter(|| black_box(fixture.archive.read_directory(black_box(path))));
     });
     group.throughput(Throughput::Elements(1));
+    group.bench_function("hakutaku_layer_contains", |b| {
+        b.iter(|| black_box(fixture.archive.contains_file(black_box(file))));
+    });
     group.bench_function("filesystem_layer_open", |b| {
         b.iter(|| black_box(fixture.filesystem.open_file(black_box(file)).unwrap()));
     });

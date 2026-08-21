@@ -20,6 +20,7 @@ pub use compiled::{
     EncodeInput, FIXED_HEADER_LEN, IR_SCHEMA_VERSION, PROGRAM_MAGIC, ProgramMetadataV1, decode,
     encode,
 };
+pub use hakutaku_core::OpenPolicy;
 pub use language::{ScriptLanguage, ScriptLanguageRegistry};
 pub use loader::{
     ContentBackend, ContentFile, ContentMount, ContentProject, HakutakuArchive, LoadedScene,

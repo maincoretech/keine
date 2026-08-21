@@ -1,7 +1,7 @@
 # Hakutaku v1 游戏资源格式
 
 > 状态：v1 wire format 已冻结并由 Kēne loader/packer 使用；Kēne 当前固定 Hakutaku
-> revision `24c39ea`。v1 不读取 Hexz、不保留 `.hxz` 回退，也不建立兼容层。规范字段与
+> revision `01a6434`。v1 不读取 Hexz、不保留 `.hxz` 回退，也不建立兼容层。规范字段与
 > 字节偏移以 Hakutaku workspace 内的 `FORMAT.md` 为准，本文件解释架构取舍；当前部署所用
 > 的硬上限和运行时预算见
 > [资源、发行包与持久化限制](../../../docs/resource-limits.md)。
@@ -262,8 +262,9 @@ Hakutaku v1 只定义两个 codec：
 - 独立 zstd block。
 
 不引入 LZ4、Brotli、seekable-zstd frame、通用字典或 codec 插件。zstd 使用
-`default-features = false`；打包器对每块试压缩，只有超过固定收益阈值才保存压缩结果。MP4、
-WebP、PNG、JPEG、Opus 等通常自然回退 RAW，避免热路径无意义解压。
+`default-features = false`。WebP、PNG、JPEG、AVIF、Opus、MP3、Ogg、FLAC 与支持的视频
+容器直接写成 RAW 加密块，不再先浪费一次 zstd 压缩；其他输入只有超过固定收益阈值才保存
+压缩结果。
 
 分块是打包策略，不是硬编码为一种大小：
 
@@ -474,7 +475,9 @@ packer 采用有界并行生产、单一顺序 writer：
 
 content root key 和 verifying key 仍编译进客户端。root/jailbreak、调试和进程内明文提取继续属于
 既定离线威胁模型；移动端 sandbox、Android 文件系统加密和商店签名是纵深防御，不替代 Hakutaku
-自身完整性。core 暴露已签名 `release sequence`，宿主可以拒绝低于本机 high-water mark 的快照；
+自身完整性。core 暴露已签名 `release sequence`，并要求每个打开者显式选择
+`TrustFirstRelease` 或 `RequireAtLeast(high-water mark)`；不存在隐式允许回滚的打开入口。
+宿主可以据此拒绝低于本机 high-water mark 的快照；
 清除应用数据或完全控制设备后无法提供不可回滚保证，格式不会声称能够做到。
 
 ### 一个极小的存储边界

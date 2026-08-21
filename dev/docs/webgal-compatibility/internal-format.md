@@ -130,9 +130,9 @@ v9 不尝试兼容旧二进制布局：未知版本由 `inspect` 报告 `Unsuppo
 - script 目录递归扫描并稳定排序，嵌套相对路径成为 scene key，避免同名文件静默碰撞。
 - 多内容源按稳定优先级合并，覆盖会产生诊断。
 - 文件系统递归扫描先固定 canonical mount root，按 `DirEntry::file_type` 遍历，并用 canonical directory identity 阻止 symlink cycle；指向挂载根之外的链接不会成为内容。
-- Hakutaku 挂载在打开包时建立共享文件集合和 parent → direct children index；普通列目录只读取
-  该 parent 的排序子项，递归脚本枚举则只过滤一次 snapshot 文件集合，不会对每个子目录
-  重复扫描整个包。
+- Hakutaku 挂载在打开包时建立紧凑的文件清单和 parent → direct children index；存在性
+  查询复用 Hakutaku 已认证的目录，不再额外保留一份文件 `HashSet`。普通列目录只读取该
+  parent 的排序子项，递归脚本枚举只过滤一次清单，不会对每个子目录重复扫描整个包。
 - `State::install_program` 替换共享 Program、同步 fingerprint、移除失效 call frame，并把当前 cursor 夹紧到新场景边界；属于旧 fingerprint 的 backlog 会被删除。
 - 开发期 watcher 安装新 Program 时不会把旧对白、Choice、输入框或动画直接挂到新 fingerprint 上；它会清理旧演出/交互/已读位置，从当前 scene 的开头重新执行，并保留 local/global variables 与鉴赏解锁。
 - `SavedState::restore_into` 是存档进入运行态的唯一 loader API；只有 fingerprint 相同才会继续协调位置并恢复槽内剧情状态。若同 fingerprint 的 payload 含异常位置，会恢复到最近仍有效的 caller；没有任何有效 scene 时清空位置并安全结束。

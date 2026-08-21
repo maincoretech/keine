@@ -6,7 +6,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use hakutaku_core::{AssetCursor, Package, ResourceBudget};
+use hakutaku_core::{AssetCursor, OpenPolicy, Package, ResourceBudget};
 
 fn packaged_hakutaku_keys() -> Result<([u8; 32], [u8; 32])> {
     let share_a = *include_bytes!(concat!(env!("OUT_DIR"), "/hakutaku-key-share-a.bin"));
@@ -366,7 +366,7 @@ impl Seek for ContentFile {
 pub struct HakutakuArchive {
     path: Arc<PathBuf>,
     package: Package,
-    files: Arc<HashSet<PathBuf>>,
+    files: Arc<Vec<PathBuf>>,
     directory_entries: Arc<HashMap<PathBuf, Vec<PathBuf>>>,
 }
 
@@ -382,16 +382,17 @@ impl fmt::Debug for HakutakuArchive {
 }
 
 impl HakutakuArchive {
-    pub fn open(path: &Path) -> Result<Self> {
-        let (root_key, public_key) = packaged_hakutaku_keys()?;
-        Self::open_with_keys(path, root_key, public_key)
-    }
-
     pub(crate) fn open_packaged(path: &Path) -> Result<Self> {
-        Self::open(path)
+        let (root_key, public_key) = packaged_hakutaku_keys()?;
+        Self::open_with_keys(path, root_key, public_key, OpenPolicy::TrustFirstRelease)
     }
 
-    pub fn open_with_keys(path: &Path, root_key: [u8; 32], public_key: [u8; 32]) -> Result<Self> {
+    pub fn open_with_keys(
+        path: &Path,
+        root_key: [u8; 32],
+        public_key: [u8; 32],
+        policy: OpenPolicy,
+    ) -> Result<Self> {
         let path = path
             .canonicalize()
             .with_context(|| format!("failed to resolve Hakutaku snapshot {}", path.display()))?;
@@ -402,13 +403,14 @@ impl HakutakuArchive {
             root_key,
             public_key,
             ResourceBudget::memory_constrained(),
+            policy,
         )
         .with_context(|| format!("failed to open Hakutaku snapshot {}", path.display()))?;
         let files = package
             .list_assets()?
             .into_iter()
             .map(|asset| safe_relative(Path::new(&asset.path)))
-            .collect::<Result<HashSet<_>>>()?;
+            .collect::<Result<Vec<_>>>()?;
         let directory_entries = build_directory_entries(&files);
         Ok(Self {
             path: Arc::new(path),
@@ -440,7 +442,7 @@ impl HakutakuArchive {
     }
 
     pub fn contains_file(&self, path: &Path) -> bool {
-        safe_relative(path).is_ok_and(|path| self.files.contains(&path))
+        archive_path(path).is_ok_and(|path| self.package.contains_asset(&path).unwrap_or(false))
     }
 
     pub fn is_directory(&self, path: &Path) -> bool {
@@ -465,7 +467,7 @@ impl HakutakuArchive {
     }
 }
 
-fn build_directory_entries(files: &HashSet<PathBuf>) -> HashMap<PathBuf, Vec<PathBuf>> {
+fn build_directory_entries(files: &[PathBuf]) -> HashMap<PathBuf, Vec<PathBuf>> {
     let mut entries = HashMap::<PathBuf, BTreeSet<PathBuf>>::new();
     for file in files {
         let mut child = file.clone();
@@ -481,13 +483,15 @@ fn build_directory_entries(files: &HashSet<PathBuf>) -> HashMap<PathBuf, Vec<Pat
         .collect()
 }
 
-fn relative_files_under(files: &HashSet<PathBuf>, prefix: &Path) -> Vec<PathBuf> {
-    files
+fn relative_files_under(files: &[PathBuf], prefix: &Path) -> Vec<PathBuf> {
+    let mut relative = files
         .iter()
         .filter_map(|file| file.strip_prefix(prefix).ok())
         .filter(|path| !path.as_os_str().is_empty())
         .map(Path::to_owned)
-        .collect()
+        .collect::<Vec<_>>();
+    relative.sort_unstable();
+    relative
 }
 
 fn collect_filesystem_files(mount_root: &Path) -> Result<Vec<PathBuf>> {
@@ -625,7 +629,7 @@ mod tests {
         ]
         .into_iter()
         .map(PathBuf::from)
-        .collect::<HashSet<_>>();
+        .collect::<Vec<_>>();
 
         let mut relative = relative_files_under(&files, Path::new("project/scripts"));
         relative.sort();
@@ -650,7 +654,7 @@ mod tests {
         ]
         .into_iter()
         .map(PathBuf::from)
-        .collect::<HashSet<_>>();
+        .collect::<Vec<_>>();
 
         let entries = build_directory_entries(&files);
 
@@ -689,6 +693,7 @@ mod tests {
             &release.join("game.haku"),
             identity.root_key(),
             identity.public_key(),
+            OpenPolicy::TrustFirstRelease,
         )
         .unwrap();
         let mount = ContentMount::new(ContentBackend::Hakutaku(archive), "").unwrap();

@@ -80,7 +80,7 @@ fn backend_name() -> &'static str {
 
 fn main() -> std::process::ExitCode {
     use hakutaku_pack::{Identity, PackOptions, pack_directory};
-    use keine_loader::{ContentBackend, HakutakuArchive};
+    use keine_loader::{ContentBackend, HakutakuArchive, OpenPolicy};
 
     let Some(fixture) = std::env::args_os().nth(1) else {
         eprintln!("usage: keine-video-acceptance <video>");
@@ -109,6 +109,7 @@ fn main() -> std::process::ExitCode {
             &release.join("game.haku"),
             identity.root_key(),
             identity.public_key(),
+            OpenPolicy::TrustFirstRelease,
         )?;
         let mount = ContentMount::new(ContentBackend::Hakutaku(archive), "")?;
         validate_backend(&[mount], &logical_path)

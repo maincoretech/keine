@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use hakutaku_pack::{Identity, PackOptions, pack_directory};
-use keine_loader::{ContentBackend, ContentMount, HakutakuArchive};
+use keine_loader::{ContentBackend, ContentMount, HakutakuArchive, OpenPolicy};
 
 const MEDIA_BYTES: usize = 32 * 1024 * 1024;
 const DIRECT_ITERATIONS: u32 = 1_000;
@@ -45,6 +45,7 @@ fn run() -> anyhow::Result<()> {
         &release.join("game.haku"),
         identity.root_key(),
         identity.public_key(),
+        OpenPolicy::TrustFirstRelease,
     )?;
     let mount = ContentMount::new(ContentBackend::Hakutaku(archive), "")?;
     let logical_path = Path::new("large.mp4");

@@ -1470,6 +1470,7 @@ mod ffmpeg_backend {
                 &release.join("game.haku"),
                 identity.root_key(),
                 identity.public_key(),
+                keine_loader::OpenPolicy::TrustFirstRelease,
             )
             .unwrap();
             ContentMount::new(ContentBackend::Hakutaku(archive), "").unwrap()
