@@ -4,7 +4,6 @@ use std::io;
 use bevy::asset::{AssetApp, AssetId, AssetLoader, LoadContext, RenderAssetUsages, io::Reader};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use futures_lite::io::AsyncReadExt;
 use keine_media::{ImageSize, MAX_WEBP_FILE_BYTES};
 
 use crate::runtime::resources::{GameConfigResource, LocalAssetCache};
@@ -62,28 +61,7 @@ impl AssetLoader for NativeWebpLoader {
 }
 
 async fn read_webp_input(reader: &mut dyn Reader) -> io::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    let mut chunk = [0_u8; 64 * 1024];
-    loop {
-        let read = reader.read(&mut chunk).await?;
-        if read == 0 {
-            return Ok(bytes);
-        }
-        let new_len = bytes
-            .len()
-            .checked_add(read)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "WebP size overflow"))?;
-        if new_len > MAX_WEBP_FILE_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("WebP exceeds the {MAX_WEBP_FILE_BYTES}-byte input limit"),
-            ));
-        }
-        bytes
-            .try_reserve_exact(read)
-            .map_err(|error| io::Error::other(format!("failed to reserve WebP input: {error}")))?;
-        bytes.extend_from_slice(&chunk[..read]);
-    }
+    crate::runtime::bounded_input::read_to_end(reader, MAX_WEBP_FILE_BYTES, "WebP").await
 }
 
 #[derive(Resource, Default)]
