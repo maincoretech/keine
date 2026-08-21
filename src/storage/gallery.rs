@@ -10,11 +10,11 @@ const VERSION: u32 = 2;
 const MAX_GALLERY_BYTES: usize = 16 * 1024 * 1024;
 const MAX_GALLERY_ENTRIES: usize = 65_536;
 
-#[derive(Serialize, Deserialize, Default)]
-struct GalleryFile {
+#[derive(Serialize)]
+struct GalleryFile<'a> {
     version: u32,
-    cg: HashMap<String, String>,
-    bgm: HashMap<String, String>,
+    cg: &'a HashMap<String, String>,
+    bgm: &'a HashMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -69,8 +69,8 @@ pub(crate) fn persist(
     }
     let file = GalleryFile {
         version: VERSION,
-        cg: state.unlocked_cg.clone(),
-        bgm: state.unlocked_bgm.clone(),
+        cg: &state.unlocked_cg,
+        bgm: &state.unlocked_bgm,
     };
     let target = path(&project_root);
     let result = super::encode_postcard_limited(&file, MAX_GALLERY_BYTES, "gallery")
@@ -109,10 +109,12 @@ mod tests {
 
     #[test]
     fn bounded_wire_decoder_accepts_the_existing_map_encoding() {
+        let cg = HashMap::from([("memory.webp".into(), "Memory".into())]);
+        let bgm = HashMap::from([("theme.opus".into(), "Theme".into())]);
         let encoded = postcard::to_stdvec(&GalleryFile {
             version: VERSION,
-            cg: HashMap::from([("memory.webp".into(), "Memory".into())]),
-            bgm: HashMap::from([("theme.opus".into(), "Theme".into())]),
+            cg: &cg,
+            bgm: &bgm,
         })
         .unwrap();
 

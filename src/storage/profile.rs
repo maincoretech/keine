@@ -14,10 +14,10 @@ const WRITE_DELAY_SECONDS: f32 = 0.5;
 const MAX_PROFILE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PROFILE_ENTRIES: usize = 65_536;
 
-#[derive(Serialize, Deserialize)]
-struct ProfileFile {
+#[derive(Serialize)]
+struct ProfileFile<'a> {
     version: u32,
-    global_vars: HashMap<String, Value>,
+    global_vars: &'a HashMap<String, Value>,
 }
 
 #[derive(Deserialize)]
@@ -120,7 +120,7 @@ fn save(values: &HashMap<String, Value>, project_root: &Path) -> Result<()> {
     let bytes = super::encode_postcard_limited(
         &ProfileFile {
             version: VERSION,
-            global_vars: values.clone(),
+            global_vars: values,
         },
         MAX_PROFILE_BYTES,
         "profile",
@@ -181,5 +181,18 @@ mod tests {
         bytes.push(0x01);
 
         assert!(decode(&bytes).is_err());
+    }
+
+    #[test]
+    fn borrowed_encoder_keeps_the_existing_wire_schema() {
+        let values = HashMap::from([("ending".into(), Value::Int(2))]);
+        let bytes = postcard::to_stdvec(&ProfileFile {
+            version: VERSION,
+            global_vars: &values,
+        })
+        .unwrap();
+
+        let decoded = decode(&bytes).unwrap();
+        assert_eq!(decoded.global_vars, [("ending".into(), Value::Int(2))]);
     }
 }
