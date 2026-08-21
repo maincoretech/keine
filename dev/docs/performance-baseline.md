@@ -1150,3 +1150,23 @@ The 8,192-file `content_lookup` fixture measured the intentional tradeoff:
 The existence probe remains below 0.3 µs and avoids a second hash table whose
 capacity scales with every asset. Directory lookup is unchanged within quick
 benchmark noise. No block read, decoder, or rendered-frame path was changed.
+
+### 2026-08-21 allocation-free Hakutaku path lookup
+
+Runtime asset paths are already canonical UTF-8 package paths in the common
+case. The archive adapter now validates and borrows those strings directly;
+only non-canonical platform paths enter the allocating normalization fallback.
+This removes the former `PathBuf`, component `Vec`, and joined `String` from
+every package existence/open/read lookup without weakening parent/root path
+rejection.
+
+The same 8,192-file `content_lookup` package measured:
+
+| Operation | Before | After | Change |
+|---|---:|---:|---:|
+| Hakutaku file existence | 251.52 ns | 142.73 ns | -43.3% |
+| 128-entry directory query | 1.6105 µs | 1.6991 µs | quick-run noise |
+
+Filesystem probes were unchanged. The optimized branch is allocation-free;
+Windows separators, current-directory components, repeated/trailing separators,
+and non-UTF-8 paths retain the normalized fallback.

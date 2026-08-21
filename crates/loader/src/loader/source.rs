@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::fs;
@@ -427,7 +428,7 @@ impl HakutakuArchive {
     pub fn read(&self, path: &Path) -> Result<Vec<u8>> {
         let path = archive_path(path)?;
         self.package
-            .asset(&path)?
+            .asset(path.as_ref())?
             .read()
             .with_context(|| format!("failed to read Hakutaku entry {path}"))
     }
@@ -436,13 +437,14 @@ impl HakutakuArchive {
         let path = archive_path(path)?;
         Ok(self
             .package
-            .asset(&path)
+            .asset(path.as_ref())
             .with_context(|| format!("failed to open Hakutaku entry {path}"))?
             .cursor())
     }
 
     pub fn contains_file(&self, path: &Path) -> bool {
-        archive_path(path).is_ok_and(|path| self.package.contains_asset(&path).unwrap_or(false))
+        archive_path(path)
+            .is_ok_and(|path| self.package.contains_asset(path.as_ref()).unwrap_or(false))
     }
 
     pub fn is_directory(&self, path: &Path) -> bool {
@@ -559,13 +561,46 @@ fn collect_filesystem_files(mount_root: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-fn archive_path(path: &Path) -> Result<String> {
-    let path = safe_relative(path)?;
-    Ok(path
-        .components()
-        .map(|component| component.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/"))
+fn archive_path(path: &Path) -> Result<Cow<'_, str>> {
+    let mut needs_normalization = false;
+    for component in path.components() {
+        match component {
+            Component::CurDir => needs_normalization = true,
+            Component::Normal(_) => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                bail!("content path must be relative: {}", path.display());
+            }
+        }
+    }
+
+    if !needs_normalization
+        && let Some(path) = path.to_str()
+        && canonical_archive_text(path)
+    {
+        return Ok(Cow::Borrowed(path));
+    }
+
+    let mut normalized = String::new();
+    for component in path.components() {
+        let Component::Normal(value) = component else {
+            continue;
+        };
+        if !normalized.is_empty() {
+            normalized.push('/');
+        }
+        normalized.push_str(&value.to_string_lossy());
+    }
+    Ok(Cow::Owned(normalized))
+}
+
+fn canonical_archive_text(path: &str) -> bool {
+    (path.is_empty()
+        || (!path.starts_with('/')
+            && !path.ends_with('/')
+            && path
+                .split('/')
+                .all(|component| !component.is_empty() && component != ".")))
+        && (!cfg!(windows) || !path.contains('\\'))
 }
 
 fn safe_relative(path: &Path) -> Result<PathBuf> {
@@ -592,6 +627,22 @@ mod tests {
     fn rejects_paths_that_escape_a_source() {
         assert!(safe_relative(Path::new("../secret")).is_err());
         assert!(safe_relative(Path::new("assets/bg.webp")).is_ok());
+    }
+
+    #[test]
+    fn canonical_archive_paths_borrow_the_callers_utf8() {
+        let path = Path::new("assets/background/day.webp");
+        let normalized = archive_path(path).unwrap();
+
+        assert!(matches!(normalized, Cow::Borrowed(_)));
+        assert_eq!(normalized, "assets/background/day.webp");
+    }
+
+    #[test]
+    fn archive_paths_remove_current_directory_components() {
+        let normalized = archive_path(Path::new("assets/./day.webp")).unwrap();
+
+        assert_eq!(normalized, "assets/day.webp");
     }
 
     #[test]
