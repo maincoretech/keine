@@ -22,10 +22,12 @@ pub use compiled::{
 };
 pub use hakutaku_core::OpenPolicy;
 pub use language::{ScriptLanguage, ScriptLanguageRegistry};
+#[cfg(feature = "hot-reload")]
+pub use loader::ScriptWatcher;
 pub use loader::{
     ContentBackend, ContentFile, ContentMount, ContentProject, HakutakuArchive, LoadedScene,
-    ScriptWatcher, SourceMount, load_hakutaku_project, load_hakutaku_project_from_archive,
-    load_project, load_project_with, load_scenes, load_scenes_with,
+    SourceMount, load_hakutaku_project, load_hakutaku_project_from_archive, load_project,
+    load_project_with, load_scenes, load_scenes_with,
 };
 pub use report::{
     Diagnostic, DiagnosticLevel, ParseReport, ResourceKind, ResourceRef, SceneRef, SourceSpan,

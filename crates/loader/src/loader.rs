@@ -1,6 +1,7 @@
 mod compiled;
 mod scenes;
 mod source;
+#[cfg(feature = "hot-reload")]
 mod watcher;
 
 use std::fmt;
@@ -15,6 +16,7 @@ use crate::{LoaderRegistry, StructuredSceneLoader};
 pub(crate) use compiled::{COMPILED_PROGRAM_PATH, with_compiled_program};
 pub use scenes::{LoadedScene, load_scenes, load_scenes_with};
 pub use source::{ContentBackend, ContentFile, ContentMount, HakutakuArchive};
+#[cfg(feature = "hot-reload")]
 pub use watcher::ScriptWatcher;
 
 /// Mounted roots produced by one complete format adapter.

@@ -3,6 +3,7 @@ pub(crate) mod audio;
 pub(crate) mod bootstrap;
 pub(crate) mod bounded_input;
 mod cli;
+#[cfg(feature = "configure")]
 mod configure;
 pub(crate) mod host;
 #[cfg(any(feature = "publisher", feature = "startup-metrics"))]

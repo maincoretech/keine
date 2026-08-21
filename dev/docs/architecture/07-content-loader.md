@@ -54,9 +54,10 @@ VM、渲染器、UI 或原生 keine 工程的启动路径。
 library embedder 还可从 `LoaderRegistry::empty()` 开始只注册自己需要的 adapter；`Default`
 只是最终 keine 二进制采用的内置组合，并不是 runtime 的类型依赖。
 
-最终二进制可运行 `cargo configure`，用方向键和空格配置默认 registry 中的具体实现与已有的
-运行能力，回车保存、Esc 取消。配置保存在用户配置目录的 `engine.conf`，只作用于默认 CLI
-启动路径；项目内的 `config.yaml` 仍负责从已启用集合中选择格式，`run_with_loader` /
+源码工具可运行 `cargo configure`，用方向键和空格配置默认 registry 中的具体实现与已有的
+运行能力，回车保存、Esc 取消。该命令显式启用非默认 `configure` feature；Crossterm TUI
+不会编入普通或发行引擎。配置保存在用户配置目录的 `engine.conf`，只作用于启用了该 feature
+的开发 CLI 启动路径；项目内的 `config.yaml` 仍负责从已启用集合中选择格式，`run_with_loader` /
 `build_app_with_loader` 等嵌入接口也不会读取这份全局配置。缺少的新 adapter 默认启用，
 asset/script/store 三类至少各保留一个，避免保存出无法启动的组合。旧 `cargo adapters` 与
 `adapters.conf` 继续作为兼容入口，下一次保存时写入新的通用格式。
@@ -119,13 +120,14 @@ adapter:
   layer，再只从同一 layer 读取 `.meta`，不会为选择 layer 额外打开资产文件。它不知道底层
   容器格式，也不会复制或落盘 archive entry。
 - 资源预取继续使用统一逻辑路径，因此来源数量不会增加业务层分支。
-- FS 脚本/结构化工程由 `notify` 递归监控；变更后先完整解析到临时 Program，再一次替换，
-  并从当前 scene 开头重建瞬态演出/交互状态。变量和图库等持久数据保留。
+- FS 脚本/结构化工程在非默认 `hot-reload` feature 下由 `notify` 递归监控；`cargo dev`
+  显式启用它，普通构建与发行引擎不解析、编译或链接文件监听后端。变更后先完整解析到临时
+  Program，再一次替换，并从当前 scene 开头重建瞬态演出/交互状态。变量和图库等持久数据保留。
 - FS 资源根由 `OverlayAssetWatcher` 监控；逻辑路径事件交给 Bevy AssetServer，原 handle 原位
   重载。多来源中高优先级文件被删除时会立即重新读取低优先级 fallback；图片重新执行尺寸
   限制与 CPU 像素释放。Hakutaku 是只读发行来源，不创建 watcher。
-- macOS/Windows/Linux 使用同一 `notify::RecommendedWatcher` 生命周期与相同逻辑路径，差异仅在
-  notify 选择的系统后端；Windows 的反斜杠不会进入 IR 或资源键。
+- 启用 `hot-reload` 时，macOS/Windows/Linux 使用同一 `notify::RecommendedWatcher` 生命周期
+  与相同逻辑路径，差异仅在 notify 选择的系统后端；Windows 的反斜杠不会进入 IR 或资源键。
 - Hakutaku 使用受限 block cache 和 seekable `AssetCursor`；配置、脚本、图片、字体与音频共享
   一个快照索引。打开快照时同时生成排序的 parent → direct children 表，列目录不再扫描
   全部文件。

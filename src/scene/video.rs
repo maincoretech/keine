@@ -170,9 +170,11 @@ mod ffmpeg_io;
 pub(crate) enum VideoSelection {
     #[default]
     Automatic,
+    #[cfg(feature = "configure")]
     Disabled,
 }
 
+#[cfg(feature = "configure")]
 impl VideoSelection {
     pub(crate) const fn id(self) -> &'static str {
         match self {
@@ -190,6 +192,7 @@ impl VideoSelection {
     }
 }
 
+#[cfg(feature = "configure")]
 pub(crate) const fn automatic_video_backend_name() -> &'static str {
     #[cfg(all(feature = "video-native", target_os = "macos"))]
     return "AVFoundation";
@@ -205,7 +208,7 @@ pub(crate) const fn automatic_video_backend_name() -> &'static str {
     return "unavailable";
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "configure"))]
 mod video_selection_tests {
     use super::*;
 
@@ -233,6 +236,7 @@ impl Plugin for VideoPlugin {
     fn build(&self, app: &mut App) {
         match self.selection {
             VideoSelection::Automatic => app.add_plugins(SelectedVideoBackendPlugin),
+            #[cfg(feature = "configure")]
             VideoSelection::Disabled => app.add_plugins(missing_backend::BackendPlugin),
         };
     }

@@ -4,11 +4,15 @@ version.workspace = true
 edition.workspace = true
 description = "Unified asset/source and script adapters with hot reload"
 
+[features]
+default = []
+hot-reload = ["dep:notify"]
+
 [dependencies]
 keine-core = { workspace = true }
 anyhow = { workspace = true }
 log = { workspace = true }
-notify = { workspace = true }
+notify = { workspace = true, optional = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
 crc32fast = { workspace = true }

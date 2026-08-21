@@ -1,14 +1,20 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+#[cfg(any(test, feature = "hot-reload"))]
+use keine_core::Program;
+use keine_core::State;
 use keine_core::step;
-use keine_core::{Program, State};
+#[cfg(feature = "hot-reload")]
 use keine_loader::{Diagnostic, DiagnosticLevel};
 
 use crate::runtime::platform::InputActions;
+#[cfg(any(test, feature = "hot-reload"))]
+use crate::runtime::resources::LocalSceneAssets;
 use crate::runtime::resources::{
-    AssetLoadingGate, ContentProjectResource, DialogueLengthCache, EditorSyncSession, GameState,
-    LocalAssetManifest, LocalSceneAssets, ScriptLanguages, ScriptWatcherResource,
+    AssetLoadingGate, DialogueLengthCache, EditorSyncSession, GameState, LocalAssetManifest,
 };
+#[cfg(feature = "hot-reload")]
+use crate::runtime::resources::{ContentProjectResource, ScriptLanguages, ScriptWatcherResource};
 use crate::storage::settings::RuntimeSettings;
 use crate::ui::control_bar::{ButtonAction, SkipMode, ToggleStates};
 use crate::ui::input_scope::UiInputScope;
@@ -31,6 +37,7 @@ enum TypewriterPause {
     Input,
 }
 
+#[cfg(feature = "hot-reload")]
 #[derive(Default)]
 struct EditorCursorSync {
     remaining_frames: u8,
@@ -39,17 +46,20 @@ struct EditorCursorSync {
     force: bool,
 }
 
+#[cfg(feature = "hot-reload")]
 #[derive(Default)]
 struct HotReloadPipeline {
     running: Option<RunningHotReload>,
     pending_change_count: usize,
 }
 
+#[cfg(feature = "hot-reload")]
 struct RunningHotReload {
     change_count: usize,
     worker: std::thread::JoinHandle<anyhow::Result<HotReloadBuild>>,
 }
 
+#[cfg(feature = "hot-reload")]
 struct HotReloadBuild {
     config: Option<keine_core::config::GameConfig>,
     manifest: LocalAssetManifest,
@@ -57,6 +67,7 @@ struct HotReloadBuild {
     diagnostics: Vec<(std::path::PathBuf, Diagnostic)>,
 }
 
+#[cfg(feature = "hot-reload")]
 const EDITOR_CURSOR_POLL_SECONDS: f32 = 0.2;
 /// Backspace is deliberately more deliberate than forward text reveal.
 /// Preserve a response to the user's text-speed preference, but keep a hard
@@ -88,11 +99,16 @@ pub struct TickContext<'w, 's> {
     time: Res<'w, Time>,
     state: ResMut<'w, GameState>,
     settings: ResMut<'w, RuntimeSettings>,
+    #[cfg(feature = "hot-reload")]
     content: Res<'w, ContentProjectResource>,
+    #[cfg(feature = "hot-reload")]
     config: ResMut<'w, crate::runtime::resources::GameConfigResource>,
+    #[cfg(feature = "hot-reload")]
     languages: Res<'w, ScriptLanguages>,
     actions: Res<'w, InputActions>,
+    #[cfg(feature = "hot-reload")]
     watcher: Option<Res<'w, ScriptWatcherResource>>,
+    #[cfg(feature = "hot-reload")]
     asset_manifest: ResMut<'w, LocalAssetManifest>,
     toggles: ResMut<'w, ToggleStates>,
     buttons: StageButtonQuery<'w, 's>,
@@ -102,7 +118,9 @@ pub struct TickContext<'w, 's> {
     editor_sync: Option<Res<'w, EditorSyncSession>>,
     auto_timer: Local<'s, f64>,
     typewriter_clock: Local<'s, TypewriterClock>,
+    #[cfg(feature = "hot-reload")]
     editor_cursor_sync: Local<'s, EditorCursorSync>,
+    #[cfg(feature = "hot-reload")]
     hot_reload: Local<'s, HotReloadPipeline>,
     commands: Commands<'w, 's>,
 }
@@ -110,7 +128,10 @@ pub struct TickContext<'w, 's> {
 /// Advances input, text timing, script hot reload, and transition state.
 pub fn tick(mut context: TickContext) {
     let delta_seconds = context.time.delta_secs_f64();
+    #[cfg(feature = "hot-reload")]
     let mut state_changed = reload_scripts_if_changed(&mut context, delta_seconds as f32);
+    #[cfg(not(feature = "hot-reload"))]
+    let mut state_changed = false;
     if context.loading.blocked {
         if context.toggles.skip {
             context.toggles.skip = false;
@@ -298,6 +319,7 @@ fn update_toggle_shortcuts(
     }
 }
 
+#[cfg(feature = "hot-reload")]
 fn reload_scripts_if_changed(context: &mut TickContext<'_, '_>, delta_seconds: f32) -> bool {
     let changes = context
         .watcher
@@ -395,6 +417,7 @@ fn reload_scripts_if_changed(context: &mut TickContext<'_, '_>, delta_seconds: f
     changed
 }
 
+#[cfg(feature = "hot-reload")]
 fn start_pending_reload(
     pipeline: &mut HotReloadPipeline,
     content: &keine_loader::ContentProject,
@@ -415,6 +438,7 @@ fn start_pending_reload(
     })
 }
 
+#[cfg(feature = "hot-reload")]
 fn install_pending_reload(
     pipeline: &mut HotReloadPipeline,
     spawn_worker: impl FnOnce()
@@ -430,6 +454,7 @@ fn install_pending_reload(
     Ok(())
 }
 
+#[cfg(feature = "hot-reload")]
 fn take_completed_reload(
     pipeline: &mut HotReloadPipeline,
 ) -> Option<(usize, anyhow::Result<HotReloadBuild>)> {
@@ -451,6 +476,7 @@ fn take_completed_reload(
     Some((running.change_count, result))
 }
 
+#[cfg(feature = "hot-reload")]
 fn build_hot_reload(
     content: &keine_loader::ContentProject,
     languages: &keine_loader::ScriptLanguageRegistry,
@@ -490,6 +516,7 @@ fn build_hot_reload(
     })
 }
 
+#[cfg(feature = "hot-reload")]
 fn apply_hot_reload(
     build: HotReloadBuild,
     state: &mut State,
@@ -531,6 +558,7 @@ pub(crate) fn sync_editor_cursor(
     }
 }
 
+#[cfg(feature = "hot-reload")]
 fn try_sync_editor_cursor(
     content: &keine_loader::ContentProject,
     state: &mut State,
@@ -736,6 +764,7 @@ fn finish_editor_presentation(preview: &mut State) -> bool {
 /// unlocks so authors can iterate near the current branch. Execution frames,
 /// read positions, backlog, stage, audio and open UI interactions are rebuilt
 /// from the beginning of the selected scene.
+#[cfg(feature = "hot-reload")]
 fn restart_after_program_reload(state: &mut State, program: Program) {
     let next_stage_revision = state.stage_revision.wrapping_add(1);
     let previous_scene = state.current_scene.clone();
@@ -2016,8 +2045,10 @@ fn preset_final_transform(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "hot-reload")]
     use std::sync::{Arc, Mutex};
 
+    #[cfg(feature = "hot-reload")]
     use keine_core::config::AssetSourceConfig;
     use keine_core::state::{Dialogue, KeyframeAnimation, TransformAnimation};
     use keine_core::{
@@ -2029,8 +2060,10 @@ mod tests {
 
     use super::*;
 
+    #[cfg(feature = "hot-reload")]
     struct ThreadRecordingLanguage(Arc<Mutex<Option<std::thread::ThreadId>>>);
 
+    #[cfg(feature = "hot-reload")]
     impl keine_loader::ScriptLanguage for ThreadRecordingLanguage {
         fn name(&self) -> &'static str {
             "thread-recording"
@@ -2047,6 +2080,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "hot-reload")]
     fn hot_reload_build_is_send_and_runs_off_the_calling_thread() {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -2089,6 +2123,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "hot-reload")]
     fn failed_hot_reload_worker_spawn_keeps_pending_changes() {
         let mut pipeline = HotReloadPipeline {
             pending_change_count: 3,
@@ -2781,6 +2816,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "hot-reload")]
     fn program_reload_rebuilds_interaction_state_from_the_new_scene() {
         let mut state = State::new();
         state.install_program(Program::from_scenes([(

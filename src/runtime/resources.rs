@@ -1,12 +1,15 @@
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+#[cfg(feature = "hot-reload")]
+use std::sync::Mutex;
 
 use bevy::prelude::*;
 use keine_core::State;
 use keine_core::config::GameConfig;
-use keine_loader::{
-    ContentProject, ResourceRef, SceneRef, ScriptLanguageRegistry, ScriptWatcher, StoreAdapter,
-};
+#[cfg(feature = "hot-reload")]
+use keine_loader::ScriptWatcher;
+use keine_loader::{ContentProject, ResourceRef, SceneRef, ScriptLanguageRegistry, StoreAdapter};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Resource, Deref, DerefMut)]
@@ -49,6 +52,7 @@ pub struct ScriptLanguages(pub ScriptLanguageRegistry);
 #[derive(Resource, Clone)]
 pub struct StoreCodec(pub Arc<dyn StoreAdapter>);
 
+#[cfg(feature = "hot-reload")]
 #[derive(Resource)]
 pub struct ScriptWatcherResource(pub Mutex<ScriptWatcher>);
 
@@ -59,6 +63,7 @@ pub struct EditorSyncSession;
 
 /// Enables source and asset watching for interactive development sessions.
 /// Shipping runtimes and deterministic benchmarks deliberately omit it.
+#[cfg(feature = "hot-reload")]
 #[derive(Resource, Default)]
 pub struct HotReloadSession;
 

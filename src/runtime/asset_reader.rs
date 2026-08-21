@@ -1,35 +1,46 @@
-use std::collections::HashSet;
 use std::io::{Error, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::{Arc, Condvar, Mutex};
 use std::task::{Context, Poll};
+
+#[cfg(feature = "hot-reload")]
+use std::collections::HashSet;
+#[cfg(feature = "hot-reload")]
+use std::sync::{Arc, Condvar, Mutex};
+#[cfg(feature = "hot-reload")]
 use std::thread;
+#[cfg(feature = "hot-reload")]
 use std::time::Duration;
 
 use bevy::asset::io::{
-    AssetReader, AssetReaderError, AssetReaderFuture, AssetSourceBuilder, AssetSourceEvent,
-    AssetWatcher, PathStream, Reader, ReaderNotSeekableError, STACK_FUTURE_SIZE, SeekableReader,
-    StackFuture,
+    AssetReader, AssetReaderError, AssetReaderFuture, AssetSourceBuilder, PathStream, Reader,
+    ReaderNotSeekableError, STACK_FUTURE_SIZE, SeekableReader, StackFuture,
 };
+#[cfg(feature = "hot-reload")]
+use bevy::asset::io::{AssetSourceEvent, AssetWatcher};
 use futures_lite::io::{AsyncRead, AsyncSeek};
 use keine_loader::{ContentFile, ContentMount};
+#[cfg(feature = "hot-reload")]
 use notify::{EventKind, RecursiveMode, Watcher};
 
+#[cfg(feature = "hot-reload")]
 const ASSET_WATCH_QUIET_PERIOD: Duration = Duration::from_millis(50);
 
+#[cfg(feature = "hot-reload")]
 #[derive(Default)]
 struct PendingAssetChanges {
     paths: HashSet<PathBuf>,
     stopped: bool,
 }
 
+#[cfg(feature = "hot-reload")]
 #[derive(Default)]
 struct AssetChangeSet {
     pending: Mutex<PendingAssetChanges>,
     wake: Condvar,
 }
 
+#[cfg(feature = "hot-reload")]
 impl AssetChangeSet {
     fn extend(&self, paths: impl IntoIterator<Item = PathBuf>) {
         let mut pending = self
@@ -86,9 +97,17 @@ impl AssetChangeSet {
 /// are configured from low to high priority; the final source wins. Filesystem
 /// mounts stay zero-copy and packaged mounts remain unopened until read.
 pub(crate) fn overlay_source(mounts: Vec<ContentMount>) -> AssetSourceBuilder {
-    let watched_mounts = mounts.clone();
-    AssetSourceBuilder::new(move || Box::new(OverlayAssetReader::new(mounts.clone()))).with_watcher(
-        move |sender| {
+    let reader_mounts = mounts.clone();
+    let source =
+        AssetSourceBuilder::new(move || Box::new(OverlayAssetReader::new(reader_mounts.clone())));
+    #[cfg(not(feature = "hot-reload"))]
+    {
+        source
+    }
+    #[cfg(feature = "hot-reload")]
+    {
+        let watched_mounts = mounts;
+        source.with_watcher(move |sender| {
             let roots = watched_mounts
                 .iter()
                 .filter_map(ContentMount::filesystem_root)
@@ -169,18 +188,21 @@ pub(crate) fn overlay_source(mounts: Vec<ContentMount>) -> AssetSourceBuilder {
                 worker: Some(worker),
                 changes,
             }))
-        },
-    )
+        })
+    }
 }
 
+#[cfg(feature = "hot-reload")]
 struct OverlayAssetWatcher {
     watcher: Option<notify::RecommendedWatcher>,
     worker: Option<thread::JoinHandle<()>>,
     changes: Arc<AssetChangeSet>,
 }
 
+#[cfg(feature = "hot-reload")]
 impl AssetWatcher for OverlayAssetWatcher {}
 
+#[cfg(feature = "hot-reload")]
 impl Drop for OverlayAssetWatcher {
     fn drop(&mut self) {
         drop(self.watcher.take());
@@ -191,6 +213,7 @@ impl Drop for OverlayAssetWatcher {
     }
 }
 
+#[cfg(feature = "hot-reload")]
 fn logical_asset_path(path: &Path, roots: &[PathBuf]) -> Option<(PathBuf, bool)> {
     let root = roots
         .iter()
@@ -213,6 +236,7 @@ fn logical_asset_path(path: &Path, roots: &[PathBuf]) -> Option<(PathBuf, bool)>
     ))
 }
 
+#[cfg(feature = "hot-reload")]
 fn watched_path(root: &Path, logical: &Path, is_meta: bool) -> PathBuf {
     if is_meta {
         root.join(metadata_path(logical))
@@ -508,6 +532,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "hot-reload")]
     fn watcher_maps_nested_assets_and_metadata_to_logical_paths() {
         let root = PathBuf::from("project").join("assets");
         assert_eq!(

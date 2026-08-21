@@ -3,6 +3,7 @@ use std::fs::{File, OpenOptions};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(feature = "hot-reload")]
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -19,9 +20,11 @@ use bevy::window::{PrimaryWindow, WindowResolution};
 use bevy::winit::WINIT_WINDOWS;
 use keine_core::config::GameConfig;
 use keine_core::{Action, DESIGN_HEIGHT, DESIGN_WIDTH, Program, State};
+#[cfg(feature = "hot-reload")]
+use keine_loader::ScriptWatcher;
 use keine_loader::{
-    ContentProject, DiagnosticLevel, LoaderRegistry, ResourceKind, ScriptWatcher,
-    load_project_with, load_scenes_with,
+    ContentProject, DiagnosticLevel, LoaderRegistry, ResourceKind, load_project_with,
+    load_scenes_with,
 };
 
 use crate::render::blur::{BlurCamera, BlurPlugin, DialogCamera, SceneBlurCamera, UiBlurCamera};
@@ -32,9 +35,11 @@ use crate::runtime::cli::{
 };
 use crate::runtime::resources::{
     ContentProjectResource, DevelopmentSession, EditorSyncSession, GameConfigResource, GameState,
-    HotReloadSession, LocalAssetCache, LocalAssetManifest, LocalSceneAssets, PersistenceDisabled,
-    ProjectRoot, ScriptLanguages, ScriptWatcherResource, StoreCodec,
+    LocalAssetCache, LocalAssetManifest, LocalSceneAssets, PersistenceDisabled, ProjectRoot,
+    ScriptLanguages, StoreCodec,
 };
+#[cfg(feature = "hot-reload")]
+use crate::runtime::resources::{HotReloadSession, ScriptWatcherResource};
 use crate::ui::performance::BenchmarkTarget;
 
 pub(crate) const MAX_PROJECT_CONFIG_BYTES: usize = 256 * 1024;
@@ -96,6 +101,7 @@ struct LaunchOptions {
 struct BootstrapMode<'w> {
     editor_sync: Option<Res<'w, EditorSyncSession>>,
     benchmark: Option<Res<'w, crate::ui::performance::RuntimeCaptureConfig>>,
+    #[cfg(feature = "hot-reload")]
     hot_reload: Option<Res<'w, HotReloadSession>>,
 }
 
@@ -125,28 +131,39 @@ pub fn run_cli() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
-    let configure_engine = matches!(&command, CliCommand::Configure);
     let uses_startup_error_page = command.uses_startup_error_page();
-    let mut loader = LoaderRegistry::default();
+    let loader = LoaderRegistry::default();
+    #[cfg(feature = "configure")]
+    let mut loader = loader;
+    #[cfg(feature = "configure")]
+    let configure_engine = matches!(&command, CliCommand::Configure);
+    #[cfg(feature = "configure")]
     let result = if configure_engine {
         super::configure::configure(&loader)
     } else {
         super::configure::apply_saved_configuration(&mut loader)
             .and_then(|video| execute_command(loader, command, video, process_started))
     };
+    #[cfg(not(feature = "configure"))]
+    let result = execute_command(
+        loader,
+        command,
+        crate::scene::video::VideoSelection::Automatic,
+        process_started,
+    );
 
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
-            report_startup_error(
-                uses_startup_error_page,
-                if configure_engine {
-                    "failed to configure engine"
-                } else {
-                    "failed to open project"
-                },
-                &error,
-            );
+            #[cfg(feature = "configure")]
+            let stage = if configure_engine {
+                "failed to configure engine"
+            } else {
+                "failed to open project"
+            };
+            #[cfg(not(feature = "configure"))]
+            let stage = "failed to open project";
+            report_startup_error(uses_startup_error_page, stage, &error);
             std::process::ExitCode::FAILURE
         }
     }
@@ -188,6 +205,7 @@ fn execute_command(
     #[cfg(feature = "hardened")]
     super::platform::apply_hardening();
     let (project_path, action) = match command {
+        #[cfg(feature = "configure")]
         CliCommand::Configure => {
             anyhow::bail!("engine configuration must run before project setup")
         }
@@ -789,6 +807,7 @@ fn build_opened_app(
     }
     if options.development {
         app.init_resource::<DevelopmentSession>();
+        #[cfg(feature = "hot-reload")]
         app.init_resource::<HotReloadSession>();
     }
     if let Some(benchmark) = options.benchmark {
@@ -1171,6 +1190,7 @@ fn bootstrap_project(
     commands.insert_resource(manifest);
     commands.insert_resource(LocalAssetCache::default());
 
+    #[cfg(feature = "hot-reload")]
     if mode.hot_reload.is_some() {
         match ScriptWatcher::start_for_project(&content, languages.0.clone()) {
             Ok(watcher) => {
@@ -1354,6 +1374,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "hot-reload")]
     fn parser_keeps_each_commands_project_and_options_together() {
         let CliCommand::Check { project } = parse_cli(&args(&["check", "project"])).unwrap() else {
             panic!("expected check command");
@@ -1373,6 +1394,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "configure")]
     fn configure_replaces_the_adapter_command_without_breaking_compatibility() {
         assert!(matches!(
             parse_cli(&args(&["configure"])).unwrap(),
@@ -1386,6 +1408,21 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "configure"))]
+    fn release_surface_rejects_the_uncompiled_configuration_tui() {
+        let error = parse_cli(&args(&["configure"])).unwrap_err();
+        assert!(error.to_string().contains("not compiled"));
+    }
+
+    #[test]
+    #[cfg(not(feature = "hot-reload"))]
+    fn release_surface_rejects_the_uncompiled_development_watcher() {
+        let error = parse_cli(&args(&["dev", "project"])).unwrap_err();
+        assert!(error.to_string().contains("not compiled"));
+    }
+
+    #[test]
+    #[cfg(feature = "hot-reload")]
     fn only_non_development_interactive_modes_require_a_process_lock() {
         assert!(InteractiveMode::Shipping.requires_single_instance());
         assert!(!InteractiveMode::Development.requires_single_instance());
@@ -1406,6 +1443,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "hot-reload")]
     fn only_shipping_runs_use_the_native_startup_error_page() {
         let shipping = parse_cli(&args(&["game.haku"])).unwrap();
         let development = parse_cli(&args(&["dev", "project"])).unwrap();

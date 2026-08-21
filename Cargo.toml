@@ -39,6 +39,12 @@ bench = false
 
 [features]
 default = ["audio-all", "ui-sounds"]
+# Developer-only filesystem watchers. Shipping builds do not compile notify or
+# the script/asset hot-reload pipeline.
+hot-reload = ["dep:notify", "keine-loader/hot-reload"]
+# Developer-only terminal configuration UI. Release engines use the feature
+# set selected by the bundler and never link Crossterm.
+configure = ["dep:crossterm"]
 audio-all = ["bundled-opus", "audio-wav", "audio-mp3", "audio-vorbis", "audio-flac"]
 ui-sounds = ["bundled-opus"]
 # Only the `keine bundle` engine build enables this: developer builds stay
@@ -156,7 +162,7 @@ anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true, optional = true }
 futures-lite = { workspace = true }
-notify = { workspace = true }
+notify = { workspace = true, optional = true }
 rfd = { workspace = true }
 webbrowser = { workspace = true }
 rodio = { workspace = true, optional = true }
@@ -166,7 +172,7 @@ ffmpeg-next = { workspace = true, optional = true }
 crossbeam-channel = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
 winit = { workspace = true }
-crossterm = { workspace = true }
+crossterm = { workspace = true, optional = true }
 fs2 = { workspace = true }
 bevy = { workspace = true, features = ["bevy_winit", "bevy_log", "bevy_render", "bevy_sprite", "bevy_ui", "bevy_ui_render", "bevy_audio", "png", "jpeg"] }
 hakutaku-core = { workspace = true, optional = true }

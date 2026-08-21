@@ -29,8 +29,8 @@ cargo validate projects/test-project
 cargo dev projects/test-project
 ```
 
-Use `cargo run -- dev projects/test-project` when FFmpeg development libraries
-are unavailable. The visual acceptance checklist is in
+Use `cargo run --features hot-reload -- dev projects/test-project` when FFmpeg
+development libraries are unavailable. The visual acceptance checklist is in
 [`projects/test-project/ACCEPTANCE.md`](projects/test-project/ACCEPTANCE.md).
 
 ## Commands

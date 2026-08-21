@@ -28,6 +28,7 @@ pub(super) struct StartupBenchmarkOptions {
 #[derive(Debug, Clone)]
 pub(super) enum InteractiveMode {
     Shipping,
+    #[cfg(feature = "hot-reload")]
     Development,
     Benchmark(BenchmarkOptions),
     StartupBenchmark(StartupBenchmarkOptions),
@@ -35,7 +36,14 @@ pub(super) enum InteractiveMode {
 
 impl InteractiveMode {
     pub(super) const fn development(&self) -> bool {
-        matches!(self, Self::Development)
+        #[cfg(feature = "hot-reload")]
+        {
+            matches!(self, Self::Development)
+        }
+        #[cfg(not(feature = "hot-reload"))]
+        {
+            false
+        }
     }
 
     pub(super) const fn benchmark(&self) -> Option<&BenchmarkOptions> {
@@ -59,6 +67,7 @@ impl InteractiveMode {
 
 #[derive(Debug)]
 pub(super) enum CliCommand {
+    #[cfg(feature = "configure")]
     Configure,
     Check {
         project: PathBuf,
@@ -112,6 +121,7 @@ struct CommandHelp {
 }
 
 const COMMANDS: &[CommandHelp] = &[
+    #[cfg(feature = "configure")]
     CommandHelp {
         binary_name: "configure",
         cargo_name: "configure",
@@ -136,6 +146,7 @@ const COMMANDS: &[CommandHelp] = &[
         args: "<project> [--output <dir>] [--benchmark]",
         summary: "Build a complete distributable game",
     },
+    #[cfg(feature = "hot-reload")]
     CommandHelp {
         binary_name: "dev",
         cargo_name: "dev",
@@ -189,9 +200,14 @@ pub(super) fn parse(args: &[OsString]) -> Result<CliCommand> {
         return Ok(run(PathBuf::new(), InteractiveMode::Shipping));
     };
     match command.to_str() {
+        #[cfg(feature = "configure")]
         Some("configure" | "adapters") => {
             require_no_extra_args(args, 1, "keine configure")?;
             Ok(CliCommand::Configure)
+        }
+        #[cfg(not(feature = "configure"))]
+        Some("configure" | "adapters") => {
+            anyhow::bail!("engine configuration TUI is not compiled; run `cargo configure`")
         }
         Some("check") => {
             let project = required_path(args, 1, "keine check <project>")?;
@@ -203,7 +219,10 @@ pub(super) fn parse(args: &[OsString]) -> Result<CliCommand> {
         Some("package") => anyhow::bail!(
             "`keine package` was split by responsibility; use `keine assets --pack <project>` for a resource package or `keine bundle <project>` for a complete game"
         ),
+        #[cfg(feature = "hot-reload")]
         Some("dev") => parse_development(args),
+        #[cfg(not(feature = "hot-reload"))]
+        Some("dev") => anyhow::bail!("hot reload is not compiled; run `cargo dev <project>`"),
         Some("benchmark") => parse_benchmark(args),
         Some("benchmark-startup") => parse_startup_benchmark(args),
         Some("__benchmark-package") => {
@@ -381,6 +400,7 @@ fn run(project: PathBuf, mode: InteractiveMode) -> CliCommand {
     }
 }
 
+#[cfg(feature = "hot-reload")]
 fn parse_development(args: &[OsString]) -> Result<CliCommand> {
     let project = required_path(args, 1, "keine dev <project> [--sync]")?;
     let mut editor_sync = false;
