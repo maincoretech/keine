@@ -103,7 +103,7 @@ seek/loop，WAV、MP3、Vorbis 和 FLAC 兼容格式会共享一份 encoded inpu
 
 ### Wire format 硬上限
 
-当前 `hakutaku-core` revision `01a6434` 对一个已签名 snapshot 执行：
+当前 `hakutaku-core` revision `ce8fe3c` 对一个已签名 snapshot 执行：
 
 | 项目 | 硬上限 |
 |---|---:|
