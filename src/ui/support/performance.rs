@@ -37,6 +37,15 @@ pub(crate) enum BenchmarkCameras {
 }
 
 impl BenchmarkCameras {
+    pub(crate) const fn id(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::SceneUi => "scene-ui",
+            Self::SceneDialog => "scene-dialog",
+            Self::SceneOnly => "scene",
+        }
+    }
+
     pub(crate) const fn scene(self) -> bool {
         true
     }

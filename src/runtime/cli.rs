@@ -432,12 +432,14 @@ fn parse_benchmark(args: &[OsString]) -> Result<CliCommand> {
     if !seconds.is_finite() || seconds < 1.0 {
         anyhow::bail!("benchmark duration must be at least one second");
     }
-    let target = args.get(3).map(|value| {
+    let target = args.get(3).and_then(|value| {
         let value = value.to_string_lossy();
-        value.parse::<usize>().map_or_else(
-            |_| BenchmarkTarget::Timeline(value.into_owned()),
-            BenchmarkTarget::Cursor,
-        )
+        (value != "-").then(|| {
+            value.parse::<usize>().map_or_else(
+                |_| BenchmarkTarget::Timeline(value.into_owned()),
+                BenchmarkTarget::Cursor,
+            )
+        })
     });
     let cameras = match args.get(4).and_then(|value| value.to_str()) {
         None | Some("full") => crate::ui::performance::BenchmarkCameras::Full,

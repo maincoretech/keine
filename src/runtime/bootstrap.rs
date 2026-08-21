@@ -40,7 +40,7 @@ use crate::runtime::resources::{
 };
 #[cfg(feature = "hot-reload")]
 use crate::runtime::resources::{HotReloadSession, ScriptWatcherResource};
-use crate::ui::performance::BenchmarkTarget;
+use crate::ui::performance::{BenchmarkCameras, BenchmarkTarget};
 
 pub(crate) const MAX_PROJECT_CONFIG_BYTES: usize = 256 * 1024;
 type BenchmarkWorkload = (&'static str, &'static str);
@@ -72,6 +72,20 @@ const FEATURE_BENCHMARK_WORKLOADS: &[BenchmarkWorkload] = &[
 ];
 const STRESS_BENCHMARK_WORKLOADS: &[BenchmarkWorkload] =
     &[("stress composition", "benchmark stress composition")];
+const CAMERA_BENCHMARK_WORKLOADS: &[(&str, BenchmarkCameras)] = &[
+    (
+        "opening composition · scene + UI",
+        BenchmarkCameras::SceneUi,
+    ),
+    (
+        "opening composition · scene + dialog",
+        BenchmarkCameras::SceneDialog,
+    ),
+    (
+        "opening composition · scene only",
+        BenchmarkCameras::SceneOnly,
+    ),
+];
 const PORTABLE_BENCHMARK_SECTIONS: &[BenchmarkSection] = &[
     (
         "daily workloads · representative player-facing actions",
@@ -358,6 +372,20 @@ fn run_startup_suite(project_path: &Path, runs: usize) -> Result<String> {
             std::env::consts::ARCH,
         ),
     );
+    let features = env!("KEINE_BUILD_FEATURES");
+    emit_report_line(
+        &mut report,
+        format!(
+            "build identity · commit {} · built {} · features {}",
+            env!("KEINE_BUILD_COMMIT"),
+            env!("KEINE_BUILD_TIME"),
+            if features.is_empty() {
+                "none"
+            } else {
+                features
+            },
+        ),
+    );
     for run in 1..=runs {
         let output = Command::new(&executable)
             .arg("benchmark-startup")
@@ -413,8 +441,24 @@ fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) ->
         project_path,
         "opening composition · full composition",
         None,
+        BenchmarkCameras::Full,
         &mut report,
     )?;
+    emit_report_line(&mut report, "");
+    emit_report_line(
+        &mut report,
+        "camera decomposition · opening composition render attribution",
+    );
+    for (label, cameras) in CAMERA_BENCHMARK_WORKLOADS {
+        run_benchmark_workload(
+            &executable,
+            project_path,
+            label,
+            None,
+            *cameras,
+            &mut report,
+        )?;
+    }
     for (section, workloads) in PORTABLE_BENCHMARK_SECTIONS {
         emit_report_line(&mut report, "");
         emit_report_line(&mut report, section);
@@ -426,6 +470,7 @@ fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) ->
                     project_path,
                     label,
                     Some(target),
+                    BenchmarkCameras::Full,
                     &mut report,
                 )?;
                 authored += 1;
@@ -471,6 +516,7 @@ fn run_benchmark_workload(
     project_path: &Path,
     label: &str,
     target: Option<&str>,
+    cameras: BenchmarkCameras,
     report: &mut String,
 ) -> Result<String> {
     emit_report_line(report, "");
@@ -480,8 +526,8 @@ fn run_benchmark_workload(
     );
     let mut command = Command::new(executable);
     command.arg("benchmark").arg(project_path).arg("5");
-    if let Some(target) = target {
-        command.arg(target).arg("full");
+    if target.is_some() || cameras != BenchmarkCameras::Full {
+        command.arg(target.unwrap_or("-")).arg(cameras.id());
     }
     let output = command
         .env(RUNTIME_BENCHMARK_CHILD_ENV, "1")
@@ -587,10 +633,27 @@ fn resolve_benchmark_target(state: &State, target: &BenchmarkTarget) -> Option<(
 }
 
 fn emit_report_line(report: &mut String, line: impl AsRef<str>) {
-    let line = line.as_ref();
+    let line = plain_report_line(line.as_ref());
     println!("{line}");
-    report.push_str(line);
+    report.push_str(&line);
     report.push('\n');
+}
+
+fn plain_report_line(line: &str) -> String {
+    let mut plain = String::with_capacity(line.len());
+    let mut characters = line.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character == '\u{1b}' && characters.next_if_eq(&'[').is_some() {
+            for code in characters.by_ref() {
+                if ('@'..='~').contains(&code) {
+                    break;
+                }
+            }
+            continue;
+        }
+        plain.push(character);
+    }
+    plain
 }
 
 fn append_startup_summary(samples: &[crate::ui::performance::StartupSample], report: &mut String) {
@@ -1358,6 +1421,35 @@ mod tests {
         assert_eq!(FEATURE_BENCHMARK_WORKLOADS.len(), 8);
         assert_eq!(STRESS_BENCHMARK_WORKLOADS.len(), 1);
         assert_eq!(targets.len(), 12);
+        assert_eq!(CAMERA_BENCHMARK_WORKLOADS.len(), 3);
+        assert!(
+            CAMERA_BENCHMARK_WORKLOADS
+                .iter()
+                .all(|(_, cameras)| *cameras != BenchmarkCameras::Full)
+        );
+        assert_eq!(
+            CAMERA_BENCHMARK_WORKLOADS
+                .iter()
+                .map(|(_, cameras)| cameras.id())
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            CAMERA_BENCHMARK_WORKLOADS.len()
+        );
+    }
+
+    #[test]
+    fn benchmark_report_lines_are_plain_utf8() {
+        assert_eq!(
+            plain_report_line("\u{1b}[2m0.1s\u{1b}[0m \u{1b}[32mINFO\u{1b}[0m Kēne"),
+            "0.1s INFO Kēne"
+        );
+        assert_eq!(plain_report_line("普通文本"), "普通文本");
+    }
+
+    #[test]
+    fn build_identity_is_available_to_portable_reports() {
+        assert!(!env!("KEINE_BUILD_COMMIT").is_empty());
+        assert!(!env!("KEINE_BUILD_TIME").is_empty());
     }
 
     #[test]
@@ -1555,6 +1647,29 @@ mod tests {
         assert_eq!(
             options.cameras,
             crate::ui::performance::BenchmarkCameras::SceneUi
+        );
+    }
+
+    #[test]
+    fn benchmark_command_accepts_camera_profile_without_a_target() {
+        let CliCommand::Run {
+            mode: InteractiveMode::Benchmark(options),
+            ..
+        } = parse_cli(&args(&[
+            "benchmark",
+            "/tmp/project",
+            "7.5",
+            "-",
+            "scene-dialog",
+        ]))
+        .unwrap()
+        else {
+            panic!("expected benchmark command");
+        };
+        assert_eq!(options.target, None);
+        assert_eq!(
+            options.cameras,
+            crate::ui::performance::BenchmarkCameras::SceneDialog
         );
     }
 

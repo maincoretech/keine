@@ -1242,3 +1242,19 @@ These APFS figures were collected immediately after producing the package and
 are therefore warm-cache implementation checks, not device claims. External
 SATA throughput and first-use latency are intentionally deferred to the
 portable Windows report.
+
+### 2026-08-22 attributable portable reports
+
+Portable reports now identify the source commit, UTC build time, and exact
+Cargo feature set. Report lines are normalized to plain UTF-8 before both
+printing and writing, so terminal ANSI styling cannot leak into the `.txt`
+artifact.
+
+The rendered workload matrix also runs the opening composition once with each
+non-full camera profile: scene + UI, scene + dialog, and scene only. Comparing
+those three samples with the existing full-composition sample attributes a
+low-end GPU regression to the scene, dialog, UI, or final composition path
+without multiplying every daily and feature workload. At five seconds per
+sample this adds about fifteen seconds of measured render time plus three child
+process startups to a complete portable run; normal game execution and normal
+test commands remain unchanged.

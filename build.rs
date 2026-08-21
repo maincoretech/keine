@@ -1,3 +1,5 @@
+use std::path::Path;
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn main() {
@@ -9,7 +11,12 @@ fn main() {
     println!("cargo:rerun-if-changed=Cargo.toml");
     println!("cargo:rerun-if-changed=Cargo.lock");
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
+    println!("cargo:rerun-if-env-changed=KEINE_BUILD_COMMIT");
+    println!("cargo:rerun-if-env-changed=GITHUB_SHA");
+    track_git_head();
     println!("cargo:rustc-env=KEINE_BUILD_TIME={}", build_time());
+    println!("cargo:rustc-env=KEINE_BUILD_COMMIT={}", build_commit());
+    println!("cargo:rustc-env=KEINE_BUILD_FEATURES={}", build_features());
     println!("cargo:rerun-if-changed={WINDOWS_ICON}");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
@@ -19,6 +26,65 @@ fn main() {
         .set_icon(WINDOWS_ICON)
         .compile()
         .expect("failed to embed the Kēne Windows icon");
+}
+
+fn track_git_head() {
+    let git = Path::new(".git");
+    let head = git.join("HEAD");
+    println!("cargo:rerun-if-changed={}", head.display());
+    let Ok(contents) = std::fs::read_to_string(&head) else {
+        return;
+    };
+    let Some(reference) = contents.trim().strip_prefix("ref: ") else {
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", git.join(reference).display());
+}
+
+fn build_commit() -> String {
+    let configured = std::env::var("KEINE_BUILD_COMMIT")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            std::env::var("GITHUB_SHA")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        });
+    let commit = configured
+        .or_else(git_head)
+        .unwrap_or_else(|| "unknown".into());
+    let mut identity = commit.trim().chars().take(12).collect::<String>();
+    if git_dirty() {
+        identity.push_str("-dirty");
+    }
+    identity
+}
+
+fn git_head() -> Option<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+fn git_dirty() -> bool {
+    Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=no"])
+        .output()
+        .is_ok_and(|output| output.status.success() && !output.stdout.is_empty())
+}
+
+fn build_features() -> String {
+    let mut features = std::env::vars()
+        .filter_map(|(name, _)| name.strip_prefix("CARGO_FEATURE_").map(str::to_owned))
+        .map(|name| name.to_ascii_lowercase().replace('_', "-"))
+        .collect::<Vec<_>>();
+    features.sort();
+    features.join(",")
 }
 
 fn build_time() -> String {
