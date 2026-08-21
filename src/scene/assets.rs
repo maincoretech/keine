@@ -10,6 +10,8 @@ use crate::runtime::resources::{
 use crate::ui::foundation::UiFonts;
 
 const LOOKAHEAD_ACTIONS: usize = 20;
+const MAX_PREDICTED_ASSETS: usize = 8;
+const MAX_SPECULATIVE_LOADS: usize = 1;
 
 fn prefetch_action_window(cursor: usize) -> std::ops::RangeInclusive<usize> {
     // Script execution advances the cursor as soon as an action starts. Keep
@@ -20,22 +22,66 @@ fn prefetch_action_window(cursor: usize) -> std::ops::RangeInclusive<usize> {
 
 #[derive(Default)]
 struct AssetPlan {
-    retained: HashMap<String, ResourceKind>,
-    critical: HashSet<String>,
+    critical: HashMap<String, ResourceKind>,
+    urgent: Vec<(String, ResourceKind)>,
+    predicted: Vec<(String, ResourceKind)>,
+    speculative: HashSet<String>,
 }
 
 impl AssetPlan {
-    fn warm(&mut self, path: String, kind: ResourceKind) {
-        if kind != ResourceKind::Video {
-            self.retained.insert(path, kind);
+    fn warm_urgent(&mut self, path: String, kind: ResourceKind) {
+        if kind == ResourceKind::Video || self.critical.contains_key(&path) {
+            return;
+        }
+        if let Some(index) = self
+            .predicted
+            .iter()
+            .position(|(candidate, _)| candidate == &path)
+        {
+            self.predicted.remove(index);
+            self.urgent.push((path, kind));
+        } else if self.speculative.insert(path.clone()) {
+            self.urgent.push((path, kind));
+        }
+    }
+
+    fn warm_predicted(&mut self, path: String, kind: ResourceKind) {
+        if kind != ResourceKind::Video
+            && !self.critical.contains_key(&path)
+            && self.speculative.insert(path.clone())
+        {
+            self.predicted.push((path, kind));
         }
     }
 
     fn require(&mut self, path: String, kind: ResourceKind) {
-        if kind != ResourceKind::Video {
-            self.critical.insert(path.clone());
-            self.retained.insert(path, kind);
+        if kind == ResourceKind::Video {
+            return;
         }
+        self.urgent.retain(|(candidate, _)| candidate != &path);
+        self.predicted.retain(|(candidate, _)| candidate != &path);
+        self.speculative.remove(&path);
+        self.critical.insert(path, kind);
+    }
+
+    fn speculative_assets(&self) -> impl Iterator<Item = &(String, ResourceKind)> {
+        self.urgent
+            .iter()
+            .chain(self.predicted.iter().take(MAX_PREDICTED_ASSETS))
+    }
+
+    fn retains(&self, path: &str) -> bool {
+        self.critical.contains_key(path)
+            || self
+                .speculative_assets()
+                .any(|(candidate, _)| candidate == path)
+    }
+
+    fn fully_admitted(&self, cache: &LocalAssetCache) -> bool {
+        self.critical
+            .keys()
+            .chain(self.speculative_assets().map(|(path, _)| path))
+            .all(|path| cache.handles.contains_key(path))
     }
 }
 
@@ -51,6 +97,7 @@ pub(crate) struct PrefetchState {
     bgm: Option<String>,
     effects: HashMap<String, String>,
     particles: HashMap<String, Option<String>>,
+    plan: AssetPlan,
 }
 
 impl PrefetchState {
@@ -126,47 +173,63 @@ pub fn prefetch_local_assets(
     mut cache: ResMut<LocalAssetCache>,
     mut previous: Local<PrefetchState>,
 ) {
-    if previous.matches(&state) && !manifest.is_changed() && !config.is_changed() {
+    let rebuild = !previous.matches(&state) || manifest.is_changed() || config.is_changed();
+    if rebuild {
+        previous.capture(&state);
+        previous.plan = build_asset_plan(&state, &config, &manifest);
+        cache.handles.retain(|path, _| previous.plan.retains(path));
+    } else if previous.plan.fully_admitted(&cache) {
         return;
     }
-    previous.capture(&state);
-    let mut plan = AssetPlan::default();
-    // While the title is open, use otherwise idle time to warm the entry scene.
-    // This also keeps its handles alive after returning from the game, instead
-    // of releasing and recreating them on the next START click.
-    let (scene_name, cursor) = if state.ended {
-        (crate::scene::entry_scene(&state), 0)
-    } else {
-        (state.current_scene.clone(), state.cursor)
-    };
-    if let Some(scene) = manifest.get(&scene_name) {
-        let window = prefetch_action_window(cursor);
-        for resource in scene
-            .resources
-            .iter()
-            .filter(|resource| window.contains(&resource.action_index))
-        {
-            let path = resource.resolved_path(&config);
-            plan.warm(path, resource.kind);
-        }
-        for reference in scene.sub_scenes.iter().filter(|reference| {
-            reference.action_index >= cursor && reference.action_index <= cursor + LOOKAHEAD_ACTIONS
-        }) {
-            if let Some(called_scene) = manifest.get(&reference.scene) {
-                // A callScene may be large. Warm only its opening window; the
-                // normal cursor lookahead takes over after entering it.
-                for resource in called_scene
-                    .resources
-                    .iter()
-                    .filter(|resource| resource.action_index <= LOOKAHEAD_ACTIONS)
-                {
-                    let path = resource.resolved_path(&config);
-                    plan.warm(path, resource.kind);
-                }
-            }
-        }
+
+    for (path, kind) in &previous.plan.critical {
+        cache
+            .handles
+            .entry(path.clone())
+            .or_insert_with(|| load_handle(&asset_server, path.clone(), *kind));
+    }
+    let critical = previous.plan.critical.keys().cloned().collect();
+    if cache.critical != critical {
+        cache.critical = critical;
     }
 
+    let pending = |handle: &UntypedHandle| {
+        matches!(
+            asset_server.load_state(handle.id()),
+            LoadState::NotLoaded | LoadState::Loading
+        )
+    };
+    if cache.blocking_handles().any(pending) {
+        return;
+    }
+    let speculative_in_flight = cache
+        .handles
+        .iter()
+        .filter(|(path, handle)| !cache.critical.contains(*path) && pending(handle))
+        .count();
+    let available = MAX_SPECULATIVE_LOADS.saturating_sub(speculative_in_flight);
+    let next = (available != 0)
+        .then(|| {
+            previous
+                .plan
+                .speculative_assets()
+                .find(|(path, _)| !cache.handles.contains_key(path))
+                .cloned()
+        })
+        .flatten();
+    if let Some((path, kind)) = next {
+        cache
+            .handles
+            .insert(path.clone(), load_handle(&asset_server, path, kind));
+    }
+}
+
+fn build_asset_plan(
+    state: &GameState,
+    config: &GameConfigResource,
+    manifest: &LocalAssetManifest,
+) -> AssetPlan {
+    let mut plan = AssetPlan::default();
     if state.ended {
         plan.require(
             config.bg_path(&config.title_background),
@@ -190,7 +253,7 @@ pub fn prefetch_local_assets(
     }
     for sequence in state.sprite_sequences.values() {
         for frame in &sequence.frames {
-            plan.warm(config.figure_path(frame), ResourceKind::Figure);
+            plan.warm_urgent(config.figure_path(frame), ResourceKind::Figure);
         }
     }
     if let Some(avatar) = &state.mini_avatar {
@@ -220,34 +283,52 @@ pub fn prefetch_local_assets(
         }
     }
 
-    if cache.handles.len() == plan.retained.len()
-        && plan
-            .retained
-            .keys()
-            .all(|path| cache.handles.contains_key(path))
-        && cache.critical == plan.critical
-    {
-        return;
-    }
-    cache
-        .handles
-        .retain(|path, _| plan.retained.contains_key(path));
-    for (path, kind) in plan.retained {
-        cache
-            .handles
-            .entry(path.clone())
-            .or_insert_with(|| match kind {
-                ResourceKind::Background
-                | ResourceKind::Figure
-                | ResourceKind::Particle
-                | ResourceKind::MiniAvatar => asset_server.load::<Image>(path).untyped(),
-                ResourceKind::Voice | ResourceKind::Bgm | ResourceKind::Effect => {
-                    crate::runtime::audio::load_untyped(&asset_server, path)
+    // Predictions are admitted only after the currently visible state is
+    // ready. This prevents title/gameplay latency from competing with a burst
+    // of speculative decode work on slower CPUs and storage.
+    let (scene_name, cursor) = if state.ended {
+        (crate::scene::entry_scene(state), 0)
+    } else {
+        (state.current_scene.clone(), state.cursor)
+    };
+    if let Some(scene) = manifest.get(&scene_name) {
+        let window = prefetch_action_window(cursor);
+        for resource in scene
+            .resources
+            .iter()
+            .filter(|resource| window.contains(&resource.action_index))
+        {
+            plan.warm_predicted(resource.resolved_path(config), resource.kind);
+        }
+        let call_end = cursor.saturating_add(LOOKAHEAD_ACTIONS);
+        for reference in scene.sub_scenes.iter().filter(|reference| {
+            reference.action_index >= cursor && reference.action_index <= call_end
+        }) {
+            if let Some(called_scene) = manifest.get(&reference.scene) {
+                for resource in called_scene
+                    .resources
+                    .iter()
+                    .filter(|resource| resource.action_index <= LOOKAHEAD_ACTIONS)
+                {
+                    plan.warm_predicted(resource.resolved_path(config), resource.kind);
                 }
-                ResourceKind::Video => unreachable!("video prefetch is handled above"),
-            });
+            }
+        }
     }
-    cache.critical = plan.critical;
+    plan
+}
+
+fn load_handle(asset_server: &AssetServer, path: String, kind: ResourceKind) -> UntypedHandle {
+    match kind {
+        ResourceKind::Background
+        | ResourceKind::Figure
+        | ResourceKind::Particle
+        | ResourceKind::MiniAvatar => asset_server.load::<Image>(path).untyped(),
+        ResourceKind::Voice | ResourceKind::Bgm | ResourceKind::Effect => {
+            crate::runtime::audio::load_untyped(asset_server, path)
+        }
+        ResourceKind::Video => unreachable!("video prefetch is handled separately"),
+    }
 }
 
 pub fn update_loading_gate(
@@ -310,23 +391,39 @@ mod tests {
     #[test]
     fn predicted_assets_are_retained_without_becoming_critical() {
         let mut plan = AssetPlan::default();
-        plan.warm("background/later.webp".into(), ResourceKind::Background);
+        plan.warm_predicted("background/later.webp".into(), ResourceKind::Background);
         plan.require("background/current.webp".into(), ResourceKind::Background);
 
-        assert_eq!(plan.retained.len(), 2);
-        assert_eq!(
-            plan.critical,
-            HashSet::from(["background/current.webp".into()])
-        );
+        assert!(plan.retains("background/later.webp"));
+        assert!(plan.retains("background/current.webp"));
+        assert_eq!(plan.critical.len(), 1);
+        assert!(plan.critical.contains_key("background/current.webp"));
+    }
+
+    #[test]
+    fn speculative_plan_prioritizes_active_assets_and_bounds_predictions() {
+        let mut plan = AssetPlan::default();
+        for index in 0..MAX_PREDICTED_ASSETS + 2 {
+            plan.warm_predicted(format!("voice/{index}.opus"), ResourceKind::Voice);
+        }
+        plan.warm_urgent("figure/animation.webp".into(), ResourceKind::Figure);
+
+        let paths = plan
+            .speculative_assets()
+            .map(|(path, _)| path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(paths.len(), MAX_PREDICTED_ASSETS + 1);
+        assert_eq!(paths[0], "figure/animation.webp");
+        assert!(!paths.contains(&format!("voice/{}.opus", MAX_PREDICTED_ASSETS + 1).as_str()));
     }
 
     #[test]
     fn streamed_video_is_never_added_to_the_generic_asset_plan() {
         let mut plan = AssetPlan::default();
-        plan.warm("video/opening.mp4".into(), ResourceKind::Video);
+        plan.warm_predicted("video/opening.mp4".into(), ResourceKind::Video);
         plan.require("video/current.mp4".into(), ResourceKind::Video);
 
-        assert!(plan.retained.is_empty());
+        assert!(plan.speculative_assets().next().is_none());
         assert!(plan.critical.is_empty());
     }
 }

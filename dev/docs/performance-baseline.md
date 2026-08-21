@@ -1170,3 +1170,27 @@ The same 8,192-file `content_lookup` package measured:
 Filesystem probes were unchanged. The optimized branch is allocation-free;
 Windows separators, current-directory components, repeated/trailing separators,
 and non-UTF-8 paths retain the normalized fallback.
+
+### 2026-08-21 critical-path asset admission
+
+The timeline previously submitted every distinct asset in a 20-action window
+to Bevy at once. On a slow CPU or storage device, title/background resources
+could therefore compete with unrelated future WebP and Opus work. The runtime
+now admits assets in three ordered classes: all current-state requirements,
+active animation frames, then at most eight timeline predictions. Current-state
+requirements remain parallel and blocking; speculative work starts only after
+they are ready and has a single in-flight admission slot.
+
+Three isolated Release/LTO startup processes used the checked-in LetsGal test
+project and the same hidden surface-backed window on an Apple M5 Pro:
+
+| Cumulative startup milestone | Before first / repeat median | After first / repeat median |
+|---|---:|---:|
+| First rendered frame | 284.78 / 234.37 ms | 262.03 / 210.19 ms |
+| Interactive title | 287.90 / 237.28 ms | 276.91 / 224.42 ms |
+
+Repeat-median first frame improved by 10.3% and interactive title by 5.4%.
+The first-launch interactive result improved by 3.8%. This fast machine is a
+regression baseline, not a low-end acceptance result; the structural invariant
+is that speculative decoding can no longer multiply CPU, storage, or allocator
+contention on the critical path.

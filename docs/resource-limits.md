@@ -103,7 +103,7 @@ seek/loop，WAV、MP3、Vorbis 和 FLAC 兼容格式会共享一份 encoded inpu
 
 ### Wire format 硬上限
 
-当前 `hakutaku-core` revision `24c39ea` 对一个已签名 snapshot 执行：
+当前 `hakutaku-core` revision `01a6434` 对一个已签名 snapshot 执行：
 
 | 项目 | 硬上限 |
 |---|---:|
@@ -138,6 +138,12 @@ Kēne 使用 `ResourceBudget::memory_constrained()` 打开资源包：
 目录索引、当前/前一个 streaming block、独占 transient buffer、媒体 decoder buffer、
 GPU texture 和 Kēne 自身状态都不包含在这些数值中，
 因此不能把 `17 MiB` 误写成进程或资源系统总内存上限。
+
+Kēne 在这层之上使用关键路径优先的时间线预取：当前画面所需资源不限制并发并进入
+loading gate；活动中的逐帧立绘按原顺序优先；普通时间线预测只保留前 8 个不同资源，
+且同时最多启动 1 个投机加载。20 个 action 的扫描窗口只是寻找候选的范围，不代表会
+同时加载 20 个资源。视频继续由独立的流式播放与全局 surface budget 管理，不进入这套
+通用 AssetServer 预取。
 
 ### 当前打包策略
 
