@@ -82,7 +82,7 @@ pub(crate) fn run(
     }
 
     let source_files = source_files(&project_path)?;
-    let edits = plan_edits(&source_files, &available)?;
+    let edits = plan_edits(&source_files, &available, &changes)?;
     for old in unavailable {
         for path in &source_files {
             if file_contains_reference(path, &old)? {
@@ -404,14 +404,23 @@ fn is_source_file(path: &Path) -> bool {
         })
 }
 
-fn plan_edits(files: &[PathBuf], replacements: &BTreeMap<String, String>) -> Result<Vec<Edit>> {
+fn plan_edits(
+    files: &[PathBuf],
+    replacements: &BTreeMap<String, String>,
+    changes: &BTreeMap<String, AssetChange>,
+) -> Result<Vec<Edit>> {
     let mut edits = Vec::new();
     for path in files {
         let original = crate::storage::read_limited(path, MAX_SOURCE_FILE_BYTES)?;
         let source = std::str::from_utf8(&original)
             .with_context(|| format!("source file is not UTF-8: {}", path.display()))?;
         let (replacement, count) = if path.extension() == Some(OsStr::new("json")) {
-            replace_json_strings(source, replacements)
+            let source = if path.file_name() == Some(OsStr::new(".manifest.json")) {
+                replace_manifest_sizes(source, changes)?
+            } else {
+                source.to_owned()
+            };
+            replace_json_strings(&source, replacements)
         } else {
             replace_path_tokens(source, replacements)
         };
@@ -425,6 +434,91 @@ fn plan_edits(files: &[PathBuf], replacements: &BTreeMap<String, String>) -> Res
         }
     }
     Ok(edits)
+}
+
+fn replace_manifest_sizes(source: &str, changes: &BTreeMap<String, AssetChange>) -> Result<String> {
+    serde_json::from_str::<serde_json::Value>(source).context("invalid asset manifest JSON")?;
+    let bytes = source.as_bytes();
+    let mut cursor = 0;
+    let mut depth = 0_usize;
+    let mut pending_sizes = BTreeMap::<usize, u64>::new();
+    let mut edits = Vec::<(std::ops::Range<usize>, String)>::new();
+
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'{' => {
+                depth += 1;
+                cursor += 1;
+            }
+            b'}' => {
+                pending_sizes.remove(&depth);
+                depth = depth.saturating_sub(1);
+                cursor += 1;
+            }
+            b'"' => {
+                let Some(end) = json_string_end(bytes, cursor) else {
+                    break;
+                };
+                let after = skip_json_whitespace(bytes, end);
+                if bytes.get(after) == Some(&b':') {
+                    let key = serde_json::from_str::<String>(&source[cursor..end])?;
+                    let value_start = skip_json_whitespace(bytes, after + 1);
+                    if key == "path" && bytes.get(value_start) == Some(&b'"') {
+                        if let Some(value_end) = json_string_end(bytes, value_start) {
+                            let path =
+                                serde_json::from_str::<String>(&source[value_start..value_end])?;
+                            if let Some(change) = changes.get(&path) {
+                                pending_sizes.insert(depth, change.new_bytes);
+                            }
+                        }
+                    } else if key == "size"
+                        && let Some(size) = pending_sizes.remove(&depth)
+                    {
+                        let value_end = bytes[value_start..]
+                            .iter()
+                            .position(|byte| !byte.is_ascii_digit())
+                            .map_or(bytes.len(), |offset| value_start + offset);
+                        if value_end == value_start {
+                            anyhow::bail!("asset manifest size is not an unsigned integer");
+                        }
+                        edits.push((value_start..value_end, size.to_string()));
+                    }
+                }
+                cursor = end;
+            }
+            _ => cursor += 1,
+        }
+    }
+
+    let mut output = source.to_owned();
+    for (range, replacement) in edits.into_iter().rev() {
+        output.replace_range(range, &replacement);
+    }
+    Ok(output)
+}
+
+fn json_string_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut cursor = start + 1;
+    let mut escaped = false;
+    while cursor < bytes.len() {
+        let byte = bytes[cursor];
+        cursor += 1;
+        if escaped {
+            escaped = false;
+        } else if byte == b'\\' {
+            escaped = true;
+        } else if byte == b'"' {
+            return Some(cursor);
+        }
+    }
+    None
+}
+
+fn skip_json_whitespace(bytes: &[u8], mut cursor: usize) -> usize {
+    while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+        cursor += 1;
+    }
+    cursor
 }
 
 fn replace_json_strings(source: &str, replacements: &BTreeMap<String, String>) -> (String, usize) {
@@ -455,23 +549,78 @@ fn replace_json_strings(source: &str, replacements: &BTreeMap<String, String>) -
         if bytes.get(cursor - 1) != Some(&b'"') {
             break;
         }
-        let value = &source[start + 1..cursor - 1];
         let followed_by_colon = bytes[cursor..]
             .iter()
             .copied()
             .find(|byte| !byte.is_ascii_whitespace())
             == Some(b':');
-        if !followed_by_colon && let Some(new) = replacements.get(value) {
+        let token = &source[start..cursor];
+        if !followed_by_colon
+            && let Some((new, replacements)) = rewrite_json_string_token(token, replacements)
+        {
             output.push_str(&source[unchanged_start..start]);
-            output.push('"');
-            output.push_str(new);
-            output.push('"');
+            output.push_str(&new);
             unchanged_start = cursor;
-            count += 1;
+            count += replacements;
         }
     }
     output.push_str(&source[unchanged_start..]);
     (output, count)
+}
+
+fn rewrite_json_string_token(
+    token: &str,
+    replacements: &BTreeMap<String, String>,
+) -> Option<(String, usize)> {
+    let mut value = serde_json::from_str::<String>(token).ok()?;
+    let count = rewrite_string_value(&mut value, replacements, 0);
+    (count != 0).then(|| {
+        (
+            serde_json::to_string(&value).expect("serializing a JSON string cannot fail"),
+            count,
+        )
+    })
+}
+
+fn rewrite_string_value(
+    value: &mut String,
+    replacements: &BTreeMap<String, String>,
+    depth: usize,
+) -> usize {
+    if let Some(new) = replacements.get(value) {
+        value.clone_from(new);
+        return 1;
+    }
+    if depth >= 8 || !matches!(value.trim_start().as_bytes().first(), Some(b'{' | b'[')) {
+        return 0;
+    }
+    let Ok(mut nested) = serde_json::from_str::<serde_json::Value>(value) else {
+        return 0;
+    };
+    let count = rewrite_json_value(&mut nested, replacements, depth + 1);
+    if count != 0 {
+        *value = serde_json::to_string(&nested).expect("serializing parsed JSON cannot fail");
+    }
+    count
+}
+
+fn rewrite_json_value(
+    value: &mut serde_json::Value,
+    replacements: &BTreeMap<String, String>,
+    depth: usize,
+) -> usize {
+    match value {
+        serde_json::Value::String(value) => rewrite_string_value(value, replacements, depth),
+        serde_json::Value::Array(values) => values
+            .iter_mut()
+            .map(|value| rewrite_json_value(value, replacements, depth))
+            .sum(),
+        serde_json::Value::Object(values) => values
+            .values_mut()
+            .map(|value| rewrite_json_value(value, replacements, depth))
+            .sum(),
+        _ => 0,
+    }
 }
 
 fn replace_path_tokens(source: &str, replacements: &BTreeMap<String, String>) -> (String, usize) {
@@ -828,6 +977,42 @@ mod tests {
         assert_eq!(
             output,
             r#"{"asset":"audio/click.opus", "note":"use audio/click.wav later", "image":"portrait.webp", "portrait.png":"key"}"#
+        );
+    }
+
+    #[test]
+    fn json_rewrite_descends_into_embedded_json_values() {
+        let replacements = BTreeMap::from([(
+            "backgrounds/snow.png".to_owned(),
+            "backgrounds/snow.webp".to_owned(),
+        )]);
+        let source = r#"{"paramsJson":"{\"layers\":[{\"assetPath\":\"backgrounds/snow.png\"}]}","note":"use backgrounds/snow.png later"}"#;
+        let (output, count) = replace_json_strings(source, &replacements);
+        assert_eq!(count, 1);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&output).unwrap(),
+            serde_json::json!({
+                "paramsJson": "{\"layers\":[{\"assetPath\":\"backgrounds/snow.webp\"}]}",
+                "note": "use backgrounds/snow.png later",
+            })
+        );
+    }
+
+    #[test]
+    fn manifest_rewrite_updates_converted_asset_sizes_without_reformatting() {
+        let source = "{\n  \"entries\": {\n    \"id\": {\n      \"path\": \"backgrounds/snow.png\",\n      \"size\": 2040460,\n      \"updatedAt\": 123.5\n    }\n  }\n}\n";
+        let changes = BTreeMap::from([(
+            "backgrounds/snow.png".to_owned(),
+            AssetChange {
+                old: "backgrounds/snow.png".to_owned(),
+                new: "backgrounds/snow.webp".to_owned(),
+                old_bytes: 2_040_460,
+                new_bytes: 177_606,
+            },
+        )]);
+        assert_eq!(
+            replace_manifest_sizes(source, &changes).unwrap(),
+            source.replace("2040460", "177606")
         );
     }
 

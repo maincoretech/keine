@@ -3016,6 +3016,7 @@ dependencies = [
  "rfd",
  "rodio",
  "serde",
+ "serde_json",
  "symphonia 0.6.0",
  "symphonia-adapter-libopus",
  "tempfile",

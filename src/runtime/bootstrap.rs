@@ -376,11 +376,39 @@ fn run_startup_suite(project_path: &Path, runs: usize) -> Result<String> {
 fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) -> Result<()> {
     let executable = std::env::current_exe().context("failed to locate benchmark executable")?;
     let mut report = run_startup_suite(project_path, runs)?;
+    emit_report_line(&mut report, "");
+    emit_report_line(
+        &mut report,
+        "project workload · actual packaged opening composition",
+    );
+    let timeline_inventory = run_benchmark_workload(
+        &executable,
+        project_path,
+        "opening composition · full composition",
+        None,
+        &mut report,
+    )?;
     for (section, workloads) in PORTABLE_BENCHMARK_SECTIONS {
         emit_report_line(&mut report, "");
         emit_report_line(&mut report, section);
+        let mut authored = 0;
         for (label, target) in *workloads {
-            run_benchmark_workload(&executable, project_path, label, target, &mut report)?;
+            if timeline_is_available(&timeline_inventory, target) {
+                run_benchmark_workload(
+                    &executable,
+                    project_path,
+                    label,
+                    Some(target),
+                    &mut report,
+                )?;
+                authored += 1;
+            }
+        }
+        if authored == 0 {
+            emit_report_line(
+                &mut report,
+                "not authored by this project · skipped without substituting unrelated content",
+            );
         }
     }
     crate::storage::write_atomically(report_path, report.as_bytes())?;
@@ -392,20 +420,20 @@ fn run_benchmark_workload(
     executable: &Path,
     project_path: &Path,
     label: &str,
-    target: &str,
+    target: Option<&str>,
     report: &mut String,
-) -> Result<()> {
+) -> Result<String> {
     emit_report_line(report, "");
     emit_report_line(
         report,
         format!("settled render · {label} · 3.0s warm-up + 5.0s sample"),
     );
-    let output = Command::new(executable)
-        .arg("benchmark")
-        .arg(project_path)
-        .arg("5")
-        .arg(target)
-        .arg("full")
+    let mut command = Command::new(executable);
+    command.arg("benchmark").arg(project_path).arg("5");
+    if let Some(target) = target {
+        command.arg(target).arg("full");
+    }
+    let output = command
         .env(RUNTIME_BENCHMARK_CHILD_ENV, "1")
         .output()
         .with_context(|| format!("failed to start {label} benchmark"))?;
@@ -417,7 +445,9 @@ fn run_benchmark_workload(
             output.status,
         );
     }
-    if !stderr.contains("resolved cursor Some(") {
+    if let Some(target) = target
+        && !stderr.contains("resolved cursor Some(")
+    {
         anyhow::bail!("{label} benchmark did not resolve timeline {target:?}\n{stderr}");
     }
     let mut captured = 0;
@@ -430,7 +460,19 @@ fn run_benchmark_workload(
     if captured == 0 {
         anyhow::bail!("{label} benchmark completed without performance output");
     }
-    Ok(())
+    Ok(stderr.into_owned())
+}
+
+fn timeline_is_available(inventory: &str, wanted: &str) -> bool {
+    let suffix = format!(":{wanted}");
+    inventory.lines().any(|line| {
+        line.split_once("TIMELINE | ")
+            .is_some_and(|(_, timelines)| {
+                timelines
+                    .split(", ")
+                    .any(|timeline| timeline.ends_with(&suffix))
+            })
+    })
 }
 
 fn benchmark_report_line(line: &str) -> bool {
@@ -1264,6 +1306,19 @@ mod tests {
         assert_eq!(FEATURE_BENCHMARK_WORKLOADS.len(), 8);
         assert_eq!(STRESS_BENCHMARK_WORKLOADS.len(), 1);
         assert_eq!(targets.len(), 12);
+    }
+
+    #[test]
+    fn portable_benchmark_matches_only_complete_authored_timeline_ids() {
+        let inventory = "0.1s INFO keine::performance: TIMELINE | intro:2:benchmark representative dialogue, coverage:8:10-04 blur family\n";
+
+        assert!(timeline_is_available(
+            inventory,
+            "benchmark representative dialogue"
+        ));
+        assert!(timeline_is_available(inventory, "10-04 blur family"));
+        assert!(!timeline_is_available(inventory, "blur family"));
+        assert!(!timeline_is_available("TIMELINE | ", "anything"));
     }
 
     #[test]

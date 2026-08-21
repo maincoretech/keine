@@ -54,6 +54,7 @@ publisher = [
     "dep:hakutaku-core",
     "dep:hakutaku-pack",
     "dep:noyalib",
+    "dep:serde_json",
     "dep:tempfile",
 ]
 audio-opus = ["dep:rodio", "dep:symphonia", "dep:symphonia-adapter-libopus"]
@@ -153,6 +154,7 @@ log = { workspace = true }
 postcard = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true, optional = true }
 futures-lite = { workspace = true }
 notify = { workspace = true }
 rfd = { workspace = true }

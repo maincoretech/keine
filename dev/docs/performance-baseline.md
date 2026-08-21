@@ -61,6 +61,45 @@ not adapter work: the source project itself opened below 1 ms in every isolated
 process. This baseline is intentionally about a real imported project; the
 synthetic 100k-action benchmark remains the scale/throughput stress case.
 
+### Canonical WebP/Opus and Hakutaku acceptance
+
+The same sample was copied to the ignored
+`target/acceptance/letsgal-canonical` staging tree, leaving
+`projects/letsgal` untouched. All 95 PNG/JPG images were converted to WebP at
+quality 90 with alpha quality 100. Five BGM tracks, nine voice clips, and two
+sound effects were converted to Opus at 160, 96, and 128 kbit/s respectively.
+`cargo assets --remap` then migrated 180 references in seven source files, and
+`cargo assets --pack` produced the signed Hakutaku package at
+`target/acceptance/letsgal-package`.
+
+| Production artifact | Size |
+| --- | ---: |
+| Original PNG/JPG media | 173.57 MiB |
+| Converted WebP media | 24.30 MiB |
+| Original WAV/MP3 media | 71.71 MiB |
+| Converted Opus media | 17.90 MiB |
+| Hakutaku `game.haku` + three segments | 49.85 MiB |
+
+The canonical image/audio set is 82.8% smaller than its compatibility-format
+source. The converted project still validates as 9 scenes / 896 actions / 0
+warnings. A release engine carrying the matching derived runtime keys opened
+the exact output of `assets --pack`; the ordinary development engine correctly
+refused it because development builds do not embed release keys.
+
+The canonical source's loader estimates were 137.67 µs for adapter/manifest
+open, 869.28 µs for scene parsing, and 1.0512 ms for the complete
+open/parse/fingerprint path. Criterion detected no statistically significant
+change from the compatibility-format source, as expected: media payloads are
+not decoded by this parser benchmark.
+
+The self-running Release/LTO Hakutaku benchmark reported a 323.07 ms first
+interactive run, a 270.67 ms repeat-run median, and 303.8 MiB maximum peak RSS.
+The first process was captured after the same machine had already built and
+opened related artifacts, so it is not claimed as a clean-machine cold start.
+The actual packaged opening composition sustained 60.0 FPS average, 53.7 FPS
+1% low, 18.35 ms p95, 18.62 ms p99, and 19.08 ms maximum frame time across
+300 frames; its peak RSS was 287.2 MiB with 328 entities and 13 decoded images.
+
 ## Portable benchmark release
 
 Build a benchmark edition without replacing the normal release:
@@ -76,9 +115,11 @@ or run `./keine` once on macOS/Linux. The package writes
 
 - seven isolated process-start samples with the first launch separated from
   the repeat-launch median, plus peak RSS;
-- twelve settled five-second rendering samples after three-second warm-ups:
-  three daily workloads, all eight authored feature-coverage timelines, and
-  one intentionally combined stress workload;
+- one settled five-second sample of the actual packaged opening composition
+  after a three-second warm-up;
+- when the project authors Kēne's standard benchmark timelines, up to twelve
+  additional settled samples: three daily workloads, all eight authored
+  feature-coverage timelines, and one intentionally combined stress workload;
 - average FPS, 1% low, frame-time percentiles, entity/asset counts, peak RSS,
   GPU identification, and available render diagnostics.
 
@@ -98,10 +139,12 @@ secret is required for this path. After all three platform jobs pass, CI updates
 access to the workflow-run artifact page. Ordinary release runs leave the
 option disabled and do not build or publish benchmark packages.
 
-The report separates daily, feature-coverage, and stress results so an extreme
-number cannot be mistaken for normal gameplay. The coverage group exercises all
-79 StageProperty values and all five timed event families authored by the
-`test-project`; the stress group deliberately combines expensive effects,
+The report always measures real project content. Missing standard timelines are
+shown as skipped instead of substituting an unrelated cursor or failing the
+package. For `test-project`, it still separates daily, feature-coverage, and
+stress results so an extreme number cannot be mistaken for normal gameplay.
+Its coverage group exercises all 79 StageProperty values and all five timed
+event families; its stress group deliberately combines expensive effects,
 portrait/background motion, 256 rain particles, camera shake, and a crossfade.
 Instant control-flow, input, and persistence actions stay in the workspace
 correctness suite: treating their completed static frame as a five-second
