@@ -5,6 +5,8 @@ pub(crate) mod bounded_input;
 mod cli;
 mod configure;
 pub(crate) mod host;
+#[cfg(any(feature = "publisher", feature = "startup-metrics"))]
+pub(crate) mod package_benchmark;
 pub(crate) mod platform;
 pub(crate) mod resources;
 pub(crate) mod tick;

@@ -58,6 +58,7 @@ pub fn bundle_project(
     let prepared = prepare_project(project, loader)?;
     let mut features = detect_features(&prepared.staged)?;
     if benchmark {
+        crate::runtime::package_benchmark::stage_payload(&prepared.staged)?;
         if !features.is_empty() {
             features.push(',');
         }
@@ -629,7 +630,7 @@ fn has_feature(features: &str, wanted: &str) -> bool {
     features.split(',').any(|feature| feature == wanted)
 }
 
-const BENCHMARK_README: &str = "Kēne performance benchmark\n\nWindows: double-click keine.exe once.\nmacOS/Linux: run ./keine once in a terminal.\n\nThe package measures seven isolated startup runs and the actual packaged opening\ncomposition. Projects that author Kēne's standard benchmark timelines also run\nthe three daily workloads, all eight feature-coverage timelines, and the combined\nstress workload; absent timelines are reported as skipped instead of measuring\nunrelated content. It uses an invisible real window and GPU surface, not a\nheadless renderer, so rendering costs remain in the results without interrupting\nnormal desktop use. Persistence is disabled. When complete, send\nkeine-benchmark-report.txt from this directory to the developer. Do not move the\nexecutable away from game.haku or the data directory.\n";
+const BENCHMARK_README: &str = "Kēne performance benchmark\n\nWindows: double-click keine.exe once.\nmacOS/Linux: run ./keine once in a terminal.\n\nFor an external-drive first-touch sample, extract or copy the complete directory\nto that drive, safely eject and reconnect it, then run the executable once from\nthe drive. The report never claims that operating-system or drive caches are\nforcibly cold.\n\nThe package measures seven isolated startup runs, the actual packaged opening\ncomposition, three daily workloads, all eight feature-coverage timelines, and a\ncombined render stress workload. It then reads real project assets and an isolated\n204.2 MiB encrypted payload covering Hakutaku Hot, Normal/CLOCK admission,\nTransient, sequential Streaming, random seeks, and four parallel streams. The\nsynthetic payload measures package I/O rather than codec decoding; valid project\nWebP/Opus resources remain part of the rendered workloads.\n\nIt uses an invisible real window and GPU surface, not a headless renderer, so\nrendering costs remain in the results without interrupting normal desktop use.\nPersistence is disabled. When complete, send keine-benchmark-report.txt from\nthis directory to the developer. Do not move the executable away from game.haku\nor the data directory.\n";
 
 #[cfg(test)]
 mod tests {

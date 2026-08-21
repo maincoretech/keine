@@ -531,37 +531,14 @@ const DEFAULT_FILTER: &str = concat!(
     "wgpu=error,",
     "naga=warn"
 );
-const BENCHMARK_FILTER: &str = "bevy_winit::state=error";
 
 pub(super) fn log_plugin() -> LogPlugin {
     LogPlugin {
-        filter: runtime_log_filter(is_benchmark_child()),
+        filter: DEFAULT_FILTER.into(),
         level: Level::INFO,
         fmt_layer: compact_layer,
         ..Default::default()
     }
-}
-
-fn runtime_log_filter(benchmark_child: bool) -> String {
-    if benchmark_child && cfg!(target_os = "macos") {
-        // Bevy removes its winit window mapping before macOS delivers the final
-        // native `Destroyed` event, then warns that this expected teardown
-        // event belongs to an unknown id. Restrict the workaround to isolated
-        // benchmark children; normal runs retain every bevy_winit warning.
-        // Upstream: https://github.com/bevyengine/bevy/issues/23313
-        format!("{DEFAULT_FILTER},{BENCHMARK_FILTER}")
-    } else {
-        DEFAULT_FILTER.into()
-    }
-}
-
-fn is_benchmark_child() -> bool {
-    [
-        super::bootstrap::STARTUP_BENCHMARK_CHILD_ENV,
-        super::bootstrap::RUNTIME_BENCHMARK_CHILD_ENV,
-    ]
-    .into_iter()
-    .any(|name| std::env::var_os(name).is_some())
 }
 
 pub(super) fn install_runtime_diagnostics(app: &mut App) {
@@ -650,17 +627,6 @@ mod tests {
 
     fn is_animating(state: &GameState) -> bool {
         core_is_animating(state, &mut DialogueLengthCache::default())
-    }
-
-    #[test]
-    fn only_benchmark_children_quiet_the_known_winit_teardown_warning() {
-        assert_eq!(runtime_log_filter(false), DEFAULT_FILTER);
-        let expected = if cfg!(target_os = "macos") {
-            format!("{DEFAULT_FILTER},{BENCHMARK_FILTER}")
-        } else {
-            DEFAULT_FILTER.into()
-        };
-        assert_eq!(runtime_log_filter(true), expected);
     }
 
     #[test]

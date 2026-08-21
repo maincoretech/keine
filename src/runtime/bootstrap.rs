@@ -229,6 +229,15 @@ fn execute_command(
             runs,
             report_path,
         } => return run_benchmark_report(&project, runs, &report_path),
+        CliCommand::PackageBenchmark { project: _project } => {
+            #[cfg(any(feature = "publisher", feature = "startup-metrics"))]
+            {
+                print!("{}", super::package_benchmark::run(&_project, &loader)?);
+                return Ok(());
+            }
+            #[cfg(not(any(feature = "publisher", feature = "startup-metrics")))]
+            anyhow::bail!("package benchmark support is not compiled");
+        }
         CliCommand::RemapAssets {
             project,
             rules,
@@ -308,8 +317,8 @@ fn execute_command(
     Ok(())
 }
 
-pub(super) const STARTUP_BENCHMARK_CHILD_ENV: &str = "KEINE_STARTUP_BENCHMARK_CHILD";
-pub(super) const RUNTIME_BENCHMARK_CHILD_ENV: &str = "KEINE_RUNTIME_BENCHMARK_CHILD";
+const STARTUP_BENCHMARK_CHILD_ENV: &str = "KEINE_STARTUP_BENCHMARK_CHILD";
+const RUNTIME_BENCHMARK_CHILD_ENV: &str = "KEINE_RUNTIME_BENCHMARK_CHILD";
 
 fn run_startup_suite(project_path: &Path, runs: usize) -> Result<String> {
     let executable =
@@ -410,6 +419,29 @@ fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) ->
                 "not authored by this project · skipped without substituting unrelated content",
             );
         }
+    }
+    emit_report_line(&mut report, "");
+    emit_report_line(
+        &mut report,
+        "package I/O · real assets and isolated Hakutaku access-class stress",
+    );
+    let output = Command::new(&executable)
+        .arg("__benchmark-package")
+        .arg(project_path)
+        .output()
+        .context("failed to start package I/O benchmark")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "package I/O benchmark failed with {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+    let package_report =
+        String::from_utf8(output.stdout).context("package I/O benchmark output is not UTF-8")?;
+    for line in package_report.lines() {
+        emit_report_line(&mut report, line);
     }
     crate::storage::write_atomically(report_path, report.as_bytes())?;
     println!("benchmark report written to {}", report_path.display());
@@ -729,9 +761,9 @@ fn build_opened_app(
                     ..default()
                 }),
                 // Keep the native window alive until the shutdown pipeline has
-                // flushed persistence. Bevy 0.19 may still receive macOS's
-                // final `Destroyed` event after removing its window mapping;
-                // benchmark logging filters that known teardown-only warning.
+                // flushed persistence. Despawning it immediately can race the
+                // final winit `Destroyed` event and produce an unknown-window
+                // warning during an otherwise successful exit.
                 close_when_requested: false,
                 ..default()
             })

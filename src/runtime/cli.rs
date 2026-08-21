@@ -77,6 +77,9 @@ pub(super) enum CliCommand {
         runs: usize,
         report_path: PathBuf,
     },
+    PackageBenchmark {
+        project: PathBuf,
+    },
     RemapAssets {
         project: PathBuf,
         rules: Vec<(String, String)>,
@@ -203,6 +206,11 @@ pub(super) fn parse(args: &[OsString]) -> Result<CliCommand> {
         Some("dev") => parse_development(args),
         Some("benchmark") => parse_benchmark(args),
         Some("benchmark-startup") => parse_startup_benchmark(args),
+        Some("__benchmark-package") => {
+            let project = required_path(args, 1, "internal package benchmark")?;
+            require_no_extra_args(args, 2, "internal package benchmark")?;
+            Ok(CliCommand::PackageBenchmark { project })
+        }
         Some("validate" | "perf" | "startup-perf") => anyhow::bail!(
             "{command:?} is a Cargo alias, not a keine subcommand; run `cargo {}` or `keine --help`",
             command.to_string_lossy()

@@ -1,7 +1,9 @@
 use bevy::app::AppExit;
 use bevy::diagnostic::{DiagnosticsStore, EntityCountDiagnosticsPlugin};
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::render::{Render, RenderApp, RenderSystems};
+use bevy::window::{PrimaryWindow, WindowCloseRequested};
 use bevy::winit::WinitSettings;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -51,6 +53,24 @@ impl BenchmarkCameras {
 #[derive(Resource, Default)]
 struct RuntimeCaptureState {
     finished: bool,
+}
+
+#[derive(SystemParam)]
+struct BenchmarkExit<'w, 's> {
+    window: Query<'w, 's, Entity, With<PrimaryWindow>>,
+    close_requests: MessageWriter<'w, WindowCloseRequested>,
+    exits: MessageWriter<'w, AppExit>,
+}
+
+impl BenchmarkExit<'_, '_> {
+    fn request(&mut self) {
+        if let Ok(window) = self.window.single() {
+            self.close_requests.write(WindowCloseRequested { window });
+        } else {
+            log::warn!("benchmark primary window unavailable; exiting directly");
+            self.exits.write(AppExit::Success);
+        }
+    }
 }
 
 #[derive(Default)]
@@ -129,7 +149,7 @@ fn capture_startup_performance(
     capture: Res<StartupCapture>,
     gate: Res<AssetLoadingGate>,
     titles: Query<(), With<TitleRoot>>,
-    mut commands: Commands,
+    mut exit: BenchmarkExit,
 ) {
     let now = Instant::now();
     let mut capture = capture.0.lock().expect("startup capture lock poisoned");
@@ -150,7 +170,7 @@ fn capture_startup_performance(
     capture.finished = true;
     drop(capture);
     eprintln!("{}", sample.machine_line());
-    commands.write_message(AppExit::Success);
+    exit.request();
 }
 
 impl StartupSample {
@@ -301,7 +321,7 @@ fn capture_runtime_performance(
     images: Res<Assets<Image>>,
     fonts: Res<Assets<Font>>,
     mut state: ResMut<RuntimeCaptureState>,
-    mut commands: Commands,
+    mut exit: BenchmarkExit,
 ) {
     if state.finished {
         return;
@@ -392,7 +412,7 @@ fn capture_runtime_performance(
         );
     }
     state.finished = true;
-    commands.write_message(AppExit::Success);
+    exit.request();
 }
 
 fn percentile(sorted: &[f64], percentile: f64) -> f64 {
@@ -406,6 +426,33 @@ fn percentile(sorted: &[f64], percentile: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn finish_capture(mut exit: BenchmarkExit) {
+        exit.request();
+    }
+
+    #[test]
+    fn benchmark_exit_uses_the_native_window_close_pipeline() {
+        let mut app = App::new();
+        app.add_message::<WindowCloseRequested>()
+            .add_message::<AppExit>()
+            .add_systems(Update, finish_capture);
+        let window = app
+            .world_mut()
+            .spawn((Window::default(), PrimaryWindow))
+            .id();
+
+        app.update();
+
+        let requests = app
+            .world_mut()
+            .resource_mut::<Messages<WindowCloseRequested>>()
+            .drain()
+            .map(|request| request.window)
+            .collect::<Vec<_>>();
+        assert_eq!(requests, [window]);
+        assert!(app.world().resource::<Messages<AppExit>>().is_empty());
+    }
 
     #[test]
     fn startup_sample_line_round_trips_with_and_without_memory_metrics() {

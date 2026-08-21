@@ -1194,3 +1194,51 @@ The first-launch interactive result improved by 3.8%. This fast machine is a
 regression baseline, not a low-end acceptance result; the structural invariant
 is that speculative decoding can no longer multiply CPU, storage, or allocator
 contention on the critical path.
+
+### 2026-08-21 portable Hakutaku storage matrix
+
+The self-running benchmark bundle previously covered startup, representative VN
+composition, every authored timeline feature and a combined render stress case,
+but its checked-in project contained only about 1.1 MiB of media. That was too
+small to distinguish local storage from an external SATA device.
+
+Benchmark bundles now add a deterministic 204.2 MiB encrypted payload only in
+publisher staging. Normal projects, normal bundles and normal runtime execution
+remain unchanged. The payload maps deliberately onto Hakutaku's four existing
+access classes:
+
+| Class | Fixture | Measurement |
+|---|---:|---|
+| Hot | 32 × 8 KiB | first read and CLOCK repeat |
+| Normal | 32 × 256 KiB | probation, second-hit admission, resident CLOCK read |
+| Transient | 16 × 256 KiB | first and repeated uncached short-resource reads |
+| Streaming | 6 × 32 MiB | isolated sequential, random 4 KiB and four-stream reads |
+
+The sequential, random and concurrent Streaming measurements use disjoint
+files. This prevents the benchmark itself from warming the next workload, but
+the report still says `first-touch`: it does not use privileged cache eviction
+and therefore does not claim a cold operating-system or drive cache. Real
+project assets are swept separately, while valid WebP/Opus decode and GPU costs
+remain in the rendered project workloads rather than the synthetic I/O data.
+
+The first local package-generation check produced a 248 MiB macOS directory:
+192 MiB Streaming, 9 MiB Normal, 4 MiB Transient, a 273 KiB Hot segment, an
+81 KiB signed snapshot and the 43 MiB engine. This confirms that the
+incompressible fixture reaches the intended encrypted access-class segments.
+The internal package child then read that exact hardened output, rather than the
+source tree:
+
+| Packaged measurement | First-touch | Repeat/resident |
+|---|---:|---:|
+| Real 1.0 MiB project asset sweep | 754.8 MiB/s | 919.4 MiB/s |
+| Hot 0.2 MiB set | 699.7 MiB/s | 5,946.4 MiB/s |
+| Normal 8.0 MiB set | 963.1 MiB/s probation | 1,179.0 MiB/s CLOCK resident |
+| Transient 4.0 MiB set | 1,211.6 MiB/s | 1,264.3 MiB/s |
+| Streaming 32 MiB sequential | 1,390.1 MiB/s | 1,541.4 MiB/s |
+| 512 random 4 KiB reads | 6,795 IOPS | 6,805 IOPS |
+| Four independent 32 MiB streams | 6,247.4 MiB/s | 6,366.9 MiB/s |
+
+These APFS figures were collected immediately after producing the package and
+are therefore warm-cache implementation checks, not device claims. External
+SATA throughput and first-use latency are intentionally deferred to the
+portable Windows report.
