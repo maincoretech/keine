@@ -308,8 +308,8 @@ fn execute_command(
     Ok(())
 }
 
-const STARTUP_BENCHMARK_CHILD_ENV: &str = "KEINE_STARTUP_BENCHMARK_CHILD";
-const RUNTIME_BENCHMARK_CHILD_ENV: &str = "KEINE_RUNTIME_BENCHMARK_CHILD";
+pub(super) const STARTUP_BENCHMARK_CHILD_ENV: &str = "KEINE_STARTUP_BENCHMARK_CHILD";
+pub(super) const RUNTIME_BENCHMARK_CHILD_ENV: &str = "KEINE_RUNTIME_BENCHMARK_CHILD";
 
 fn run_startup_suite(project_path: &Path, runs: usize) -> Result<String> {
     let executable =
@@ -729,9 +729,9 @@ fn build_opened_app(
                     ..default()
                 }),
                 // Keep the native window alive until the shutdown pipeline has
-                // flushed persistence. Despawning it immediately can race the
-                // final winit `Destroyed` event and produce an unknown-window
-                // warning during an otherwise successful exit.
+                // flushed persistence. Bevy 0.19 may still receive macOS's
+                // final `Destroyed` event after removing its window mapping;
+                // benchmark logging filters that known teardown-only warning.
                 close_when_requested: false,
                 ..default()
             })
