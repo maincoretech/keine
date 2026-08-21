@@ -363,6 +363,9 @@ pub(crate) fn sync_background_audio(
     mut commands: Commands,
 ) {
     let background = *activity == RuntimeActivity::Background;
+    if !should_scan_background_audio(*activity, activity.is_changed()) {
+        return;
+    }
     for (entity, sink, paused_by_lifecycle) in &sinks {
         match (background, paused_by_lifecycle.is_some(), sink.is_paused()) {
             (true, false, false) => {
@@ -376,6 +379,10 @@ pub(crate) fn sync_background_audio(
             _ => {}
         }
     }
+}
+
+const fn should_scan_background_audio(activity: RuntimeActivity, changed: bool) -> bool {
+    changed || matches!(activity, RuntimeActivity::Background)
 }
 
 fn core_is_animating(state: &GameState, dialogue_length: &mut DialogueLengthCache) -> bool {
@@ -728,6 +735,19 @@ mod tests {
         assert!(!should_pause_for_background(false, true));
         assert!(should_pause_for_background(false, false));
         assert!(!should_pause_for_background(true, false));
+    }
+
+    #[test]
+    fn background_audio_scan_stays_live_only_while_backgrounded() {
+        assert!(!should_scan_background_audio(
+            RuntimeActivity::Active,
+            false
+        ));
+        assert!(should_scan_background_audio(RuntimeActivity::Active, true));
+        assert!(should_scan_background_audio(
+            RuntimeActivity::Background,
+            false
+        ));
     }
 
     #[test]

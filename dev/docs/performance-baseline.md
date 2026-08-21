@@ -1103,3 +1103,31 @@ inputs were already memory-resident. On disk, the new path additionally avoids
 reading the state payload at startup, so its absolute benefit scales with save
 size and storage speed. No renderer quality, frame-rate, or asset-prefetch
 policy changed in this pass.
+
+### 2026-08-21 bounded input and idle maintenance cleanup
+
+The WebP loader and compatibility-audio loader previously called
+`try_reserve_exact` for every 64 KiB read. Both now share one bounded reader
+that grows geometrically while capping every requested capacity at the same
+format-specific byte limit. Profile and gallery encoding now borrow their maps
+instead of cloning them into temporary wire structs. Stable foreground frames
+also return before visiting audio sinks; transition frames still visit every
+sink, and background frames keep visiting them so newly created players are
+paused.
+
+A temporary Criterion A/B, run through the repository's release/LTO benchmark
+profile, compared the old and new algorithms in the same Apple M5 Pro process:
+
+| Operation | Before | After |
+|---|---:|---:|
+| Read a 4 MiB in-memory asset in 64 KiB chunks | 225.69 µs exact growth | 92.744 µs geometric growth |
+| Encode 4,096 profile variables | 169.93 µs clone + encode | 45.478 µs borrowed encode |
+| Stable foreground maintenance over 64 synthetic sink states | 1.3340 ns scan | 412.62 ps early return |
+
+The media fixture measures allocation and copying, not decoding; the new path
+is about 2.43 times faster while preserving the existing logical input limits.
+The profile fixture is about 3.74 times faster and, more importantly, removes a
+second complete key/value map at persistence time. The synthetic audio row is a
+lower bound for the loop that production now skips, not an end-to-end frame-time
+claim. No serialized schema, resource budget, or background-audio behavior
+changed.
