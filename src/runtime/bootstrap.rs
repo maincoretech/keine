@@ -48,15 +48,15 @@ type BenchmarkSection = (&'static str, &'static [BenchmarkWorkload]);
 
 const DAILY_BENCHMARK_WORKLOADS: &[BenchmarkWorkload] = &[
     (
-        "representative dialogue · full composition",
+        "representative dialogue · runtime composition",
         "benchmark representative dialogue",
     ),
     (
-        "representative portrait motion · full composition",
+        "representative portrait motion · runtime composition",
         "benchmark representative portrait motion",
     ),
     (
-        "representative scene transition · full composition",
+        "representative scene transition · runtime composition",
         "benchmark representative scene transition",
     ),
 ];
@@ -436,12 +436,16 @@ fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) ->
         &mut report,
         "project workload · actual packaged opening composition",
     );
+    emit_report_line(
+        &mut report,
+        "camera policy · runtime follows production sleep/wake · decomposition profiles pin explicit cameras",
+    );
     let timeline_inventory = run_benchmark_workload(
         &executable,
         project_path,
-        "opening composition · full composition",
+        "opening composition · runtime composition",
         None,
-        BenchmarkCameras::Full,
+        BenchmarkCameras::Runtime,
         &mut report,
     )?;
     emit_report_line(&mut report, "");
@@ -470,7 +474,7 @@ fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) ->
                     project_path,
                     label,
                     Some(target),
-                    BenchmarkCameras::Full,
+                    BenchmarkCameras::Runtime,
                     &mut report,
                 )?;
                 authored += 1;
@@ -526,7 +530,7 @@ fn run_benchmark_workload(
     );
     let mut command = Command::new(executable);
     command.arg("benchmark").arg(project_path).arg("5");
-    if target.is_some() || cameras != BenchmarkCameras::Full {
+    if target.is_some() || cameras != BenchmarkCameras::Runtime {
         command.arg(target.unwrap_or("-")).arg(cameras.id());
     }
     let output = command
@@ -1084,11 +1088,10 @@ fn bootstrap_project(
 ) {
     spawn_cameras(
         &mut commands,
-        mode.benchmark
-            .as_ref()
-            .map_or(crate::ui::performance::BenchmarkCameras::Full, |capture| {
-                capture.cameras
-            }),
+        mode.benchmark.as_ref().map_or(
+            crate::ui::performance::BenchmarkCameras::Runtime,
+            |capture| capture.cameras,
+        ),
     );
 
     let mut state = State::new();
@@ -1425,7 +1428,7 @@ mod tests {
         assert!(
             CAMERA_BENCHMARK_WORKLOADS
                 .iter()
-                .all(|(_, cameras)| *cameras != BenchmarkCameras::Full)
+                .all(|(_, cameras)| *cameras != BenchmarkCameras::Runtime)
         );
         assert_eq!(
             CAMERA_BENCHMARK_WORKLOADS
@@ -1522,7 +1525,7 @@ mod tests {
             !InteractiveMode::Benchmark(BenchmarkOptions {
                 seconds: 1.0,
                 target: None,
-                cameras: crate::ui::performance::BenchmarkCameras::Full,
+                cameras: crate::ui::performance::BenchmarkCameras::Runtime,
             })
             .requires_single_instance()
         );
@@ -1572,7 +1575,7 @@ mod tests {
         assert_eq!(options.target, None);
         assert_eq!(
             options.cameras,
-            crate::ui::performance::BenchmarkCameras::Full
+            crate::ui::performance::BenchmarkCameras::Runtime
         );
     }
 
@@ -1603,7 +1606,7 @@ mod tests {
         assert_eq!(options.target, Some(BenchmarkTarget::Cursor(25)));
         assert_eq!(
             options.cameras,
-            crate::ui::performance::BenchmarkCameras::Full
+            crate::ui::performance::BenchmarkCameras::Runtime
         );
     }
 

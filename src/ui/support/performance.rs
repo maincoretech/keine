@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
 
+use crate::render::blur::{DialogCamera, SceneBlurCamera, UiBlurCamera};
 use crate::runtime::GameSystemSet;
 use crate::runtime::resources::AssetLoadingGate;
 use crate::ui::title::TitleRoot;
@@ -30,7 +31,7 @@ pub(crate) struct RuntimeCaptureConfig {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum BenchmarkCameras {
     #[default]
-    Full,
+    Runtime,
     SceneUi,
     SceneDialog,
     SceneOnly,
@@ -39,11 +40,20 @@ pub(crate) enum BenchmarkCameras {
 impl BenchmarkCameras {
     pub(crate) const fn id(self) -> &'static str {
         match self {
-            Self::Full => "full",
+            Self::Runtime => "runtime",
             Self::SceneUi => "scene-ui",
             Self::SceneDialog => "scene-dialog",
             Self::SceneOnly => "scene",
         }
+    }
+
+    /// Whether a benchmark profile deliberately pins the dialog camera.
+    ///
+    /// The runtime profile must retain production sleep/wake behavior; the
+    /// decomposition profiles instead hold an explicit camera set so their
+    /// costs remain attributable.
+    pub(crate) const fn pins_dialog_activity(self) -> bool {
+        !matches!(self, Self::Runtime)
     }
 
     pub(crate) const fn scene(self) -> bool {
@@ -51,17 +61,36 @@ impl BenchmarkCameras {
     }
 
     pub(crate) const fn ui(self) -> bool {
-        matches!(self, Self::Full | Self::SceneUi)
+        matches!(self, Self::Runtime | Self::SceneUi)
     }
 
     pub(crate) const fn dialog(self) -> bool {
-        matches!(self, Self::Full | Self::SceneDialog)
+        matches!(self, Self::Runtime | Self::SceneDialog)
     }
 }
 
 #[derive(Resource, Default)]
 struct RuntimeCaptureState {
     finished: bool,
+}
+
+type CaptureCameraQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Camera,
+        Option<&'static SceneBlurCamera>,
+        Option<&'static UiBlurCamera>,
+        Option<&'static DialogCamera>,
+    ),
+>;
+
+#[derive(SystemParam)]
+struct RuntimeCaptureDiagnostics<'w, 's> {
+    diagnostics: Res<'w, DiagnosticsStore>,
+    images: Res<'w, Assets<Image>>,
+    fonts: Res<'w, Assets<Font>>,
+    cameras: CaptureCameraQuery<'w, 's>,
 }
 
 #[derive(SystemParam)]
@@ -326,9 +355,7 @@ fn capture_render_frame(samples: Res<RenderCaptureSamples>) {
 fn capture_runtime_performance(
     config: Res<RuntimeCaptureConfig>,
     samples: Res<RenderCaptureSamples>,
-    diagnostics: Res<DiagnosticsStore>,
-    images: Res<Assets<Image>>,
-    fonts: Res<Assets<Font>>,
+    capture: RuntimeCaptureDiagnostics,
     mut state: ResMut<RuntimeCaptureState>,
     mut exit: BenchmarkExit,
 ) {
@@ -358,7 +385,8 @@ fn capture_runtime_performance(
     let p95 = percentile(&frame_ms, 0.95);
     let p99 = percentile(&frame_ms, 0.99);
     let maximum = frame_ms.last().copied().unwrap_or_default();
-    let entities = diagnostics
+    let entities = capture
+        .diagnostics
         .get(&EntityCountDiagnosticsPlugin::ENTITY_COUNT)
         .and_then(|value| value.smoothed())
         .unwrap_or_default();
@@ -375,20 +403,26 @@ fn capture_runtime_performance(
     );
     log::info!(
         target: "keine::performance",
-        "SCENE    | {entities:.0} entities · cameras {:?} · 3.0s warm-up excluded",
+        "SCENE    | {entities:.0} entities · profile {:?} · active cameras {} · 3.0s warm-up excluded",
         config.cameras,
+        active_camera_label(&capture.cameras),
     );
-    let image_bytes = images
+    let image_bytes = capture
+        .images
         .iter()
         .filter_map(|(_, image)| image.data.as_ref().map(Vec::len))
         .sum::<usize>();
-    let font_bytes = fonts.iter().map(|(_, font)| font.data.len()).sum::<usize>();
+    let font_bytes = capture
+        .fonts
+        .iter()
+        .map(|(_, font)| font.data.len())
+        .sum::<usize>();
     log::info!(
         target: "keine::performance",
         "ASSETS   | {} images / {:.1} MiB CPU pixels · {} fonts / {:.1} MiB source data",
-        images.len(),
+        capture.images.len(),
         image_bytes as f64 / 1_048_576.0,
-        fonts.len(),
+        capture.fonts.len(),
         font_bytes as f64 / 1_048_576.0,
     );
     if let Some(bytes) = peak_rss_bytes() {
@@ -398,7 +432,8 @@ fn capture_runtime_performance(
             bytes as f64 / 1_048_576.0,
         );
     }
-    let mut render_passes = diagnostics
+    let mut render_passes = capture
+        .diagnostics
         .iter()
         .filter_map(|diagnostic| {
             diagnostic
@@ -422,6 +457,33 @@ fn capture_runtime_performance(
     }
     state.finished = true;
     exit.request();
+}
+
+fn active_camera_label(cameras: &CaptureCameraQuery) -> String {
+    [
+        (
+            "scene",
+            cameras
+                .iter()
+                .any(|(camera, marker, _, _)| camera.is_active && marker.is_some()),
+        ),
+        (
+            "ui",
+            cameras
+                .iter()
+                .any(|(camera, _, marker, _)| camera.is_active && marker.is_some()),
+        ),
+        (
+            "dialog",
+            cameras
+                .iter()
+                .any(|(camera, _, _, marker)| camera.is_active && marker.is_some()),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(name, active)| active.then_some(name))
+    .collect::<Vec<_>>()
+    .join("+")
 }
 
 fn percentile(sorted: &[f64], percentile: f64) -> f64 {
@@ -461,6 +523,18 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(requests, [window]);
         assert!(app.world().resource::<Messages<AppExit>>().is_empty());
+    }
+
+    #[test]
+    fn only_decomposition_profiles_pin_dialog_camera_activity() {
+        assert!(!BenchmarkCameras::Runtime.pins_dialog_activity());
+        for cameras in [
+            BenchmarkCameras::SceneUi,
+            BenchmarkCameras::SceneDialog,
+            BenchmarkCameras::SceneOnly,
+        ] {
+            assert!(cameras.pins_dialog_activity());
+        }
     }
 
     #[test]

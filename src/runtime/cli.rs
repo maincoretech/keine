@@ -442,12 +442,12 @@ fn parse_benchmark(args: &[OsString]) -> Result<CliCommand> {
         })
     });
     let cameras = match args.get(4).and_then(|value| value.to_str()) {
-        None | Some("full") => crate::ui::performance::BenchmarkCameras::Full,
+        None | Some("runtime") => crate::ui::performance::BenchmarkCameras::Runtime,
         Some("scene-ui") => crate::ui::performance::BenchmarkCameras::SceneUi,
         Some("scene-dialog") => crate::ui::performance::BenchmarkCameras::SceneDialog,
         Some("scene") => crate::ui::performance::BenchmarkCameras::SceneOnly,
         Some(value) => anyhow::bail!(
-            "unknown benchmark camera profile {value:?}; expected full, scene-ui, scene-dialog, or scene"
+            "unknown benchmark camera profile {value:?}; expected runtime, scene-ui, scene-dialog, or scene"
         ),
     };
     Ok(run(

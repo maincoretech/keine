@@ -233,7 +233,10 @@ pub(crate) fn sync_dialog_camera_activity(
     roots: DialogTargetRoots,
     previews: Query<&Node, With<QuickPreviewSurface>>,
 ) {
-    if benchmark.is_some() {
+    if benchmark
+        .as_ref()
+        .is_some_and(|capture| capture.cameras.pins_dialog_activity())
+    {
         return;
     }
     let Ok((camera_entity, mut camera)) = camera.single_mut() else {

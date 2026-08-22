@@ -322,11 +322,12 @@ or 19.6 ms per run, with about 18.9 MiB maximum RSS.
 
 ### Camera composition A/B
 
-The three runtime cameras remain part of normal rendering. Benchmark-only
-camera profiles can deactivate individual views without despawning their
-entities or the UI assigned to them, which isolates render-view cost from ECS
-and layout cost. All four profiles below used the same release binary, project,
-1920x1080 target, action cursor 0, and a five-second capture after warm-up.
+The three runtime cameras exist throughout normal execution, while the dialog
+camera sleeps whenever its overlay layer is empty. Benchmark-only decomposition
+profiles pin explicit views without despawning their entities or the UI assigned
+to them, which isolates render-view cost from ECS and layout cost. All four
+profiles below used the same release binary, project, 1920x1080 target, action
+cursor 0, and a five-second capture after warm-up.
 
 | Active cameras | Max RSS | Peak footprint |
 | --- | ---: | ---: |
@@ -334,6 +335,10 @@ and layout cost. All four profiles below used the same release binary, project,
 | Scene + UI | 235.3 MiB | 373.0 MiB |
 | Scene + dialog | 234.5 MiB | 370.4 MiB |
 | Scene only | 230.2 MiB | 202.1 MiB |
+
+This historical table predates the runtime-managed profile: its complete
+composition row deliberately pinned all three cameras. Current reports print
+both the requested profile and the cameras that were actually active.
 
 Three shorter repetitions gave a median of 237.2 MiB RSS / 381.4 MiB peak for
 the complete composition and 230.3 MiB RSS / 202.0 MiB peak for scene-only.
@@ -467,7 +472,7 @@ cargo perf projects/test-project 10 "10-07 all event types"
 
 # Benchmark-only camera composition A/B. A target is required before the final
 # profile argument; cursor 0 is the explicit initial-stage escape hatch.
-cargo perf projects/test-project 5 0 full
+cargo perf projects/test-project 5 0 runtime
 cargo perf projects/test-project 5 0 scene-ui
 cargo perf projects/test-project 5 0 scene-dialog
 cargo perf projects/test-project 5 0 scene
@@ -1251,10 +1256,25 @@ printing and writing, so terminal ANSI styling cannot leak into the `.txt`
 artifact.
 
 The rendered workload matrix also runs the opening composition once with each
-non-full camera profile: scene + UI, scene + dialog, and scene only. Comparing
-those three samples with the existing full-composition sample attributes a
-low-end GPU regression to the scene, dialog, UI, or final composition path
-without multiplying every daily and feature workload. At five seconds per
-sample this adds about fifteen seconds of measured render time plus three child
-process startups to a complete portable run; normal game execution and normal
-test commands remain unchanged.
+decomposition profile: scene + UI, scene + dialog, and scene only. The runtime
+sample retains production camera sleep/wake behavior, while those three samples
+pin their named camera sets. Comparing them attributes a low-end GPU regression
+without turning the normal runtime sample into an artificial worst case. At five
+seconds per sample this adds about fifteen seconds of measured render time plus
+three child process startups to a complete portable run; normal game execution
+and normal test commands remain unchanged.
+
+### 2026-08-22 production camera policy in benchmark mode
+
+The first Windows camera decomposition exposed an important measurement flaw on
+Intel UHD 620. With the dialog camera pinned, the opening measured 40.7 FPS for
+scene + dialog and 60.0 FPS for scene only; the nominal runtime sample measured
+48.5 FPS because benchmark mode also pinned the otherwise empty dialog camera.
+Production execution had already disabled that camera whenever its layer was
+empty, so the nominal sample was measuring a synthetic render pass rather than
+the player-facing opening.
+
+The runtime benchmark profile now uses the same dialog-camera activity manager
+as production. Only the three explicit decomposition profiles bypass it. A
+local Apple M5 Pro Release verification remained refresh-capped at 60.0 FPS
+before the change; the UHD 620 portable rerun is the meaningful after-sample.
