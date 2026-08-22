@@ -4,7 +4,8 @@ use crate::scene::sprites::SpriteNode;
 use crate::ui::control_bar::{
     AutoHideTiming, BlurSource, BlurStrength, HideContentBg, UiBlurSource,
 };
-use crate::ui::dialog::DialogRequest;
+use crate::ui::dialog::{DialogFade, DialogRequest};
+use crate::ui::foundation::smoothstep;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
@@ -507,8 +508,9 @@ pub(crate) struct BlurRegionScratch {
 }
 
 #[derive(SystemParam)]
-pub struct BlurBehavior<'w> {
+pub struct BlurBehavior<'w, 's> {
     dialog: Option<Res<'w, DialogRequest>>,
+    dialog_fade: Query<'w, 's, &'static DialogFade>,
     timing: Res<'w, AutoHideTiming>,
     state: Res<'w, GameState>,
     textbox_fade: Res<'w, crate::ui::textbox::TextboxOverlayFade>,
@@ -551,6 +553,14 @@ pub fn update_blur_regions(
     // pass here blurs the scene, textbox, and control bar together. Camera 2
     // then draws the dialog itself without post-processing.
     if behavior.dialog.is_some() {
+        // The dialog UI already fades from zero to one. Drive its backdrop
+        // from the same progress so the scene does not snap to full blur one
+        // frame before the modal itself becomes visible.
+        let fade = behavior
+            .dialog_fade
+            .single()
+            .map(DialogFade::progress)
+            .unwrap_or(0.0);
         if let Ok(mut bc) = scene_blur_query.single_mut()
             && bc.count != 0
         {
@@ -567,7 +577,7 @@ pub fn update_blur_regions(
                 max_x: max.x,
                 min_y: min.y,
                 max_y: max.y,
-                coc: clamp_ui_blur(crate::ui::FULLSCREEN_BLUR_STRENGTH, blur_scale),
+                coc: dialog_blur_strength(fade, blur_scale),
                 _pad: Vec3::ZERO,
             };
             if bc.count != 1 || bc.rects[0] != region {
@@ -700,6 +710,13 @@ fn clamp_ui_blur(strength: f32, viewport_scale: f32) -> f32 {
     clamp_blur(strength * viewport_scale * UI_BLUR_STRENGTH_SCALE)
 }
 
+fn dialog_blur_strength(fade: f32, viewport_scale: f32) -> f32 {
+    clamp_ui_blur(
+        crate::ui::FULLSCREEN_BLUR_STRENGTH * smoothstep(fade.clamp(0.0, 1.0)),
+        viewport_scale,
+    )
+}
+
 #[cfg(test)]
 fn write_regions(camera: &mut BlurCamera, regions: &mut Vec<BlurRect>) {
     merge_regions(regions, camera.rects.len());
@@ -811,6 +828,13 @@ mod tests {
     fn ui_blur_receives_a_global_lift_and_stays_clamped() {
         assert_eq!(clamp_ui_blur(36.0, 1.0), 45.0);
         assert_eq!(clamp_ui_blur(48.0, 1.0), MAX_BLUR_STRENGTH);
+    }
+
+    #[test]
+    fn dialog_blur_fades_in_with_the_dialog() {
+        assert_eq!(dialog_blur_strength(0.0, 1.0), 0.0);
+        assert_eq!(dialog_blur_strength(0.5, 1.0), 22.5);
+        assert_eq!(dialog_blur_strength(1.0, 1.0), 45.0);
     }
 
     #[test]

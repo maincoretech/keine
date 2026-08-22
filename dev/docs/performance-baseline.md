@@ -1315,17 +1315,33 @@ measurement.
 ### 2026-08-22 unified UI glass strength
 
 Title buttons previously used `7.5` blur except for Continue, which incorrectly
-borrowed the separate save-preview panel's `36.0` strength. All title-button
-surfaces now use `12.0`; the preview panel remains `36.0`. The shared UI blur
-scale also rises from `1.125` to `1.25`, taking a 36-unit fullscreen menu
-backdrop from 40.5 to 45 effective units while remaining below the existing
-48-unit bound. This changes no texture, camera, allocation, or render pass. The
-separable kernel moves from 5 to 7 samples per pass for title buttons and from
-17 to 19 for the strongest menu backdrops, only inside their existing scissor
-regions.
+borrowed the separate save-preview panel's `36.0` strength. The first consistency
+pass placed every button at `12.0`; the final product decision makes the button
+surfaces and preview share one `36.0` `TITLE_GLASS_BLUR` constant. The shared UI
+blur scale is `1.25`, producing 45 effective units at a 1x viewport while
+remaining below the existing 48-unit bound. This changes no texture, camera,
+allocation, or render pass. The separable kernel moves from 7 to 19 samples per
+pass for the small title-button scissor regions.
+
+Dialog UI already had a 0.2-second `DialogFade`, but its full-screen backdrop
+blur jumped to maximum as soon as `DialogRequest` existed. The blur now follows
+the same eased progress from zero to the existing 36-unit maximum. This adds no
+animation state or render work after the fade settles; it only distributes the
+already-present full-screen blur over the dialog entrance.
 
 The same Apple M5 Pro Release/LTO dialogue composition was captured for 600
 frames on both sides with a three-second warm-up. Both runs remained refresh
 capped at 60.0 FPS with a 56.6 FPS 1% low; P95 was 17.47 ms before and 17.27 ms
 after. The difference is noise rather than a claimed speedup, but it rules out
 a visible regression on this path.
+
+After raising the settled title glass to the preview strength and coupling the
+dialog blur to its existing fade, the same 10-second Release/LTO runtime capture
+was repeated. This steady dialogue target does not display title glass or a
+modal, so it is a guard against unrelated changes rather than a throughput
+claim for those transient UI regions.
+
+| Runtime guard | Avg FPS | 1% low | P95 | P99 | Max |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Before | 60.0 | 53.7 | 17.85 ms | 18.61 ms | 19.42 ms |
+| After | 60.0 | 55.0 | 17.62 ms | 18.18 ms | 18.62 ms |

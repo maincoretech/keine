@@ -102,6 +102,10 @@ pub(crate) enum DialogButton {
 pub(crate) struct DialogFade(f32);
 
 impl DialogFade {
+    pub(crate) fn progress(&self) -> f32 {
+        self.0
+    }
+
     pub(crate) fn is_animating(&self) -> bool {
         self.0 < 0.999
     }

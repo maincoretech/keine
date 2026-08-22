@@ -175,9 +175,8 @@ impl TitleButtonMotion {
 }
 
 const CONTINUE_PREVIEW_ALPHA: f32 = 0.78;
-const CONTINUE_PREVIEW_BLUR: f32 = 36.0;
 const CONTINUE_PREVIEW_GAP_PERCENT: f32 = 5.0;
-const TITLE_BUTTON_BLUR: f32 = 12.0;
+const TITLE_GLASS_BLUR: f32 = 36.0;
 const DISABLED_BUTTON_SURFACE_ALPHA: f32 = 0.28;
 const DISABLED_BUTTON_TEXT_ALPHA: f32 = 0.36;
 
@@ -448,7 +447,7 @@ fn spawn_title_button(
             TitleButtonVisual,
             UiTransform::default(),
             BlurSource,
-            BlurStrength(TITLE_BUTTON_BLUR),
+            BlurStrength(TITLE_GLASS_BLUR),
             Node {
                 position_type: PositionType::Absolute,
                 right: Val::ZERO,
@@ -550,7 +549,7 @@ fn spawn_continue_preview(
 fn spawn_disabled_button(menu: &mut ChildSpawnerCommands, label: &str, font: &Handle<Font>) {
     menu.spawn((
         BlurSource,
-        BlurStrength(TITLE_BUTTON_BLUR),
+        BlurStrength(TITLE_GLASS_BLUR),
         Node {
             width: Val::Percent(100.0),
             height: Val::Px(94.5),
@@ -777,7 +776,7 @@ pub fn animate_title_buttons(
 
     let opacity = smoothstep(preview.progress);
     background.0 = Color::srgba(0.0, 0.0, 0.0, CONTINUE_PREVIEW_ALPHA * opacity);
-    blur.0 = CONTINUE_PREVIEW_BLUR * opacity;
+    blur.0 = TITLE_GLASS_BLUR * opacity;
     for (base, mut color) in &mut preview_texts {
         color.0 = color.0.with_alpha(base.0 * opacity);
     }
@@ -923,7 +922,7 @@ mod tests {
             .iter(world)
             .map(|strength| strength.0)
             .collect::<Vec<_>>();
-        assert_eq!(strengths, vec![TITLE_BUTTON_BLUR; 2]);
+        assert_eq!(strengths, vec![TITLE_GLASS_BLUR; 2]);
     }
 
     #[test]
