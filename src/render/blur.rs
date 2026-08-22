@@ -828,13 +828,17 @@ mod tests {
     fn ui_blur_receives_a_global_lift_and_stays_clamped() {
         assert_eq!(clamp_ui_blur(36.0, 1.0), 45.0);
         assert_eq!(clamp_ui_blur(48.0, 1.0), MAX_BLUR_STRENGTH);
+        assert!(
+            clamp_ui_blur(crate::ui::FULLSCREEN_BLUR_STRENGTH, 1.0)
+                >= clamp_ui_blur(crate::ui::title::TITLE_GLASS_BLUR, 1.0)
+        );
     }
 
     #[test]
     fn dialog_blur_fades_in_with_the_dialog() {
         assert_eq!(dialog_blur_strength(0.0, 1.0), 0.0);
-        assert_eq!(dialog_blur_strength(0.5, 1.0), 22.5);
-        assert_eq!(dialog_blur_strength(1.0, 1.0), 45.0);
+        assert_eq!(dialog_blur_strength(0.5, 1.0), 30.0);
+        assert_eq!(dialog_blur_strength(1.0, 1.0), 48.0);
     }
 
     #[test]

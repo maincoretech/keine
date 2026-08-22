@@ -594,9 +594,13 @@ pub fn sync_settings(
                 watermark.hide();
             }
         }
-        for (entity, _) in &mut context.proxies {
+        for (entity, mut visibility) in &mut context.proxies {
             if let Ok(mut fade) = context.fades.get_mut(entity) {
-                fade.target = f32::from(save_load.mode.is_some());
+                if save_load.mode.is_some() {
+                    fade.target = 1.0;
+                } else {
+                    fade.release_to_title(&mut visibility);
+                }
             }
         }
         return;

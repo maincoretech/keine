@@ -431,7 +431,11 @@ pub fn sync_save_load(
                 *visibility = Visibility::Inherited;
             }
             if let Ok(mut fade) = context.fades.get_mut(entity) {
-                fade.target = f32::from(settings.open);
+                if settings.open {
+                    fade.target = 1.0;
+                } else {
+                    fade.release_to_title(&mut visibility);
+                }
             }
         }
         if !settings.open {

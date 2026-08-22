@@ -20,7 +20,10 @@ use bevy::prelude::*;
 use crate::render::blur;
 use crate::runtime::GameSystemSet;
 
-pub(crate) const FULLSCREEN_BLUR_STRENGTH: f32 = 36.0;
+// Full-screen shells must never look shallower than TITLE_GLASS_BLUR. The
+// shared UI scale takes title buttons to 45 effective units at 1x, while this
+// value reaches the renderer's deliberate 48-unit quality/cost ceiling.
+pub(crate) const FULLSCREEN_BLUR_STRENGTH: f32 = 48.0;
 pub(crate) const MENU_BACKDROP_ALPHA: f32 = 0.8;
 pub(crate) const BACKLOG_BACKDROP_ALPHA: f32 = 0.82;
 

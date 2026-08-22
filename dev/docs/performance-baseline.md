@@ -1345,3 +1345,31 @@ claim for those transient UI regions.
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Before | 60.0 | 53.7 | 17.85 ms | 18.61 ms | 19.42 ms |
 | After | 60.0 | 55.0 | 17.62 ms | 18.18 ms | 18.62 ms |
+
+### 2026-08-22 stronger shell backdrop and immediate TITLE handoff
+
+SAVE, LOAD, CONFIG, EXTRA, backlog, input, and modal backdrops now request the
+renderer ceiling of 48 units instead of 36. At a 1x viewport the title glass is
+45 effective units and the full-screen shell is 48, so a shell never looks
+shallower than the buttons beneath it. Both strengths still use 19 paired
+Gaussian samples per pass; the stronger shell only widens support by one pixel
+and changes the existing weights.
+
+Returning from SAVE, LOAD, or CONFIG previously faded the full-screen blur to
+zero alongside the menu surface. TITLE's regional button glass was already
+active underneath, but could not become visually distinct until that fade
+finished. A return to TITLE now releases the persistent backdrop proxy in the
+same update while retaining the menu-content fade. Route-to-route transitions
+continue to keep the backdrop active. This also removes the full-screen blur
+work from the exit tail rather than adding a pass.
+
+The same Apple M5 Pro 10-second Release/LTO runtime guard was repeated. This
+timeline does not hold a menu open, so the result guards unrelated steady-state
+work; the changed shell path is bounded by the unchanged 19-sample kernel and
+the immediate-release regression test. The single after-run maximum is an
+isolated scheduling outlier and is not reflected in P95/P99.
+
+| Runtime guard | Avg FPS | 1% low | P95 | P99 | Max |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Before | 60.0 | 55.0 | 17.62 ms | 18.18 ms | 18.62 ms |
+| After | 60.0 | 57.0 | 17.28 ms | 17.56 ms | 26.19 ms |

@@ -43,6 +43,18 @@ impl MenuFade {
             target: 1.0,
         }
     }
+
+    /// Releases the full-screen backdrop when the shell returns to TITLE.
+    ///
+    /// Fading this proxy alongside the menu makes TITLE's already-active
+    /// regional glass indistinguishable until the full-screen blur reaches
+    /// zero. The menu surface may still fade out, but its backdrop must hand
+    /// off immediately so the title buttons never appear one beat late.
+    pub(crate) fn release_to_title(&mut self, visibility: &mut Visibility) {
+        self.current = 0.0;
+        self.target = 0.0;
+        *visibility = Visibility::Hidden;
+    }
 }
 
 #[derive(Component)]
@@ -786,6 +798,18 @@ pub(crate) fn animate_route_transition(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn returning_to_title_releases_the_fullscreen_blur_immediately() {
+        let mut fade = MenuFade::visible();
+        let mut visibility = Visibility::Inherited;
+
+        fade.release_to_title(&mut visibility);
+
+        assert_eq!(fade.current, 0.0);
+        assert_eq!(fade.target, 0.0);
+        assert_eq!(visibility, Visibility::Hidden);
+    }
 
     #[test]
     fn routes_keep_one_fixed_header_root() {
