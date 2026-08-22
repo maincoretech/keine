@@ -534,13 +534,27 @@ const DEFAULT_FILTER: &str = concat!(
     "wgpu=error,",
     "naga=warn"
 );
+const MACOS_BENCHMARK_FILTER: &str = "bevy_winit::state=error";
 
-pub(super) fn log_plugin() -> LogPlugin {
+pub(super) fn log_plugin(benchmark: bool) -> LogPlugin {
     LogPlugin {
-        filter: DEFAULT_FILTER.into(),
+        filter: runtime_log_filter(benchmark),
         level: Level::INFO,
         fmt_layer: compact_layer,
         ..Default::default()
+    }
+}
+
+fn runtime_log_filter(benchmark: bool) -> String {
+    if benchmark && cfg!(target_os = "macos") {
+        // macOS can deliver the final native `Destroyed` event after Bevy has
+        // removed its window mapping, producing a harmless warning on every
+        // automated exit. Restrict the workaround to benchmark launches;
+        // normal runs retain every bevy_winit warning.
+        // Upstream: https://github.com/bevyengine/bevy/issues/23313
+        format!("{DEFAULT_FILTER},{MACOS_BENCHMARK_FILTER}")
+    } else {
+        DEFAULT_FILTER.into()
     }
 }
 
@@ -738,6 +752,17 @@ mod tests {
         assert!(!should_pause_for_background(false, true));
         assert!(should_pause_for_background(false, false));
         assert!(!should_pause_for_background(true, false));
+    }
+
+    #[test]
+    fn only_macos_benchmarks_quiet_the_known_winit_teardown_warning() {
+        assert_eq!(runtime_log_filter(false), DEFAULT_FILTER);
+        let expected = if cfg!(target_os = "macos") {
+            format!("{DEFAULT_FILTER},{MACOS_BENCHMARK_FILTER}")
+        } else {
+            DEFAULT_FILTER.into()
+        };
+        assert_eq!(runtime_log_filter(true), expected);
     }
 
     #[test]

@@ -853,7 +853,9 @@ fn build_opened_app(
                 ..default()
             })
             .set(ImagePlugin::default())
-            .set(super::platform::log_plugin()),
+            .set(super::platform::log_plugin(
+                options.benchmark.is_some() || options.startup_capture.is_some(),
+            )),
     );
     #[cfg(feature = "audio-opus")]
     app.add_plugins(crate::runtime::audio::OpusAudioPlugin::new(
