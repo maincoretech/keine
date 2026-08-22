@@ -14,8 +14,7 @@ use crate::storage::settings::RuntimeSettings;
 use crate::ui::control_bar::{BlurStrength, HoverAlpha, UiBlurSource};
 use crate::ui::foundation::{
     SURFACE_ACTIVE_ALPHA, SURFACE_HOVER_ALPHA, SURFACE_IDLE_ALPHA, SURFACE_PANEL_ALPHA,
-    UI_MOTION_RATE, UiFonts, UiSoundStyle, button_surface, dark_surface, exp_lerp, smoothstep,
-    text, text_weight,
+    UI_MOTION_RATE, UiFonts, button_surface, dark_surface, exp_lerp, smoothstep, text, text_weight,
 };
 use crate::ui::settings_panel::{SettingsWatermark, menu_watermark};
 use crate::ui::support::i18n::{LocalizedText, UiText};
@@ -342,7 +341,6 @@ fn spawn_header(root: &mut ChildSpawnerCommands, fonts: &UiFonts) {
             header
                 .spawn((
                     Button,
-                    UiSoundStyle::Click,
                     ExtraClose,
                     HoverAlpha::default(),
                     Node {
@@ -418,7 +416,6 @@ fn spawn_bgm_panel(
                     let active = ui.selected_bgm.as_ref() == Some(file);
                     list.spawn((
                         Button,
-                        UiSoundStyle::Switch,
                         ExtraBgm(file.clone()),
                         hover_surface(0.0, active),
                         Node {
@@ -523,7 +520,6 @@ fn spawn_bgm_panel(
                 ] {
                     let mut button = controls.spawn((
                         Button,
-                        UiSoundStyle::Switch,
                         action,
                         hover_surface(SURFACE_IDLE_ALPHA, false),
                         Node {
@@ -605,7 +601,6 @@ fn spawn_cg_panel(
                             for index in 1..=page_count {
                                 buttons.spawn((
                                     Button,
-                                    UiSoundStyle::Switch,
                                     ExtraPage(index),
                                     hover_surface(0.0, index == page),
                                     Node {
@@ -663,7 +658,6 @@ fn spawn_cg_cards(
     for (file, name) in visible {
         grid.spawn((
             Button,
-            UiSoundStyle::Click,
             ExtraCg(file.clone()),
             Node {
                 width: Val::Percent(22.5),
@@ -916,15 +910,14 @@ fn spawn_full_cg(
                             ..default()
                         },))
                         .with_children(|buttons| {
-                            for (label, action, sound) in [
-                                ("‹", ExtraCgControl::Previous, UiSoundStyle::Switch),
-                                ("›", ExtraCgControl::Next, UiSoundStyle::Switch),
-                                ("×", ExtraCgControl::Close, UiSoundStyle::Click),
+                            for (label, action) in [
+                                ("‹", ExtraCgControl::Previous),
+                                ("›", ExtraCgControl::Next),
+                                ("×", ExtraCgControl::Close),
                             ] {
                                 buttons
                                     .spawn((
                                         Button,
-                                        sound,
                                         action,
                                         hover_surface(SURFACE_IDLE_ALPHA, false),
                                         Node {

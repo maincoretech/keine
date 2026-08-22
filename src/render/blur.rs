@@ -27,9 +27,10 @@ use std::borrow::Cow;
 // Keep CPU scissor padding aligned with the shader clamp. Larger values used
 // to enlarge the processed area without producing a stronger visual result.
 const MAX_BLUR_STRENGTH: f32 = 48.0;
-// Give every UI surface a small, consistent lift without changing blur values
-// authored by scripts for backgrounds and sprites.
-const UI_BLUR_STRENGTH_SCALE: f32 = 1.125;
+// Give every UI surface a consistent lift without changing blur values authored
+// by scripts for backgrounds and sprites. Regional button glass and fullscreen
+// menu backdrops share this scale so the shell keeps one depth vocabulary.
+const UI_BLUR_STRENGTH_SCALE: f32 = 1.25;
 
 // ── BlurCamera ──
 #[derive(Component, Clone, ExtractComponent, ShaderType)]
@@ -807,8 +808,8 @@ mod tests {
     }
 
     #[test]
-    fn ui_blur_receives_a_small_global_lift_and_stays_clamped() {
-        assert_eq!(clamp_ui_blur(36.0, 1.0), 40.5);
+    fn ui_blur_receives_a_global_lift_and_stays_clamped() {
+        assert_eq!(clamp_ui_blur(36.0, 1.0), 45.0);
         assert_eq!(clamp_ui_blur(48.0, 1.0), MAX_BLUR_STRENGTH);
     }
 

@@ -1311,3 +1311,21 @@ measurement.
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Before | 60.0 | 54.9 | 17.78 ms | 18.20 ms | 18.35 ms |
 | After | 60.0 | 54.9 | 17.77 ms | 18.21 ms | 19.17 ms |
+
+### 2026-08-22 unified UI glass strength
+
+Title buttons previously used `7.5` blur except for Continue, which incorrectly
+borrowed the separate save-preview panel's `36.0` strength. All title-button
+surfaces now use `12.0`; the preview panel remains `36.0`. The shared UI blur
+scale also rises from `1.125` to `1.25`, taking a 36-unit fullscreen menu
+backdrop from 40.5 to 45 effective units while remaining below the existing
+48-unit bound. This changes no texture, camera, allocation, or render pass. The
+separable kernel moves from 5 to 7 samples per pass for title buttons and from
+17 to 19 for the strongest menu backdrops, only inside their existing scissor
+regions.
+
+The same Apple M5 Pro Release/LTO dialogue composition was captured for 600
+frames on both sides with a three-second warm-up. Both runs remained refresh
+capped at 60.0 FPS with a 56.6 FPS 1% low; P95 was 17.47 ms before and 17.27 ms
+after. The difference is noise rather than a claimed speedup, but it rules out
+a visible regression on this path.

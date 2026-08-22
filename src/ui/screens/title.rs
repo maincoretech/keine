@@ -177,6 +177,7 @@ impl TitleButtonMotion {
 const CONTINUE_PREVIEW_ALPHA: f32 = 0.78;
 const CONTINUE_PREVIEW_BLUR: f32 = 36.0;
 const CONTINUE_PREVIEW_GAP_PERCENT: f32 = 5.0;
+const TITLE_BUTTON_BLUR: f32 = 12.0;
 const DISABLED_BUTTON_SURFACE_ALPHA: f32 = 0.28;
 const DISABLED_BUTTON_TEXT_ALPHA: f32 = 0.36;
 
@@ -409,11 +410,6 @@ fn spawn_title_button(
     } else {
         100.0
     };
-    let blur_strength = if matches!(action, Some(TitleAction::Continue)) {
-        CONTINUE_PREVIEW_BLUR
-    } else {
-        7.5
-    };
     // Continue's fixed hit area also covers the intentional visual gap before
     // its preview. Only the inner surface animates, so hover never falls into
     // an uncovered seam.
@@ -452,7 +448,7 @@ fn spawn_title_button(
             TitleButtonVisual,
             UiTransform::default(),
             BlurSource,
-            BlurStrength(blur_strength),
+            BlurStrength(TITLE_BUTTON_BLUR),
             Node {
                 position_type: PositionType::Absolute,
                 right: Val::ZERO,
@@ -554,7 +550,7 @@ fn spawn_continue_preview(
 fn spawn_disabled_button(menu: &mut ChildSpawnerCommands, label: &str, font: &Handle<Font>) {
     menu.spawn((
         BlurSource,
-        BlurStrength(7.5),
+        BlurStrength(TITLE_BUTTON_BLUR),
         Node {
             width: Val::Percent(100.0),
             height: Val::Px(94.5),
@@ -899,6 +895,35 @@ mod tests {
                 .0,
             button_surface(0.0)
         );
+    }
+
+    #[test]
+    fn continue_and_regular_title_buttons_share_one_blur_strength() {
+        fn spawn(mut commands: Commands) {
+            let font = Handle::<Font>::default();
+            let preview = QuickSavePreview::default();
+            commands.spawn_empty().with_children(|root| {
+                spawn_title_button(root, "START", Some(TitleAction::Start), &font, None);
+                spawn_title_button(
+                    root,
+                    "CONTINUE",
+                    Some(TitleAction::Continue),
+                    &font,
+                    Some(&preview),
+                );
+            });
+        }
+        let mut app = App::new();
+        app.add_systems(Update, spawn);
+        app.update();
+        let world = app.world_mut();
+
+        let strengths = world
+            .query_filtered::<&BlurStrength, With<TitleButtonVisual>>()
+            .iter(world)
+            .map(|strength| strength.0)
+            .collect::<Vec<_>>();
+        assert_eq!(strengths, vec![TITLE_BUTTON_BLUR; 2]);
     }
 
     #[test]
