@@ -30,10 +30,11 @@
 也可以显式选择 `disabled`，由缺失后端稳定拒绝视频指令。Cargo feature 表示实现是否编译可用，
 用户配置只在已编译能力之上选择运行策略。
 
-Windows CI 使用 `.github/actions/setup-video/vcpkg.json` 的完整 vcpkg baseline 固定 FFmpeg
-8.1.2，与 Rust `ffmpeg-next 8.1` binding 保持同一 release branch。升级任一侧时必须同步升级
-另一侧并通过 Windows feature-specific unit、acceptance 与 release build，不能依赖 runner
-预装 vcpkg registry 的最新 FFmpeg 主版本。Windows vcpkg、Linux development packages 与
+Rust 侧使用 `ffmpeg-next 9.0`，因此开发环境可以绑定当前 FFmpeg 9；wrapper 的编译期版本
+检测仍支持 Linux 发行版和 Windows vcpkg 提供的较早 ABI。Windows CI 使用
+`.github/actions/setup-video/vcpkg.json` 的完整 vcpkg baseline 固定 FFmpeg 8.1.2，升级该
+baseline 后必须继续通过 Windows feature-specific unit、acceptance 与 release build，不能
+依赖 runner 预装 vcpkg registry 的浮动版本。Windows vcpkg、Linux development packages 与
 Rust crate features 都只启用解码所需的 `avcodec`、`avformat`、`swscale`、`swresample`
 （以及隐式 `avutil`）；不构建或安装未使用的 `avdevice`、`avfilter`。macOS 发行只使用
 AVFoundation，不携带 FFmpeg SDK。

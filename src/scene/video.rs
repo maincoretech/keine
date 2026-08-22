@@ -124,7 +124,7 @@ mod loop_progress_tests {
     feature = "video-native",
     target_os = "macos"
 ))]
-use ffmpeg_next as _;
+use {crossbeam_channel as _, ffmpeg_next as _};
 
 #[cfg(any(
     feature = "video-ffmpeg",
@@ -242,6 +242,13 @@ impl Plugin for VideoPlugin {
     }
 }
 
+#[cfg(any(
+    feature = "configure",
+    not(any(
+        feature = "video-ffmpeg",
+        all(feature = "video-native", target_os = "macos")
+    ))
+))]
 mod missing_backend {
     use super::*;
     use crate::runtime::resources::GameState;

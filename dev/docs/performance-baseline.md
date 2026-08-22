@@ -1029,10 +1029,10 @@ demuxer for the closest decodable position at or before the target, flushes the
 audio decoder and resampler, then discards only timestamped preroll frames.
 Loop wrap uses the same seek path instead of reopening the media.
 
-The local macOS release backend is AVFoundation, while the installed FFmpeg 9
-is newer than the project's pinned FFmpeg 8 Rust binding. A command-line proxy
-therefore isolated the same two FFmpeg algorithms without claiming end-to-end
-Kēne timings: a 10-minute stream-copy expansion of
+At the time of this capture, the local macOS release backend was AVFoundation
+and the installed FFmpeg 9 was newer than the then-pinned FFmpeg 8 Rust
+binding. A command-line proxy therefore isolated the same two FFmpeg algorithms
+without claiming end-to-end Kēne timings: a 10-minute stream-copy expansion of
 `dev/fixtures/video/playback.mp4` was sought to 09:30 and one audio frame was
 decoded. Three warm Apple M5 Pro / FFmpeg 9.0.1 runs produced:
 
@@ -1044,8 +1044,10 @@ decoded. Three warm Apple M5 Pro / FFmpeg 9.0.1 runs produced:
 Commands placed `-ss 570` after `-i` for the decode/discard control and before
 `-i` for demux seeking. The important production invariant is complexity:
 work now scales with the demuxer's seek preroll rather than the complete media
-prefix. The pinned FFmpeg 8 CI feature job supplies the real Kēne decode,
-encrypted random-access, exact remaining-duration, and loop regression tests.
+prefix. Since 2026-08-22, `ffmpeg-next 9.0` also passes the real Kēne filesystem
+and encrypted Hakutaku acceptance paths against local FFmpeg 9.0.1. The pinned
+FFmpeg 8.1.2 Windows job continues to cover its older native ABI through the
+same wrapper's compile-time version detection.
 
 ### 2026-08-14 global video surface budget
 

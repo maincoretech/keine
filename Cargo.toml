@@ -139,7 +139,7 @@ webbrowser = "1"
 rodio = { version = "0.22.2", default-features = false }
 symphonia = { version = "0.6", default-features = false, features = ["ogg"] }
 symphonia-adapter-libopus = { version = "0.3", default-features = false }
-ffmpeg-next = { version = "8.1", default-features = false, features = ["codec", "format", "software-scaling", "software-resampling"] }
+ffmpeg-next = { version = "9.0", default-features = false, features = ["codec", "format", "software-scaling", "software-resampling"] }
 tempfile = "3"
 winit = { version = "0.30.13", default-features = false }
 wgpu = { version = "29.0.4", default-features = false, features = ["metal"] }
