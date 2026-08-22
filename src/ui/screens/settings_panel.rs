@@ -287,6 +287,42 @@ impl SettingsPageTransition {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LocaleTransitionPhase {
+    FadeOut,
+    FadeIn,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct SettingsLocaleTransition {
+    target: Option<UiLocale>,
+    phase: Option<LocaleTransitionPhase>,
+}
+
+impl SettingsLocaleTransition {
+    fn begin(&mut self, target: UiLocale) {
+        self.target = Some(target);
+        self.phase = Some(LocaleTransitionPhase::FadeOut);
+    }
+
+    fn begin_fade_in(&mut self) {
+        self.phase = Some(LocaleTransitionPhase::FadeIn);
+    }
+
+    fn finish(&mut self) {
+        self.target = None;
+        self.phase = None;
+    }
+
+    pub(crate) fn is_animating(&self) -> bool {
+        self.phase.is_some()
+    }
+
+    fn is_fading_in(&self) -> bool {
+        self.phase == Some(LocaleTransitionPhase::FadeIn)
+    }
+}
+
 #[derive(Component)]
 pub(crate) struct SettingsPageButton(pub(crate) SettingsPage);
 
@@ -520,6 +556,7 @@ pub(crate) struct SettingsSyncContext<'w, 's> {
         Query<'w, 's, (Entity, &'static mut Visibility), With<crate::ui::save_load::SaveLoadRoot>>,
     save_proxies: Query<'w, 's, Entity, With<crate::ui::save_load::SaveLoadBlurProxy>>,
     route_transition: Res<'w, MenuRouteTransition>,
+    locale_transition: Res<'w, SettingsLocaleTransition>,
 }
 
 pub fn toggle_settings(
@@ -695,12 +732,17 @@ pub fn sync_settings(
                 .with_children(|proxy| spawn_menu_watermark(proxy, "CONFIG", &font));
         }
     }
+    let surface = if context.locale_transition.is_fading_in() {
+        MenuSurface::fade_only()
+    } else {
+        MenuSurface::config()
+    };
     context
         .commands
         .spawn((
             Name::new("system_settings"),
             SettingsRoot,
-            MenuSurfaceState::new(MenuSurface::config(), switching),
+            MenuSurfaceState::new(surface, switching),
             PersistentMenu,
             root_node(),
             BackgroundColor(Color::NONE),
@@ -1897,6 +1939,18 @@ type TitleEntityQuery<'w, 's> = Query<
     )>,
 >;
 
+type SettingsLocaleRootQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static mut MenuFade,
+        &'static mut MenuSurface,
+        &'static mut Visibility,
+    ),
+    With<SettingsRoot>,
+>;
+
 #[derive(SystemParam)]
 pub(crate) struct SettingActionContext<'w, 's> {
     commands: Commands<'w, 's>,
@@ -1910,8 +1964,8 @@ pub(crate) struct SettingActionContext<'w, 's> {
     quick_preview: ResMut<'w, crate::ui::control_bar::QuickSavePreview>,
     save_previews: ResMut<'w, crate::ui::save_load::SavePreviewCache>,
     title_entities: TitleEntityQuery<'w, 's>,
-    settings_roots: Query<'w, 's, Entity, With<SettingsRoot>>,
-    settings_ui: ResMut<'w, SettingsUi>,
+    settings_roots: SettingsLocaleRootQuery<'w, 's>,
+    locale_transition: ResMut<'w, SettingsLocaleTransition>,
 }
 
 pub fn handle_setting_action(context: SettingActionContext) {
@@ -1927,8 +1981,8 @@ pub fn handle_setting_action(context: SettingActionContext) {
         mut quick_preview,
         mut save_previews,
         title_entities,
-        settings_roots,
-        mut settings_ui,
+        mut settings_roots,
+        mut locale_transition,
     } = context;
     let Some(action) = actions.iter().find_map(|(interaction, action)| {
         (*interaction == Interaction::Pressed).then_some(*action)
@@ -1946,17 +2000,15 @@ pub fn handle_setting_action(context: SettingActionContext) {
             toggles.skip = false;
         }
         SettingAction::SetLanguage(locale) => {
-            if settings.locale == locale {
+            if settings.locale == locale || locale_transition.is_animating() {
                 return;
             }
-            settings.locale = locale;
-            if let Err(error) = crate::storage::settings::persist(&settings, &project_root) {
-                log::error!("failed to persist UI language: {error:#}");
+            locale_transition.begin(locale);
+            for (_, mut fade, mut surface, mut visibility) in &mut settings_roots {
+                *surface = MenuSurface::fade_only();
+                fade.target = 0.0;
+                *visibility = Visibility::Inherited;
             }
-            for entity in &settings_roots {
-                commands.entity(entity).despawn();
-            }
-            settings_ui.set_changed();
             return;
         }
         SettingAction::SetFullscreen(value) => {
@@ -2048,6 +2100,43 @@ pub fn handle_setting_action(context: SettingActionContext) {
     }
     if let Err(error) = crate::storage::settings::persist(&settings, &project_root) {
         log::error!("failed to persist settings: {error:#}");
+    }
+}
+
+pub fn advance_language_transition(
+    mut commands: Commands,
+    mut transition: ResMut<SettingsLocaleTransition>,
+    mut settings: ResMut<RuntimeSettings>,
+    mut settings_ui: ResMut<SettingsUi>,
+    project_root: Res<ProjectRoot>,
+    roots: Query<(Entity, &MenuFade), With<SettingsRoot>>,
+) {
+    if !transition.is_animating() {
+        return;
+    }
+    if !settings_ui.open {
+        transition.finish();
+        return;
+    }
+    let Ok((root, fade)) = roots.single() else {
+        return;
+    };
+    match transition.phase {
+        Some(LocaleTransitionPhase::FadeOut) if fade.current <= f32::EPSILON => {
+            let Some(locale) = transition.target else {
+                transition.finish();
+                return;
+            };
+            settings.locale = locale;
+            if let Err(error) = crate::storage::settings::persist(&settings, &project_root) {
+                log::error!("failed to persist UI language: {error:#}");
+            }
+            commands.entity(root).despawn();
+            transition.begin_fade_in();
+            settings_ui.set_changed();
+        }
+        Some(LocaleTransitionPhase::FadeIn) if fade.current >= 0.999 => transition.finish(),
+        _ => {}
     }
 }
 
@@ -2384,6 +2473,21 @@ pub fn update_settings_pages(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn language_refresh_has_distinct_fade_out_and_fade_in_phases() {
+        let mut transition = SettingsLocaleTransition::default();
+
+        transition.begin(UiLocale::Ja);
+        assert!(transition.is_animating());
+        assert_eq!(transition.phase, Some(LocaleTransitionPhase::FadeOut));
+
+        transition.begin_fade_in();
+        assert_eq!(transition.phase, Some(LocaleTransitionPhase::FadeIn));
+
+        transition.finish();
+        assert!(!transition.is_animating());
+    }
 
     #[test]
     fn system_page_groups_keep_their_column_relationships() {

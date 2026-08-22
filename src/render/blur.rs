@@ -596,13 +596,12 @@ pub fn update_blur_regions(
             if !visibility.get() || strength <= f32::EPSILON || size.x <= 0.0 || size.y <= 0.0 {
                 continue;
             }
-            let position = transform.translation + ui_origin;
-            let half = size * 0.5;
+            let (min, max) = transformed_node_bounds(size, transform, ui_origin);
             scratch.ui.push(BlurRect {
-                min_x: position.x - half.x,
-                max_x: position.x + half.x,
-                min_y: position.y - half.y,
-                max_y: position.y + half.y,
+                min_x: min.x,
+                max_x: max.x,
+                min_y: min.y,
+                max_y: max.y,
                 coc: clamp_ui_blur(strength, blur_scale),
                 _pad: Vec3::ZERO,
             });
@@ -671,13 +670,12 @@ pub fn update_blur_regions(
         if !visibility.get() || strength <= f32::EPSILON || size.x <= 0.0 || size.y <= 0.0 {
             continue;
         }
-        let pos = transform.translation + ui_origin;
-        let half = size * 0.5;
+        let (min, max) = transformed_node_bounds(size, transform, ui_origin);
         scratch.scene.push(BlurRect {
-            min_x: pos.x - half.x,
-            max_x: pos.x + half.x,
-            min_y: pos.y - half.y,
-            max_y: pos.y + half.y,
+            min_x: min.x,
+            max_x: max.x,
+            min_y: min.y,
+            max_y: max.y,
             coc: clamp_ui_blur(strength, blur_scale),
             _pad: Vec3::ZERO,
         });
@@ -687,6 +685,21 @@ pub fn update_blur_regions(
     } else {
         scratch.scene.clear();
     }
+}
+
+/// Returns the screen-space AABB of a UI node after its complete inherited
+/// transform. `ComputedNode::size` is pre-transform, so using it directly
+/// leaves regional blur outside buttons that animate their scale.
+fn transformed_node_bounds(
+    size: Vec2,
+    transform: &UiGlobalTransform,
+    origin: Vec2,
+) -> (Vec2, Vec2) {
+    let affine = transform.affine();
+    let half = size * 0.5;
+    let extent = affine.matrix2.x_axis.abs() * half.x + affine.matrix2.y_axis.abs() * half.y;
+    let center = affine.translation + origin;
+    (center - extent, center + extent)
 }
 
 fn blur_node_alpha(
@@ -799,6 +812,7 @@ impl BlurRect {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::math::Affine2;
 
     fn region(min_x: f32, max_x: f32, min_y: f32, max_y: f32, coc: f32) -> BlurRect {
         BlurRect {
@@ -839,6 +853,20 @@ mod tests {
         assert_eq!(dialog_blur_strength(0.0, 1.0), 0.0);
         assert_eq!(dialog_blur_strength(0.5, 1.0), 30.0);
         assert_eq!(dialog_blur_strength(1.0, 1.0), 48.0);
+    }
+
+    #[test]
+    fn transformed_node_bounds_follow_button_scale() {
+        let transform = UiGlobalTransform::from(Affine2::from_scale_angle_translation(
+            Vec2::splat(0.95),
+            0.0,
+            Vec2::new(300.0, 200.0),
+        ));
+
+        let (min, max) = transformed_node_bounds(Vec2::new(400.0, 100.0), &transform, Vec2::ZERO);
+
+        assert_eq!(min, Vec2::new(110.0, 152.5));
+        assert_eq!(max, Vec2::new(490.0, 247.5));
     }
 
     #[test]

@@ -90,6 +90,7 @@ fn init_resources(app: &mut App) {
         .init_resource::<save_load::SaveLoadPageTransition>()
         .init_resource::<menu::MenuRouteTransition>()
         .init_resource::<settings_panel::SettingsUi>()
+        .init_resource::<settings_panel::SettingsLocaleTransition>()
         .init_resource::<settings_panel::SettingsPageTransition>()
         .init_resource::<settings_panel::PendingWindowMode>()
         .init_resource::<settings_panel::ActiveSettingSlider>()
@@ -283,6 +284,7 @@ fn add_menu_systems(app: &mut App) {
                 .chain(),
             (
                 save_load::poll_preview_tasks.run_if(save_load::save_load_open),
+                settings_panel::advance_language_transition,
                 settings_panel::sync_settings,
                 menu::sync_header,
                 menu::sync_tabs,

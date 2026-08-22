@@ -77,6 +77,13 @@ impl MenuSurface {
             start_translation: Vec2::new(31.5, 0.0),
         }
     }
+
+    pub(crate) fn fade_only() -> Self {
+        Self {
+            start_scale: 1.0,
+            start_translation: Vec2::ZERO,
+        }
+    }
 }
 
 #[derive(Bundle)]
@@ -798,6 +805,14 @@ pub(crate) fn animate_route_transition(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fade_only_surface_never_translates_or_scales() {
+        assert_eq!(
+            surface_transform(&MenuSurface::fade_only(), false),
+            UiTransform::default()
+        );
+    }
 
     #[test]
     fn returning_to_title_releases_the_fullscreen_blur_immediately() {

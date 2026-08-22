@@ -18,8 +18,8 @@ use crate::ui::save_load::{
 use crate::ui::settings_panel::{
     AboutRepositoryLink, AboutRepositoryVisual, ActiveSettingSlider, PendingWindowMode,
     SettingChoice, SettingChoiceVisual, SettingSlider, SettingSliderThumb,
-    SettingSliderThumbVisual, SettingsPageButton, SettingsPageButtonVisual, SettingsPageTransition,
-    SettingsUi, SettingsWatermark,
+    SettingSliderThumbVisual, SettingsLocaleTransition, SettingsPageButton,
+    SettingsPageButtonVisual, SettingsPageTransition, SettingsUi, SettingsWatermark,
 };
 use crate::ui::textbox::{
     DialogueGlyphReveal, InitialTextboxFade, TextboxLayoutMotion, TextboxOverlayFade,
@@ -85,6 +85,7 @@ pub(crate) struct UiActivityContext<'w, 's> {
         ),
     >,
     settings_page_transition: Res<'w, SettingsPageTransition>,
+    settings_locale_transition: Res<'w, SettingsLocaleTransition>,
     setting_choices: Query<
         'w,
         's,
@@ -207,6 +208,7 @@ fn menu_controls_are_animating(context: &UiActivityContext<'_, '_>) -> bool {
                 visual.is_animating(*interaction, page.0, context.settings_ui.page)
             })
         || context.settings_page_transition.is_animating()
+        || context.settings_locale_transition.is_animating()
         || context
             .about_links
             .iter()
