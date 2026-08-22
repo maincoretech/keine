@@ -1358,10 +1358,10 @@ and changes the existing weights.
 Returning from SAVE, LOAD, or CONFIG previously faded the full-screen blur to
 zero alongside the menu surface. TITLE's regional button glass was already
 active underneath, but could not become visually distinct until that fade
-finished. A return to TITLE now releases the persistent backdrop proxy in the
-same update while retaining the menu-content fade. Route-to-route transitions
-continue to keep the backdrop active. This also removes the full-screen blur
-work from the exit tail rather than adding a pass.
+finished. A return to TITLE now settles the persistent backdrop, route content,
+and fixed header in the same update. Route-to-route transitions retain their
+motion and keep the backdrop active. This removes the shell and full-screen
+blur work from the exit tail rather than adding a pass.
 
 The same Apple M5 Pro 10-second Release/LTO runtime guard was repeated. This
 timeline does not hold a menu open, so the result guards unrelated steady-state

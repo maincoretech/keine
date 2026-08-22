@@ -579,12 +579,12 @@ pub fn sync_settings(
     if !ui.is_changed() {
         return;
     }
-    for (entity, _) in &mut context.roots {
+    for (entity, mut visibility) in &mut context.roots {
         if !ui.open
             && !context.route_transition.involves(MenuHeaderActive::Config)
             && let Ok(mut fade) = context.fades.get_mut(entity)
         {
-            fade.target = 0.0;
+            fade.release_to_title(&mut visibility);
         }
     }
     if !ui.open {

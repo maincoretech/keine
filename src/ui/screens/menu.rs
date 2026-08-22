@@ -44,12 +44,12 @@ impl MenuFade {
         }
     }
 
-    /// Releases the full-screen backdrop when the shell returns to TITLE.
+    /// Hides one persistent shell layer when the route returns to TITLE.
     ///
-    /// Fading this proxy alongside the menu makes TITLE's already-active
-    /// regional glass indistinguishable until the full-screen blur reaches
-    /// zero. The menu surface may still fade out, but its backdrop must hand
-    /// off immediately so the title buttons never appear one beat late.
+    /// Fading any of the backdrop, content, or fixed header layers over TITLE
+    /// keeps covering its already-active regional glass. Route changes retain
+    /// their authored motion, but the terminal handoff must settle every shell
+    /// layer in the same update.
     pub(crate) fn release_to_title(&mut self, visibility: &mut Visibility) {
         self.current = 0.0;
         self.target = 0.0;
@@ -377,7 +377,7 @@ pub(crate) fn sync_header(
     let route = active_route(&save_load, &settings);
     if let Ok((mut visibility, mut fade, mut surface)) = context.roots.single_mut() {
         let Some(route) = route else {
-            fade.target = 0.0;
+            fade.release_to_title(&mut visibility);
             return;
         };
         *surface = surface_for_route(route);
@@ -809,6 +809,32 @@ mod tests {
         assert_eq!(fade.current, 0.0);
         assert_eq!(fade.target, 0.0);
         assert_eq!(visibility, Visibility::Hidden);
+    }
+
+    #[test]
+    fn returning_to_title_hides_the_fixed_header_in_the_same_update() {
+        let mut app = App::new();
+        app.init_resource::<SaveLoadUi>()
+            .init_resource::<SettingsUi>()
+            .init_resource::<MenuRouteTransition>()
+            .insert_resource(UiFonts {
+                text: Handle::default(),
+                icons: Handle::default(),
+            })
+            .add_systems(Update, sync_header);
+        app.world_mut().spawn(DialogCamera);
+        app.world_mut().resource_mut::<SettingsUi>().open = true;
+        app.update();
+
+        app.world_mut().resource_mut::<SettingsUi>().open = false;
+        app.update();
+
+        let world = app.world_mut();
+        let mut roots = world.query_filtered::<(&MenuFade, &Visibility), With<MenuHeaderRoot>>();
+        let (fade, visibility) = roots.single(world).expect("persistent header");
+        assert_eq!(fade.current, 0.0);
+        assert_eq!(fade.target, 0.0);
+        assert_eq!(*visibility, Visibility::Hidden);
     }
 
     #[test]

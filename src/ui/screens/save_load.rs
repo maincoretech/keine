@@ -418,12 +418,16 @@ pub fn sync_save_load(
         return;
     }
     let Some(mode) = ui.mode else {
-        for (entity, _) in &mut context.roots {
+        for (entity, mut visibility) in &mut context.roots {
             if context.route_transition.is_animating() && settings.open {
                 continue;
             }
             if let Ok(mut fade) = context.fades.get_mut(entity) {
-                fade.target = 0.0;
+                if settings.open {
+                    fade.target = 0.0;
+                } else {
+                    fade.release_to_title(&mut visibility);
+                }
             }
         }
         for (entity, mut visibility) in &mut context.proxies {
