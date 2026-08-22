@@ -1278,3 +1278,34 @@ The runtime benchmark profile now uses the same dialog-camera activity manager
 as production. Only the three explicit decomposition profiles bypass it. A
 local Apple M5 Pro Release verification remained refresh-capped at 60.0 FPS
 before the change; the UHD 620 portable rerun is the meaningful after-sample.
+
+### 2026-08-22 bounded stage-shader specialization
+
+`StageMaterial` now keeps three bounded shader classes: plain, basic/procedural,
+and multi-sample optical. This adds only one class to the previous plain/complex
+split and prevents ordinary color, fog, distortion, and transition materials
+from carrying the optical sampling paths. The optical shader also preserves the
+existing effect precedence without calculating results that a later blur fully
+overwrites. In the authored stress composition, where radial/zoom blur replaces
+motion blur before bloom, the active source-sample budget falls from 16 to 10
+per fragment (37.5%). No quality level or runtime feature toggle was added.
+
+The same review found that fog hashed `floor`ed coordinates without
+interpolation, producing visible square tiles rather than moving fog. It now
+uses one smoothly interpolated noise field plus a continuous low-amplitude
+wisp. This remains procedural: it adds no texture, allocation, entity, or render
+pass. A surface-backed Metal run of the atmosphere workload completed all 600
+sampled frames without a WGSL or pipeline error (60.0 FPS average, 53.1 FPS 1%
+low, 18.03 ms P95, 18.85 ms P99).
+
+The Release/LTO stress capture below uses the same Apple M5 Pro, 1920x1080
+surface, three-second warm-up, five-second sample, and production camera policy
+on both sides. The display cap hides shader-throughput gains on this GPU; the
+small tail differences are ordinary run-to-run noise and are not claimed as a
+speedup. The low-end UHD 620 portable rerun remains the meaningful throughput
+measurement.
+
+| Stress composition | Avg FPS | 1% low | P95 | P99 | Max |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Before | 60.0 | 54.9 | 17.78 ms | 18.20 ms | 18.35 ms |
+| After | 60.0 | 54.9 | 17.77 ms | 18.21 ms | 19.17 ms |

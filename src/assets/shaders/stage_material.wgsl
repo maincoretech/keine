@@ -36,6 +36,19 @@ fn noise(point: vec2<f32>) -> f32 {
     return fract(sin(dot(point, vec2<f32>(12.9898, 78.233))) * 43758.5453);
 }
 
+fn smooth_noise(point: vec2<f32>) -> f32 {
+    let cell = floor(point);
+    let local = fract(point);
+    let blend = local * local * (vec2<f32>(3.0) - 2.0 * local);
+    let lower = mix(noise(cell), noise(cell + vec2<f32>(1.0, 0.0)), blend.x);
+    let upper = mix(
+        noise(cell + vec2<f32>(0.0, 1.0)),
+        noise(cell + vec2<f32>(1.0, 1.0)),
+        blend.x,
+    );
+    return mix(lower, upper, blend.y);
+}
+
 fn distort_uv(uv: vec2<f32>) -> vec2<f32> {
     let dimensions = vec2<f32>(textureDimensions(color_texture));
     let short_side = min(dimensions.x, dimensions.y);
@@ -77,6 +90,7 @@ fn animate_uv(source: vec2<f32>) -> vec2<f32> {
     return uv;
 }
 
+#ifdef STAGE_OPTICAL
 fn sample_blurred(uv: vec2<f32>) -> vec4<f32> {
     let blur = max(0.0, material.filter_data.x + material.post_a.w);
     var color = textureSample(color_texture, color_sampler, uv);
@@ -107,32 +121,32 @@ fn sample_blurred(uv: vec2<f32>) -> vec4<f32> {
 fn sample_camera_effects(uv: vec2<f32>) -> vec4<f32> {
     let dimensions = vec2<f32>(textureDimensions(color_texture));
     let texel = vec2<f32>(1.0) / dimensions;
-    var color = sample_blurred(uv);
-
-    if material.post_g.z > 0.001 {
-        let split = texel.x * (1.0 + material.post_g.z * 18.0);
-        color.r = sample_blurred(clamp(uv + vec2<f32>(split, 0.0), vec2<f32>(0.0), vec2<f32>(1.0))).r;
-        color.b = sample_blurred(clamp(uv - vec2<f32>(split, 0.0), vec2<f32>(0.0), vec2<f32>(1.0))).b;
-    }
-    if material.post_i.z > 0.001 {
-        let direction = vec2<f32>(cos(material.post_i.w), sin(material.post_i.w)) * material.post_i.z * 0.018;
-        var motion = vec4<f32>(0.0);
-        for (var index = 0; index < 5; index += 1) {
-            let amount = (f32(index) - 2.0) * 0.5;
-            motion += sample_blurred(clamp(uv + direction * amount, vec2<f32>(0.0), vec2<f32>(1.0)));
-        }
-        color = motion / 5.0;
-    }
     let center_blur = max(material.post_h.w, material.post_j.x);
+    var color = vec4<f32>(0.0);
     if center_blur > 0.001 {
+        // Radial and zoom blur replace the complete color, so sampling the
+        // chromatic/motion paths first would only compute discarded pixels.
         let center = mix(material.post_i.xy, material.post_j.yz, step(material.post_h.w, material.post_j.x));
         let direction = uv - center;
-        var radial = vec4<f32>(0.0);
         for (var index = 0; index < 6; index += 1) {
             let amount = f32(index) / 5.0 * center_blur * 0.055;
-            radial += sample_blurred(clamp(uv - direction * amount, vec2<f32>(0.0), vec2<f32>(1.0)));
+            color += sample_blurred(clamp(uv - direction * amount, vec2<f32>(0.0), vec2<f32>(1.0)));
         }
-        color = radial / 6.0;
+        color /= 6.0;
+    } else if material.post_i.z > 0.001 {
+        let direction = vec2<f32>(cos(material.post_i.w), sin(material.post_i.w)) * material.post_i.z * 0.018;
+        for (var index = 0; index < 5; index += 1) {
+            let amount = (f32(index) - 2.0) * 0.5;
+            color += sample_blurred(clamp(uv + direction * amount, vec2<f32>(0.0), vec2<f32>(1.0)));
+        }
+        color /= 5.0;
+    } else {
+        color = sample_blurred(uv);
+        if material.post_g.z > 0.001 {
+            let split = texel.x * (1.0 + material.post_g.z * 18.0);
+            color.r = sample_blurred(clamp(uv + vec2<f32>(split, 0.0), vec2<f32>(0.0), vec2<f32>(1.0))).r;
+            color.b = sample_blurred(clamp(uv - vec2<f32>(split, 0.0), vec2<f32>(0.0), vec2<f32>(1.0))).b;
+        }
     }
     if material.post_h.z > 0.001 {
         let neighbours = sample_blurred(clamp(uv + vec2<f32>(texel.x, 0.0), vec2<f32>(0.0), vec2<f32>(1.0)))
@@ -151,6 +165,7 @@ fn sample_camera_effects(uv: vec2<f32>) -> vec4<f32> {
     }
     return color;
 }
+#endif
 
 fn apply_basic_filter(color: vec4<f32>) -> vec4<f32> {
     let luminance = dot(color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
@@ -257,8 +272,15 @@ fn apply_post(color: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {
     }
     if material.post_n.z > 0.001 {
         let fog_uv = uv * material.post_o.x;
-        let fog = noise(floor(fog_uv * 5.0) + vec2<f32>(globals.time * material.post_n.w, 0.0)) * 0.45
-            + noise(floor(fog_uv * 11.0) - vec2<f32>(0.0, globals.time * material.post_n.w * 0.7)) * 0.25;
+        let drift = vec2<f32>(
+            globals.time * material.post_n.w * 0.18,
+            -globals.time * material.post_n.w * 0.11,
+        );
+        let cloud = smooth_noise(fog_uv + drift);
+        let wisp = 0.5 + 0.5 * sin(
+            dot(fog_uv, vec2<f32>(3.7, -2.9)) + globals.time * material.post_n.w * 0.4,
+        );
+        let fog = cloud * 0.55 + wisp * 0.15;
         result = vec4<f32>(mix(result.rgb, vec3<f32>(0.72, 0.76, 0.80), fog * material.post_n.z), result.a);
     }
     if material.post_o.y > 0.001 {
@@ -291,6 +313,7 @@ fn apply_post(color: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {
         let quantized = floor(clamp(result.rgb + threshold, vec3<f32>(0.0), vec3<f32>(1.0)) * levels) / levels;
         result = vec4<f32>(mix(result.rgb, quantized, material.post_p.w), result.a);
     }
+#ifdef STAGE_OPTICAL
     if material.post_q.y > 0.001 {
         let texel = vec2<f32>(material.post_q.z) / vec2<f32>(textureDimensions(color_texture));
         let left = textureSample(color_texture, color_sampler, clamp(uv - vec2<f32>(texel.x, 0.0), vec2<f32>(0.0), vec2<f32>(1.0))).rgb;
@@ -300,6 +323,7 @@ fn apply_post(color: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {
         let edge = clamp(length(left - right) + length(up - down), 0.0, 1.0);
         result = vec4<f32>(mix(result.rgb, vec3<f32>(edge), material.post_q.y), result.a);
     }
+#endif
     let ray = godray(uv);
     result = vec4<f32>(result.rgb + vec3<f32>(1.0, 0.88, 0.62) * ray, result.a);
     if material.post_a.y > 0.001 {
@@ -357,7 +381,12 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
         let shift = (shift_seed - 0.5) * band * (0.08 + band_seed * 0.12);
         uv = vec2<f32>(fract(uv.x + shift), uv.y);
     }
+#ifdef STAGE_OPTICAL
     var color = apply_basic_filter(sample_camera_effects(uv)) * material.tint;
+#else
+    var color = apply_basic_filter(textureSample(color_texture, color_sampler, uv)) * material.tint;
+#endif
+#ifdef STAGE_OPTICAL
     if material.post_b.w > 0.001 {
         let direction = uv - vec2<f32>(0.5);
         var zoom = vec4<f32>(0.0);
@@ -371,6 +400,7 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
         let blue = textureSample(color_texture, color_sampler, clamp(uv - vec2<f32>(split, 0.0), vec2<f32>(0.0), vec2<f32>(1.0))).b;
         color = vec4<f32>(mix(color.rgb, vec3<f32>(red, zoom.g, blue), material.post_b.w), color.a);
     }
+#endif
     color = apply_post(color, uv);
     if kind == 2u {
         let fine = noise(floor(mesh.uv * vec2<f32>(960.0, 540.0)));
@@ -427,12 +457,14 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
             color.a,
         );
     }
+#ifdef STAGE_OPTICAL
     if (effects & 16u) != 0u {
         let offset = vec2<f32>(0.007 + 0.002 * sin(globals.time * 18.0), 0.0);
         let red = sample_blurred(clamp(uv + offset, vec2<f32>(0.0), vec2<f32>(1.0))).r;
         let blue = sample_blurred(clamp(uv - offset, vec2<f32>(0.0), vec2<f32>(1.0))).b;
         color = vec4<f32>(red, color.g, blue, color.a);
     }
+#endif
     if (effects & 32u) != 0u {
         let source = -0.10 + fract(globals.time * 0.018) * 1.20;
         let ray = pow(max(0.0, 1.0 - abs(uv.x - source) * 2.2), 3.0)

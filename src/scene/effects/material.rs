@@ -309,6 +309,14 @@ mod animation_tests {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct StageMaterialKey(u8);
 
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StageShaderClass {
+    Plain,
+    Basic,
+    Optical,
+}
+
 impl From<&StageMaterial> for StageMaterialKey {
     fn from(material: &StageMaterial) -> Self {
         let blend = match material.blend {
@@ -317,25 +325,37 @@ impl From<&StageMaterial> for StageMaterialKey {
             BlendMode::Multiply => 2,
             BlendMode::Screen => 3,
         };
-        Self(blend | u8::from(material.needs_complex_shader()) << 2)
+        Self(blend | (material.shader_class() as u8) << 2)
     }
 }
 
 impl StageMaterial {
-    fn needs_complex_shader(&self) -> bool {
+    fn shader_class(&self) -> StageShaderClass {
         const ACTIVE: f32 = 0.001;
-        self.filter.x > ACTIVE
-            || (self.filter.y - 1.0).abs() > ACTIVE
+        const RGB_FILM: u8 = 1 << 4;
+        let optical = self.filter.x > ACTIVE
+            || self.post_a.w > ACTIVE
+            || self.post_b.w > ACTIVE
+            || self.post_g.y > ACTIVE
+            || self.post_g.z > ACTIVE
+            || self.post_h.z > ACTIVE
+            || self.post_h.w > ACTIVE
+            || self.post_i.z > ACTIVE
+            || self.post_j.x > ACTIVE
+            || self.post_q.y > ACTIVE
+            || (self.transition.z.round() as u8 & RGB_FILM) != 0;
+        if optical {
+            return StageShaderClass::Optical;
+        }
+        let basic = (self.filter.y - 1.0).abs() > ACTIVE
             || (self.filter.z - 1.0).abs() > ACTIVE
             || (self.filter.w - 1.0).abs() > ACTIVE
             || self.transition.x.abs() > ACTIVE
             || self.transition.z.abs() > ACTIVE
             || self.post_a.x.abs() > ACTIVE
             || self.post_a.y > ACTIVE
-            || self.post_a.w > ACTIVE
             || self.post_b.y > ACTIVE
             || self.post_b.z > ACTIVE
-            || self.post_b.w > ACTIVE
             || self.post_c.x > ACTIVE
             || self.post_c.y > ACTIVE
             || self.post_f.x.abs() > ACTIVE
@@ -343,15 +363,9 @@ impl StageMaterial {
             || self.post_f.z.abs() > ACTIVE
             || (self.post_f.w - 1.0).abs() > ACTIVE
             || self.post_g.x.abs() > ACTIVE
-            || self.post_g.y > ACTIVE
-            || self.post_g.z > ACTIVE
             || self.post_g.w > 1.01
             || self.post_h.x > ACTIVE
             || self.post_h.y > ACTIVE
-            || self.post_h.z > ACTIVE
-            || self.post_h.w > ACTIVE
-            || self.post_i.z > ACTIVE
-            || self.post_j.x > ACTIVE
             || self.post_j.w > ACTIVE
             || self.post_k.y > ACTIVE
             || self.post_l.x > ACTIVE
@@ -361,8 +375,12 @@ impl StageMaterial {
             || self.post_o.y > ACTIVE
             || self.post_p.x > ACTIVE
             || self.post_p.w > ACTIVE
-            || self.post_q.y > ACTIVE
-            || self.post_q.w < 0.999
+            || self.post_q.w < 0.999;
+        if basic {
+            StageShaderClass::Basic
+        } else {
+            StageShaderClass::Plain
+        }
     }
 }
 
@@ -412,8 +430,12 @@ impl Material2d for StageMaterial {
             _ => BlendState::ALPHA_BLENDING,
         };
         if let Some(fragment) = descriptor.fragment.as_mut() {
-            if key.bind_group_data.0 & 0b100 != 0 {
+            let shader_class = key.bind_group_data.0 >> 2;
+            if shader_class != StageShaderClass::Plain as u8 {
                 fragment.shader_defs.push("STAGE_COMPLEX".into());
+            }
+            if shader_class == StageShaderClass::Optical as u8 {
+                fragment.shader_defs.push("STAGE_OPTICAL".into());
             }
             match blend_key {
                 2 => fragment.shader_defs.push("BLEND_MULTIPLY".into()),
@@ -471,6 +493,25 @@ mod tests {
         let mut filtered = plain.clone();
         filtered.filter.y = 1.2;
         assert_eq!(StageMaterialKey::from(&filtered).0, 0b100);
+
+        let optical_variants: [fn(&mut StageMaterial); 11] = [
+            |material| material.filter.x = 1.0,
+            |material| material.post_a.w = 1.0,
+            |material| material.post_b.w = 0.5,
+            |material| material.post_g.y = 0.5,
+            |material| material.post_g.z = 0.5,
+            |material| material.post_h.z = 0.5,
+            |material| material.post_h.w = 0.5,
+            |material| material.post_i.z = 0.5,
+            |material| material.post_j.x = 0.5,
+            |material| material.post_q.y = 0.5,
+            |material| material.transition.z = 16.0,
+        ];
+        for activate in optical_variants {
+            let mut optical = plain.clone();
+            activate(&mut optical);
+            assert_eq!(StageMaterialKey::from(&optical).0, 0b1000);
+        }
 
         let mut screen = plain;
         screen.blend = BlendMode::Screen;
