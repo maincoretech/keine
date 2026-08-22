@@ -454,9 +454,11 @@ fn spawn_title_button(
             BlurSource,
             BlurStrength(blur_strength),
             Node {
+                position_type: PositionType::Absolute,
+                right: Val::ZERO,
+                top: Val::ZERO,
                 width: Val::Percent(100.0 / hit_width * 100.0),
                 height: Val::Percent(100.0),
-                margin: UiRect::left(Val::Auto),
                 padding: UiRect::left(Val::Px(22.5)),
                 align_items: AlignItems::Center,
                 ..default()
@@ -754,7 +756,6 @@ pub fn animate_title_buttons(
             100.0
         };
         node.width = Val::Percent(motion.width / hit_width * 100.0);
-        node.margin.left = Val::Auto;
         node.padding.left = Val::Px(motion.padding);
         transform.scale = Vec2::splat(1.0 - 0.045 * motion.press);
         background.0 = button_surface(motion.hover);
@@ -858,7 +859,7 @@ mod tests {
     use keine_loader::KeineStore;
 
     #[test]
-    fn title_button_keeps_hover_surface_inside_scaled_visual() {
+    fn title_button_keeps_hover_surface_right_anchored() {
         fn spawn(mut commands: Commands) {
             let font = Handle::<Font>::default();
             commands.spawn_empty().with_children(|root| {
@@ -888,6 +889,9 @@ mod tests {
             .iter()
             .find(|child| world.get::<TitleButtonVisual>(*child).is_some())
             .expect("scaled title-button visual");
+        let visual_node = world.get::<Node>(visual).expect("visual node");
+        assert_eq!(visual_node.position_type, PositionType::Absolute);
+        assert_eq!(visual_node.right, Val::ZERO);
         assert_eq!(
             world
                 .get::<BackgroundColor>(visual)
