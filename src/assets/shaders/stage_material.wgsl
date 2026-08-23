@@ -90,7 +90,7 @@ fn animate_uv(source: vec2<f32>) -> vec2<f32> {
     return uv;
 }
 
-#ifdef STAGE_OPTICAL
+#ifdef STAGE_BLUR
 fn sample_blurred(uv: vec2<f32>) -> vec4<f32> {
     let blur = max(0.0, material.filter_data.x + material.post_a.w);
     var color = textureSample(color_texture, color_sampler, uv);
@@ -117,7 +117,9 @@ fn sample_blurred(uv: vec2<f32>) -> vec4<f32> {
     }
     return color;
 }
+#endif
 
+#ifdef STAGE_OPTICAL
 fn sample_camera_effects(uv: vec2<f32>) -> vec4<f32> {
     let dimensions = vec2<f32>(textureDimensions(color_texture));
     let texel = vec2<f32>(1.0) / dimensions;
@@ -313,7 +315,7 @@ fn apply_post(color: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {
         let quantized = floor(clamp(result.rgb + threshold, vec3<f32>(0.0), vec3<f32>(1.0)) * levels) / levels;
         result = vec4<f32>(mix(result.rgb, quantized, material.post_p.w), result.a);
     }
-#ifdef STAGE_OPTICAL
+#ifdef STAGE_OUTLINE
     if material.post_q.y > 0.001 {
         let texel = vec2<f32>(material.post_q.z) / vec2<f32>(textureDimensions(color_texture));
         let left = textureSample(color_texture, color_sampler, clamp(uv - vec2<f32>(texel.x, 0.0), vec2<f32>(0.0), vec2<f32>(1.0))).rgb;
@@ -384,9 +386,13 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
 #ifdef STAGE_OPTICAL
     var color = apply_basic_filter(sample_camera_effects(uv)) * material.tint;
 #else
+#ifdef STAGE_BLUR
+    var color = apply_basic_filter(sample_blurred(uv)) * material.tint;
+#else
     var color = apply_basic_filter(textureSample(color_texture, color_sampler, uv)) * material.tint;
 #endif
-#ifdef STAGE_OPTICAL
+#endif
+#ifdef STAGE_BLUR
     if material.post_b.w > 0.001 {
         let direction = uv - vec2<f32>(0.5);
         var zoom = vec4<f32>(0.0);
@@ -457,7 +463,7 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
             color.a,
         );
     }
-#ifdef STAGE_OPTICAL
+#ifdef STAGE_BLUR
     if (effects & 16u) != 0u {
         let offset = vec2<f32>(0.007 + 0.002 * sin(globals.time * 18.0), 0.0);
         let red = sample_blurred(clamp(uv + offset, vec2<f32>(0.0), vec2<f32>(1.0))).r;

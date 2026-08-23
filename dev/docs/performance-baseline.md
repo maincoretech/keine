@@ -1447,3 +1447,44 @@ GPUs rather than a promise of proportional frame-time improvement. The
 quarter-resolution bloom/depth-of-field designs described in GPU Gems were not
 adopted because they would change the current visual result and add render
 targets/passes.
+
+### 2026-08-23 exact stage-shader sampling variants
+
+The remaining Intel UHD 620 workloads exposed two avoidable shader supersets.
+Local/focal blur selected the complete optical path even when directional blur,
+chromatic aberration, sharpening, and bloom were inactive. Outline similarly
+selected that path despite needing only its own four edge samples. The material
+pipeline now has bounded `blur` and `outline` variants between `basic` and the
+combined `optical` superset. This is deliberately not a feature-bit Cartesian
+product: a blur + outline combination falls back to the optical superset, so
+the number of cached pipelines remains small.
+
+The fragment calculations are unchanged. The blur variant executes the same
+17-tap kernel and the outline variant executes the same four neighbouring
+samples; only unrelated uniform branches and shader code are omitted. This
+follows Intel's guidance to avoid redundant sampler work and NVIDIA's finding
+that texture reads dominate post-process depth-of-field cost, while rejecting
+lower-resolution buffers or a smaller kernel because those would change the
+accepted image:
+
+- [Intel Gen11 API Developer and Optimization Guide](https://cdrdv2-public.intel.com/671309/intel-c2-ae-processor-graphics-gen11-api-developer-and-optimization-guide.pdf)
+- [GPU Gems 3: Practical Post-Process Depth of Field](https://developer.nvidia.com/gpugems/gpugems3/part-iv-image-effects/chapter-28-practical-post-process-depth-field)
+
+The pre-change Windows portable report is the throughput baseline for the next
+Intel UHD 620 run:
+
+| Workload | Avg FPS | 1% low | P95 | P99 |
+| --- | ---: | ---: | ---: | ---: |
+| `10-02 classic camera properties` | 45.0 | 40.5 | 23.67 ms | 24.70 ms |
+| `10-06 retro and eyelid mask` | 46.1 | 43.6 | 21.85 ms | 22.92 ms |
+
+An Apple M5 Pro Release/LTO surface run validated both specialized pipelines.
+The display remains capped, so the paired local samples establish no regression
+rather than a speedup claim:
+
+| Workload | State | Avg FPS | 1% low | P95 | P99 | Max |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `10-02 classic camera properties` | Before | 60.0 | 54.5 | 17.70 ms | 18.36 ms | 19.15 ms |
+| `10-02 classic camera properties` | After | 60.0 | 54.7 | 17.86 ms | 18.28 ms | 18.49 ms |
+| `10-06 retro and eyelid mask` | Before | 60.0 | 55.4 | 17.67 ms | 18.04 ms | 18.67 ms |
+| `10-06 retro and eyelid mask` | After | 60.0 | 56.2 | 17.52 ms | 17.80 ms | 18.31 ms |
