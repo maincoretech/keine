@@ -33,6 +33,12 @@ const MAX_BLUR_STRENGTH: f32 = 48.0;
 // menu backdrops share this scale so the shell keeps one depth vocabulary.
 const UI_BLUR_STRENGTH_SCALE: f32 = 1.25;
 
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum BlurRenderSet {
+    CompositedCamera,
+    Regional,
+}
+
 // ── BlurCamera ──
 #[derive(Component, Clone, ExtractComponent, ShaderType)]
 pub struct BlurCamera {
@@ -89,9 +95,15 @@ impl Plugin for BlurPlugin {
         let shader_handle: Handle<Shader> =
             load_embedded_asset!(render_app.world_mut(), "../assets/shaders/blur.wgsl");
         render_app.insert_resource(BlurShader(shader_handle));
+        render_app.configure_sets(
+            Core2d,
+            (BlurRenderSet::CompositedCamera, BlurRenderSet::Regional).chain(),
+        );
         render_app.add_systems(
             Core2d,
-            do_scene_blur.in_set(Core2dSystems::EarlyPostProcess),
+            do_scene_blur
+                .in_set(Core2dSystems::EarlyPostProcess)
+                .in_set(BlurRenderSet::Regional),
         );
         render_app.add_systems(
             Core2d,
@@ -822,6 +834,43 @@ mod tests {
             max_y,
             coc,
             _pad: Vec3::ZERO,
+        }
+    }
+
+    fn incremental_gaussian_weights(exp_factor: f32, support: usize) -> Vec<f32> {
+        if support == 0 {
+            return vec![1.0];
+        }
+        let first_weight = exp_factor.exp();
+        let ratio_step = first_weight * first_weight;
+        let mut sample_weight = first_weight;
+        let mut ratio = first_weight * ratio_step;
+        let mut weights = vec![1.0];
+        for index in (1..=support).step_by(2) {
+            let first = sample_weight;
+            weights.push(first);
+            let second = (index < support).then_some(first * ratio);
+            if let Some(second) = second {
+                weights.push(second);
+            }
+            let next_ratio = ratio * ratio_step;
+            sample_weight = second.unwrap_or_default() * next_ratio;
+            ratio = next_ratio * ratio_step;
+        }
+        weights
+    }
+
+    #[test]
+    fn incremental_gaussian_matches_direct_coefficients() {
+        for support in 1..=18 {
+            let exp_factor = -1.0 / (2.0 * 11.25_f32.powi(2));
+            for (index, incremental) in incremental_gaussian_weights(exp_factor, support)
+                .into_iter()
+                .enumerate()
+            {
+                let direct = (exp_factor * (index * index) as f32).exp();
+                assert!((incremental - direct).abs() <= 2.0e-6);
+            }
         }
     }
 

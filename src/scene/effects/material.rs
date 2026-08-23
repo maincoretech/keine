@@ -26,7 +26,7 @@ fn setup_quad(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
     commands.insert_resource(StageQuad(meshes.add(Rectangle::new(1.0, 1.0))));
 }
 
-#[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
+#[derive(Asset, TypePath, AsBindGroup, Debug, Clone, PartialEq)]
 #[bind_group_data(StageMaterialKey)]
 pub(crate) struct StageMaterial {
     // Keep all scalar parameters in one uniform buffer. Separate bindings exceed
@@ -82,6 +82,29 @@ pub(crate) struct StageMaterial {
     #[sampler(4, visibility(fragment))]
     pub(crate) image: Handle<Image>,
     pub(crate) blend: BlendMode,
+}
+
+/// Reuses an entity's material handle and only marks the asset changed when
+/// its GPU-visible data actually differs. Stage animation revisions may wake
+/// both stage layers even when a composited camera effect was stripped from
+/// their materials; writing the identical asset would still force Bevy to
+/// prepare and upload it again.
+pub(crate) fn upsert_stage_material(
+    existing: Option<&MeshMaterial2d<StageMaterial>>,
+    materials: &mut Assets<StageMaterial>,
+    material: StageMaterial,
+) -> Handle<StageMaterial> {
+    let Some(existing) = existing else {
+        return materials.add(material);
+    };
+    if materials
+        .get(&existing.0)
+        .is_some_and(|current| *current != material)
+        && let Some(mut current) = materials.get_mut(&existing.0)
+    {
+        *current = material;
+    }
+    existing.0.clone()
 }
 
 impl StageMaterial {
@@ -243,6 +266,7 @@ pub(crate) fn effective_post_process(
             + (distance - focal_distance).abs() * effect.blur_strength.max(0.0) * 6.0)
             .min(20.0);
     }
+    crate::render::camera_blur::strip_composited_effects(&mut effect, targets);
     effect
 }
 
@@ -516,5 +540,39 @@ mod tests {
         let mut screen = plain;
         screen.blend = BlendMode::Screen;
         assert_eq!(StageMaterialKey::from(&screen).0, 0b11);
+    }
+
+    #[test]
+    fn global_optical_effects_do_not_promote_every_layer_to_optical() {
+        let source = PostProcessEffect {
+            radial_blur_strength: 0.3,
+            motion_blur_strength: 0.4,
+            zoom_blur_strength: 0.5,
+            chromatic_aberration: 0.6,
+            sharpen_strength: 0.7,
+            bloom_intensity: 0.8,
+            ..default()
+        };
+        let composed_layer =
+            effective_post_process(&source, CameraTargets::ALL, "characters", None);
+        let selective_layer =
+            effective_post_process(&source, CameraTargets::CHARACTERS, "characters", None);
+        let material = |effect: &PostProcessEffect| {
+            StageMaterial::new(
+                Handle::default(),
+                1.0,
+                VisualFilter::default(),
+                BlendMode::Alpha,
+                Vec4::ZERO,
+                effect,
+                None,
+            )
+        };
+
+        assert_eq!(StageMaterialKey::from(&material(&composed_layer)).0, 0);
+        assert_eq!(
+            StageMaterialKey::from(&material(&selective_layer)).0,
+            0b1000
+        );
     }
 }

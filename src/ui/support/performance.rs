@@ -372,12 +372,17 @@ fn capture_runtime_performance(
         return;
     }
 
-    let mut frame_ms = samples
+    let sampled_frames = samples
         .frame_ms
         .iter()
-        .filter_map(|(elapsed, frame_ms)| (*elapsed >= config.warmup_seconds).then_some(*frame_ms))
+        .filter(|(elapsed, _)| *elapsed >= config.warmup_seconds)
+        .copied()
         .collect::<Vec<_>>();
     drop(samples);
+    let mut frame_ms = sampled_frames
+        .iter()
+        .map(|(_, frame_ms)| *frame_ms)
+        .collect::<Vec<_>>();
     frame_ms.sort_by(f64::total_cmp);
     let frames = frame_ms.len();
     let average = frame_ms.iter().sum::<f64>() / frames.max(1) as f64;
@@ -401,6 +406,17 @@ fn capture_runtime_performance(
         target: "keine::performance",
         "FRAME    | avg {average:.2} ms · p50 {p50:.2} · p95 {p95:.2} · p99 {p99:.2} · max {maximum:.2}",
     );
+    let mut slow_frames = sampled_frames
+        .into_iter()
+        .filter(|(_, frame_ms)| *frame_ms >= 1_000.0 / 30.0)
+        .collect::<Vec<_>>();
+    slow_frames.sort_by(|left, right| right.1.total_cmp(&left.1));
+    for (elapsed, frame_ms) in slow_frames.into_iter().take(5) {
+        log::info!(
+            target: "keine::performance",
+            "SLOW     | t={elapsed:.3}s · {frame_ms:.2} ms",
+        );
+    }
     log::info!(
         target: "keine::performance",
         "SCENE    | {entities:.0} entities · profile {:?} · active cameras {} · 3.0s warm-up excluded",

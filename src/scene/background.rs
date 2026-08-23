@@ -10,6 +10,7 @@ use crate::runtime::resources::GameConfigResource;
 use crate::runtime::resources::GameState;
 use crate::scene::effects::material::{
     StageMaterial, StageQuad, active_lut_preset, animation_uniform, effective_post_process,
+    upsert_stage_material,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -357,14 +358,7 @@ fn apply_background_entity(
             &post,
             lut,
         );
-        let material_handle = if let Some(existing) = existing_material {
-            if let Some(mut current) = materials.get_mut(&existing.0) {
-                *current = material;
-            }
-            existing.0.clone()
-        } else {
-            materials.add(material)
-        };
+        let material_handle = upsert_stage_material(existing_material, materials, material);
         if existing_material.is_none() {
             commands
                 .entity(entity)

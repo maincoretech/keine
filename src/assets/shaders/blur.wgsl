@@ -40,17 +40,26 @@ fn gaussian_blur(frag_coord: vec4<f32>, coc: f32, frag_offset: vec2<f32>) -> vec
 
     var sum = textureSampleLevel(src, smp, uv, 0.0);
     var weight_sum = 1.0;
+    // Incremental Gaussian coefficients (GPU Gems 3, chapter 40): one exp for
+    // the whole regularly spaced kernel, followed by cheap quotient updates.
+    let first_weight = exp(exp_factor);
+    let ratio_step = first_weight * first_weight;
+    var sample_weight = first_weight;
+    var ratio = first_weight * ratio_step;
     for (var i = 1; i <= support; i += 2) {
-        let w0 = exp(exp_factor * f32(i) * f32(i));
+        let w0 = sample_weight;
         var w1 = 0.0;
         if (i + 1 <= support) {
-            w1 = exp(exp_factor * f32(i + 1) * f32(i + 1));
+            w1 = w0 * ratio;
         }
         let uv_offset = offset * (f32(i) + w1 / (w0 + w1));
         let weight = w0 + w1;
         sum += (textureSampleLevel(src, smp, uv + uv_offset, 0.0) +
                 textureSampleLevel(src, smp, uv - uv_offset, 0.0)) * weight;
         weight_sum += weight * 2.0;
+        let next_ratio = ratio * ratio_step;
+        sample_weight = w1 * next_ratio;
+        ratio = next_ratio * ratio_step;
     }
     return sum / weight_sum;
 }

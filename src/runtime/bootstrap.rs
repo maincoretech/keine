@@ -28,6 +28,7 @@ use keine_loader::{
 };
 
 use crate::render::blur::{BlurCamera, BlurPlugin, DialogCamera, SceneBlurCamera, UiBlurCamera};
+use crate::render::camera_blur::{CameraEffectsPlugin, CompositedCameraEffects};
 use crate::runtime::GamePlugin;
 use crate::runtime::cli::{
     BenchmarkOptions, CliCommand, InteractiveMode, help_or_version, packaged_benchmark_command,
@@ -581,6 +582,7 @@ fn benchmark_report_line(line: &str) -> bool {
         "START    |",
         "CAPTURE  |",
         "FRAME    |",
+        "SLOW     |",
         "SCENE    |",
         "ASSETS   |",
         "MEMORY   |",
@@ -863,14 +865,19 @@ fn build_opened_app(
     ));
     #[cfg(feature = "audio-seekable")]
     app.add_plugins(crate::runtime::audio::SeekableAudioPlugin);
-    app.add_plugins((webp, GamePlugin::new(options.video), BlurPlugin))
-        .insert_resource(ProjectRoot(project_root))
-        .insert_resource(ContentProjectResource(content))
-        .insert_resource(ScriptLanguages(languages))
-        .insert_resource(StoreCodec(store))
-        .insert_resource(GameConfigResource(config))
-        .add_systems(PreStartup, bootstrap_project)
-        .add_systems(PostStartup, set_primary_window_icon);
+    app.add_plugins((
+        webp,
+        GamePlugin::new(options.video),
+        CameraEffectsPlugin,
+        BlurPlugin,
+    ))
+    .insert_resource(ProjectRoot(project_root))
+    .insert_resource(ContentProjectResource(content))
+    .insert_resource(ScriptLanguages(languages))
+    .insert_resource(StoreCodec(store))
+    .insert_resource(GameConfigResource(config))
+    .add_systems(PreStartup, bootstrap_project)
+    .add_systems(PostStartup, set_primary_window_icon);
     if options.editor_sync {
         app.init_resource::<EditorSyncSession>();
     }
@@ -1280,6 +1287,7 @@ fn spawn_cameras(commands: &mut Commands, cameras: crate::ui::performance::Bench
         },
         RenderLayers::layer(0),
         BlurCamera::default(),
+        CompositedCameraEffects::default(),
         SceneBlurCamera,
     ));
     commands.spawn((
@@ -1449,6 +1457,9 @@ mod tests {
             "0.1s INFO Kēne"
         );
         assert_eq!(plain_report_line("普通文本"), "普通文本");
+        assert!(benchmark_report_line(
+            "0.1s INFO keine::performance: SLOW     | t=3.400s · 393.01 ms"
+        ));
     }
 
     #[test]

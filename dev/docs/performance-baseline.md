@@ -1373,3 +1373,77 @@ isolated scheduling outlier and is not reflected in P95/P99.
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Before | 60.0 | 55.0 | 17.62 ms | 18.18 ms | 18.62 ms |
 | After | 60.0 | 57.0 | 17.28 ms | 17.56 ms | 26.19 ms |
+
+### 2026-08-23 composed camera optical effects
+
+Directional camera blur (`radial`, `zoom`, and `motion`) previously ran inside
+every targeted `StageMaterial`. An `all` target therefore sampled the same
+camera effect independently for the full-screen background and every character.
+It now runs once on the scene camera after stage composition. Scene-only and
+character-only effects retain the material path, as do local image blur,
+focal-distance blur, and layer-dependent post effects. The same composited pass
+now also handles camera-wide chromatic aberration, sharpening, and bloom. This
+removes up to ten additional source taps from each stage layer without adding a
+second fullscreen pass. The render-node shape follows Bevy's official
+[`ViewTarget::post_process_write()` example](https://bevy.org/examples-webgpu/shaders/custom-post-processing/).
+
+Stage revisions can still wake background and character synchronization while
+a composited effect animates. `StageMaterial` updates now compare GPU-visible
+data before mutably borrowing the asset, so an unchanged layer no longer emits
+an asset change and redundant prepare/upload work.
+
+The authored `10-04 blur family` workload contains one full-screen background
+and one character. Its active center blur uses six source taps. Before this
+change both layers selected the optical material and paid those taps over their
+respective coverage. Afterwards the layers use their ordinary one-sample path
+and one six-tap fullscreen pass processes the composition; additional
+characters no longer multiply the camera-blur tap count.
+
+The same Apple M5 Pro Release/LTO binary, 1920x1080 surface, three-second warm-up
+and five-second sample was captured immediately before and after the change:
+
+| `10-04 blur family` | Avg FPS | 1% low | P95 | P99 | Max |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Before | 60.0 | 54.7 | 17.84 ms | 18.28 ms | 18.96 ms |
+| After | 60.0 | 54.2 | 17.82 ms | 18.44 ms | 19.62 ms |
+
+This machine remains refresh-capped and the tail delta is noise, so no local
+frame-rate gain is claimed. The structural regression test verifies that an
+`all` directional blur no longer promotes each layer to the optical shader,
+while selective targets still do. The Intel UHD 620 portable benchmark is the
+meaningful follow-up for throughput below the 60 FPS target.
+
+The optical extension and material-write suppression were then measured with
+the same build and capture settings. These are single paired runs on a capped
+machine, so the stress-tail improvement is encouraging rather than a claimed
+cross-device percentage.
+
+| Workload | State | Avg FPS | 1% low | P95 | P99 | Max |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `10-03 optical effects` | Before | 60.0 | 53.9 | 17.87 ms | 18.56 ms | 19.01 ms |
+| `10-03 optical effects` | After | 60.0 | 53.9 | 17.82 ms | 18.54 ms | 18.88 ms |
+| `benchmark stress composition` | Before | 60.0 | 47.8 | 17.93 ms | 20.91 ms | 22.60 ms |
+| `benchmark stress composition` | After | 60.0 | 54.5 | 17.93 ms | 18.36 ms | 18.65 ms |
+
+The portable report now records up to five sampled frames at or above 33.33 ms
+as `SLOW` entries with their elapsed capture time. This makes a first-use shader,
+asset, or transition stall visible instead of hiding it behind one `max` value;
+the timestamp is diagnostic correlation, not an automatic attribution.
+
+### 2026-08-23 incremental UI Gaussian coefficients
+
+The regional and fullscreen UI blur keeps the same separable kernel, scissor,
+sample positions, and 19 texture samples per pass at the common effective
+strength of 45. Only coefficient generation changed. Following NVIDIA GPU Gems
+3 chapter 40, [Incremental Computation of the Gaussian](https://developer.nvidia.com/gpugems/gpugems3/part-vi-gpu-computing/chapter-40-incremental-computation-gaussian),
+regularly spaced coefficients are advanced with multiplicative quotients. At
+this radius the two-pass shader therefore evaluates two `exp()` operations
+instead of 34, with multiplication-only updates for the remaining weights.
+
+A CPU regression test compares every incremental coefficient through support
+18 against direct Gaussian evaluation within `2e-6`. Texture bandwidth remains
+unchanged, so this is principally an ALU/SFU reduction for integrated and older
+GPUs rather than a promise of proportional frame-time improvement. The
+quarter-resolution bloom/depth-of-field designs described in GPU Gems were not
+adopted because they would change the current visual result and add render
+targets/passes.

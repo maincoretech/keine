@@ -9,6 +9,7 @@ use crate::runtime::platform::DesignViewport;
 use crate::runtime::resources::{GameConfigResource, GameState};
 use crate::scene::effects::material::{
     StageMaterial, StageQuad, active_lut_preset, animation_uniform, effective_post_process,
+    upsert_stage_material,
 };
 use crate::scene::images::ImageDimensions;
 
@@ -318,14 +319,8 @@ pub(crate) fn sync_sprites(
                     let material = StageMaterial::new(
                         handle, alpha, filter, data.blend, animation, &post, lut,
                     );
-                    let material_handle = if let Some(existing_material) = existing_material {
-                        if let Some(mut current) = render.materials.get_mut(&existing_material.0) {
-                            *current = material;
-                        }
-                        existing_material.0.clone()
-                    } else {
-                        render.materials.add(material)
-                    };
+                    let material_handle =
+                        upsert_stage_material(existing_material, &mut render.materials, material);
                     let mesh_transform = entity_transform.with_scale(Vec3::new(
                         width * viewport.scale,
                         height * viewport.scale,
