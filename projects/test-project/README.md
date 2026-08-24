@@ -48,9 +48,16 @@ Normal 两次访问准入与 CLOCK 常驻命中、Transient 短资源、Streamin
 随机 seek 和四路并发流。顺序、随机与并发使用互不重叠的 Streaming 文件，避免前一项
 主动预热后一项；报告仍只称 `first-touch`，不声称能够绕过操作系统或硬盘缓存。
 
+普通玩家路径保留一次 60 Hz 发行验收；classic、optical、blur、atmosphere、retro、
+timed-event 和组合压力热点各由三个独立进程重复，报告中给出中位数与范围。`1% low`
+按最慢 1% 帧的瞬时 FPS 平均值计算，另列 `p99-equivalent`，不再混用两种定义。逐帧
+样本以制表符分隔的附录写入同一个 `keine-benchmark-report.txt`，用于复核尖峰和事件
+时间；不生成第二个报告文件，正常运行也不启用这些采样与 render-pass diagnostics。
+
 在外接盘上测试时，应把完整 benchmark 目录解压或复制到目标盘，安全弹出并重新连接后，
 直接从盘内运行一次可执行文件。正常 WebP/Opus 解码和渲染成本来自上面的真实工程场景，
 确定性负载只测加密包、分块、缓存和存储 I/O，不冒充合法媒体解码。
+这些吞吐量也只表示 warm Hakutaku/cache 路径，不作为机械盘或 SATA SSD 的物理基准。
 
 ## 资源
 

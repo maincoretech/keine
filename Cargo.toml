@@ -130,7 +130,7 @@ noyalib = { version = "0.0.15", default-features = false, features = ["std", "fa
 hakutaku-core = { git = "https://github.com/maincoretech/hakutaku", rev = "ce8fe3c" }
 hakutaku-pack = { git = "https://github.com/maincoretech/hakutaku", rev = "ce8fe3c" }
 libc = "0.2"
-windows-sys = { version = "0.61.2", default-features = false, features = ["Win32_System_Diagnostics_Debug", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
+windows-sys = { version = "0.61.2", default-features = false, features = ["Win32_System_Diagnostics_Debug", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading"] }
 bevy = { version = "0.19", default-features = false }
 libwebp-sys = "0.14.4"
 futures-lite = "2"

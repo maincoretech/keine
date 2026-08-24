@@ -1488,3 +1488,56 @@ rather than a speedup claim:
 | `10-02 classic camera properties` | After | 60.0 | 54.7 | 17.86 ms | 18.28 ms | 18.49 ms |
 | `10-06 retro and eyelid mask` | Before | 60.0 | 55.4 | 17.67 ms | 18.04 ms | 18.67 ms |
 | `10-06 retro and eyelid mask` | After | 60.0 | 56.2 | 17.52 ms | 17.80 ms | 18.31 ms |
+
+### 2026-08-24 portable benchmark evidence model
+
+The Intel UHD 620 report at `6c95808` confirmed that the portable package is a
+useful 60 Hz product-acceptance suite but exposed three measurement ambiguities.
+Each render workload had one five-second process sample, VSync capped ordinary
+camera profiles, and the value labelled `1% low` was the reciprocal of P99 frame
+time. Historical tables above retain that original label for provenance, but
+those values are **P99-equivalent FPS**, not the mean FPS of the slowest 1% of
+sampled frames.
+
+The benchmark now reports both definitions explicitly. `1% low` averages the
+per-frame FPS of the slowest `ceil(frame_count × 0.01)` frames;
+`p99-equivalent` remains `1000 / P99 frame milliseconds`. Classic, optical,
+blur, atmosphere, retro, timed-event and combined stress workloads run in three
+isolated processes and add a median, range and worst-frame summary. Ordinary
+player-facing and already-capped feature paths still run once, limiting package
+duration while retaining complete coverage.
+
+Benchmark children also emit bounded raw frame samples into a tab-separated
+appendix in the same `keine-benchmark-report.txt`. It remains a single-file
+handoff while recording workload, repeat identity, target, camera profile,
+elapsed sample time and frame duration, so outliers can be aligned across
+repeats instead of being inferred from one maximum. Bevy's benchmark-only
+`RenderDiagnosticsPlugin` supplies render-pass CPU/GPU diagnostics where the
+backend supports timestamp queries; it is not installed during normal game
+execution. The text report additionally records host CPU/RAM/OS/power context,
+adapter driver, physical surface size, requested present mode and monitor
+refresh when available.
+
+The same review reclassified package numbers as **warm Hakutaku/cache
+throughput**. First-touch ranges are disjoint inside the benchmark, but Windows
+page cache, storage firmware and prior package access are not forcibly cold.
+The encrypted-package matrix remains valuable for detecting open, decrypt,
+CLOCK admission, random-access and parallel-reader regressions; it is not a
+physical HDD-versus-SSD benchmark.
+
+The current X280 values remain the pre-method-change baseline: normal opening
+and daily workloads averaged 60 FPS, repeat interactive startup was 1.172 s,
+and peak RSS reached 425.2 MiB. Classic improved from 45.0 to 48.5 average FPS
+and retro from 46.1 to 56.2 versus the prior matching report, but those
+single-process deltas remain directional evidence. The next X280 package run
+starts a new comparable series because render diagnostics and the corrected
+slowest-1% calculation intentionally change measurement overhead and semantics.
+
+Method references:
+
+- [Unity Performance Testing guidance](https://docs.unity3d.com/Packages/com.unity.test-framework.performance%403.2/manual/index.html)
+  separates target-device acceptance from VSync-free rendering throughput.
+- [NVIDIA FrameView 1.7](https://images.nvidia.com/content/geforce/technologies/frameview/frameview-1-7-user-guide-web-version.pdf)
+  distinguishes percentile FPS from slowest-percent average FPS.
+- [Bevy RenderDiagnosticsPlugin](https://docs.rs/bevy_render/latest/bevy_render/diagnostic/struct.RenderDiagnosticsPlugin.html)
+  provides benchmark-only render-pass CPU/GPU timing and pipeline statistics.

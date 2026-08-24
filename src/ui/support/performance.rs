@@ -1,10 +1,11 @@
 use bevy::app::AppExit;
 use bevy::diagnostic::{DiagnosticsStore, EntityCountDiagnosticsPlugin};
-use bevy::ecs::system::SystemParam;
+use bevy::ecs::system::{NonSendMarker, SystemParam};
 use bevy::prelude::*;
+use bevy::render::renderer::RenderAdapterInfo;
 use bevy::render::{Render, RenderApp, RenderSystems};
 use bevy::window::{PrimaryWindow, WindowCloseRequested};
-use bevy::winit::WinitSettings;
+use bevy::winit::{WINIT_WINDOWS, WinitSettings};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
@@ -24,6 +25,7 @@ pub(crate) enum BenchmarkTarget {
 pub(crate) struct RuntimeCaptureConfig {
     warmup_seconds: f32,
     sample_seconds: f32,
+    machine_output: bool,
     pub(crate) target: Option<BenchmarkTarget>,
     pub(crate) cameras: BenchmarkCameras,
 }
@@ -91,6 +93,8 @@ struct RuntimeCaptureDiagnostics<'w, 's> {
     images: Res<'w, Assets<Image>>,
     fonts: Res<'w, Assets<Font>>,
     cameras: CaptureCameraQuery<'w, 's>,
+    windows: Query<'w, 's, (Entity, &'static Window), With<PrimaryWindow>>,
+    _main_thread: NonSendMarker,
 }
 
 #[derive(SystemParam)]
@@ -116,6 +120,7 @@ struct RenderSampleData {
     first_frame: Option<Instant>,
     previous_frame: Option<Instant>,
     frame_ms: Vec<(f32, f64)>,
+    adapter: Option<String>,
 }
 
 #[derive(Resource, Clone, Default)]
@@ -128,6 +133,127 @@ pub(crate) struct StartupSample {
     pub(crate) first_frame_ms: f64,
     pub(crate) interactive_ms: f64,
     pub(crate) peak_rss_mib: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct RenderSummary {
+    pub(crate) frames: usize,
+    pub(crate) average_ms: f64,
+    pub(crate) p50_ms: f64,
+    pub(crate) p95_ms: f64,
+    pub(crate) p99_ms: f64,
+    pub(crate) maximum_ms: f64,
+    pub(crate) average_fps: f64,
+    pub(crate) one_percent_low_fps: f64,
+    pub(crate) p99_equivalent_fps: f64,
+}
+
+impl RenderSummary {
+    fn from_sorted_frame_ms(frame_ms: &[f64]) -> Self {
+        let frames = frame_ms.len();
+        let average_ms = frame_ms.iter().sum::<f64>() / frames.max(1) as f64;
+        let reciprocal = |frame_ms: f64| {
+            if frame_ms > 0.0 {
+                1_000.0 / frame_ms
+            } else {
+                0.0
+            }
+        };
+        let p99_ms = percentile(frame_ms, 0.99);
+        Self {
+            frames,
+            average_ms,
+            p50_ms: percentile(frame_ms, 0.50),
+            p95_ms: percentile(frame_ms, 0.95),
+            p99_ms,
+            maximum_ms: frame_ms.last().copied().unwrap_or_default(),
+            average_fps: reciprocal(average_ms),
+            one_percent_low_fps: slowest_percent_average_fps(frame_ms, 0.01),
+            p99_equivalent_fps: reciprocal(p99_ms),
+        }
+    }
+
+    pub(crate) fn machine_line(self) -> String {
+        format!(
+            "KEINE_RENDER_SAMPLE frames={} average_ms={} p50_ms={} p95_ms={} p99_ms={} maximum_ms={} average_fps={} one_percent_low_fps={} p99_equivalent_fps={}",
+            self.frames,
+            self.average_ms,
+            self.p50_ms,
+            self.p95_ms,
+            self.p99_ms,
+            self.maximum_ms,
+            self.average_fps,
+            self.one_percent_low_fps,
+            self.p99_equivalent_fps,
+        )
+    }
+
+    pub(crate) fn parse(output: &str) -> Option<Self> {
+        let line = output
+            .lines()
+            .find(|line| line.starts_with("KEINE_RENDER_SAMPLE "))?;
+        let mut values = [None; 9];
+        for field in line.split_whitespace().skip(1) {
+            let (key, value) = field.split_once('=')?;
+            let slot = match key {
+                "frames" => 0,
+                "average_ms" => 1,
+                "p50_ms" => 2,
+                "p95_ms" => 3,
+                "p99_ms" => 4,
+                "maximum_ms" => 5,
+                "average_fps" => 6,
+                "one_percent_low_fps" => 7,
+                "p99_equivalent_fps" => 8,
+                _ => return None,
+            };
+            values[slot] = Some(value.parse::<f64>().ok()?);
+        }
+        Some(Self {
+            frames: values[0]? as usize,
+            average_ms: values[1]?,
+            p50_ms: values[2]?,
+            p95_ms: values[3]?,
+            p99_ms: values[4]?,
+            maximum_ms: values[5]?,
+            average_fps: values[6]?,
+            one_percent_low_fps: values[7]?,
+            p99_equivalent_fps: values[8]?,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct FrameSample {
+    pub(crate) elapsed_seconds: f32,
+    pub(crate) frame_ms: f64,
+}
+
+impl FrameSample {
+    fn machine_line(self) -> String {
+        format!(
+            "KEINE_FRAME_SAMPLE elapsed_seconds={} frame_ms={}",
+            self.elapsed_seconds, self.frame_ms,
+        )
+    }
+
+    pub(crate) fn parse(line: &str) -> Option<Self> {
+        let line = line.strip_prefix("KEINE_FRAME_SAMPLE ")?;
+        let mut elapsed_seconds = None;
+        let mut frame_ms = None;
+        for field in line.split_whitespace() {
+            let (key, value) = field.split_once('=')?;
+            match key {
+                "elapsed_seconds" => elapsed_seconds = value.parse().ok(),
+                "frame_ms" => frame_ms = value.parse().ok(),
+                _ => return None,
+            }
+        }
+        Some(Self {
+            elapsed_seconds: elapsed_seconds?,
+            frame_ms: frame_ms?,
+        })
+    }
 }
 
 struct StartupCaptureData {
@@ -321,6 +447,8 @@ pub(crate) fn install_runtime_capture(
     app.insert_resource(RuntimeCaptureConfig {
         warmup_seconds: 3.0,
         sample_seconds,
+        machine_output: std::env::var_os(crate::runtime::bootstrap::RUNTIME_BENCHMARK_CHILD_ENV)
+            .is_some(),
         target,
         cameras,
     })
@@ -339,9 +467,15 @@ pub(crate) fn install_runtime_capture(
     }
 }
 
-fn capture_render_frame(samples: Res<RenderCaptureSamples>) {
+fn capture_render_frame(samples: Res<RenderCaptureSamples>, adapter: Res<RenderAdapterInfo>) {
     let now = Instant::now();
     let mut samples = samples.0.lock().expect("render capture lock poisoned");
+    samples.adapter.get_or_insert_with(|| {
+        format!(
+            "{} · {:?} · driver {} {}",
+            adapter.name, adapter.backend, adapter.driver, adapter.driver_info,
+        )
+    });
     let first_frame = *samples.first_frame.get_or_insert(now);
     if let Some(previous) = samples.previous_frame {
         samples.frame_ms.push((
@@ -378,18 +512,14 @@ fn capture_runtime_performance(
         .filter(|(elapsed, _)| *elapsed >= config.warmup_seconds)
         .copied()
         .collect::<Vec<_>>();
+    let adapter = samples.adapter.clone();
     drop(samples);
     let mut frame_ms = sampled_frames
         .iter()
         .map(|(_, frame_ms)| *frame_ms)
         .collect::<Vec<_>>();
     frame_ms.sort_by(f64::total_cmp);
-    let frames = frame_ms.len();
-    let average = frame_ms.iter().sum::<f64>() / frames.max(1) as f64;
-    let p50 = percentile(&frame_ms, 0.50);
-    let p95 = percentile(&frame_ms, 0.95);
-    let p99 = percentile(&frame_ms, 0.99);
-    let maximum = frame_ms.last().copied().unwrap_or_default();
+    let summary = RenderSummary::from_sorted_frame_ms(&frame_ms);
     let entities = capture
         .diagnostics
         .get(&EntityCountDiagnosticsPlugin::ENTITY_COUNT)
@@ -397,17 +527,25 @@ fn capture_runtime_performance(
         .unwrap_or_default();
     log::info!(
         target: "keine::performance",
-        "CAPTURE  | {:.1}s · {frames} frames · {:.1} FPS avg · {:.1} FPS 1% low",
+        "CAPTURE  | {:.1}s · {} frames · {:.1} FPS avg · {:.1} FPS 1% low · {:.1} FPS p99-equivalent",
         config.sample_seconds,
-        if average > 0.0 { 1_000.0 / average } else { 0.0 },
-        if p99 > 0.0 { 1_000.0 / p99 } else { 0.0 },
+        summary.frames,
+        summary.average_fps,
+        summary.one_percent_low_fps,
+        summary.p99_equivalent_fps,
     );
     log::info!(
         target: "keine::performance",
-        "FRAME    | avg {average:.2} ms · p50 {p50:.2} · p95 {p95:.2} · p99 {p99:.2} · max {maximum:.2}",
+        "FRAME    | avg {:.2} ms · p50 {:.2} · p95 {:.2} · p99 {:.2} · max {:.2}",
+        summary.average_ms,
+        summary.p50_ms,
+        summary.p95_ms,
+        summary.p99_ms,
+        summary.maximum_ms,
     );
     let mut slow_frames = sampled_frames
-        .into_iter()
+        .iter()
+        .copied()
         .filter(|(_, frame_ms)| *frame_ms >= 1_000.0 / 30.0)
         .collect::<Vec<_>>();
     slow_frames.sort_by(|left, right| right.1.total_cmp(&left.1));
@@ -423,6 +561,28 @@ fn capture_runtime_performance(
         config.cameras,
         active_camera_label(&capture.cameras),
     );
+    if let Some(adapter) = adapter {
+        log::info!(target: "keine::performance", "GPUINFO  | {adapter}");
+    }
+    if let Ok((entity, window)) = capture.windows.single() {
+        let refresh_hz = WINIT_WINDOWS.with_borrow(|windows| {
+            windows
+                .get_window(entity)
+                .and_then(|window| window.current_monitor())
+                .and_then(|monitor| monitor.refresh_rate_millihertz())
+                .map(|millihertz| millihertz as f64 / 1_000.0)
+        });
+        log::info!(
+            target: "keine::performance",
+            "DISPLAY  | {}x{} physical · scale {:.2} · present {:?} · refresh {} · hidden {}",
+            window.resolution.physical_width(),
+            window.resolution.physical_height(),
+            window.resolution.scale_factor(),
+            window.present_mode,
+            refresh_hz.map_or_else(|| "unknown".to_owned(), |hz| format!("{hz:.2} Hz")),
+            !window.visible,
+        );
+    }
     let image_bytes = capture
         .images
         .iter()
@@ -452,16 +612,15 @@ fn capture_runtime_performance(
         .diagnostics
         .iter()
         .filter_map(|diagnostic| {
-            diagnostic
-                .path()
-                .as_str()
-                .starts_with("render/")
-                .then(|| {
-                    diagnostic
-                        .average()
-                        .map(|value| (diagnostic.path().to_string(), value, &diagnostic.suffix))
-                })
-                .flatten()
+            let path = diagnostic.path().as_str();
+            (path.starts_with("render/")
+                && (path.ends_with("/elapsed_cpu") || path.ends_with("/elapsed_gpu")))
+            .then(|| {
+                diagnostic
+                    .average()
+                    .map(|value| (diagnostic.path().to_string(), value, &diagnostic.suffix))
+            })
+            .flatten()
         })
         .collect::<Vec<_>>();
     render_passes.sort_by(|left, right| right.1.total_cmp(&left.1));
@@ -470,6 +629,19 @@ fn capture_runtime_performance(
             target: "keine::performance",
             "RENDER   | {path} {value:.3}{suffix}",
         );
+    }
+    if config.machine_output {
+        eprintln!("{}", summary.machine_line());
+        for (elapsed_seconds, frame_ms) in sampled_frames {
+            eprintln!(
+                "{}",
+                FrameSample {
+                    elapsed_seconds,
+                    frame_ms,
+                }
+                .machine_line()
+            );
+        }
     }
     state.finished = true;
     exit.request();
@@ -508,6 +680,21 @@ fn percentile(sorted: &[f64], percentile: f64) -> f64 {
     }
     let index = ((sorted.len() - 1) as f64 * percentile).round() as usize;
     sorted[index]
+}
+
+fn slowest_percent_average_fps(sorted_frame_ms: &[f64], fraction: f64) -> f64 {
+    if sorted_frame_ms.is_empty() {
+        return 0.0;
+    }
+    let count =
+        ((sorted_frame_ms.len() as f64 * fraction).ceil() as usize).clamp(1, sorted_frame_ms.len());
+    sorted_frame_ms
+        .iter()
+        .rev()
+        .take(count)
+        .map(|frame_ms| 1_000.0 / frame_ms.max(f64::EPSILON))
+        .sum::<f64>()
+        / count as f64
 }
 
 #[cfg(test)]
@@ -571,5 +758,25 @@ mod tests {
                 .peak_rss_mib,
             None
         );
+    }
+
+    #[test]
+    fn render_summary_distinguishes_one_percent_low_from_p99_equivalent_fps() {
+        let mut frame_ms = vec![10.0; 99];
+        frame_ms.push(100.0);
+        let summary = RenderSummary::from_sorted_frame_ms(&frame_ms);
+
+        assert_eq!(summary.one_percent_low_fps, 10.0);
+        assert_eq!(summary.p99_equivalent_fps, 100.0);
+        assert_eq!(RenderSummary::parse(&summary.machine_line()), Some(summary));
+    }
+
+    #[test]
+    fn frame_sample_machine_line_round_trips() {
+        let sample = FrameSample {
+            elapsed_seconds: 3.25,
+            frame_ms: 16.75,
+        };
+        assert_eq!(FrameSample::parse(&sample.machine_line()), Some(sample));
     }
 }

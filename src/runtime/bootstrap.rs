@@ -16,6 +16,7 @@ use bevy::ecs::system::NonSendMarker;
 use bevy::ecs::system::SystemParam;
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 use bevy::prelude::*;
+use bevy::render::diagnostic::RenderDiagnosticsPlugin;
 use bevy::window::{PrimaryWindow, WindowResolution};
 use bevy::winit::WINIT_WINDOWS;
 use keine_core::config::GameConfig;
@@ -73,6 +74,16 @@ const FEATURE_BENCHMARK_WORKLOADS: &[BenchmarkWorkload] = &[
 ];
 const STRESS_BENCHMARK_WORKLOADS: &[BenchmarkWorkload] =
     &[("stress composition", "benchmark stress composition")];
+const REPEATED_BENCHMARK_TARGETS: &[&str] = &[
+    "10-02 classic camera properties",
+    "10-03 optical effects",
+    "10-04 blur family",
+    "10-05 atmosphere effects",
+    "10-06 retro and eyelid mask",
+    "10-07 all event types",
+    "benchmark stress composition",
+];
+const HOTSPOT_BENCHMARK_RUNS: usize = 3;
 const CAMERA_BENCHMARK_WORKLOADS: &[(&str, BenchmarkCameras)] = &[
     (
         "opening composition · scene + UI",
@@ -351,7 +362,7 @@ fn execute_command(
 }
 
 const STARTUP_BENCHMARK_CHILD_ENV: &str = "KEINE_STARTUP_BENCHMARK_CHILD";
-const RUNTIME_BENCHMARK_CHILD_ENV: &str = "KEINE_RUNTIME_BENCHMARK_CHILD";
+pub(crate) const RUNTIME_BENCHMARK_CHILD_ENV: &str = "KEINE_RUNTIME_BENCHMARK_CHILD";
 
 fn run_startup_suite(project_path: &Path, runs: usize) -> Result<String> {
     let executable =
@@ -387,6 +398,7 @@ fn run_startup_suite(project_path: &Path, runs: usize) -> Result<String> {
             },
         ),
     );
+    append_host_environment(&mut report, logical_threads);
     for run in 1..=runs {
         let output = Command::new(&executable)
             .arg("benchmark-startup")
@@ -429,9 +441,146 @@ fn run_startup_suite(project_path: &Path, runs: usize) -> Result<String> {
     Ok(report)
 }
 
+fn append_host_environment(report: &mut String, logical_threads: usize) {
+    let memory = physical_memory_bytes().map_or_else(
+        || "unknown RAM".to_owned(),
+        |bytes| format!("{:.1} GiB RAM", bytes as f64 / 1_073_741_824.0),
+    );
+    emit_report_line(
+        report,
+        format!(
+            "host environment · OS {} · CPU {} · {logical_threads} logical thread(s) · {memory}",
+            host_os_version(),
+            host_cpu_model(),
+        ),
+    );
+    if let Some(power) = host_power_context() {
+        emit_report_line(report, format!("power context · {power}"));
+    }
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn clean_command_output(program: &str, arguments: &[&str]) -> Option<String> {
+    let output = Command::new(program).args(arguments).output().ok()?;
+    output
+        .status
+        .success()
+        .then(|| {
+            String::from_utf8_lossy(&output.stdout)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .filter(|output| !output.is_empty())
+}
+
+#[cfg(windows)]
+fn host_cpu_model() -> String {
+    std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_else(|_| "unknown".to_owned())
+}
+
+#[cfg(target_os = "macos")]
+fn host_cpu_model() -> String {
+    clean_command_output("sysctl", &["-n", "machdep.cpu.brand_string"])
+        .unwrap_or_else(|| "unknown".to_owned())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn host_cpu_model() -> String {
+    std::fs::read_to_string("/proc/cpuinfo")
+        .ok()
+        .and_then(|contents| {
+            contents.lines().find_map(|line| {
+                let (key, value) = line.split_once(':')?;
+                (key.trim() == "model name").then(|| value.trim().to_owned())
+            })
+        })
+        .unwrap_or_else(|| "unknown".to_owned())
+}
+
+#[cfg(not(any(windows, unix)))]
+fn host_cpu_model() -> String {
+    "unknown".to_owned()
+}
+
+#[cfg(windows)]
+fn host_os_version() -> String {
+    clean_command_output("cmd", &["/C", "ver"]).unwrap_or_else(|| "Windows".to_owned())
+}
+
+#[cfg(target_os = "macos")]
+fn host_os_version() -> String {
+    clean_command_output("sw_vers", &["-productVersion"])
+        .map_or_else(|| "macOS".to_owned(), |version| format!("macOS {version}"))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn host_os_version() -> String {
+    std::fs::read_to_string("/etc/os-release")
+        .ok()
+        .and_then(|contents| {
+            contents.lines().find_map(|line| {
+                line.strip_prefix("PRETTY_NAME=")
+                    .map(|value| value.trim_matches('"').to_owned())
+            })
+        })
+        .unwrap_or_else(|| std::env::consts::OS.to_owned())
+}
+
+#[cfg(not(any(windows, unix)))]
+fn host_os_version() -> String {
+    std::env::consts::OS.to_owned()
+}
+
+#[cfg(windows)]
+fn host_power_context() -> Option<String> {
+    clean_command_output("powercfg", &["/getactivescheme"])
+}
+
+#[cfg(not(windows))]
+fn host_power_context() -> Option<String> {
+    None
+}
+
+#[cfg(all(feature = "startup-metrics", windows))]
+fn physical_memory_bytes() -> Option<u64> {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+
+    let mut status = MEMORYSTATUSEX {
+        dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: `status` has the required size and remains writable for the call.
+    let success = unsafe { GlobalMemoryStatusEx(&mut status) };
+    (success != 0).then_some(status.ullTotalPhys)
+}
+
+#[cfg(all(feature = "startup-metrics", unix))]
+fn physical_memory_bytes() -> Option<u64> {
+    // SAFETY: `sysconf` has no pointer arguments and these names query stable
+    // process-global system values.
+    let pages = unsafe { libc::sysconf(libc::_SC_PHYS_PAGES) };
+    // SAFETY: See above; the page-size query has the same contract.
+    let page_bytes = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    (pages > 0 && page_bytes > 0)
+        .then(|| (pages as u64).checked_mul(page_bytes as u64))
+        .flatten()
+}
+
+#[cfg(not(any(
+    all(feature = "startup-metrics", windows),
+    all(feature = "startup-metrics", unix)
+)))]
+fn physical_memory_bytes() -> Option<u64> {
+    None
+}
+
 fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) -> Result<()> {
     let executable = std::env::current_exe().context("failed to locate benchmark executable")?;
     let mut report = run_startup_suite(project_path, runs)?;
+    let mut raw_frames = String::from(
+        "RAWFRAME\tworkload\trun\ttotal_runs\ttarget\tcamera_profile\telapsed_seconds\tframe_ms\n",
+    );
     emit_report_line(&mut report, "");
     emit_report_line(
         &mut report,
@@ -442,13 +591,19 @@ fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) ->
         "camera policy · runtime follows production sleep/wake · decomposition profiles pin explicit cameras",
     );
     let timeline_inventory = run_benchmark_workload(
-        &executable,
-        project_path,
-        "opening composition · runtime composition",
-        None,
-        BenchmarkCameras::Runtime,
+        BenchmarkWorkloadCapture {
+            executable: &executable,
+            project_path,
+            label: "opening composition · runtime composition",
+            target: None,
+            cameras: BenchmarkCameras::Runtime,
+            run: 1,
+            total_runs: 1,
+        },
         &mut report,
-    )?;
+        &mut raw_frames,
+    )?
+    .stderr;
     emit_report_line(&mut report, "");
     emit_report_line(
         &mut report,
@@ -456,12 +611,17 @@ fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) ->
     );
     for (label, cameras) in CAMERA_BENCHMARK_WORKLOADS {
         run_benchmark_workload(
-            &executable,
-            project_path,
-            label,
-            None,
-            *cameras,
+            BenchmarkWorkloadCapture {
+                executable: &executable,
+                project_path,
+                label,
+                target: None,
+                cameras: *cameras,
+                run: 1,
+                total_runs: 1,
+            },
             &mut report,
+            &mut raw_frames,
         )?;
     }
     for (section, workloads) in PORTABLE_BENCHMARK_SECTIONS {
@@ -470,14 +630,29 @@ fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) ->
         let mut authored = 0;
         for (label, target) in *workloads {
             if timeline_is_available(&timeline_inventory, target) {
-                run_benchmark_workload(
-                    &executable,
-                    project_path,
-                    label,
-                    Some(target),
-                    BenchmarkCameras::Runtime,
-                    &mut report,
-                )?;
+                let total_runs = benchmark_workload_runs(target);
+                let mut summaries = Vec::with_capacity(total_runs);
+                for run in 1..=total_runs {
+                    summaries.push(
+                        run_benchmark_workload(
+                            BenchmarkWorkloadCapture {
+                                executable: &executable,
+                                project_path,
+                                label,
+                                target: Some(target),
+                                cameras: BenchmarkCameras::Runtime,
+                                run,
+                                total_runs,
+                            },
+                            &mut report,
+                            &mut raw_frames,
+                        )?
+                        .summary,
+                    );
+                }
+                if total_runs > 1 {
+                    append_render_repeat_summary(label, &summaries, &mut report);
+                }
                 authored += 1;
             }
         }
@@ -491,7 +666,11 @@ fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) ->
     emit_report_line(&mut report, "");
     emit_report_line(
         &mut report,
-        "package I/O · real assets and isolated Hakutaku access-class stress",
+        "warm Hakutaku/cache throughput · real assets and isolated access-class stress",
+    );
+    emit_report_line(
+        &mut report,
+        "scope · package open/decrypt/cache/memory path; not a cold-cache or physical-device benchmark",
     );
     let output = Command::new(&executable)
         .arg("__benchmark-package")
@@ -511,23 +690,56 @@ fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) ->
     for line in package_report.lines() {
         emit_report_line(&mut report, line);
     }
+    emit_report_line(&mut report, "");
+    emit_report_line(
+        &mut report,
+        "raw frame appendix · bounded tab-separated samples for offline analysis",
+    );
+    report.push_str(&raw_frames);
     crate::storage::write_atomically(report_path, report.as_bytes())?;
     println!("benchmark report written to {}", report_path.display());
     Ok(())
 }
 
-fn run_benchmark_workload(
-    executable: &Path,
-    project_path: &Path,
-    label: &str,
-    target: Option<&str>,
+struct BenchmarkWorkloadOutput {
+    stderr: String,
+    summary: crate::ui::performance::RenderSummary,
+}
+
+struct BenchmarkWorkloadCapture<'a> {
+    executable: &'a Path,
+    project_path: &'a Path,
+    label: &'a str,
+    target: Option<&'a str>,
     cameras: BenchmarkCameras,
+    run: usize,
+    total_runs: usize,
+}
+
+fn run_benchmark_workload(
+    capture: BenchmarkWorkloadCapture<'_>,
     report: &mut String,
-) -> Result<String> {
+    raw_frames: &mut String,
+) -> Result<BenchmarkWorkloadOutput> {
+    let BenchmarkWorkloadCapture {
+        executable,
+        project_path,
+        label,
+        target,
+        cameras,
+        run,
+        total_runs,
+    } = capture;
     emit_report_line(report, "");
     emit_report_line(
         report,
-        format!("settled render · {label} · 3.0s warm-up + 5.0s sample"),
+        if total_runs == 1 {
+            format!("settled render · {label} · 3.0s warm-up + 5.0s sample")
+        } else {
+            format!(
+                "settled render · {label} · run {run}/{total_runs} · 3.0s warm-up + 5.0s sample"
+            )
+        },
     );
     let mut command = Command::new(executable);
     command.arg("benchmark").arg(project_path).arg("5");
@@ -552,16 +764,101 @@ fn run_benchmark_workload(
         anyhow::bail!("{label} benchmark did not resolve timeline {target:?}\n{stderr}");
     }
     let mut captured = 0;
+    let mut summary = None;
     for line in stdout.lines().chain(stderr.lines()) {
+        let line = line.trim();
+        if let Some(frame) = crate::ui::performance::FrameSample::parse(line) {
+            append_raw_frame(raw_frames, label, run, total_runs, target, cameras, frame);
+            continue;
+        }
+        if let Some(sample) = crate::ui::performance::RenderSummary::parse(line) {
+            summary = Some(sample);
+            continue;
+        }
         if benchmark_report_line(line) {
-            emit_report_line(report, line.trim());
+            emit_report_line(report, line);
             captured += 1;
         }
     }
     if captured == 0 {
         anyhow::bail!("{label} benchmark completed without performance output");
     }
-    Ok(stderr.into_owned())
+    let summary =
+        summary.context("benchmark completed without a machine-readable render sample")?;
+    Ok(BenchmarkWorkloadOutput {
+        stderr: stderr.into_owned(),
+        summary,
+    })
+}
+
+fn benchmark_workload_runs(target: &str) -> usize {
+    if REPEATED_BENCHMARK_TARGETS.contains(&target) {
+        HOTSPOT_BENCHMARK_RUNS
+    } else {
+        1
+    }
+}
+
+fn append_render_repeat_summary(
+    label: &str,
+    summaries: &[crate::ui::performance::RenderSummary],
+    report: &mut String,
+) {
+    let median = |select: fn(&crate::ui::performance::RenderSummary) -> f64| {
+        let mut values = summaries.iter().map(select).collect::<Vec<_>>();
+        values.sort_by(f64::total_cmp);
+        values[values.len() / 2]
+    };
+    let minimum_fps = summaries
+        .iter()
+        .map(|summary| summary.average_fps)
+        .min_by(f64::total_cmp)
+        .unwrap_or_default();
+    let maximum_fps = summaries
+        .iter()
+        .map(|summary| summary.average_fps)
+        .max_by(f64::total_cmp)
+        .unwrap_or_default();
+    let worst_frame = summaries
+        .iter()
+        .map(|summary| summary.maximum_ms)
+        .max_by(f64::total_cmp)
+        .unwrap_or_default();
+    emit_report_line(
+        report,
+        format!(
+            "REPEAT   | {label} · {} runs · avg FPS median {:.1} ({minimum_fps:.1}..{maximum_fps:.1}) · 1% low median {:.1} · p99 median {:.2} ms · worst frame {worst_frame:.2} ms",
+            summaries.len(),
+            median(|summary| summary.average_fps),
+            median(|summary| summary.one_percent_low_fps),
+            median(|summary| summary.p99_ms),
+        ),
+    );
+}
+
+fn append_raw_frame(
+    output: &mut String,
+    label: &str,
+    run: usize,
+    total_runs: usize,
+    target: Option<&str>,
+    cameras: BenchmarkCameras,
+    frame: crate::ui::performance::FrameSample,
+) {
+    output.push_str("RAWFRAME\t");
+    output.push_str(&tsv_text(label));
+    output.push_str(&format!("\t{run}\t{total_runs}\t"));
+    output.push_str(&tsv_text(target.unwrap_or("opening")));
+    output.push('\t');
+    output.push_str(&tsv_text(cameras.id()));
+    output.push_str(&format!(
+        "\t{:.6}\t{:.6}\n",
+        frame.elapsed_seconds, frame.frame_ms
+    ));
+}
+
+fn tsv_text(value: &str) -> String {
+    value.replace(['\t', '\r', '\n'], " ")
 }
 
 fn timeline_is_available(inventory: &str, wanted: &str) -> bool {
@@ -579,6 +876,8 @@ fn timeline_is_available(inventory: &str, wanted: &str) -> bool {
 fn benchmark_report_line(line: &str) -> bool {
     [
         "GPU      │",
+        "GPUINFO  |",
+        "DISPLAY  |",
         "START    |",
         "CAPTURE  |",
         "FRAME    |",
@@ -887,7 +1186,13 @@ fn build_opened_app(
         app.init_resource::<HotReloadSession>();
     }
     if let Some(benchmark) = options.benchmark {
-        app.add_plugins(EntityCountDiagnosticsPlugin::default());
+        // Render diagnostics are benchmark-only. Vulkan and DX12 expose both
+        // CPU/GPU pass time and pipeline statistics; other backends still
+        // provide CPU pass time without affecting normal game execution.
+        app.add_plugins((
+            EntityCountDiagnosticsPlugin::default(),
+            RenderDiagnosticsPlugin,
+        ));
         app.init_resource::<PersistenceDisabled>();
         crate::ui::performance::install_runtime_capture(
             &mut app,
@@ -1433,6 +1738,10 @@ mod tests {
         assert_eq!(DAILY_BENCHMARK_WORKLOADS.len(), 3);
         assert_eq!(FEATURE_BENCHMARK_WORKLOADS.len(), 8);
         assert_eq!(STRESS_BENCHMARK_WORKLOADS.len(), 1);
+        assert_eq!(REPEATED_BENCHMARK_TARGETS.len(), 7);
+        assert_eq!(HOTSPOT_BENCHMARK_RUNS, 3);
+        assert_eq!(benchmark_workload_runs("10-04 blur family"), 3);
+        assert_eq!(benchmark_workload_runs("10-01 shared transform clock"), 1);
         assert_eq!(targets.len(), 12);
         assert_eq!(CAMERA_BENCHMARK_WORKLOADS.len(), 3);
         assert!(
@@ -1460,6 +1769,27 @@ mod tests {
         assert!(benchmark_report_line(
             "0.1s INFO keine::performance: SLOW     | t=3.400s · 393.01 ms"
         ));
+    }
+
+    #[test]
+    fn raw_frame_appendix_sanitizes_tab_separators() {
+        let mut output = String::new();
+        append_raw_frame(
+            &mut output,
+            "blur\tfamily",
+            2,
+            3,
+            Some("10-04 blur family"),
+            BenchmarkCameras::Runtime,
+            crate::ui::performance::FrameSample {
+                elapsed_seconds: 3.5,
+                frame_ms: 16.75,
+            },
+        );
+        assert_eq!(
+            output,
+            "RAWFRAME\tblur family\t2\t3\t10-04 blur family\truntime\t3.500000\t16.750000\n"
+        );
     }
 
     #[test]
