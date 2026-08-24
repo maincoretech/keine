@@ -517,6 +517,517 @@
           }
         },
         {
+          "id": "benchmark-10-classic-sampling",
+          "type": "stageAnimation",
+          "content": null,
+          "props": {
+            "name": "benchmark classic sampling",
+            "loop": "0",
+            "playbackRate": "1",
+            "waitForComplete": "true",
+            "clipJson": {
+              "version": 1,
+              "duration": 2600,
+              "tracks": [
+                {
+                  "target": {
+                    "kind": "camera"
+                  },
+                  "property": "focalDistance",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": 0
+                    },
+                    {
+                      "time": 1300,
+                      "value": 0.55
+                    },
+                    {
+                      "time": 2600,
+                      "value": 0
+                    }
+                  ]
+                },
+                {
+                  "target": {
+                    "kind": "camera"
+                  },
+                  "property": "blurStrength",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": 0
+                    },
+                    {
+                      "time": 1300,
+                      "value": 5
+                    },
+                    {
+                      "time": 2600,
+                      "value": 0
+                    }
+                  ]
+                },
+                {
+                  "target": {
+                    "kind": "camera"
+                  },
+                  "property": "blurAmount",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": 0
+                    },
+                    {
+                      "time": 1300,
+                      "value": 4
+                    },
+                    {
+                      "time": 2600,
+                      "value": 0
+                    }
+                  ]
+                },
+                {
+                  "target": {
+                    "kind": "camera"
+                  },
+                  "property": "shockIntensity",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": 0
+                    },
+                    {
+                      "time": 1300,
+                      "value": 0.32
+                    },
+                    {
+                      "time": 2600,
+                      "value": 0
+                    }
+                  ]
+                }
+              ],
+              "events": []
+            }
+          }
+        },
+        {
+          "id": "benchmark-11-classic-godray",
+          "type": "stageAnimation",
+          "content": null,
+          "props": {
+            "name": "benchmark classic godray",
+            "loop": "0",
+            "playbackRate": "1",
+            "waitForComplete": "true",
+            "clipJson": {
+              "version": 1,
+              "duration": 2600,
+              "tracks": [
+                {
+                  "target": {
+                    "kind": "camera"
+                  },
+                  "property": "godrayIntensity",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": 0
+                    },
+                    {
+                      "time": 1300,
+                      "value": 0.55
+                    },
+                    {
+                      "time": 2600,
+                      "value": 0
+                    }
+                  ]
+                },
+                {
+                  "target": {
+                    "kind": "camera"
+                  },
+                  "property": "godrayAngle",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": 30
+                    },
+                    {
+                      "time": 1300,
+                      "value": 65
+                    },
+                    {
+                      "time": 2600,
+                      "value": 30
+                    }
+                  ]
+                },
+                {
+                  "target": {
+                    "kind": "camera"
+                  },
+                  "property": "godrayGain",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": 0.5
+                    },
+                    {
+                      "time": 1300,
+                      "value": 0.8
+                    },
+                    {
+                      "time": 2600,
+                      "value": 0.5
+                    }
+                  ]
+                },
+                {
+                  "target": {
+                    "kind": "camera"
+                  },
+                  "property": "godrayLacunarity",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": 2.5
+                    },
+                    {
+                      "time": 1300,
+                      "value": 3.2
+                    },
+                    {
+                      "time": 2600,
+                      "value": 2.5
+                    }
+                  ]
+                },
+                {
+                  "target": {
+                    "kind": "camera"
+                  },
+                  "property": "godraySpeed",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": 1
+                    },
+                    {
+                      "time": 1300,
+                      "value": 1.8
+                    },
+                    {
+                      "time": 2600,
+                      "value": 1
+                    }
+                  ]
+                },
+                {
+                  "target": {
+                    "kind": "camera"
+                  },
+                  "property": "godrayCenterX",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": 0.5
+                    },
+                    {
+                      "time": 1300,
+                      "value": 0.72
+                    },
+                    {
+                      "time": 2600,
+                      "value": 0.5
+                    }
+                  ]
+                },
+                {
+                  "target": {
+                    "kind": "camera"
+                  },
+                  "property": "godrayCenterY",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": 0
+                    },
+                    {
+                      "time": 1300,
+                      "value": 0.2
+                    },
+                    {
+                      "time": 2600,
+                      "value": 0
+                    }
+                  ]
+                }
+              ],
+              "events": []
+            }
+          }
+        },
+        {
+          "id": "benchmark-12-classic-film-noise",
+          "type": "stageAnimation",
+          "content": null,
+          "props": {
+            "name": "benchmark classic film noise",
+            "loop": "0",
+            "playbackRate": "1",
+            "waitForComplete": "true",
+            "clipJson": {
+              "version": 1,
+              "duration": 2600,
+              "tracks": [
+                {
+                  "target": {
+                    "kind": "camera"
+                  },
+                  "property": "oldFilmIntensity",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": 0
+                    },
+                    {
+                      "time": 1300,
+                      "value": 0.5
+                    },
+                    {
+                      "time": 2600,
+                      "value": 0
+                    }
+                  ]
+                }
+              ],
+              "events": []
+            }
+          }
+        },
+        {
+          "id": "benchmark-13-classic-color-lens",
+          "type": "stageAnimation",
+          "content": null,
+          "props": {
+            "name": "benchmark classic color and lens",
+            "loop": "0",
+            "playbackRate": "1",
+            "waitForComplete": "true",
+            "clipJson": {
+              "version": 1,
+              "duration": 2600,
+              "tracks": [
+                {
+                  "target": {
+                    "kind": "camera"
+                  },
+                  "property": "distortionStrength",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": 0
+                    },
+                    {
+                      "time": 1300,
+                      "value": 0.16
+                    },
+                    {
+                      "time": 2600,
+                      "value": 0
+                    }
+                  ]
+                },
+                {
+                  "target": {
+                    "kind": "camera"
+                  },
+                  "property": "vignetteIntensity",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": 0
+                    },
+                    {
+                      "time": 1300,
+                      "value": 0.65
+                    },
+                    {
+                      "time": 2600,
+                      "value": 0
+                    }
+                  ]
+                },
+                {
+                  "target": {
+                    "kind": "camera"
+                  },
+                  "property": "vignetteSize",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": 0.7
+                    },
+                    {
+                      "time": 1300,
+                      "value": 0.42
+                    },
+                    {
+                      "time": 2600,
+                      "value": 0.7
+                    }
+                  ]
+                },
+                {
+                  "target": {
+                    "kind": "camera"
+                  },
+                  "property": "colorToneIntensity",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": 0
+                    },
+                    {
+                      "time": 1300,
+                      "value": 0.5
+                    },
+                    {
+                      "time": 2600,
+                      "value": 0
+                    }
+                  ]
+                },
+                {
+                  "target": {
+                    "kind": "camera"
+                  },
+                  "property": "colorExposure",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": 0
+                    },
+                    {
+                      "time": 1300,
+                      "value": 0.2
+                    },
+                    {
+                      "time": 2600,
+                      "value": 0
+                    }
+                  ]
+                },
+                {
+                  "target": {
+                    "kind": "camera"
+                  },
+                  "property": "colorBrightness",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": 0
+                    },
+                    {
+                      "time": 1300,
+                      "value": 0.12
+                    },
+                    {
+                      "time": 2600,
+                      "value": 0
+                    }
+                  ]
+                },
+                {
+                  "target": {
+                    "kind": "camera"
+                  },
+                  "property": "colorContrast",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": 0
+                    },
+                    {
+                      "time": 1300,
+                      "value": 0.18
+                    },
+                    {
+                      "time": 2600,
+                      "value": 0
+                    }
+                  ]
+                },
+                {
+                  "target": {
+                    "kind": "camera"
+                  },
+                  "property": "colorSaturation",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": 1
+                    },
+                    {
+                      "time": 1300,
+                      "value": 0.35
+                    },
+                    {
+                      "time": 2600,
+                      "value": 1
+                    }
+                  ]
+                },
+                {
+                  "target": {
+                    "kind": "camera"
+                  },
+                  "property": "colorTemperature",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": 0
+                    },
+                    {
+                      "time": 1300,
+                      "value": 0.35
+                    },
+                    {
+                      "time": 2600,
+                      "value": 0
+                    }
+                  ]
+                }
+              ],
+              "events": [
+                {
+                  "type": "cameraPatch",
+                  "time": 0,
+                  "data": {
+                    "patch": {
+                      "colorToneMode": "sepia"
+                    }
+                  }
+                },
+                {
+                  "type": "cameraPatch",
+                  "time": 2599,
+                  "data": {
+                    "patch": {
+                      "colorToneMode": "none"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
           "id": "benchmark-90-stress-composition",
           "type": "stageAnimation",
           "content": null,

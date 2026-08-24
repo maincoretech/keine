@@ -40,7 +40,10 @@ WebGAL 命令覆盖脚本已移至 `tests/fixtures/webgal-showcase/`，仅作为
 运行时直接重建，复用正式验收资源组成普通背景、单人立绘、姓名框和 textbox，并分别测量
 对白构图、一次立绘移动和常见背景交叉淡入淡出。portable 报告随后逐项运行 `10-01` 至
 `10-08`，覆盖全部 79 个 StageProperty 和五类时间事件，最后运行一个明确标记的组合极限场景。
-日常、全能力覆盖和极限结果分区展示；相机拆分仍只属于开发诊断。
+日常、全能力覆盖和极限结果分区展示；相机拆分仍只属于开发诊断。组合 `classic camera`
+另有四个不可从剧情到达的归因时间轴，分别隔离纹理采样（景深/模糊/冲击）、godray 数学、
+胶片噪声和颜色/镜头数学。它们只帮助判断下一次 shader 优化应落在哪里，不新增运行时
+开关、画质档位或发行资源。
 
 `bundle --benchmark` 还会在临时 staging 中生成 204.2 MiB、不可压缩且不会被剧情引用的
 Hakutaku I/O 负载；它不写回本工程，也不会进入普通发行包。负载分别覆盖 Hot 小文件、
@@ -49,7 +52,8 @@ Normal 两次访问准入与 CLOCK 常驻命中、Transient 短资源、Streamin
 主动预热后一项；报告仍只称 `first-touch`，不声称能够绕过操作系统或硬盘缓存。
 
 普通玩家路径保留一次 60 Hz 发行验收；classic、optical、blur、atmosphere、retro、
-timed-event 和组合压力热点各由三个独立进程重复，报告中给出中位数与范围。`1% low`
+timed-event、四个 classic 归因组和组合压力热点各由三个独立进程重复，报告中给出中位数
+与范围。`1% low`
 按最慢 1% 帧的瞬时 FPS 平均值计算，另列 `p99-equivalent`，不再混用两种定义。逐帧
 样本以制表符分隔的附录写入同一个 `keine-benchmark-report.txt`，用于复核尖峰和事件
 时间；不生成第二个报告文件，正常运行也不启用这些采样与 render-pass diagnostics。

@@ -161,10 +161,10 @@ impl StageMaterial {
             ),
             post_e: Vec4::new(post.godray_center_y.clamp(0.0, 1.0), 0.0, 0.0, 0.0),
             post_f: Vec4::new(
-                post.color_exposure.clamp(-4.0, 4.0),
+                post.color_exposure.clamp(-2.0, 2.0),
                 post.color_brightness.clamp(-1.0, 1.0),
-                post.color_contrast.clamp(-1.0, 3.0),
-                post.color_saturation.clamp(0.0, 4.0),
+                post.color_contrast.clamp(-1.0, 1.0),
+                post.color_saturation.clamp(0.0, 2.0),
             ),
             post_g: Vec4::new(
                 post.color_temperature.clamp(-1.0, 1.0),
@@ -520,6 +520,28 @@ mod tests {
 
         effect.lut_intensity = 0.5;
         assert_eq!(active_lut_preset(&effect), Some("warm"));
+    }
+
+    #[test]
+    fn classic_color_parameters_follow_letsgal_filter_limits() {
+        let effect = PostProcessEffect {
+            color_exposure: 9.0,
+            color_brightness: -9.0,
+            color_contrast: 9.0,
+            color_saturation: 9.0,
+            ..default()
+        };
+        let material = StageMaterial::new(
+            Handle::default(),
+            1.0,
+            VisualFilter::default(),
+            BlendMode::Alpha,
+            Vec4::ZERO,
+            &effect,
+            None,
+        );
+
+        assert_eq!(material.post_f, Vec4::new(2.0, -1.0, 1.0, 2.0));
     }
 
     #[test]

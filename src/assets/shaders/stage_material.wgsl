@@ -57,6 +57,25 @@ fn distort_uv(uv: vec2<f32>) -> vec2<f32> {
     return (distorted * short_side + dimensions * 0.5) / dimensions;
 }
 
+fn texture_edge_coverage(uv: vec2<f32>) -> f32 {
+    let dimensions = vec2<f32>(textureDimensions(color_texture));
+    let signed_edge = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
+    // The camera lens maps a rectangular texture onto a curved boundary.
+    // Feather that boundary in screen space instead of discarding a whole
+    // fragment, so every color channel shares the same antialiased coverage.
+    let antialias_width = max(fwidth(signed_edge), 1.0 / min(dimensions.x, dimensions.y));
+    return smoothstep(-antialias_width, antialias_width, signed_edge);
+}
+
+fn texture_edge_distance_pixels(uv: vec2<f32>) -> f32 {
+    let dimensions = vec2<f32>(textureDimensions(color_texture));
+    let edge = min(
+        min(uv.x * dimensions.x, (1.0 - uv.x) * dimensions.x),
+        min(uv.y * dimensions.y, (1.0 - uv.y) * dimensions.y),
+    );
+    return max(edge, 0.0);
+}
+
 fn animate_uv(source: vec2<f32>) -> vec2<f32> {
     let dimensions = vec2<f32>(textureDimensions(color_texture));
     var uv = source;
@@ -120,7 +139,7 @@ fn sample_blurred(uv: vec2<f32>) -> vec4<f32> {
 #endif
 
 #ifdef STAGE_OPTICAL
-fn sample_camera_effects(uv: vec2<f32>) -> vec4<f32> {
+fn sample_camera_effects(uv: vec2<f32>, edge_uv: vec2<f32>) -> vec4<f32> {
     let dimensions = vec2<f32>(textureDimensions(color_texture));
     let texel = vec2<f32>(1.0) / dimensions;
     let center_blur = max(material.post_h.w, material.post_j.x);
@@ -145,9 +164,17 @@ fn sample_camera_effects(uv: vec2<f32>) -> vec4<f32> {
     } else {
         color = sample_blurred(uv);
         if material.post_g.z > 0.001 {
-            let split = texel.x * (1.0 + material.post_g.z * 18.0);
+            let unsplit = color.rgb;
+            let split_pixels = 1.0 + material.post_g.z * 18.0;
+            let split = texel.x * split_pixels;
+            let edge_fade = smoothstep(
+                split_pixels,
+                split_pixels + 1.5,
+                texture_edge_distance_pixels(edge_uv),
+            );
             color.r = sample_blurred(clamp(uv + vec2<f32>(split, 0.0), vec2<f32>(0.0), vec2<f32>(1.0))).r;
             color.b = sample_blurred(clamp(uv - vec2<f32>(split, 0.0), vec2<f32>(0.0), vec2<f32>(1.0))).b;
+            color = vec4<f32>(mix(unsplit, color.rgb, edge_fade), color.a);
         }
     }
     if material.post_h.z > 0.001 {
@@ -201,41 +228,61 @@ fn godray(uv: vec2<f32>) -> f32 {
     if material.post_c.x <= 0.001 {
         return 0.0;
     }
+    let dimensions = vec2<f32>(textureDimensions(color_texture));
+    let aspect = dimensions.y / max(dimensions.x, 1.0);
     let angle = material.post_c.z;
     let direction = vec2<f32>(cos(angle), sin(angle));
     let center = vec2<f32>(material.post_d.w, material.post_e.x);
-    let point = uv - center;
-    let axis = select(normalize(point + vec2<f32>(0.0001)), direction, material.post_d.z > 0.5);
-    let across = dot(point, vec2<f32>(-axis.y, axis.x));
-    let along = max(0.0, dot(point, axis));
-    let density = material.post_d.y;
-    let phase = globals.time * material.post_c.w;
-    var layers = 0.0;
-    var frequency = 9.0 * density;
+    let parallel_coordinate = direction.x * uv.x + direction.y * uv.y * aspect;
+    let from_center = vec2<f32>(uv.x - center.x, (uv.y - center.y) * aspect);
+    let point_coordinate = from_center.y / max(length(from_center), 0.00001);
+    var coordinate = select(point_coordinate, parallel_coordinate, material.post_d.z > 0.5);
+    coordinate += globals.time * material.post_c.w * 0.05;
+
+    // LetsGal's GodrayFilter builds mist from six octaves of periodic
+    // turbulence. A one-dimensional value-noise form is sufficient here
+    // because a parallel ray only varies across its projected coordinate.
+    var turbulence = 0.0;
+    var frequency = 1.0;
     var amplitude = 1.0;
-    for (var octave = 0; octave < 3; octave += 1) {
-        let wave = 0.5 + 0.5 * sin(across * frequency + phase * (1.0 + f32(octave) * 0.37));
-        layers += pow(wave, 3.5) * amplitude;
-        frequency *= 1.73;
-        amplitude *= mix(0.28, 0.62, material.post_d.x);
+    // LetsGal blurs the generated mist in the following Gaussian filter.
+    // This single-pass material applies the equivalent Gaussian low-pass to
+    // each procedural octave, avoiding another render target and texture pass.
+    let blur_sigma = material.post_a.w / max(min(dimensions.x, dimensions.y), 1.0);
+    for (var octave = 0; octave < 6; octave += 1) {
+        let sample_position = coordinate * frequency;
+        let cell = floor(sample_position);
+        let fraction = fract(sample_position);
+        let fade = fraction * fraction * fraction
+            * (fraction * (fraction * 6.0 - 15.0) + 10.0);
+        let lower_gradient = noise(vec2<f32>(cell, f32(octave) * 17.0 + 62.1)) * 2.0 - 1.0;
+        let upper_gradient = noise(vec2<f32>(cell + 1.0, f32(octave) * 17.0 + 62.1)) * 2.0 - 1.0;
+        let lower = lower_gradient * fraction;
+        let upper = upper_gradient * (fraction - 1.0);
+        let angular_sigma = frequency * blur_sigma * 6.2831853;
+        let low_pass = exp(-0.5 * angular_sigma * angular_sigma);
+        turbulence += mix(lower, upper, fade) * amplitude * low_pass;
+        frequency *= material.post_d.y;
+        amplitude *= material.post_d.x;
     }
-    let source_falloff = select(exp(-along * 1.25), 1.0, material.post_d.z > 0.5);
-    let edge_fade = smoothstep(0.0, 0.12, uv.y) * smoothstep(0.0, 0.12, 1.0 - uv.y);
-    return layers * source_falloff * edge_fade * material.post_c.x * 0.22;
+    // Pixi's periodic Perlin helper normalizes its gradient result by 2.2,
+    // then the Godray filter keeps 70% of the turbulence.
+    let mist = abs(turbulence * 2.2) * 0.7;
+    return mist * (1.0 - uv.y) * material.post_c.x;
 }
 
 fn apply_post(color: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {
     var result = color;
-    result = vec4<f32>(result.rgb * exp2(material.post_f.x) + vec3<f32>(material.post_f.y), result.a);
+    result = vec4<f32>(result.rgb * exp2(material.post_f.x), result.a);
+    result = vec4<f32>((result.rgb - vec3<f32>(0.5)) * (1.0 + material.post_f.z) + vec3<f32>(0.5), result.a);
+    result = vec4<f32>(result.rgb + vec3<f32>(material.post_f.y), result.a);
     let color_luma = dot(result.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
     result = vec4<f32>(mix(vec3<f32>(color_luma), result.rgb, material.post_f.w), result.a);
-    result = vec4<f32>((result.rgb - vec3<f32>(0.5)) * (1.0 + material.post_f.z) + vec3<f32>(0.5), result.a);
-    result = vec4<f32>(result.rgb + vec3<f32>(material.post_g.x * 0.10, material.post_g.x * 0.025, -material.post_g.x * 0.10), result.a);
+    result = vec4<f32>(result.rgb + vec3<f32>(material.post_g.x * 0.12, material.post_g.x * 0.025, -material.post_g.x * 0.12), result.a);
     let tone = u32(material.post_b.x + 0.5);
     let tone_strength = material.post_b.y;
     if tone == 1u && tone_strength > 0.001 {
-        let grey = dot(result.rgb, vec3<f32>(0.299, 0.587, 0.114));
-        result = vec4<f32>(mix(result.rgb, vec3<f32>(grey), tone_strength * 0.7), result.a);
+        result = vec4<f32>(mix(result.rgb, vec3<f32>(color_luma), tone_strength), result.a);
     } else if tone == 2u && tone_strength > 0.001 {
         let sepia = vec3<f32>(
             dot(result.rgb, vec3<f32>(0.393, 0.769, 0.189)),
@@ -244,14 +291,41 @@ fn apply_post(color: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {
         );
         result = vec4<f32>(mix(result.rgb, sepia, tone_strength), result.a);
     }
+    result = vec4<f32>(clamp(result.rgb, vec3<f32>(0.0), vec3<f32>(1.0)), result.a);
     if material.post_c.y > 0.001 {
         result = vec4<f32>(mix(result.rgb, lookup_lut(result.rgb), material.post_c.y), result.a);
     }
     if material.post_b.z > 0.001 {
-        let grain = noise(vec2<f32>(floor(uv.x * 960.0), floor(uv.y * 540.0) + floor(globals.time * 24.0)));
-        let scratch = step(0.996 - material.post_b.z * 0.003, noise(vec2<f32>(floor(uv.x * 420.0), floor(globals.time * 12.0))));
-        let grained = result.rgb * (1.0 + (grain - 0.5) * material.post_b.z * 0.4);
-        result = vec4<f32>(mix(grained, vec3<f32>(0.82), scratch * material.post_b.z * 0.6), result.a);
+        let dimensions = vec2<f32>(textureDimensions(color_texture));
+        let frame = floor(globals.time * 24.0);
+        let seed = noise(vec2<f32>(frame * 5.3, 37.0));
+        let grain = noise(floor(uv * dimensions) * max(seed, 0.0001));
+        let grained = result.rgb + vec3<f32>((grain - 0.5) * material.post_b.z * 0.4);
+        result = vec4<f32>(grained, result.a);
+        if seed < 0.3 {
+            let phase = seed * 256.0;
+            let parity = floor(phase) % 2.0;
+            let scratch_density = 0.3;
+            let distance_scale = 1.0 / scratch_density;
+            let scratch_origin = vec2<f32>(
+                seed * distance_scale,
+                abs(parity - seed * distance_scale),
+            );
+            if distance(uv, scratch_origin) < seed * 0.6 + 0.4 {
+                let period = scratch_density * 10.0;
+                let scratch_x = uv.x * period + phase;
+                let rising = abs((scratch_x % 0.5) * 4.0);
+                let alternating = floor(scratch_x / 0.5) % 2.0;
+                let triangle = (1.0 - alternating) * rising + alternating * (2.0 - rising);
+                let width = (0.75 + seed) / dimensions.x;
+                var tine = triangle - (2.0 - width * period * 2.0);
+                if tine > 0.0 {
+                    tine = parity * tine / period + material.post_b.z * 0.6 + 0.1;
+                    let scratch_gain = clamp(tine + 1.0, 1.0, 2.0);
+                    result = vec4<f32>(result.rgb * scratch_gain, result.a);
+                }
+            }
+        }
     }
     if material.post_l.x > 0.001 {
         let grain_size = max(1.0, material.post_l.y);
@@ -326,14 +400,6 @@ fn apply_post(color: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {
         result = vec4<f32>(mix(result.rgb, vec3<f32>(edge), material.post_q.y), result.a);
     }
 #endif
-    let ray = godray(uv);
-    result = vec4<f32>(result.rgb + vec3<f32>(1.0, 0.88, 0.62) * ray, result.a);
-    if material.post_a.y > 0.001 {
-        let dimensions = vec2<f32>(textureDimensions(color_texture));
-        let centered = (uv * dimensions - dimensions * 0.5) / min(dimensions.x, dimensions.y);
-        let inner = smoothstep(material.post_a.z, max(0.0, material.post_a.z - 0.2), length(centered));
-        result = vec4<f32>(result.rgb * mix(1.0 - material.post_a.y, 1.0, inner), result.a);
-    }
     if material.post_q.w < 0.999 {
         let centered = uv - vec2<f32>(material.post_r.w, material.post_s.x);
         let horizontal = abs(centered.x) / max(material.post_r.x, 0.001);
@@ -354,10 +420,15 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     }
     let effects = u32(material.transition_data.z + 0.5);
     let animation_progress = clamp(material.transition_data.w, 0.0, 1.0);
-    var uv = animate_uv(distort_uv(mesh.uv));
-    if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) {
+    let edge_uv = distort_uv(mesh.uv);
+    var edge_coverage = 1.0;
+    if abs(material.post_a.x) > 0.001 {
+        edge_coverage = texture_edge_coverage(edge_uv);
+    }
+    if edge_coverage <= 0.0 {
         discard;
     }
+    var uv = animate_uv(edge_uv);
     let shockwave_in = (effects & 64u) != 0u;
     let shockwave_out = (effects & 128u) != 0u;
     if shockwave_in || shockwave_out {
@@ -383,8 +454,11 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
         let shift = (shift_seed - 0.5) * band * (0.08 + band_seed * 0.12);
         uv = vec2<f32>(fract(uv.x + shift), uv.y);
     }
+    let dimensions = vec2<f32>(textureDimensions(color_texture));
+    let half_texel = vec2<f32>(0.5) / dimensions;
+    uv = clamp(uv, half_texel, vec2<f32>(1.0) - half_texel);
 #ifdef STAGE_OPTICAL
-    var color = apply_basic_filter(sample_camera_effects(uv)) * material.tint;
+    var color = apply_basic_filter(sample_camera_effects(uv, edge_uv)) * material.tint;
 #else
 #ifdef STAGE_BLUR
     var color = apply_basic_filter(sample_blurred(uv)) * material.tint;
@@ -394,19 +468,47 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
 #endif
 #ifdef STAGE_BLUR
     if material.post_b.w > 0.001 {
+        let dimensions = vec2<f32>(textureDimensions(color_texture));
+        let blur_step = vec2<f32>(max(0.0, material.filter_data.x + material.post_a.w)) / dimensions;
+        let blur_offsets = array<vec2<f32>, 8>(
+            vec2<f32>(0.00, -0.65),
+            vec2<f32>(0.00, 0.65),
+            vec2<f32>(0.54, -0.35),
+            vec2<f32>(-0.54, 0.35),
+            vec2<f32>(0.25, 0.60),
+            vec2<f32>(-0.25, -0.60),
+            vec2<f32>(0.72, 0.18),
+            vec2<f32>(-0.72, -0.18),
+        );
         let direction = uv - vec2<f32>(0.5);
         var zoom = vec4<f32>(0.0);
-        for (var index = 0; index < 6; index += 1) {
-            let amount = f32(index) / 5.0 * material.post_b.w * 0.05;
-            zoom += textureSample(color_texture, color_sampler, clamp(uv - direction * amount, vec2<f32>(0.0), vec2<f32>(1.0)));
+        for (var index = 0; index < 8; index += 1) {
+            let amount = f32(index) / 8.0 * material.post_b.w * 0.05;
+            let sample_uv = uv - direction * amount + blur_step * blur_offsets[index];
+            zoom += textureSample(color_texture, color_sampler, clamp(sample_uv, vec2<f32>(0.0), vec2<f32>(1.0)));
         }
-        zoom /= 6.0;
+        zoom /= 8.0;
         let split = material.post_b.w * 0.01;
-        let red = textureSample(color_texture, color_sampler, clamp(uv + vec2<f32>(split, 0.0), vec2<f32>(0.0), vec2<f32>(1.0))).r;
-        let blue = textureSample(color_texture, color_sampler, clamp(uv - vec2<f32>(split, 0.0), vec2<f32>(0.0), vec2<f32>(1.0))).b;
-        color = vec4<f32>(mix(color.rgb, vec3<f32>(red, zoom.g, blue), material.post_b.w), color.a);
+        let red_uv = uv + vec2<f32>(split, 0.0) + blur_step * vec2<f32>(0.48, -0.48);
+        let blue_uv = uv - vec2<f32>(split, 0.0) + blur_step * vec2<f32>(-0.48, 0.48);
+        let red = textureSample(color_texture, color_sampler, clamp(red_uv, vec2<f32>(0.0), vec2<f32>(1.0))).r;
+        let blue = textureSample(color_texture, color_sampler, clamp(blue_uv, vec2<f32>(0.0), vec2<f32>(1.0))).b;
+        color = vec4<f32>(
+            mix(zoom.r, red, material.post_b.w),
+            zoom.g,
+            mix(zoom.b, blue, material.post_b.w),
+            zoom.a,
+        );
     }
 #endif
+    let ray = godray(uv);
+    color = vec4<f32>(color.rgb + vec3<f32>(ray), color.a);
+    if material.post_a.y > 0.001 {
+        let dimensions = vec2<f32>(textureDimensions(color_texture));
+        let centered = (uv * dimensions - dimensions * 0.5) / min(dimensions.x, dimensions.y);
+        let inner = smoothstep(material.post_a.z, max(0.0, material.post_a.z - 0.2), length(centered));
+        color = vec4<f32>(color.rgb * mix(1.0 - material.post_a.y, 1.0, inner), color.a);
+    }
     color = apply_post(color, uv);
     if kind == 2u {
         let fine = noise(floor(mesh.uv * vec2<f32>(960.0, 540.0)));
@@ -481,6 +583,7 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
             color.a,
         );
     }
+    color = vec4<f32>(color.rgb, color.a * edge_coverage);
 #ifdef BLEND_MULTIPLY
     // Pixi/WebGAL's multiply is perceived in display space. Bevy samples the
     // sRGB texture into linear space, so feeding raw linear RGB to the fixed

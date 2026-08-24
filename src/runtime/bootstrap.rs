@@ -72,6 +72,18 @@ const FEATURE_BENCHMARK_WORKLOADS: &[BenchmarkWorkload] = &[
     ("timed event types", "10-07 all event types"),
     ("playback controls", "10-08 playback options"),
 ];
+const CLASSIC_ATTRIBUTION_BENCHMARK_WORKLOADS: &[BenchmarkWorkload] = &[
+    (
+        "classic sampling · depth blur and shock",
+        "benchmark classic sampling",
+    ),
+    ("classic godray math", "benchmark classic godray"),
+    ("classic film noise", "benchmark classic film noise"),
+    (
+        "classic color and lens math",
+        "benchmark classic color and lens",
+    ),
+];
 const STRESS_BENCHMARK_WORKLOADS: &[BenchmarkWorkload] =
     &[("stress composition", "benchmark stress composition")];
 const REPEATED_BENCHMARK_TARGETS: &[&str] = &[
@@ -81,6 +93,10 @@ const REPEATED_BENCHMARK_TARGETS: &[&str] = &[
     "10-05 atmosphere effects",
     "10-06 retro and eyelid mask",
     "10-07 all event types",
+    "benchmark classic sampling",
+    "benchmark classic godray",
+    "benchmark classic film noise",
+    "benchmark classic color and lens",
     "benchmark stress composition",
 ];
 const HOTSPOT_BENCHMARK_RUNS: usize = 3;
@@ -106,6 +122,10 @@ const PORTABLE_BENCHMARK_SECTIONS: &[BenchmarkSection] = &[
     (
         "feature coverage · every authored timeline property and event family",
         FEATURE_BENCHMARK_WORKLOADS,
+    ),
+    (
+        "classic camera attribution · isolated shader cost groups",
+        CLASSIC_ATTRIBUTION_BENCHMARK_WORKLOADS,
     ),
     (
         "stress workload · intentionally combined peak load",
@@ -1737,12 +1757,14 @@ mod tests {
 
         assert_eq!(DAILY_BENCHMARK_WORKLOADS.len(), 3);
         assert_eq!(FEATURE_BENCHMARK_WORKLOADS.len(), 8);
+        assert_eq!(CLASSIC_ATTRIBUTION_BENCHMARK_WORKLOADS.len(), 4);
         assert_eq!(STRESS_BENCHMARK_WORKLOADS.len(), 1);
-        assert_eq!(REPEATED_BENCHMARK_TARGETS.len(), 7);
+        assert_eq!(REPEATED_BENCHMARK_TARGETS.len(), 11);
         assert_eq!(HOTSPOT_BENCHMARK_RUNS, 3);
         assert_eq!(benchmark_workload_runs("10-04 blur family"), 3);
+        assert_eq!(benchmark_workload_runs("benchmark classic godray"), 3);
         assert_eq!(benchmark_workload_runs("10-01 shared transform clock"), 1);
-        assert_eq!(targets.len(), 12);
+        assert_eq!(targets.len(), 16);
         assert_eq!(CAMERA_BENCHMARK_WORKLOADS.len(), 3);
         assert!(
             CAMERA_BENCHMARK_WORKLOADS

@@ -1541,3 +1541,86 @@ Method references:
   distinguishes percentile FPS from slowest-percent average FPS.
 - [Bevy RenderDiagnosticsPlugin](https://docs.rs/bevy_render/latest/bevy_render/diagnostic/struct.RenderDiagnosticsPlugin.html)
   provides benchmark-only render-pass CPU/GPU timing and pipeline statistics.
+
+### 2026-08-24 classic-camera attribution matrix
+
+The corrected X280 report measured `classic camera` at 52.9 median average FPS
+with a 46.3 FPS median 1% low, while the main transparent render pass reported
+about 3.87 ms of GPU work. The authored timeline intentionally combines 22
+properties, so that aggregate cannot distinguish texture sampling from
+extended-math or inexpensive color work.
+
+Four benchmark-only timelines now replay the same peak values in isolated cost
+groups: depth blur plus shock sampling, six-octave godray math, old-film
+procedural noise, and color/lens arithmetic. Each uses the same project
+composition, three-second warm-up, five-second sample and three independent
+process runs as the existing hotspots. They add no runtime setting or shipping
+asset; their samples and repeat summaries remain inside the single
+`keine-benchmark-report.txt`.
+
+The checked-in classic timeline animates `lutIntensity` without a `lutPreset`,
+so the runtime correctly performs no LUT lookup. The attribution matrix does
+not mislabel that inactive control as texture cost; LUT sampling should be
+measured only when a real canonical LUT asset is added to the acceptance
+project.
+
+This matrix follows the evidence boundary in the relevant optimization
+guidance: first distinguish sampler stalls from extended-math execution, then
+change only the dominant path. Candidate follow-ups are a smaller or bilinear-
+paired blur kernel, a lower-resolution godray pass, or a GPU-oriented integer
+hash in place of `sin(dot())`; none is accepted without a matching X280 A/B and
+visual comparison.
+
+- [Intel GPA texture metrics](https://www.intel.com/content/www/us/en/docs/gpa/user-guide/2022-4/gpu-metrics.html)
+- [Intel GPA shader-execution guidance](https://www.intel.com/content/www/us/en/docs/gpa/cookbook/2025-1/optimize-shader-execution.html)
+- [GPU Gems 3: Practical Post-Process Depth of Field](https://developer.nvidia.com/gpugems/gpugems3/part-iv-image-effects/chapter-28-practical-post-process-depth-field)
+- [Hash Functions for GPU Rendering](https://jcgt.org/published/0009/03/02/)
+
+An Apple M5 Pro Release surface smoke used a two-second sample after the normal
+three-second warm-up to verify target resolution and execution. All four
+timelines completed at the 60 FPS product cap:
+
+| Attribution group | Avg FPS | 1% low | Max frame |
+| --- | ---: | ---: | ---: |
+| Sampling | 60.0 | 56.3 | 17.84 ms |
+| Godray | 60.1 | 52.2 | 19.67 ms |
+| Film noise | 60.0 | 55.4 | 18.17 ms |
+| Color/lens | 60.0 | 54.7 | 18.34 ms |
+
+Metal did not expose usable per-pass GPU timestamps in this run and the OS
+reported different active-monitor refresh values between process launches, so
+these numbers are validation only. They are not used to rank the groups. The
+standard five-second, three-process X280 package run is the attribution
+baseline.
+
+### 2026-08-24 LetsGal classic-camera visual alignment
+
+The classic path was checked against the installed LetsGal Studio 1.11.0
+player shader at the authored `00:01.306` peak instead of being tuned from the
+Kēne screenshot alone. The source chain is distortion, godray, vignette,
+four-quality Gaussian blur, exposure/contrast/brightness/saturation/
+temperature, optional LUT, old film and finally the eight-sample dynamic
+shock. The Kēne material now follows those parameter limits and formulas,
+including the godray aspect convention and `2.2 × 0.7` turbulence amplitude,
+the old-film scratch gate, and the shock sample count and RGB split.
+
+Kēne retains one material pass for low-end hardware. Godray therefore applies
+the Gaussian filter's frequency response to its procedural octaves instead of
+allocating LetsGal's intermediate render target; shock folds the existing blur
+radius into its eight source samples. Fixed-frame visual acceptance confirmed
+soft irregular neutral mist, an obvious radial drag, occasional rather than
+persistent scratches, and clean endpoints. A first amplitude-correct capture
+was rejected because it exposed dense high-frequency bands; the checked-in
+low-pass version removed that regression without another texture pass.
+
+The final Apple M5 Pro Release/LTO surface sample remains capped and is a
+no-regression check, not a throughput claim:
+
+| Workload | Duration | Frames | Avg FPS | 1% low | P95 | P99 | Max |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `10-02 classic camera properties` | 60.0 s | 3600 | 60.0 | 54.8 | 17.37 ms | 17.76 ms | 21.31 ms |
+
+The next Intel UHD 620 portable run remains the decision point for shader
+throughput. Its new attribution timelines separate sampling, godray, film
+noise and color/lens work so visual alignment does not justify speculative
+quality tiers or extra render passes.

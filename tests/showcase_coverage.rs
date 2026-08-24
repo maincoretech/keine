@@ -249,7 +249,7 @@ fn letsgal_1_9_showcase_exercises_every_timeline_property_and_event() {
         }
     }
 
-    assert_eq!(animations, 12);
+    assert_eq!(animations, benchmark_timelines.len() + 8);
     assert_eq!(retractions, 3);
     assert_eq!(
         targets,
@@ -348,6 +348,10 @@ fn letsgal_1_9_showcase_exercises_every_timeline_property_and_event() {
     assert_eq!(
         benchmark_timelines,
         BTreeSet::from([
+            "benchmark classic color and lens".into(),
+            "benchmark classic film noise".into(),
+            "benchmark classic godray".into(),
+            "benchmark classic sampling".into(),
             "benchmark representative dialogue".into(),
             "benchmark representative portrait motion".into(),
             "benchmark representative scene transition".into(),
