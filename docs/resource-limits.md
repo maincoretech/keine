@@ -198,8 +198,7 @@ Backup import 和 publisher 的正式目录 rename（以及要求的目录同步
 Commit 之后删除旧副本失败只记录明确 warning，并留待下次操作重试清理；它不会把已经成功
 安装的存档或发行目录报告成整体失败。Commit 之前或正式 rename/同步失败仍返回错误。
 
-项目配置和全局引擎配置均先经过 bounded read，再解析；旧版
-`adapters.conf` 迁移入口也使用相同的 256 KiB 上限。
+项目配置和全局 `engine.conf` 均先经过 bounded read，再解析；引擎配置上限为 256 KiB。
 
 ## 6. 确定性执行保护
 

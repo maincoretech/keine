@@ -574,14 +574,7 @@ impl GameConfig {
 
     /// Resolve a sound effect below the local asset root.
     pub fn effect_path(&self, name: &str) -> String {
-        resolve_asset_path(&self.assets.effects, name, |name| format!("vocal/{name}"))
-    }
-
-    /// Whether a sound effect still depends on the historical `vocal/`
-    /// single-name fallback. Callers can use this to guide projects towards
-    /// the canonical `se/` directory without silently breaking old content.
-    pub fn uses_legacy_effect_fallback(&self, name: &str) -> bool {
-        !self.assets.effects.contains_key(name) && !is_direct_asset_path(name)
+        resolve_asset_path(&self.assets.effects, name, |name| format!("se/{name}"))
     }
 
     /// Resolve background music below the local asset root.
@@ -875,12 +868,6 @@ adapter:
     }
 
     #[test]
-    fn ignores_the_removed_compiled_program_policy() {
-        let cfg = GameConfig::from_yaml("compiled_program: require\n").unwrap();
-        assert_eq!(cfg.title, default_title());
-    }
-
-    #[test]
     fn aliases_take_priority_over_direct_paths() {
         let mut cfg = GameConfig::default();
         cfg.assets
@@ -904,18 +891,16 @@ adapter:
     }
 
     #[test]
-    fn logical_asset_names_keep_compatible_fallbacks() {
+    fn logical_asset_names_use_canonical_directories() {
         let cfg = GameConfig::default();
 
         assert_eq!(cfg.bg_path("day.webp"), "background/day.webp");
         assert_eq!(cfg.figure_path("a.webp"), "figure/a.webp");
         assert_eq!(cfg.voice_path("a.opus"), "vocal/a.opus");
-        assert_eq!(cfg.effect_path("a.opus"), "vocal/a.opus");
+        assert_eq!(cfg.effect_path("a.opus"), "se/a.opus");
         assert_eq!(cfg.bgm_path("a.opus"), "bgm/a.opus");
         assert_eq!(cfg.video_path("a.mp4"), "video/a.mp4");
         assert_eq!(cfg.lut_path("night"), "luts/night.webp");
-        assert!(cfg.uses_legacy_effect_fallback("a.opus"));
-        assert!(!cfg.uses_legacy_effect_fallback("se/a.opus"));
     }
 
     #[test]

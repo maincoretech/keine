@@ -24,8 +24,8 @@ use keine_core::{Action, DESIGN_HEIGHT, DESIGN_WIDTH, Program, State};
 #[cfg(feature = "hot-reload")]
 use keine_loader::ScriptWatcher;
 use keine_loader::{
-    ContentProject, DiagnosticLevel, LoaderRegistry, ResourceKind, load_project_with,
-    load_scenes_with, load_startup_scenes_with,
+    ContentProject, DiagnosticLevel, LoaderRegistry, load_project_with, load_scenes_with,
+    load_startup_scenes_with,
 };
 
 use crate::render::blur::{BlurCamera, BlurPlugin, DialogCamera, SceneBlurCamera, UiBlurCamera};
@@ -1336,7 +1336,6 @@ fn check_project(
     let mut warnings = 0usize;
     let mut errors = 0usize;
     let mut missing_resources = HashSet::new();
-    let mut legacy_effects = HashSet::new();
     for scene in &scenes {
         actions += scene.actions.len();
         for diagnostic in &scene.diagnostics {
@@ -1362,19 +1361,6 @@ fn check_project(
             let path = resource.resolved_path(config);
             if resource.is_dynamic() {
                 continue;
-            }
-            if resource.kind == ResourceKind::Effect
-                && config.uses_legacy_effect_fallback(&resource.path)
-                && legacy_effects.insert(resource.path.clone())
-            {
-                warnings += 1;
-                eprintln!(
-                    "warning: {}:{}:{}: bare sound effect {:?} uses the deprecated vocal/ fallback; use se/... or an assets.effects alias",
-                    scene.path.display(),
-                    resource.span.line,
-                    resource.span.column,
-                    resource.path,
-                );
             }
             if !missing_resources.insert(path.clone()) {
                 continue;
@@ -1897,13 +1883,9 @@ mod tests {
 
     #[test]
     #[cfg(feature = "configure")]
-    fn configure_replaces_the_adapter_command_without_breaking_compatibility() {
+    fn configure_command_accepts_no_arguments() {
         assert!(matches!(
             parse_cli(&args(&["configure"])).unwrap(),
-            CliCommand::Configure
-        ));
-        assert!(matches!(
-            parse_cli(&args(&["adapters"])).unwrap(),
             CliCommand::Configure
         ));
         assert!(parse_cli(&args(&["configure", "ignored"])).is_err());

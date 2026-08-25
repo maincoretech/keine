@@ -8,8 +8,8 @@
 
 ## 当前优先级
 
-1. **桌面视频后端** — macOS AVFoundation 已接入，继续 Windows Media Foundation 与 Hakutaku byte source；Linux 保留 FFmpeg
-2. **跨平台视觉基线** — 在 Linux/Windows、1× DPI、超宽/高窗口建立独立 screenshot/golden
+1. **跨平台视觉基线** — 在 Linux/Windows、1× DPI、超宽/高窗口建立独立 screenshot/golden
+2. **真实发行验收** — 用完整 LetsGal 工程、规范 WebP/Opus 与 Hakutaku 包持续验证长流程和低端设备
 
 ## WebGAL 4.6.2 兼容性审计与内部格式 (DONE)
 
@@ -86,7 +86,7 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 - [x] 合并短生命周期模块：core transition math、loader watcher、Bevy plugin/runtime 注册
 - [x] 文本框系统按职责拆分，Dialog 模糊、专用样式与键盘操作完成实际交互验证
 - [x] 存档 API 返回 `Result`，使用临时文件 + rename 原子替换
-- [x] Rust 2024、格式检查、严格 Clippy，并在 Phase 2.5 当时建立 51 项测试质量基线（当前无默认功能全量为 217 项）
+- [x] Rust 2024、格式检查、严格 Clippy，并建立覆盖 core、loader、runtime 与发行管线的 workspace 测试基线
 - [x] UI 公共字体、文本原语、菜单顶栏与淡入/模糊生命周期集中化；CONFIG 控件改为数据表驱动
 - [x] 全仓目录收敛：领域入口统一为同名 `.rs` 门面并清零 `mod.rs`；storage、UI support、
   scene effects 与 adapter 按执行机制放入同名目录，FS/Hakutaku 等紧密实现保持同文件；内嵌资源
@@ -211,7 +211,7 @@ Flowchart 仍保留为可选适配工作，不能用静态占位或实验依赖�
 ## LetsGal Studio 1.11.0 adapter（DONE — 待用户验收）
 
 - [x] 原生 `project.json`、章节、角色、场景与 `assets/.manifest.json` 多文件读取
-- [x] 38 种已知内置 block 穷举编译；未知字段保留，未知 block 明确报错
+- [x] 38 种已知内置 block 穷举编译；宿主转发 block 保留未知字段，其他未消费字段安全忽略，未知 block 明确报错
 - [x] Studio 原生资源目录直接挂载，hash 与逻辑路径均可解析
 - [x] 内容/清单变化热重载；`.studio/state.json` 调试位置变化只做 fragment/block seek
 - [x] 多来源 FS 资源热重载、覆盖层删除 fallback、manifest alias 刷新与静态资源存在性校验

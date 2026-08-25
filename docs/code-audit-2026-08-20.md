@@ -2,8 +2,8 @@
 
 审查基准：`7c7b430f794e11d4d9890e43e468f7e7d655a697`。
 
-本文把静态审查结论转换成可验收的维护清单。前三项已经结合运行路径复核并修复；
-其余项仍须在实施前重新核对当前代码、真实项目数据和平台行为，不能仅凭本文直接修改。
+本文把静态审查结论转换成可验收的维护记录。清单已按后续实现复核并关闭；它记录当时的
+问题与决策，不再作为当前待办入口。当前工作优先级只维护在 `dev/docs/TODO.md`。
 
 ## 威胁模型与范围
 
@@ -18,16 +18,16 @@
 |---|---|---|
 | 已修 | transient SFX 批处理保留命令顺序 | P1 |
 | 已修 | `ExecutionLimit` 不再作为普通 yield 静默返回 | P1 |
-| 已修 | 直接资源路径不再重复添加目录；裸 Effect 进入迁移期 | P1 |
+| 已修 | 直接资源路径不再重复添加目录；裸 Effect 使用规范 `se/` 目录 | P1 |
 | 已修 | source-project 统一有界读取 | P1/P2 |
 | 已修 | 兼容音频 encoded-input 上限 | P1/P2 |
 | 暂缓 | PNG/JPEG 保持兼容 loader，发行资源目标仍为 WebP | P2 |
 | 已修 | looped FFmpeg 音视频 no-progress guard | P2 |
 | 已修 | LetsGal 源工程 confinement 与 native 内容层一致 | P2 |
 | 已修 | backup/publisher commit 后 cleanup 只告警 | P2 |
-| 待复核 | compiled payload 分配前结构预算与 fuzz | P2/P3 |
-| 待复核 | overlay 目录枚举合并所有 mount | P3 |
-| 待复核 | user input 严格截断到最大 Unicode scalar 数 | P3 |
+| 已评估 | compiled payload 使用分配前 envelope 上限与解码后语义校验，不增加递归预扫描器 | P2/P3 |
+| 已修 | overlay 目录枚举合并所有 mount | P3 |
+| 已修 | user input 严格截断到最大 Unicode scalar 数 | P3 |
 
 ## 已修项目
 
@@ -66,11 +66,10 @@
 `background/background/day.webp`；音效 `se/click.opus` 应无需别名。
 
 **约束**：别名优先；只有安全的、多段、使用 `/` 的相对路径才原样通过；最终路径
-containment 仍由内容挂载层执行。为避免破坏旧工程，裸 Effect 暂时继续解析为
-`vocal/{name}`。
+containment 仍由内容挂载层执行。裸 Effect 使用规范 `se/{name}`，不保留第二套目录语义。
 
-**验收**：所有资源类别的显式路径保持原样；单段逻辑名保留既有默认；不安全路径不被
-识别为显式路径；`cargo validate` 和发布编译对裸 Effect 发出一次迁移警告。
+**验收**：所有资源类别的显式路径保持原样；单段逻辑名进入各自规范目录；不安全路径不被
+识别为显式路径。
 
 ## 已完成 hardening
 
@@ -86,8 +85,8 @@ LetsGal 同时检查 canonical project root。工程文件数与总源码量不�
 **实施约束**：先统计真实大工程的单文件、文件数和总字节分布，再确定默认值；native、
 LetsGal 和 tooling 复用同一个 bounded reader，错误包含路径、实际值和上限。
 
-**验收**：覆盖单文件超限、读取期间增长、文件数超限、总量超限和正常大型工程；拒绝
-发生在 parser 分配完整 payload 之前。
+**验收**：覆盖单文件超限、读取期间增长和正常大型工程；拒绝发生在 parser 分配完整
+payload 之前。工程文件数与总量不设与峰值内存无关的任意上限。
 
 ### 5. 兼容音频输入预算
 
@@ -132,7 +131,7 @@ flush 尾帧不能被误判；错误必须终止 worker 并可观测。
 ### 8. LetsGal confinement
 
 **状态**：已随 source reader 完成。所有实际读取的 LetsGal JSON 都检查 canonical target
-仍在 canonical project root 内，并应用同一文件数/字节预算。
+仍在 canonical project root 内，并应用同一单文件字节预算。
 
 **问题**：LetsGal adapter 的直接 filesystem JSON 读取尚未确认复用了 native
 `ContentMount` 的 canonical containment。
@@ -156,27 +155,28 @@ publisher 的 symlink 拒绝不能代替开发态边界。
 **验收**：对 rename 前失败、正式 rename 失败、commit 后 cleanup 失败分别注入故障并检查
 最终目录和返回状态。
 
-## 待复核 hardening、一致性与 UX
+## 已关闭的 hardening、一致性与 UX
 
 ### 10. compiled payload 分配前预算
 
 **问题**：scene/action/string 的语义上限主要在 postcard 已反序列化后检查。
 
-**实施约束**：保持 schema/version/CRC/fingerprint 兼容；先通过 fuzz 证明实际风险，再选择
-depth/count-aware decoder 或更小的 envelope 分段，避免为低风险边界引入复杂格式。
+**结论**：metadata 与 encoded payload 在分配前受 envelope 长度上限约束；scene/action/string
+在解码后执行语义校验。玩家侧产物还受 Hakutaku 签名与认证保护。没有证据表明再增加一套
+递归 Postcard 预扫描器能抵消其格式复杂度，因此当前不实施。
 
 **验收**：恶意 length prefix、深层 action、超长 string、超量 scene/action 在预算内失败，
 并持续运行 fuzz/sanitizer smoke。
 
 ### 11. overlay directory union
 
-`read_directory()` 应与高优先级覆盖的直接 `read()` 形成一致视图：合并所有 mount 的直接
-children，再按 layer priority 去重。实施前先确认 runtime 是否已有 folder enumeration 调用。
+**状态**：已实现。`read_directory()` 合并所有 mount 的直接 children，按 layer priority
+去重；`directory_enumeration_unions_every_overlay_layer` 覆盖同名文件与跨层目录。
 
 ### 12. user input 最大长度
 
-追加一次包含多个 Unicode scalar 的 `Key::Character` 时，只取剩余容量；不得按 byte 截断，
-也不能先制造超长状态再依赖提交校验拒绝。
+**状态**：已实现。一次包含多个 Unicode scalar 的 `Key::Character` 只追加剩余容量，按 scalar
+而非 byte 截断；空余容量时不修改输入状态。
 
 ## 需要产品决定的语义
 

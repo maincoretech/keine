@@ -201,12 +201,12 @@ pub(super) fn parse(args: &[OsString]) -> Result<CliCommand> {
     };
     match command.to_str() {
         #[cfg(feature = "configure")]
-        Some("configure" | "adapters") => {
+        Some("configure") => {
             require_no_extra_args(args, 1, "keine configure")?;
             Ok(CliCommand::Configure)
         }
         #[cfg(not(feature = "configure"))]
-        Some("configure" | "adapters") => {
+        Some("configure") => {
             anyhow::bail!("engine configuration TUI is not compiled; run `cargo configure`")
         }
         Some("check") => {

@@ -15,7 +15,6 @@ use keine_loader::{AdapterCategory, AdapterDescriptor, LoaderRegistry};
 use crate::scene::video::{VideoSelection, automatic_video_backend_name};
 
 const CONFIG_ENV: &str = "KEINE_ENGINE_CONFIG";
-const LEGACY_CONFIG_ENV: &str = "KEINE_ADAPTER_CONFIG";
 const VIDEO_KEY: &str = "media:video";
 const MAX_CONFIG_BYTES: usize = 256 * 1024;
 
@@ -95,15 +94,15 @@ pub(crate) fn configure(registry: &LoaderRegistry) -> Result<()> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         bail!("engine configuration requires an interactive terminal");
     }
-    let paths = config_paths()?;
-    let saved = read_saved(&paths)?;
+    let path = config_path()?;
+    let saved = read_saved(&path)?;
     let mut rows = rows(registry, &saved)?;
     let mut selected = 0usize;
     let mut message = String::new();
     let terminal = TerminalSession::enter()?;
 
     loop {
-        draw(&rows, selected, &message, &paths.primary)?;
+        draw(&rows, selected, &message, &path)?;
         let Event::Key(key) = event::read().context("failed to read terminal input")? else {
             continue;
         };
@@ -120,7 +119,7 @@ pub(crate) fn configure(registry: &LoaderRegistry) -> Result<()> {
                 }
             }
             KeyCode::Enter => {
-                write_configuration(&paths.primary, &rows)?;
+                write_configuration(&path, &rows)?;
                 break;
             }
             KeyCode::Esc => return Ok(()),
@@ -129,12 +128,12 @@ pub(crate) fn configure(registry: &LoaderRegistry) -> Result<()> {
     }
 
     drop(terminal);
-    println!("engine configuration saved · {}", paths.primary.display());
+    println!("engine configuration saved · {}", path.display());
     Ok(())
 }
 
 pub(crate) fn apply_saved_configuration(registry: &mut LoaderRegistry) -> Result<VideoSelection> {
-    let saved = read_saved(&config_paths()?)?;
+    let saved = read_saved(&config_path()?)?;
     if !saved.values.is_empty() {
         registry.retain_adapters(|category, name| {
             saved.adapter_enabled(category, name).unwrap_or(true)
@@ -299,14 +298,9 @@ fn parse_bool(value: &str) -> Option<bool> {
     }
 }
 
-fn read_saved(paths: &ConfigPaths) -> Result<SavedConfiguration> {
-    if paths.primary.exists() {
-        return read_configuration(&paths.primary);
-    }
-    if let Some(legacy) = &paths.legacy
-        && legacy.exists()
-    {
-        return read_configuration(legacy);
+fn read_saved(path: &Path) -> Result<SavedConfiguration> {
+    if path.exists() {
+        return read_configuration(path);
     }
     Ok(SavedConfiguration::default())
 }
@@ -329,16 +323,6 @@ fn read_configuration(path: &Path) -> Result<SavedConfiguration> {
             )
         })?;
         let id = id.trim().to_ascii_lowercase();
-        let id = if id.starts_with("adapter:") {
-            id
-        } else if ["asset:", "script:", "project:", "store:"]
-            .iter()
-            .any(|prefix| id.starts_with(prefix))
-        {
-            format!("adapter:{id}")
-        } else {
-            id
-        };
         let value = value.trim().to_ascii_lowercase();
         if id.starts_with("adapter:") && parse_bool(&value).is_none() {
             bail!(
@@ -380,29 +364,11 @@ fn write_configuration(path: &Path, rows: &[ConfigRow]) -> Result<()> {
         .with_context(|| format!("failed to replace {}", path.display()))
 }
 
-struct ConfigPaths {
-    primary: PathBuf,
-    legacy: Option<PathBuf>,
-}
-
-fn config_paths() -> Result<ConfigPaths> {
+fn config_path() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os(CONFIG_ENV) {
-        return Ok(ConfigPaths {
-            primary: PathBuf::from(path),
-            legacy: None,
-        });
+        return Ok(PathBuf::from(path));
     }
-    if let Some(path) = std::env::var_os(LEGACY_CONFIG_ENV) {
-        return Ok(ConfigPaths {
-            primary: PathBuf::from(path),
-            legacy: None,
-        });
-    }
-    let directory = config_directory()?;
-    Ok(ConfigPaths {
-        primary: directory.join("engine.conf"),
-        legacy: Some(directory.join("adapters.conf")),
-    })
+    Ok(config_directory()?.join("engine.conf"))
 }
 
 fn config_directory() -> Result<PathBuf> {
@@ -504,18 +470,6 @@ mod tests {
             }
         ));
         assert!(matches!(rows[1], ConfigRow::Video { selected: true, .. }));
-    }
-
-    #[test]
-    fn legacy_adapter_keys_are_migrated_on_read() {
-        let path = temporary_path("legacy");
-        fs::write(&path, "# keine adapter selection v1\nasset:fs=false\n").unwrap();
-        let saved = read_configuration(&path).unwrap();
-        assert_eq!(
-            saved.adapter_enabled(AdapterCategory::Asset, "fs"),
-            Some(false)
-        );
-        let _ = fs::remove_file(path);
     }
 
     #[test]

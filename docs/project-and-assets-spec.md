@@ -112,7 +112,6 @@ assets:
 - 未在别名表中的名称按第 4 节的默认回退目录解析。
 - 目录工程始终解析源脚本；发布流水线在 staging 内生成
   `.keine/compiled/program.bin`，打包后的 `.haku` 缺少或损坏该产物时拒绝启动。
-  旧工程中的 `compiled_program` 字段仅为向后兼容而忽略。
 
 ## 4. 资源类别规范
 
@@ -122,7 +121,7 @@ assets:
 | 立绘 | Figure / MiniAvatar | `ShowSprite image` | `figure/` | `figures/`、`character/`、`characters/` | `figure/{name}` |
 | 语音 | Voice | `Say vocal` / `Vocal` | `vocal/` | `voice/`、`voices/` | `vocal/{name}` |
 | BGM | Bgm | `Bgm file` | `bgm/` | `bgm` | `bgm/{name}` |
-| 音效 | Effect | `Effect file` | `se/` | `se`、`sound/`、`sounds/`、`effect/`、`effects/` | `vocal/{name}`（弃用中的兼容行为） |
+| 音效 | Effect | `Effect file` | `se/` | `se`、`sound/`、`sounds/`、`effect/`、`effects/` | `se/{name}` |
 | 粒子 | Particle | `ShowParticles texture` | `particle/` | 任意 | 路径原样使用 |
 | 视频 | Video | `PlayVideo` | `video/` | `videos/` + 扩展名识别 | `video/{name}` |
 | LUT | Lut | 后处理 preset / camera patch | `luts/` | `lut/`、`luts/` | `luts/{name}.webp` |
@@ -131,10 +130,8 @@ assets:
 
 兼容与迁移细节：
 
-- 显式音效路径（如 `se/click.opus`）无需登记别名。只有裸名称（如 `click.opus`）
-  暂时沿用旧版 `vocal/{name}` 回退；`cargo validate` 与发布编译会发出迁移警告。
-  新工程应直接写 `se/...`，或在 `assets.effects` 中登记别名。后续不兼容版本可将
-  裸名称回退切换到规范目录 `se/`。
+- 显式音效路径（如 `se/click.opus`）无需登记别名；裸名称（如 `click.opus`）直接解析到
+  `se/{name}`。其他位置必须使用显式路径或在 `assets.effects` 中登记别名。
 - `cg/` 目录兼容背景：LetsGal 场景可用多个背景层，第一层走背景渲染器，其余层
   走通用 sprite 路径（同一资产同时登记为背景与立绘别名）。
 - 运行时图片角色来自脚本编译产物中的 `ResourceKind`，不通过路径前缀猜测。因此
@@ -275,10 +272,11 @@ LetsGal 长期维护的原生项目（config.yaml + 规范目录 + 脚本）。
 - 规范目录与兼容目录集合以本表为准；新兼容目录需先在 letsgal adapter 落地
   再回填本表。
 
-## 10. 待定项（demo 项目引入后确认）
+## 10. 已确定的生产约束
 
-1. `scripts/` 的脚本形态：WebGAL `.txt` 还是结构化 JSON（LetsGal 章节内联）；
-2. `font/` 与 `ui/` 的实际需求（自定义字体目前仅内置）；
-3. 视频编解码默认组合（H.264 vs VP9，依赖目标平台视频后端）；
-4. 转换工具的转码选项默认值（WebP 质量、Opus 码率）；
-5. `.keine/compiled/program.bin` 与源脚本并存时的优先级细节。
+1. 原生工程的 `scripts/` 使用 WebGAL `.txt`；LetsGal 结构化章节只由 project adapter 读取；
+2. 字体与固定 UI 资源由引擎内置，当前不增加项目级主题或换肤目录；
+3. 发行视频首选 MP4（H.264 + AAC），兼顾 AVFoundation 与 FFmpeg；
+4. `cargo assets` 只负责打包和事务化引用重映射，不隐式决定 WebP 质量或 Opus 码率；转码参数属于创作工具输入；
+5. 源工程始终以源码为权威；`cargo bundle` 在 staging 中重新生成
+   `.keine/compiled/program.bin`，发行包只从该编译产物启动。

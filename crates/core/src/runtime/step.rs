@@ -1882,9 +1882,6 @@ fn parse_inline_wait(label: &str) -> Option<Option<f32>> {
     Some(Some(milliseconds.max(0.0) / 1000.0))
 }
 
-/// Compatibility no-op. Labels are indexed once when `Program` is built.
-pub fn index_labels(_state: &mut State) {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1917,7 +1914,6 @@ mod tests {
         let mut state = State::new();
         state.current_scene = "main".into();
         state.insert_scene("main".into(), actions);
-        index_labels(&mut state);
         state
     }
 

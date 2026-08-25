@@ -312,7 +312,6 @@ mod tests {
                 .map(|scene| (scene.name, scene.actions)),
         ));
         state.current_scene = "main".into();
-        step::index_labels(&mut state);
 
         assert_eq!(step::step(&mut state), StepResult::AwaitClick);
         assert_eq!(state.current_scene, "aside");

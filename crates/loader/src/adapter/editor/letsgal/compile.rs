@@ -3102,7 +3102,6 @@ mod tests {
             name: "chapter".into(),
             disabled: false,
             fragments: Vec::new(),
-            extras: Map::new(),
         };
         let chapter_next = HashMap::new();
         let characters = HashMap::new();

@@ -8,7 +8,7 @@
 | 游戏引擎 | Bevy 0.19 | 成熟 ECS、跨平台渲染、Plugin 架构、bevy_ui |
 | GPU 渲染 | wgpu (via Bevy) | 跨平台 Vulkan/Metal/DX12 |
 | UI | bevy_ui | Node 布局、Interaction 系统、Bootstrap Icons 字体图标 |
-| 音频 | 待定 (rodio / Bevy audio) | -- |
+| 音频 | Bevy Audio + rodio；Symphonia/Opus 专用流式路径 | ECS 生命周期、统一总线与项目 Opus 随机读取 |
 | 桌面壳 | 原生 winit (via Bevy) | 无 WebView 开销 |
 | 资源打包 | Hakutaku (`.haku` + `.taku`) | AES-256-GCM、zstd、签名随机访问 |
 | 存档序列化 | Postcard | 紧凑、Serde 原生、持续维护的版本化状态快照 |

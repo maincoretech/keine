@@ -1,9 +1,6 @@
 [alias]
 configure = "run --features configure -- configure"
-# Compatibility alias for the former adapter-only configuration screen.
-adapters = "configure"
-# Interactive preview; add `--sync` to follow an open LetsGal project the
-# same way the former `studio-sync` command did.
+# Interactive preview; add `--sync` to follow an open LetsGal project.
 # Machines without FFmpeg development libraries can use
 # `cargo run --features hot-reload -- dev` for the same session without video.
 dev = "run --features configure,hot-reload,video-native,video-ffmpeg -- dev"

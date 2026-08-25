@@ -59,8 +59,8 @@ library embedder 还可从 `LoaderRegistry::empty()` 开始只注册自己需要
 不会编入普通或发行引擎。配置保存在用户配置目录的 `engine.conf`，只作用于启用了该 feature
 的开发 CLI 启动路径；项目内的 `config.yaml` 仍负责从已启用集合中选择格式，`run_with_loader` /
 `build_app_with_loader` 等嵌入接口也不会读取这份全局配置。缺少的新 adapter 默认启用，
-asset/script/store 三类至少各保留一个，避免保存出无法启动的组合。旧 `cargo adapters` 与
-`adapters.conf` 继续作为兼容入口，下一次保存时写入新的通用格式。
+asset/script/store 三类至少各保留一个，避免保存出无法启动的组合。旧入口与旧配置文件不再
+参与运行；唯一入口与格式分别是 `cargo configure` 和 `engine.conf`。
 
 配置界面按能力而不是实现技术分区：Content 下列出 project/asset/script adapter，Persistence
 下列出 store codec，Media 下提供视频 `automatic`/`disabled` 单选。`automatic` 显示当前二进制

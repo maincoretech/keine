@@ -16,8 +16,7 @@ use keine_core::Program;
 use keine_core::config::GameConfig;
 use keine_loader::compiled::{CompiledSceneV1, EncodeInput, ProgramMetadataV1, encode};
 use keine_loader::{
-    ContentProject, DiagnosticLevel, LoadedScene, ResourceKind, ScriptLanguageRegistry,
-    load_scenes_with,
+    ContentProject, DiagnosticLevel, LoadedScene, ScriptLanguageRegistry, load_scenes_with,
 };
 
 pub(crate) fn build_program(
@@ -78,7 +77,6 @@ fn validate_scenes(
     let mut warnings = 0usize;
     let mut errors = Vec::new();
     let mut missing = HashSet::new();
-    let mut legacy_effects = HashSet::new();
     for scene in scenes {
         for diagnostic in &scene.diagnostics {
             let location = format!(
@@ -101,19 +99,6 @@ fn validate_scenes(
             let path = resource.resolved_path(config);
             if resource.is_dynamic() {
                 continue;
-            }
-            if resource.kind == ResourceKind::Effect
-                && config.uses_legacy_effect_fallback(&resource.path)
-                && legacy_effects.insert(resource.path.clone())
-            {
-                warnings += 1;
-                eprintln!(
-                    "warning: {}:{}:{}: bare sound effect {:?} uses the deprecated vocal/ fallback; use se/... or an assets.effects alias",
-                    scene.path.display(),
-                    resource.span.line,
-                    resource.span.column,
-                    resource.path,
-                );
             }
             if !missing.insert(path.clone()) {
                 continue;

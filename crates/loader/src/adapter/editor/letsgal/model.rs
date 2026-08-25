@@ -1,7 +1,5 @@
-// The Studio format is intentionally open. Several retained fields are not
-// consumed by the initial compiler yet, but keeping them typed prevents a
-// future write-capable adapter from dropping extension-owned data.
-#![allow(dead_code)]
+// This adapter is deliberately read-only. Serde ignores unknown JSON fields by
+// default, so only data consumed by compilation belongs in this typed model.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -25,16 +23,6 @@ pub(super) struct ProjectDocument {
     pub chapter_tree_order: Option<Vec<ChapterTreeEntry>>,
     #[serde(default)]
     pub resolution: Resolution,
-    #[serde(default)]
-    pub extensions: BTreeMap<String, ExtensionSelection>,
-    #[serde(default)]
-    pub extension_settings: BTreeMap<String, Value>,
-    #[serde(default)]
-    pub system_bindings: BTreeMap<String, String>,
-    #[serde(default)]
-    pub action_bindings: BTreeMap<String, Vec<String>>,
-    #[serde(flatten)]
-    pub extras: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -42,11 +30,7 @@ pub(super) struct ProjectDocument {
 pub(super) struct ChapterFolder {
     pub id: String,
     #[serde(default)]
-    pub name: String,
-    #[serde(default)]
     pub chapter_ids: Vec<String>,
-    #[serde(flatten)]
-    pub extras: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -54,8 +38,6 @@ pub(super) struct ChapterTreeEntry {
     #[serde(rename = "type")]
     pub kind: String,
     pub id: String,
-    #[serde(flatten)]
-    pub extras: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -92,14 +74,6 @@ const fn default_height() -> u32 {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub(super) struct ExtensionSelection {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(flatten)]
-    pub extras: Map<String, Value>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
 pub(super) struct ChapterDocument {
     pub id: String,
     pub name: String,
@@ -107,23 +81,17 @@ pub(super) struct ChapterDocument {
     pub disabled: bool,
     #[serde(default)]
     pub fragments: Vec<StoryFragment>,
-    #[serde(flatten)]
-    pub extras: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct StoryFragment {
     pub id: String,
-    pub name: String,
     #[serde(default)]
     pub blocks: Vec<StoryBlock>,
-    #[serde(flatten)]
-    pub extras: Map<String, Value>,
 }
 
-/// Studio deliberately treats blocks as an open structure. Known fields are
-/// typed and every unknown field is retained so version additions never get
-/// destroyed by a keine read/write round trip.
+/// Blocks are forwarded to extension hosts, so their unknown fields remain
+/// part of the runtime payload even though the project adapter is read-only.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(super) struct StoryBlock {
     #[serde(default)]
@@ -150,11 +118,8 @@ pub(super) struct ScenesDocument {
 #[serde(rename_all = "camelCase")]
 pub(super) struct SceneDefinition {
     pub id: String,
-    pub name: String,
     #[serde(default)]
     pub layers: Vec<SceneLayer>,
-    #[serde(flatten)]
-    pub extras: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -162,15 +127,11 @@ pub(super) struct SceneDefinition {
 pub(super) struct SceneLayer {
     pub id: String,
     #[serde(default)]
-    pub name: String,
-    #[serde(default)]
     pub asset_path: String,
     #[serde(default = "default_distance")]
     pub distance: f32,
     #[serde(default)]
     pub offset: String,
-    #[serde(flatten)]
-    pub extras: Map<String, Value>,
 }
 
 const fn default_distance() -> f32 {
@@ -201,8 +162,6 @@ pub(super) struct CharacterAttribute {
 pub(super) struct CharacterGlobalSettings {
     #[serde(default)]
     pub positions: Vec<CharacterPosition>,
-    #[serde(default)]
-    pub default_position_id: String,
     #[serde(default)]
     pub distance_presets: Vec<PortraitDistancePreset>,
     #[serde(default)]
@@ -268,15 +227,11 @@ pub(super) struct CharacterDefinition {
     pub portrait_skin_config: Option<PortraitSkinConfig>,
     #[serde(default)]
     pub portrait_layout: Option<CharacterPortraitLayout>,
-    #[serde(flatten)]
-    pub extras: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct PortraitSkinConfig {
-    #[serde(default)]
-    pub skins: Vec<String>,
     #[serde(default)]
     pub default_skin: String,
     #[serde(default)]
@@ -306,28 +261,11 @@ pub(super) struct AssetManifest {
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct AssetEntry {
     pub path: String,
-    #[serde(default)]
-    pub voice: Option<VoiceMetadata>,
-    #[serde(flatten)]
-    pub extras: Map<String, Value>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct VoiceMetadata {
-    #[serde(default)]
-    pub character_id: String,
-    #[serde(default)]
-    pub asr_text: String,
-    #[serde(flatten)]
-    pub extras: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct StudioState {
-    #[serde(default)]
-    pub active_chapter_id: String,
     #[serde(default)]
     pub active_fragment_id: String,
     #[serde(default)]
