@@ -913,11 +913,7 @@ fn compile_character(
                 id: character.id.clone(),
                 variable: format!("{}.{}", character.id, config.attribute_name),
                 default_image: image,
-                variants: expression
-                    .skin_assets
-                    .iter()
-                    .map(|(skin, image)| (skin.clone(), image.clone()))
-                    .collect(),
+                variants: sorted_skin_assets(&expression.skin_assets),
             },
             span,
         );
@@ -932,6 +928,15 @@ fn compile_character(
             span,
         );
     }
+}
+
+fn sorted_skin_assets(skin_assets: &HashMap<String, String>) -> Vec<(String, String)> {
+    let mut variants = skin_assets
+        .iter()
+        .map(|(skin, image)| (skin.clone(), image.clone()))
+        .collect::<Vec<_>>();
+    variants.sort_unstable();
+    variants
 }
 
 struct PortraitSequence {
@@ -4013,7 +4018,10 @@ mod tests {
                 ..
             } if variable == "aya.skin"
                 && default_image == "characters/summer.webp"
-                && variants.len() == 2
+                && variants.as_slice() == [
+                    ("summer".into(), "characters/summer.webp".into()),
+                    ("winter".into(), "characters/winter.webp".into()),
+                ]
         ));
         assert!(matches!(report.actions[2], Action::WaitForAdvance));
     }

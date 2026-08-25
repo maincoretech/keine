@@ -19,10 +19,15 @@
   runtime path; PNG/JPEG and WAV/MP3/Vorbis/FLAC remain development compatibility inputs.
 - `cargo assets --pack` creates only Hakutaku resources. `cargo bundle` builds the matching
   hardened engine and complete release. Production media gates require WebP and Ogg Opus.
+- Publisher preparation validates and compiles project-owned input before loading or creating an
+  identity. Failed release assembly preserves the previous runnable package, and generated
+  LetsGal configuration and portrait variants have deterministic ordering.
 - Save, backup, settings, profile, history, gallery, and preview paths have explicit input limits,
   transactional replacement, and post-commit cleanup warning semantics.
 - CI covers Linux, macOS, Windows x64, dependency advisories, platform media feature contracts,
-  release feature sets, WebP fuzz smoke, and Linux FFmpeg ASan acceptance.
+  release feature sets, WebP fuzz smoke, and Linux FFmpeg ASan acceptance. Desktop video fixtures
+  cover no-audio, long-GOP, tail-`moov`, damaged-header, rewind, cancellation, FS, and encrypted
+  Hakutaku sources.
 
 ## Architecture and interfaces
 
@@ -97,9 +102,7 @@ project / package
 | [T02](tasks/T02-letsgal-production.md) | parallel-safe | LetsGal adapter and external sample evidence |
 | [T03](tasks/T03-ui-visual-baseline.md) | parallel-safe | UI and cross-platform visual evidence |
 | [T04](tasks/T04-render-hotspots.md) | parallel-safe | render/shader/stage hotspot evidence |
-| [T05](tasks/T05-desktop-video.md) | parallel-safe | desktop video backends and acceptance |
-| [T06](tasks/T06-release-packaging.md) | parallel-safe | publisher and release workflow |
-| [T08](tasks/T08-mobile-contract.md) | integration-only; depends on T05, T06 | mobile platform contract |
+| [T08](tasks/T08-mobile-contract.md) | integration-only | mobile platform contract |
 
 ## Canonical references
 

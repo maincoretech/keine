@@ -26,8 +26,8 @@ video backend selection, publisher/release assembly, and application icon assets
 
 ## Interfaces it may depend on
 
-The integrated T05 `ContentFile`/video backend contract and T06 release/publisher layout, plus
-Bevy application lifecycle and platform user-data APIs.
+The current `ContentFile`/video backend contract and release/publisher layout, plus Bevy
+application lifecycle and platform user-data APIs.
 
 ## Ownership
 
@@ -57,7 +57,8 @@ the workspace gate if any shared Rust or manifest file changes during integratio
 
 ## Dependencies on other tasks
 
-T05 and T06 must be integrated. This remains in the orchestrator rather than a worker batch.
+None. The desktop video and release contracts are integrated. This remains in the orchestrator
+rather than a worker batch.
 
 ## Completion report
 

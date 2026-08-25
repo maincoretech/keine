@@ -64,7 +64,7 @@ cargo clippy --workspace --all-targets
 
 ## Dependencies on other tasks
 
-None. WebGAL compatibility work is outside this task; it is independent of T02/T04/T05.
+None. WebGAL compatibility work is outside this task; it is independent of T02 and T04.
 
 ## Completion report
 
