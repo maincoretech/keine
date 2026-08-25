@@ -166,6 +166,17 @@ fn validate_project(root: &Path, project: &ProjectDocument) -> Result<()> {
     if project.id.trim().is_empty() || project.name.trim().is_empty() {
         bail!("LetsGal project id and name must not be empty");
     }
+    if !project.keine.project_id.is_empty() {
+        let metadata = keine_core::config::ProjectMetadata {
+            id: project.keine.project_id.clone(),
+            ..keine_core::config::ProjectMetadata::default()
+        };
+        if metadata.valid_id().is_none() {
+            bail!(
+                "LetsGal keine.projectId must be a lowercase ASCII slug (letters, digits and hyphens; maximum 64 bytes)"
+            );
+        }
+    }
     if project.resolution.width == 0 || project.resolution.height == 0 {
         bail!("LetsGal project resolution must be non-zero");
     }
@@ -338,6 +349,23 @@ mod tests {
                 source_step: 3,
             })
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_an_invalid_explicit_shipping_id() {
+        let root = fixture();
+        fs::write(
+            root.join(PROJECT_FILE),
+            r#"{"id":"Studio.Project","name":"Studio project","keine":{"projectId":"Invalid.Project"}}"#,
+        )
+        .unwrap();
+
+        let error = match LetsGalProjectAdapter.open(&root) {
+            Ok(_) => panic!("invalid explicit shipping ID was accepted"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("keine.projectId"), "{error}");
         let _ = fs::remove_dir_all(root);
     }
 

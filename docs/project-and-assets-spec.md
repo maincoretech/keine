@@ -88,7 +88,10 @@ assets:
 
 - `project.id` 是发行身份，不是显示名：只接受 1–64 字节的小写 ASCII 字母、数字和连字符，
   首字符必须是小写字母、末字符必须是字母或数字。开发运行可以暂时省略，`cargo assets
-  --pack` 与 `cargo bundle` 必须提供；LetsGal 工程直接沿用 `project.json.id`。
+  --pack` 与 `cargo bundle` 必须提供。LetsGal 工程的原生 `project.json.id` 若已满足该合同则
+  原样使用；否则 adapter 从原值确定性派生 `letsgal-<slug>-<hash>`，不修改源工程。正式项目
+  可在 `project.json` 的 `keine.projectId` 显式固定 Kēne 的发行/存档身份；该值必须满足同一
+  slug 合同。
 - `project.bundle_identifier` 可选，必须是合法 reverse-DNS 标识；省略时从 `project.id`
   确定性派生。修改已经发行的 id 或 bundle identifier 会切换到另一套用户数据命名空间。
 - 目录工程继续写 `<project>/saves`。Hakutaku 发行包保持只读，分别写入 macOS

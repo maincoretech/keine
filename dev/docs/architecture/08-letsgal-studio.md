@@ -47,6 +47,7 @@ keine 源码/二进制和 LetsGal 工程目录。不带 `--sync` 的 `cargo dev`
 | character attributes | `<character-id>.<attribute>` 默认值 | 每次确定性重放重新注入 |
 | chapterFolders / chapterTreeOrder | 1.9.x 虚拟目录展开后的章节执行顺序 | project 保存后重编译 |
 | dialogueBehavior | 打字间隔、字符淡入、10 种文字出现效果；普通/自动播放等待指示器明确不支持 | 对话框样式保存后刷新 config |
+| `project.json.id` / `keine.projectId` | 稳定 Kēne 发行与存档命名空间 | 合法 slug 原样使用；否则确定性派生，显式覆盖优先 |
 | `.studio/state.json` | fragment UUID + 一基 source step | 选择 block 后立即重放 |
 
 Studio 的 block index 是零基；loader 转成一基 `SourceSpan.line`。一个 block 可编译成多个 Action，
@@ -140,6 +141,9 @@ runtime 以所有 `line <= selected_step` 的 Action 为目标，因此不会把
   独立点击等待、存档恢复和 Studio 确定性重放全部由 core/runtime 实现；keine 仍不加载或
   执行 Studio 扩展 bundle；
 - adapter 只读源工程；不启动 watcher、窗口或进程，实际生命周期归 loader/runtime；
+- Studio 的原生 project ID 不承担 Kēne 的路径安全合同：合法小写 slug 原样使用，其他 ID
+  确定性映射为带校验后缀的 `letsgal-*`；需要跨 Studio ID 变更保持同一存档命名空间时，在
+  `project.json.keine.projectId` 显式固定；
 - core、渲染器和 UI 不导入 LetsGal model；卸下 adapter 后引擎仍独立运行；
 - Studio 原版“运行”按钮与 Player 不受 keine 控制，两者不能同时作为同一调试会话的状态源；
 - 本方案明确不支持 Studio 扩展、内嵌预览或反向操控 Studio UI。

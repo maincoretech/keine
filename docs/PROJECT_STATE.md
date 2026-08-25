@@ -59,6 +59,8 @@ project / package
   loss, or Kēne-caused regressions justify maintenance without a new product decision.
 - LetsGal Studio 1.x remains a read-only adapter. The checked-in 1.8 fixture and 1.11 acceptance
   project are active compatibility evidence; Studio extensions and bridge injection are excluded.
+  A Studio-native ID outside Kēne's path-safe slug grammar is deterministically mapped to a stable
+  `letsgal-*` shipping/save ID; `project.json.keine.projectId` is the explicit override.
 - Save v10 and compiled Program v1 are strict envelopes. Other layouts are rejected; there is no
   best-effort legacy decoder.
 - Hakutaku v1 is the sole release package. Publisher encryption raises extraction cost but is not

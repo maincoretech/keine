@@ -45,6 +45,10 @@ pub(super) struct ChapterTreeEntry {
 pub(super) struct KeineProjectConfig {
     #[serde(default)]
     pub features: keine_core::config::FeatureConfig,
+    /// Optional stable Kēne shipping/save namespace. LetsGal's own project ID
+    /// remains untouched and may use a wider editor-specific character set.
+    #[serde(default)]
+    pub project_id: String,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]

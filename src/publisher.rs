@@ -98,6 +98,7 @@ fn prepare_project(
         config, content, ..
     } = open_project(&staged, loader)?;
     validate_shipping_identity(&config.project)?;
+    println!("release project identity: {}", config.project.id);
     validate_shipping_media(&content)?;
     let config_path = staged.join("config.yaml");
     if !config_path.is_file() {
@@ -150,7 +151,8 @@ fn sort_yaml_mappings(value: &mut noyalib::Value) {
 fn validate_shipping_identity(project: &keine_core::config::ProjectMetadata) -> Result<()> {
     if project.valid_id().is_none() {
         bail!(
-            "release packaging requires project.id to be a lowercase ASCII slug (letters, digits and hyphens; maximum 64 bytes)"
+            "release packaging requires project.id to be a lowercase ASCII slug (letters, digits and hyphens; maximum 64 bytes); got {:?}",
+            project.id
         );
     }
     if project.application_identifier().is_none() {

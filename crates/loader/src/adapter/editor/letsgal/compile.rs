@@ -145,7 +145,7 @@ pub(super) fn game_config(
     let mut config = GameConfig {
         title: project.name.clone(),
         project: ProjectMetadata {
-            id: project.id.clone(),
+            id: shipping_project_id(project),
             description: project.description.clone().unwrap_or_default(),
             ..ProjectMetadata::default()
         },
@@ -229,6 +229,50 @@ pub(super) fn game_config(
             .insert(background.clone(), background);
     }
     config
+}
+
+pub(super) fn shipping_project_id(project: &ProjectDocument) -> String {
+    if !project.keine.project_id.is_empty() {
+        return project.keine.project_id.clone();
+    }
+    let source = ProjectMetadata {
+        id: project.id.clone(),
+        ..ProjectMetadata::default()
+    };
+    if source.valid_id().is_some() {
+        return project.id.clone();
+    }
+
+    const PREFIX: &str = "letsgal-";
+    const HASH_BYTES: usize = 8;
+    const SEPARATOR_BYTES: usize = 1;
+    const MAX_BASE_BYTES: usize = 64 - PREFIX.len() - SEPARATOR_BYTES - HASH_BYTES;
+
+    let mut base = String::with_capacity(MAX_BASE_BYTES);
+    for byte in project.id.bytes() {
+        let byte = match byte {
+            b'A'..=b'Z' => byte.to_ascii_lowercase(),
+            b'a'..=b'z' | b'0'..=b'9' => byte,
+            _ => b'-',
+        };
+        if byte == b'-' && (base.is_empty() || base.ends_with('-')) {
+            continue;
+        }
+        if base.len() == MAX_BASE_BYTES {
+            break;
+        }
+        base.push(char::from(byte));
+    }
+    while base.ends_with('-') {
+        base.pop();
+    }
+    if base.is_empty() {
+        base.push_str("project");
+    }
+    format!(
+        "{PREFIX}{base}-{:08x}",
+        crc32fast::hash(project.id.as_bytes())
+    )
 }
 
 fn insert_aliases(map: &mut HashMap<String, String>, hash: &str, path: &str) {
@@ -4759,6 +4803,47 @@ mod tests {
         assert_eq!(config.bg_path("hash"), "backgrounds/sea.png");
         assert_eq!(config.bg_path("backgrounds/sea.png"), "backgrounds/sea.png");
         assert_eq!(config.layout.anchor_offset, 0.0);
+    }
+
+    #[test]
+    fn derives_a_stable_shipping_id_without_changing_valid_or_explicit_ids() {
+        let manifest: AssetManifest = serde_json::from_value(json!({"entries": {}})).unwrap();
+        let valid: ProjectDocument = serde_json::from_value(json!({
+            "id":"already-valid", "name":"n"
+        }))
+        .unwrap();
+        assert_eq!(
+            game_config(&valid, &manifest, None).project.id,
+            "already-valid"
+        );
+
+        let editor_native: ProjectDocument = serde_json::from_value(json!({
+            "id":"Project_测试.01", "name":"n"
+        }))
+        .unwrap();
+        let first = game_config(&editor_native, &manifest, None).project.id;
+        let second = game_config(&editor_native, &manifest, None).project.id;
+        assert_eq!(first, second);
+        assert!(first.starts_with("letsgal-project-01-"), "{first}");
+        assert!(
+            ProjectMetadata {
+                id: first,
+                ..ProjectMetadata::default()
+            }
+            .valid_id()
+            .is_some()
+        );
+
+        let explicit: ProjectDocument = serde_json::from_value(json!({
+            "id":"Project_测试.01",
+            "name":"n",
+            "keine":{"projectId":"fixed-release-id"}
+        }))
+        .unwrap();
+        assert_eq!(
+            game_config(&explicit, &manifest, None).project.id,
+            "fixed-release-id"
+        );
     }
 
     #[test]
