@@ -82,7 +82,9 @@ sprite 带 `films` 一律视为动画中；`godray` 已按 speed 判断。若某
 
 ## 9. 大图加载 —— 不改
 
-WebP 走专用 loader（`src/scene/images.rs`），解码期直接缩到目标尺寸；
+WebP 走专用 loader（`src/scene/images.rs`），解码期直接缩到目标尺寸。目标来自编译期
+`ResourceKind` 汇总，而不是目录前缀；同一路径多角色先合并为一个稳定设置，避免重复
+解码和 Bevy 首次加载设置竞争；
 PNG/JPEG 走 Bevy 通用 loader（无缩放下采样）。构建期约束优先：资源规范已规定
 背景 ≤ 4K、推荐 WebP。可选后续：`cargo validate` 对超大资源出警告（暂缓）。
 

@@ -15,7 +15,7 @@ use hakutaku_pack::{Identity, PackOptions, pack_directory};
 use tempfile::{Builder, TempDir, tempdir};
 
 use crate::compiler::build_program;
-use crate::runtime::bootstrap::open_project;
+use crate::runtime::bootstrap::{OpenedProject, open_project};
 
 #[cfg(target_os = "macos")]
 const VIDEO_FEATURE: &str = "video-native";
@@ -96,7 +96,11 @@ fn prepare_project(
     let staged = staging.path().join("project");
     copy_tree(project, &staged)?;
 
-    let (_root, config, content) = open_project(&staged, loader)?;
+    let OpenedProject {
+        config, content, ..
+    } = open_project(&staged, loader)?;
+    validate_shipping_identity(&config.project)?;
+    validate_shipping_media(&content)?;
     let config_path = staged.join("config.yaml");
     if !config_path.is_file() {
         // LetsGal source: materialize the adapter-derived config (asset
@@ -116,6 +120,67 @@ fn prepare_project(
         staged,
         identity,
     })
+}
+
+fn validate_shipping_identity(project: &keine_core::config::ProjectMetadata) -> Result<()> {
+    if project.valid_id().is_none() {
+        bail!(
+            "release packaging requires project.id to be a lowercase ASCII slug (letters, digits and hyphens; maximum 64 bytes)"
+        );
+    }
+    if project.application_identifier().is_none() {
+        bail!(
+            "project.bundle_identifier must be a valid reverse-DNS identifier, or be omitted to derive one from project.id"
+        );
+    }
+    Ok(())
+}
+
+fn validate_shipping_media(content: &keine_loader::ContentProject) -> Result<()> {
+    let mut violations = Vec::new();
+    for root in content
+        .asset_mounts()
+        .into_iter()
+        .filter_map(|mount| mount.filesystem_root())
+    {
+        for file in walk_files(&root)? {
+            let Some(kind) = noncanonical_shipping_media(&file) else {
+                continue;
+            };
+            let path = file.strip_prefix(&content.root).unwrap_or(&file);
+            violations.push((path.to_owned(), kind));
+        }
+    }
+    violations.sort_unstable();
+    violations.dedup();
+    if violations.is_empty() {
+        return Ok(());
+    }
+
+    for (path, kind) in violations.iter().take(16) {
+        eprintln!(
+            "error: non-canonical {kind} shipping resource: {}",
+            path.display()
+        );
+    }
+    if violations.len() > 16 {
+        eprintln!(
+            "error: and {} more non-canonical resource(s)",
+            violations.len() - 16
+        );
+    }
+    bail!(
+        "release resources must use WebP images and Ogg Opus (.opus) standalone audio; convert the files first, then migrate their references with `cargo assets --remap <project> png=webp jpg=webp jpeg=webp wav=opus mp3=opus ogg=opus flac=opus -y` before packing"
+    )
+}
+
+fn noncanonical_shipping_media(path: &Path) -> Option<&'static str> {
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    match extension.as_str() {
+        "png" | "jpg" | "jpeg" => Some("image"),
+        "wav" | "wave" | "mp3" | "ogg" | "oga" | "spx" | "flac" => Some("standalone audio"),
+        _ => None,
+    }
 }
 
 fn publish_prepared(
@@ -289,46 +354,19 @@ fn is_ignored_file(name: &str) -> bool {
     name == ".DS_Store" || name.ends_with(".meta")
 }
 
-/// Smallest comma-separated feature set required by a project, mirroring
-/// `dev/scripts/audio-features.sh`. `KEINE_AUDIO_FEATURES` overrides detection.
+/// Canonical shipping feature set: embedded/project Opus plus the selected
+/// platform video backend when the project contains a video container.
 fn detect_features(project: &Path) -> Result<String> {
-    if let Some(features) = env::var("KEINE_AUDIO_FEATURES")
-        .ok()
-        .filter(|features| !features.is_empty())
-    {
-        return Ok(features);
-    }
-    let mut wav = false;
-    let mut mp3 = false;
-    let mut vorbis = false;
-    let mut flac = false;
     let mut video = false;
     for file in walk_files(project)? {
         let lower = file.to_string_lossy().to_ascii_lowercase();
         let extension = lower.rsplit('.').next().unwrap_or("");
         match extension {
-            "opus" => {}
-            "wav" | "wave" => wav = true,
-            "mp3" => mp3 = true,
-            "ogg" | "oga" | "spx" => vorbis = true,
-            "flac" => flac = true,
             "mp4" | "m4v" | "mov" | "webm" | "mkv" => video = true,
             _ => {}
         }
     }
     let mut features = vec!["ui-sounds".to_owned()];
-    if wav {
-        features.push("audio-wav".to_owned());
-    }
-    if mp3 {
-        features.push("audio-mp3".to_owned());
-    }
-    if vorbis {
-        features.push("audio-vorbis".to_owned());
-    }
-    if flac {
-        features.push("audio-flac".to_owned());
-    }
     if video {
         features.push(VIDEO_FEATURE.to_owned());
     }
@@ -673,6 +711,41 @@ mod tests {
     }
 
     #[test]
+    fn compatibility_audio_never_expands_the_shipping_feature_set() {
+        let root = tempdir().unwrap();
+        let assets = root.path().join("assets");
+        fs::create_dir_all(&assets).unwrap();
+        fs::write(assets.join("legacy.wav"), b"audio").unwrap();
+
+        assert_eq!(detect_features(root.path()).unwrap(), "ui-sounds");
+    }
+
+    #[test]
+    fn shipping_media_validation_is_scoped_to_asset_mounts() {
+        let root = tempdir().unwrap();
+        let assets = root.path().join("assets");
+        fs::create_dir_all(&assets).unwrap();
+        fs::write(root.path().join("thumbnail.png"), b"studio metadata").unwrap();
+        fs::write(assets.join("background.webp"), b"image").unwrap();
+        fs::write(assets.join("voice.opus"), b"audio").unwrap();
+        let content = keine_loader::load_project(
+            root.path(),
+            &[keine_core::config::AssetSourceConfig {
+                path: "assets".into(),
+                format: "fs".into(),
+            }],
+        )
+        .unwrap();
+
+        validate_shipping_media(&content).unwrap();
+        fs::write(assets.join("legacy.png"), b"image").unwrap();
+        assert!(validate_shipping_media(&content).is_err());
+        fs::remove_file(assets.join("legacy.png")).unwrap();
+        fs::write(assets.join("legacy.mp3"), b"audio").unwrap();
+        assert!(validate_shipping_media(&content).is_err());
+    }
+
+    #[test]
     fn publisher_output_cannot_select_target_itself_or_escape_it() {
         assert!(publisher_output_path(Path::new("target/bundle")).is_ok());
         assert!(publisher_output_path(Path::new("target/package")).is_ok());
@@ -682,6 +755,18 @@ mod tests {
         assert!(publisher_output_path(Path::new("target/release")).is_err());
         assert!(publisher_output_path(Path::new("target/debug/package")).is_err());
         assert!(publisher_output_path(Path::new("target/publisher-runner/output")).is_err());
+    }
+
+    #[test]
+    fn shipping_requires_a_stable_game_identity() {
+        assert!(validate_shipping_identity(&Default::default()).is_err());
+        assert!(
+            validate_shipping_identity(&keine_core::config::ProjectMetadata {
+                id: "example-game".into(),
+                ..keine_core::config::ProjectMetadata::default()
+            })
+            .is_ok()
+        );
     }
 
     #[test]

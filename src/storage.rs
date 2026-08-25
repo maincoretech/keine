@@ -1,5 +1,6 @@
 pub(crate) mod backup;
 pub(crate) mod gallery;
+mod persistence;
 pub(crate) mod profile;
 pub(crate) mod read_history;
 pub(crate) mod save;
@@ -17,6 +18,8 @@ use serde::Serialize;
 use crate::runtime::GameSystemSet;
 
 pub(crate) struct StoragePlugin;
+
+pub(crate) use persistence::{prepare as prepare_persistence, root as persistence_root};
 
 pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path
@@ -86,6 +89,7 @@ pub(crate) fn sync_directory(path: &Path) -> Result<()> {
 impl Plugin for StoragePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<gallery::GallerySnapshot>();
+        app.init_resource::<save::ContinuationCheckpoint>();
         app.add_systems(Startup, settings::load_settings);
         app.add_systems(
             Update,

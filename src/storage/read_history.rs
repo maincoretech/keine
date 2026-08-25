@@ -6,7 +6,9 @@ use bevy::prelude::*;
 use keine_core::state::DialogueKey;
 use serde::{Deserialize, Serialize};
 
-use crate::runtime::resources::{EditorSyncSession, GameState, PersistenceDisabled, ProjectRoot};
+use crate::runtime::resources::{
+    EditorSyncSession, GameState, PersistenceDisabled, PersistenceRoot,
+};
 
 const VERSION: u32 = 1;
 const MAX_HISTORY_BYTES: usize = 64 * 1024 * 1024;
@@ -57,7 +59,7 @@ pub(crate) fn load(project_root: &Path) -> HashSet<DialogueKey> {
 pub(crate) fn persist_read_history(
     time: Res<Time>,
     state: Res<GameState>,
-    project_root: Res<ProjectRoot>,
+    project_root: Res<PersistenceRoot>,
     mut writer: ResMut<ReadHistoryWriter>,
     editor_sync: Option<Res<EditorSyncSession>>,
     persistence_disabled: Option<Res<PersistenceDisabled>>,

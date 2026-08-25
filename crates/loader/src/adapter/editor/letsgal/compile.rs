@@ -145,7 +145,9 @@ pub(super) fn game_config(
     let mut config = GameConfig {
         title: project.name.clone(),
         project: ProjectMetadata {
+            id: project.id.clone(),
             description: project.description.clone().unwrap_or_default(),
+            ..ProjectMetadata::default()
         },
         features: project.keine.features.clone(),
         adapter: AdapterConfig {
@@ -4746,6 +4748,7 @@ mod tests {
         }))
         .unwrap();
         let config = game_config(&project, &manifest, None);
+        assert_eq!(config.project.id, "p");
         assert_eq!(config.bg_path("hash"), "backgrounds/sea.png");
         assert_eq!(config.bg_path("backgrounds/sea.png"), "backgrounds/sea.png");
         assert_eq!(config.layout.anchor_offset, 0.0);

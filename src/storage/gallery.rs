@@ -4,7 +4,9 @@ use std::path::Path;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::runtime::resources::{EditorSyncSession, GameState, PersistenceDisabled, ProjectRoot};
+use crate::runtime::resources::{
+    EditorSyncSession, GameState, PersistenceDisabled, PersistenceRoot,
+};
 
 const VERSION: u32 = 2;
 const MAX_GALLERY_BYTES: usize = 16 * 1024 * 1024;
@@ -54,7 +56,7 @@ pub(crate) fn load(state: &mut keine_core::State, project_root: &Path) {
 
 pub(crate) fn persist(
     state: Res<GameState>,
-    project_root: Res<ProjectRoot>,
+    project_root: Res<PersistenceRoot>,
     mut previous: ResMut<GallerySnapshot>,
     editor_sync: Option<Res<EditorSyncSession>>,
     persistence_disabled: Option<Res<PersistenceDisabled>>,

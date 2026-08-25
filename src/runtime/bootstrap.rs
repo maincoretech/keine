@@ -37,8 +37,8 @@ use crate::runtime::cli::{
 };
 use crate::runtime::resources::{
     ContentProjectResource, DevelopmentSession, EditorSyncSession, GameConfigResource, GameState,
-    LocalAssetCache, LocalAssetManifest, LocalSceneAssets, PersistenceDisabled, ProjectRoot,
-    ScriptLanguages, StoreCodec,
+    LocalAssetCache, LocalAssetManifest, LocalSceneAssets, PersistenceDisabled, PersistenceRoot,
+    ProjectRoot, ScriptLanguages, StoreCodec,
 };
 #[cfg(feature = "hot-reload")]
 use crate::runtime::resources::{HotReloadSession, ScriptWatcherResource};
@@ -338,7 +338,12 @@ fn execute_command(
         run_startup_suite(&project_path, options.runs)?;
         return Ok(());
     }
-    let (project_root, config, content) = open_project(&project_path, &loader)?;
+    let OpenedProject {
+        root: project_root,
+        config,
+        content,
+        packaged,
+    } = open_project(&project_path, &loader)?;
     let project_opened = Instant::now();
     let languages = loader
         .languages(&config.adapter.script)
@@ -353,13 +358,20 @@ fn execute_command(
     let startup_capture = mode
         .startup_benchmark()
         .map(|_| crate::ui::performance::StartupCapture::new(process_started, project_opened));
+    let persistence_root =
+        crate::storage::persistence_root(&project_root, &config.project, packaged)?;
     let _instance = mode.requires_single_instance().then(|| {
-        SingleInstanceGuard::acquire(&project_root)
+        SingleInstanceGuard::acquire(&persistence_root)
             .context("another instance of this project is already running")
     });
     let _instance = _instance.transpose()?;
+    if mode.benchmark().is_none() && mode.startup_benchmark().is_none() {
+        crate::storage::prepare_persistence(&project_root, &persistence_root)
+            .context("failed to prepare persistent game data")?;
+    }
     let mut app = build_opened_app(
         project_root,
+        persistence_root,
         config,
         content,
         languages,
@@ -1106,15 +1118,25 @@ pub fn build_app_with_loader(
     project_path: impl AsRef<Path>,
     loader: LoaderRegistry,
 ) -> Result<App> {
-    let (project_root, config, content) = open_project(project_path.as_ref(), &loader)?;
+    let OpenedProject {
+        root: project_root,
+        config,
+        content,
+        packaged,
+    } = open_project(project_path.as_ref(), &loader)?;
     let languages = loader
         .languages(&config.adapter.script)
         .context("failed to select script adapter")?;
     let store = loader
         .store(&config.adapter.store)
         .context("failed to select store adapter")?;
+    let persistence_root =
+        crate::storage::persistence_root(&project_root, &config.project, packaged)?;
+    crate::storage::prepare_persistence(&project_root, &persistence_root)
+        .context("failed to prepare persistent game data")?;
     Ok(build_opened_app(
         project_root,
+        persistence_root,
         config,
         content,
         languages,
@@ -1125,6 +1147,7 @@ pub fn build_app_with_loader(
 
 fn build_opened_app(
     project_root: PathBuf,
+    persistence_root: PathBuf,
     config: GameConfig,
     content: ContentProject,
     languages: keine_loader::ScriptLanguageRegistry,
@@ -1191,6 +1214,7 @@ fn build_opened_app(
         BlurPlugin,
     ))
     .insert_resource(ProjectRoot(project_root))
+    .insert_resource(PersistenceRoot(persistence_root))
     .insert_resource(ContentProjectResource(content))
     .insert_resource(ScriptLanguages(languages))
     .insert_resource(StoreCodec(store))
@@ -1378,12 +1402,22 @@ fn check_project(
     Ok(())
 }
 
-pub(crate) fn open_project(
-    project_path: &Path,
-    loader: &LoaderRegistry,
-) -> Result<(PathBuf, GameConfig, ContentProject)> {
+#[derive(Debug)]
+pub(crate) struct OpenedProject {
+    pub(crate) root: PathBuf,
+    pub(crate) config: GameConfig,
+    pub(crate) content: ContentProject,
+    pub(crate) packaged: bool,
+}
+
+pub(crate) fn open_project(project_path: &Path, loader: &LoaderRegistry) -> Result<OpenedProject> {
     if let Some(project) = loader.open_project(project_path)? {
-        return Ok((project.root, project.config, project.content));
+        return Ok(OpenedProject {
+            root: project.root,
+            config: project.config,
+            content: project.content,
+            packaged: project.format == "hakutaku",
+        });
     }
 
     ensure_project_directory(project_path)?;
@@ -1395,7 +1429,12 @@ pub(crate) fn open_project(
     let config = GameConfig::from_yaml(yaml)
         .with_context(|| format!("invalid project config {}", config_path.display()))?;
     let content = load_project_with(project_path, &config.adapter.asset, loader)?;
-    Ok((content.root.clone(), config, content))
+    Ok(OpenedProject {
+        root: content.root.clone(),
+        config,
+        content,
+        packaged: false,
+    })
 }
 
 fn ensure_project_directory(project_path: &Path) -> Result<()> {
@@ -1414,7 +1453,7 @@ fn ensure_project_directory(project_path: &Path) -> Result<()> {
 
 fn bootstrap_project(
     mut commands: Commands,
-    project_root: Res<ProjectRoot>,
+    persistence_root: Res<PersistenceRoot>,
     content: Res<ContentProjectResource>,
     languages: Res<ScriptLanguages>,
     config: Res<GameConfigResource>,
@@ -1439,9 +1478,9 @@ fn bootstrap_project(
     if mode.editor_sync.is_none() {
         state
             .global_vars
-            .extend(crate::storage::profile::load(&project_root));
-        crate::storage::gallery::load(&mut state, &project_root);
-        state.read_dialogues = crate::storage::read_history::load(&project_root);
+            .extend(crate::storage::profile::load(&persistence_root));
+        crate::storage::gallery::load(&mut state, &persistence_root);
+        state.read_dialogues = crate::storage::read_history::load(&persistence_root);
     }
     let read_history_count = state.read_dialogues.len();
     let mut scene_count = 0;
@@ -1486,13 +1525,13 @@ fn bootstrap_project(
         // so the native overlay never flashes keine's title screen first.
         state.ended = false;
         if !crate::runtime::tick::sync_editor_cursor(&content, &mut state, &manifest) {
-            keine_core::step::step(&mut state);
+            crate::runtime::script_driver::resume_for_tooling(&mut state);
         }
     } else if mode.benchmark.is_some() {
         // Runtime captures start on the actual stage, not the comparatively
         // cheap title screen, and never require synthetic keyboard input.
         state.ended = false;
-        keine_core::step::step(&mut state);
+        crate::runtime::script_driver::resume_for_tooling(&mut state);
         let timelines = benchmark_timelines(&state)
             .into_iter()
             .map(|(scene, index, timeline)| format!("{scene}:{index}:{timeline}"))
@@ -1581,6 +1620,8 @@ fn bootstrap_project(
     );
     let profile_writer = crate::storage::profile::ProfileWriter::loaded(&state.global_vars);
     let gallery_snapshot = crate::storage::gallery::GallerySnapshot::loaded(&state);
+    let mut image_roles = crate::scene::images::ImageRoleRegistry::default();
+    image_roles.rebuild(&config, &manifest);
     commands.insert_resource(GameState(state));
     commands.insert_resource(crate::storage::read_history::ReadHistoryWriter::loaded(
         read_history_count,
@@ -1588,6 +1629,7 @@ fn bootstrap_project(
     commands.insert_resource(profile_writer);
     commands.insert_resource(gallery_snapshot);
     commands.insert_resource(manifest);
+    commands.insert_resource(image_roles);
     commands.insert_resource(LocalAssetCache::default());
 
     #[cfg(feature = "hot-reload")]

@@ -122,7 +122,7 @@ fn fill_deterministic(output: &mut [u8], state: &mut u64) {
 
 pub(super) fn run(project_path: &Path, loader: &LoaderRegistry) -> Result<String> {
     let opened_at = Instant::now();
-    let (_, _, content) = super::bootstrap::open_project(project_path, loader)?;
+    let content = super::bootstrap::open_project(project_path, loader)?.content;
     let open_elapsed = opened_at.elapsed();
     storage_report(project_path, &content, open_elapsed)
 }

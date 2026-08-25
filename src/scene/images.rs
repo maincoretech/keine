@@ -1,12 +1,15 @@
 use std::collections::{HashMap, HashSet};
 use std::io;
+use std::path::Path;
 
 use bevy::asset::{AssetApp, AssetId, AssetLoader, LoadContext, RenderAssetUsages, io::Reader};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use keine_loader::ResourceKind;
 use keine_media::{ImageSize, MAX_WEBP_FILE_BYTES};
+use serde::{Deserialize, Serialize};
 
-use crate::runtime::resources::{GameConfigResource, LocalAssetCache};
+use crate::runtime::resources::{GameConfigResource, LocalAssetCache, LocalAssetManifest};
 
 const BACKGROUND_LIMIT: UVec2 = UVec2::new(
     keine_core::DESIGN_WIDTH as u32,
@@ -37,27 +40,133 @@ struct NativeWebpLoader {
     sprite_height: f32,
 }
 
+/// Semantic decode requirements for one project image.
+///
+/// Bevy intentionally applies loader settings only from the first load of an
+/// asset path. The registry therefore merges every known use before startup so
+/// aliases and shared background/figure files always request one stable target.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ImageRole {
+    background: bool,
+    figure: bool,
+    raw: bool,
+}
+
+impl ImageRole {
+    pub(crate) const BACKGROUND: Self = Self {
+        background: true,
+        figure: false,
+        raw: false,
+    };
+    pub(crate) const FIGURE: Self = Self {
+        background: false,
+        figure: true,
+        raw: false,
+    };
+    pub(crate) const RAW: Self = Self {
+        background: false,
+        figure: false,
+        raw: true,
+    };
+
+    fn for_resource(kind: ResourceKind) -> Option<Self> {
+        match kind {
+            ResourceKind::Background => Some(Self::BACKGROUND),
+            ResourceKind::Figure | ResourceKind::MiniAvatar => Some(Self::FIGURE),
+            ResourceKind::Particle | ResourceKind::Lut => Some(Self::RAW),
+            ResourceKind::Voice
+            | ResourceKind::Bgm
+            | ResourceKind::Effect
+            | ResourceKind::Video => None,
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.background |= other.background;
+        self.figure |= other.figure;
+        self.raw |= other.raw;
+    }
+
+    fn is_stage_art(self) -> bool {
+        self.background || self.figure
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+struct NativeWebpSettings {
+    role: ImageRole,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct ImageRoleRegistry(HashMap<String, ImageRole>);
+
+impl ImageRoleRegistry {
+    pub(crate) fn rebuild(&mut self, config: &GameConfigResource, manifest: &LocalAssetManifest) {
+        self.0.clear();
+        self.register(
+            config.bg_path(&config.title_background),
+            ImageRole::BACKGROUND,
+        );
+        for scene in manifest.values() {
+            for resource in &scene.resources {
+                if let Some(role) = ImageRole::for_resource(resource.kind) {
+                    self.register(resource.resolved_path(config), role);
+                }
+            }
+        }
+    }
+
+    fn register(&mut self, path: String, role: ImageRole) {
+        self.0.entry(path).or_default().merge(role);
+    }
+
+    fn resolve(&self, path: &str, requested: ImageRole) -> ImageRole {
+        self.0.get(path).copied().unwrap_or(requested)
+    }
+}
+
 impl AssetLoader for NativeWebpLoader {
     type Asset = Image;
-    type Settings = ();
+    type Settings = NativeWebpSettings;
     type Error = io::Error;
 
     async fn load(
         &self,
         reader: &mut dyn Reader,
-        _settings: &Self::Settings,
-        load_context: &mut LoadContext<'_>,
+        settings: &Self::Settings,
+        _load_context: &mut LoadContext<'_>,
     ) -> Result<Image, Self::Error> {
         let bytes = read_webp_input(reader).await?;
-        let path = load_context.path().path().to_string_lossy();
         decode_webp(&bytes, |original| {
-            target_size(&path, original, self.sprite_height)
+            target_size(settings.role, original, self.sprite_height)
         })
     }
 
     fn extensions(&self) -> &[&str] {
         &["webp"]
     }
+}
+
+pub(crate) fn load(
+    asset_server: &AssetServer,
+    roles: &ImageRoleRegistry,
+    path: String,
+    requested: ImageRole,
+) -> Handle<Image> {
+    if !is_webp(&path) {
+        return asset_server.load(path);
+    }
+    let role = roles.resolve(&path, requested);
+    asset_server
+        .load_builder()
+        .with_settings(move |settings: &mut NativeWebpSettings| settings.role = role)
+        .load(path)
+}
+
+fn is_webp(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("webp"))
 }
 
 async fn read_webp_input(reader: &mut dyn Reader) -> io::Result<Vec<u8>> {
@@ -86,6 +195,7 @@ impl ImageDimensions {
 pub(crate) fn prepare(
     cache: Res<LocalAssetCache>,
     config: Res<GameConfigResource>,
+    roles: Res<ImageRoleRegistry>,
     mut images: ResMut<Assets<Image>>,
     mut dimensions: ResMut<ImageDimensions>,
     mut prepared: ResMut<PreparedImages>,
@@ -101,9 +211,9 @@ pub(crate) fn prepare(
         prepared.0.remove(&id);
         dimensions.0.remove(&id);
     }
-    let is_image = |path: &str| is_background_path(path) || is_figure_path(path);
     let has_pending = cache.handles.iter().any(|(path, handle)| {
-        is_image(path) && !prepared.0.contains(&handle.id().typed::<Image>())
+        roles.resolve(path, ImageRole::default()).is_stage_art()
+            && !prepared.0.contains(&handle.id().typed::<Image>())
     });
     if !cache.is_changed() && !has_pending {
         return;
@@ -112,7 +222,7 @@ pub(crate) fn prepare(
     let active = cache
         .handles
         .iter()
-        .filter(|(path, _)| is_image(path))
+        .filter(|(path, _)| roles.resolve(path, ImageRole::default()).is_stage_art())
         .map(|(_, handle)| handle.id().typed::<Image>())
         .collect::<HashSet<_>>();
     if cache.is_changed() {
@@ -125,7 +235,8 @@ pub(crate) fn prepare(
     }
 
     for (path, handle) in &cache.handles {
-        if !is_background_path(path) && !is_figure_path(path) {
+        let role = roles.resolve(path, ImageRole::default());
+        if !role.is_stage_art() {
             continue;
         }
         let id = handle.id().typed::<Image>();
@@ -136,7 +247,7 @@ pub(crate) fn prepare(
             continue;
         };
         let original = image.size();
-        let target = target_size(path, original, config.layout.sprite_height);
+        let target = target_size(role, original, config.layout.sprite_height);
         dimensions.0.insert(id, target);
 
         if target != original && is_resizeable(&image) {
@@ -176,34 +287,34 @@ fn is_resizeable(image: &Image) -> bool {
         })
 }
 
-fn target_size(path: &str, original: UVec2, sprite_height: f32) -> UVec2 {
-    let limit = if is_figure_path(path) {
+fn target_size(role: ImageRole, original: UVec2, sprite_height: f32) -> UVec2 {
+    if role.raw {
+        return original;
+    }
+    let mut target = UVec2::ZERO;
+    if role.background {
+        target = fit_within(original, BACKGROUND_LIMIT);
+    }
+    if role.figure {
         let sprite_height = if sprite_height.is_finite() && sprite_height > 0.0 {
             sprite_height.min(MAX_SPRITE_HEIGHT)
         } else {
             keine_core::DESIGN_HEIGHT
         };
-        UVec2::new(keine_core::DESIGN_WIDTH as u32, sprite_height.ceil() as u32)
-    } else if is_background_path(path) {
-        BACKGROUND_LIMIT
+        let figure = fit_within(
+            original,
+            UVec2::new(keine_core::DESIGN_WIDTH as u32, sprite_height.ceil() as u32)
+                .max(UVec2::ONE),
+        );
+        if figure.element_product() > target.element_product() {
+            target = figure;
+        }
+    }
+    if target != UVec2::ZERO {
+        target
     } else {
-        return original;
-    };
-    fit_within(original, limit.max(UVec2::ONE))
-}
-
-fn is_background_path(path: &str) -> bool {
-    matches!(
-        path.split('/').next().unwrap_or_default(),
-        "background" | "backgrounds" | "cg"
-    )
-}
-
-fn is_figure_path(path: &str) -> bool {
-    matches!(
-        path.split('/').next().unwrap_or_default(),
-        "figure" | "figures" | "character" | "characters"
-    )
+        original
+    }
 }
 
 pub(crate) fn decode_preview(bytes: &[u8]) -> io::Result<Image> {
@@ -252,11 +363,23 @@ fn fit_within(original: UVec2, limit: UVec2) -> UVec2 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::resources::{GameConfigResource, LocalAssetManifest, LocalSceneAssets};
+    use keine_core::config::GameConfig;
+    use keine_loader::{ResourceRef, SourceSpan};
+
+    fn resource(path: &str, kind: ResourceKind) -> ResourceRef {
+        ResourceRef {
+            path: path.into(),
+            kind,
+            action_index: 0,
+            span: SourceSpan { line: 1, column: 1 },
+        }
+    }
 
     #[test]
     fn preserves_aspect_when_reducing_figure() {
         assert_eq!(
-            target_size("figure/stand.webp", UVec2::new(1536, 2742), 825.0),
+            target_size(ImageRole::FIGURE, UVec2::new(1536, 2742), 825.0),
             UVec2::new(462, 825)
         );
     }
@@ -264,7 +387,7 @@ mod tests {
     #[test]
     fn caps_background_textures_at_the_design_resolution() {
         assert_eq!(
-            target_size("background/bg.webp", UVec2::new(3840, 2160), 825.0),
+            target_size(ImageRole::BACKGROUND, UVec2::new(3840, 2160), 825.0),
             UVec2::new(1920, 1080)
         );
     }
@@ -272,7 +395,7 @@ mod tests {
     #[test]
     fn never_upscales_source_art() {
         assert_eq!(
-            target_size("background/bg.webp", UVec2::new(1280, 720), 825.0),
+            target_size(ImageRole::BACKGROUND, UVec2::new(1280, 720), 825.0),
             UVec2::new(1280, 720)
         );
     }
@@ -280,8 +403,68 @@ mod tests {
     #[test]
     fn bounds_invalid_sprite_heights() {
         assert_eq!(
-            target_size("figure/stand.webp", UVec2::new(1920, 1080), f32::INFINITY),
+            target_size(ImageRole::FIGURE, UVec2::new(1920, 1080), f32::INFINITY),
             UVec2::new(1920, 1080)
+        );
+    }
+
+    #[test]
+    fn roles_ignore_directory_names_and_merge_shared_assets() {
+        let mut roles = ImageRoleRegistry::default();
+        roles.register("art/shared.webp".into(), ImageRole::FIGURE);
+        roles.register("art/shared.webp".into(), ImageRole::BACKGROUND);
+        let role = roles.resolve("art/shared.webp", ImageRole::RAW);
+
+        assert!(role.figure);
+        assert!(role.background);
+        assert_eq!(
+            target_size(role, UVec2::new(3840, 2160), 825.0),
+            UVec2::new(1920, 1080)
+        );
+    }
+
+    #[test]
+    fn manifest_aliases_define_decode_roles() {
+        let mut config = GameConfig::default();
+        config
+            .assets
+            .backgrounds
+            .insert("sea".into(), "artwork/scenes/sea.webp".into());
+        config
+            .assets
+            .figures
+            .insert("hero".into(), "art/hero.webp".into());
+        let config = GameConfigResource(config);
+        let mut manifest = LocalAssetManifest::default();
+        manifest.insert(
+            "start".into(),
+            LocalSceneAssets {
+                resources: vec![
+                    resource("sea", ResourceKind::Background),
+                    resource("hero", ResourceKind::Figure),
+                ],
+                ..default()
+            },
+        );
+        let mut roles = ImageRoleRegistry::default();
+        roles.rebuild(&config, &manifest);
+
+        let background = roles.resolve("artwork/scenes/sea.webp", ImageRole::RAW);
+        let figure = roles.resolve("art/hero.webp", ImageRole::RAW);
+        assert_eq!(
+            target_size(background, UVec2::new(3840, 2160), 825.0),
+            UVec2::new(1920, 1080)
+        );
+        let figure_size = target_size(figure, UVec2::new(2000, 1000), 825.0);
+        assert_eq!(figure_size, UVec2::new(1650, 825));
+        assert_eq!(figure_size.x as f32 / figure_size.y as f32, 2.0);
+    }
+
+    #[test]
+    fn raw_role_keeps_original_pixels() {
+        assert_eq!(
+            target_size(ImageRole::RAW, UVec2::new(3840, 2160), 825.0),
+            UVec2::new(3840, 2160)
         );
     }
 

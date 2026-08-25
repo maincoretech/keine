@@ -168,6 +168,7 @@ pub fn handle_choice_input(
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
     mut state: ResMut<GameState>,
+    mut checkpoint: ResMut<crate::storage::save::ContinuationCheckpoint>,
     mut root_query: Query<(Entity, &mut ChoiceRoot)>,
     interactions: Query<(&Interaction, &ChoiceButton), Changed<Interaction>>,
 ) {
@@ -230,7 +231,8 @@ pub fn handle_choice_input(
     if state.menu.is_some() {
         return;
     }
-    step::step(&mut state);
+    let outcome = crate::runtime::script_driver::resume(&mut state, &mut checkpoint);
+    crate::ui::title::handle_script_outcome(&mut commands, outcome);
     commands.entity(root_entity).despawn();
 }
 

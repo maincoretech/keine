@@ -18,6 +18,12 @@ target/package/
 资源打包阶段、构建与身份匹配的 hardened 引擎，并组装完整可运行发行目录；benchmark 也只属于
 bundle。
 
+两个发布入口共用 canonical media gate：asset mount 内的项目图片（背景、立绘、粒子和
+LUT）必须是 WebP，独立语音/BGM/音效必须是 Ogg Opus `.opus`。PNG/JPEG、WAV、MP3、
+Vorbis 和 FLAC 只属于开发/导入兼容路径；打包器发现它们会直接报错，不隐式转码，也不
+据此扩大 shipping engine 的 Cargo features。发行引擎固定启用 `ui-sounds`（bundled Opus），
+再按项目是否包含视频选择当前平台 video backend。
+
 独立资源包仍绑定 publisher identity；它只能由嵌入同一 identity 运行时材料的发行引擎打开，
 并不是可由普通开发版引擎通用加载的无密钥归档。
 
@@ -39,10 +45,16 @@ ELF `DT_RPATH` 中固定 `$ORIGIN/lib`，因此可以从任意工作目录直接
 更新时 Kēne 先将上一版快照和 segment 以硬链接（失败时复制）放进临时发布目录，Hakutaku
 只写新增块，并在新快照提交后清理未引用 segment。最终目录仍通过同目录 rename 事务发布。
 
+Hakutaku 内容目录不是持久化目录。发行项目必须声明稳定、路径安全的 `project.id`；运行时
+在 macOS Application Support、Windows LocalAppData 或 Linux XDG data home 中建立独立
+命名空间，`.app/Contents/Resources` 和普通 release 目录保持只读。首次升级会保守复制旧
+sidecar `saves/`，但已有新目录永远优先，旧副本不会自动删除。
+
 ## 发布身份
 
-首次本地打包会创建 `.keine/publisher.hakutaku-key`。它同时决定项目 ID、AES 根密钥和
-Ed25519 发布身份，必须备份且不得随游戏发布。也可用 `KEINE_HAKUTAKU_IDENTITY` 指向外部
+首次本地打包会创建 `.keine/publisher.hakutaku-key`。它同时决定 Hakutaku archive ID、AES
+根密钥和 Ed25519 发布身份；archive ID 与配置中用于存档命名空间的 `project.id` 是两个不同
+合同。私钥必须备份且不得随游戏发布。也可用 `KEINE_HAKUTAKU_IDENTITY` 指向外部
 身份文件；CI 使用 base64 的 `HAKUTAKU_IDENTITY_BASE64` secret 还原同一身份。
 
 GitHub 手动构建明确分成两种身份模式：

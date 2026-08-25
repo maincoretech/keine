@@ -7,7 +7,7 @@ keine 将四类生命周期不同的数据分开处理：
 | 数据域 | 当前表示 | 持久化位置 | 恢复规则 |
 |---|---|---|---|
 | 编译脚本 | `Arc<Program>` | 不进入存档 | 启动或热重载时由当前项目安装 |
-| 剧情时间点 | `State` 中的执行、舞台、交互、音频和局部变量 | v9 槽位 `.sav` | 只能恢复到 fingerprint 相同的当前 `Program` |
+| 剧情时间点 | `State` 中的执行、舞台、交互、音频和局部变量 | v10 槽位 `.sav` | 只能恢复到 fingerprint 相同的当前 `Program` |
 | 长效玩家数据 | global variables、已读历史、CG/BGM 解锁、设置 | `profile.bin`、`read_history.bin`、`gallery.bin`、`settings.bin` | 不被单槽读档或 Backlog 回想覆盖 |
 | 一次性运行事件 | `effect_queue` 等 | 不持久化 | 由呈现层消费，恢复时清空 |
 
@@ -45,16 +45,16 @@ keine 将四类生命周期不同的数据分开处理：
 - `State`、槽位 metadata 和每个 `RollbackSnapshot` 都携带该值；
 - `Program::insert_scene` 与 `State::install_program` 会同步重新计算或安装该值。
 
-fingerprint 是确定性的兼容身份，不是密码学签名，也不替代文件完整性校验。v9 存档分别以 CRC32 校验 metadata 与 state payload。
+fingerprint 是确定性的兼容身份，不是密码学签名，也不替代文件完整性校验。v10 存档分别以 CRC32 校验 metadata 与 state payload。
 
-## v9 二进制存档格式
+## v10 二进制存档格式
 
-当前原生存档版本为严格的 **v9**。一个 `slot_N.sav` 由 28-byte 固定 header、Postcard metadata 和 Postcard state payload 顺序组成：
+当前原生存档版本为严格的 **v10**。一个 `slot_N.sav` 由 28-byte 固定 header、Postcard metadata 和 Postcard state payload 顺序组成：
 
 ```text
 offset  size  field
 0       8     magic = "KEINE\0\0\0"
-8       4     version = 9 (little-endian u32)
+8       4     version = 10 (little-endian u32)
 12      4     metadata_len (little-endian u32)
 16      4     state_len (little-endian u32)
 20      4     CRC32(metadata payload)
@@ -85,7 +85,29 @@ metadata 上限为 64 KiB，state payload 上限为 64 MiB，连同 28-byte head
 
 因此脚本 Action 总数不会直接放大存档；长期玩家数据也不会被复制进每个槽位。
 
-固定 golden 位于 [`crates/loader/tests/fixtures/store-v9.sav`](../../../crates/loader/tests/fixtures/store-v9.sav)，由 `save_v9_golden_is_stable` 防止无意改变字节格式。v9 在 v8 的 LetsGal 1.8.0 相机状态之上加入可恢复的句尾退格状态，因此动画中途存档会在读档后从同一字符和点击等待阶段继续；舞台时间轴本身仍是恢复时清理的瞬态演出，不写入存档。v9 不兼容旧二进制存档。
+固定 golden 位于 [`crates/loader/tests/fixtures/store-v10.sav`](../../../crates/loader/tests/fixtures/store-v10.sav)，由 `save_v10_golden_is_stable` 防止无意改变字节格式。v10 在 v8 的 LetsGal 1.8.0 相机状态之上加入可恢复的句尾退格状态，因此动画中途存档会在读档后从同一字符和点击等待阶段继续；舞台时间轴本身仍是恢复时清理的瞬态演出，不写入存档。v10 不兼容旧二进制存档。
+
+v10 进一步持久化脚本游标之后仍会影响后续行为的逻辑表现状态：等待推进、系统消息、
+幕布、浮动文字、立绘规则、对白/段落样式及 reveal override、sprite sequence。FFmpeg
+decoder、共享 stage timeline、camera/keyframe animation 等 native 时间轴仍不进入 payload。
+
+## 可恢复 checkpoint 合同
+
+`State::persistence_safety()` 是所有保存入口共享的边界：
+
+- 普通 dialogue/typewriter、可序列化 transform、幕布/浮动文字、样式和 sprite sequence
+  可 exact resume；
+- blocking 与 non-blocking video、shared stage timeline、camera shake/effect/transform、
+  background/sprite keyframe/position animation 在 active 期间不是 exact-save-safe；
+- 已消费的一次性 host/audio event 不恢复，避免 LOAD 后重复触发。
+
+手动 SAVE 与 Q·SAVE 遇到第二类状态时不写文件，并向用户说明需要等待当前演出结束。
+返回标题和 graceful exit 使用 `ContinuationCheckpoint`：runtime 只在脚本恢复边界把最后一个
+exact state 克隆到 RAM，危险演出期间保存该内存快照；本次会话若尚无 checkpoint，则保留已有
+quick save，不以不完整状态覆盖它。
+
+checkpoint 捕获本身没有文件创建、周期备份或 `fsync`。只有用户实际保存、返回标题或正常退出
+才执行一次既有原子写入，因此该可靠性合同不会以持续写放大或额外硬盘磨损为代价。
 
 ## SavedState 恢复边界
 
@@ -123,7 +145,11 @@ saves/
   slot_N.webp
 ```
 
-预览 WebP 不嵌入 `.sav`，也不参与 v9 CRC。保存时由独立相机直接渲染到不超过
+这里的 `saves/` 相对于独立的 persistence root：可编辑目录工程使用项目根，Hakutaku
+发行版使用由稳定 `project.id` 决定的平台用户数据目录。内容根始终只读；旧发行版遗留在
+内容旁的 sidecar 只会在新目录不存在时复制一次，永不反向覆盖或自动删除。
+
+预览 WebP 不嵌入 `.sav`，也不参与 v10 CRC。保存时由独立相机直接渲染到不超过
 480x270、保持当前窗口宽高比的目标，随后在有界后台队列中以质量 80 的有损 WebP
 编码；不回读全窗口纹理，也不在渲染线程缩放或编码。存档页通过 `IoTaskPool` 按当前页
 异步解码，强 `Handle<Image>` 缓存仅保留十个可见槽位。
@@ -132,13 +158,13 @@ saves/
 history/gallery，而 UI 的 CLEAR ALL 会删除整个 `saves/` 数据目录并同步清理内存
 writer cache。
 
-写入采用同目录临时文件、`write_all`、`sync_all` 和 `rename` 原子替换。进程在替换前中断时不会用半写入 payload 覆盖现有槽位。
+写入采用同目录临时文件、`write_all`、`sync_all` 和 `rename` 原子替换。进程在替换前中断时不会用半写入 payload 覆盖现有槽位。同步只发生在上述真实写档操作，不在 checkpoint 捕获或每帧执行。
 
 ## 版本与损坏处理
 
-- version 不是 9：`inspect` 返回 `StoreStatus::Unsupported(version)`，`decode` 返回错误；当前没有旧版本迁移器；
+- version 不是 10：`inspect` 返回 `StoreStatus::Unsupported(version)`，`decode` 返回错误；当前没有旧版本迁移器；
 - magic、长度、metadata CRC32 或 metadata schema 无法解析：`Corrupt` 或 decode error；
 - state 截断或 state CRC32 不匹配：槽位前缀仍可展示，但实际 LOAD 返回 decode error；
-- v9 内容有效但 Program fingerprint 不匹配：文件格式有效，剧情恢复被 `ProgramMismatch` 拒绝。
+- v10 内容有效但 Program fingerprint 不匹配：文件格式有效，剧情恢复被 `ProgramMismatch` 拒绝。
 
 旧版本不能通过“尽量反序列化”静默加载。若未来需要迁移，应增加明确的版本 adapter、输入上限、迁移测试与新的固定 golden，并保持解码结果只能通过 `SavedState::restore_into` 进入运行态。

@@ -218,7 +218,8 @@ fn write_save_preview(job: SavePreviewJob) {
 #[derive(SystemParam)]
 pub(crate) struct QuickSaveContext<'w, 's> {
     state: ResMut<'w, crate::runtime::resources::GameState>,
-    project_root: Res<'w, crate::runtime::resources::ProjectRoot>,
+    checkpoint: ResMut<'w, crate::storage::save::ContinuationCheckpoint>,
+    project_root: Res<'w, crate::runtime::resources::PersistenceRoot>,
     store: Res<'w, crate::runtime::resources::StoreCodec>,
     preview: ResMut<'w, QuickSavePreview>,
     save_previews: ResMut<'w, crate::ui::save_load::SavePreviewCache>,
@@ -245,7 +246,7 @@ struct SavePreviewContext<'w, 's> {
     preview: ResMut<'w, QuickSavePreview>,
     save_previews: ResMut<'w, crate::ui::save_load::SavePreviewCache>,
     save_load: ResMut<'w, crate::ui::save_load::SaveLoadUi>,
-    project_root: Res<'w, crate::runtime::resources::ProjectRoot>,
+    project_root: Res<'w, crate::runtime::resources::PersistenceRoot>,
     writer: Res<'w, SavePreviewWriter>,
 }
 
@@ -512,6 +513,15 @@ pub fn handle_dialog_click(
                     &context.project_root,
                 ) {
                     log::error!("quick save failed: {error:#}");
+                    if !context.state.persistence_safety().is_exact() {
+                        commands.insert_resource(DialogRequest::confirmation(
+                            tr(
+                                context.settings.locale,
+                                UiText::SaveUnavailableDuringPresentation,
+                            ),
+                            DialogAction::Noop,
+                        ));
+                    }
                 } else {
                     context.preview.state = Some(crate::ui::control_bar::QuickSaveSnapshot::from(
                         &**context.state,
@@ -534,31 +544,46 @@ pub fn handle_dialog_click(
                     QUICK_SAVE_SLOT,
                     &context.project_root,
                 ) {
-                    Ok(loaded) => {
-                        if let Err(error) = loaded.restore_into(&mut context.state) {
+                    Ok(loaded) => match loaded.restore_into(&mut context.state) {
+                        Ok(()) => context.checkpoint.reset(&context.state),
+                        Err(error) => {
                             log::error!("quick load rejected: {error}");
                             commands.insert_resource(DialogRequest::confirmation(
                                 tr(context.settings.locale, UiText::ForeignSave),
                                 DialogAction::Noop,
                             ));
                         }
-                    }
+                    },
                     Err(error) => log::error!("quick load failed: {error:#}"),
                 }
             }
             DialogAction::BackToTitle => {
-                if let Err(error) = crate::storage::save::save_game(
+                let continuation = context
+                    .checkpoint
+                    .state_for_continuation(&context.state)
+                    .cloned();
+                match crate::storage::save::save_continuation(
                     context.store.0.as_ref(),
                     &context.state,
-                    QUICK_SAVE_SLOT,
+                    &context.checkpoint,
                     &context.project_root,
                 ) {
-                    log::error!("failed to save continuation before returning to title: {error:#}");
-                } else {
-                    context.preview.state = Some(crate::ui::control_bar::QuickSaveSnapshot::from(
-                        &**context.state,
-                    ));
-                    context.preview.image = None;
+                    Ok(crate::storage::save::ContinuationSave::Skipped) => {
+                        log::warn!(
+                            "kept the previous continuation because no exact checkpoint exists"
+                        )
+                    }
+                    Ok(_) => {
+                        context.preview.state = continuation
+                            .as_ref()
+                            .map(crate::ui::control_bar::QuickSaveSnapshot::from);
+                        context.preview.image = None;
+                    }
+                    Err(error) => {
+                        log::error!(
+                            "failed to save continuation before returning to title: {error:#}"
+                        )
+                    }
                 }
                 commands.insert_resource(crate::ui::title::ReturnToTitleTransition::default());
                 context.save_load.mode = None;
@@ -573,6 +598,15 @@ pub fn handle_dialog_click(
                     &context.project_root,
                 ) {
                     log::error!("save slot {slot} failed: {error:#}");
+                    if !context.state.persistence_safety().is_exact() {
+                        commands.insert_resource(DialogRequest::confirmation(
+                            tr(
+                                context.settings.locale,
+                                UiText::SaveUnavailableDuringPresentation,
+                            ),
+                            DialogAction::Noop,
+                        ));
+                    }
                 } else {
                     context.save_load.set_changed();
                     if let Ok(window) = context.windows.single() {
@@ -588,7 +622,10 @@ pub fn handle_dialog_click(
                     &context.project_root,
                 ) {
                     Ok(loaded) => match loaded.restore_into(&mut context.state) {
-                        Ok(()) => context.save_load.mode = None,
+                        Ok(()) => {
+                            context.checkpoint.reset(&context.state);
+                            context.save_load.mode = None;
+                        }
                         Err(error) => {
                             log::error!("load slot {slot} rejected: {error}");
                             commands.insert_resource(DialogRequest::confirmation(
@@ -655,7 +692,13 @@ pub fn handle_dialog_click(
             }
             DialogAction::Noop => {}
             DialogAction::SystemMessage => {
-                keine_core::step::resolve_system_message(&mut context.state, true);
+                if keine_core::step::resolve_system_message(&mut context.state, true) {
+                    let outcome = crate::runtime::script_driver::resume(
+                        &mut context.state,
+                        &mut context.checkpoint,
+                    );
+                    crate::ui::title::handle_script_outcome(&mut commands, outcome);
+                }
             }
             DialogAction::ExitGame => {
                 if let Ok(window) = context.primary_window.single() {
@@ -667,8 +710,13 @@ pub fn handle_dialog_click(
             }
         }
     }
-    if right_clicked && matches!(req.action, DialogAction::SystemMessage) {
-        keine_core::step::resolve_system_message(&mut context.state, false);
+    if right_clicked
+        && matches!(req.action, DialogAction::SystemMessage)
+        && keine_core::step::resolve_system_message(&mut context.state, false)
+    {
+        let outcome =
+            crate::runtime::script_driver::resume(&mut context.state, &mut context.checkpoint);
+        crate::ui::title::handle_script_outcome(&mut commands, outcome);
     }
 }
 

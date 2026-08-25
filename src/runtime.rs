@@ -10,6 +10,7 @@ pub(crate) mod host;
 pub(crate) mod package_benchmark;
 pub(crate) mod platform;
 pub(crate) mod resources;
+pub(crate) mod script_driver;
 pub(crate) mod tick;
 
 use bevy::prelude::*;

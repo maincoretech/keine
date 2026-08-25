@@ -51,9 +51,57 @@ pub struct GameConfig {
 /// metadata.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectMetadata {
+    /// Stable, filesystem-safe identity used to namespace shipping saves.
+    /// Development projects may omit it, but packaging requires one.
+    #[serde(default)]
+    pub id: String,
+    /// Optional reverse-DNS native application identity. When omitted,
+    /// shipping tools derive `moe.maincore.keine.<id>`.
+    #[serde(default)]
+    pub bundle_identifier: String,
     /// Short description of the currently loaded visual novel.
     #[serde(default)]
     pub description: String,
+}
+
+impl ProjectMetadata {
+    pub fn valid_id(&self) -> Option<&str> {
+        valid_project_id(&self.id).then_some(self.id.as_str())
+    }
+
+    pub fn application_identifier(&self) -> Option<String> {
+        let id = self.valid_id()?;
+        if self.bundle_identifier.is_empty() {
+            return Some(format!("moe.maincore.keine.{id}"));
+        }
+        valid_bundle_identifier(&self.bundle_identifier).then(|| self.bundle_identifier.clone())
+    }
+}
+
+fn valid_project_id(id: &str) -> bool {
+    let bytes = id.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 64
+        && bytes[0].is_ascii_lowercase()
+        && bytes[bytes.len() - 1].is_ascii_alphanumeric()
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+}
+
+fn valid_bundle_identifier(identifier: &str) -> bool {
+    !identifier.is_empty()
+        && identifier.len() <= 255
+        && identifier.split('.').count() >= 3
+        && identifier.split('.').all(|component| {
+            let bytes = component.as_bytes();
+            !bytes.is_empty()
+                && bytes[0].is_ascii_alphanumeric()
+                && bytes[bytes.len() - 1].is_ascii_alphanumeric()
+                && bytes
+                    .iter()
+                    .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+        })
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -446,7 +494,7 @@ impl GameConfig {
     }
 
     pub fn lut_path(&self, name: &str) -> String {
-        resolve_asset_path(&self.assets.luts, name, |name| format!("luts/{name}.png"))
+        resolve_asset_path(&self.assets.luts, name, |name| format!("luts/{name}.webp"))
     }
 }
 
@@ -525,10 +573,45 @@ layout:
         let yaml = r#"
 title: "Example"
 project:
+  id: example-game
+  bundle_identifier: moe.example.game
   description: "A short visual novel."
 "#;
         let cfg = GameConfig::from_yaml(yaml).unwrap();
+        assert_eq!(cfg.project.valid_id(), Some("example-game"));
+        assert_eq!(
+            cfg.project.application_identifier().as_deref(),
+            Some("moe.example.game")
+        );
         assert_eq!(cfg.project.description, "A short visual novel.");
+    }
+
+    #[test]
+    fn shipping_identity_is_strict_and_has_a_stable_default_bundle_id() {
+        let metadata = ProjectMetadata {
+            id: "example-game".into(),
+            ..ProjectMetadata::default()
+        };
+        assert_eq!(
+            metadata.application_identifier().as_deref(),
+            Some("moe.maincore.keine.example-game")
+        );
+
+        for invalid in ["", "Example", "-example", "example_1", "example/one"] {
+            let metadata = ProjectMetadata {
+                id: invalid.into(),
+                ..ProjectMetadata::default()
+            };
+            assert_eq!(metadata.valid_id(), None, "{invalid:?}");
+            assert_eq!(metadata.application_identifier(), None, "{invalid:?}");
+        }
+
+        let invalid_bundle = ProjectMetadata {
+            id: "example".into(),
+            bundle_identifier: "not a bundle/id".into(),
+            ..ProjectMetadata::default()
+        };
+        assert_eq!(invalid_bundle.application_identifier(), None);
     }
 
     #[test]
@@ -605,7 +688,7 @@ adapter:
         assert_eq!(cfg.effect_path("a.opus"), "vocal/a.opus");
         assert_eq!(cfg.bgm_path("a.opus"), "bgm/a.opus");
         assert_eq!(cfg.video_path("a.mp4"), "video/a.mp4");
-        assert_eq!(cfg.lut_path("night"), "luts/night.png");
+        assert_eq!(cfg.lut_path("night"), "luts/night.webp");
         assert!(cfg.uses_legacy_effect_fallback("a.opus"));
         assert!(!cfg.uses_legacy_effect_fallback("se/a.opus"));
     }

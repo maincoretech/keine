@@ -5,15 +5,73 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use bevy::app::AppExit;
 use bevy::prelude::*;
-use keine_core::State;
+use keine_core::{PersistenceSafety, State};
 use keine_loader::{SavedState, StoreAdapter, StoreStatus};
 
 use crate::runtime::resources::{
-    EditorSyncSession, GameState, PersistenceDisabled, ProjectRoot, StoreCodec,
+    EditorSyncSession, GameState, PersistenceDisabled, PersistenceRoot, StoreCodec,
 };
 
 pub const QUICK_SAVE_SLOT: u32 = 0;
 pub use keine_loader::StoreMetadata as SaveMetadata;
+
+/// Latest exact continuation point kept only in RAM.
+///
+/// Capturing a checkpoint never touches the filesystem. Disk I/O still occurs
+/// only for an explicit save, return-to-title continuation, or graceful exit.
+#[derive(Resource, Default)]
+pub(crate) struct ContinuationCheckpoint(Option<State>);
+
+impl ContinuationCheckpoint {
+    pub(crate) fn capture(&mut self, state: &State) {
+        if !state.ended && state.persistence_safety().is_exact() {
+            self.0 = Some(state.clone());
+        }
+    }
+
+    pub(crate) fn reset(&mut self, state: &State) {
+        self.0 = None;
+        self.capture(state);
+    }
+
+    pub(crate) fn ensure_current_program(&mut self, state: &State) {
+        let matches = self
+            .0
+            .as_ref()
+            .is_some_and(|saved| saved.program_fingerprint == state.program_fingerprint);
+        if !matches {
+            self.reset(state);
+        }
+    }
+
+    fn continuation<'a>(&'a self, live: &'a State) -> Option<ContinuationState<'a>> {
+        if live.persistence_safety().is_exact() {
+            return Some(ContinuationState::Live(live));
+        }
+        self.0
+            .as_ref()
+            .filter(|saved| saved.program_fingerprint == live.program_fingerprint)
+            .map(ContinuationState::Checkpoint)
+    }
+
+    pub(crate) fn state_for_continuation<'a>(&'a self, live: &'a State) -> Option<&'a State> {
+        match self.continuation(live)? {
+            ContinuationState::Live(state) | ContinuationState::Checkpoint(state) => Some(state),
+        }
+    }
+}
+
+enum ContinuationState<'a> {
+    Live(&'a State),
+    Checkpoint(&'a State),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ContinuationSave {
+    Live,
+    Checkpoint,
+    Skipped,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SlotStatus {
@@ -29,6 +87,9 @@ pub fn save_game(
     slot: u32,
     project_root: &Path,
 ) -> Result<()> {
+    if let PersistenceSafety::ActiveTransient(hazard) = state.persistence_safety() {
+        bail!("save is unavailable while {hazard:?} presentation is active");
+    }
     let path = slot_path(store, project_root, slot);
     let parent = path.parent().context("save slot path has no parent")?;
     fs::create_dir_all(parent)
@@ -49,6 +110,23 @@ pub fn save_game(
     Ok(())
 }
 
+pub(crate) fn save_continuation(
+    store: &dyn StoreAdapter,
+    live: &State,
+    checkpoint: &ContinuationCheckpoint,
+    project_root: &Path,
+) -> Result<ContinuationSave> {
+    let Some(state) = checkpoint.continuation(live) else {
+        return Ok(ContinuationSave::Skipped);
+    };
+    let (state, result) = match state {
+        ContinuationState::Live(state) => (state, ContinuationSave::Live),
+        ContinuationState::Checkpoint(state) => (state, ContinuationSave::Checkpoint),
+    };
+    save_game(store, state, QUICK_SAVE_SLOT, project_root)?;
+    Ok(result)
+}
+
 pub fn load_game(store: &dyn StoreAdapter, slot: u32, project_root: &Path) -> Result<SavedState> {
     let path = slot_path(store, project_root, slot);
     let bytes = super::read_limited(&path, store.maximum_encoded_size())
@@ -67,8 +145,9 @@ pub fn load_game(store: &dyn StoreAdapter, slot: u32, project_root: &Path) -> Re
 pub(crate) fn quick_save_on_exit(
     mut exits: MessageReader<AppExit>,
     state: Res<GameState>,
-    project_root: Res<ProjectRoot>,
+    project_root: Res<PersistenceRoot>,
     store: Res<StoreCodec>,
+    checkpoint: Res<ContinuationCheckpoint>,
     editor_sync: Option<Res<EditorSyncSession>>,
     persistence_disabled: Option<Res<PersistenceDisabled>>,
 ) {
@@ -78,10 +157,15 @@ pub(crate) fn quick_save_on_exit(
     if exits.read().next().is_none() || state.ended {
         return;
     }
-    if let Err(error) = save_game(store.0.as_ref(), &state, QUICK_SAVE_SLOT, &project_root) {
-        log::error!("failed to quick-save during shutdown: {error:#}");
-    } else {
-        log::info!("quick-saved current game before shutdown");
+    match save_continuation(store.0.as_ref(), &state, &checkpoint, &project_root) {
+        Ok(ContinuationSave::Live) => log::info!("quick-saved current game before shutdown"),
+        Ok(ContinuationSave::Checkpoint) => {
+            log::info!("quick-saved the last exact checkpoint before shutdown")
+        }
+        Ok(ContinuationSave::Skipped) => {
+            log::warn!("kept the previous quick save because this session has no exact checkpoint")
+        }
+        Err(error) => log::error!("failed to quick-save during shutdown: {error:#}"),
     }
 }
 
@@ -209,6 +293,32 @@ mod tests {
         state
     }
 
+    fn state_with_active_video(cursor: usize) -> State {
+        let mut state = sample_state();
+        state.cursor = cursor;
+        state.videos.insert(
+            "opening".into(),
+            keine_core::VideoState {
+                spec: keine_core::VideoSpec {
+                    id: "opening".into(),
+                    file: "video/opening.mp4".into(),
+                    looped: false,
+                    muted: false,
+                    alpha: 1.0,
+                    skippable: true,
+                    wait_for_finished: false,
+                    mode: keine_core::VideoMode::Fullscreen,
+                },
+                revision: 1,
+                elapsed: 0.5,
+                opacity: 1.0,
+                stopping: false,
+                fade_out: 0.0,
+            },
+        );
+        state
+    }
+
     #[test]
     fn round_trips_state_and_inspects_metadata() {
         let root = temp_root("round-trip");
@@ -278,6 +388,73 @@ mod tests {
     }
 
     #[test]
+    fn manual_save_rejects_active_transient_presentation() {
+        let root = temp_root("unsafe-manual");
+        let error = save_game(&KeineStore, &state_with_active_video(50), 1, &root).unwrap_err();
+
+        assert!(format!("{error:#}").contains("Video"));
+        assert_eq!(inspect_slot(&KeineStore, 1, &root), SlotStatus::Empty);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn continuation_checkpoint_is_memory_only_until_a_real_save() {
+        let root = temp_root("checkpoint");
+        let stable = sample_state();
+        let mut checkpoint = ContinuationCheckpoint::default();
+        checkpoint.capture(&stable);
+
+        assert!(
+            !root.exists(),
+            "RAM checkpoint capture must not touch storage"
+        );
+        assert_eq!(
+            save_continuation(
+                &KeineStore,
+                &state_with_active_video(50),
+                &checkpoint,
+                &root,
+            )
+            .unwrap(),
+            ContinuationSave::Checkpoint
+        );
+        assert_eq!(
+            load_game(&KeineStore, QUICK_SAVE_SLOT, &root)
+                .unwrap()
+                .snapshot()
+                .cursor,
+            stable.cursor
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn missing_checkpoint_never_overwrites_an_existing_continuation() {
+        let root = temp_root("checkpoint-missing");
+        let stable = sample_state();
+        save_game(&KeineStore, &stable, QUICK_SAVE_SLOT, &root).unwrap();
+
+        assert_eq!(
+            save_continuation(
+                &KeineStore,
+                &state_with_active_video(50),
+                &ContinuationCheckpoint::default(),
+                &root,
+            )
+            .unwrap(),
+            ContinuationSave::Skipped
+        );
+        assert_eq!(
+            load_game(&KeineStore, QUICK_SAVE_SLOT, &root)
+                .unwrap()
+                .snapshot()
+                .cursor,
+            stable.cursor
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn deletes_state_and_preview_together() {
         let root = temp_root("delete");
         save_game(&KeineStore, &sample_state(), 4, &root).unwrap();
@@ -317,7 +494,8 @@ mod tests {
         let mut app = App::new();
         app.add_message::<AppExit>()
             .insert_resource(GameState(state.clone()))
-            .insert_resource(ProjectRoot(root.clone()))
+            .insert_resource(ContinuationCheckpoint::default())
+            .insert_resource(PersistenceRoot(root.clone()))
             .insert_resource(StoreCodec(Arc::new(KeineStore)))
             .add_systems(Last, quick_save_on_exit);
 
@@ -350,7 +528,8 @@ mod tests {
         let mut app = App::new();
         app.add_message::<AppExit>()
             .insert_resource(GameState(state))
-            .insert_resource(ProjectRoot(root.clone()))
+            .insert_resource(ContinuationCheckpoint::default())
+            .insert_resource(PersistenceRoot(root.clone()))
             .insert_resource(StoreCodec(Arc::new(KeineStore)))
             .init_resource::<EditorSyncSession>()
             .add_systems(Last, quick_save_on_exit);

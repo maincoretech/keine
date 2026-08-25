@@ -4,7 +4,7 @@ use anyhow::Result;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::runtime::resources::{GameConfigResource, ProjectRoot};
+use crate::runtime::resources::{GameConfigResource, PersistenceRoot};
 use crate::ui::control_bar::{SkipMode, ToggleStates};
 
 const SETTINGS_VERSION: u32 = 4;
@@ -74,7 +74,7 @@ impl Default for RuntimeSettings {
 }
 
 pub fn load_settings(
-    project_root: Res<ProjectRoot>,
+    project_root: Res<PersistenceRoot>,
     config: Res<GameConfigResource>,
     mut settings: ResMut<RuntimeSettings>,
     mut toggles: ResMut<ToggleStates>,

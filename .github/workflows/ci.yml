@@ -32,18 +32,21 @@ jobs:
             quality: true
             backend: none
             release_features: audio-all,ui-sounds
+            shipping_features: ui-sounds
             timeout: 60
           - name: macOS
             os: macos-latest
             quality: false
             backend: native
             release_features: audio-all,ui-sounds,video-native
+            shipping_features: ui-sounds,video-native
             timeout: 60
           - name: Windows x64
             os: windows-latest
             quality: false
             backend: ffmpeg
             release_features: audio-all,ui-sounds,video-ffmpeg
+            shipping_features: ui-sounds,video-ffmpeg
             timeout: 90
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout }}
@@ -99,3 +102,7 @@ jobs:
         run: >-
           cargo build --release --locked --no-default-features
           --features "${{ matrix.release_features }}"
+      - name: Check canonical shipping feature set
+        run: >-
+          cargo check --locked --no-default-features
+          --features "${{ matrix.shipping_features }}"

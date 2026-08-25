@@ -11,7 +11,7 @@ use crate::scene::effects::material::{
     StageMaterial, StageQuad, active_lut_preset, animation_uniform, effective_post_process,
     upsert_stage_material,
 };
-use crate::scene::images::ImageDimensions;
+use crate::scene::images::{ImageDimensions, ImageRole, ImageRoleRegistry};
 
 /// Marker for sprite entities with stable IDs used by diff-based synchronization.
 #[derive(Component)]
@@ -135,6 +135,7 @@ fn scene_layer_size(layout: SceneLayerLayout, aspect: f32, texture_size: Vec2) -
 #[derive(SystemParam)]
 pub(crate) struct SpriteRenderResources<'w> {
     asset_server: Res<'w, AssetServer>,
+    image_roles: Res<'w, ImageRoleRegistry>,
     dimensions: Res<'w, ImageDimensions>,
     quad: Res<'w, StageQuad>,
     materials: ResMut<'w, Assets<StageMaterial>>,
@@ -191,7 +192,12 @@ pub(crate) fn sync_sprites(
     });
 
     for (id, data) in &state.sprites {
-        let handle: Handle<Image> = render.asset_server.load(config.figure_path(&data.image));
+        let handle = crate::scene::images::load(
+            &render.asset_server,
+            &render.image_roles,
+            config.figure_path(&data.image),
+            ImageRole::FIGURE,
+        );
         let texture_size = render
             .dimensions
             .size(&handle)
@@ -263,8 +269,14 @@ pub(crate) fn sync_sprites(
             group,
             data.camera_distance,
         );
-        let lut = active_lut_preset(&post)
-            .map(|preset| render.asset_server.load(config.lut_path(preset)));
+        let lut = active_lut_preset(&post).map(|preset| {
+            crate::scene::images::load(
+                &render.asset_server,
+                &render.image_roles,
+                config.lut_path(preset),
+                ImageRole::RAW,
+            )
+        });
         let progress = data.transition_progress.clamp(0.0, 1.0);
         let transition_x = (1.0 - progress) * data.transition_offset_x;
         let alpha = (progress * transform.alpha).clamp(0.0, 1.0);

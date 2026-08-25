@@ -98,6 +98,7 @@ type StageButtonQuery<'w, 's> = Query<
 pub struct TickContext<'w, 's> {
     time: Res<'w, Time>,
     state: ResMut<'w, GameState>,
+    checkpoint: ResMut<'w, crate::storage::save::ContinuationCheckpoint>,
     settings: ResMut<'w, RuntimeSettings>,
     #[cfg(feature = "hot-reload")]
     content: Res<'w, ContentProjectResource>,
@@ -110,6 +111,8 @@ pub struct TickContext<'w, 's> {
     watcher: Option<Res<'w, ScriptWatcherResource>>,
     #[cfg(feature = "hot-reload")]
     asset_manifest: ResMut<'w, LocalAssetManifest>,
+    #[cfg(feature = "hot-reload")]
+    image_roles: ResMut<'w, crate::scene::images::ImageRoleRegistry>,
     toggles: ResMut<'w, ToggleStates>,
     buttons: StageButtonQuery<'w, 's>,
     windows: Query<'w, 's, &'static Window>,
@@ -191,7 +194,10 @@ pub fn tick(mut context: TickContext) {
     );
     if presentation_was_blocked {
         if context.editor_sync.is_none() && !context.state.presentation_blocked() {
-            let progress = step_once(context.state.bypass_change_detection());
+            let progress = step_once(
+                context.state.bypass_change_detection(),
+                &mut context.checkpoint,
+            );
             state_changed |= progress.changed;
             if progress.return_to_title {
                 request_return_to_title(&mut context.commands);
@@ -206,6 +212,7 @@ pub fn tick(mut context: TickContext) {
         let progress = skip_once(
             context.state.bypass_change_detection(),
             &mut context.toggles,
+            &mut context.checkpoint,
         );
         state_changed |= progress.changed;
         if progress.return_to_title {
@@ -236,7 +243,11 @@ pub fn tick(mut context: TickContext) {
         return;
     }
     let target_chars = dialogue_target(&context.state, &mut context.typewriter_clock);
-    let notend = update_notend(context.state.bypass_change_detection(), target_chars);
+    let notend = update_notend(
+        context.state.bypass_change_detection(),
+        target_chars,
+        &mut context.checkpoint,
+    );
     state_changed |= notend.changed;
     let target_chars = dialogue_target(&context.state, &mut context.typewriter_clock);
     let auto = update_auto_mode(
@@ -246,6 +257,7 @@ pub fn tick(mut context: TickContext) {
         context.settings.auto_delay,
         &mut context.auto_timer,
         target_chars,
+        &mut context.checkpoint,
     );
     state_changed |= auto.changed;
     if notend.return_to_title || auto.return_to_title {
@@ -258,7 +270,10 @@ pub fn tick(mut context: TickContext) {
         &context.windows,
         context.toggles.hide,
     ) {
-        let progress = advance_once(context.state.bypass_change_detection());
+        let progress = advance_once(
+            context.state.bypass_change_detection(),
+            &mut context.checkpoint,
+        );
         state_changed |= progress.changed;
         if progress.return_to_title {
             request_return_to_title(&mut context.commands);
@@ -288,13 +303,17 @@ fn dialogue_target(state: &State, clock: &mut TypewriterClock) -> usize {
         .map_or(0, |dialogue| clock.dialogue_length.count(&dialogue.text))
 }
 
-fn update_notend(state: &mut State, target_chars: usize) -> TickProgress {
+fn update_notend(
+    state: &mut State,
+    target_chars: usize,
+    checkpoint: &mut crate::storage::save::ContinuationCheckpoint,
+) -> TickProgress {
     let should_advance = state
         .dialogue
         .as_ref()
         .is_some_and(|dialogue| dialogue.auto_advance && dialogue.visible_chars >= target_chars);
     if should_advance {
-        return advance_once(state);
+        return advance_once(state, checkpoint);
     }
     TickProgress::default()
 }
@@ -356,6 +375,7 @@ fn reload_scripts_if_changed(context: &mut TickContext<'_, '_>, delta_seconds: f
                         context.state.bypass_change_detection(),
                         &mut context.asset_manifest,
                         &mut context.config,
+                        &mut context.image_roles,
                     );
                     changed = true;
                     log::info!("reloaded {change_count} changed project source(s)");
@@ -522,6 +542,7 @@ fn apply_hot_reload(
     state: &mut State,
     asset_manifest: &mut LocalAssetManifest,
     config: &mut crate::runtime::resources::GameConfigResource,
+    image_roles: &mut crate::scene::images::ImageRoleRegistry,
 ) {
     for (path, diagnostic) in build.diagnostics {
         let message = format!(
@@ -540,6 +561,7 @@ fn apply_hot_reload(
         config.0 = refreshed_config;
     }
     *asset_manifest = build.manifest;
+    image_roles.rebuild(config, asset_manifest);
     restart_after_program_reload(state, build.program);
 }
 
@@ -791,17 +813,21 @@ fn restart_after_program_reload(state: &mut State, program: Program) {
     restarted.effect_queue.push(keine_core::EffectEvent::Stop);
     restarted.stage_revision = next_stage_revision;
     if !restarted.ended {
-        step::step(&mut restarted);
+        crate::runtime::script_driver::resume_for_tooling(&mut restarted);
     }
     *state = restarted;
 }
 
-fn skip_once(state: &mut State, toggles: &mut ToggleStates) -> TickProgress {
+fn skip_once(
+    state: &mut State,
+    toggles: &mut ToggleStates,
+    checkpoint: &mut crate::storage::save::ContinuationCheckpoint,
+) -> TickProgress {
     if toggles.skip_mode == SkipMode::Read && !state.current_dialogue_is_read() {
         toggles.skip = false;
         return TickProgress::default();
     }
-    advance_once(state)
+    advance_once(state, checkpoint)
 }
 
 fn update_typewriter(
@@ -931,6 +957,7 @@ fn update_auto_mode(
     delay: f64,
     timer: &mut f64,
     target_chars: usize,
+    checkpoint: &mut crate::storage::save::ContinuationCheckpoint,
 ) -> TickProgress {
     if !enabled {
         *timer = 0.0;
@@ -949,7 +976,7 @@ fn update_auto_mode(
     *timer += delta_seconds;
     if *timer >= delay {
         *timer = 0.0;
-        return advance_once(state);
+        return advance_once(state, checkpoint);
     }
     TickProgress::default()
 }
@@ -1000,7 +1027,10 @@ fn point_inside_rect(point: Vec2, center: Vec2, size: Vec2) -> bool {
         && (point.y - center.y).abs() <= size.y * 0.5
 }
 
-fn advance_once(state: &mut State) -> TickProgress {
+fn advance_once(
+    state: &mut State,
+    checkpoint: &mut crate::storage::save::ContinuationCheckpoint,
+) -> TickProgress {
     if let Some(dialogue) = &mut state.dialogue {
         let target = dialogue.text.chars().count();
         if dialogue.visible_chars < target {
@@ -1015,25 +1045,23 @@ fn advance_once(state: &mut State) -> TickProgress {
     if advanced_dialogue {
         step::advance(state);
     }
-    finish_step(state, advanced_dialogue)
+    finish_step(state, checkpoint, advanced_dialogue)
 }
 
-fn step_once(state: &mut State) -> TickProgress {
-    finish_step(state, false)
+fn step_once(
+    state: &mut State,
+    checkpoint: &mut crate::storage::save::ContinuationCheckpoint,
+) -> TickProgress {
+    finish_step(state, checkpoint, false)
 }
 
-fn finish_step(state: &mut State, restore_previous_dialogue: bool) -> TickProgress {
-    let result = step::step_preserving_presentation(state);
-    let execution_limited = matches!(result, keine_core::StepResult::ExecutionLimit);
-    if execution_limited {
-        log::error!(
-            target: "keine::runtime",
-            "script execution stopped at {}:{} after reaching the forward-action safety limit; returning to title",
-            state.current_scene,
-            state.cursor,
-        );
-    }
-    let return_to_title = execution_limited || matches!(result, keine_core::StepResult::EndOfScene);
+fn finish_step(
+    state: &mut State,
+    checkpoint: &mut crate::storage::save::ContinuationCheckpoint,
+    restore_previous_dialogue: bool,
+) -> TickProgress {
+    let outcome = crate::runtime::script_driver::resume(state, checkpoint);
+    let return_to_title = outcome.returns_to_title();
     if return_to_title && restore_previous_dialogue && state.dialogue.is_none() {
         // `advance` moves the settled line here before stepping. Moving it
         // back retains the final text without cloning the complete State.
@@ -2532,7 +2560,10 @@ mod tests {
         assert_eq!(step::step(&mut state), keine_core::StepResult::AwaitClick);
         state.dialogue.as_mut().unwrap().visible_chars = 4;
 
-        let progress = advance_once(&mut state);
+        let progress = advance_once(
+            &mut state,
+            &mut crate::storage::save::ContinuationCheckpoint::default(),
+        );
 
         assert!(progress.changed);
         assert!(progress.return_to_title);
@@ -2557,7 +2588,10 @@ mod tests {
         state.current_scene = "main".into();
         state.ended = false;
 
-        let progress = step_once(&mut state);
+        let progress = step_once(
+            &mut state,
+            &mut crate::storage::save::ContinuationCheckpoint::default(),
+        );
 
         assert!(progress.changed);
         assert!(progress.return_to_title);
@@ -2594,7 +2628,11 @@ mod tests {
             ..default()
         };
 
-        skip_once(&mut state, &mut toggles);
+        skip_once(
+            &mut state,
+            &mut toggles,
+            &mut crate::storage::save::ContinuationCheckpoint::default(),
+        );
 
         assert!(!toggles.skip);
         assert_eq!(state.dialogue.unwrap().visible_chars, 0);
@@ -2609,7 +2647,11 @@ mod tests {
             ..default()
         };
 
-        skip_once(&mut state, &mut toggles);
+        skip_once(
+            &mut state,
+            &mut toggles,
+            &mut crate::storage::save::ContinuationCheckpoint::default(),
+        );
 
         assert!(toggles.skip);
         assert_eq!(state.dialogue.unwrap().visible_chars, 10);

@@ -68,8 +68,9 @@ pub struct State {
     pub camera_effect_targets: CameraTargets,
     #[serde(skip, default)]
     pub camera_effect_animation: Option<PostProcessAnimation>,
-    /// One adapter-neutral shared-clock stage timeline. It is transient
-    /// presentation state and is reconstructed by editor preview replay.
+    /// One adapter-neutral shared-clock stage timeline. Native playback state
+    /// stays transient; persistence must use a prior exact checkpoint while it
+    /// is active.
     #[serde(skip, default)]
     pub stage_animation: Option<StageAnimationState>,
     #[serde(skip, default)]
@@ -82,7 +83,7 @@ pub struct State {
     pub stage_revision: u64,
     /// Active sprites, keyed by id.
     pub sprites: HashMap<String, Sprite>,
-    #[serde(skip, default)]
+    #[serde(default)]
     pub sprite_sequences: HashMap<String, SpriteSequenceState>,
     /// Current dialogue text (if any).
     pub dialogue: Option<Dialogue>,
@@ -100,40 +101,39 @@ pub struct State {
     pub textbox_auto_hidden: bool,
     pub user_input: Option<UserInputState>,
     /// Active engine-owned alert/confirmation emitted by a script adapter.
-    #[serde(skip, default)]
+    #[serde(default)]
     pub system_message: Option<SystemMessageState>,
 
     // ── Presentation state ──
     pub wait_remaining: f32,
     pub wait_blocking: bool,
-    #[serde(skip, default)]
+    #[serde(default)]
     pub waiting_for_advance: bool,
     pub intro: Option<IntroState>,
     pub film_mode: bool,
-    #[serde(skip, default)]
+    #[serde(default)]
     pub curtain: CurtainState,
-    #[serde(skip, default)]
+    #[serde(default)]
     pub floating_text: Option<FloatingTextState>,
-    #[serde(skip, default)]
+    #[serde(default)]
     pub portrait_rule: Option<PortraitRuleState>,
-    /// Active dialogue presentation. It is editor/runtime presentation state,
-    /// so legacy save payloads remain stable; direct preview reconstructs it by
-    /// replaying source actions up to the selected block.
-    #[serde(skip, default)]
+    /// Active dialogue presentation. These logical style selections persist
+    /// even though editor preview can also reconstruct them by replay.
+    #[serde(default)]
     pub dialogue_style: DialogueStyle,
-    #[serde(skip, default)]
+    #[serde(default)]
     pub paragraph_style: DialogueStyle,
-    #[serde(skip, default)]
+    #[serde(default)]
     pub active_text_style: DialogueStyle,
-    #[serde(skip, default)]
+    #[serde(default)]
     pub paragraph_typewriter_speed: Option<f64>,
-    #[serde(skip, default)]
+    #[serde(default)]
     pub paragraph_text_reveal: Option<TextRevealConfig>,
-    #[serde(skip, default)]
+    #[serde(default)]
     pub active_typewriter_speed: Option<f64>,
-    #[serde(skip, default)]
+    #[serde(default)]
     pub active_text_reveal: Option<TextRevealConfig>,
-    #[serde(skip, default)]
+    #[serde(default)]
     pub next_text_is_paragraph: bool,
     pub particle_effects: HashMap<String, ActiveParticleEffect>,
     pub transition_rules: HashMap<String, TransitionRule>,
@@ -331,34 +331,34 @@ pub struct RollbackSnapshot {
     #[serde(default)]
     pub camera_effect_targets: CameraTargets,
     pub sprites: Arc<HashMap<String, Sprite>>,
-    #[serde(skip, default)]
+    #[serde(default)]
     pub sprite_sequences: HashMap<String, SpriteSequenceState>,
     pub dialogue: Dialogue,
     pub mini_avatar: Option<String>,
     pub textbox_hidden: bool,
     pub textbox_auto_hidden: bool,
     pub film_mode: bool,
-    #[serde(skip, default)]
+    #[serde(default)]
     pub curtain: CurtainState,
-    #[serde(skip, default)]
+    #[serde(default)]
     pub floating_text: Option<FloatingTextState>,
-    #[serde(skip, default)]
+    #[serde(default)]
     pub portrait_rule: Option<PortraitRuleState>,
-    #[serde(skip, default)]
+    #[serde(default)]
     pub dialogue_style: DialogueStyle,
-    #[serde(skip, default)]
+    #[serde(default)]
     pub paragraph_style: DialogueStyle,
-    #[serde(skip, default)]
+    #[serde(default)]
     pub active_text_style: DialogueStyle,
-    #[serde(skip, default)]
+    #[serde(default)]
     pub paragraph_typewriter_speed: Option<f64>,
-    #[serde(skip, default)]
+    #[serde(default)]
     pub paragraph_text_reveal: Option<TextRevealConfig>,
-    #[serde(skip, default)]
+    #[serde(default)]
     pub active_typewriter_speed: Option<f64>,
-    #[serde(skip, default)]
+    #[serde(default)]
     pub active_text_reveal: Option<TextRevealConfig>,
-    #[serde(skip, default)]
+    #[serde(default)]
     pub next_text_is_paragraph: bool,
     pub particle_effects: Arc<HashMap<String, ActiveParticleEffect>>,
     pub transition_rules: Arc<HashMap<String, TransitionRule>>,
@@ -377,6 +377,36 @@ pub struct SceneFrame {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RestoreError {
     ProgramMismatch { saved: u64, current: u64 },
+}
+
+/// Whether serializing the live state can resume every authored operation.
+///
+/// One-shot host/audio events are intentionally not hazards: restoring them
+/// would risk replaying an event already consumed by the host. Active native
+/// presentation timelines are different because the script cursor has already
+/// advanced past the action that created them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersistenceSafety {
+    Exact,
+    ActiveTransient(PersistenceHazard),
+}
+
+impl PersistenceSafety {
+    pub const fn is_exact(self) -> bool {
+        matches!(self, Self::Exact)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersistenceHazard {
+    BackgroundKeyframes,
+    CameraTransform,
+    CameraShake,
+    CameraEffect,
+    StageAnimation,
+    Video,
+    SpritePosition,
+    SpriteKeyframes,
 }
 
 impl fmt::Display for RestoreError {
@@ -481,7 +511,7 @@ pub struct IntroState {
     pub blocking: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CurtainState {
     pub color: [f32; 4],
     pub current: f32,
@@ -506,7 +536,7 @@ impl Default for CurtainState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FloatingTextState {
     pub id: Option<String>,
     pub text: String,
@@ -541,7 +571,7 @@ impl FloatingTextState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SystemMessageState {
     pub mode: SystemMessageMode,
     pub title: String,
@@ -551,7 +581,7 @@ pub struct SystemMessageState {
     pub result_variable: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PortraitRuleState {
     pub enabled: bool,
     pub character_ids: HashSet<String>,
@@ -749,6 +779,52 @@ impl State {
     /// Mark sprite or camera presentation data as changed.
     pub fn invalidate_stage(&mut self) {
         self.stage_revision = self.stage_revision.wrapping_add(1);
+    }
+
+    /// Classify the live state at the save boundary.
+    ///
+    /// Long-lived logical presentation such as dialogue styles, portrait
+    /// rules, curtains, floating text and sprite sequences is serialized.
+    /// Native/timeline animation state remains deliberately transient and must
+    /// finish before a manual save can be exact.
+    pub fn persistence_safety(&self) -> PersistenceSafety {
+        use PersistenceHazard as Hazard;
+
+        let hazard = self
+            .bg_keyframe_animation
+            .as_ref()
+            .map(|_| Hazard::BackgroundKeyframes)
+            .or_else(|| {
+                self.camera_transform_animation
+                    .as_ref()
+                    .map(|_| Hazard::CameraTransform)
+            })
+            .or_else(|| self.camera_shake.as_ref().map(|_| Hazard::CameraShake))
+            .or_else(|| {
+                self.camera_effect_animation
+                    .as_ref()
+                    .map(|_| Hazard::CameraEffect)
+            })
+            .or_else(|| {
+                self.stage_animation
+                    .as_ref()
+                    .map(|_| Hazard::StageAnimation)
+            })
+            .or_else(|| (!self.videos.is_empty()).then_some(Hazard::Video))
+            .or_else(|| {
+                self.sprites
+                    .values()
+                    .any(|sprite| sprite.position_animation.is_some())
+                    .then_some(Hazard::SpritePosition)
+            })
+            .or_else(|| {
+                self.sprites
+                    .values()
+                    .any(|sprite| sprite.keyframe_animation.is_some())
+                    .then_some(Hazard::SpriteKeyframes)
+            });
+
+        hazard.map_or(PersistenceSafety::Exact, PersistenceSafety::ActiveTransient)
     }
 
     /// Install a freshly compiled program and clamp every persisted cursor to
@@ -1601,5 +1677,73 @@ mod tests {
 
         assert!(state.restore_backlog(0));
         assert_eq!(state.global_vars["endings"], Value::Int(2));
+    }
+
+    #[test]
+    fn persistence_safety_rejects_blocking_and_non_blocking_native_timelines() {
+        let animation = |blocking| StageAnimation {
+            id: "camera".into(),
+            duration: 1.0,
+            tracks: Vec::new(),
+            events: Vec::new(),
+            repeat: 0,
+            infinite: false,
+            playback_rate: 1.0,
+            blocking,
+        };
+        for blocking in [false, true] {
+            let mut state = State::new();
+            state.stage_animation = Some(StageAnimationState::new(animation(blocking), &state));
+            assert_eq!(
+                state.persistence_safety(),
+                PersistenceSafety::ActiveTransient(PersistenceHazard::StageAnimation)
+            );
+        }
+
+        let mut state = State::new();
+        state.videos.insert(
+            "opening".into(),
+            VideoState {
+                spec: VideoSpec {
+                    id: "opening".into(),
+                    file: "video/opening.mp4".into(),
+                    looped: true,
+                    muted: false,
+                    alpha: 1.0,
+                    skippable: true,
+                    wait_for_finished: false,
+                    mode: crate::types::VideoMode::Fullscreen,
+                },
+                revision: 1,
+                elapsed: 0.0,
+                opacity: 1.0,
+                stopping: false,
+                fade_out: 0.0,
+            },
+        );
+        assert_eq!(
+            state.persistence_safety(),
+            PersistenceSafety::ActiveTransient(PersistenceHazard::Video)
+        );
+    }
+
+    #[test]
+    fn persisted_logical_presentation_remains_exact_save_safe() {
+        let mut state = State::new();
+        state.waiting_for_advance = true;
+        state.curtain.current = 1.0;
+        state.dialogue_style = DialogueStyle::Literary;
+        state.sprite_sequences.insert(
+            "hero".into(),
+            SpriteSequenceState {
+                frames: vec!["hero-1.webp".into(), "hero-2.webp".into()],
+                fps: 12.0,
+                looped: true,
+                elapsed: 2.0,
+                frame: 1,
+            },
+        );
+
+        assert_eq!(state.persistence_safety(), PersistenceSafety::Exact);
     }
 }

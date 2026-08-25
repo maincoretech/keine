@@ -9,7 +9,7 @@ use bevy::text::FontWeight;
 use bevy::ui::FocusPolicy;
 
 use crate::render::blur::{DialogCamera, UiBlurCamera};
-use crate::runtime::resources::ProjectRoot;
+use crate::runtime::resources::PersistenceRoot;
 use crate::ui::control_bar::{BlurStrength, ButtonAction, ControlInput, HoverAlpha, UiBlurSource};
 use crate::ui::dialog::{DialogAction, DialogRequest};
 use crate::ui::foundation::{
@@ -104,7 +104,7 @@ impl SavePreviewCache {
 
 struct SaveContentContext<'a> {
     font: &'a Handle<Font>,
-    project_root: &'a ProjectRoot,
+    project_root: &'a PersistenceRoot,
     store: &'a dyn keine_loader::StoreAdapter,
     program_fingerprint: u64,
     preview_cache: &'a mut SavePreviewCache,
@@ -275,7 +275,7 @@ pub(crate) struct SaveLoadSyncContext<'w, 's> {
     camera: Query<'w, 's, Entity, With<DialogCamera>>,
     blur_camera: Query<'w, 's, Entity, With<UiBlurCamera>>,
     fonts: Res<'w, UiFonts>,
-    project_root: Res<'w, ProjectRoot>,
+    project_root: Res<'w, PersistenceRoot>,
     store: Res<'w, crate::runtime::resources::StoreCodec>,
     state: Res<'w, crate::runtime::resources::GameState>,
     preview_cache: ResMut<'w, SavePreviewCache>,
@@ -306,7 +306,7 @@ pub(crate) struct SaveLoadFadeContext<'w, 's> {
 
 #[derive(SystemParam)]
 pub(crate) struct SaveSlotContext<'w, 's> {
-    project_root: Res<'w, ProjectRoot>,
+    project_root: Res<'w, PersistenceRoot>,
     store: Res<'w, crate::runtime::resources::StoreCodec>,
     state: Res<'w, crate::runtime::resources::GameState>,
     windows: Query<'w, 's, &'static Window>,
@@ -320,7 +320,7 @@ pub(crate) struct SaveDeleteContext<'w, 's> {
     slots: Query<'w, 's, (&'static Interaction, &'static SaveLoadSlot)>,
     ui: Res<'w, SaveLoadUi>,
     request: Option<Res<'w, DialogRequest>>,
-    project_root: Res<'w, ProjectRoot>,
+    project_root: Res<'w, PersistenceRoot>,
     store: Res<'w, crate::runtime::resources::StoreCodec>,
     commands: Commands<'w, 's>,
     settings: Res<'w, crate::storage::settings::RuntimeSettings>,
@@ -1179,7 +1179,7 @@ fn slot_speaker(status: &crate::storage::save::SlotStatus) -> String {
 }
 
 fn request_preview(
-    project_root: &ProjectRoot,
+    project_root: &PersistenceRoot,
     slot: u32,
     cache: &mut SavePreviewCache,
 ) -> Option<Handle<Image>> {
@@ -1308,7 +1308,20 @@ pub fn handle_save_load_slot(
                     );
                 }
             }
-            Err(error) => log::error!("save slot {slot} failed: {error:#}"),
+            Err(error) => {
+                log::error!("save slot {slot} failed: {error:#}");
+                if !context.state.persistence_safety().is_exact() {
+                    context
+                        .commands
+                        .insert_resource(DialogRequest::confirmation(
+                            crate::ui::support::i18n::tr(
+                                context.settings.locale,
+                                crate::ui::support::i18n::UiText::SaveUnavailableDuringPresentation,
+                            ),
+                            DialogAction::Noop,
+                        ));
+                }
+            }
         }
         return;
     }

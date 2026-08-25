@@ -47,7 +47,7 @@
 
 脚本在加载后被编译为不可变 `Program`：每个场景使用 `Box<[Action]>` 紧凑保存，并在构建时生成 label 索引与稳定 fingerprint；运行时 `State` 通过 `Arc<Program>` 共享脚本。这样 clone/rollback/save 不再按脚本大小复制全部 Action，label 跳转也不再每次线性扫描。`Program` 被排除在 serde 存档外；热重载整体替换 `Arc`，协调仍有效的位置，并让旧 fingerprint 的 Backlog checkpoint 失效。
 
-`step()` 每次调用只共享一个 `Arc<Program>` 并借用当前 Action，避免热循环深拷贝脚本 payload。`setTransform` 使用 presence-mask `TransformPatch`，在不分配内存的情况下只覆盖脚本实际写出的字段。v9 存档 codec 解码为不可直接运行的 `SavedState`，只有 `restore_into()` 通过 Program fingerprint 检查后才能合入当前状态；不匹配时原子拒绝。`global_vars`、已读历史和鉴赏解锁也已经从单槽 save/Backlog rollback 中分离；长期变量单独写入版本化 `saves/profile.bin`，成功读档不会回滚当前 profile。
+`step()` 每次调用只共享一个 `Arc<Program>` 并借用当前 Action，避免热循环深拷贝脚本 payload。`setTransform` 使用 presence-mask `TransformPatch`，在不分配内存的情况下只覆盖脚本实际写出的字段。v10 存档 codec 解码为不可直接运行的 `SavedState`，只有 `restore_into()` 通过 Program fingerprint 检查后才能合入当前状态；不匹配时原子拒绝。`global_vars`、已读历史和鉴赏解锁也已经从单槽 save/Backlog rollback 中分离；长期变量单独写入版本化 `saves/profile.bin`，成功读档不会回滚当前 profile。
 
 这项优化已经消除了“脚本越长，状态快照越重”的主要结构性成本；它不代表所有状态都已最优。Backlog 快照仍会复制 sprites、变量和场景栈，高级演出也仍需更精细的 typed payload 与增量快照。详细约束和建议见 [internal-format.md](internal-format.md)。
 

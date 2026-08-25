@@ -104,7 +104,7 @@ WebGAL 兼容是 keine 最快获得真实剧本、资源布局和用户心智的
 - Backlog 最多保留 200 条展示元数据和轻量 `RollbackSnapshot`，不复制 `Program`；
 - 回想在恢复场景、变量、舞台、音频和 cursor 前，再次核对 Program fingerprint 并修正
   scene stack；安装新 Program 时会清除不再兼容的记录；
-- 原生 `slot_N.sav` 当前为严格 v9：固定 header、Postcard metadata/state、长度上限和
+- 原生 `slot_N.sav` 当前为严格 v10：固定 header、Postcard metadata/state、长度上限和
   metadata/state 双 CRC32；槽位列表只读取元数据前缀，不会同步扫描全部剧情状态；
 - `StoreAdapter::decode` 返回不可直接执行的 `SavedState`，唯一运行态入口
   `restore_into(&mut State)` 会重新附着当前 `Arc<Program>`，并拒绝 fingerprint 不匹配；
@@ -157,7 +157,7 @@ CLI 检查、Hakutaku 压缩/加密随机访问和平台打包接入同一项目
 - 1920×1080 设计空间和 letterbox 换算已集中管理；
 - 脚本 watcher 生命周期正确，修改后会真实重载；
 - 场景加载顺序稳定，重复 scene stem 会报错；
-- v9 多槽存档拥有固定 golden、metadata/state 长度校验、双 CRC32、前缀检查和 Program fingerprint；
+- v10 多槽存档拥有固定 golden、metadata/state 长度校验、双 CRC32、前缀检查和 Program fingerprint；
 - codec 只暴露 `SavedState`，读档必须经过 `restore_into`；预览使用独立 WebP sidecar；
 - 快速存档采用临时文件、`sync_all` 和 rename，IO 错误显式返回；
 - Rustfmt、严格 Clippy 和现有测试构成了最低质量门槛。
@@ -182,7 +182,7 @@ M1/M2 是早期用于闭合主链的历史路线，保留在这里用于解释�
 ### M2（历史）：可信赖的 VN 产品能力
 
 - Backlog、已读记录、带 fingerprint 的 RollbackSnapshot 已落地；
-- v9 多槽存档、独立 WebP 预览、`SavedState` 恢复边界和槽外 profile/gallery/settings
+- v10 多槽存档、独立 WebP 预览、`SavedState` 恢复边界和槽外 profile/gallery/settings
   已落地；
 - BGM、vocal、SE/replay、音量设置，以及 Options/Title/Save/Load 主流程已形成当前基线；
 - 未完成项是未来 schema migration、更多压力/故障注入测试和目标平台实机验收，不是重写

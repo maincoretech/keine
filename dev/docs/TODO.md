@@ -100,7 +100,7 @@ multiply/screen/add 合成属于演出渲染，不以“已解析”冒充完成
 - [x] WebGAL K 风格 Backlog UI、反向滚动、语音重播、回想跳转与进出动画
 - [x] WebGAL K 风格 SAVE / LOAD：20 页 × 10 槽、空槽保护、覆盖/读取确认
 - [x] 槽位 WebP 截图、角色/文本/时间预览、分页与右键删除确认
-- [x] v9 专用二进制存档：元数据前置、状态载荷分离、metadata/state 双 CRC32、只读前缀槽位检查、Program fingerprint、多粒子发射器状态、完整相机与句尾退格状态、`SavedState` 恢复边界、固定 golden、原子替换与独立 WebP 预览
+- [x] v10 专用二进制存档：元数据前置、状态载荷分离、metadata/state 双 CRC32、只读前缀槽位检查、Program fingerprint、多粒子发射器状态、完整相机与句尾退格状态、`SavedState` 恢复边界、固定 golden、原子替换与独立 WebP 预览
 - [x] SYSTEM 设置面板（主音量、文字速度、Auto 延迟、Skip 模式与本地持久化）
 - [x] TITLE 返回标题画面
 - [x] 对齐 WebGAL K 的菜单模糊、分页/卡片 hover、0.2 秒页面过渡、Backlog 退出与标题按钮反馈

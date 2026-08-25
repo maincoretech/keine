@@ -34,12 +34,12 @@ Kēne 支持三种输入形态，本规范只定义后两种（原生形态）�
 │   ├── se/                  # 音效
 │   ├── particle/            # 粒子贴图
 │   ├── video/               # 视频
-│   ├── luts/                # 调色 LUT（PNG）
+│   ├── luts/                # 调色 LUT（WebP）
 │   ├── font/                # 自定义字体（预留）
 │   └── ui/                  # UI 图标 / 对话框皮肤（预留）
 ├── scripts/                 # 脚本场景（script: webgal 时放 .txt；结构化工程可留空）
 ├── .keine/                  # 引擎产物：program.bin 等（源项目永不打包；发布时在 staging 内重新生成并随包）
-├── saves/                   # 运行时用户数据：slot_*.sav、profile.bin 等（永不打包）
+├── saves/                   # 开发运行用户数据；发行版改用平台用户数据目录（永不打包）
 └── imported_assets/         # Bevy 生成缓存（永不打包，.gitignore 已排除）
 ```
 
@@ -56,7 +56,7 @@ Kēne 支持三种输入形态，本规范只定义后两种（原生形态）�
 | 名称 | 用途 | 约束 |
 |---|---|---|
 | `.keine/` | 引擎编译产物与内部缓存 | 源项目永不打包；发布脚本在 staging 内重新生成 `.keine/compiled/program.bin` 并随包发布（运行时契约） |
-| `saves/` | 存档、profile、阅读历史、图库 | 永不打包；打包脚本显式排除 |
+| `saves/` | 开发期存档、profile、阅读历史、图库 | 永不打包；发行版使用平台用户数据目录 |
 | `imported_assets/`、`*.meta` | Bevy 资产处理器生成物 | 永不打包；不进 git |
 
 ## 3. 配置（config.yaml）
@@ -66,6 +66,8 @@ Kēne 支持三种输入形态，本规范只定义后两种（原生形态）�
 ```yaml
 title: "My Game"
 project:
+  id: my-game
+  bundle_identifier: moe.example.my-game # 可省略；默认 moe.maincore.keine.my-game
   description: "A short visual novel."
 adapter:
   asset:
@@ -87,6 +89,18 @@ assets:
 ```
 
 规则：
+
+- `project.id` 是发行身份，不是显示名：只接受 1–64 字节的小写 ASCII 字母、数字和连字符，
+  首字符必须是小写字母、末字符必须是字母或数字。开发运行可以暂时省略，`cargo assets
+  --pack` 与 `cargo bundle` 必须提供；LetsGal 工程直接沿用 `project.json.id`。
+- `project.bundle_identifier` 可选，必须是合法 reverse-DNS 标识；省略时从 `project.id`
+  确定性派生。修改已经发行的 id 或 bundle identifier 会切换到另一套用户数据命名空间。
+- 目录工程继续写 `<project>/saves`。Hakutaku 发行包保持只读，分别写入 macOS
+  `~/Library/Application Support/<bundle-id>/saves`、Windows
+  `%LOCALAPPDATA%/Kēne/<project-id>/saves`、Linux
+  `$XDG_DATA_HOME/keine/<project-id>/saves`（默认 `$HOME/.local/share`）。
+- 首次按新布局启动时，如果发行内容旁有旧版 `saves/` 且新目录尚未初始化，引擎会事务化复制
+  一次；不会覆盖新目录，也不会删除旧副本。
 
 - `adapter.asset` 声明顺序即层顺序，越靠后优先级越高；未声明等价于
   `[{ path: ".", format: "fs" }]`。
@@ -111,7 +125,7 @@ assets:
 | 音效 | Effect | `Effect file` | `se/` | `se`、`sound/`、`sounds/`、`effect/`、`effects/` | `vocal/{name}`（弃用中的兼容行为） |
 | 粒子 | Particle | `ShowParticles texture` | `particle/` | 任意 | 路径原样使用 |
 | 视频 | Video | `PlayVideo` | `video/` | `videos/` + 扩展名识别 | `video/{name}` |
-| LUT | — | 后处理 preset | `luts/` | `lut/`、`luts/` | `luts/{name}.png` |
+| LUT | Lut | 后处理 preset / camera patch | `luts/` | `lut/`、`luts/` | `luts/{name}.webp` |
 | 字体 | — | 预留 | `font/` | — | 内置 MavenPro-CJK |
 | UI | — | 预留 | `ui/` | — | 内置 |
 
@@ -123,6 +137,11 @@ assets:
   裸名称回退切换到规范目录 `se/`。
 - `cg/` 目录兼容背景：LetsGal 场景可用多个背景层，第一层走背景渲染器，其余层
   走通用 sprite 路径（同一资产同时登记为背景与立绘别名）。
+- 运行时图片角色来自脚本编译产物中的 `ResourceKind`，不通过路径前缀猜测。因此
+  `assets.figures.hero: art/hero.webp` 仍按立绘高度和真实宽高比加载，任意目录中的背景
+  仍受背景解码上限约束。一个 WebP 同时用于多个角色时，启动阶段先合并其需求，再以
+  所需目标中分辨率较大的一个只解码、上传一次；这避免 Bevy 同路径 loader settings 的
+  “首次加载生效”语义造成不确定结果。
 - 图库（`features.extra`）解锁来自实际播放过的场景背景，不需要单独的 `cg/`
   资源目录；`cg/` 仅是 LetsGal 兼容目录名。
 
@@ -131,21 +150,26 @@ assets:
 | 类型 | 规范格式 | 兼容格式 | 说明 |
 |---|---|---|---|
 | 背景 / 立绘 / 粒子 | WebP | PNG、JPEG | WebP 是生产资源目标并走 libwebp 专用解码（支持解码期缩放）；PNG/JPEG 仅保留 Bevy 通用 loader 兼容能力 |
-| LUT | PNG | WebP | 默认回退路径为 `luts/{name}.png` |
-| 语音 / BGM / 音效 | Ogg Opus（`.opus`） | WAV、MP3、Vorbis（`.ogg/.oga/.spx`）、FLAC | 默认 `bundled-opus` 静态 libopus；发布脚本按项目实际扩展名自动裁剪 audio features |
+| LUT | WebP | PNG | LUT 是 `ResourceKind::Lut` 一等资源；有可见强度时参与静态校验与预取，所有 asset mount 内的 LUT 都受发布格式检查；默认回退路径为 `luts/{name}.webp` |
+| 语音 / BGM / 音效 | Ogg Opus（`.opus`） | WAV、MP3、Vorbis（`.ogg/.oga/.spx`）、FLAC | 开发版保留兼容 decoder；发行引擎固定只带 `ui-sounds`/bundled Opus，不按项目扩展名扩张 feature set |
 | 视频 | MP4（H.264） | WebM、MOV、MKV | FFmpeg 后端全格式；macOS native 后端走 AVFoundation（MP4/MOV） |
 | 字体 | TTF / OTF | — | 目前内置字体随引擎打包，自定义字体路径为预留能力 |
 
 设计空间固定为 1920×1080：
 
 - 背景建议源图 ≤ 4K 并尽量使用 WebP，避免首次切换大图卡顿。自定义 WebP loader
-  接受最多 64 MiB 压缩输入、64 Mi pixels 源图和 16 Mi pixels 输出；
+  接受最多 64 MiB 压缩输入、64 Mi pixels 源图和 16 Mi pixels 输出；背景角色的解码
+  目标不超过 1920×1080，别名或自定义目录不会绕过该策略；
 - 立绘为透明 WebP，站立高度按 `layout.sprite_height` 控制（原生项目默认；
   LetsGal 导入项目强制 1080 全高以保持 Studio 比例），运行时最高接受 4320；
 - FFmpeg 视频帧单边不超过 4096、总像素不超过 4096×2304；AVFoundation 不使用
   这组 FFmpeg 常量；
 - 必须整文件驻留以支持 seek/loop 的兼容音频最多 128 MiB；项目 Opus 继续流式读取；
 - 构建期资源约束优先于运行时处理：过大图片在打包前统一缩放/转 WebP。
+- `cargo assets --pack` 与 `cargo bundle` 只接受 WebP 项目图片（包括 LUT）和 `.opus`
+  独立音频；兼容格式必须先在独立转换步骤生成目标文件，再用 `cargo assets --remap`
+  迁移引用。打包器不会隐式转码，也不会把兼容 decoder 带入发行引擎。视频容器、字体和
+  引擎内嵌图标不受这条媒体合同影响。
 
 完整数值、适用 backend 与失败阶段见
 [资源、发行包与持久化限制](resource-limits.md)。

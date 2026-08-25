@@ -9,7 +9,7 @@ use bevy::window::{MonitorSelection, WindowMode};
 
 use crate::render::blur::{DialogCamera, UiBlurCamera};
 use crate::runtime::resources::{
-    ContentProjectResource, DevelopmentSession, GameConfigResource, ProjectRoot,
+    ContentProjectResource, DevelopmentSession, GameConfigResource, PersistenceRoot,
 };
 use crate::storage::settings::{RuntimeSettings, UiLocale};
 use crate::ui::control_bar::{
@@ -1958,7 +1958,7 @@ pub(crate) struct SettingActionContext<'w, 's> {
     settings: ResMut<'w, RuntimeSettings>,
     toggles: ResMut<'w, ToggleStates>,
     pending_window: ResMut<'w, PendingWindowMode>,
-    project_root: Res<'w, ProjectRoot>,
+    project_root: Res<'w, PersistenceRoot>,
     store: Res<'w, crate::runtime::resources::StoreCodec>,
     state: ResMut<'w, crate::runtime::resources::GameState>,
     quick_preview: ResMut<'w, crate::ui::control_bar::QuickSavePreview>,
@@ -2108,7 +2108,7 @@ pub fn advance_language_transition(
     mut transition: ResMut<SettingsLocaleTransition>,
     mut settings: ResMut<RuntimeSettings>,
     mut settings_ui: ResMut<SettingsUi>,
-    project_root: Res<ProjectRoot>,
+    project_root: Res<PersistenceRoot>,
     roots: Query<(Entity, &MenuFade), With<SettingsRoot>>,
 ) {
     if !transition.is_animating() {
@@ -2144,7 +2144,7 @@ pub(crate) fn reset_runtime_settings(
     settings: &mut RuntimeSettings,
     toggles: &mut ToggleStates,
     pending_window: &mut PendingWindowMode,
-    project_root: &ProjectRoot,
+    project_root: &PersistenceRoot,
 ) {
     *settings = RuntimeSettings::default();
     toggles.skip = false;
@@ -2187,7 +2187,7 @@ pub fn handle_setting_sliders(
     windows: Query<&Window>,
     mouse: Res<ButtonInput<MouseButton>>,
     mut settings: ResMut<RuntimeSettings>,
-    project_root: Res<ProjectRoot>,
+    project_root: Res<PersistenceRoot>,
     mut drag: ResMut<ActiveSettingSlider>,
 ) {
     let Ok(window) = windows.single() else { return };

@@ -3,6 +3,7 @@ set -euo pipefail
 
 project="${1:-projects/test-project}"
 name="${2:-Kēne}"
+bundle_identifier="${3:-}"
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 bundle_parent="$root/target/bundle/macos"
 bundle="$bundle_parent/$name.app"
@@ -20,6 +21,16 @@ case "$name" in
         exit 2
         ;;
 esac
+project_path="$project"
+[[ "$project_path" = /* ]] || project_path="$root/$project_path"
+if [[ -z "$bundle_identifier" && -f "$project_path/project.json" ]]; then
+    project_id="$(/usr/bin/plutil -extract id raw -o - "$project_path/project.json")"
+    bundle_identifier="moe.maincore.keine.$project_id"
+fi
+if [[ ! "$bundle_identifier" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\.[A-Za-z0-9][A-Za-z0-9-]*){2,}$ ]]; then
+    echo "a valid reverse-DNS bundle identifier is required as argument 3 for native projects" >&2
+    exit 2
+fi
 cd "$root"
 mkdir -p "$bundle_parent"
 cargo bundle "$project" --output "$package_output"
@@ -38,12 +49,12 @@ cp "$package_dir/game.haku" "$staging/Contents/Resources/game.haku"
 cp -R "$package_dir/data" "$staging/Contents/Resources/data"
 cp "$root/assets/icons/keine.icns" "$staging/Contents/Resources/keine.icns"
 
-sed -e "s/__NAME__/$name/g" -e "s/__VERSION__/$version/g" > "$staging/Contents/Info.plist" <<'PLIST'
+sed -e "s/__NAME__/$name/g" -e "s/__VERSION__/$version/g" -e "s/__BUNDLE_IDENTIFIER__/$bundle_identifier/g" > "$staging/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>CFBundleExecutable</key><string>keine</string>
-<key>CFBundleIdentifier</key><string>moe.maincore.keine</string>
+<key>CFBundleIdentifier</key><string>__BUNDLE_IDENTIFIER__</string>
 <key>CFBundleName</key><string>__NAME__</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleIconFile</key><string>keine.icns</string>

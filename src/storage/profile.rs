@@ -7,7 +7,9 @@ use bevy::prelude::*;
 use keine_core::Value;
 use serde::{Deserialize, Serialize};
 
-use crate::runtime::resources::{EditorSyncSession, GameState, PersistenceDisabled, ProjectRoot};
+use crate::runtime::resources::{
+    EditorSyncSession, GameState, PersistenceDisabled, PersistenceRoot,
+};
 
 const VERSION: u32 = 1;
 const WRITE_DELAY_SECONDS: f32 = 0.5;
@@ -59,7 +61,7 @@ pub(crate) fn load(project_root: &Path) -> HashMap<String, Value> {
 pub(crate) fn persist(
     time: Res<Time>,
     state: Res<GameState>,
-    project_root: Res<ProjectRoot>,
+    project_root: Res<PersistenceRoot>,
     mut writer: ResMut<ProfileWriter>,
     editor_sync: Option<Res<EditorSyncSession>>,
     persistence_disabled: Option<Res<PersistenceDisabled>>,
@@ -86,7 +88,7 @@ pub(crate) fn persist(
 pub(crate) fn flush_on_exit(
     mut exits: MessageReader<AppExit>,
     state: Res<GameState>,
-    project_root: Res<ProjectRoot>,
+    project_root: Res<PersistenceRoot>,
     mut writer: ResMut<ProfileWriter>,
     editor_sync: Option<Res<EditorSyncSession>>,
     persistence_disabled: Option<Res<PersistenceDisabled>>,

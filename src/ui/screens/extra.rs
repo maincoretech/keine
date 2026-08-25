@@ -10,6 +10,7 @@ use crate::render::blur::{DialogCamera, UiBlurCamera};
 use crate::runtime::audio::GalleryAudio;
 use crate::runtime::resources::{GameConfigResource, GameState};
 use crate::scene::audio::BgmPlayer;
+use crate::scene::images::{ImageRole, ImageRoleRegistry};
 use crate::storage::settings::RuntimeSettings;
 use crate::ui::control_bar::{BlurStrength, HoverAlpha, UiBlurSource};
 use crate::ui::foundation::{
@@ -215,6 +216,7 @@ pub(crate) struct ExtraSyncContext<'w, 's> {
     config: Res<'w, GameConfigResource>,
     fonts: Res<'w, UiFonts>,
     assets: Res<'w, AssetServer>,
+    image_roles: Res<'w, ImageRoleRegistry>,
     ui_camera: Query<'w, 's, Entity, With<UiBlurCamera>>,
     dialog_camera: Query<'w, 's, Entity, With<DialogCamera>>,
     roots: Query<'w, 's, &'static mut ExtraMotion, With<ExtraRoot>>,
@@ -322,6 +324,7 @@ pub(crate) fn sync(mut context: ExtraSyncContext) {
                         &context.config,
                         &context.fonts,
                         &context.assets,
+                        &context.image_roles,
                     );
                 });
         });
@@ -563,6 +566,7 @@ fn spawn_cg_panel(
     config: &GameConfigResource,
     fonts: &UiFonts,
     assets: &AssetServer,
+    image_roles: &ImageRoleRegistry,
 ) {
     let page_count = images.len().div_ceil(CG_PER_PAGE).max(1);
     let page = ui.page.clamp(1, page_count);
@@ -636,7 +640,7 @@ fn spawn_cg_panel(
                     },
                 ))
                 .with_children(|grid| {
-                    spawn_cg_cards(grid, images, page, config, fonts, assets);
+                    spawn_cg_cards(grid, images, page, config, fonts, assets, image_roles);
                 });
         });
 }
@@ -648,6 +652,7 @@ fn spawn_cg_cards(
     config: &GameConfigResource,
     fonts: &UiFonts,
     assets: &AssetServer,
+    image_roles: &ImageRoleRegistry,
 ) {
     let first = page.saturating_sub(1) * CG_PER_PAGE;
     let visible = images.iter().skip(first).take(CG_PER_PAGE);
@@ -672,7 +677,12 @@ fn spawn_cg_cards(
         ))
         .with_children(|card| {
             card.spawn((
-                ImageNode::new(assets.load(config.bg_path(file))),
+                ImageNode::new(crate::scene::images::load(
+                    assets,
+                    image_roles,
+                    config.bg_path(file),
+                    ImageRole::BACKGROUND,
+                )),
                 Node {
                     width: Val::Percent(100.0),
                     flex_grow: 1.0,
@@ -727,6 +737,7 @@ pub(crate) struct ExtraPageContext<'w, 's> {
     config: Res<'w, GameConfigResource>,
     fonts: Res<'w, UiFonts>,
     assets: Res<'w, AssetServer>,
+    image_roles: Res<'w, ImageRoleRegistry>,
     grids: Query<'w, 's, Entity, With<ExtraCgGrid>>,
     page_visuals: Query<'w, 's, (&'static ExtraPage, &'static mut HoverAlpha)>,
     commands: Commands<'w, 's>,
@@ -771,6 +782,7 @@ pub(crate) fn handle_page(mut context: ExtraPageContext) {
                         &context.config,
                         &context.fonts,
                         &context.assets,
+                        &context.image_roles,
                     );
                 });
         }
@@ -786,6 +798,7 @@ pub(crate) struct ExtraCgContext<'w, 's> {
     config: Res<'w, GameConfigResource>,
     fonts: Res<'w, UiFonts>,
     assets: Res<'w, AssetServer>,
+    image_roles: Res<'w, ImageRoleRegistry>,
     camera: Query<'w, 's, Entity, With<DialogCamera>>,
     commands: Commands<'w, 's>,
 }
@@ -832,14 +845,19 @@ pub(crate) fn handle_cg(mut context: ExtraCgContext) {
         context.commands.entity(entity).despawn();
     }
     let Some(file) = selected else { return };
+    let image = crate::scene::images::load(
+        &context.assets,
+        &context.image_roles,
+        context.config.bg_path(&file),
+        ImageRole::BACKGROUND,
+    );
     spawn_full_cg(
         &mut context.commands,
         camera,
         &file,
         &images,
-        &context.config,
         &context.fonts,
-        &context.assets,
+        image,
     );
 }
 
@@ -848,9 +866,8 @@ fn spawn_full_cg(
     camera: Entity,
     file: &str,
     images: &[(String, String)],
-    config: &GameConfigResource,
     fonts: &UiFonts,
-    assets: &AssetServer,
+    image: Handle<Image>,
 ) {
     let name = images
         .iter()
@@ -876,7 +893,7 @@ fn spawn_full_cg(
         ))
         .with_children(|overlay| {
             overlay.spawn((
-                ImageNode::new(assets.load(config.bg_path(file))),
+                ImageNode::new(image),
                 Node {
                     max_width: Val::Percent(94.0),
                     max_height: Val::Percent(90.0),

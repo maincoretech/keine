@@ -392,7 +392,9 @@ pub(crate) fn animate_caret(
 }
 
 pub(crate) fn handle(
+    mut commands: Commands,
     mut state: ResMut<GameState>,
+    mut checkpoint: ResMut<crate::storage::save::ContinuationCheckpoint>,
     mut keyboard: MessageReader<KeyboardInput>,
     buttons: Query<&Interaction, (With<UserInputConfirm>, Changed<Interaction>)>,
 ) {
@@ -456,7 +458,8 @@ pub(crate) fn handle(
         }
         if submit {
             if keine_core::step::submit_user_input(state_value) {
-                keine_core::step::step(state_value);
+                let outcome = crate::runtime::script_driver::resume(state_value, &mut checkpoint);
+                crate::ui::title::handle_script_outcome(&mut commands, outcome);
             }
             changed = true;
         }

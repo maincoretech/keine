@@ -100,6 +100,14 @@ Create a macOS application bundle with:
 dev/scripts/bundle-macos.sh path/to/project
 ```
 
+LetsGal projects derive the app bundle identifier from `project.json.id`.
+For a native `config.yaml` project, pass the same reverse-DNS identifier as a
+third argument. Shipping saves are stored outside the read-only app bundle in
+the platform user-data directory selected by `project.id`.
+Manual saves wait for active native video/timeline presentation to finish;
+return-to-title and graceful exit fall back to the latest RAM-only exact
+checkpoint without periodic disk writes.
+
 ### Remap converted assets
 
 After converting audio or images offline, migrate their project references
@@ -119,6 +127,11 @@ change percentage. Apply mode backs up every changed source below
 `.keine/asset-remap-backups/`, replaces files atomically, and reopens the
 project for validation. Failed validation restores the originals. The command
 does not convert, rename, delete, or select fallback assets.
+
+Both `cargo assets --pack` and `cargo bundle` enforce the production media
+contract: project images (including LUTs) must be WebP and standalone audio
+must be Ogg Opus (`.opus`). Compatibility formats remain available in
+development builds, but never expand the shipping engine feature set.
 
 ## Controls
 

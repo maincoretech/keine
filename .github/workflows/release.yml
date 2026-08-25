@@ -115,13 +115,13 @@ jobs:
               ;;
           esac
           echo "path=$project" >> "$GITHUB_OUTPUT"
-      - name: Detect project media features
+      - name: Detect canonical shipping features
         shell: bash
         env:
           PROJECT_PATH: ${{ steps.project.outputs.path }}
         run: |
-          source dev/scripts/audio-features.sh
-          features="$(detect_audio_features "$PROJECT_PATH")"
+          source dev/scripts/shipping-features.sh
+          features="$(detect_shipping_features "$PROJECT_PATH")"
           echo "KEINE_RELEASE_FEATURES=$features" >> "$GITHUB_ENV"
       - name: Resolve artifact name
         id: artifact

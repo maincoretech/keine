@@ -12,6 +12,7 @@ use crate::scene::effects::material::{
     StageMaterial, StageQuad, active_lut_preset, animation_uniform, effective_post_process,
     upsert_stage_material,
 };
+use crate::scene::images::{ImageRole, ImageRoleRegistry};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum BackgroundLayer {
@@ -103,6 +104,7 @@ pub(crate) struct BackgroundSyncContext<'w, 's> {
     state: Res<'w, GameState>,
     config: Res<'w, GameConfigResource>,
     asset_server: Res<'w, AssetServer>,
+    image_roles: Res<'w, ImageRoleRegistry>,
     commands: Commands<'w, 's>,
     backgrounds: BackgroundQuery<'w, 's>,
     quad: Res<'w, StageQuad>,
@@ -117,6 +119,7 @@ pub fn sync_bg(context: BackgroundSyncContext) {
         state,
         config,
         asset_server,
+        image_roles,
         mut commands,
         mut backgrounds,
         quad,
@@ -151,14 +154,26 @@ pub fn sync_bg(context: BackgroundSyncContext) {
             BackgroundLayer::Current => current_exists = true,
         }
         node.image = background.image.to_owned();
-        let image = asset_server.load(config.bg_path(background.image));
+        let image = crate::scene::images::load(
+            &asset_server,
+            &image_roles,
+            config.bg_path(background.image),
+            ImageRole::BACKGROUND,
+        );
         let post = effective_post_process(
             &state.camera_effect,
             state.camera_effect_targets,
             "scene",
             state.bg_camera_distance,
         );
-        let lut = active_lut_preset(&post).map(|preset| asset_server.load(config.lut_path(preset)));
+        let lut = active_lut_preset(&post).map(|preset| {
+            crate::scene::images::load(
+                &asset_server,
+                &image_roles,
+                config.lut_path(preset),
+                ImageRole::RAW,
+            )
+        });
         apply_background_entity(
             &mut commands,
             entity,
@@ -187,14 +202,26 @@ pub fn sync_bg(context: BackgroundSyncContext) {
             continue;
         }
         let mut transform = Transform::default();
-        let image = asset_server.load(config.bg_path(background.image));
+        let image = crate::scene::images::load(
+            &asset_server,
+            &image_roles,
+            config.bg_path(background.image),
+            ImageRole::BACKGROUND,
+        );
         let post = effective_post_process(
             &state.camera_effect,
             state.camera_effect_targets,
             "scene",
             state.bg_camera_distance,
         );
-        let lut = active_lut_preset(&post).map(|preset| asset_server.load(config.lut_path(preset)));
+        let lut = active_lut_preset(&post).map(|preset| {
+            crate::scene::images::load(
+                &asset_server,
+                &image_roles,
+                config.lut_path(preset),
+                ImageRole::RAW,
+            )
+        });
         let entity = commands
             .spawn((
                 Name::new(format!("background::{:?}", background.layer)),

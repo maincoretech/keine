@@ -84,6 +84,12 @@ cargo dev projects/test-project
 5. 确认截图是纯场景画面，没有把文本框、按钮或存档面板截进去。
 6. 再次点击槽位 1，确认出现覆盖提示；点取消后原存档不变。
 7. 再次覆盖并确认，重新打开 SAVE，确认时间、文本和截图已更新。
+8. 在 blocking/non-blocking video、shared stage timeline 或 camera shake 进行中请求
+   SAVE/Q·SAVE，确认出现“当前演出结束后才能保存”，且原槽位内容不变。
+9. 在上述演出期间选择返回标题或正常关闭窗口，再 CONTINUE，确认从该演出开始前最后一个
+   可恢复 checkpoint 继续；本次会话尚无 checkpoint 时不得覆盖已有 quick save。
+10. 普通 dialogue/typewriter、transform animation、幕布/浮动文字、system message 和
+    sprite sequence 状态应能正常写入 v10 并恢复。
 
 ### D. LOAD 与删除
 
@@ -236,6 +242,8 @@ open target/bundle/macos/keine-demo.app
 
 8. `.app` 可脱离工作目录启动内置项目；包内存在
    `Contents/Resources/game.haku` 与 `Contents/Resources/data`，且不存在明文 project 目录。
+   `CFBundleIdentifier` 必须由项目身份产生且不同游戏不冲突；存档写到用户 Application
+   Support，运行后 `Contents/Resources/saves` 不得出现。旧 sidecar 迁移不得覆盖已有新存档。
 9. 普通推送后 `ci.yml` 在 Linux 执行一次跨平台 fmt、Clippy、workspace 与 publisher
    测试；macOS/Windows 分别执行 native/FFmpeg backend 契约、真实 fixture 解码，并在
    三个平台构建各自实际启用 backend 的 release。Windows 的精简 vcpkg FFmpeg binary

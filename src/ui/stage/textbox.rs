@@ -294,6 +294,7 @@ pub fn update_mini_avatar(
     state: Res<GameState>,
     config: Res<GameConfigResource>,
     asset_server: Res<AssetServer>,
+    image_roles: Res<crate::scene::images::ImageRoleRegistry>,
     mut avatars: Query<(&mut ImageNode, &mut Node), With<MiniAvatarNode>>,
     mut previous: Local<Option<(Option<String>, f32, bool)>>,
 ) {
@@ -325,7 +326,12 @@ pub fn update_mini_avatar(
             node.display = Display::None;
             continue;
         };
-        image.image = asset_server.load(config.figure_path(avatar));
+        image.image = crate::scene::images::load(
+            &asset_server,
+            &image_roles,
+            config.figure_path(avatar),
+            crate::scene::images::ImageRole::FIGURE,
+        );
         image.color = Color::srgba(1.0, 1.0, 1.0, state.mini_avatar_progress);
         node.display = Display::Flex;
     }

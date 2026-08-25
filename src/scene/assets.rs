@@ -7,6 +7,8 @@ use keine_loader::ResourceKind;
 use crate::runtime::resources::{
     AssetLoadingGate, GameConfigResource, GameState, LocalAssetCache, LocalAssetManifest,
 };
+use crate::scene::effects::material::active_lut_preset;
+use crate::scene::images::{ImageRole, ImageRoleRegistry};
 use crate::ui::foundation::UiFonts;
 
 const LOOKAHEAD_ACTIONS: usize = 20;
@@ -97,6 +99,7 @@ pub(crate) struct PrefetchState {
     bgm: Option<String>,
     effects: HashMap<String, String>,
     particles: HashMap<String, Option<String>>,
+    lut: Option<String>,
     plan: AssetPlan,
 }
 
@@ -128,6 +131,7 @@ impl PrefetchState {
                 .particle_effects
                 .iter()
                 .all(|(id, effect)| self.particles.get(id) == Some(&effect.effect.texture))
+            && self.lut.as_deref() == active_lut_preset(&state.camera_effect)
     }
 
     fn capture(&mut self, state: &GameState) {
@@ -162,6 +166,7 @@ impl PrefetchState {
                 .iter()
                 .map(|(id, effect)| (id.clone(), effect.effect.texture.clone())),
         );
+        self.lut = active_lut_preset(&state.camera_effect).map(str::to_owned);
     }
 }
 
@@ -169,6 +174,7 @@ pub fn prefetch_local_assets(
     state: Res<GameState>,
     config: Res<GameConfigResource>,
     manifest: Res<LocalAssetManifest>,
+    image_roles: Res<ImageRoleRegistry>,
     asset_server: Res<AssetServer>,
     mut cache: ResMut<LocalAssetCache>,
     mut previous: Local<PrefetchState>,
@@ -186,7 +192,7 @@ pub fn prefetch_local_assets(
         cache
             .handles
             .entry(path.clone())
-            .or_insert_with(|| load_handle(&asset_server, path.clone(), *kind));
+            .or_insert_with(|| load_handle(&asset_server, &image_roles, path.clone(), *kind));
     }
     let critical = previous.plan.critical.keys().cloned().collect();
     if cache.critical != critical {
@@ -218,9 +224,10 @@ pub fn prefetch_local_assets(
         })
         .flatten();
     if let Some((path, kind)) = next {
-        cache
-            .handles
-            .insert(path.clone(), load_handle(&asset_server, path, kind));
+        cache.handles.insert(
+            path.clone(),
+            load_handle(&asset_server, &image_roles, path, kind),
+        );
     }
 }
 
@@ -282,6 +289,9 @@ fn build_asset_plan(
             plan.require(texture.clone(), ResourceKind::Particle);
         }
     }
+    if let Some(lut) = active_lut_preset(&state.camera_effect) {
+        plan.require(config.lut_path(lut), ResourceKind::Lut);
+    }
 
     // Predictions are admitted only after the currently visible state is
     // ready. This prevents title/gameplay latency from competing with a burst
@@ -318,12 +328,23 @@ fn build_asset_plan(
     plan
 }
 
-fn load_handle(asset_server: &AssetServer, path: String, kind: ResourceKind) -> UntypedHandle {
+fn load_handle(
+    asset_server: &AssetServer,
+    image_roles: &ImageRoleRegistry,
+    path: String,
+    kind: ResourceKind,
+) -> UntypedHandle {
     match kind {
-        ResourceKind::Background
-        | ResourceKind::Figure
-        | ResourceKind::Particle
-        | ResourceKind::MiniAvatar => asset_server.load::<Image>(path).untyped(),
+        ResourceKind::Background => {
+            crate::scene::images::load(asset_server, image_roles, path, ImageRole::BACKGROUND)
+                .untyped()
+        }
+        ResourceKind::Figure | ResourceKind::MiniAvatar => {
+            crate::scene::images::load(asset_server, image_roles, path, ImageRole::FIGURE).untyped()
+        }
+        ResourceKind::Particle | ResourceKind::Lut => {
+            crate::scene::images::load(asset_server, image_roles, path, ImageRole::RAW).untyped()
+        }
         ResourceKind::Voice | ResourceKind::Bgm | ResourceKind::Effect => {
             crate::runtime::audio::load_untyped(asset_server, path)
         }
@@ -354,6 +375,20 @@ pub fn update_loading_gate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inactive_lut_does_not_enter_the_prefetch_identity() {
+        let mut state = keine_core::State::new();
+        state.camera_effect.lut_preset = Some("warm".into());
+        let mut previous = PrefetchState::default();
+        previous.capture(&GameState(state.clone()));
+
+        assert_eq!(previous.lut, None);
+        state.camera_effect.lut_intensity = 0.5;
+        assert!(!previous.matches(&GameState(state.clone())));
+        previous.capture(&GameState(state));
+        assert_eq!(previous.lut.as_deref(), Some("warm"));
+    }
 
     #[test]
     fn typewriter_progress_does_not_rebuild_the_prefetch_set() {

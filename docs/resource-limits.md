@@ -209,7 +209,8 @@ Commit 之后删除旧副本失败只记录明确 warning，并留待下次操�
 ## 7. 失败发生在哪一层
 
 - `cargo validate`：配置、mount、脚本与引用层错误；
-- `cargo bundle`：symlink、special file、非 canonical path 和 Hakutaku 格式上限；
+- `cargo assets --pack` / `cargo bundle`：非 WebP 项目图片、非 Opus 独立音频、symlink、
+  special file、非 canonical path 和 Hakutaku 格式上限；
 - 打包游戏启动：签名、catalog、segment 与 compiled program envelope 上限；
 - 资源实际加载：WebP、FFmpeg 帧、symlink containment 等按需限制；
 - 存档/导入：持久化文件在反序列化前执行字节与数量限制。

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use keine_core::Action;
+use keine_core::{Action, ChoiceTarget};
 
 use crate::{
     ContentMount, ContentProject, Diagnostic, DiagnosticLevel, ResourceRef, SceneRef,
@@ -33,7 +33,10 @@ pub fn load_scenes_with(
     languages: &ScriptLanguageRegistry,
 ) -> Result<Vec<LoadedScene>> {
     if let Some(loader) = project.scene_loader() {
-        return loader.load(&project.root);
+        let mut scenes = loader.load(&project.root)?;
+        validate_scene_references(&mut scenes);
+        validate_control_flow_references(&mut scenes);
+        return Ok(scenes);
     }
     let mut merged = BTreeMap::new();
     let source_reader = SourceReader::for_mounts();
@@ -55,6 +58,7 @@ pub fn load_scenes_with(
     }
     let mut scenes = merged.into_values().collect::<Vec<_>>();
     validate_scene_references(&mut scenes);
+    validate_control_flow_references(&mut scenes);
     Ok(scenes)
 }
 
@@ -107,6 +111,82 @@ fn validate_scene_references(scenes: &mut [LoadedScene]) {
                 });
             }
         }
+    }
+}
+
+fn validate_control_flow_references(scenes: &mut [LoadedScene]) {
+    for scene in scenes {
+        let mut labels = HashSet::new();
+        let mut diagnostics = Vec::new();
+        for (index, action) in scene.actions.iter().enumerate() {
+            let span = scene
+                .action_spans
+                .get(index)
+                .copied()
+                .unwrap_or(crate::SourceSpan { line: 1, column: 1 });
+            register_labels(action, span, &mut labels, &mut diagnostics);
+        }
+        for (index, action) in scene.actions.iter().enumerate() {
+            let span = scene
+                .action_spans
+                .get(index)
+                .copied()
+                .unwrap_or(crate::SourceSpan { line: 1, column: 1 });
+            validate_label_references(action, span, &labels, &mut diagnostics);
+        }
+        scene.diagnostics.extend(diagnostics);
+    }
+}
+
+fn register_labels(
+    action: &Action,
+    span: crate::SourceSpan,
+    labels: &mut HashSet<String>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match action {
+        Action::Label(label) => {
+            if !labels.insert(label.clone()) {
+                diagnostics.push(Diagnostic {
+                    level: DiagnosticLevel::Error,
+                    span,
+                    message: format!("duplicate label {label:?}"),
+                });
+            }
+        }
+        Action::Flow { action, .. } => register_labels(action, span, labels, diagnostics),
+        _ => {}
+    }
+}
+
+fn validate_label_references(
+    action: &Action,
+    span: crate::SourceSpan,
+    labels: &HashSet<String>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut validate = |label: &str| {
+        if !label.contains('{') && !labels.contains(label) {
+            diagnostics.push(Diagnostic {
+                level: DiagnosticLevel::Error,
+                span,
+                message: format!("referenced label {label:?} does not exist"),
+            });
+        }
+    };
+    match action {
+        Action::Jump(label) => validate(label),
+        Action::Menu { choices, .. } => {
+            for choice in choices {
+                if let ChoiceTarget::Label(label) = &choice.target {
+                    validate(label);
+                }
+            }
+        }
+        Action::Flow { action, .. } => {
+            validate_label_references(action, span, labels, diagnostics);
+        }
+        _ => {}
     }
 }
 
@@ -379,5 +459,63 @@ mod tests {
         };
         assert_eq!(text, "new");
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn validates_static_labels_recursively_with_source_spans() {
+        let actions = vec![
+            Action::Label("known".into()),
+            Action::Label("known".into()),
+            Action::Jump("missing-jump".into()),
+            Action::Menu {
+                prompt: String::new(),
+                choices: vec![keine_core::action::Choice {
+                    text: "Missing".into(),
+                    target: ChoiceTarget::Label("missing-choice".into()),
+                    show_when: None,
+                    enable_when: None,
+                }],
+            },
+            Action::Flow {
+                action: Box::new(Action::Jump("missing-wrapped".into())),
+                when: Some("true".into()),
+                next: false,
+            },
+            Action::Flow {
+                action: Box::new(Action::Label("wrapped".into())),
+                when: None,
+                next: false,
+            },
+            Action::Jump("wrapped".into()),
+            Action::Jump("{dynamic}".into()),
+        ];
+        let mut scenes = vec![LoadedScene {
+            name: "main".into(),
+            path: "main.txt".into(),
+            action_spans: (1..=actions.len())
+                .map(|line| crate::SourceSpan { line, column: 1 })
+                .collect(),
+            actions,
+            diagnostics: Vec::new(),
+            resources: Vec::new(),
+            sub_scenes: Vec::new(),
+        }];
+
+        validate_control_flow_references(&mut scenes);
+
+        let errors = scenes[0]
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.level == DiagnosticLevel::Error)
+            .collect::<Vec<_>>();
+        assert_eq!(errors.len(), 4);
+        assert_eq!(errors[0].span.line, 2);
+        assert!(errors[0].message.contains("duplicate label"));
+        assert_eq!(errors[1].span.line, 3);
+        assert!(errors[1].message.contains("missing-jump"));
+        assert_eq!(errors[2].span.line, 4);
+        assert!(errors[2].message.contains("missing-choice"));
+        assert_eq!(errors[3].span.line, 5);
+        assert!(errors[3].message.contains("missing-wrapped"));
     }
 }

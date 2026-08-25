@@ -7,7 +7,8 @@ use bevy::ui::FocusPolicy;
 use crate::render::blur::{DialogCamera, UiBlurCamera};
 use crate::runtime::platform::DesignViewport;
 use crate::runtime::platform::InputActions;
-use crate::runtime::resources::{GameConfigResource, GameState, ProjectRoot};
+use crate::runtime::resources::{GameConfigResource, GameState, PersistenceRoot};
+use crate::scene::images::{ImageRole, ImageRoleRegistry};
 use crate::ui::control_bar::{BlurSource, BlurStrength, QuickSavePreview, QuickSavePreviewLoad};
 use crate::ui::dialog::{DialogAction, DialogRequest};
 use crate::ui::foundation::{
@@ -54,6 +55,15 @@ pub(crate) struct ReturnToTitleTransition {
     title_background: Option<Handle<Image>>,
 }
 
+pub(crate) fn handle_script_outcome(
+    commands: &mut Commands,
+    outcome: crate::runtime::script_driver::ScriptOutcome,
+) {
+    if outcome.returns_to_title() {
+        commands.insert_resource(ReturnToTitleTransition::default());
+    }
+}
+
 #[derive(Component)]
 pub(crate) struct ReturnToTitleOverlay;
 
@@ -62,6 +72,7 @@ pub(crate) struct ReturnToTitleContext<'w, 's> {
     time: Res<'w, Time<Real>>,
     config: Res<'w, GameConfigResource>,
     asset_server: Res<'w, AssetServer>,
+    image_roles: Res<'w, ImageRoleRegistry>,
     state: ResMut<'w, GameState>,
     camera: Query<'w, 's, Entity, With<DialogCamera>>,
     overlays: Query<'w, 's, (Entity, &'static mut BackgroundColor), With<ReturnToTitleOverlay>>,
@@ -76,11 +87,12 @@ pub(crate) fn animate_return_to_title(
         return;
     };
     if transition.title_background.is_none() {
-        transition.title_background = Some(
-            context
-                .asset_server
-                .load(context.config.bg_path(&context.config.title_background)),
-        );
+        transition.title_background = Some(crate::scene::images::load(
+            &context.asset_server,
+            &context.image_roles,
+            context.config.bg_path(&context.config.title_background),
+            ImageRole::BACKGROUND,
+        ));
     }
     if context.overlays.is_empty() {
         if let Ok(camera) = context.camera.single() {
@@ -229,6 +241,7 @@ pub struct TitleSyncContext<'w, 's> {
     camera: Query<'w, 's, Entity, With<UiBlurCamera>>,
     fonts: Res<'w, UiFonts>,
     asset_server: Res<'w, AssetServer>,
+    image_roles: Res<'w, ImageRoleRegistry>,
     preview: Res<'w, QuickSavePreview>,
     windows: Query<'w, 's, &'static Window>,
     commands: Commands<'w, 's>,
@@ -240,9 +253,10 @@ pub struct TitleInputContext<'w, 's> {
     keys: ResMut<'w, ButtonInput<KeyCode>>,
     actions: ResMut<'w, InputActions>,
     state: ResMut<'w, GameState>,
+    checkpoint: ResMut<'w, crate::storage::save::ContinuationCheckpoint>,
     config: Res<'w, GameConfigResource>,
     preview: Res<'w, QuickSavePreview>,
-    project_root: Res<'w, ProjectRoot>,
+    project_root: Res<'w, PersistenceRoot>,
     store: Res<'w, crate::runtime::resources::StoreCodec>,
     time: Res<'w, Time>,
     pending: Option<ResMut<'w, PendingTitleAction>>,
@@ -283,9 +297,12 @@ pub fn sync_title(state: Res<GameState>, mut context: TitleSyncContext) {
         return;
     };
     let font = context.fonts.text.clone();
-    let background: Handle<Image> = context
-        .asset_server
-        .load(context.config.bg_path(&context.config.title_background));
+    let background = crate::scene::images::load(
+        &context.asset_server,
+        &context.image_roles,
+        context.config.bg_path(&context.config.title_background),
+        ImageRole::BACKGROUND,
+    );
     context.commands.spawn((
         Name::new("title_background"),
         TitleBackground,
@@ -359,7 +376,7 @@ pub fn sync_title(state: Res<GameState>, mut context: TitleSyncContext) {
 
 pub fn hydrate_quick_save_preview(
     buttons: Query<(&Interaction, &TitleAction), Changed<Interaction>>,
-    project_root: Res<ProjectRoot>,
+    project_root: Res<PersistenceRoot>,
     mut load: ResMut<QuickSavePreviewLoad>,
     mut preview: ResMut<QuickSavePreview>,
     mut images: ResMut<Assets<Image>>,
@@ -575,7 +592,13 @@ pub fn handle_title_input(mut context: TitleInputContext) {
         context.commands.remove_resource::<PendingTitleAction>();
         return;
     }
-    if start_game_from_keyboard(&mut context.keys, &mut context.actions, &mut context.state) {
+    if let Some(outcome) = start_game_from_keyboard(
+        &mut context.keys,
+        &mut context.actions,
+        &mut context.state,
+        &mut context.checkpoint,
+    ) {
+        handle_script_outcome(&mut context.commands, outcome);
         return;
     }
     let action = if let Some(mut pending) = context.pending {
@@ -619,6 +642,7 @@ pub fn handle_title_input(mut context: TitleInputContext) {
                             DialogAction::Noop,
                         ));
                 } else {
+                    context.checkpoint.reset(&context.state);
                     *context.actions = InputActions::default();
                     log::info!(
                         "continued quick save · {}:{}",
@@ -662,7 +686,10 @@ pub fn handle_title_input(mut context: TitleInputContext) {
             context.settings.open = false;
             context.extra.open = true;
         }
-        Some(TitleAction::Start) => start_game(&mut context.state),
+        Some(TitleAction::Start) => {
+            let outcome = start_game(&mut context.state, &mut context.checkpoint);
+            handle_script_outcome(&mut context.commands, outcome);
+        }
         _ => {}
     }
 }
@@ -817,22 +844,27 @@ fn restore_continuation(
     Ok(())
 }
 
-fn start_game(state: &mut GameState) {
+fn start_game(
+    state: &mut GameState,
+    checkpoint: &mut crate::storage::save::ContinuationCheckpoint,
+) -> crate::runtime::script_driver::ScriptOutcome {
     state.ended = false;
     state.backlog.clear();
     state.current_scene = crate::scene::entry_scene(state);
     state.cursor = 0;
-    keine_core::step::step(state);
+    checkpoint.reset(state);
+    crate::runtime::script_driver::resume(state, checkpoint)
 }
 
 fn start_game_from_keyboard(
     keys: &mut ButtonInput<KeyCode>,
     actions: &mut InputActions,
     state: &mut GameState,
-) -> bool {
+    checkpoint: &mut crate::storage::save::ContinuationCheckpoint,
+) -> Option<crate::runtime::script_driver::ScriptOutcome> {
     const START_KEYS: [KeyCode; 2] = [KeyCode::Enter, KeyCode::Space];
     if !keys.any_just_pressed(START_KEYS) {
-        return false;
+        return None;
     }
 
     // `InputActions` was collected earlier in this frame. Clear both the raw
@@ -843,8 +875,7 @@ fn start_game_from_keyboard(
         keys.clear_just_pressed(key);
     }
     actions.advance = false;
-    start_game(state);
-    true
+    Some(start_game(state, checkpoint))
 }
 
 #[cfg(test)]
@@ -966,11 +997,15 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(start_game_from_keyboard(
-            &mut keys,
-            &mut actions,
-            &mut state,
-        ));
+        assert!(
+            start_game_from_keyboard(
+                &mut keys,
+                &mut actions,
+                &mut state,
+                &mut crate::storage::save::ContinuationCheckpoint::default(),
+            )
+            .is_some()
+        );
         assert_eq!(state.intro.as_ref().unwrap().page, 0);
         assert!(state.intro.as_ref().unwrap().hold);
         assert!(!state.ended);

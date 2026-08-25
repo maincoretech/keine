@@ -732,15 +732,20 @@ impl Scene {
         let labels = actions
             .iter()
             .enumerate()
-            .filter_map(|(index, action)| match action {
-                Action::Label(name) => Some((name.clone(), index)),
-                _ => None,
-            })
+            .filter_map(|(index, action)| action_label(action).map(|name| (name.to_owned(), index)))
             .collect();
         Self {
             actions: actions.into_boxed_slice(),
             labels,
         }
+    }
+}
+
+fn action_label(action: &Action) -> Option<&str> {
+    match action {
+        Action::Label(name) => Some(name),
+        Action::Flow { action, .. } => action_label(action),
+        _ => None,
     }
 }
 
@@ -798,6 +803,20 @@ mod program_tests {
         assert_eq!(program.label("main", "start"), Some(0));
         assert!(program.contains_scene("main"));
         assert_ne!(program.fingerprint(), 0);
+    }
+
+    #[test]
+    fn indexes_a_label_through_its_flow_wrapper() {
+        let program = Program::from_scenes([(
+            "main".into(),
+            vec![Action::Flow {
+                action: Box::new(Action::Label("wrapped".into())),
+                when: None,
+                next: false,
+            }],
+        )]);
+
+        assert_eq!(program.label("main", "wrapped"), Some(0));
     }
 
     #[test]

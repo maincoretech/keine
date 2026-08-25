@@ -43,6 +43,11 @@ pub struct GameConfigResource(pub GameConfig);
 #[derive(Resource, Deref)]
 pub struct ProjectRoot(pub PathBuf);
 
+/// Writable root for all game-owned persistent data. It equals
+/// [`ProjectRoot`] for editable projects and is platform-specific for packages.
+#[derive(Resource, Deref)]
+pub struct PersistenceRoot(pub PathBuf);
+
 #[derive(Resource, Deref)]
 pub struct ContentProjectResource(pub ContentProject);
 

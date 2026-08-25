@@ -95,7 +95,7 @@ adapter:
 | asset / `auto` | 本地目录或容器 | 根据路径委派 asset adapter |
 | project / `hakutaku` | `.haku` 快照与同级 `data/*.taku` | `hakutaku_core::Package` 验签、解密与随机读取 |
 | script / `webgal` | `.txt` scene | `ParseReport<Action>` |
-| store / `keine` | v9 原生 `.sav` bytes 或当前 `State` | 编码后的 bytes；解码后的 `SavedState`；可独立检查的 `StoreStatus`/metadata |
+| store / `keine` | v10 原生 `.sav` bytes 或当前 `State` | 编码后的 bytes；解码后的 `SavedState`；可独立检查的 `StoreStatus`/metadata |
 
 `LoaderRegistry` 按类别解析名称。asset source 可以有多个且保持后声明覆盖；script 和 store
 各选一个明确格式，未知名称在启动阶段直接报错，而不是静默回退。
@@ -110,7 +110,7 @@ adapter:
 
 `SavedState` 只允许通过 `snapshot()` 做只读预览投影，或通过 `restore_into(&mut current)` 合入当前项目。恢复时 core 会核对存档与当前 `Program` 的 fingerprint，重新附着当前 `Arc<Program>`，保留 profile/read-history/gallery 等槽外数据，并拒绝不同脚本布局的存档。UI 的 metadata 过滤只是提前反馈，不能替代 core 检查。
 
-当前 keine store 使用 v9、Postcard metadata/state 与双 CRC32；槽位列表只读取 header + metadata，Bevy storage 层另行维护独立 WebP preview sidecar。完整字节布局、版本策略与 Backlog 恢复合同见 [04-rollback-and-save.md](04-rollback-and-save.md)。
+当前 keine store 使用 v10、Postcard metadata/state 与双 CRC32；槽位列表只读取 header + metadata，Bevy storage 层另行维护独立 WebP preview sidecar。完整字节布局、版本策略与 Backlog 恢复合同见 [04-rollback-and-save.md](04-rollback-and-save.md)。
 
 ## 运行时规则
 

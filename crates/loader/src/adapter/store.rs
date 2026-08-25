@@ -9,7 +9,7 @@ mod keine {
     use super::{SavedState, StoreAdapter, StoreMetadata, StoreStatus};
 
     const MAGIC: [u8; 8] = *b"KEINE\0\0\0";
-    const VERSION: u32 = 9;
+    const VERSION: u32 = 10;
     const HEADER_SIZE: usize = 28;
     const MAX_METADATA_SIZE: usize = 64 * 1024;
     const MAX_STATE_SIZE: usize = 64 * 1024 * 1024;
@@ -244,7 +244,10 @@ mod keine {
         use std::io::Cursor;
 
         use keine_core::state::{Dialogue, DialogueKey, DialogueRetraction};
-        use keine_core::{Action, EffectCue, EffectEvent, Program, SayOptions, Value};
+        use keine_core::{
+            Action, DialogueStyle, EffectCue, EffectEvent, Program, SayOptions,
+            SpriteSequenceState, Value,
+        };
 
         fn inspect(bytes: &[u8]) -> StoreStatus {
             KeineStore.inspect(&mut Cursor::new(bytes)).unwrap()
@@ -387,6 +390,19 @@ mod keine {
                 fractional_chars: 0.375,
                 awaiting_advance: false,
             });
+            state.waiting_for_advance = true;
+            state.curtain.current = 0.75;
+            state.dialogue_style = DialogueStyle::Literary;
+            state.sprite_sequences.insert(
+                "mio".into(),
+                SpriteSequenceState {
+                    frames: vec!["mio-1.webp".into(), "mio-2.webp".into()],
+                    fps: 12.0,
+                    looped: true,
+                    elapsed: 1.25,
+                    frame: 1,
+                },
+            );
             state.record_dialogue(1);
 
             state.global_vars.insert("route".into(), Value::Int(3));
@@ -427,7 +443,7 @@ mod keine {
         }
 
         #[test]
-        fn save_v9_golden_is_stable() {
+        fn save_v10_golden_is_stable() {
             let mut state = State::new();
             state.install_program(Program::from_scenes([(
                 "main".into(),
@@ -438,14 +454,21 @@ mod keine {
             let bytes = encode_at(&state, 1_700_000_000).unwrap();
             if std::env::var_os("KEINE_UPDATE_STORE_GOLDEN").is_some() {
                 let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("tests/fixtures/store-v9.sav");
+                    .join("tests/fixtures/store-v10.sav");
                 std::fs::create_dir_all(path.parent().unwrap()).unwrap();
                 std::fs::write(path, &bytes).unwrap();
                 return;
             }
-            let expected = include_bytes!("../../tests/fixtures/store-v9.sav");
+            let expected = include_bytes!("../../tests/fixtures/store-v10.sav");
 
             assert_eq!(bytes.as_slice(), expected);
+        }
+
+        #[test]
+        fn v9_is_reported_as_an_unsupported_schema() {
+            let bytes = include_bytes!("../../tests/fixtures/store-v9.sav");
+            assert_eq!(inspect(bytes), StoreStatus::Unsupported(9));
+            assert!(KeineStore.decode(bytes).is_err());
         }
     }
 }

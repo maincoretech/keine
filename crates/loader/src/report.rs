@@ -31,6 +31,7 @@ pub enum ResourceKind {
     Particle,
     Video,
     MiniAvatar,
+    Lut,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,6 +54,7 @@ impl ResourceRef {
             ResourceKind::Effect => config.effect_path(&self.path),
             ResourceKind::Particle => self.path.clone(),
             ResourceKind::Video => config.video_path(&self.path),
+            ResourceKind::Lut => config.lut_path(&self.path),
         }
     }
 }
@@ -153,11 +155,14 @@ fn collect_references(
                             keine_core::StageAudioKind::Vocal => ResourceKind::Voice,
                         },
                     ),
-                    keine_core::StageEventKind::CameraShake(_)
-                    | keine_core::StageEventKind::CameraPatch { .. } => {}
+                    keine_core::StageEventKind::CameraPatch { effect, .. } => {
+                        collect_visible_lut(effect, &mut resource);
+                    }
+                    keine_core::StageEventKind::CameraShake(_) => {}
                 }
             }
         }
+        Action::SetPostProcess { effect, .. } => collect_visible_lut(effect, &mut resource),
         Action::PlayVideo { video } => resource(&video.file, ResourceKind::Video),
         Action::MiniAvatar { image } => resource(image, ResourceKind::MiniAvatar),
         Action::Unlock { kind, file, .. } => resource(
@@ -191,5 +196,98 @@ fn collect_references(
             collect_references(action, action_index, span, report);
         }
         _ => {}
+    }
+}
+
+fn collect_visible_lut(
+    effect: &keine_core::PostProcessPatch,
+    resource: &mut impl FnMut(&str, ResourceKind),
+) {
+    if effect.lut_intensity.unwrap_or_default() > 0.001
+        && let Some(Some(lut)) = &effect.lut_preset
+    {
+        resource(lut, ResourceKind::Lut);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use keine_core::{
+        CameraTargets, Easing, PostProcessPatch, StageAnimation, StageEvent, StageEventKind,
+    };
+
+    fn lut_patch(name: &str) -> Box<PostProcessPatch> {
+        Box::new(PostProcessPatch {
+            lut_preset: Some(Some(name.into())),
+            lut_intensity: Some(0.5),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn collects_luts_from_direct_and_timeline_camera_patches() {
+        let span = SourceSpan { line: 3, column: 7 };
+        let mut report = ParseReport::default();
+        report.push(
+            Action::SetPostProcess {
+                targets: CameraTargets::ALL,
+                effect: lut_patch("warm"),
+                duration: 0.0,
+                easing: Easing::Linear,
+                blocking: false,
+            },
+            span,
+        );
+        report.push(
+            Action::StageAnimation {
+                animation: StageAnimation {
+                    id: "camera".into(),
+                    duration: 1.0,
+                    tracks: Vec::new(),
+                    events: vec![StageEvent {
+                        time: 0.0,
+                        kind: StageEventKind::CameraPatch {
+                            targets: Some(CameraTargets::SCENE),
+                            effect: lut_patch("night"),
+                        },
+                    }],
+                    repeat: 0,
+                    infinite: false,
+                    playback_rate: 1.0,
+                    blocking: false,
+                },
+            },
+            span,
+        );
+
+        assert_eq!(
+            report
+                .resources
+                .iter()
+                .map(|resource| (resource.path.as_str(), resource.kind))
+                .collect::<Vec<_>>(),
+            [("warm", ResourceKind::Lut), ("night", ResourceKind::Lut),]
+        );
+    }
+
+    #[test]
+    fn ignores_lut_presets_that_cannot_affect_pixels() {
+        let mut report = ParseReport::default();
+        report.push(
+            Action::SetPostProcess {
+                targets: CameraTargets::ALL,
+                effect: Box::new(PostProcessPatch {
+                    lut_preset: Some(Some("warm".into())),
+                    ..Default::default()
+                }),
+                duration: 0.0,
+                easing: Easing::Linear,
+                blocking: false,
+            },
+            SourceSpan { line: 1, column: 1 },
+        );
+
+        assert!(report.resources.is_empty());
     }
 }

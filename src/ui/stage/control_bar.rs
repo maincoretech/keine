@@ -9,7 +9,7 @@ use keine_core::State;
 use keine_loader::StoreMetadata;
 use std::{path::Path, time::Duration};
 
-use crate::runtime::resources::ProjectRoot;
+use crate::runtime::resources::PersistenceRoot;
 use crate::storage::save::QUICK_SAVE_SLOT;
 use crate::ui::dialog::{DialogAction, DialogRequest};
 use crate::ui::foundation::{SURFACE_HOVER_ALPHA, button_surface, exp_lerp};
@@ -506,7 +506,7 @@ fn perform_button_action(
 }
 
 pub fn load_quick_save_preview(
-    project_root: Res<ProjectRoot>,
+    project_root: Res<PersistenceRoot>,
     store: Res<crate::runtime::resources::StoreCodec>,
     mut preview: ResMut<QuickSavePreview>,
 ) {
@@ -648,6 +648,7 @@ pub fn sync_quick_preview(
     preview: Res<QuickSavePreview>,
     game_state: Res<crate::runtime::resources::GameState>,
     asset_server: Res<AssetServer>,
+    image_roles: Res<crate::scene::images::ImageRoleRegistry>,
     mut last_program_fingerprint: Local<Option<u64>>,
     mut content: QuickPreviewContentQueries,
 ) {
@@ -679,7 +680,12 @@ pub fn sync_quick_preview(
             image.image = preview_image.clone();
             node.display = Display::Flex;
         } else if let Some(background) = &state.background {
-            image.image = asset_server.load(format!("background/{background}"));
+            image.image = crate::scene::images::load(
+                &asset_server,
+                &image_roles,
+                format!("background/{background}"),
+                crate::scene::images::ImageRole::BACKGROUND,
+            );
             node.display = Display::Flex;
         } else {
             node.display = Display::None;
