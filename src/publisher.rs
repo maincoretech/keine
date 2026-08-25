@@ -90,8 +90,6 @@ fn prepare_project(
     if !project.is_dir() {
         bail!("project directory does not exist: {}", project.display());
     }
-    let identity = load_or_create_identity(project)?;
-
     let staging = tempdir().context("failed to create staging directory")?;
     let staged = staging.path().join("project");
     copy_tree(project, &staged)?;
@@ -106,8 +104,7 @@ fn prepare_project(
         // LetsGal source: materialize the adapter-derived config (asset
         // aliases, layout, styles) so the packaged archive can be opened
         // through config.yaml with the same resolution as the editor.
-        let yaml = noyalib::to_string(&config)
-            .context("failed to serialize the project config to YAML")?;
+        let yaml = serialize_config_deterministically(&config)?;
         fs::write(&config_path, yaml)?;
     }
 
@@ -115,11 +112,39 @@ fn prepare_project(
         .languages(&config.adapter.script)
         .context("failed to select script adapter")?;
     build_program(&config, &content, &languages)?;
+    // Do not create or load publisher secrets until every project-owned
+    // validation and compilation step has succeeded.
+    let identity = load_or_create_identity(project)?;
     Ok(PreparedProject {
         _staging: staging,
         staged,
         identity,
     })
+}
+
+fn serialize_config_deterministically(config: &keine_core::config::GameConfig) -> Result<String> {
+    let mut value = noyalib::to_value(config)
+        .context("failed to serialize the project config to YAML values")?;
+    sort_yaml_mappings(&mut value);
+    noyalib::to_string_value(&value).context("failed to serialize the project config to YAML")
+}
+
+fn sort_yaml_mappings(value: &mut noyalib::Value) {
+    match value {
+        noyalib::Value::Sequence(sequence) => {
+            for value in sequence {
+                sort_yaml_mappings(value);
+            }
+        }
+        noyalib::Value::Mapping(mapping) => {
+            for (_, value) in mapping.iter_mut() {
+                sort_yaml_mappings(value);
+            }
+            mapping.sort_keys();
+        }
+        noyalib::Value::Tagged(tagged) => sort_yaml_mappings(tagged.value_mut()),
+        _ => {}
+    }
 }
 
 fn validate_shipping_identity(project: &keine_core::config::ProjectMetadata) -> Result<()> {
@@ -892,6 +917,56 @@ mod tests {
     }
 
     #[test]
+    fn generated_project_config_is_deterministic() {
+        let mut first = keine_core::config::GameConfig::default();
+        first
+            .assets
+            .backgrounds
+            .insert("second".into(), "backgrounds/second.webp".into());
+        first
+            .assets
+            .backgrounds
+            .insert("first".into(), "backgrounds/first.webp".into());
+        let mut second = keine_core::config::GameConfig::default();
+        second
+            .assets
+            .backgrounds
+            .insert("first".into(), "backgrounds/first.webp".into());
+        second
+            .assets
+            .backgrounds
+            .insert("second".into(), "backgrounds/second.webp".into());
+
+        assert_eq!(
+            serialize_config_deterministically(&first).unwrap(),
+            serialize_config_deterministically(&second).unwrap()
+        );
+    }
+
+    #[test]
+    fn invalid_project_does_not_create_a_default_publisher_identity() {
+        let project = tempdir().unwrap();
+        fs::create_dir_all(project.path().join("assets")).unwrap();
+        fs::create_dir_all(project.path().join("scripts")).unwrap();
+        fs::write(project.path().join("scripts/start.txt"), "comment:test;\n").unwrap();
+        let mut config = keine_core::config::GameConfig::default();
+        config.project.id = "Invalid.Project".into();
+        fs::write(
+            project.path().join("config.yaml"),
+            noyalib::to_string(&config).unwrap(),
+        )
+        .unwrap();
+
+        assert!(prepare_project(project.path(), &keine_loader::LoaderRegistry::default()).is_err());
+        assert!(
+            !project
+                .path()
+                .join(".keine/publisher.hakutaku-key")
+                .exists()
+        );
+    }
+
+    #[test]
     fn previous_hakutaku_segments_seed_incremental_output() {
         let root = tempdir().unwrap();
         let previous = root.path().join("previous");
@@ -910,6 +985,51 @@ mod tests {
             b"segment"
         );
         assert!(!assembled.join("data/ignored.txt").exists());
+    }
+
+    #[test]
+    fn failed_assembly_preserves_the_previous_runnable_release() {
+        let root = tempdir().unwrap();
+        let staged = root.path().join("staged");
+        let output = root.path().join("release");
+        fs::create_dir(&staged).unwrap();
+        fs::write(staged.join("asset.txt"), b"previous").unwrap();
+        let identity = Identity::generate().unwrap();
+        publish_prepared(&staged, &identity, &output, |_| Ok(())).unwrap();
+        let previous_snapshot = fs::read(output.join("game.haku")).unwrap();
+        let previous_segments = release_segments(&output);
+
+        fs::write(staged.join("asset.txt"), b"replacement").unwrap();
+        let error = publish_prepared(&staged, &identity, &output, |_| {
+            bail!("injected assembly failure")
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("injected assembly failure"));
+        assert_eq!(
+            fs::read(output.join("game.haku")).unwrap(),
+            previous_snapshot
+        );
+        assert_eq!(release_segments(&output), previous_segments);
+        assert!(fs::read_dir(root.path()).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".keine-publisher-")
+        }));
+    }
+
+    fn release_segments(release: &Path) -> Vec<(std::ffi::OsString, Vec<u8>)> {
+        let mut segments = fs::read_dir(release.join("data"))
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                (entry.file_name(), fs::read(entry.path()).unwrap())
+            })
+            .collect::<Vec<_>>();
+        segments.sort_by(|left, right| left.0.cmp(&right.0));
+        segments
     }
 
     #[test]

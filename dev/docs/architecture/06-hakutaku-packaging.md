@@ -34,16 +34,23 @@ Vorbis 和 FLAC 只属于开发/导入兼容路径；打包器发现它们会直
 ```text
 release/
 ├── keine[.exe]
+├── keine.png
 ├── game.haku
 └── data/
     └── <content-id>.taku
 ```
+
+`cargo bundle <project> --output target/release --benchmark` 不覆盖上述目录，而是生成
+`target/release-benchmark/`，并只在该独立目录增加 `keine-benchmark.conf`、`BENCHMARK.txt`
+和 benchmark Hakutaku payload；普通 bundle 不包含这些文件。
 
 `game.haku` 是签名快照与加密目录，`data/*.taku` 是不可变、内容寻址的加密 segment。
 发行物不包含启动脚本：Windows 将 FFmpeg DLL 放在程序目录，Linux 视频发行版则在引擎的
 ELF `DT_RPATH` 中固定 `$ORIGIN/lib`，因此可以从任意工作目录直接运行引擎。
 更新时 Kēne 先将上一版快照和 segment 以硬链接（失败时复制）放进临时发布目录，Hakutaku
 只写新增块，并在新快照提交后清理未引用 segment。最终目录仍通过同目录 rename 事务发布。
+LetsGal 项目在 staging 内生成的 `config.yaml` 会递归排序 mapping key，避免同一项目因
+`HashMap` 迭代顺序变化而产生新的配置 segment，并让未变化的配置内容直接复用已有 segment。
 
 Hakutaku 内容目录不是持久化目录。发行项目必须声明稳定、路径安全的 `project.id`；运行时
 在 macOS Application Support、Windows LocalAppData 或 Linux XDG data home 中建立独立
@@ -55,7 +62,8 @@ sidecar `saves/`，但已有新目录永远优先，旧副本不会自动删除�
 首次本地打包会创建 `.keine/publisher.hakutaku-key`。它同时决定 Hakutaku archive ID、AES
 根密钥和 Ed25519 发布身份；archive ID 与配置中用于存档命名空间的 `project.id` 是两个不同
 合同。私钥必须备份且不得随游戏发布。也可用 `KEINE_HAKUTAKU_IDENTITY` 指向外部
-身份文件；CI 使用 base64 的 `HAKUTAKU_IDENTITY_BASE64` secret 还原同一身份。
+身份文件；CI 使用 base64 的 `HAKUTAKU_IDENTITY_BASE64` secret 还原同一身份。打包器只在
+项目校验和编译成功后才加载或创建 identity，因此无效项目不会留下新的 publisher secret。
 
 GitHub 手动构建明确分成两种身份模式：
 
