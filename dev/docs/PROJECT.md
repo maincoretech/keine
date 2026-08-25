@@ -50,12 +50,15 @@ keine/
 │   └── test-project/              唯一端到端测试项目
 ├── .github/workflows/             桌面平台 fmt、Clippy、测试和 release CI
 ├── dev/scripts/                   发布/打包辅助脚本
+├── docs/
+│   ├── PROJECT_STATE.md           多线程共享的当前能力、接口与限制
+│   └── tasks/                     独立线程任务、所有权与依赖
 └── dev/docs/
     ├── architecture/              当前架构与平台合同
     ├── webgal-compatibility/      当前 WebGAL 语义、格式与视觉证据
     ├── acceptance/                Phase 1–7 总清单与 LetsGal 独立验收
     ├── PROJECT.md                 项目边界和目录规则
-    └── TODO.md                    唯一进度入口
+    └── TODO.md                    产品能力 backlog 与验收清单
 ```
 
 ## Plugin ownership

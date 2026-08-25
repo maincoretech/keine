@@ -178,6 +178,7 @@ gallery without loading a second compressed copy.
 
 ## Documentation
 
+- [Current project state and task queue](docs/PROJECT_STATE.md)
 - [Project structure](dev/docs/PROJECT.md)
 - [Resource, package, and storage limits](docs/resource-limits.md)
 - [Content loader](dev/docs/architecture/07-content-loader.md)

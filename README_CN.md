@@ -129,6 +129,7 @@ cargo validate projects/test-project
 
 ## 文档
 
+- [当前项目状态与任务队列](docs/PROJECT_STATE.md)
 - [工程结构](dev/docs/PROJECT.md)
 - [资源、发行包与持久化限制](docs/resource-limits.md)
 - [内容加载](dev/docs/architecture/07-content-loader.md)

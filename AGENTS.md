@@ -1,38 +1,90 @@
-# Kēne 行动指南
+# Kēne collaboration guide
 
-> 本指南对整个项目生命周期有效，适用于本仓库的每一次改动，
-> 无论任务大小。所有会话开始工作时默认遵守。
+## Product and stack
 
-## 代码质量原则
+Kēne is a native visual-novel engine for WebGAL scripts, native projects, and LetsGal Studio
+projects. Rust 2024 is used throughout. `keine-core` owns the Bevy-free typed model and
+deterministic execution; `keine-loader` owns content and format adapters; the root `keine`
+package owns Bevy 0.19 runtime, rendering, UI, media, storage, and publishing tools.
 
-1. **写优雅的代码。** 结构清晰、命名准确、职责单一。避免散落的 `unwrap`、
-   魔法数字和重复逻辑；布局、格式、边界这类有单一事实的代码收敛到一个类型
-   或函数里，让 schema 演进只改一处。
-2. **积极地反思结构。** 动手前先想清模块边界与公共 API 形状；实现后回头
-   审视是否出现了更干净的形态（类型收敛、错误路径统一、职责边界正确）。
-   发现更好的结构就重构后再提交，不要带着已知的结构问题交付。
-3. **上网查证再定稿。** 对设计决策（序列化格式、二进制 envelope 惯例、依赖
-   行为、错误处理、性能假设）先查官方文档、issue 与社区实践，确认方案是否
-   合适再实现。查证结论应体现为代码注释或提交说明，不能只停留在口头。
+WebP and Ogg Opus are the canonical production image/audio formats. Hakutaku v1 is the only
+packaged-project format. Compatibility formats may remain available for development, but must
+not silently expand a shipping build.
 
-## 完成标准
+## Architectural constraints
 
-每次改动提交前必须全部通过：
+- Dependencies flow `keine-core <- keine-loader <- keine`; core and loader must remain Bevy-free.
+- Runtime consumes typed `Program`/`State`, never editor-specific JSON or package-format details.
+- Content enters through ordered, read-only `ContentMount`/`ContentFile` sources. Later mounts
+  override earlier mounts without escaping their roots.
+- Adapters are grouped by capability: `asset`, `editor`, `script`, and `store`. Editor-specific
+  behavior stays below its adapter.
+- The design space is 1920x1080. Viewport/letterbox conversion has one owner; UI and scene code
+  must not introduce independent physical-pixel coordinate systems.
+- Scene, normal UI, and dialog cameras have fixed responsibilities. Rendering effects must
+  preserve that composition order.
+- Save v10 restores only against a matching Program fingerprint. Profile, read history, gallery,
+  and settings remain outside slot rollback. Unsupported binary layouts fail closed.
+- Shipping persistence lives in the platform user-data directory identified by stable
+  `project.id`, never beside a read-only bundle.
+- Publisher identities and embedded key material are never logged, committed, cached, or passed
+  to child builds beyond the step that needs them.
+- Do not add a theme/plugin framework, dynamic backend abstraction, compatibility layer, or new
+  dependency without a demonstrated current use.
+
+## Directory ownership
+
+- `crates/core/`: action schema, state, expression evaluator, deterministic step semantics.
+- `crates/loader/`: adapters, source confinement, compiled program/store envelopes, diagnostics.
+- `src/runtime/`: bootstrap, host boundary, input/lifecycle, script-driving coordination.
+- `src/scene/`: asset planning, audio/video, background, sprites, effects.
+- `src/render/` and `src/assets/shaders/`: render-world pipelines and WGSL.
+- `src/ui/`: fixed MainCore UI, overlays, screens, stage controls, shared UI mechanisms.
+- `src/storage/`: persistence roots, saves, backups, profiles, history, gallery, settings.
+- `src/compiler.rs`, `src/publisher.rs`, `src/resource_migration.rs`: publisher-only tooling.
+- `projects/test-project/`: shared end-to-end acceptance project; integration-owned.
+
+## Code and evidence quality
+
+- Preserve unrelated worktree changes. Inspect `git status` and the relevant diff before editing.
+- Prefer one clear owner for schemas, limits, coordinate transforms, and lifecycle decisions.
+- Avoid scattered `unwrap`, magic numbers, repeated mappings, speculative abstraction, and tests
+  that only restate implementation details.
+- For serialization, dependency behavior, unsafe/FFI contracts, security, or performance claims,
+  verify official documentation or primary sources before finalizing. Record the resulting
+  invariant in code, tests, or the commit message.
+- Performance changes require before/after measurements. Workers report raw commands and results;
+  the integration thread updates `dev/docs/performance-baseline.md` to avoid parallel conflicts.
+
+## Validation
+
+Every integrated change must pass:
 
 ```text
+cargo fmt --all --check
 cargo check --workspace
-cargo clippy --workspace --all-targets        # 0 warning / 0 error
-cargo fmt --all --check                        # 干净
-cargo test --workspace                         # 全过
-cargo validate projects/test-project           # 涉及项目加载/适配器时
+cargo clippy --workspace --all-targets
+cargo test --workspace
 ```
 
-涉及性能的改动还必须带前后基准（`cargo bench --workspace` 或 `cargo perf`），并把结果写进
-`dev/docs/performance-baseline.md`。
+Run `cargo validate projects/test-project` for project, loader, adapter, compiler, or publishing
+changes. Run the task-specific feature checks and benchmarks declared in `docs/tasks/` when the
+affected code is not exercised by the default workspace suite.
 
-## 提交约定
+## Multi-thread workflow
 
-- 本项目直接提交 `main`，不走 PR。
-- 每次提交完成后立即推送到 `origin/main`（`git push`），不积压本地提交。
-- 一个 commit 只解决一个热点；提交信息说明改了什么、为什么、验证结果。
-- 工作树有无关改动时先 `git status` 核对范围，不顺手提交无关文件。
+1. Read `AGENTS.md`, `docs/PROJECT_STATE.md`, and exactly one assigned `docs/tasks/TXX-*.md` before
+   editing. Inspect only the task-relevant code after that.
+2. Use an isolated worktree/branch named `codex/TXX-short-name`. One thread owns one task.
+3. Modify only the task's declared ownership. If a required change crosses that boundary, stop and
+   report the proposed interface change to the orchestrator; do not edit around the boundary.
+4. `AGENTS.md`, `docs/PROJECT_STATE.md`, `docs/tasks/`, `Cargo.toml`, `Cargo.lock`, `.cargo/`,
+   `src/lib.rs`, `src/runtime.rs`, `src/runtime/bootstrap.rs`, `README*`, `dev/docs/TODO.md`,
+   `dev/docs/performance-baseline.md`, and `projects/test-project/` are integration-owned unless a
+   task explicitly grants ownership.
+5. Workers do not merge or push `main`. Commit a focused worker result only when requested, then
+   report its commit, files, validation, risks, and interface effects.
+6. The orchestrator reviews and integrates worker diffs, resolves shared-file changes, updates
+   project state, runs the complete gate, and pushes `origin/main`.
+7. Do not start a `depends-on` task before its dependency is integrated. Do not dispatch an
+   `integration-only` task to an independent worker.
