@@ -1,5 +1,5 @@
 // GlobalDialog — WebGAL-style confirmation overlay with title + two buttons.
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 use std::thread;
 
@@ -531,41 +531,40 @@ pub fn handle_dialog_click(
         }
         match &req.action {
             DialogAction::QuickSave => {
-                if let Err(error) = crate::storage::save::save_game(
+                match crate::storage::save::save_game_replacing_preview(
                     context.store.0.as_ref(),
                     &context.state,
                     QUICK_SAVE_SLOT,
                     &context.project_root,
+                    &context.preview_coordinator,
                 ) {
-                    log::error!("quick save failed: {error:#}");
-                    if !context.state.persistence_safety().is_exact() {
-                        commands.insert_resource(DialogRequest::confirmation(
-                            tr(
-                                context.settings.locale,
-                                UiText::SaveUnavailableDuringPresentation,
-                            ),
-                            DialogAction::Noop,
-                        ));
-                    }
-                } else {
-                    let generation = replace_preview_generation(
-                        &context.preview_coordinator,
-                        &context.project_root,
-                        QUICK_SAVE_SLOT,
-                    );
-                    context.preview.state = Some(crate::ui::control_bar::QuickSaveSnapshot::from(
-                        &**context.state,
-                    ));
-                    context.preview.image = None;
-                    if let Ok(window) = context.windows.single() {
-                        let size = Vec2::new(window.width(), window.height());
-                        capture_save_preview(
-                            &mut commands,
-                            &mut context.images,
-                            size,
-                            QUICK_SAVE_SLOT,
-                            generation,
+                    Ok(generation) => {
+                        context.preview.state = Some(
+                            crate::ui::control_bar::QuickSaveSnapshot::from(&**context.state),
                         );
+                        context.preview.image = None;
+                        if let Ok(window) = context.windows.single() {
+                            let size = Vec2::new(window.width(), window.height());
+                            capture_save_preview(
+                                &mut commands,
+                                &mut context.images,
+                                size,
+                                QUICK_SAVE_SLOT,
+                                generation,
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        log::error!("quick save failed: {error:#}");
+                        if !context.state.persistence_safety().is_exact() {
+                            commands.insert_resource(DialogRequest::confirmation(
+                                tr(
+                                    context.settings.locale,
+                                    UiText::SaveUnavailableDuringPresentation,
+                                ),
+                                DialogAction::Noop,
+                            ));
+                        }
                     }
                 }
             }
@@ -593,11 +592,12 @@ pub fn handle_dialog_click(
                     .checkpoint
                     .state_for_continuation(&context.state)
                     .cloned();
-                match crate::storage::save::save_continuation(
+                match crate::storage::save::save_continuation_replacing_preview(
                     context.store.0.as_ref(),
                     &context.state,
                     &context.checkpoint,
                     &context.project_root,
+                    &context.preview_coordinator,
                 ) {
                     Ok(crate::storage::save::ContinuationSave::Skipped) => {
                         log::warn!(
@@ -605,13 +605,6 @@ pub fn handle_dialog_click(
                         )
                     }
                     Ok(_) => {
-                        context.preview_coordinator.invalidate_slot(QUICK_SAVE_SLOT);
-                        if let Err(error) = crate::storage::save::remove_preview(
-                            &context.project_root,
-                            QUICK_SAVE_SLOT,
-                        ) {
-                            log::warn!("failed to invalidate stale quick-save preview: {error:#}");
-                        }
                         context.preview.state = continuation
                             .as_ref()
                             .map(crate::ui::control_bar::QuickSaveSnapshot::from);
@@ -629,39 +622,38 @@ pub fn handle_dialog_click(
                 context.backlog_ui.open = false;
             }
             DialogAction::SaveSlot(slot) => {
-                if let Err(error) = crate::storage::save::save_game(
+                match crate::storage::save::save_game_replacing_preview(
                     context.store.0.as_ref(),
                     &context.state,
                     *slot,
                     &context.project_root,
+                    &context.preview_coordinator,
                 ) {
-                    log::error!("save slot {slot} failed: {error:#}");
-                    if !context.state.persistence_safety().is_exact() {
-                        commands.insert_resource(DialogRequest::confirmation(
-                            tr(
-                                context.settings.locale,
-                                UiText::SaveUnavailableDuringPresentation,
-                            ),
-                            DialogAction::Noop,
-                        ));
+                    Ok(generation) => {
+                        context.save_previews.invalidate(*slot);
+                        context.save_load.set_changed();
+                        if let Ok(window) = context.windows.single() {
+                            let size = Vec2::new(window.width(), window.height());
+                            capture_save_preview(
+                                &mut commands,
+                                &mut context.images,
+                                size,
+                                *slot,
+                                generation,
+                            );
+                        }
                     }
-                } else {
-                    let generation = replace_preview_generation(
-                        &context.preview_coordinator,
-                        &context.project_root,
-                        *slot,
-                    );
-                    context.save_previews.invalidate(*slot);
-                    context.save_load.set_changed();
-                    if let Ok(window) = context.windows.single() {
-                        let size = Vec2::new(window.width(), window.height());
-                        capture_save_preview(
-                            &mut commands,
-                            &mut context.images,
-                            size,
-                            *slot,
-                            generation,
-                        );
+                    Err(error) => {
+                        log::error!("save slot {slot} failed: {error:#}");
+                        if !context.state.persistence_safety().is_exact() {
+                            commands.insert_resource(DialogRequest::confirmation(
+                                tr(
+                                    context.settings.locale,
+                                    UiText::SaveUnavailableDuringPresentation,
+                                ),
+                                DialogAction::Noop,
+                            ));
+                        }
                     }
                 }
             }
@@ -772,18 +764,6 @@ pub fn handle_dialog_click(
             crate::runtime::script_driver::resume(&mut context.state, &mut context.checkpoint);
         crate::ui::title::handle_script_outcome(&mut commands, outcome);
     }
-}
-
-pub(crate) fn replace_preview_generation(
-    coordinator: &crate::storage::save::SavePreviewCoordinator,
-    project_root: &Path,
-    slot: u32,
-) -> crate::storage::save::SavePreviewGeneration {
-    let generation = coordinator.invalidate_slot(slot);
-    if let Err(error) = crate::storage::save::remove_preview(project_root, slot) {
-        log::warn!("failed to remove stale slot preview: {error:#}");
-    }
-    generation
 }
 
 pub(crate) fn capture_save_preview(

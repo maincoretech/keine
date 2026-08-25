@@ -1298,20 +1298,16 @@ pub fn handle_save_load_slot(
         return;
     }
     if mode == SaveLoadMode::Save && !matches!(status, crate::storage::save::SlotStatus::Ready(_)) {
-        match crate::storage::save::save_game(
+        match crate::storage::save::save_game_replacing_preview(
             context.store.0.as_ref(),
             &context.state,
             slot,
             &context.project_root,
+            &context.preview_coordinator,
         ) {
-            Ok(()) => {
+            Ok(generation) => {
                 ui.set_changed();
                 context.save_previews.invalidate(slot);
-                let generation = crate::ui::dialog::replace_preview_generation(
-                    &context.preview_coordinator,
-                    &context.project_root,
-                    slot,
-                );
                 if let Ok(window) = context.windows.single() {
                     crate::ui::dialog::capture_save_preview(
                         &mut context.commands,

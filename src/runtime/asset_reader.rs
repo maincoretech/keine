@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use std::collections::BTreeSet;
 #[cfg(feature = "hot-reload")]
 use std::collections::HashSet;
 #[cfg(feature = "hot-reload")]
@@ -18,6 +19,7 @@ use bevy::asset::io::{
 };
 #[cfg(feature = "hot-reload")]
 use bevy::asset::io::{AssetSourceEvent, AssetWatcher};
+use futures_lite::StreamExt;
 use futures_lite::io::{AsyncRead, AsyncSeek};
 use keine_loader::{ContentFile, ContentMount};
 #[cfg(feature = "hot-reload")]
@@ -333,14 +335,24 @@ impl AssetReader for OverlayAssetReader {
         &'a self,
         path: &'a Path,
     ) -> Result<Box<PathStream>, AssetReaderError> {
+        let mut entries = BTreeSet::new();
+        let mut found = false;
         for reader in &self.readers {
             match reader.read_directory(path).await {
-                Ok(value) => return Ok(value),
+                Ok(mut stream) => {
+                    found = true;
+                    while let Some(entry) = stream.next().await {
+                        entries.insert(entry);
+                    }
+                }
                 Err(AssetReaderError::NotFound(_)) => {}
                 Err(error) => return Err(error),
             }
         }
-        Err(AssetReaderError::NotFound(path.to_owned()))
+        if !found {
+            return Err(AssetReaderError::NotFound(path.to_owned()));
+        }
+        Ok(Box::new(futures_lite::stream::iter(entries)))
     }
 
     async fn is_directory<'a>(&'a self, path: &'a Path) -> Result<bool, AssetReaderError> {
@@ -528,6 +540,50 @@ mod tests {
         ]);
 
         assert!(block_on(overlay.read_meta(Path::new("shared.txt"))).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn directory_enumeration_unions_every_overlay_layer() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("keine-overlay-directory-{nonce}"));
+        let base = root.join("base");
+        let patch = root.join("patch");
+        fs::create_dir_all(base.join("gallery")).unwrap();
+        fs::create_dir_all(patch.join("gallery")).unwrap();
+        fs::write(base.join("gallery/base.webp"), "base").unwrap();
+        fs::write(base.join("gallery/shared.webp"), "base").unwrap();
+        fs::write(patch.join("gallery/patch.webp"), "patch").unwrap();
+        fs::write(patch.join("gallery/shared.webp"), "patch").unwrap();
+        let overlay = OverlayAssetReader::new(vec![
+            keine_loader::SourceMount::assets("test", "base", base)
+                .asset
+                .unwrap(),
+            keine_loader::SourceMount::assets("test", "patch", patch)
+                .asset
+                .unwrap(),
+        ]);
+
+        let entries = block_on(async {
+            let mut stream = overlay.read_directory(Path::new("gallery")).await.unwrap();
+            let mut entries = Vec::new();
+            while let Some(entry) = stream.next().await {
+                entries.push(entry);
+            }
+            entries
+        });
+
+        assert_eq!(
+            entries,
+            [
+                PathBuf::from("gallery/base.webp"),
+                PathBuf::from("gallery/patch.webp"),
+                PathBuf::from("gallery/shared.webp"),
+            ]
+        );
         let _ = fs::remove_dir_all(root);
     }
 

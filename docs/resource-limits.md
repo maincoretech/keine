@@ -95,11 +95,14 @@ seek/loop，WAV、MP3、Vorbis 和 FLAC 兼容格式会共享一份 encoded inpu
 | encoded payload | 512 MiB |
 | scenes | 1,000,000 |
 | actions | 100,000,000 |
-| 单个字符串或资源路径 | 16 MiB |
+| scene name、资源路径或 sub-scene reference | 每项 16 MiB |
 
-这些是编译产物 envelope 的防御边界，不是建议的工程规模。源脚本热重载会在独立 worker
-完成全量解析和 Program 构建，再在帧边界安装结果；大项目仍会占用后台 CPU，但不再把完整
-解析时间直接压进单帧预算。
+metadata/payload ceiling 在反序列化前生效；scene/resource/sub-scene 的逐项限制属于解码后的
+semantic validation。Action 内对白、Choice 文本和表达式等字符串由 512 MiB payload 总上限
+约束，不声称具有相同的逐字段 16 MiB 上限。这些是编译产物 envelope 的防御边界，不是建议
+的工程规模。`source_manifest_hash` 只记录构建 provenance，运行时完整性由 envelope CRC、
+Program fingerprint 与发行包认证负责。源脚本热重载会在独立 worker 完成全量解析和 Program
+构建，再在帧边界安装结果；大项目仍会占用后台 CPU，但不再把完整解析时间直接压进单帧预算。
 
 ## 4. Hakutaku 发行包
 

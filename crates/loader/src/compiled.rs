@@ -284,7 +284,10 @@ impl fmt::Display for CompiledError {
                 write!(f, "compiled program: action count {count} exceeds limit")
             }
             Self::StringTooLong => {
-                write!(f, "compiled program: string exceeds {MAX_STRING_LEN} bytes")
+                write!(
+                    f,
+                    "compiled program: reference string exceeds {MAX_STRING_LEN} bytes"
+                )
             }
             Self::DuplicateScene(name) => {
                 write!(f, "compiled program: duplicate scene {name:?}")

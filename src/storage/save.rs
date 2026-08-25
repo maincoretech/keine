@@ -59,6 +59,16 @@ impl SavePreviewCoordinator {
         generations.slots.clear();
     }
 
+    /// Begins replacing a slot's authoritative state by invalidating every
+    /// older capture and removing its derived sidecar before the state commit.
+    /// A crash can therefore leave a missing preview, but never a new state
+    /// paired with the previous state's image.
+    fn prepare_replacement(&self, project_root: &Path, slot: u32) -> Result<SavePreviewGeneration> {
+        let generation = self.invalidate_slot(slot);
+        remove_preview(project_root, slot)?;
+        Ok(generation)
+    }
+
     pub(crate) fn is_current(&self, slot: u32, generation: SavePreviewGeneration) -> bool {
         let generations = self.lock();
         current_preview_generation(&generations, slot) == generation
@@ -161,9 +171,7 @@ pub fn save_game(
     slot: u32,
     project_root: &Path,
 ) -> Result<()> {
-    if let PersistenceSafety::ActiveTransient(hazard) = state.persistence_safety() {
-        bail!("save is unavailable while {hazard:?} presentation is active");
-    }
+    ensure_saveable(state)?;
     let path = slot_path(store, project_root, slot);
     let parent = path.parent().context("save slot path has no parent")?;
     fs::create_dir_all(parent)
@@ -184,11 +192,37 @@ pub fn save_game(
     Ok(())
 }
 
-pub(crate) fn save_continuation(
+/// Replaces a save and its derived preview in crash-consistent order.
+///
+/// Preview removal deliberately precedes the authoritative state commit. If
+/// encoding or writing the state fails, the previous state remains usable
+/// without a preview; the inverse pairing would display stale information.
+pub(crate) fn save_game_replacing_preview(
+    store: &dyn StoreAdapter,
+    state: &State,
+    slot: u32,
+    project_root: &Path,
+    previews: &SavePreviewCoordinator,
+) -> Result<SavePreviewGeneration> {
+    ensure_saveable(state)?;
+    let generation = previews.prepare_replacement(project_root, slot)?;
+    save_game(store, state, slot, project_root)?;
+    Ok(generation)
+}
+
+fn ensure_saveable(state: &State) -> Result<()> {
+    if let PersistenceSafety::ActiveTransient(hazard) = state.persistence_safety() {
+        bail!("save is unavailable while {hazard:?} presentation is active");
+    }
+    Ok(())
+}
+
+pub(crate) fn save_continuation_replacing_preview(
     store: &dyn StoreAdapter,
     live: &State,
     checkpoint: &ContinuationCheckpoint,
     project_root: &Path,
+    previews: &SavePreviewCoordinator,
 ) -> Result<ContinuationSave> {
     let Some(state) = checkpoint.continuation(live) else {
         return Ok(ContinuationSave::Skipped);
@@ -197,7 +231,7 @@ pub(crate) fn save_continuation(
         ContinuationState::Live(state) => (state, ContinuationSave::Live),
         ContinuationState::Checkpoint(state) => (state, ContinuationSave::Checkpoint),
     };
-    save_game(store, state, QUICK_SAVE_SLOT, project_root)?;
+    save_game_replacing_preview(store, state, QUICK_SAVE_SLOT, project_root, previews)?;
     Ok(result)
 }
 
@@ -234,11 +268,12 @@ pub(crate) fn quick_save_on_exit(mut exits: MessageReader<AppExit>, context: Qui
     if exits.read().next().is_none() || context.state.ended {
         return;
     }
-    let result = save_continuation(
+    let result = save_continuation_replacing_preview(
         context.store.0.as_ref(),
         &context.state,
         &context.checkpoint,
         &context.project_root,
+        &context.previews,
     );
     match &result {
         Ok(ContinuationSave::Live) => log::info!("quick-saved current game before shutdown"),
@@ -249,15 +284,6 @@ pub(crate) fn quick_save_on_exit(mut exits: MessageReader<AppExit>, context: Qui
             log::warn!("kept the previous quick save because this session has no exact checkpoint")
         }
         Err(error) => log::error!("failed to quick-save during shutdown: {error:#}"),
-    }
-    if matches!(
-        result,
-        Ok(ContinuationSave::Live | ContinuationSave::Checkpoint)
-    ) {
-        context.previews.invalidate_slot(QUICK_SAVE_SLOT);
-        if let Err(error) = remove_preview(&context.project_root, QUICK_SAVE_SLOT) {
-            log::warn!("failed to invalidate stale quick-save preview: {error:#}");
-        }
     }
 }
 
@@ -490,10 +516,83 @@ mod tests {
     #[test]
     fn manual_save_rejects_active_transient_presentation() {
         let root = temp_root("unsafe-manual");
+        fs::create_dir_all(root.join("saves")).unwrap();
+        fs::write(preview_path(&root, 1), b"old-preview").unwrap();
+        let previews = SavePreviewCoordinator::default();
         let error = save_game(&KeineStore, &state_with_active_video(50), 1, &root).unwrap_err();
 
         assert!(format!("{error:#}").contains("Video"));
         assert_eq!(inspect_slot(&KeineStore, 1, &root), SlotStatus::Empty);
+        assert!(preview_path(&root, 1).exists());
+        assert!(
+            save_game_replacing_preview(
+                &KeineStore,
+                &state_with_active_video(50),
+                1,
+                &root,
+                &previews,
+            )
+            .is_err()
+        );
+        assert!(preview_path(&root, 1).exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn replacement_removes_the_derived_preview_before_encoding_state() {
+        struct OrderingStore(PathBuf);
+
+        impl StoreAdapter for OrderingStore {
+            fn name(&self) -> &'static str {
+                KeineStore.name()
+            }
+
+            fn extension(&self) -> &'static str {
+                KeineStore.extension()
+            }
+
+            fn maximum_encoded_size(&self) -> usize {
+                KeineStore.maximum_encoded_size()
+            }
+
+            fn encode(&self, state: &State) -> Result<Vec<u8>> {
+                assert!(
+                    !self.0.exists(),
+                    "preview must be gone before state encoding"
+                );
+                KeineStore.encode(state)
+            }
+
+            fn decode(&self, bytes: &[u8]) -> Result<SavedState> {
+                KeineStore.decode(bytes)
+            }
+
+            fn inspect_prefix(&self, prefix: &[u8]) -> StoreStatus {
+                KeineStore.inspect_prefix(prefix)
+            }
+        }
+
+        let root = temp_root("preview-before-state");
+        let preview = preview_path(&root, 3);
+        fs::create_dir_all(preview.parent().unwrap()).unwrap();
+        fs::write(&preview, b"old-preview").unwrap();
+        let previews = SavePreviewCoordinator::default();
+
+        let generation = save_game_replacing_preview(
+            &OrderingStore(preview.clone()),
+            &sample_state(),
+            3,
+            &root,
+            &previews,
+        )
+        .unwrap();
+
+        assert!(!preview.exists());
+        assert!(previews.is_current(3, generation));
+        assert!(matches!(
+            inspect_slot(&KeineStore, 3, &root),
+            SlotStatus::Ready(_)
+        ));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -509,11 +608,12 @@ mod tests {
             "RAM checkpoint capture must not touch storage"
         );
         assert_eq!(
-            save_continuation(
+            save_continuation_replacing_preview(
                 &KeineStore,
                 &state_with_active_video(50),
                 &checkpoint,
                 &root,
+                &SavePreviewCoordinator::default(),
             )
             .unwrap(),
             ContinuationSave::Checkpoint
@@ -533,13 +633,15 @@ mod tests {
         let root = temp_root("checkpoint-missing");
         let stable = sample_state();
         save_game(&KeineStore, &stable, QUICK_SAVE_SLOT, &root).unwrap();
+        fs::write(preview_path(&root, QUICK_SAVE_SLOT), b"old-preview").unwrap();
 
         assert_eq!(
-            save_continuation(
+            save_continuation_replacing_preview(
                 &KeineStore,
                 &state_with_active_video(50),
                 &ContinuationCheckpoint::default(),
                 &root,
+                &SavePreviewCoordinator::default(),
             )
             .unwrap(),
             ContinuationSave::Skipped
@@ -551,6 +653,7 @@ mod tests {
                 .cursor,
             stable.cursor
         );
+        assert!(preview_path(&root, QUICK_SAVE_SLOT).exists());
         let _ = fs::remove_dir_all(root);
     }
 

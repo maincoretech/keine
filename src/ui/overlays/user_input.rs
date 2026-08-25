@@ -414,17 +414,14 @@ pub(crate) fn handle(
                 continue;
             }
             match &event.logical_key {
-                Key::Character(value)
-                    if input.value_type != keine_core::InputValueType::Bool
-                        && (input.max_length == 0
-                            || input.value.chars().count() < input.max_length) =>
-                {
+                Key::Character(value) if input.value_type != keine_core::InputValueType::Bool => {
                     let accepted = input.value_type == keine_core::InputValueType::String
                         || value.chars().all(|character| {
                             character.is_ascii_digit() || ".-+".contains(character)
                         });
-                    if accepted {
-                        input.value.push_str(value);
+                    if accepted
+                        && append_with_scalar_limit(&mut input.value, value, input.max_length)
+                    {
                         input.error.clear();
                         changed = true;
                     }
@@ -439,12 +436,10 @@ pub(crate) fn handle(
                     input.error.clear();
                     changed = true;
                 }
-                Key::Space
-                    if input.value_type == keine_core::InputValueType::String
-                        && (input.max_length == 0
-                            || input.value.chars().count() < input.max_length) =>
-                {
-                    input.value.push(' ');
+                Key::Space if input.value_type == keine_core::InputValueType::String => {
+                    if !append_with_scalar_limit(&mut input.value, " ", input.max_length) {
+                        continue;
+                    }
                     input.error.clear();
                     changed = true;
                 }
@@ -470,6 +465,20 @@ pub(crate) fn handle(
     }
 }
 
+fn append_with_scalar_limit(value: &mut String, incoming: &str, maximum: usize) -> bool {
+    if incoming.is_empty() {
+        return false;
+    }
+    if maximum == 0 {
+        value.push_str(incoming);
+        return true;
+    }
+    let remaining = maximum.saturating_sub(value.chars().count());
+    let previous_bytes = value.len();
+    value.extend(incoming.chars().take(remaining));
+    value.len() != previous_bytes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -488,5 +497,24 @@ mod tests {
         blink.stop();
         assert_eq!(blink.alpha(20.0), 0.0);
         assert_eq!(blink.next_toggle_in(20.0), Duration::MAX);
+    }
+
+    #[test]
+    fn text_input_never_exceeds_its_unicode_scalar_limit() {
+        let mut value = "你".to_string();
+
+        assert!(append_with_scalar_limit(&mut value, "好🙂extra", 3));
+        assert_eq!(value, "你好🙂");
+        assert_eq!(value.chars().count(), 3);
+        assert!(!append_with_scalar_limit(&mut value, "!", 3));
+        assert_eq!(value, "你好🙂");
+    }
+
+    #[test]
+    fn zero_text_limit_remains_unbounded() {
+        let mut value = String::new();
+
+        assert!(append_with_scalar_limit(&mut value, "你好🙂", 0));
+        assert_eq!(value, "你好🙂");
     }
 }
