@@ -70,8 +70,18 @@ FS mount 保留平台快速路径，直接把真实文件路径交给播放器�
 - 每个回调游标直接持有 `AssetCursor`，Hakutaku 的 memory-constrained block cache
   继续限定解压内存；播放器结束后随 session 一起释放。
 
-测试 fixture 是 1 秒、320×240、H.264 Constrained Baseline + AAC、fast-start MP4。CI 会把它
-现场加密进临时 Hakutaku 包再真实解码；不包含项目素材或发行密钥。
+AVFoundation delegate 接受请求后，只在完整提供已知资源范围后调用 `finishLoading`；取消的
+请求停止读取并交回 AVFoundation，不会被误报为成功。读取缓冲固定为 256 KiB，遇到已知长度
+以内的意外 EOF 会作为 I/O 错误报告。该规则对应 Apple 对
+[`requestsAllDataToEndOfResource`](https://developer.apple.com/documentation/avfoundation/avassetresourceloadingdatarequest/requestsalldatatoendofresource)
+和 [`finishLoading`](https://developer.apple.com/documentation/avfoundation/avassetresourceloadingrequest/finishloading%28%29)
+的合同：增量提供到资源末尾、取消或错误为止，并明确结束已承担的成功请求。
+
+测试 fixture 全部是 320×240、24 fps 的 FFmpeg 生成素材，不包含项目素材或发行密钥：1 秒
+H.264 Baseline + AAC fast-start 基线、无音轨变体、4 秒单一 96-frame 长 GOP、尾部 `moov`
+变体，以及截断在 header 内的 128-byte 损坏输入。`dev/tools/video_fixtures.sh` 固定生成参数，
+`dev/fixtures/video/README.md` 记录每个文件的合同。验收工具会把每个输入现场加密进临时
+Hakutaku 包；有效素材完整解码到 EOF 并回卷，损坏输入则要求 FS 与 Hakutaku 都明确拒绝。
 
 ## 时钟与循环语义
 
@@ -87,9 +97,10 @@ session cancellation，并优先处理取消；因此暂停消费不会产生原
 session 清理也不会被阻塞发送卡住。所有 `Ready`、frame、end 和 error event 都经过同一
 可取消发送路径。
 
-自动化覆盖加密 Hakutaku 随机读取、音视频时长误差、三次循环单调性、暂停/恢复、无音频长时
-回退时钟，以及 macOS AVFoundation 的 FS/Hakutaku 首帧解码和 Core Video → Metal → wgpu
-实际复制。Windows 当前只发布并验证 x64；ARM64 原生构建暂缓，在具备明确发行需求和
+自动化覆盖加密 Hakutaku 随机读取、音视频时长误差、三次循环单调性、满队列取消、暂停/恢复、
+无音频长时回退时钟，以及 macOS AVFoundation 的 FS/Hakutaku 完整播放、回卷和 Core Video
+→ Metal → wgpu 实际复制。Linux FFmpeg ASan acceptance 还覆盖无音轨、长 GOP、尾部 `moov`
+与损坏 header。Windows 当前只发布并验证 x64；ARM64 原生构建暂缓，在具备明确发行需求和
 真实硬件验收条件后再恢复。
 
 `.github/workflows/media-safety.yml` 另外在媒体代码变化和每周计划任务中执行两层防御：
@@ -122,7 +133,6 @@ cargo +nightly fuzz run webp_decode fuzz/corpus/webp_decode \
 
 - Windows 可在真实播放与发行稳定后评估 `IMFMediaEngine` + `IMFByteStream`，以利用系统
   硬件解码；这不是消除明文临时文件的前置条件。
-- 增加损坏头、无音轨、长 GOP 与尾部 `moov` fixture，并验证中途取消和进程退出。
 - 发布检查可进一步拒绝非 fast-start 的大 MP4，减少远端或分块源的尾部探测。
 
 编译进客户端的资源密钥仍按既定离线游戏模型处理；自定义 byte source 的目标是消除

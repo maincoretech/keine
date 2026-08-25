@@ -21,8 +21,8 @@ use objc2_av_foundation::{
 };
 use objc2_core_video::{kCVPixelBufferMetalCompatibilityKey, kCVPixelFormatType_32BGRA};
 use objc2_foundation::{
-    NSData, NSDate, NSDictionary, NSNumber, NSObject, NSObjectProtocol, NSRunLoop, NSString, NSURL,
-    ns_string,
+    NSData, NSDate, NSDictionary, NSError, NSNumber, NSObject, NSObjectProtocol, NSRunLoop,
+    NSString, NSURL, ns_string,
 };
 
 use super::metal_frame::{
@@ -85,6 +85,11 @@ struct ResourceLoaderIvars {
     source: Arc<PreparedSource>,
 }
 
+enum ResourceLoadOutcome {
+    Completed,
+    Cancelled,
+}
+
 define_class!(
     // SAFETY: NSObject has no subclassing requirements. The only ivar is an
     // immutable, Send + Sync source factory used on one serial dispatch queue.
@@ -102,11 +107,14 @@ define_class!(
             _resource_loader: &AVAssetResourceLoader,
             request: &AVAssetResourceLoadingRequest,
         ) -> bool {
-            if let Err(error) = self.fulfill(request) {
-                log::error!("AVFoundation resource read failed: {error}");
-                unsafe { request.finishLoadingWithError(None) };
-            } else {
-                unsafe { request.finishLoading() };
+            match self.fulfill(request) {
+                Ok(ResourceLoadOutcome::Completed) => unsafe { request.finishLoading() },
+                Ok(ResourceLoadOutcome::Cancelled) => {}
+                Err(error) => {
+                    log::error!("AVFoundation resource read failed: {error}");
+                    let error = NSError::new(1, ns_string!("moe.maincore.keine.video-source"));
+                    unsafe { request.finishLoadingWithError(Some(&error)) };
+                }
             }
             true
         }
@@ -119,7 +127,10 @@ impl ResourceLoaderDelegate {
         unsafe { msg_send![super(this), init] }
     }
 
-    fn fulfill(&self, request: &AVAssetResourceLoadingRequest) -> Result<(), String> {
+    fn fulfill(
+        &self,
+        request: &AVAssetResourceLoadingRequest,
+    ) -> Result<ResourceLoadOutcome, String> {
         let source = &self.ivars().source;
         if let Some(info) = unsafe { request.contentInformationRequest() } {
             let allowed = unsafe { info.allowedContentTypes() };
@@ -138,7 +149,7 @@ impl ResourceLoaderDelegate {
             }
         }
         let Some(data_request) = (unsafe { request.dataRequest() }) else {
-            return Ok(());
+            return Ok(ResourceLoadOutcome::Completed);
         };
         let offset = unsafe { data_request.currentOffset() };
         let offset = u64::try_from(offset).map_err(|_| "negative video byte offset".to_owned())?;
@@ -162,13 +173,19 @@ impl ResourceLoaderDelegate {
                 .read(&mut buffer[..chunk])
                 .map_err(|error| error.to_string())?;
             if read == 0 {
-                break;
+                return Err(format!(
+                    "video source ended with {remaining} requested bytes remaining"
+                ));
             }
             let data = NSData::with_bytes(&buffer[..read]);
             unsafe { data_request.respondWithData(&data) };
             remaining -= read as u64;
         }
-        Ok(())
+        if unsafe { request.isCancelled() } {
+            Ok(ResourceLoadOutcome::Cancelled)
+        } else {
+            Ok(ResourceLoadOutcome::Completed)
+        }
     }
 }
 
@@ -476,7 +493,18 @@ impl NativePlayer {
         if status == AVPlayerItemStatus::Failed {
             let detail = unsafe { self.item.error() }.map_or_else(
                 || "unknown AVFoundation error".to_owned(),
-                |error| format!("{error:?}"),
+                |error| {
+                    let reason = error.localizedFailureReason().map_or_else(
+                        || "no failure reason".to_owned(),
+                        |reason| reason.to_string(),
+                    );
+                    format!(
+                        "{} (domain={}, code={}, reason={reason})",
+                        error.localizedDescription(),
+                        error.domain(),
+                        error.code()
+                    )
+                },
             );
             return Err(detail);
         }
@@ -554,18 +582,38 @@ pub(crate) fn validate_native_video(mounts: &[ContentMount], path: &Path) -> Res
     let source = Arc::new(prepare_source(mounts, path)?);
     let mut player = NativePlayer::open(
         source,
-        false,
+        true,
         0.0,
         VideoMemoryBudget::default().reservation(),
     )?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     let run_loop = NSRunLoop::currentRunLoop();
+    let mut decoded_first_cycle = false;
+    let mut restarted = false;
     while std::time::Instant::now() < deadline {
         if let Some(frame) = player.next_frame()? {
-            return validate_frame_import(frame);
+            if restarted {
+                validate_frame_import(frame)?;
+                return Ok(());
+            }
+            if !decoded_first_cycle {
+                validate_frame_import(frame)?;
+                decoded_first_cycle = true;
+            }
         }
-        player.playback_end()?;
+        let ended = player.playback_end().map_err(|error| {
+            format!(
+                "AVFoundation failed after first_frame={decoded_first_cycle}, rewound={restarted}: {error}"
+            )
+        })?;
+        if ended && !restarted {
+            if !decoded_first_cycle {
+                return Err("AVFoundation reached EOF without a decoded frame".to_owned());
+            }
+            player.restart();
+            restarted = true;
+        }
         run_loop.runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.01));
     }
-    Err("AVFoundation did not produce a decoded frame within 10 seconds".to_owned())
+    Err("AVFoundation did not complete decode and rewind within 20 seconds".to_owned())
 }

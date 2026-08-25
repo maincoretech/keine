@@ -89,13 +89,19 @@ jobs:
           host="$(rustc +nightly -vV | sed -n 's/^host: //p')"
           test -n "$host"
           echo "RUST_HOST=$host" >> "$GITHUB_ENV"
-      - name: Decode filesystem and Hakutaku media under ASan
+      - name: Exercise filesystem and Hakutaku media under ASan
         shell: bash
         env:
           ASAN_OPTIONS: detect_leaks=0:halt_on_error=1
           RUSTFLAGS: -Zsanitizer=address
           RUSTDOCFLAGS: -Zsanitizer=address
-        run: >-
-          cargo +nightly run -Zbuild-std --target "$RUST_HOST" --locked
-          --no-default-features --features publisher,video-ffmpeg
-          --bin keine-video-acceptance -- dev/fixtures/video/playback.mp4
+        run: |
+          cargo_args=(
+            +nightly run -Zbuild-std --target "$RUST_HOST" --locked
+            --no-default-features --features publisher,video-ffmpeg
+            --bin keine-video-acceptance --
+          )
+          for fixture in playback.mp4 no-audio.mp4 long-gop.mp4 tail-moov.mp4; do
+            cargo "${cargo_args[@]}" "dev/fixtures/video/$fixture"
+          done
+          cargo "${cargo_args[@]}" --expect-error dev/fixtures/video/damaged-header.mp4

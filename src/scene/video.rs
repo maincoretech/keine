@@ -1000,37 +1000,72 @@ mod ffmpeg_backend {
         mounts: &[ContentMount],
         path: &Path,
     ) -> Result<(), String> {
+        const ACCEPTANCE_CYCLES: usize = 3;
+        const MAX_FRAMES_PER_CYCLE: usize = 10_000;
+
         ffmpeg::init().map_err(|error| error.to_string())?;
         let source = Arc::new(prepare_source(mounts, path)?);
         let mut decoder = open_decoder(&source).map_err(|error| error.to_string())?;
         let has_audio = decoder.has_audio();
+        let duration = decoder.duration();
         let mut converter = None;
-        let mut decoded_frames = 0;
-        while decoded_frames < 60 {
-            let Some(frame) = decoder.decode_raw().map_err(|error| error.to_string())? else {
-                break;
-            };
-            let (_, _, expected_bytes) = video_frame_layout(frame.width(), frame.height())?;
-            let rgba = convert_to_rgba(&frame, &mut converter)?;
-            if rgba.len() != expected_bytes {
+        let mut last_timestamp = f32::NEG_INFINITY;
+        for cycle in 0..ACCEPTANCE_CYCLES {
+            let mut decoded_frames = 0;
+            while decoded_frames < MAX_FRAMES_PER_CYCLE {
+                let Some(frame) = decoder.decode_raw().map_err(|error| error.to_string())? else {
+                    break;
+                };
+                let (_, _, expected_bytes) = video_frame_layout(frame.width(), frame.height())?;
+                let rgba = convert_to_rgba(&frame, &mut converter)?;
+                if rgba.len() != expected_bytes {
+                    return Err(format!(
+                        "FFmpeg produced {} RGBA bytes for a {}-byte frame",
+                        rgba.len(),
+                        expected_bytes
+                    ));
+                }
+                if let Some(timestamp) = frame.timestamp() {
+                    let local_timestamp = timestamp as f64
+                        * f64::from(decoder.time_base().numerator())
+                        / f64::from(decoder.time_base().denominator());
+                    let timestamp = cycle as f64 * f64::from(duration) + local_timestamp.max(0.0);
+                    if !timestamp.is_finite() || timestamp + 0.001 < f64::from(last_timestamp) {
+                        return Err("FFmpeg produced a non-monotonic video timeline".to_owned());
+                    }
+                    last_timestamp = timestamp as f32;
+                }
+                decoded_frames += 1;
+            }
+            if decoded_frames == MAX_FRAMES_PER_CYCLE {
                 return Err(format!(
-                    "FFmpeg produced {} RGBA bytes for a {}-byte frame",
-                    rgba.len(),
-                    expected_bytes
+                    "FFmpeg acceptance exceeded {MAX_FRAMES_PER_CYCLE} frames before EOF"
                 ));
             }
-            decoded_frames += 1;
-        }
-        if decoded_frames == 0 {
-            return Err("FFmpeg did not produce a decoded video frame".to_owned());
+            validate_loop_cycle(decoded_frames > 0, Some(duration))?;
+            if cycle + 1 < ACCEPTANCE_CYCLES {
+                decoder
+                    .seek_to_start()
+                    .map_err(|error| format!("FFmpeg video rewind failed: {error}"))?;
+            }
         }
         if has_audio {
-            let samples = FfmpegAudioStream::open(source, false)
-                .map_err(|error| error.to_string())?
-                .take(4_096)
-                .count();
-            if samples == 0 {
+            let mut audio =
+                FfmpegAudioStream::open(source, false).map_err(|error| error.to_string())?;
+            if audio.by_ref().take(4_096).count() == 0 {
                 return Err("FFmpeg did not produce decoded audio samples".to_owned());
+            }
+            audio
+                .try_seek(Duration::from_secs_f32(duration / 2.0))
+                .map_err(|error| format!("FFmpeg audio seek failed: {error}"))?;
+            if audio.by_ref().take(4_096).count() == 0 {
+                return Err("FFmpeg did not decode audio after seeking".to_owned());
+            }
+            audio
+                .try_seek(Duration::ZERO)
+                .map_err(|error| format!("FFmpeg audio rewind failed: {error}"))?;
+            if audio.take(4_096).count() == 0 {
+                return Err("FFmpeg did not decode audio after rewinding".to_owned());
             }
         }
         Ok(())
@@ -1470,6 +1505,54 @@ mod ffmpeg_backend {
             let sample_rate = audio.sample_rate().get() as f32;
             let audio_duration = audio.count() as f32 / (sample_rate * 2.0);
             assert!((audio_duration - video_duration).abs() < 0.05);
+        }
+
+        #[test]
+        #[cfg(feature = "publisher")]
+        fn decoder_cancellation_unblocks_a_full_queue_and_joins() {
+            let temporary = Scratch::new();
+            let source_dir = temporary.path().join("source");
+            fs::create_dir(&source_dir).unwrap();
+            fs::copy(playback_fixture(), source_dir.join("playback.mp4")).unwrap();
+            let mount = ContentMount::new(ContentBackend::FileSystem(source_dir), "").unwrap();
+            let (sender, receiver) = bounded(1);
+            let (cancel_sender, cancel_receiver) = bounded(1);
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let worker_cancelled = Arc::clone(&cancelled);
+            let worker = thread::spawn(move || {
+                decode_video(
+                    vec![mount],
+                    "playback.mp4",
+                    false,
+                    worker_cancelled,
+                    sender,
+                    cancel_receiver,
+                    VideoMemoryBudget::default().reservation(),
+                )
+            });
+
+            assert!(matches!(
+                receiver.recv_timeout(Duration::from_secs(2)),
+                Ok(DecoderEvent::Ready { .. })
+            ));
+            let queue_deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while receiver.is_empty() && std::time::Instant::now() < queue_deadline {
+                thread::yield_now();
+            }
+            assert_eq!(receiver.len(), 1, "decoder did not fill its bounded queue");
+
+            cancelled.store(true, Ordering::Release);
+            cancel_sender.send(()).unwrap();
+            let (joined_sender, joined_receiver) = bounded(1);
+            thread::spawn(move || {
+                let _ = joined_sender.send(worker.join());
+            });
+            assert!(
+                joined_receiver
+                    .recv_timeout(Duration::from_secs(1))
+                    .expect("decoder did not stop within one second")
+                    .is_ok()
+            );
         }
 
         #[cfg(feature = "publisher")]

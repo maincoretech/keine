@@ -3,6 +3,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use keine_loader::ContentMount;
 
+#[derive(Clone, Copy)]
+enum ExpectedResult {
+    Decode,
+    Reject,
+}
+
 struct Scratch(PathBuf);
 
 impl Scratch {
@@ -78,14 +84,43 @@ fn backend_name() -> &'static str {
     "unavailable video backend"
 }
 
+fn validate_source(
+    label: &str,
+    mounts: &[ContentMount],
+    path: &Path,
+    expected: ExpectedResult,
+) -> anyhow::Result<()> {
+    match (expected, validate_backend(mounts, path)) {
+        (ExpectedResult::Decode, Ok(())) | (ExpectedResult::Reject, Err(_)) => Ok(()),
+        (ExpectedResult::Decode, Err(error)) => Err(anyhow::anyhow!("{label} source: {error}")),
+        (ExpectedResult::Reject, Ok(())) => Err(anyhow::anyhow!(
+            "{label} source unexpectedly decoded damaged media"
+        )),
+    }
+}
+
 fn main() -> std::process::ExitCode {
     use hakutaku_pack::{Identity, PackOptions, pack_directory};
     use keine_loader::{ContentBackend, HakutakuArchive, OpenPolicy};
 
-    let Some(fixture) = std::env::args_os().nth(1) else {
-        eprintln!("usage: keine-video-acceptance <video>");
+    let mut arguments = std::env::args_os().skip(1);
+    let Some(first) = arguments.next() else {
+        eprintln!("usage: keine-video-acceptance [--expect-error] <video>");
         return std::process::ExitCode::from(2);
     };
+    let (expected, fixture) = if first == "--expect-error" {
+        let Some(fixture) = arguments.next() else {
+            eprintln!("usage: keine-video-acceptance [--expect-error] <video>");
+            return std::process::ExitCode::from(2);
+        };
+        (ExpectedResult::Reject, fixture)
+    } else {
+        (ExpectedResult::Decode, first)
+    };
+    if arguments.next().is_some() {
+        eprintln!("usage: keine-video-acceptance [--expect-error] <video>");
+        return std::process::ExitCode::from(2);
+    }
     let fixture = Path::new(&fixture);
     let extension = fixture
         .extension()
@@ -99,8 +134,7 @@ fn main() -> std::process::ExitCode {
         std::fs::copy(fixture, source_dir.join(&logical_path))?;
 
         let filesystem = ContentMount::new(ContentBackend::FileSystem(source_dir.clone()), "")?;
-        validate_backend(&[filesystem], &logical_path)
-            .map_err(|error| anyhow::anyhow!("filesystem source: {error}"))?;
+        validate_source("filesystem", &[filesystem], &logical_path, expected)?;
 
         let release = temporary.path().join("release");
         let identity = Identity::generate()?;
@@ -112,13 +146,16 @@ fn main() -> std::process::ExitCode {
             OpenPolicy::TrustFirstRelease,
         )?;
         let mount = ContentMount::new(ContentBackend::Hakutaku(archive), "")?;
-        validate_backend(&[mount], &logical_path)
-            .map_err(|error| anyhow::anyhow!("Hakutaku source: {error}"))
+        validate_source("Hakutaku", &[mount], &logical_path, expected)
     })();
     match result {
         Ok(()) => {
+            let action = match expected {
+                ExpectedResult::Decode => "decoded",
+                ExpectedResult::Reject => "rejected",
+            };
             println!(
-                "{} decoded filesystem and Hakutaku video successfully",
+                "{} {action} filesystem and Hakutaku video as expected",
                 backend_name()
             );
             std::process::ExitCode::SUCCESS
