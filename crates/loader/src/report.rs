@@ -43,6 +43,13 @@ pub struct ResourceRef {
 }
 
 impl ResourceRef {
+    /// Whether runtime interpolation still has to resolve this reference.
+    /// Static validation and speculative loading must not treat the template
+    /// itself as an asset path; the resolved active state is loaded normally.
+    pub fn is_dynamic(&self) -> bool {
+        self.path.contains('{')
+    }
+
     /// Resolves an adapter-neutral resource reference through the active
     /// project's aliases and conventional fallback directories.
     pub fn resolved_path(&self, config: &GameConfig) -> String {
@@ -289,5 +296,17 @@ mod tests {
         );
 
         assert!(report.resources.is_empty());
+    }
+
+    #[test]
+    fn marks_interpolated_resources_without_resolving_them_as_files() {
+        let resource = ResourceRef {
+            path: "characters/{route}.webp".into(),
+            kind: ResourceKind::Figure,
+            action_index: 0,
+            span: SourceSpan { line: 1, column: 1 },
+        };
+
+        assert!(resource.is_dynamic());
     }
 }

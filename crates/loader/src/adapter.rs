@@ -130,10 +130,14 @@ impl LoaderRegistry {
     pub fn open_project(&self, root: &Path) -> Result<Option<AdaptedProject>> {
         for adapter in &self.projects {
             if adapter.detect(root)? {
-                return adapter
+                let project = adapter
                     .open(root)
-                    .with_context(|| format!("failed to open {} project", adapter.name()))
-                    .map(Some);
+                    .with_context(|| format!("failed to open {} project", adapter.name()))?;
+                project
+                    .config
+                    .validate()
+                    .with_context(|| format!("invalid {} project config", adapter.name()))?;
+                return Ok(Some(project));
             }
         }
         Ok(None)
@@ -214,7 +218,7 @@ impl LoaderRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ParseReport, ScriptLanguage, SourceMount};
+    use crate::{LoadedScene, ParseReport, ScriptLanguage, SourceMount};
 
     struct CustomFormat;
 
@@ -245,6 +249,51 @@ mod tests {
 
         fn parse(&self, _source: &str) -> ParseReport {
             ParseReport::default()
+        }
+    }
+
+    struct InvalidProject;
+
+    impl StructuredSceneLoader for InvalidProject {
+        fn name(&self) -> &'static str {
+            "invalid-project"
+        }
+
+        fn load(&self, _project_root: &Path) -> Result<Vec<LoadedScene>> {
+            Ok(Vec::new())
+        }
+
+        fn watch_roots(&self, _project_root: &Path) -> Vec<PathBuf> {
+            Vec::new()
+        }
+
+        fn accepts_change(&self, _path: &Path) -> bool {
+            false
+        }
+    }
+
+    impl ProjectAdapter for InvalidProject {
+        fn name(&self) -> &'static str {
+            "invalid-project"
+        }
+
+        fn detect(&self, _project_root: &Path) -> Result<bool> {
+            Ok(true)
+        }
+
+        fn open(&self, project_root: &Path) -> Result<AdaptedProject> {
+            let mut config = GameConfig::default();
+            config.layout.sprite_height = f32::NAN;
+            Ok(AdaptedProject {
+                format: "invalid-project",
+                root: project_root.to_owned(),
+                config,
+                content: ContentProject::with_structured_scenes(
+                    project_root.to_owned(),
+                    Vec::new(),
+                    Arc::new(InvalidProject),
+                ),
+            })
         }
     }
 
@@ -300,5 +349,15 @@ mod tests {
         assert!(registry.languages("webgal").is_ok());
         assert!(adapters.iter().any(|adapter| adapter.id() == "asset:fs"));
         assert!(registry.store("keine").is_ok());
+    }
+
+    #[test]
+    fn rejects_invalid_config_generated_by_a_project_adapter() {
+        let mut registry = LoaderRegistry::empty();
+        registry.register_project(InvalidProject);
+
+        let error = registry.open_project(Path::new("unused")).err().unwrap();
+        assert!(error.to_string().contains("invalid-project project config"));
+        assert!(format!("{error:#}").contains("layout.sprite_height"));
     }
 }

@@ -99,7 +99,7 @@ fn validate_scenes(
         }
         for resource in &scene.resources {
             let path = resource.resolved_path(config);
-            if path.contains('{') {
+            if resource.is_dynamic() {
                 continue;
             }
             if resource.kind == ResourceKind::Effect

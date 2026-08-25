@@ -90,6 +90,7 @@ impl Plugin for StoragePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<gallery::GallerySnapshot>();
         app.init_resource::<save::ContinuationCheckpoint>();
+        app.init_resource::<save::SavePreviewCoordinator>();
         app.add_systems(Startup, settings::load_settings);
         app.add_systems(
             Update,

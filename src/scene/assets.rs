@@ -307,6 +307,7 @@ fn build_asset_plan(
             .resources
             .iter()
             .filter(|resource| window.contains(&resource.action_index))
+            .filter(|resource| !resource.is_dynamic())
         {
             plan.warm_predicted(resource.resolved_path(config), resource.kind);
         }
@@ -319,6 +320,7 @@ fn build_asset_plan(
                     .resources
                     .iter()
                     .filter(|resource| resource.action_index <= LOOKAHEAD_ACTIONS)
+                    .filter(|resource| !resource.is_dynamic())
                 {
                     plan.warm_predicted(resource.resolved_path(config), resource.kind);
                 }
@@ -375,6 +377,7 @@ pub fn update_loading_gate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use keine_loader::{ResourceRef, SourceSpan};
 
     #[test]
     fn inactive_lut_does_not_enter_the_prefetch_identity() {
@@ -460,5 +463,34 @@ mod tests {
 
         assert!(plan.speculative_assets().next().is_none());
         assert!(plan.critical.is_empty());
+    }
+
+    #[test]
+    fn dynamic_resource_templates_do_not_enter_speculative_prefetch() {
+        let mut state = keine_core::State::new();
+        state.current_scene = "main".into();
+        state.ended = false;
+        let mut manifest = LocalAssetManifest::default();
+        manifest.insert(
+            "main".into(),
+            crate::runtime::resources::LocalSceneAssets {
+                resources: vec![ResourceRef {
+                    path: "characters/{route}.webp".into(),
+                    kind: ResourceKind::Figure,
+                    action_index: 1,
+                    span: SourceSpan { line: 1, column: 1 },
+                }],
+                ..default()
+            },
+        );
+
+        let plan = build_asset_plan(
+            &GameState(state),
+            &GameConfigResource(keine_core::config::GameConfig::default()),
+            &manifest,
+        );
+
+        assert!(plan.speculative_assets().next().is_none());
+        assert!(!plan.retains("characters/{route}.webp"));
     }
 }

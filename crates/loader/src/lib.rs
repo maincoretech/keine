@@ -27,7 +27,7 @@ pub use loader::ScriptWatcher;
 pub use loader::{
     ContentBackend, ContentFile, ContentMount, ContentProject, HakutakuArchive, LoadedScene,
     SourceMount, load_hakutaku_project, load_hakutaku_project_from_archive, load_project,
-    load_project_with, load_scenes, load_scenes_with,
+    load_project_with, load_scenes, load_scenes_with, load_startup_scenes_with,
 };
 pub use report::{
     Diagnostic, DiagnosticLevel, ParseReport, ResourceKind, ResourceRef, SceneRef, SourceSpan,

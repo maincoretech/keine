@@ -115,11 +115,17 @@ adapter:
 ## 运行时规则
 
 - `keine-loader` 从统一 `ContentMount` 合并脚本并生成最终 scene/resource manifest。
+- 打包项目的 compiled loader 在启动时把已解码 scene payload 一次性移交给
+  `Program`；交付后 loader 只保留内容 mount，不再长期保留第二棵 Action tree。
+  可热重载的目录/编辑器 loader 仍通过可重复的 `load()` 路径重建，不受这一所有权
+  优化影响。
 - `OverlayAssetReader` 只做 Bevy 接口桥接，按相反顺序查找资产，只消费通用
   `ContentMount/ContentFile`；metadata 查询先用 containment 选出实际提供资产的最高优先级
   layer，再只从同一 layer 读取 `.meta`，不会为选择 layer 额外打开资产文件。它不知道底层
   容器格式，也不会复制或落盘 archive entry。
-- 资源预取继续使用统一逻辑路径，因此来源数量不会增加业务层分支。
+- 资源预取继续使用统一逻辑路径，因此来源数量不会增加业务层分支。含 `{...}` 的
+  runtime interpolation 模板不会被静态检查、图片角色登记、迁移或 speculative
+  prefetch 当作字面文件；变量解析后的活动资源仍由正常场景同步路径加载。
 - FS 脚本/结构化工程在非默认 `hot-reload` feature 下由 `notify` 递归监控；`cargo dev`
   显式启用它，普通构建与发行引擎不解析、编译或链接文件监听后端。变更后先完整解析到临时
   Program，再一次替换，并从当前 scene 开头重建瞬态演出/交互状态。变量和图库等持久数据保留。

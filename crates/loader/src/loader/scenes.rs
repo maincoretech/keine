@@ -62,6 +62,22 @@ pub fn load_scenes_with(
     Ok(scenes)
 }
 
+/// Loads startup scenes while allowing a packaged loader to transfer its
+/// decoded action tree exactly once. Directory/editor loaders remain reusable
+/// for validation and hot reload.
+pub fn load_startup_scenes_with(
+    project: &ContentProject,
+    languages: &ScriptLanguageRegistry,
+) -> Result<Vec<LoadedScene>> {
+    if let Some(loader) = project.scene_loader() {
+        let mut scenes = loader.load_startup(&project.root)?;
+        validate_scene_references(&mut scenes);
+        validate_control_flow_references(&mut scenes);
+        return Ok(scenes);
+    }
+    load_scenes_with(project, languages)
+}
+
 fn load_directory(
     scripts: &ContentMount,
     languages: &ScriptLanguageRegistry,

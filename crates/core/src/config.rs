@@ -3,7 +3,56 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::{collections::HashMap, fs};
+use std::{collections::HashMap, error::Error, fmt, fs};
+
+use crate::DESIGN_HEIGHT;
+
+const MAX_FONT_SIZE: f32 = DESIGN_HEIGHT;
+const MAX_SPRITE_HEIGHT: f32 = DESIGN_HEIGHT * 4.0;
+
+#[derive(Debug)]
+pub enum GameConfigError {
+    Parse(noyalib::Error),
+    Validation(ConfigValidationError),
+}
+
+impl fmt::Display for GameConfigError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Parse(error) => error.fmt(formatter),
+            Self::Validation(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl Error for GameConfigError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Parse(error) => Some(error),
+            Self::Validation(error) => Some(error),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigValidationError {
+    field: &'static str,
+    requirement: &'static str,
+}
+
+impl ConfigValidationError {
+    fn new(field: &'static str, requirement: &'static str) -> Self {
+        Self { field, requirement }
+    }
+}
+
+impl fmt::Display for ConfigValidationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{} {}", self.field, self.requirement)
+    }
+}
+
+impl Error for ConfigValidationError {}
 
 /// Top-level game configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -433,8 +482,60 @@ impl Default for StyleConfig {
 
 impl GameConfig {
     /// Parse project configuration from an arbitrary content source.
-    pub fn from_yaml(yaml: &str) -> Result<Self, noyalib::Error> {
-        noyalib::from_str(yaml)
+    pub fn from_yaml(yaml: &str) -> Result<Self, GameConfigError> {
+        let config: Self = noyalib::from_str(yaml).map_err(GameConfigError::Parse)?;
+        config.validate().map_err(GameConfigError::Validation)?;
+        Ok(config)
+    }
+
+    /// Validates every numeric field once at the adapter/runtime boundary so
+    /// render, decode and timing consumers cannot disagree about malformed
+    /// values.
+    pub fn validate(&self) -> Result<(), ConfigValidationError> {
+        finite_f32("layout.anchor_offset", self.layout.anchor_offset)?;
+        positive_bounded_f32(
+            "layout.sprite_height",
+            self.layout.sprite_height,
+            MAX_SPRITE_HEIGHT,
+        )?;
+        finite_f32("layout.sprite_y_offset", self.layout.sprite_y_offset)?;
+        percent("layout.textbox_left", self.layout.textbox_left, false)?;
+        percent(
+            "layout.textbox_dodge_left",
+            self.layout.textbox_dodge_left,
+            false,
+        )?;
+        percent("layout.textbox_bottom", self.layout.textbox_bottom, false)?;
+        percent("layout.textbox_height", self.layout.textbox_height, true)?;
+        percent("layout.namebar_bottom", self.layout.namebar_bottom, false)?;
+
+        positive_bounded_f32("fonts.speaker_size", self.fonts.speaker_size, MAX_FONT_SIZE)?;
+        positive_bounded_f32(
+            "fonts.dialogue_size",
+            self.fonts.dialogue_size,
+            MAX_FONT_SIZE,
+        )?;
+        positive_bounded_f32("fonts.icon_size", self.fonts.icon_size, MAX_FONT_SIZE)?;
+        positive_bounded_f32("fonts.label_size", self.fonts.label_size, MAX_FONT_SIZE)?;
+
+        bounded_f32("styles.textbox_alpha", self.styles.textbox_alpha, 0.0, 1.0)?;
+        positive_f64("styles.typewriter_speed", self.styles.typewriter_speed)?;
+        non_negative_f64("styles.auto_delay", self.styles.auto_delay)?;
+        non_negative_f32(
+            "styles.text_reveal.duration",
+            self.styles.text_reveal.duration,
+        )?;
+        finite_f32(
+            "styles.text_reveal.distance",
+            self.styles.text_reveal.distance,
+        )?;
+        finite_f32("styles.text_reveal.scale", self.styles.text_reveal.scale)?;
+        finite_f32(
+            "styles.text_reveal.rotation",
+            self.styles.text_reveal.rotation,
+        )?;
+        non_negative_f32("styles.text_reveal.blur", self.styles.text_reveal.blur)?;
+        Ok(())
     }
 
     /// Load from a YAML file, falling back to defaults.
@@ -498,6 +599,93 @@ impl GameConfig {
     }
 }
 
+fn finite_f32(field: &'static str, value: f32) -> Result<(), ConfigValidationError> {
+    if value.is_finite() {
+        Ok(())
+    } else {
+        Err(ConfigValidationError::new(field, "must be finite"))
+    }
+}
+
+fn non_negative_f32(field: &'static str, value: f32) -> Result<(), ConfigValidationError> {
+    finite_f32(field, value)?;
+    if value >= 0.0 {
+        Ok(())
+    } else {
+        Err(ConfigValidationError::new(
+            field,
+            "must be greater than or equal to 0",
+        ))
+    }
+}
+
+fn bounded_f32(
+    field: &'static str,
+    value: f32,
+    minimum: f32,
+    maximum: f32,
+) -> Result<(), ConfigValidationError> {
+    finite_f32(field, value)?;
+    if value >= minimum && value <= maximum {
+        Ok(())
+    } else {
+        Err(ConfigValidationError::new(
+            field,
+            "is outside its valid range",
+        ))
+    }
+}
+
+fn positive_bounded_f32(
+    field: &'static str,
+    value: f32,
+    maximum: f32,
+) -> Result<(), ConfigValidationError> {
+    finite_f32(field, value)?;
+    if value > 0.0 && value <= maximum {
+        Ok(())
+    } else {
+        Err(ConfigValidationError::new(
+            field,
+            "must be greater than 0 and within its hard limit",
+        ))
+    }
+}
+
+fn percent(
+    field: &'static str,
+    value: f32,
+    strictly_positive: bool,
+) -> Result<(), ConfigValidationError> {
+    bounded_f32(field, value, 0.0, 100.0)?;
+    if strictly_positive && value == 0.0 {
+        return Err(ConfigValidationError::new(field, "must be greater than 0"));
+    }
+    Ok(())
+}
+
+fn positive_f64(field: &'static str, value: f64) -> Result<(), ConfigValidationError> {
+    if value.is_finite() && value > 0.0 {
+        Ok(())
+    } else {
+        Err(ConfigValidationError::new(
+            field,
+            "must be finite and greater than 0",
+        ))
+    }
+}
+
+fn non_negative_f64(field: &'static str, value: f64) -> Result<(), ConfigValidationError> {
+    if value.is_finite() && value >= 0.0 {
+        Ok(())
+    } else {
+        Err(ConfigValidationError::new(
+            field,
+            "must be finite and greater than or equal to 0",
+        ))
+    }
+}
+
 fn resolve_asset_path(
     aliases: &HashMap<String, String>,
     name: &str,
@@ -547,12 +735,49 @@ title: "Test Game"
 styles:
   typewriter_speed: 60.0
 "#;
-        let cfg: GameConfig = noyalib::from_str(yaml).unwrap();
+        let cfg = GameConfig::from_yaml(yaml).unwrap();
         assert_eq!(cfg.title, "Test Game");
         assert_eq!(cfg.styles.typewriter_speed, 60.0);
         assert!(!cfg.features.extra);
         assert_eq!(cfg.adapter, AdapterConfig::default());
         assert_eq!(cfg.layout.sprite_y_offset, 0.0);
+    }
+
+    #[test]
+    fn rejects_non_finite_and_semantically_invalid_numeric_fields() {
+        let mut config = GameConfig::default();
+        config.layout.sprite_height = f32::NAN;
+        assert_eq!(
+            config.validate().unwrap_err().to_string(),
+            "layout.sprite_height must be finite"
+        );
+
+        config = GameConfig::default();
+        config.styles.textbox_alpha = 1.1;
+        assert_eq!(
+            config.validate().unwrap_err().to_string(),
+            "styles.textbox_alpha is outside its valid range"
+        );
+
+        config = GameConfig::default();
+        config.styles.typewriter_speed = 0.0;
+        assert_eq!(
+            config.validate().unwrap_err().to_string(),
+            "styles.typewriter_speed must be finite and greater than 0"
+        );
+    }
+
+    #[test]
+    fn yaml_parsing_applies_the_same_semantic_validator() {
+        let error = GameConfig::from_yaml(
+            r#"
+layout:
+  sprite_height: -1
+"#,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().starts_with("layout.sprite_height "));
     }
 
     #[test]

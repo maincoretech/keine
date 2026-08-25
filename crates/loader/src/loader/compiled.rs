@@ -5,7 +5,7 @@
 //! projects always use this loader, so there is no runtime policy to resolve.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::compiled::{CompiledProgramV1, decode};
 use crate::{ContentProject, LoadedScene, SourceSpan, StructuredSceneLoader};
@@ -15,9 +15,9 @@ use anyhow::{Context, Result};
 pub(crate) const COMPILED_PROGRAM_PATH: &str = ".keine/compiled/program.bin";
 
 /// Scene source backed by a decoded compiled program.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct CompiledProgramSceneLoader {
-    program: CompiledProgramV1,
+    program: Mutex<Option<CompiledProgramV1>>,
 }
 
 impl CompiledProgramSceneLoader {
@@ -25,10 +25,31 @@ impl CompiledProgramSceneLoader {
         let decoded = decode(bytes, expected_schema)
             .map_err(|error| anyhow::anyhow!("invalid compiled program: {error}"))?;
         Ok(Self {
-            program: CompiledProgramV1 {
+            program: Mutex::new(Some(CompiledProgramV1 {
                 scenes: decoded.scenes,
-            },
+            })),
         })
+    }
+
+    fn loaded_scene(scene: crate::CompiledSceneV1) -> LoadedScene {
+        let action_count = scene.actions.len();
+        LoadedScene {
+            name: scene.name.clone(),
+            // Compiled artifacts carry no source positions; the synthetic
+            // path keeps diagnostics and editor seek code unchanged.
+            path: PathBuf::from(&scene.name),
+            actions: scene.actions,
+            action_spans: vec![SourceSpan { line: 1, column: 1 }; action_count],
+            diagnostics: Vec::new(),
+            resources: scene.resources,
+            sub_scenes: scene.sub_scenes,
+        }
+    }
+
+    fn lock_program(&self) -> std::sync::MutexGuard<'_, Option<CompiledProgramV1>> {
+        self.program
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -38,22 +59,24 @@ impl StructuredSceneLoader for CompiledProgramSceneLoader {
     }
 
     fn load(&self, _project_root: &Path) -> Result<Vec<LoadedScene>> {
-        Ok(self
-            .program
+        let program = self.lock_program();
+        let program = program
+            .as_ref()
+            .context("compiled startup scenes were already transferred")?;
+        Ok(program
             .scenes
             .iter()
-            .map(|scene| LoadedScene {
-                name: scene.name.clone(),
-                // Compiled artifacts carry no source positions; the synthetic
-                // path keeps diagnostics and editor seek code unchanged.
-                path: PathBuf::from(&scene.name),
-                actions: scene.actions.clone(),
-                action_spans: vec![SourceSpan { line: 1, column: 1 }; scene.actions.len()],
-                diagnostics: Vec::new(),
-                resources: scene.resources.clone(),
-                sub_scenes: scene.sub_scenes.clone(),
-            })
+            .cloned()
+            .map(Self::loaded_scene)
             .collect())
+    }
+
+    fn load_startup(&self, _project_root: &Path) -> Result<Vec<LoadedScene>> {
+        let program = self
+            .lock_program()
+            .take()
+            .context("compiled startup scenes were already transferred")?;
+        Ok(program.scenes.into_iter().map(Self::loaded_scene).collect())
     }
 
     fn watch_roots(&self, _project_root: &Path) -> Vec<PathBuf> {
@@ -145,6 +168,17 @@ mod tests {
         assert_eq!(scenes[0].actions.len(), 2);
         assert_eq!(scenes[0].action_spans.len(), 2);
         assert!(scenes[0].resources.is_empty());
+    }
+
+    #[test]
+    fn compiled_loader_transfers_and_releases_its_action_tree_once() {
+        let loader = compiled_loader();
+        let scenes = loader.load_startup(Path::new("/unused")).unwrap();
+
+        assert_eq!(scenes[0].actions.len(), 2);
+        assert!(loader.lock_program().is_none());
+        assert!(loader.load(Path::new("/unused")).is_err());
+        assert!(loader.load_startup(Path::new("/unused")).is_err());
     }
 
     #[test]

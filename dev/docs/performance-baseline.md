@@ -536,6 +536,34 @@ Compiled loading validates the envelope and content fingerprint directly over
 borrowed decoded scenes, avoiding a second 100k-action clone and label-index
 construction before the final `Program` takes ownership.
 
+### 2026-08-25 packaged compiled-program ownership transfer
+
+The earlier compiled benchmark moved decoded scenes directly and therefore did
+not model the packaged runtime loader, which retained its decoded payload while
+cloning every Action into `Program`. The benchmark now keeps an explicit former-
+path control beside the new one-shot startup transfer. Both decode the same
+100,000-Action artifact and build/fingerprint the same `Program` in the same
+Criterion process:
+
+```text
+cargo bench -p keine-loader --bench program_load -- decode_ --quick
+```
+
+Apple M5 Pro, release bench profile:
+
+| Benchmark | Median | Throughput | Change |
+| --- | ---: | ---: | ---: |
+| `decode_clone_and_build_100000` | 7.234 ms | 13.82 M actions/s | former packaged ownership model |
+| `decode_take_and_build_100000` | 4.784 ms | 20.90 M actions/s | time -33.9%, throughput +51.2% |
+
+The packaged loader now exposes a startup semantic, not a second public payload
+type: source/editor adapters default to their reusable load path, while the
+compiled adapter drains its decoded scenes exactly once. A unit contract checks
+that the loader holds no Action tree after transfer. This deterministic
+ownership assertion is the regression gate for settled duplication; platform
+RSS remains useful observational evidence but is not used as a flaky unit-test
+threshold.
+
 ## 2026-08-12 save preview encoding
 
 Quick Criterion comparison on the same Apple M5 Pro development machine:

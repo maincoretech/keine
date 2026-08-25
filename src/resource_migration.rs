@@ -275,6 +275,9 @@ fn collect_resource_replacement(
     aliases: &mut BTreeMap<String, BTreeSet<String>>,
     missing: &mut BTreeSet<String>,
 ) {
+    if resource.is_dynamic() {
+        return;
+    }
     let resolved = resource.resolved_path(config);
     let Some(rule) = matching_rule(Path::new(&resolved), rules) else {
         return;

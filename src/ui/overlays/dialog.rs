@@ -1,5 +1,5 @@
 // GlobalDialog — WebGAL-style confirmation overlay with title + two buttons.
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 use std::thread;
 
@@ -137,11 +137,15 @@ type ModalBackdropQuery<'w, 's> = Query<
 struct SavePreviewCapture {
     camera: Entity,
     slot: u32,
+    generation: crate::storage::save::SavePreviewGeneration,
 }
 
 struct SavePreviewJob {
     image: Image,
     path: PathBuf,
+    slot: u32,
+    generation: crate::storage::save::SavePreviewGeneration,
+    coordinator: crate::storage::save::SavePreviewCoordinator,
 }
 
 #[derive(Resource)]
@@ -173,11 +177,24 @@ impl Default for SavePreviewWriter {
 }
 
 impl SavePreviewWriter {
-    fn enqueue(&self, image: Image, path: PathBuf) {
+    fn enqueue(
+        &self,
+        image: Image,
+        path: PathBuf,
+        slot: u32,
+        generation: crate::storage::save::SavePreviewGeneration,
+        coordinator: &crate::storage::save::SavePreviewCoordinator,
+    ) {
         let Some(sender) = &self.sender else {
             return;
         };
-        match sender.try_send(SavePreviewJob { image, path }) {
+        match sender.try_send(SavePreviewJob {
+            image,
+            path,
+            slot,
+            generation,
+            coordinator: coordinator.clone(),
+        }) {
             Ok(()) => {}
             Err(TrySendError::Full(job)) => {
                 log::warn!("save preview queue is full; skipped {}", job.path.display())
@@ -209,7 +226,13 @@ fn write_save_preview(job: SavePreviewJob) {
             crate::scene::images::encode_preview(rgba, job.image.width(), job.image.height())
                 .map_err(anyhow::Error::from)
         })
-        .and_then(|bytes| crate::storage::write_atomically(&job.path, &bytes));
+        .and_then(|bytes| {
+            job.coordinator
+                .commit_if_current(job.slot, job.generation, || {
+                    crate::storage::write_atomically(&job.path, &bytes)
+                })
+                .map(|_| ())
+        });
     if let Err(error) = result {
         log::error!("failed to save slot preview: {error:#}");
     }
@@ -235,6 +258,7 @@ pub(crate) struct QuickSaveContext<'w, 's> {
     profile_writer: ResMut<'w, crate::storage::profile::ProfileWriter>,
     read_history_writer: ResMut<'w, crate::storage::read_history::ReadHistoryWriter>,
     gallery_snapshot: ResMut<'w, crate::storage::gallery::GallerySnapshot>,
+    preview_coordinator: Res<'w, crate::storage::save::SavePreviewCoordinator>,
     editor_sync: Option<Res<'w, crate::runtime::resources::EditorSyncSession>>,
 }
 
@@ -248,6 +272,7 @@ struct SavePreviewContext<'w, 's> {
     save_load: ResMut<'w, crate::ui::save_load::SaveLoadUi>,
     project_root: Res<'w, crate::runtime::resources::PersistenceRoot>,
     writer: Res<'w, SavePreviewWriter>,
+    coordinator: Res<'w, crate::storage::save::SavePreviewCoordinator>,
 }
 
 /// Spawn the dialog overlay + centred box when DialogRequest is present.
@@ -523,6 +548,11 @@ pub fn handle_dialog_click(
                         ));
                     }
                 } else {
+                    let generation = replace_preview_generation(
+                        &context.preview_coordinator,
+                        &context.project_root,
+                        QUICK_SAVE_SLOT,
+                    );
                     context.preview.state = Some(crate::ui::control_bar::QuickSaveSnapshot::from(
                         &**context.state,
                     ));
@@ -534,6 +564,7 @@ pub fn handle_dialog_click(
                             &mut context.images,
                             size,
                             QUICK_SAVE_SLOT,
+                            generation,
                         );
                     }
                 }
@@ -574,6 +605,13 @@ pub fn handle_dialog_click(
                         )
                     }
                     Ok(_) => {
+                        context.preview_coordinator.invalidate_slot(QUICK_SAVE_SLOT);
+                        if let Err(error) = crate::storage::save::remove_preview(
+                            &context.project_root,
+                            QUICK_SAVE_SLOT,
+                        ) {
+                            log::warn!("failed to invalidate stale quick-save preview: {error:#}");
+                        }
                         context.preview.state = continuation
                             .as_ref()
                             .map(crate::ui::control_bar::QuickSaveSnapshot::from);
@@ -608,10 +646,22 @@ pub fn handle_dialog_click(
                         ));
                     }
                 } else {
+                    let generation = replace_preview_generation(
+                        &context.preview_coordinator,
+                        &context.project_root,
+                        *slot,
+                    );
+                    context.save_previews.invalidate(*slot);
                     context.save_load.set_changed();
                     if let Ok(window) = context.windows.single() {
                         let size = Vec2::new(window.width(), window.height());
-                        capture_save_preview(&mut commands, &mut context.images, size, *slot);
+                        capture_save_preview(
+                            &mut commands,
+                            &mut context.images,
+                            size,
+                            *slot,
+                            generation,
+                        );
                     }
                 }
             }
@@ -638,6 +688,8 @@ pub fn handle_dialog_click(
                 }
             }
             DialogAction::DeleteSlot(slot) => {
+                context.preview_coordinator.invalidate_slot(*slot);
+                context.save_previews.invalidate(*slot);
                 match crate::storage::save::delete_game(
                     context.store.0.as_ref(),
                     *slot,
@@ -648,6 +700,7 @@ pub fn handle_dialog_click(
                 }
             }
             DialogAction::ClearSaves => {
+                context.preview_coordinator.invalidate_all();
                 if let Err(error) = crate::storage::save::clear_games(
                     context.store.0.as_ref(),
                     &context.project_root,
@@ -669,6 +722,7 @@ pub fn handle_dialog_click(
                 );
             }
             DialogAction::ClearAll => {
+                context.preview_coordinator.invalidate_all();
                 crate::ui::settings_panel::reset_runtime_settings(
                     &mut context.settings,
                     &mut context.toggles,
@@ -720,11 +774,24 @@ pub fn handle_dialog_click(
     }
 }
 
+pub(crate) fn replace_preview_generation(
+    coordinator: &crate::storage::save::SavePreviewCoordinator,
+    project_root: &Path,
+    slot: u32,
+) -> crate::storage::save::SavePreviewGeneration {
+    let generation = coordinator.invalidate_slot(slot);
+    if let Err(error) = crate::storage::save::remove_preview(project_root, slot) {
+        log::warn!("failed to remove stale slot preview: {error:#}");
+    }
+    generation
+}
+
 pub(crate) fn capture_save_preview(
     commands: &mut Commands,
     images: &mut Assets<Image>,
     size: Vec2,
     slot: u32,
+    generation: crate::storage::save::SavePreviewGeneration,
 ) {
     let extent = preview_extent(size);
     let target = images.add(Image::new_target_texture(
@@ -755,7 +822,11 @@ pub(crate) fn capture_save_preview(
     commands
         .spawn((
             Screenshot::image(target),
-            SavePreviewCapture { camera, slot },
+            SavePreviewCapture {
+                camera,
+                slot,
+                generation,
+            },
         ))
         .observe(store_save_preview);
 }
@@ -776,6 +847,12 @@ fn store_save_preview(capture: On<ScreenshotCaptured>, mut context: SavePreviewC
         return;
     };
     context.commands.entity(target.camera).despawn();
+    if !context
+        .coordinator
+        .is_current(target.slot, target.generation)
+    {
+        return;
+    }
     let mut display_image = capture.image.clone();
     display_image.asset_usage = bevy::asset::RenderAssetUsages::RENDER_WORLD;
     let captured = context.images.add(display_image);
@@ -786,7 +863,13 @@ fn store_save_preview(capture: On<ScreenshotCaptured>, mut context: SavePreviewC
         context.save_load.set_changed();
     }
     let path = crate::storage::save::preview_path(&context.project_root, target.slot);
-    context.writer.enqueue(capture.image.clone(), path);
+    context.writer.enqueue(
+        capture.image.clone(),
+        path,
+        target.slot,
+        target.generation,
+        &context.coordinator,
+    );
 }
 
 #[cfg(test)]

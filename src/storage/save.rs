@@ -1,9 +1,12 @@
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use anyhow::{Context, Result, bail};
 use bevy::app::AppExit;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use keine_core::{PersistenceSafety, State};
 use keine_loader::{SavedState, StoreAdapter, StoreStatus};
@@ -14,6 +17,77 @@ use crate::runtime::resources::{
 
 pub const QUICK_SAVE_SLOT: u32 = 0;
 pub use keine_loader::StoreMetadata as SaveMetadata;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SavePreviewGeneration {
+    epoch: u64,
+    slot: u64,
+}
+
+#[derive(Default)]
+struct SavePreviewGenerations {
+    epoch: u64,
+    slots: HashMap<u32, u64>,
+}
+
+/// Serializes preview invalidation with the worker's final atomic commit.
+/// Encoding remains outside the lock; only the short generation check and
+/// rename are coordinated, so delete/clear/import cannot be followed by a
+/// stale preview resurrection.
+#[derive(Resource, Clone, Default)]
+pub(crate) struct SavePreviewCoordinator(Arc<Mutex<SavePreviewGenerations>>);
+
+impl SavePreviewCoordinator {
+    fn lock(&self) -> MutexGuard<'_, SavePreviewGenerations> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(crate) fn invalidate_slot(&self, slot: u32) -> SavePreviewGeneration {
+        let mut generations = self.lock();
+        let epoch = generations.epoch;
+        let slot_generation = generations.slots.entry(slot).or_default();
+        *slot_generation = slot_generation.wrapping_add(1);
+        SavePreviewGeneration {
+            epoch,
+            slot: *slot_generation,
+        }
+    }
+
+    pub(crate) fn invalidate_all(&self) {
+        let mut generations = self.lock();
+        generations.epoch = generations.epoch.wrapping_add(1);
+        generations.slots.clear();
+    }
+
+    pub(crate) fn is_current(&self, slot: u32, generation: SavePreviewGeneration) -> bool {
+        let generations = self.lock();
+        current_preview_generation(&generations, slot) == generation
+    }
+
+    pub(crate) fn commit_if_current(
+        &self,
+        slot: u32,
+        generation: SavePreviewGeneration,
+        commit: impl FnOnce() -> Result<()>,
+    ) -> Result<bool> {
+        let generations = self.lock();
+        if current_preview_generation(&generations, slot) != generation {
+            return Ok(false);
+        }
+        commit()?;
+        Ok(true)
+    }
+}
+
+fn current_preview_generation(
+    generations: &SavePreviewGenerations,
+    slot: u32,
+) -> SavePreviewGeneration {
+    SavePreviewGeneration {
+        epoch: generations.epoch,
+        slot: generations.slots.get(&slot).copied().unwrap_or_default(),
+    }
+}
 
 /// Latest exact continuation point kept only in RAM.
 ///
@@ -142,22 +216,31 @@ pub fn load_game(store: &dyn StoreAdapter, slot: u32, project_root: &Path) -> Re
 /// Window close, the in-game EXIT action and the first terminal Ctrl+C all
 /// produce `AppExit`; title-screen exits intentionally preserve the previous
 /// quick save instead of replacing it with an empty title state.
-pub(crate) fn quick_save_on_exit(
-    mut exits: MessageReader<AppExit>,
-    state: Res<GameState>,
-    project_root: Res<PersistenceRoot>,
-    store: Res<StoreCodec>,
-    checkpoint: Res<ContinuationCheckpoint>,
-    editor_sync: Option<Res<EditorSyncSession>>,
-    persistence_disabled: Option<Res<PersistenceDisabled>>,
-) {
-    if editor_sync.is_some() || persistence_disabled.is_some() {
+#[derive(SystemParam)]
+pub(crate) struct QuickSaveExitContext<'w> {
+    state: Res<'w, GameState>,
+    project_root: Res<'w, PersistenceRoot>,
+    store: Res<'w, StoreCodec>,
+    checkpoint: Res<'w, ContinuationCheckpoint>,
+    previews: Res<'w, SavePreviewCoordinator>,
+    editor_sync: Option<Res<'w, EditorSyncSession>>,
+    persistence_disabled: Option<Res<'w, PersistenceDisabled>>,
+}
+
+pub(crate) fn quick_save_on_exit(mut exits: MessageReader<AppExit>, context: QuickSaveExitContext) {
+    if context.editor_sync.is_some() || context.persistence_disabled.is_some() {
         return;
     }
-    if exits.read().next().is_none() || state.ended {
+    if exits.read().next().is_none() || context.state.ended {
         return;
     }
-    match save_continuation(store.0.as_ref(), &state, &checkpoint, &project_root) {
+    let result = save_continuation(
+        context.store.0.as_ref(),
+        &context.state,
+        &context.checkpoint,
+        &context.project_root,
+    );
+    match &result {
         Ok(ContinuationSave::Live) => log::info!("quick-saved current game before shutdown"),
         Ok(ContinuationSave::Checkpoint) => {
             log::info!("quick-saved the last exact checkpoint before shutdown")
@@ -166,6 +249,15 @@ pub(crate) fn quick_save_on_exit(
             log::warn!("kept the previous quick save because this session has no exact checkpoint")
         }
         Err(error) => log::error!("failed to quick-save during shutdown: {error:#}"),
+    }
+    if matches!(
+        result,
+        Ok(ContinuationSave::Live | ContinuationSave::Checkpoint)
+    ) {
+        context.previews.invalidate_slot(QUICK_SAVE_SLOT);
+        if let Err(error) = remove_preview(&context.project_root, QUICK_SAVE_SLOT) {
+            log::warn!("failed to invalidate stale quick-save preview: {error:#}");
+        }
     }
 }
 
@@ -185,6 +277,17 @@ pub fn preview_path(project_root: &Path, slot: u32) -> PathBuf {
     project_root.join("saves").join(format!("slot_{slot}.webp"))
 }
 
+pub(crate) fn remove_preview(project_root: &Path, slot: u32) -> Result<()> {
+    let path = preview_path(project_root, slot);
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => {
+            Err(error).with_context(|| format!("failed to delete preview {}", path.display()))
+        }
+    }
+}
+
 /// Reads a save-card sidecar under the same compressed-input ceiling as every
 /// other WebP path. Keeping this beside [`preview_path`] prevents UI callers
 /// from accidentally allocating an untrusted sidecar before the decoder can
@@ -196,18 +299,15 @@ pub(crate) fn read_preview(project_root: &Path, slot: u32) -> Result<Vec<u8>> {
 }
 
 pub fn delete_game(store: &dyn StoreAdapter, slot: u32, project_root: &Path) -> Result<()> {
-    for path in [
-        slot_path(store, project_root, slot),
-        preview_path(project_root, slot),
-    ] {
-        match fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(error).with_context(|| format!("failed to delete {}", path.display()));
-            }
+    let path = slot_path(store, project_root, slot);
+    match fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to delete {}", path.display()));
         }
     }
+    remove_preview(project_root, slot)?;
     log::info!("deleted slot {slot}");
     Ok(())
 }
@@ -487,16 +587,85 @@ mod tests {
     }
 
     #[test]
+    fn invalidated_preview_job_cannot_resurrect_a_deleted_slot() {
+        let root = temp_root("preview-delete-race");
+        let coordinator = SavePreviewCoordinator::default();
+        let stale = coordinator.invalidate_slot(4);
+        coordinator.invalidate_slot(4);
+        delete_game(&KeineStore, 4, &root).unwrap();
+
+        let committed = coordinator
+            .commit_if_current(4, stale, || {
+                fs::create_dir_all(root.join("saves"))?;
+                fs::write(preview_path(&root, 4), b"stale")?;
+                Ok(())
+            })
+            .unwrap();
+
+        assert!(!committed);
+        assert!(!preview_path(&root, 4).exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn queue_loss_leaves_no_preview_from_the_previous_save() {
+        let root = temp_root("preview-queue-loss");
+        let coordinator = SavePreviewCoordinator::default();
+        let old = coordinator.invalidate_slot(4);
+        assert!(
+            coordinator
+                .commit_if_current(4, old, || {
+                    fs::create_dir_all(root.join("saves"))?;
+                    fs::write(preview_path(&root, 4), b"old")?;
+                    Ok(())
+                })
+                .unwrap()
+        );
+
+        coordinator.invalidate_slot(4);
+        remove_preview(&root, 4).unwrap();
+
+        assert!(!preview_path(&root, 4).exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn import_generation_invalidates_every_pending_slot() {
+        let root = temp_root("preview-import-race");
+        let coordinator = SavePreviewCoordinator::default();
+        let first = coordinator.invalidate_slot(1);
+        let second = coordinator.invalidate_slot(2);
+        coordinator.invalidate_all();
+
+        for (slot, generation) in [(1, first), (2, second)] {
+            assert!(
+                !coordinator
+                    .commit_if_current(slot, generation, || {
+                        fs::create_dir_all(root.join("saves"))?;
+                        fs::write(preview_path(&root, slot), b"stale")?;
+                        Ok(())
+                    })
+                    .unwrap()
+            );
+        }
+        assert!(!root.join("saves").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn graceful_exit_quick_saves_only_during_gameplay() {
         let root = temp_root("exit");
         let mut state = sample_state();
         state.ended = false;
+        fs::create_dir_all(root.join("saves")).unwrap();
+        fs::write(preview_path(&root, QUICK_SAVE_SLOT), b"old-preview").unwrap();
         let mut app = App::new();
         app.add_message::<AppExit>()
             .insert_resource(GameState(state.clone()))
             .insert_resource(ContinuationCheckpoint::default())
             .insert_resource(PersistenceRoot(root.clone()))
             .insert_resource(StoreCodec(Arc::new(KeineStore)))
+            .init_resource::<SavePreviewCoordinator>()
             .add_systems(Last, quick_save_on_exit);
 
         app.world_mut().write_message(AppExit::Success);
@@ -508,6 +677,7 @@ mod tests {
                 .snapshot(),
             &state
         );
+        assert!(!preview_path(&root, QUICK_SAVE_SLOT).exists());
 
         app.world_mut().resource_mut::<GameState>().ended = true;
         fs::remove_file(slot_path(&KeineStore, &root, QUICK_SAVE_SLOT)).unwrap();
@@ -531,6 +701,7 @@ mod tests {
             .insert_resource(ContinuationCheckpoint::default())
             .insert_resource(PersistenceRoot(root.clone()))
             .insert_resource(StoreCodec(Arc::new(KeineStore)))
+            .init_resource::<SavePreviewCoordinator>()
             .init_resource::<EditorSyncSession>()
             .add_systems(Last, quick_save_on_exit);
 

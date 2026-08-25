@@ -100,6 +100,11 @@ impl SavePreviewCache {
         self.ready.clear();
         self.pending.clear();
     }
+
+    pub(crate) fn invalidate(&mut self, slot: u32) {
+        self.ready.remove(&slot);
+        self.pending.remove(&slot);
+    }
 }
 
 struct SaveContentContext<'a> {
@@ -313,6 +318,8 @@ pub(crate) struct SaveSlotContext<'w, 's> {
     images: ResMut<'w, Assets<Image>>,
     commands: Commands<'w, 's>,
     settings: Res<'w, crate::storage::settings::RuntimeSettings>,
+    preview_coordinator: Res<'w, crate::storage::save::SavePreviewCoordinator>,
+    save_previews: ResMut<'w, SavePreviewCache>,
 }
 
 #[derive(SystemParam)]
@@ -1299,12 +1306,19 @@ pub fn handle_save_load_slot(
         ) {
             Ok(()) => {
                 ui.set_changed();
+                context.save_previews.invalidate(slot);
+                let generation = crate::ui::dialog::replace_preview_generation(
+                    &context.preview_coordinator,
+                    &context.project_root,
+                    slot,
+                );
                 if let Ok(window) = context.windows.single() {
                     crate::ui::dialog::capture_save_preview(
                         &mut context.commands,
                         &mut context.images,
                         Vec2::new(window.width(), window.height()),
                         slot,
+                        generation,
                     );
                 }
             }

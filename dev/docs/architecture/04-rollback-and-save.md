@@ -154,6 +154,13 @@ saves/
 编码；不回读全窗口纹理，也不在渲染线程缩放或编码。存档页通过 `IoTaskPool` 按当前页
 异步解码，强 `Handle<Image>` 缓存仅保留十个可见槽位。
 
+每次 state 成功替换、删除槽位、清空数据或导入备份都会推进预览 generation。截图与
+后台编码任务携带其 slot generation，最终原子提交前再核对；过期任务会被丢弃，不能在
+delete/CLEAR ALL/import 后重新写回 sidecar。新 state 写入后旧 preview 立即删除，因此
+队列满或编码失败表现为“暂时没有预览”，而不是显示另一版本存档的旧图。返回标题或
+正常退出只写 continuation、不生成截图时，同样删除 slot 0 的旧 preview。generation
+只协调内存状态与最终提交，不增加周期性存档或磁盘同步。
+
 删除槽位会同时删除 state 与 preview；只清除游戏槽会保留 settings/profile/read
 history/gallery，而 UI 的 CLEAR ALL 会删除整个 `saves/` 数据目录并同步清理内存
 writer cache。

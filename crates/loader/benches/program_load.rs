@@ -102,7 +102,7 @@ fn compiled_fixture() -> &'static [u8] {
     })
 }
 
-fn decode_and_build() -> u64 {
+fn decode_take_and_build() -> u64 {
     let decoded = decode(compiled_fixture(), IR_SCHEMA_VERSION).expect("decode compiled fixture");
     Program::from_scenes(
         decoded
@@ -113,14 +113,30 @@ fn decode_and_build() -> u64 {
     .fingerprint()
 }
 
+/// Models the former packaged startup path: keep the decoded artifact alive
+/// while cloning its complete action tree into the runtime Program.
+fn decode_clone_and_build() -> u64 {
+    let decoded = decode(compiled_fixture(), IR_SCHEMA_VERSION).expect("decode compiled fixture");
+    Program::from_scenes(
+        decoded
+            .scenes
+            .iter()
+            .map(|scene| (scene.name.clone(), scene.actions.clone())),
+    )
+    .fingerprint()
+}
+
 fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("program_load");
     group.throughput(Throughput::Elements(ACTION_COUNT as u64));
     group.bench_function(format!("parse_and_build_{ACTION_COUNT}"), |b| {
         b.iter(|| black_box(load_and_build()));
     });
-    group.bench_function(format!("decode_and_build_{ACTION_COUNT}"), |b| {
-        b.iter(|| black_box(decode_and_build()));
+    group.bench_function(format!("decode_clone_and_build_{ACTION_COUNT}"), |b| {
+        b.iter(|| black_box(decode_clone_and_build()));
+    });
+    group.bench_function(format!("decode_take_and_build_{ACTION_COUNT}"), |b| {
+        b.iter(|| black_box(decode_take_and_build()));
     });
     group.bench_function(format!("frame_apply_prebuilt_{ACTION_COUNT}"), |b| {
         b.iter_batched(

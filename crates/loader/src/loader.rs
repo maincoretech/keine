@@ -14,7 +14,7 @@ use keine_core::config::{AssetSourceConfig, GameConfig};
 use crate::{LoaderRegistry, StructuredSceneLoader};
 
 pub(crate) use compiled::{COMPILED_PROGRAM_PATH, with_compiled_program};
-pub use scenes::{LoadedScene, load_scenes, load_scenes_with};
+pub use scenes::{LoadedScene, load_scenes, load_scenes_with, load_startup_scenes_with};
 pub use source::{ContentBackend, ContentFile, ContentMount, HakutakuArchive};
 #[cfg(feature = "hot-reload")]
 pub use watcher::ScriptWatcher;
@@ -151,9 +151,14 @@ impl ContentProject {
     }
 
     pub fn reload_config(&self) -> Result<Option<GameConfig>> {
-        self.scene_loader
+        let config = self
+            .scene_loader
             .as_ref()
-            .map_or(Ok(None), |loader| loader.load_config(&self.root))
+            .map_or(Ok(None), |loader| loader.load_config(&self.root))?;
+        if let Some(config) = &config {
+            config.validate()?;
+        }
+        Ok(config)
     }
 
     pub fn contains_asset(&self, path: &Path) -> bool {
@@ -259,9 +264,36 @@ pub fn load_hakutaku_project_from_archive(
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
+
+    struct InvalidReloadConfig;
+
+    impl StructuredSceneLoader for InvalidReloadConfig {
+        fn name(&self) -> &'static str {
+            "invalid-reload"
+        }
+
+        fn load(&self, _project_root: &Path) -> Result<Vec<LoadedScene>> {
+            Ok(Vec::new())
+        }
+
+        fn watch_roots(&self, _project_root: &Path) -> Vec<PathBuf> {
+            Vec::new()
+        }
+
+        fn accepts_change(&self, _path: &Path) -> bool {
+            false
+        }
+
+        fn load_config(&self, _project_root: &Path) -> Result<Option<GameConfig>> {
+            let mut config = GameConfig::default();
+            config.styles.textbox_alpha = f32::INFINITY;
+            Ok(Some(config))
+        }
+    }
 
     #[test]
     fn mounts_ordered_filesystem_layers() {
@@ -302,6 +334,18 @@ mod tests {
             format: "missing".into(),
         };
         assert!(load_project(Path::new("."), &[source]).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_adapter_config_before_hot_reload_can_apply_it() {
+        let project = ContentProject::with_structured_scenes(
+            PathBuf::from("unused"),
+            Vec::new(),
+            Arc::new(InvalidReloadConfig),
+        );
+
+        let error = project.reload_config().unwrap_err();
+        assert!(error.to_string().contains("styles.textbox_alpha"));
     }
 
     #[test]

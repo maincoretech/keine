@@ -157,6 +157,10 @@ assets:
 
 设计空间固定为 1920×1080：
 
+- 原生 YAML 与 project adapter 生成的 `GameConfig` 在进入 runtime 前使用同一个
+  semantic validator；hot reload 也先验证新配置，失败时不替换当前配置。所有数值必须
+  finite；percent/alpha 按实际范围校验；`sprite_height`、字体大小、时间与速度分别应用
+  正值、上限或非负约束。允许负值的设计像素 offset 仅要求 finite；
 - 背景建议源图 ≤ 4K 并尽量使用 WebP，避免首次切换大图卡顿。自定义 WebP loader
   接受最多 64 MiB 压缩输入、64 Mi pixels 源图和 16 Mi pixels 输出；背景角色的解码
   目标不超过 1920×1080，别名或自定义目录不会绕过该策略；

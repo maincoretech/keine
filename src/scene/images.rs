@@ -109,7 +109,9 @@ impl ImageRoleRegistry {
         );
         for scene in manifest.values() {
             for resource in &scene.resources {
-                if let Some(role) = ImageRole::for_resource(resource.kind) {
+                if !resource.is_dynamic()
+                    && let Some(role) = ImageRole::for_resource(resource.kind)
+                {
                     self.register(resource.resolved_path(config), role);
                 }
             }

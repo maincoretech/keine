@@ -1963,6 +1963,7 @@ pub(crate) struct SettingActionContext<'w, 's> {
     state: ResMut<'w, crate::runtime::resources::GameState>,
     quick_preview: ResMut<'w, crate::ui::control_bar::QuickSavePreview>,
     save_previews: ResMut<'w, crate::ui::save_load::SavePreviewCache>,
+    preview_coordinator: Res<'w, crate::storage::save::SavePreviewCoordinator>,
     title_entities: TitleEntityQuery<'w, 's>,
     settings_roots: SettingsLocaleRootQuery<'w, 's>,
     locale_transition: ResMut<'w, SettingsLocaleTransition>,
@@ -1980,6 +1981,7 @@ pub fn handle_setting_action(context: SettingActionContext) {
         mut state,
         mut quick_preview,
         mut save_previews,
+        preview_coordinator,
         title_entities,
         mut settings_roots,
         mut locale_transition,
@@ -2058,6 +2060,7 @@ pub fn handle_setting_action(context: SettingActionContext) {
             else {
                 return;
             };
+            preview_coordinator.invalidate_all();
             if let Err(error) = crate::storage::backup::import(&project_root, &path) {
                 log::error!("failed to import save data: {error:#}");
                 return;

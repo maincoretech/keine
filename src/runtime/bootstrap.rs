@@ -25,7 +25,7 @@ use keine_core::{Action, DESIGN_HEIGHT, DESIGN_WIDTH, Program, State};
 use keine_loader::ScriptWatcher;
 use keine_loader::{
     ContentProject, DiagnosticLevel, LoaderRegistry, ResourceKind, load_project_with,
-    load_scenes_with,
+    load_scenes_with, load_startup_scenes_with,
 };
 
 use crate::render::blur::{BlurCamera, BlurPlugin, DialogCamera, SceneBlurCamera, UiBlurCamera};
@@ -1360,7 +1360,7 @@ fn check_project(
         }
         for resource in &scene.resources {
             let path = resource.resolved_path(config);
-            if path.contains('{') {
+            if resource.is_dynamic() {
                 continue;
             }
             if resource.kind == ResourceKind::Effect
@@ -1486,7 +1486,7 @@ fn bootstrap_project(
     let mut scene_count = 0;
     let mut action_count = 0;
     let mut manifest = LocalAssetManifest::default();
-    match load_scenes_with(&content, &languages) {
+    match load_startup_scenes_with(&content, &languages) {
         Ok(scenes) => {
             let mut program_scenes = Vec::with_capacity(scenes.len());
             for scene in scenes {

@@ -44,8 +44,10 @@ Kēne 的自定义 WebP loader 在分配输出前应用以下硬上限：
 | 解码/缩放后像素数 | 16 Mi pixels（`16,777,216`） |
 | `layout.sprite_height` | 设计高度的 4 倍，即 `4,320` 逻辑像素 |
 
-零尺寸、非有限或非正的 `sprite_height` 回退为 1080；更大的值截到 4320。尺寸和
-RGBA buffer 大小使用 checked arithmetic，并在写入前进行 fallible allocation。
+项目配置在进入 runtime 前拒绝零尺寸、非有限、非正或超过 4320 的
+`sprite_height`。WebP loader 内部仍保留回退/截断作为防御，确保未来非配置调用者也
+不能绕过分配上限。尺寸和 RGBA buffer 大小使用 checked arithmetic，并在写入前进行
+fallible allocation。
 
 这些限制只覆盖自定义 WebP 路径。PNG/JPEG 仍由 Bevy 通用 loader 处理，目前没有同一套
 Kēne 压缩字节/像素硬上限。

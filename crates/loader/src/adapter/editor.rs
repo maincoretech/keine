@@ -43,6 +43,14 @@ pub struct ProjectInitialState {
 pub trait StructuredSceneLoader: Send + Sync {
     fn name(&self) -> &'static str;
     fn load(&self, project_root: &Path) -> Result<Vec<LoadedScene>>;
+
+    /// Loads the initial runtime program. Reloadable source adapters reuse
+    /// [`Self::load`]; packaged adapters may transfer a decoded payload once
+    /// instead of cloning it into a second action tree.
+    fn load_startup(&self, project_root: &Path) -> Result<Vec<LoadedScene>> {
+        self.load(project_root)
+    }
+
     fn watch_roots(&self, project_root: &Path) -> Vec<PathBuf>;
     fn accepts_change(&self, path: &Path) -> bool;
 
