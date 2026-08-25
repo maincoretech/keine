@@ -11,6 +11,11 @@ WebP and Ogg Opus are the canonical production image/audio formats. Hakutaku v1 
 packaged-project format. Compatibility formats may remain available for development, but must
 not silently expand a shipping build.
 
+WebGAL support is a frozen compatibility layer, not an active parity target. Preserve its current
+documented behavior, but add no new WebGAL semantics unless a future product decision explicitly
+reopens the scope. Maintenance is limited to security, crashes, data loss, and clear regressions
+caused by Kēne changes.
+
 ## Architectural constraints
 
 - Dependencies flow `keine-core <- keine-loader <- keine`; core and loader must remain Bevy-free.

@@ -68,7 +68,7 @@ cargo clippy --workspace --all-targets
 
 ## Dependencies on other tasks
 
-None. T07 waits for its rendering interfaces and evidence to stabilize.
+None.
 
 ## Completion report
 

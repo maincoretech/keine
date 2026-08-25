@@ -1,10 +1,13 @@
 # 不支持项与兼容边界
 
+> WebGAL 兼容范围已经冻结。下列项目用于说明现有工程的迁移风险，不是待实现清单。
+> 除非未来明确重新开启兼容开发，否则这些差距不会继续补齐。
+
 ## 明确不支持的 3 个官方命令
 
 这三个关键词在 loader 中作为 WebGAL 保留字单独识别。它们会产生带行列信息的 warning，然后被跳过；不会进入 core，也不会被未知命令回退策略误显示成普通对话。
 
-| 命令 | WebGAL 行为 | keine 当前行为 | 缺失能力 | 引入前置条件 |
+| 命令 | WebGAL 行为 | keine 当前行为 | 缺失能力 | 若未来重新启用时的前置条件 |
 |---|---|---|---|---|
 | `showVars` | 在对话框输出本地/全局变量 | warning + skip | 调试展示 Action、稳定排序/格式、敏感值策略 | 定义仅开发模式还是发布版可用；编写确定性格式测试 |
 | `applyStyle` | 把 WebGAL UI 模板样式名运行时映射到新样式 | warning + skip | React/CSS class/template 等价层 | keine 使用 Bevy UI，需先设计 typed theme token 映射；不能直接执行项目 CSS |
@@ -18,7 +21,7 @@
 
 ### P0：会改变流程或最终状态
 
-| 缺口 | 影响 | 当前安全处理 | 完成标准 |
+| 缺口 | 影响 | 当前安全处理 | 若未来重新启用时的完成标准 |
 |---|---|---|---|
 | 公共 `-continue` 未建模 | 演出结束后不能按 WebGAL 时机自动推进 | 参数不污染对话文本，但没有伪造语义 | 在 core 中区分 click wait、presentation completion 与 auto-continue；补 wait/intro/transform 连续链测试 |
 | `setTempAnimation` 不解析 keyframe JSON | 多段动画变成单一 fallback 效果 | 有界 native fallback，不执行脚本代码 | 编译 JSON 为 typed keyframe；逐段 duration/ease/继承；补中断、keep 与存档测试 |
@@ -103,9 +106,11 @@ WebGAL 4.6.2 源码存在但当前脚本参考未公开的参数/路径包括：
 
 静态占位图不能冒充视频、Live2D 或 Spine；generic blur 不能冒充官方复杂/临时动画；日志中打印 achievementId 也不能冒充 Steam 解锁。对这些能力，明确 warning 比“看起来执行了”更安全，因为后者会让剧情制作方漏掉真实发布错误。
 
-## 升级状态的统一门槛
+## 若未来重新启用兼容开发
 
-从“不支持”升级到“部分支持”至少需要：typed Action、core 状态、缺失资源诊断和一条端到端测试。从“部分支持”升级到“已实现”还需要：
+当前没有升级任何 WebGAL 支持状态的计划。若未来作出新的产品决定，从“不支持”升级到
+“部分支持”至少需要：typed Action、core 状态、缺失资源诊断和一条端到端测试。从
+“部分支持”升级到“已实现”还需要：
 
 1. 官方 4.6.2 文档参数与默认值的 fixture；
 2. parser、state/runtime、renderer/UI/audio 的消费测试；

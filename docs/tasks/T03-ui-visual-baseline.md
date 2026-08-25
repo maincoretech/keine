@@ -1,6 +1,6 @@
 # T03 — Cross-platform UI visual baseline
 
-**Execution:** `depends-on: T01`
+**Execution:** `parallel-safe`
 
 ## Goal
 
@@ -17,8 +17,8 @@ normal tests into window-opening or timing-sensitive tests.
 
 ## Non-goals
 
-Theme systems, pixel-identical WebGAL branding, renderer/shader optimization, product assets, or
-making the default workspace test suite open a window.
+Theme systems, parity work for an external engine, renderer/shader optimization, product assets,
+or making the default workspace test suite open a window.
 
 ## Relevant files / modules
 
@@ -27,7 +27,7 @@ making the default workspace test suite open a window.
 ## Interfaces it may depend on
 
 `DesignViewport`, camera roles, `UiInputScope`, blur-region requests, elapsed-time animation, and
-the integrated user-input/flow contract from T01.
+the existing frozen core/input contract.
 
 ## Ownership
 
@@ -64,7 +64,7 @@ cargo clippy --workspace --all-targets
 
 ## Dependencies on other tasks
 
-Start after T01 because both tasks may touch the user-input overlay. Independent of T02/T04/T05.
+None. WebGAL compatibility work is outside this task; it is independent of T02/T04/T05.
 
 ## Completion report
 

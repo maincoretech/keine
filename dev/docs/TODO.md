@@ -1,8 +1,9 @@
 # keine TODO
 
-> 对齐 WebGAL 脚本标准。当前事实以
+> WebGAL 4.6.2 兼容范围已经冻结。当前事实以
 > [`webgal-compatibility/semantic-matrix.md`](webgal-compatibility/semantic-matrix.md) 为准；
-> 勾选表示端到端可用，而不只是能够解析。
+> 它是现状和迁移边界，不是后续对齐路线图。仅继续处理安全、崩溃、数据损坏和
+> Kēne 自身改动造成的明确回归。
 
 ---
 
@@ -11,7 +12,7 @@
 1. **跨平台视觉基线** — 在 Linux/Windows、1× DPI、超宽/高窗口建立独立 screenshot/golden
 2. **真实发行验收** — 用完整 LetsGal 工程、规范 WebP/Opus 与 Hakutaku 包持续验证长流程和低端设备
 
-## WebGAL 4.6.2 兼容性审计与内部格式 (DONE)
+## WebGAL 4.6.2 冻结兼容性审计与内部格式 (DONE)
 
 - [x] 按官方 4.6.2 文档与命令注册表逐项审计 31 个命令：已实现 5、部分支持 23、不支持 3
 - [x] 对不支持的 `showVars/applyStyle/callSteam` 产生可定位 warning，不退化为对白或伪成功

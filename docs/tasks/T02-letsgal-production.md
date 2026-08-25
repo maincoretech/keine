@@ -1,6 +1,6 @@
 # T02 — LetsGal production-project acceptance
 
-**Execution:** `depends-on: T01`
+**Execution:** `parallel-safe`
 
 ## Goal
 
@@ -65,7 +65,9 @@ cargo letsgal-perf            # only for measured performance changes
 
 ## Dependencies on other tasks
 
-Start after T01 is integrated so the shared Action/flow schema is stable.
+None. Treat the existing core Action/flow schema as frozen for this task. If a demonstrated
+LetsGal defect requires a new core interface, report it to the orchestrator instead of changing
+core files.
 
 ## Completion report
 

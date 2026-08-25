@@ -48,8 +48,10 @@ project / package
 
 ## Decisions and compatibility contracts
 
-- WebGAL compatibility is pinned to 4.6.2 evidence: 5 commands implemented, 23 partially
-  supported, 3 explicitly unsupported. Parser acceptance alone is not implementation.
+- WebGAL compatibility is frozen at the pinned 4.6.2 evidence boundary: 5 commands implemented,
+  23 partially supported, and 3 explicitly unsupported. This is a compatibility record rather
+  than a parity roadmap. Existing behavior remains regression-tested; only security, crash, data
+  loss, or Kēne-caused regressions justify maintenance without a new product decision.
 - LetsGal Studio 1.x remains a read-only adapter. The checked-in 1.8 fixture and 1.11 acceptance
   project are active compatibility evidence; Studio extensions and bridge injection are excluded.
 - Save v10 and compiled Program v1 are strict envelopes. Other layouts are rejected; there is no
@@ -65,8 +67,9 @@ project / package
 ## Incomplete or intentionally deferred
 
 - WebGAL `-continue`, advanced animation tables/keyframes/filters, full input validation, complete
-  expression parity, Live2D/Spine/GIF, runtime UI styling, and Steam/debug bridge commands are not
-  fully equivalent. See `dev/docs/webgal-compatibility/unsupported.md`.
+  expression parity, Live2D/Spine/GIF, runtime UI styling, and Steam/debug bridge commands remain
+  known compatibility boundaries. They are not scheduled for closure; see
+  `dev/docs/webgal-compatibility/unsupported.md` for migration facts.
 - Automated screenshot/golden coverage is not established across Windows/Linux, 1x DPI,
   ultrawide, and tall windows. Existing semantic tests do not prove pixel equivalence.
 - The full LetsGal commercial sample is intentionally untracked. Local acceptance and loader
@@ -91,13 +94,11 @@ project / package
 
 | Task | Scheduling | Boundary |
 |---|---|---|
-| [T01](tasks/T01-webgal-flow.md) | parallel-safe | WebGAL deterministic flow/input interfaces |
-| [T02](tasks/T02-letsgal-production.md) | depends on T01 | LetsGal adapter and external sample evidence |
-| [T03](tasks/T03-ui-visual-baseline.md) | depends on T01 | UI and cross-platform visual evidence |
+| [T02](tasks/T02-letsgal-production.md) | parallel-safe | LetsGal adapter and external sample evidence |
+| [T03](tasks/T03-ui-visual-baseline.md) | parallel-safe | UI and cross-platform visual evidence |
 | [T04](tasks/T04-render-hotspots.md) | parallel-safe | render/shader/stage hotspot evidence |
 | [T05](tasks/T05-desktop-video.md) | parallel-safe | desktop video backends and acceptance |
 | [T06](tasks/T06-release-packaging.md) | parallel-safe | publisher and release workflow |
-| [T07](tasks/T07-webgal-presentation.md) | depends on T01, T04 | authored presentation payloads |
 | [T08](tasks/T08-mobile-contract.md) | integration-only; depends on T05, T06 | mobile platform contract |
 
 ## Canonical references
