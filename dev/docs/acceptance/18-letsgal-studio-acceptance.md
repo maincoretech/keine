@@ -1,6 +1,6 @@
 # LetsGal Studio 1.11.0 原生同步验收
 
-本轮只验收原生工程同步，不安装或启用任何 Studio 扩展。Studio 原版 Player 可以关闭；
+本验收只覆盖原生工程同步，不安装或启用任何 Studio 扩展。Studio 原版 Player 可以关闭；
 画面以独立 keine 窗口为准。
 
 本文的“调试位置”只表示 Studio 当前选中的 fragment/block，不是鼠标指针。个性化鼠标指针

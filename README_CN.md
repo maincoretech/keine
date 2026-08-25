@@ -132,7 +132,7 @@ cargo validate projects/test-project
 - [工程结构](dev/docs/PROJECT.md)
 - [资源、发行包与持久化限制](docs/resource-limits.md)
 - [内容加载](dev/docs/architecture/07-content-loader.md)
-- [渲染](dev/docs/architecture/03-render-pipeline.md)
+- [渲染与 Bevy 架构](dev/docs/architecture/05-bevy-architecture.md)
 - [存档与回滚](dev/docs/architecture/04-rollback-and-save.md)
 - [Hakutaku 打包](dev/docs/architecture/06-hakutaku-packaging.md)
 - [LetsGal 集成](dev/docs/architecture/08-letsgal-studio.md)

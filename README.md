@@ -181,7 +181,7 @@ gallery without loading a second compressed copy.
 - [Project structure](dev/docs/PROJECT.md)
 - [Resource, package, and storage limits](docs/resource-limits.md)
 - [Content loader](dev/docs/architecture/07-content-loader.md)
-- [Rendering](dev/docs/architecture/03-render-pipeline.md)
+- [Rendering and Bevy architecture](dev/docs/architecture/05-bevy-architecture.md)
 - [Saves and rollback](dev/docs/architecture/04-rollback-and-save.md)
 - [Hakutaku packaging](dev/docs/architecture/06-hakutaku-packaging.md)
 - [LetsGal integration](dev/docs/architecture/08-letsgal-studio.md)

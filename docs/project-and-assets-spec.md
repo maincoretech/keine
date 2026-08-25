@@ -1,19 +1,17 @@
-# Kēne 原生项目与资源规范（v1 草案）
+# Kēne 原生项目与资源规范（v1）
 
-> 状态：草案。所有条目都以当前代码事实为准（`config.yaml` / `GameConfig` /
-> `ResourceKind` / loader adapter / Hakutaku 打包），未实现的部分明确标注「预留」。
-> 本规范是 LetsGal → Kēne 转换的目标形态，也是后续 demo 项目的落点。
+> 当前合同以 `GameConfig`、`ResourceKind`、loader adapter 与 Hakutaku 打包实现为准。
 
 ## 0. 目的
 
 1. 定义 Kēne 原生项目（Native Project）的目录布局与资源组织方式；
-2. 为「LetsGal 资源完全转换为我们自己的资源」提供权威目标格式；
-3. 为发布打包（`game.haku` + `data/`）与编译产物（`.keine/compiled/program.bin`）预留稳定路径；
+2. 定义 LetsGal 兼容工程如何映射到同一运行时资源语义；
+3. 定义发布打包（`game.haku` + `data/`）与编译产物（`.keine/compiled/program.bin`）的稳定路径；
 4. 让脚本、配置、预取、图库与打包共用同一套资源语义，不依赖 LetsGal 专用字段。
 
 ## 1. 项目形态
 
-Kēne 支持三种输入形态，本规范只定义后两种（原生形态），LetsGal 工程属于兼容输入：
+Kēne 支持三种输入形态，并把它们映射到同一运行时内容模型：
 
 | 形态 | 入口文件 | 说明 |
 |---|---|---|
@@ -21,7 +19,7 @@ Kēne 支持三种输入形态，本规范只定义后两种（原生形态）�
 | Kēne 原生目录项目 | `config.yaml`（项目根） | 本规范定义的主要开发形态 |
 | Kēne 打包项目 | `game.haku` 与同级 `data/` | 原生目录项目的发布形态 |
 
-## 2. 项目目录规范（预留布局）
+## 2. 项目目录规范
 
 ```text
 <project>/
@@ -34,9 +32,7 @@ Kēne 支持三种输入形态，本规范只定义后两种（原生形态）�
 │   ├── se/                  # 音效
 │   ├── particle/            # 粒子贴图
 │   ├── video/               # 视频
-│   ├── luts/                # 调色 LUT（WebP）
-│   ├── font/                # 自定义字体（预留）
-│   └── ui/                  # UI 图标 / 对话框皮肤（预留）
+│   └── luts/                # 调色 LUT（WebP）
 ├── scripts/                 # 脚本场景（script: webgal 时放 .txt；结构化工程可留空）
 ├── .keine/                  # 引擎产物：program.bin 等（源项目永不打包；发布时在 staging 内重新生成并随包）
 ├── saves/                   # 开发运行用户数据；发行版改用平台用户数据目录（永不打包）
@@ -45,7 +41,7 @@ Kēne 支持三种输入形态，本规范只定义后两种（原生形态）�
 
 ### 2.1 目录是约定，不是硬约束
 
-- 规范目录是默认回退路径（见第 4 节），也是转换工具的目标位置。
+- 规范目录是默认回退路径（见第 4 节）。
 - 任何偏离规范目录的资产，必须通过 `config.yaml` 的 `assets` 别名表或脚本中的
   完整相对路径引用；否则引擎按默认回退路径解析会找不到。
 - 目录可分层叠加：`adapter.asset` 声明多个 fs 来源，后者覆盖前者，
@@ -125,8 +121,6 @@ assets:
 | 粒子 | Particle | `ShowParticles texture` | `particle/` | 任意 | 路径原样使用 |
 | 视频 | Video | `PlayVideo` | `video/` | `videos/` + 扩展名识别 | `video/{name}` |
 | LUT | Lut | 后处理 preset / camera patch | `luts/` | `lut/`、`luts/` | `luts/{name}.webp` |
-| 字体 | — | 预留 | `font/` | — | 内置 MavenPro-CJK |
-| UI | — | 预留 | `ui/` | — | 内置 |
 
 兼容与迁移细节：
 
@@ -150,7 +144,6 @@ assets:
 | LUT | WebP | PNG | LUT 是 `ResourceKind::Lut` 一等资源；有可见强度时参与静态校验与预取，所有 asset mount 内的 LUT 都受发布格式检查；默认回退路径为 `luts/{name}.webp` |
 | 语音 / BGM / 音效 | Ogg Opus（`.opus`） | WAV、MP3、Vorbis（`.ogg/.oga/.spx`）、FLAC | 开发版保留兼容 decoder；发行引擎固定只带 `ui-sounds`/bundled Opus，不按项目扩展名扩张 feature set |
 | 视频 | MP4（H.264） | WebM、MOV、MKV | FFmpeg 后端全格式；macOS native 后端走 AVFoundation（MP4/MOV） |
-| 字体 | TTF / OTF | — | 目前内置字体随引擎打包，自定义字体路径为预留能力 |
 
 设计空间固定为 1920×1080：
 
@@ -189,9 +182,7 @@ assets:
 - 包体、compiled program 和媒体解码的其它硬上限见
   [资源、发行包与持久化限制](resource-limits.md)。
 
-## 7. LetsGal → Kēne 转换规范
-
-### 7.1 现状：加载期内存转换
+## 7. LetsGal 加载期编译
 
 `keine-loader` 的 letsgal editor adapter 已经能在加载时把 LetsGal 工程完整转换：
 
@@ -205,57 +196,15 @@ assets:
 - 把对话行为、打字机、文字出现效果映射为 config styles；
 - 章节 JSON 编译为统一 `Vec<Action>`（与 WebGAL 脚本同一 IR）。
 
-结论：**运行 LetsGal 工程不需要先转换资源**。转换工具的价值是生成可脱离
-LetsGal 长期维护的原生项目（config.yaml + 规范目录 + 脚本）。
-
-### 7.2 目标：独立转换工具生成原生项目
-
-形态：独立 CLI/脚本（非 LetsGal Studio 扩展；不注入、不依赖 Studio）。
-转换只读源工程，写入新目录，绝不修改源工程。
-
-输出目录：
-
-```text
-<output>/
-├── config.yaml        # 生成：title/description/features/layout/styles/assets 表
-├── assets/
-│   ├── background/    # 来自 backgrounds/、cg/
-│   ├── figure/        # 来自 characters/、figures/
-│   ├── vocal/         # 来自 voices/、vocal/
-│   ├── bgm/           # 来自 bgm/
-│   ├── se/            # 来自 se/、sound(s)/、effect(s)/
-│   ├── video/         # 来自 video(s)/ 或 *.mp4/*.webm/*.mov/*.mkv
-│   └── luts/          # 来自 lut(s)/
-└── scripts/           # 转换后的脚本（形态待 demo 确认；引擎 fs mount 固定挂载 scripts/）
-```
-
-转换步骤：
-
-1. 枚举 `assets/.manifest.json` 全部条目，按第 7.1 节分类规则映射到规范目录；
-2. 拷贝文件；可选转码：非 WebP 图片 → WebP、非 Opus 音频 → Opus（发布推荐，
-   开发可跳过）；
-3. 生成 `config.yaml`：`assets` 别名表由 manifest 条目翻译（逻辑名与路径双键），
-   `layout`/`styles` 来自 Studio 默认壳配置，`features` 来自 `project.json` 的
-   `keine` 段；
-4. 转换章节为 `scripts/*.txt`（script: webgal）或结构化为编辑器工程（待定）；
-5. 输出后必须通过 `cargo validate <output>` 才能算完成；
-6. 校验项：所有脚本引用都能解析到文件、无重复 scene 名、资源类别归属正确。
-
-### 7.3 边界
-
-- 转换器不实现 LetsGal Studio 扩展、不走 TCP/localhost、不写回源工程；
-- 转换后项目不再依赖 letsgal adapter 的字段模型（`chapterFolders`、
-  `dialogue-box.json` 等），但允许保留 `.manifest.json` 作为过渡输入；
-- 无法静态枚举的动态路径（如 `bg/{route}.webp`）保持动态引用，不强制物化。
+运行 LetsGal 工程不需要物理转换资源。adapter 保持只读，不加载 Studio 扩展、不启动
+HTTP/TCP bridge，也不写回源工程；动态资源路径保持动态引用。
 
 ## 8. 打包规范（Hakutaku）
 
-- 打包输入 = 原生目录项目或 LetsGal 工程；输出 `config.yaml` 位于包根（LetsGal
-  的适配器配置在打包时物化），`assets/` 暴露为 asset root，脚本在 `scripts/`
-  （或编译产物）。
-- 排除：`saves/`、`imported_assets/`、`*.meta`、`.DS_Store`、`.keine/` 之外
-  的所有临时文件；`.keine/compiled/program.bin` 为预留编译产物（打包脚本写入，
-  见 program.bin v2 设计）。
+- 打包输入是原生目录项目或 LetsGal 工程。staging 会为 LetsGal 物化 `config.yaml`，并从
+  当前源内容重新生成 `.keine/compiled/program.bin`；发行运行时只读取该编译产物。
+- `saves/`、`imported_assets/`、`*.meta`、`.DS_Store`、源项目 `.keine/` 与其它临时文件不进入
+  staging；新生成的 compiled program 随包发布。
 - 输出固定为签名 `game.haku` 快照和内容寻址 `data/*.taku` segment；按访问类型选择
   256 KiB streaming block、1 MiB bulk block 或 FastCDC，并用 zstd + AES-256-GCM。
 - 运行时用 `ResourceBudget::memory_constrained()` 打开：16 MiB plaintext block cache，

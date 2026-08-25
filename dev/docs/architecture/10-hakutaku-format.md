@@ -1,8 +1,8 @@
 # Hakutaku v1 游戏资源格式
 
 > 状态：v1 wire format 已冻结并由 Kēne loader/packer 使用；Kēne 当前固定 Hakutaku
-> revision `ce8fe3c`。v1 不读取 Hexz、不保留 `.hxz` 回退，也不建立兼容层。规范字段与
-> 字节偏移以 Hakutaku workspace 内的 `FORMAT.md` 为准，本文件解释架构取舍；当前部署所用
+> revision `ce8fe3c`。规范字段与字节偏移以 Hakutaku workspace 内的 `FORMAT.md` 为准，
+> 本文件解释架构取舍；当前部署所用
 > 的硬上限和运行时预算见
 > [资源、发行包与持久化限制](../../../docs/resource-limits.md)。
 
@@ -63,7 +63,6 @@ Hakutaku 只解决三件事：把逻辑路径映射到块、认证并解码块�
 - 不阻止能够调试客户端的攻击者最终取得明文或嵌入密钥；
 - 不实现通用文件权限、软链接、时间戳、扩展属性或任意 codec 插件；
 - 不实现网络协议、CDN、S3、在线 updater 或跨游戏全局 CAS；
-- 不读取 Hexz 0.8，也不迁移已有 `.hxz`；所有 fixture 和测试包直接重建；
 - 不以 DirectStorage、Metal I/O 或某一种 SSD 的参数作为格式前提。
 
 ## 为什么是快照加不可变 segment
@@ -166,10 +165,9 @@ tag 延迟验证。`hakutaku verify` 和打包事务必须执行完整 segment h
 所有结构都是手写、有界、little-endian 的 v1 wire format，不使用 serde、bincode 或 postcard。
 所有 offset、count、length 在分配前检查，整数运算使用 checked arithmetic。
 
-Hexz 值得保留的不是名为 `memory/auxiliary` 的第二数据流，而是更基础的 working-set 思路：常用
-目录信息小而常驻，体积随 block 数增长的索引分页，plaintext cache 有硬预算，预读不能挤掉真正
-热的数据。Hakutaku 用一个格式表达这件事，不复制 Hexz 的双 stream、两套 page directory 或
-通用 VM/archive 语义。
+常用目录信息小而常驻，体积随 block 数增长的索引分页，plaintext cache 有硬预算，预读不能
+挤掉真正热的数据。Hakutaku 用一个格式表达这些 working-set 类别，不增加平行数据流或重复
+page directory。
 
 ### 常驻 catalog
 
@@ -652,14 +650,13 @@ target 必须由基准决定，不能因为某个 SSD 型号的宣传参数直�
 - 相同 fixture 在 desktop directory、Android asset descriptor 和 Apple asset descriptor adapter 下
   得到完全一致的文件内容与错误分类。
 
-## 实现状态与迁移顺序
+## 实施状态
 
-1. **已完成：**在独立 Cargo workspace 冻结 v1 wire spec、严格 parser 和格式边界；
-2. **已完成：**只读 core、AEAD/signature mutation tests、`Asset::read_at` 与流式 cursor；
-3. **已完成：**full/incremental packer、基于旧 snapshot 的 block reuse、CLI 与独立 GUI；
-4. **待迁移：**用 Kēne 真实 staging 和原生视频后端建立前后基准；
-5. **待迁移：**一次性将 Kēne loader/package 切到 Hakutaku，重新生成 fixture；
-6. **已迁移：**删除 `hexz_k`、Hexz patches、`.hxz` 回退和旧文档，不保留双实现；
-7. **移动端阶段：**实现 Android/iOS 的薄 `SegmentSource` adapter、资源预算和生命周期测试，不复制
-   core reader；
-8. **最终验收：**通过完整 workspace gate 和桌面/移动 GUI、视频验收后发布独立仓库。
+- 独立 Hakutaku workspace 已冻结 v1 wire spec、严格 parser、只读 core、AEAD/signature
+  mutation tests、`Asset::read_at`、流式 cursor 与 full/incremental packer；
+- Kēne 的 `cargo assets --pack` 与 `cargo bundle` 直接生成 v1 快照和 segment，loader 只读取
+  Hakutaku packaged project；
+- FFmpeg `AVIOContext` 与 AVFoundation resource loader 都直接映射 `ContentFile` 随机读取，
+  不生成明文媒体临时文件；
+- 当前支持矩阵是 macOS、Windows x64 与 Linux 桌面。Android/iOS 尚无 Kēne launcher 或
+  `SegmentSource` 平台 adapter，因此不属于已支持发行目标。

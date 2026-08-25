@@ -465,10 +465,12 @@ mod keine {
         }
 
         #[test]
-        fn v9_is_reported_as_an_unsupported_schema() {
-            let bytes = include_bytes!("../../tests/fixtures/store-v9.sav");
-            assert_eq!(inspect(bytes), StoreStatus::Unsupported(9));
-            assert!(KeineStore.decode(bytes).is_err());
+        fn unsupported_schema_version_is_rejected() {
+            let mut bytes = KeineStore.encode(&State::new()).unwrap();
+            bytes[8..12].copy_from_slice(&9_u32.to_le_bytes());
+
+            assert_eq!(inspect(&bytes), StoreStatus::Unsupported(9));
+            assert!(KeineStore.decode(&bytes).is_err());
         }
     }
 }

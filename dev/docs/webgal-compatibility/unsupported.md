@@ -43,7 +43,7 @@
 | `setTransition` | native enter/exit rule | WebGAL 自定义 animation table、完整 target/default、视觉关键帧 |
 | `setTransform` | 32-byte 稀疏 patch、默认 500 ms、显式 0、7 个基础字段、4 easing | 其余 10 easing、writeDefault/keep、stage-main、完整 filter 与连续 patch golden |
 
-## 本轮已经关闭的结构性缺口
+## 已关闭的结构性缺口
 
 以下项目已有实现与定向测试，不应继续出现在“尚未实现”清单中：
 

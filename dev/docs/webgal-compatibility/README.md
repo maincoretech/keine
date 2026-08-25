@@ -1,10 +1,9 @@
-# WebGAL 兼容性审计
+# WebGAL 4.6.2 兼容性合同
 
 本目录记录 keine 对 WebGAL 脚本语义的实际兼容范围、可复现证据、视觉验收状态和高性能内部格式。结论以代码和测试为准，不以“解析器接受了关键词”或“已有验收清单”冒充端到端支持。
 
-## 审计基线
+## 当前基线
 
-- 审计日期：2026-07-15
 - WebGAL 稳定版：[`4.6.2`](https://github.com/OpenWebGAL/WebGAL/releases/tag/4.6.2)（2026-07-04 发布）
 - WebGAL 引擎提交：[`e7f0abeb855b5b442460743bdaa9778ca751b43f`](https://github.com/OpenWebGAL/WebGAL/tree/e7f0abeb855b5b442460743bdaa9778ca751b43f)
 - WebGAL 文档提交：[`121bd6a64f4095b41c5caa9c2bbafa8f0a8d83b9`](https://github.com/OpenWebGAL/WebGAL_Doc/tree/121bd6a64f4095b41c5caa9c2bbafa8f0a8d83b9)
@@ -19,15 +18,15 @@
 | 状态 | 数量 | 含义 |
 |---|---:|---|
 | 已实现 | 5 | 命令本地的文档化主语义已有自动测试覆盖；若需要呈现层，也必须有可核验的呈现证据 |
-| 部分支持 | 22 | 有可用子集，但仍有参数、状态、时序、资源类型、自动测试或视觉证据不完整 |
-| 不支持 | 4 | 没有等价 Action/runtime；loader 会给出明确 warning，而不会误当普通对话 |
+| 部分支持 | 23 | 有可用子集，但仍有参数、状态、时序、资源类型、自动测试或视觉证据不完整 |
+| 不支持 | 3 | 没有等价 Action/runtime；loader 会给出明确 warning，而不会误当普通对话 |
 | 合计 | 31 | 与 WebGAL 4.6.2 文档化命令注册表逐项对齐 |
 
-这不是“完整 WebGAL 兼容”的声明。尤其是公共 `-continue`、高级 filter、自定义多段动画、Live2D/Spine、视频、运行时 UI 换肤和 Steam 桥接仍未等价实现。`setTransform` 已改为稀疏 `TransformPatch`，不会再重置未出现字段；它仍因 easing/filter/writeDefault/keep 子集而保持“部分支持”。四个不支持命令保留 warning 防误降级测试。完整逐项证据见 [semantic-matrix.md](semantic-matrix.md)，明确缺口见 [unsupported.md](unsupported.md)。
+这不是“完整 WebGAL 兼容”的声明。尤其是公共 `-continue`、高级 filter、自定义多段动画、Live2D/Spine、视频、运行时 UI 换肤和 Steam 桥接仍未等价实现。`setTransform` 已改为稀疏 `TransformPatch`，不会再重置未出现字段；它仍因 easing/filter/writeDefault/keep 子集而保持“部分支持”。三个不支持命令保留 warning 防误降级测试。完整逐项证据见 [semantic-matrix.md](semantic-matrix.md)，明确缺口见 [unsupported.md](unsupported.md)。
 
 ## 证据口径
 
-每项能力分四层审计：
+每项能力按四层记录：
 
 1. **P — Parser**：语法、转义、参数、资源引用和诊断是否正确。
 2. **C — Core**：Action、状态迁移、阻塞/继续、场景栈和持久状态是否正确。

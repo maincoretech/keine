@@ -51,8 +51,8 @@ keine/
 ├── .github/workflows/             桌面平台 fmt、Clippy、测试和 release CI
 ├── dev/scripts/                   发布/打包辅助脚本
 └── dev/docs/
-    ├── architecture/              当前与历史架构设计
-    ├── reference/                 WebGAL 对照、参考与产品优势
+    ├── architecture/              当前架构与平台合同
+    ├── webgal-compatibility/      当前 WebGAL 语义、格式与视觉证据
     ├── acceptance/                Phase 1–7 总清单与 LetsGal 独立验收
     ├── PROJECT.md                 项目边界和目录规则
     └── TODO.md                    唯一进度入口
@@ -77,9 +77,9 @@ keine/
 - `target/`
 - `projects/*/saves/`
 
-`**/imported_assets/` 是旧版开发期 Asset Processor 缓存，继续忽略以便安全清理，
-但当前引擎直接读取本地 `assets/`，不再生成或依赖它。项目源文件只包含
-`config.yaml`、`scripts/` 和 `assets/`。
+`**/imported_assets/` 与 `*.meta` 作为外部工具可能产生的缓存统一忽略；当前引擎直接读取
+本地 `assets/`，不生成或依赖它们。原生项目源文件由 `config.yaml`、`scripts/` 和
+`assets/` 组成；LetsGal 兼容工程保持其开放 JSON 布局。
 
 ## Design constraints
 

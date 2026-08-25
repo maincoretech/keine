@@ -2,7 +2,7 @@
 
 > 对齐 WebGAL 脚本标准。当前事实以
 > [`webgal-compatibility/semantic-matrix.md`](webgal-compatibility/semantic-matrix.md) 为准；
-> `10-webgal-k-gap-analysis.md` 仅保留为 0.2.0 历史快照。勾选表示端到端可用，而不只是能够解析。
+> 勾选表示端到端可用，而不只是能够解析。
 
 ---
 
@@ -253,12 +253,10 @@ Flowchart 仍保留为可选适配工作，不能用静态占位或实验依赖�
 - [x] Studio adapter 保持只读且 loader-only；普通 dev、library embed 与发行运行不依赖该 adapter
 - [ ] （延期）视频和完整相机后处理的移动端逐像素/音画验收与平台解码后端分发
 
-明确不支持 Studio 扩展或注入。`reference/12` 只保留为 Studio 格式与历史 API 调研资料，
-不构成 keine 运行时依赖或后续实现清单。
+明确不支持 Studio 扩展或注入；扩展 ABI 不属于 Kēne 的运行时依赖或实现清单。
 
 实现和当前能力矩阵见
-[`08-letsgal-studio.md`](architecture/08-letsgal-studio.md)；API 反向工程证据见
-[`12-letsgal-studio-extension-api.md`](reference/12-letsgal-studio-extension-api.md)；逐步联调见
+[`08-letsgal-studio.md`](architecture/08-letsgal-studio.md)；逐步联调见
 [`18-letsgal-studio-acceptance.md`](acceptance/18-letsgal-studio-acceptance.md)。
 
 ---
@@ -268,18 +266,13 @@ Flowchart 仍保留为可选适配工作，不能用静态占位或实验依赖�
 | 文档 | 内容 |
 |------|------|
 | [01-language-and-stack.md](architecture/01-language-and-stack.md) | 语言与技术栈选型 |
-| [02-ecs-architecture.md](architecture/02-ecs-architecture.md) | ECS 架构设计（历史参考） |
-| [03-render-pipeline.md](architecture/03-render-pipeline.md) | 渲染管线 |
 | [04-rollback-and-save.md](architecture/04-rollback-and-save.md) | 存档与回溯 |
-| [05-bevy-architecture.md](architecture/05-bevy-architecture.md) | Bevy 架构设计（当前权威） |
+| [05-bevy-architecture.md](architecture/05-bevy-architecture.md) | Bevy ECS 与渲染架构 |
 | [06-hakutaku-packaging.md](architecture/06-hakutaku-packaging.md) | Hakutaku 打包、更新与挂载 |
 | [07-content-loader.md](architecture/07-content-loader.md) | 内容来源、adapter、多根覆盖与 Hakutaku 加载契约 |
 | [08-letsgal-studio.md](architecture/08-letsgal-studio.md) | LetsGal 原生工程、动作编译、资源与步进调试边界 |
-| [09-native-video.md](architecture/09-native-video.md) | 桌面原生视频后端、FFmpeg 回退与 Hakutaku byte source 待办 |
+| [09-native-video.md](architecture/09-native-video.md) | 桌面视频后端与 Hakutaku byte source |
+| [10-hakutaku-format.md](architecture/10-hakutaku-format.md) | Hakutaku v1 读取、缓存与发布事务 |
 | `crates/loader/src/lib.rs` | 可注册语言、诊断与资源引用合同 |
-| [07-references.md](reference/07-references.md) | 业界引擎参考 |
-| [09-webgal-script-reference.md](reference/09-webgal-script-reference.md) | WebGAL 脚本参考 |
-| [10-webgal-k-gap-analysis.md](reference/10-webgal-k-gap-analysis.md) | 本地 WebGAL_K 4.6.1 与 keine 0.2.0 的历史缺口快照 |
-| [11-engine-advantages.md](reference/11-engine-advantages.md) | keine 的差异化、优势支柱与量化验收标准 |
 | [webgal-compatibility/README.md](webgal-compatibility/README.md) | WebGAL 4.6.2 当前语义矩阵、视觉证据、内部格式与综合示例 |
 | [phases.md](acceptance/phases.md) | Phase 1–7 桌面、状态 UI、音频、演出、文本及工程能力验收步骤 |

@@ -1,6 +1,6 @@
 # Hakutaku 打包与挂载
 
-> 状态：Kēne 直接固定依赖 `maincoretech/hakutaku`。不保留 Hexz 回退或兼容层。
+> 状态：Kēne 直接固定依赖 `maincoretech/hakutaku`，发行路径只有 Hakutaku v1。
 
 ## 命令边界
 

@@ -121,7 +121,7 @@ WebGAL `setTransform` 是稀疏更新：命令没有写出的字段必须继承�
 
 `decode` 返回 `SavedState`，而不是可直接执行或覆盖当前 runtime 的公开 `State`。其内部 Program 因 `serde(skip)` 为空，但保存的 fingerprint 仍在；`snapshot()` 只提供预览读取，真正恢复必须消费 `SavedState` 并调用 `restore_into(&mut current)`。该方法转入 `State::restore_saved`，统一执行 fingerprint 等值门控、当前 Program 重绑定和 profile 保留，避免调用方绕过不变量。
 
-v10 不尝试兼容旧二进制布局：未知版本由 `inspect` 报告 `Unsupported(version)`，`decode` 直接拒绝。固定时间戳生成的 [`store-v10.sav`](../../../crates/loader/tests/fixtures/store-v10.sav) 由 `save_v10_golden_is_stable` 逐 byte 比较；只有有意升级格式时才应使用 `KEINE_UPDATE_STORE_GOLDEN=1` 重建 fixture，并同步评估是否需要增加版本号。v10 持久化句尾退格、等待推进、系统消息、幕布/浮动文字、立绘规则、文本呈现 override 和 sprite sequence；native video、shared stage timeline、camera/keyframe animation 仍由 `State::persistence_safety()` 拒绝 live save，并由 RAM-only continuation checkpoint 负责返回标题/退出恢复点。这次显式升版，避免新增字段被旧布局误读。
+v10 不尝试兼容其他二进制布局：未知版本由 `inspect` 报告 `Unsupported(version)`，`decode` 直接拒绝。固定时间戳生成的 [`store-v10.sav`](../../../crates/loader/tests/fixtures/store-v10.sav) 由 `save_v10_golden_is_stable` 逐 byte 比较；只有有意升级格式时才应使用 `KEINE_UPDATE_STORE_GOLDEN=1` 重建 fixture，并同步评估是否需要增加版本号。v10 持久化句尾退格、等待推进、系统消息、幕布/浮动文字、立绘规则、文本呈现 override 和 sprite sequence；native video、shared stage timeline、camera/keyframe animation 仍由 `State::persistence_safety()` 拒绝 live save，并由 RAM-only continuation checkpoint 负责返回标题/退出恢复点。版本不匹配时 fail-closed，避免新增字段被其他布局误读。
 
 ### Loader 与热重载
 

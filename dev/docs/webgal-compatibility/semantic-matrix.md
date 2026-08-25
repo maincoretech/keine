@@ -95,7 +95,7 @@
 
 兼容实现不能只复制文档示例；下列项目在同一基线内已经不一致：
 
-| 项目 | 文档 | WebGAL 4.6.2 源码 | 本审计处理 |
+| 项目 | 文档 | WebGAL 4.6.2 源码 | Kēne 合同 |
 |---|---|---|---|
 | 重复 `label` | 从上到下取第一个 | 构建映射时后项覆盖前项，实际取最后一个 | keine 取最后一个并记录漂移 |
 | `intro fontColor` 默认值 | 黑色 | [`intro.tsx`](https://github.com/OpenWebGAL/WebGAL/blob/e7f0abeb855b5b442460743bdaa9778ca751b43f/packages/webgal/src/Core/gameScripts/intro.tsx) 使用白色 | 以运行时源码为行为基线 |

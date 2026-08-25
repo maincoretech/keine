@@ -94,8 +94,7 @@ runtime 以所有 `line <= selected_step` 的 Action 为目标，因此不会把
   工程根 `config/`（`fonts.json`、`personalization`）与 `ui/` 目录，以及 `message-box.json`
   等按屏幕拆分的 UI JSON。这些是 Studio 壳层 UI 的编辑产物，keine 不解析、不渲染，
   watcher 也不对其建立依赖。
-- 扩展 SDK 版本由 1.9.0 提升为 `1.9.2-beta`；keine 不加载或执行扩展，仅按该版本更新
-  兼容基线文档（见 `12-letsgal-studio-extension-api.md`）。
+- 扩展 SDK 不属于工程 adapter 合同；keine 不加载、执行或追踪扩展 ABI。
 - 1.9.2 工程仍可带 `chapterFolders` / `chapterTreeOrder`、`scenes.json`（版本 3 视差层）与
   `characters.json`（版本 2 全局位置/高度比），这些字段的解析保持兼容。
 

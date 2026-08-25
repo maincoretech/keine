@@ -85,7 +85,7 @@ metadata 上限为 64 KiB，state payload 上限为 64 MiB，连同 28-byte head
 
 因此脚本 Action 总数不会直接放大存档；长期玩家数据也不会被复制进每个槽位。
 
-固定 golden 位于 [`crates/loader/tests/fixtures/store-v10.sav`](../../../crates/loader/tests/fixtures/store-v10.sav)，由 `save_v10_golden_is_stable` 防止无意改变字节格式。v10 在 v8 的 LetsGal 1.8.0 相机状态之上加入可恢复的句尾退格状态，因此动画中途存档会在读档后从同一字符和点击等待阶段继续；舞台时间轴本身仍是恢复时清理的瞬态演出，不写入存档。v10 不兼容旧二进制存档。
+固定 golden 位于 [`crates/loader/tests/fixtures/store-v10.sav`](../../../crates/loader/tests/fixtures/store-v10.sav)，由 `save_v10_golden_is_stable` 防止无意改变字节格式。v10 保存可恢复的句尾退格状态，因此动画中途存档会在读档后从同一字符和点击等待阶段继续；舞台时间轴本身仍是恢复时清理的瞬态演出，不写入存档。v10 只接受自身的二进制布局。
 
 v10 进一步持久化脚本游标之后仍会影响后续行为的逻辑表现状态：等待推进、系统消息、
 幕布、浮动文字、立绘规则、对白/段落样式及 reveal override、sprite sequence。FFmpeg
