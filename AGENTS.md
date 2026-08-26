@@ -60,6 +60,9 @@ caused by Kēne changes.
   invariant in code, tests, or the commit message.
 - Performance changes require before/after measurements. Workers report raw commands and results;
   the integration thread updates `dev/docs/performance-baseline.md` to avoid parallel conflicts.
+- Visual acceptance uses the Computer Use skill directly against the running application. Do not
+  add engine screenshot hooks, readiness state, environment-variable protocols, or ad-hoc GUI
+  automation solely to collect evidence. Product code changes require a demonstrated visual defect.
 
 ## Validation
 

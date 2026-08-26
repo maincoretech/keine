@@ -9,8 +9,8 @@ normal tests into window-opening or timing-sensitive tests.
 
 ## Scope
 
-- Define the smallest reliable capture protocol for title, stage, dialog, backlog, save/load,
-  config, Extra, and representative transitions.
+- Use Computer Use directly to inspect title, stage, dialog, backlog, save/load, config, Extra,
+  and representative transitions on available real targets.
 - Cover 1x/HiDPI where available, 16:9, ultrawide, and tall windows.
 - Fix only demonstrated UI/layout/input defects inside the owned UI files.
 - Keep platform/GPU/window/DPI metadata with every accepted image or report.
@@ -18,7 +18,8 @@ normal tests into window-opening or timing-sensitive tests.
 ## Non-goals
 
 Theme systems, parity work for an external engine, renderer/shader optimization, product assets,
-or making the default workspace test suite open a window.
+engine-native screenshot/capture infrastructure, ad-hoc mouse/keyboard automation, or making the
+default workspace test suite open a window.
 
 ## Relevant files / modules
 
@@ -31,9 +32,8 @@ the existing frozen core/input contract.
 
 ## Ownership
 
-- Owns `src/ui/`, `src/ui.rs`, and task-specific visual test support added below `tests/visual/`.
-- Owns `dev/docs/webgal-compatibility/visual-audit.md`.
-- May add a dedicated `.github/workflows/visual.yml`; it must not edit existing workflows.
+- Owns `src/ui/` and `src/ui.rs` only for fixes to defects observed during this task.
+- Owns `dev/docs/webgal-compatibility/visual-audit.md` only for concise verified results.
 
 ## Avoid modifying
 
@@ -42,14 +42,16 @@ workflows, manifests, and integration-owned files.
 
 ## Required behavior
 
-Normal gameplay and default tests remain unaffected. Capture waits use explicit visual readiness,
-not arbitrary long sleeps. Logical layout and input hit testing remain resolution-independent.
+Normal gameplay and default tests remain unaffected. Computer Use is an external acceptance tool,
+not a reason to add runtime capture state. Logical layout and input hit testing remain
+resolution-independent. If no defect is observed, make no product-code change.
 
 ## Acceptance criteria
 
-- Every required screen/state has a reproducible capture step and recorded environment.
-- At least one target run proves the protocol; missing target machines are reported, not simulated.
-- Any checked-in golden has a documented update rule and deterministic dimensions.
+- Available screen/state combinations are directly inspected with Computer Use and their
+  environment is recorded in the completion report.
+- Missing target machines or states are reported, not simulated and not replaced by new tooling.
+- Screenshots remain task evidence unless the orchestrator separately approves a golden baseline.
 - Existing UI transition and input-scope tests remain green.
 
 ## Tests / validation
@@ -59,7 +61,7 @@ cargo test -p keine ui::
 cargo test -p keine render::blur::tests::transformed_node_bounds_follow_button_scale
 cargo fmt --all --check
 cargo clippy --workspace --all-targets
-# Run the documented visual capture on each available target platform.
+# Inspect each available target directly with Computer Use.
 ```
 
 ## Dependencies on other tasks
