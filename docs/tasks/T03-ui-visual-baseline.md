@@ -1,6 +1,6 @@
 # T03 — Cross-platform UI visual baseline
 
-**Execution:** `parallel-safe`
+**Execution:** `user-acceptance`
 
 ## Goal
 
@@ -9,11 +9,11 @@ normal tests into window-opening or timing-sensitive tests.
 
 ## Scope
 
-- Use Computer Use directly to inspect title, stage, dialog, backlog, save/load, config, Extra,
-  and representative transitions on available real targets.
+- The user directly inspects title, stage, dialog, backlog, save/load, config, Extra, and
+  representative transitions on available real targets.
 - Cover 1x/HiDPI where available, 16:9, ultrawide, and tall windows.
 - Fix only demonstrated UI/layout/input defects inside the owned UI files.
-- Keep platform/GPU/window/DPI metadata with every accepted image or report.
+- Keep platform/GPU/window/DPI metadata with every reported defect or accepted result.
 
 ## Non-goals
 
@@ -42,14 +42,14 @@ workflows, manifests, and integration-owned files.
 
 ## Required behavior
 
-Normal gameplay and default tests remain unaffected. Computer Use is an external acceptance tool,
-not a reason to add runtime capture state. Logical layout and input hit testing remain
-resolution-independent. If no defect is observed, make no product-code change.
+Normal gameplay and default tests remain unaffected. Manual acceptance is not a reason to add
+runtime capture state. Logical layout and input hit testing remain resolution-independent. If no
+defect is observed, make no product-code change.
 
 ## Acceptance criteria
 
-- Available screen/state combinations are directly inspected with Computer Use and their
-  environment is recorded in the completion report.
+- Available screen/state combinations are directly inspected by the user and their environment is
+  recorded in the completion report.
 - Missing target machines or states are reported, not simulated and not replaced by new tooling.
 - Screenshots remain task evidence unless the orchestrator separately approves a golden baseline.
 - Existing UI transition and input-scope tests remain green.
@@ -61,22 +61,26 @@ cargo test -p keine ui::
 cargo test -p keine render::blur::tests::transformed_node_bounds_follow_button_scale
 cargo fmt --all --check
 cargo clippy --workspace --all-targets
-# Inspect each available target directly with Computer Use.
+# The user inspects each available target directly.
 ```
 
 ## Dependencies on other tasks
 
-None. WebGAL compatibility work is outside this task; it is independent of T02 and T04.
+None. WebGAL compatibility and renderer performance work are outside this task.
 
 ## Completion report
 
 Report platform matrix, capture method, files, tests, accepted differences, missing hardware, and
 whether any issue belongs to the renderer rather than UI ownership.
 
-## Worker startup prompt
+## Current evidence
 
-Read `AGENTS.md`, `docs/PROJECT_STATE.md`, and `docs/tasks/T03-ui-visual-baseline.md`.
+macOS acceptance completed on 2026-08-27 at `1db8e15` using a shipping `.app` on Apple M5 Pro /
+Metal. The title, stage, dialogs, Backlog, Save/Load, Config, Extra, continuation, system Zoom, and
+native fullscreen showed no reproducible defect. Windows requires the user's remote credential;
+Windows, Linux, 1× DPI, and frame-by-frame transition checks remain for manual coverage.
 
-Then inspect only the code relevant to this task. Implement within its ownership boundaries; do
-not redesign unrelated systems. Run the specified validation. Report what changed, files changed,
-tests run, remaining risks, and interface changes other threads must know about.
+## User handoff
+
+Report each observed defect with a screenshot, platform, resolution/DPI, the action that exposed
+it, and expected behavior. The orchestrator will reproduce and implement only demonstrated fixes.

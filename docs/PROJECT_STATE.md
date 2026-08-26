@@ -100,14 +100,22 @@ project / package
   pass by 42.3% and raised its median from 55.2 to the 60 FPS cap; complete classic improved 6.4%
   and combined stress 1.8%. Visual and non-target workloads showed no material regression. Godray
   and remaining combined costs require a new measured task before any further renderer change.
+- T02 closed without a product-code change. The local representative LetsGal project compiled 9
+  scenes and 896 actions with no diagnostics or unresolved static resources; complete adapter
+  load, compilation, and fingerprinting measured 1.1314–1.1420 ms. Tracked adapter tests and the
+  shared acceptance project passed. The external sample remains untracked by design.
+- Release workflow run 17 completed successfully for `a8175f9`, covering the integrated LetsGal
+  release-ID fix and the Linux, macOS, and Windows temporary benchmark bundles.
+- T03's available macOS acceptance passed on Apple M5 Pro / Metal at `1db8e15`: title, stage,
+  dialogs, Backlog, Save/Load, Config, Extra, continuation, system Zoom, and native fullscreen
+  showed no reproducible UI defect. Windows requires the user's remote credential; Windows,
+  Linux, 1× DPI, and frame-by-frame transition evidence remain explicitly unverified.
 
 ## Active task queue
 
 | Task | Scheduling | Boundary |
 |---|---|---|
-| [T02](tasks/T02-letsgal-production.md) | parallel-safe | LetsGal adapter and external sample evidence |
-| [T03](tasks/T03-ui-visual-baseline.md) | parallel-safe | UI and cross-platform visual evidence |
-| [T08](tasks/T08-mobile-contract.md) | integration-only | mobile platform contract |
+| [T03](tasks/T03-ui-visual-baseline.md) | user acceptance | UI and cross-platform visual evidence |
 
 ## Canonical references
 
