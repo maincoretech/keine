@@ -1026,7 +1026,7 @@ fn spawn_slot(
                     Node {
                         width: Val::Percent(78.0),
                         height: Val::Percent(100.0),
-                        padding: UiRect::left(Val::Px(7.5)),
+                        padding: UiRect::left(Val::Px(10.5)),
                         align_items: AlignItems::Center,
                         ..default()
                     },
@@ -1038,7 +1038,7 @@ fn spawn_slot(
                     children![text(
                         slot_time(&status),
                         context.font,
-                        15.75,
+                        17.25,
                         secondary_text_alpha,
                     )]
                 )
@@ -1306,9 +1306,10 @@ pub fn handle_save_load_slot(
             &context.preview_coordinator,
         ) {
             Ok(generation) => {
-                ui.set_changed();
                 context.save_previews.invalidate(slot);
                 if let Ok(window) = context.windows.single() {
+                    // Keep the current slot intact until the captured preview is ready, then the
+                    // screenshot callback refreshes the complete card in one pass.
                     crate::ui::dialog::capture_save_preview(
                         &mut context.commands,
                         &mut context.images,
@@ -1316,6 +1317,8 @@ pub fn handle_save_load_slot(
                         slot,
                         generation,
                     );
+                } else {
+                    ui.set_changed();
                 }
             }
             Err(error) => {

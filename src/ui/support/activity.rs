@@ -63,6 +63,7 @@ pub(crate) struct UiActivityContext<'w, 's> {
         ),
     >,
     dialog_fades: Query<'w, 's, &'static DialogFade>,
+    removed_dialog_fades: RemovedComponents<'w, 's, DialogFade>,
     hover_sweeps: Query<'w, 's, (&'static Interaction, &'static HoverSweep)>,
     watermarks: Query<'w, 's, &'static SettingsWatermark>,
     save_slots: Query<'w, 's, (&'static Interaction, &'static SaveLoadSlotMotion)>,
@@ -121,7 +122,11 @@ pub(crate) struct UiActivityContext<'w, 's> {
     active_slider: Res<'w, ActiveSettingSlider>,
 }
 
-pub(crate) fn update(context: UiActivityContext, mut activity: ResMut<UiAnimationActivity>) {
+pub(crate) fn update(mut context: UiActivityContext, mut activity: ResMut<UiAnimationActivity>) {
+    // A dismissed modal removes its full-screen blur in PostUpdate. Keep one
+    // additional frame live so the title/menu regional blur is rendered
+    // before the reactive event loop goes back to sleep.
+    let dialog_just_closed = context.removed_dialog_fades.read().next().is_some();
     let animating = context
         .hovers
         .iter()
@@ -157,6 +162,7 @@ pub(crate) fn update(context: UiActivityContext, mut activity: ResMut<UiAnimatio
             .any(|(interaction, visual, close)| visual.is_animating(*interaction, close.is_some()))
         || context.backlog_scroll.is_animating()
         || context.dialog_fades.iter().any(DialogFade::is_animating)
+        || dialog_just_closed
         || context
             .hover_sweeps
             .iter()
