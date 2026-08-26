@@ -204,6 +204,7 @@ fn add_overlay_systems(app: &mut App) {
                 title::animate_return_to_title,
                 title::hydrate_quick_save_preview.run_if(input_scope::title_allowed),
                 title::sync_title,
+                title::animate_title_glass,
                 title::handle_title_input
                     .run_if(loading::assets_ready)
                     .run_if(input_scope::title_allowed),

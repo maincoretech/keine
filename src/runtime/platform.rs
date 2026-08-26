@@ -640,6 +640,7 @@ fn log_renderer(adapter: Res<RenderAdapterInfo>, preprocessing: Res<GpuPreproces
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::input::{ButtonState, InputPlugin, InputSystems, mouse::MouseButtonInput};
     use bevy::window::WindowResolution;
 
     fn is_animating(state: &GameState) -> bool {
@@ -712,6 +713,28 @@ mod tests {
         keys.press(KeyCode::ControlLeft);
         update_control_hold(&keys, &mut actions);
         assert!(actions.skip_held);
+    }
+
+    #[test]
+    fn collected_pointer_edge_is_not_replayed_on_the_next_frame() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, InputPlugin))
+            .init_resource::<InputActions>()
+            .init_resource::<PointerClickHistory>()
+            .add_systems(PreUpdate, collect_input.after(InputSystems));
+        let window = app.world_mut().spawn_empty().id();
+        app.world_mut().write_message(MouseButtonInput {
+            button: MouseButton::Left,
+            state: ButtonState::Pressed,
+            window,
+        });
+
+        app.update();
+        assert!(app.world().resource::<InputActions>().pointer_advance);
+
+        app.update();
+        assert!(!app.world().resource::<InputActions>().pointer_advance);
+        assert!(!app.world().resource::<InputActions>().advance);
     }
 
     #[test]

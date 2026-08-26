@@ -41,7 +41,14 @@ impl Plugin for RuntimePlugin {
             .init_resource::<platform::InputActions>()
             .init_resource::<platform::PointerClickHistory>()
             .init_resource::<platform::GracefulExit>();
-        app.add_systems(PreUpdate, platform::collect_input);
+        // Read edge-triggered input only after Bevy has cleared the previous
+        // frame and applied the current keyboard, pointer, touch, and gamepad
+        // messages. Otherwise a menu-closing click can be observed again
+        // after the input scope has already returned to Stage.
+        app.add_systems(
+            PreUpdate,
+            platform::collect_input.after(bevy::input::InputSystems),
+        );
         app.add_systems(Update, tick::tick.in_set(GameSystemSet::Input));
         app.add_systems(Update, host::dispatch_shell.in_set(GameSystemSet::Sync));
         app.add_message::<host::HostCommandMessage>();

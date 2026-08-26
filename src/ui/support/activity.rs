@@ -26,6 +26,7 @@ use crate::ui::textbox::{
 };
 use crate::ui::title::{
     PendingTitleAction, ReturnToTitleTransition, TitleButtonMotion, TitleContinuePreview,
+    TitleGlassReveal,
 };
 
 const SETTLED_EPSILON: f32 = 0.001;
@@ -50,6 +51,7 @@ pub(crate) struct UiActivityContext<'w, 's> {
     button_feedback: Query<'w, 's, (&'static Interaction, &'static ButtonPressFeedback)>,
     title_buttons: Query<'w, 's, (&'static Interaction, &'static TitleButtonMotion)>,
     title_previews: Query<'w, 's, &'static TitleContinuePreview>,
+    title_glass: Query<'w, 's, &'static TitleGlassReveal>,
     choice_roots: Query<'w, 's, &'static ChoiceRoot>,
     choices: Query<'w, 's, (&'static Interaction, &'static ChoiceButton)>,
     backlog_roots: Query<'w, 's, &'static BacklogRoot>,
@@ -151,6 +153,10 @@ pub(crate) fn update(mut context: UiActivityContext, mut activity: ResMut<UiAnim
             .title_previews
             .iter()
             .any(TitleContinuePreview::is_animating)
+        || context
+            .title_glass
+            .iter()
+            .any(TitleGlassReveal::is_animating)
         || choices_are_animating(&context)
         || context
             .backlog_roots

@@ -189,8 +189,24 @@ impl TitleButtonMotion {
 const CONTINUE_PREVIEW_ALPHA: f32 = 0.78;
 const CONTINUE_PREVIEW_GAP_PERCENT: f32 = 5.0;
 pub(crate) const TITLE_GLASS_BLUR: f32 = 36.0;
+const TITLE_GLASS_REVEAL_SECONDS: f32 = 0.1;
 const DISABLED_BUTTON_SURFACE_ALPHA: f32 = 0.28;
 const DISABLED_BUTTON_TEXT_ALPHA: f32 = 0.36;
+
+#[derive(Component, Default)]
+pub(crate) struct TitleGlassReveal {
+    progress: f32,
+    armed: bool,
+}
+
+impl TitleGlassReveal {
+    pub(crate) fn is_animating(&self) -> bool {
+        self.progress < 0.999
+    }
+}
+
+#[derive(Component)]
+pub(crate) struct TitleButtonGlass;
 
 #[derive(Component, Default)]
 pub struct TitleContinuePreview {
@@ -319,6 +335,7 @@ pub fn sync_title(state: Res<GameState>, mut context: TitleSyncContext) {
         .spawn((
             Name::new("title"),
             TitleRoot,
+            TitleGlassReveal::default(),
             Node {
                 position_type: PositionType::Absolute,
                 left: Val::ZERO,
@@ -462,9 +479,10 @@ fn spawn_title_button(
         }
         entity.with_child((
             TitleButtonVisual,
+            TitleButtonGlass,
             UiTransform::default(),
             BlurSource,
-            BlurStrength(TITLE_GLASS_BLUR),
+            BlurStrength(0.0),
             Node {
                 position_type: PositionType::Absolute,
                 right: Val::ZERO,
@@ -565,8 +583,9 @@ fn spawn_continue_preview(
 
 fn spawn_disabled_button(menu: &mut ChildSpawnerCommands, label: &str, font: &Handle<Font>) {
     menu.spawn((
+        TitleButtonGlass,
         BlurSource,
-        BlurStrength(TITLE_GLASS_BLUR),
+        BlurStrength(0.0),
         Node {
             width: Val::Percent(100.0),
             height: Val::Px(94.5),
@@ -577,6 +596,45 @@ fn spawn_disabled_button(menu: &mut ChildSpawnerCommands, label: &str, font: &Ha
         BackgroundColor(dark_surface(DISABLED_BUTTON_SURFACE_ALPHA)),
         children![text(label, font, 37.5, DISABLED_BUTTON_TEXT_ALPHA)],
     ));
+}
+
+pub fn animate_title_glass(
+    time: Res<Time>,
+    assets: Res<AssetServer>,
+    fonts: Res<UiFonts>,
+    mut reveals: Query<&mut TitleGlassReveal>,
+    mut glass: Query<&mut BlurStrength, With<TitleButtonGlass>>,
+) {
+    let Ok(mut reveal) = reveals.single_mut() else {
+        return;
+    };
+    if reveal.progress >= 1.0 {
+        return;
+    }
+    let font_ready = assets.is_loaded_with_dependencies(&fonts.text)
+        || matches!(
+            assets.get_load_state(&fonts.text),
+            Some(LoadState::Failed(_))
+        );
+    if !font_ready {
+        return;
+    }
+    // Let the newly loaded glyphs and button surfaces participate in one
+    // rendered frame before the regional blur begins. This avoids first-run
+    // shader/font warm-up making the blur appear ahead of the title buttons.
+    if !reveal.armed {
+        reveal.armed = true;
+        return;
+    }
+    reveal.progress = (reveal.progress + time.delta_secs() / TITLE_GLASS_REVEAL_SECONDS).min(1.0);
+    let strength = title_glass_strength(reveal.progress);
+    for mut blur in &mut glass {
+        blur.0 = strength;
+    }
+}
+
+fn title_glass_strength(progress: f32) -> f32 {
+    TITLE_GLASS_BLUR * smoothstep(progress.clamp(0.0, 1.0))
 }
 
 pub fn handle_title_input(mut context: TitleInputContext) {
@@ -928,7 +986,7 @@ mod tests {
     }
 
     #[test]
-    fn continue_and_regular_title_buttons_share_one_blur_strength() {
+    fn title_buttons_start_unblurred_and_share_one_reveal_target() {
         fn spawn(mut commands: Commands) {
             let font = Handle::<Font>::default();
             let preview = QuickSavePreview::default();
@@ -953,7 +1011,9 @@ mod tests {
             .iter(world)
             .map(|strength| strength.0)
             .collect::<Vec<_>>();
-        assert_eq!(strengths, vec![TITLE_GLASS_BLUR; 2]);
+        assert_eq!(strengths, vec![0.0; 2]);
+        assert_eq!(title_glass_strength(0.0), 0.0);
+        assert_eq!(title_glass_strength(1.0), TITLE_GLASS_BLUR);
     }
 
     #[test]
