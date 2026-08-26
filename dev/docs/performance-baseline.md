@@ -1648,10 +1648,10 @@ no-regression check, not a throughput claim:
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | `10-02 classic camera properties` | 60.0 s | 3600 | 60.0 | 54.8 | 17.37 ms | 17.76 ms | 21.31 ms |
 
-The next Intel UHD 620 portable run remains the decision point for shader
-throughput. Its new attribution timelines separate sampling, godray, film
-noise and color/lens work so visual alignment does not justify speculative
-quality tiers or extra render passes.
+The subsequent Intel UHD 620 portable run reported below is the shader-
+throughput decision point. Its attribution timelines separate sampling,
+godray, film noise and color/lens work so visual alignment does not justify
+speculative quality tiers or extra render passes.
 
 ### 2026-08-26 shock pre-sampling elimination
 
@@ -1663,9 +1663,9 @@ are unchanged. In the typical classic specialization this reduces the shock
 path from 27 texture samples per pixel to 10; non-shock variants retain their
 previous sampling path.
 
-The three-repeat X280 report `report-26082600.txt` at build identity `5260ba8`
-is the pre-change low-end baseline: Intel UHD 620 / Vulkan, 1920x1080,
-Release/LTO, Fifo presentation on a reported 66 Hz display.
+The three-repeat X280 report at build identity `5260ba8` is the pre-change
+low-end baseline: Intel UHD 620 / Vulkan, 1920x1080, Release/LTO, Fifo
+presentation on a reported 66 Hz display.
 
 | Workload | Median avg FPS (range) | Median 1% low | Median P95 | Median P99 | Worst |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -1698,7 +1698,35 @@ capped. The 1920x1144 before/after captures had 51.89 dB PSNR and no visible
 composition, blur, shock, character or UI regression; remaining pixel
 differences are consistent with capture timing.
 
-Strict T04 completion still requires a new X280 portable report whose build
-identity contains `f083c57` or a descendant. Compare classic sampling, classic
-camera and combined stress against the table above; do not infer the low-end
-speedup from the VSync-capped Apple result.
+The final X280 report `report-26082600.txt` has build identity `55f53230b51f`;
+Git ancestry confirms that it contains `f083c57`. It used the same device,
+backend, resolution, release profile, presentation mode, three independent
+processes, three-second warm-up and five-second capture as the before report.
+The self-running benchmark package was launched once and produced every repeat
+inside its single `keine-benchmark-report.txt`.
+
+| Workload | Median avg FPS | Median 1% low | Median P95 | Median P99 | Worst |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Isolated classic sampling | 55.2 → 60.0 (+8.7%) | 49.5 → 52.8 (+6.7%) | 19.40 → 17.37 ms (-10.5%) | 19.99 → 17.82 ms (-10.9%) | 21.16 → 19.54 ms (-7.7%) |
+| Complete classic camera | 50.2 → 53.4 (+6.4%) | 44.7 → 47.0 (+5.1%) | 21.43 → 20.51 ms (-4.3%) | 22.09 → 21.05 ms (-4.7%) | 23.53 → 22.18 ms (-5.7%) |
+| Combined stress | 51.3 → 52.2 (+1.8%) | 45.6 → 46.8 (+2.6%) | 20.91 → 20.51 ms (-1.9%) | 21.56 → 21.03 ms (-2.5%) | 22.68 → 22.04 ms (-2.8%) |
+
+The isolated sampling transparent-pass GPU median fell from 3.635 to 2.096 ms
+(-42.3%); its already-small CPU median moved from 0.010 to 0.005 ms. Complete
+classic GPU time fell from about 4.66 to 3.957 ms (-15.1%). This directly
+confirms that the removed work was a low-end GPU sampling hotspot rather than
+CPU preparation overhead.
+
+Opening composition and blur family remained at 60 FPS with effectively
+unchanged P99 (17.57 → 17.58 ms and 17.70 → 17.67 ms). Atmosphere, retro/mask,
+film-noise and color/lens groups were also stable. Small optical and godray
+movements were mixed rather than a consistent regression: optical P99 improved
+18.91 → 18.78 ms while average FPS moved 60.1 → 59.6; godray average moved
+59.2 → 59.4 while P99 moved 18.55 → 18.81 ms. The previous isolated 39.32 ms
+timed-event spike did not recur; the after worst was 20.86 ms.
+
+T04 is complete. The targeted path reaches the 60 FPS product cap, complete
+classic and stress move in the same direction, and the fixed-frame visual and
+Apple checks show no material regression. Godray and remaining combined costs
+are future benchmark candidates, not justification for further changes in this
+task.
