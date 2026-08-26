@@ -1652,3 +1652,53 @@ The next Intel UHD 620 portable run remains the decision point for shader
 throughput. Its new attribution timelines separate sampling, godray, film
 noise and color/lens work so visual alignment does not justify speculative
 quality tiers or extra render passes.
+
+### 2026-08-26 shock pre-sampling elimination
+
+Commit `f083c57` removes a discarded source-color calculation from the classic
+shock path. Shock already replaces the complete blur/optical result with eight
+zoom samples and two RGB-split samples, so the shader now constructs that
+result directly. The sample positions, weights and subsequent post-processing
+are unchanged. In the typical classic specialization this reduces the shock
+path from 27 texture samples per pixel to 10; non-shock variants retain their
+previous sampling path.
+
+The three-repeat X280 report `report-26082600.txt` at build identity `5260ba8`
+is the pre-change low-end baseline: Intel UHD 620 / Vulkan, 1920x1080,
+Release/LTO, Fifo presentation on a reported 66 Hz display.
+
+| Workload | Median avg FPS (range) | Median 1% low | Median P95 | Median P99 | Worst |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Classic camera | 50.2 (49.6–50.6) | 44.7 | 21.43 ms | 22.09 ms | 23.53 ms |
+| Isolated classic sampling | 55.2 (55.0–55.7) | 49.5 | 19.40 ms | 19.99 ms | 21.16 ms |
+
+The isolated sampling pass reported 3.635 ms median transparent-pass GPU time
+and 0.010 ms CPU time. The blur-family workload sustained 60 FPS. Together
+these results attribute the remaining classic cost to GPU sampling rather than
+CPU frame preparation or the ordinary blur family.
+
+The Apple M5 Pro A/B used the same release surface and command for three runs
+per build:
+
+```text
+LIBRARY_PATH=/opt/homebrew/opt/ffmpeg/lib \
+DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/opt/ffmpeg/lib \
+<binary> benchmark projects/test-project 5 'benchmark classic sampling'
+```
+
+| Build | Median avg FPS | Median 1% low | Median P99 |
+| --- | ---: | ---: | ---: |
+| Before (`/tmp/keine-t04-before`) | 60.0 | 51.0 | 18.20 ms |
+| After (`f083c57`) | 60.0 | 55.2 | 17.93 ms |
+
+A separate 30-second after run produced 60.0 average FPS, 55.6 FPS 1% low and
+17.75 ms P99. These Metal results and the fixed-frame visual comparison are
+no-regression evidence, not a throughput claim: the display remained VSync
+capped. The 1920x1144 before/after captures had 51.89 dB PSNR and no visible
+composition, blur, shock, character or UI regression; remaining pixel
+differences are consistent with capture timing.
+
+Strict T04 completion still requires a new X280 portable report whose build
+identity contains `f083c57` or a descendant. Compare classic sampling, classic
+camera and combined stress against the table above; do not infer the low-end
+speedup from the VSync-capped Apple result.

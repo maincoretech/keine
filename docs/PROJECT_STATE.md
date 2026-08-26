@@ -96,6 +96,10 @@ project / package
   WebP/Opus/Hakutaku paths.
 - Performance work must start from a repeatable hotspot measurement. Optional ideas in design
   documents are not approved work until a benchmark shows user-visible value.
+- T04's shock pre-sampling removal is integrated at `f083c57`: source inspection reduces the
+  classic shock path from 27 to 10 texture samples per pixel, and Apple surface A/B plus visual
+  comparison show no regression. The Intel UHD 620 report at `5260ba8` is the retained before;
+  a new X280 report containing `f083c57` or a descendant is still required for the low-end after.
 
 ## Active task queue
 
