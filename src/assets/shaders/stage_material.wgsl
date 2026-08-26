@@ -457,17 +457,11 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     let dimensions = vec2<f32>(textureDimensions(color_texture));
     let half_texel = vec2<f32>(0.5) / dimensions;
     uv = clamp(uv, half_texel, vec2<f32>(1.0) - half_texel);
-#ifdef STAGE_OPTICAL
-    var color = apply_basic_filter(sample_camera_effects(uv, edge_uv)) * material.tint;
-#else
 #ifdef STAGE_BLUR
-    var color = apply_basic_filter(sample_blurred(uv)) * material.tint;
-#else
-    var color = apply_basic_filter(textureSample(color_texture, color_sampler, uv)) * material.tint;
-#endif
-#endif
-#ifdef STAGE_BLUR
+    var color = vec4<f32>(0.0);
     if material.post_b.w > 0.001 {
+        // Shock replaces the complete source color. Build it directly instead
+        // of paying for a blurred/optical sample that would be discarded.
         let dimensions = vec2<f32>(textureDimensions(color_texture));
         let blur_step = vec2<f32>(max(0.0, material.filter_data.x + material.post_a.w)) / dimensions;
         let blur_offsets = array<vec2<f32>, 8>(
@@ -499,7 +493,15 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
             mix(zoom.b, blue, material.post_b.w),
             zoom.a,
         );
+    } else {
+#ifdef STAGE_OPTICAL
+        color = apply_basic_filter(sample_camera_effects(uv, edge_uv)) * material.tint;
+#else
+        color = apply_basic_filter(sample_blurred(uv)) * material.tint;
+#endif
     }
+#else
+    var color = apply_basic_filter(textureSample(color_texture, color_sampler, uv)) * material.tint;
 #endif
     let ray = godray(uv);
     color = vec4<f32>(color.rgb + vec3<f32>(ray), color.a);
