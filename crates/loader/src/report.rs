@@ -172,6 +172,16 @@ fn collect_references(
         }
         Action::SetPostProcess { effect, .. } => collect_visible_lut(effect, &mut resource),
         Action::PlayVideo { video } => resource(&video.file, ResourceKind::Video),
+        Action::StageMask {
+            mask: Some(mask), ..
+        } => {
+            if let Some(image) = &mask.image {
+                resource(image, ResourceKind::Particle);
+            }
+            if let Some(texture) = &mask.texture {
+                resource(texture, ResourceKind::Particle);
+            }
+        }
         Action::MiniAvatar { image } => resource(image, ResourceKind::MiniAvatar),
         Action::Unlock { kind, file, .. } => resource(
             file,

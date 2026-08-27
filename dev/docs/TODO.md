@@ -209,10 +209,10 @@ Flowchart 仍保留为可选适配工作，不能用静态占位或实验依赖�
 - Steam 集成与 Flowchart 内容页
 - SafeArea、横竖屏、响应式断点及 Android / iOS / Web 设备验收
 
-## LetsGal Studio 1.11.0 adapter（DONE — 待用户验收）
+## LetsGal Studio 1.20.0 adapter（DONE — 待用户验收）
 
 - [x] 原生 `project.json`、章节、角色、场景与 `assets/.manifest.json` 多文件读取
-- [x] 38 种已知内置 block 穷举编译；宿主转发 block 保留未知字段，其他未消费字段安全忽略，未知 block 明确报错
+- [x] 39 种已知内置 block 穷举编译；宿主转发 block 保留未知字段，其他未消费字段安全忽略，未知 block 明确报错
 - [x] Studio 原生资源目录直接挂载，hash 与逻辑路径均可解析
 - [x] 内容/清单变化热重载；`.studio/state.json` 调试位置变化只做 fragment/block seek
 - [x] 多来源 FS 资源热重载、覆盖层删除 fallback、manifest alias 刷新与静态资源存在性校验
@@ -238,6 +238,8 @@ Flowchart 仍保留为可选适配工作，不能用静态占位或实验依赖�
   新增缓动由 core 采样，Spine、Live2D 翻转仍明确不支持
 - [x] 1.11.0 发行包确认仍为 38 种 block；Android 构建、开发者信、主题/素材页不进入剧情 IR，
   普通与自动播放等待指示器继续明确不支持并安全忽略
+- [x] 1.20.0 `removeCharacter` 多目标按顺序展开；`stageMask` 进入 typed core、存档/回滚与
+  原生 overlay/clip 材质，Spine、Live2D 继续明确不支持
 - [x] 视频和完整相机后处理进入 typed core、原生运行状态与 Bevy backend；内置 block
   不得经 `HostCommand` 降级，流式视频由项目特征按需启用
 - [x] Godray 八字段进入稀疏 IR、状态插值和单通道 GPU 材质；动态 `callFragment`

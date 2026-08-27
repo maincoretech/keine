@@ -1446,6 +1446,50 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                     return StepResult::AwaitPresentation;
                 }
             }
+            Action::StageMask {
+                id,
+                mask,
+                duration,
+                blocking,
+            } => {
+                let duration = duration.max(0.0);
+                state.stage_mask_order = state.stage_mask_order.wrapping_add(1);
+                let state_blocking = *blocking && !next && duration > f32::EPSILON;
+                if let Some(mask) = mask {
+                    let previous = state.stage_masks.get(id).map_or(0.0, |mask| mask.current);
+                    state.stage_masks.insert(
+                        id.clone(),
+                        crate::state::StageMaskState {
+                            mask: (**mask).clone(),
+                            current: if duration <= f32::EPSILON {
+                                1.0
+                            } else {
+                                previous
+                            },
+                            from: previous,
+                            target: 1.0,
+                            elapsed: 0.0,
+                            duration,
+                            blocking: state_blocking,
+                            order: state.stage_mask_order,
+                        },
+                    );
+                } else if let Some(active) = state.stage_masks.get_mut(id) {
+                    active.from = active.current;
+                    active.target = 0.0;
+                    active.elapsed = 0.0;
+                    active.duration = duration;
+                    active.blocking = state_blocking;
+                    active.order = state.stage_mask_order;
+                    if duration <= f32::EPSILON {
+                        state.stage_masks.remove(id);
+                    }
+                }
+                state.invalidate_stage();
+                if state_blocking {
+                    return StepResult::AwaitPresentation;
+                }
+            }
             Action::Flow { .. } => unreachable!("flow wrappers are removed before dispatch"),
         }
     }
@@ -1660,6 +1704,8 @@ pub fn end_game(state: &mut State) {
     state.intro = None;
     state.film_mode = false;
     state.curtain = Default::default();
+    state.stage_masks.clear();
+    state.stage_mask_order = 0;
     state.floating_text = None;
     state.portrait_rule = None;
     state.dialogue_style = Default::default();
@@ -3127,6 +3173,45 @@ mod tests {
         assert!(state.curtain.blocking);
         assert_eq!(state.curtain.target, 1.0);
         assert_eq!(state.curtain.color, [0.1, 0.2, 0.3, 1.0]);
+    }
+
+    #[test]
+    fn named_stage_mask_blocks_and_can_begin_an_authored_exit() {
+        let mut state = state_with(vec![
+            Action::StageMask {
+                id: "focus".into(),
+                mask: Some(Box::new(crate::StageMask {
+                    mode: crate::StageMaskMode::Clip,
+                    ..Default::default()
+                })),
+                duration: 0.4,
+                blocking: true,
+            },
+            Action::StageMask {
+                id: "focus".into(),
+                mask: None,
+                duration: 0.2,
+                blocking: true,
+            },
+        ]);
+
+        assert_eq!(step(&mut state), StepResult::AwaitPresentation);
+        let active = &state.stage_masks["focus"];
+        assert!(active.blocking);
+        assert_eq!(active.target, 1.0);
+        assert_eq!(active.mask.mode, crate::StageMaskMode::Clip);
+        assert!(!state.persistence_safety().is_exact());
+
+        active_stage_mask_finished(&mut state, "focus");
+        assert_eq!(step(&mut state), StepResult::AwaitPresentation);
+        assert_eq!(state.stage_masks["focus"].target, 0.0);
+    }
+
+    fn active_stage_mask_finished(state: &mut State, id: &str) {
+        let mask = state.stage_masks.get_mut(id).unwrap();
+        mask.current = 1.0;
+        mask.target = 1.0;
+        mask.blocking = false;
     }
 
     #[test]

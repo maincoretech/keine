@@ -289,6 +289,14 @@ fn build_asset_plan(
             plan.require(texture.clone(), ResourceKind::Particle);
         }
     }
+    for active in state.stage_masks.values() {
+        if let Some(image) = &active.mask.image {
+            plan.require(image.clone(), ResourceKind::Particle);
+        }
+        if let Some(texture) = &active.mask.texture {
+            plan.require(texture.clone(), ResourceKind::Particle);
+        }
+    }
     if let Some(lut) = active_lut_preset(&state.camera_effect) {
         plan.require(config.lut_path(lut), ResourceKind::Lut);
     }

@@ -41,6 +41,7 @@ pub(crate) struct BackgroundRenderCache {
     camera_shake: Option<keine_core::state::CameraShakeState>,
     camera_effect: keine_core::PostProcessEffect,
     camera_effect_targets: keine_core::CameraTargets,
+    stage_revision: u64,
 }
 
 impl BackgroundRenderCache {
@@ -58,6 +59,7 @@ impl BackgroundRenderCache {
             && self.camera_shake == state.camera_shake
             && self.camera_effect == state.camera_effect
             && self.camera_effect_targets == state.camera_effect_targets
+            && self.stage_revision == state.stage_revision
     }
 
     fn capture(&mut self, state: &GameState) {
@@ -74,6 +76,7 @@ impl BackgroundRenderCache {
         self.camera_shake.clone_from(&state.camera_shake);
         self.camera_effect.clone_from(&state.camera_effect);
         self.camera_effect_targets = state.camera_effect_targets;
+        self.stage_revision = state.stage_revision;
     }
 }
 
@@ -174,6 +177,14 @@ pub fn sync_bg(context: BackgroundSyncContext) {
                 ImageRole::RAW,
             )
         });
+        let clip = crate::scene::masks::clip_input(
+            &state,
+            "scene",
+            "background",
+            viewport,
+            &asset_server,
+            &image_roles,
+        );
         apply_background_entity(
             &mut commands,
             entity,
@@ -188,6 +199,7 @@ pub fn sync_bg(context: BackgroundSyncContext) {
             camera_transform(&state),
             post,
             lut,
+            clip,
             existing_sprite,
             true,
         );
@@ -222,6 +234,14 @@ pub fn sync_bg(context: BackgroundSyncContext) {
                 ImageRole::RAW,
             )
         });
+        let clip = crate::scene::masks::clip_input(
+            &state,
+            "scene",
+            "background",
+            viewport,
+            &asset_server,
+            &image_roles,
+        );
         let entity = commands
             .spawn((
                 Name::new(format!("background::{:?}", background.layer)),
@@ -247,6 +267,7 @@ pub fn sync_bg(context: BackgroundSyncContext) {
             camera_transform(&state),
             post,
             lut,
+            clip,
             None,
             false,
         );
@@ -350,6 +371,7 @@ fn apply_background_entity(
     camera: Option<(SpriteTransform, f32)>,
     post: keine_core::PostProcessEffect,
     lut: Option<Handle<Image>>,
+    clip: Option<crate::scene::masks::StageClipInput>,
     existing_sprite: Option<Mut<'_, Sprite>>,
     existing_entity: bool,
 ) {
@@ -374,9 +396,10 @@ fn apply_background_entity(
         || !post.is_identity()
         || background.transition.x > 0.0
         || background.transition.z > 0.0
+        || clip.is_some()
     {
         transform.scale = size.extend(1.0);
-        let material = StageMaterial::new(
+        let mut material = StageMaterial::new(
             image,
             alpha,
             filter,
@@ -385,6 +408,9 @@ fn apply_background_entity(
             &post,
             lut,
         );
+        if let Some(clip) = clip {
+            clip.apply(&mut material);
+        }
         let material_handle = upsert_stage_material(existing_material, materials, material);
         if existing_material.is_none() {
             commands

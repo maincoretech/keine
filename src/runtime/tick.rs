@@ -1113,6 +1113,33 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
             state.curtain.blocking = false;
         }
     }
+    for mask in state.stage_masks.values_mut() {
+        if (mask.current - mask.target).abs() <= f32::EPSILON {
+            continue;
+        }
+        changed = true;
+        stage_changed = true;
+        mask.elapsed = (mask.elapsed + delta_seconds).min(mask.duration);
+        let progress = if mask.duration <= f32::EPSILON {
+            1.0
+        } else {
+            (mask.elapsed / mask.duration).clamp(0.0, 1.0)
+        };
+        let eased = progress * progress * (3.0 - 2.0 * progress);
+        mask.current = mask.from + (mask.target - mask.from) * eased;
+        if progress >= 1.0 {
+            mask.current = mask.target;
+            mask.blocking = false;
+        }
+    }
+    let mask_count = state.stage_masks.len();
+    state
+        .stage_masks
+        .retain(|_, mask| mask.target > f32::EPSILON || mask.current > f32::EPSILON);
+    if state.stage_masks.len() != mask_count {
+        changed = true;
+        stage_changed = true;
+    }
     if let Some(text) = &mut state.floating_text {
         changed = true;
         text.elapsed += delta_seconds;

@@ -24,6 +24,9 @@ struct StageMaterialUniform {
     post_q: vec4<f32>,
     post_r: vec4<f32>,
     post_s: vec4<f32>,
+    clip_a: vec4<f32>,
+    clip_b: vec4<f32>,
+    clip_c: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> material: StageMaterialUniform;
@@ -31,6 +34,8 @@ struct StageMaterialUniform {
 @group(#{MATERIAL_BIND_GROUP}) @binding(2) var lut_sampler: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(3) var color_texture: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(4) var color_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(5) var clip_texture: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(6) var clip_sampler: sampler;
 
 fn noise(point: vec2<f32>) -> f32 {
     return fract(sin(dot(point, vec2<f32>(12.9898, 78.233))) * 43758.5453);
@@ -47,6 +52,71 @@ fn smooth_noise(point: vec2<f32>) -> f32 {
         blend.x,
     );
     return mix(lower, upper, blend.y);
+}
+
+fn rotate_2d(point: vec2<f32>, angle: f32) -> vec2<f32> {
+    let sine = sin(angle);
+    let cosine = cos(angle);
+    return vec2<f32>(point.x * cosine - point.y * sine, point.x * sine + point.y * cosine);
+}
+
+fn fitted_mask_uv(source: vec2<f32>, fit: u32) -> vec2<f32> {
+    if fit == 0u {
+        return source;
+    }
+    let box_size = max(material.clip_b.zw * 2.0, vec2<f32>(1.0));
+    let texture_size = vec2<f32>(textureDimensions(clip_texture));
+    let box_aspect = box_size.x / box_size.y;
+    let texture_aspect = texture_size.x / max(texture_size.y, 1.0);
+    var uv = source;
+    if fit == 1u {
+        if texture_aspect > box_aspect {
+            uv.x = (uv.x - 0.5) * box_aspect / texture_aspect + 0.5;
+        } else {
+            uv.y = (uv.y - 0.5) * texture_aspect / box_aspect + 0.5;
+        }
+    } else if texture_aspect > box_aspect {
+        uv.y = (uv.y - 0.5) * texture_aspect / box_aspect + 0.5;
+    } else {
+        uv.x = (uv.x - 0.5) * box_aspect / texture_aspect + 0.5;
+    }
+    return uv;
+}
+
+fn stage_clip_coverage(world_position: vec2<f32>) -> f32 {
+    if material.clip_a.x <= 0.001 {
+        return 1.0;
+    }
+    let local = rotate_2d(world_position - material.clip_b.xy, -material.clip_c.x);
+    let half_size = max(material.clip_b.zw, vec2<f32>(0.5));
+    let shape = u32(material.clip_a.y + 0.5);
+    var coverage = 0.0;
+    if shape == 3u {
+        var uv = local / (half_size * 2.0) + vec2<f32>(0.5);
+        uv.y = 1.0 - uv.y;
+        uv = fitted_mask_uv(uv, u32(material.clip_c.w + 0.5));
+        if all(uv >= vec2<f32>(0.0)) && all(uv <= vec2<f32>(1.0)) {
+            let sample = textureSample(clip_texture, clip_sampler, uv);
+            let channel = select(sample.a, dot(sample.rgb, vec3<f32>(0.2126, 0.7152, 0.0722)), material.clip_c.z > 0.5);
+            let softness = max(fwidth(channel), material.clip_a.w / max(min(half_size.x, half_size.y), 1.0));
+            coverage = smoothstep(0.5 - softness, 0.5 + softness, channel);
+        }
+    } else {
+        var distance_from_shape = 0.0;
+        if shape == 2u {
+            distance_from_shape = (length(local / half_size) - 1.0) * min(half_size.x, half_size.y);
+        } else {
+            let radius = select(0.0, min(material.clip_c.y, min(half_size.x, half_size.y)), shape == 1u);
+            let delta = abs(local) - (half_size - vec2<f32>(radius));
+            distance_from_shape = length(max(delta, vec2<f32>(0.0))) + min(max(delta.x, delta.y), 0.0) - radius;
+        }
+        let softness = max(material.clip_a.w, fwidth(distance_from_shape));
+        coverage = 1.0 - smoothstep(-softness, softness, distance_from_shape);
+    }
+    if material.clip_a.z > 0.5 {
+        coverage = 1.0 - coverage;
+    }
+    return mix(1.0, coverage, clamp(material.clip_a.x, 0.0, 1.0));
 }
 
 fn distort_uv(uv: vec2<f32>) -> vec2<f32> {
@@ -586,6 +656,7 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
         );
     }
     color = vec4<f32>(color.rgb, color.a * edge_coverage);
+    color = vec4<f32>(color.rgb, color.a * stage_clip_coverage(mesh.world_position.xy));
 #ifdef BLEND_MULTIPLY
     // Pixi/WebGAL's multiply is perceived in display space. Bevy samples the
     // sRGB texture into linear space, so feeding raw linear RGB to the fixed
@@ -600,6 +671,7 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     return color;
 #else
     var color = textureSample(color_texture, color_sampler, mesh.uv) * material.tint;
+    color = vec4<f32>(color.rgb, color.a * stage_clip_coverage(mesh.world_position.xy));
 #ifdef BLEND_MULTIPLY
     let perceptual = pow(max(color.rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
     color = vec4<f32>(perceptual * color.a, color.a);

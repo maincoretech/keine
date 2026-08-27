@@ -1309,6 +1309,169 @@ pub enum UnlockKind {
     Bgm,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum StageMaskShape {
+    #[default]
+    Rectangle,
+    RoundedRectangle,
+    Ellipse,
+    Image,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum StageMaskMode {
+    #[default]
+    Overlay,
+    Clip,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum StageMaskPlane {
+    BehindScene,
+    #[default]
+    Bottom,
+    Top,
+    Topmost,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum StageMaskScope {
+    Scene,
+    Characters,
+    #[default]
+    All,
+    Selected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum StageMaskVisibility {
+    #[default]
+    Inside,
+    Outside,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum StageMaskImageChannel {
+    #[default]
+    Alpha,
+    Luminance,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum StageMaskFit {
+    #[default]
+    Stretch,
+    Cover,
+    Contain,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum StageMaskFillMode {
+    #[default]
+    Solid,
+    Gradient,
+    Texture,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum StageMaskTextureBlend {
+    #[default]
+    Normal,
+    Multiply,
+    Screen,
+    Add,
+}
+
+/// Persistent adapter-neutral stage mask authored in design-space percentages.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StageMask {
+    pub mode: StageMaskMode,
+    pub plane: StageMaskPlane,
+    pub scope: StageMaskScope,
+    #[serde(default)]
+    pub targets: Vec<String>,
+    pub shape: StageMaskShape,
+    #[serde(default)]
+    pub image: Option<String>,
+    pub image_channel: StageMaskImageChannel,
+    pub image_fit: StageMaskFit,
+    pub center: [f32; 2],
+    pub size: [f32; 2],
+    pub rotation: f32,
+    pub radius: f32,
+    pub visibility: StageMaskVisibility,
+    pub feather: f32,
+    pub opacity: f32,
+    pub fill_mode: StageMaskFillMode,
+    pub color: [f32; 4],
+    pub gradient_start: [f32; 4],
+    pub gradient_end: [f32; 4],
+    pub gradient_direction: f32,
+    #[serde(default)]
+    pub texture: Option<String>,
+    pub texture_fit: StageMaskFit,
+    pub texture_blend: StageMaskTextureBlend,
+    pub texture_scale: f32,
+    pub texture_opacity: f32,
+    pub blur: f32,
+    pub vignette_amount: f32,
+    pub vignette_size: f32,
+    pub noise_amount: f32,
+    pub noise_size: f32,
+    pub hue: f32,
+    pub saturation: f32,
+    pub brightness: f32,
+}
+
+impl Default for StageMask {
+    fn default() -> Self {
+        Self {
+            mode: StageMaskMode::Overlay,
+            plane: StageMaskPlane::Bottom,
+            scope: StageMaskScope::All,
+            targets: Vec::new(),
+            shape: StageMaskShape::Rectangle,
+            image: None,
+            image_channel: StageMaskImageChannel::Alpha,
+            image_fit: StageMaskFit::Stretch,
+            center: [50.0, 50.0],
+            size: [50.0, 50.0],
+            rotation: 0.0,
+            radius: 24.0,
+            visibility: StageMaskVisibility::Inside,
+            feather: 0.0,
+            opacity: 1.0,
+            fill_mode: StageMaskFillMode::Solid,
+            color: [0.0, 0.0, 0.0, 1.0],
+            gradient_start: [0.0, 0.0, 0.0, 1.0],
+            gradient_end: [0.14, 0.2, 0.28, 1.0],
+            gradient_direction: 0.0,
+            texture: None,
+            texture_fit: StageMaskFit::Cover,
+            texture_blend: StageMaskTextureBlend::Normal,
+            texture_scale: 1.0,
+            texture_opacity: 1.0,
+            blur: 0.0,
+            vignette_amount: 0.0,
+            vignette_size: 0.55,
+            noise_amount: 0.0,
+            noise_size: 45.0,
+            hue: 0.0,
+            saturation: 1.0,
+            brightness: 1.0,
+        }
+    }
+}
+
 impl Easing {
     pub fn sample(self, progress: f32) -> f32 {
         let progress = progress.clamp(0.0, 1.0);

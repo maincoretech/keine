@@ -11,6 +11,11 @@ with `git status --short` and inspect the latest commit before continuing.
 
 ## Latest integrated work
 
+- LetsGal Studio 1.20 `stageMask` now compiles to typed core state and renders native overlay or
+  clip masks across scene and character targets. Mask state participates in blocking, rollback,
+  and editor replay; Save v10 explicitly rejects an active mask instead of writing partial state.
+- Studio 1.20 multi-target character removal expands authored targets deterministically while
+  retaining the legacy single-target fallback.
 - Save/Load no longer rebuilds a newly written or overwritten slot before its asynchronous
   screenshot is available. The screenshot callback now refreshes metadata and preview together;
   if no primary window exists, the card still refreshes without a preview.

@@ -463,6 +463,7 @@ mod tests {
                         | "switchParagraphStyle"
                         | "systemMessage"
                         | "updateCharacter"
+                        | "stageMask"
                 )
             })
             .collect::<BTreeSet<_>>();

@@ -519,6 +519,7 @@ fn action_name(action: &Action) -> &'static str {
         // LetsGal owns this adapter-native fixture; the WebGAL showcase
         // intentionally does not need to manufacture Studio timeline JSON.
         Action::StageAnimation { .. } => "stage-animation",
+        Action::StageMask { .. } => "stage-mask",
         Action::RetractDialogue { .. } => "retract-dialogue",
         Action::WaitForAdvance => "wait-for-advance",
         Action::SelectSpriteImage { .. } => "select-sprite-image",

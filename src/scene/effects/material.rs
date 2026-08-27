@@ -75,12 +75,21 @@ pub(crate) struct StageMaterial {
     pub(crate) post_r: Vec4,
     #[uniform(0)]
     pub(crate) post_s: Vec4,
+    #[uniform(0)]
+    pub(crate) clip_a: Vec4,
+    #[uniform(0)]
+    pub(crate) clip_b: Vec4,
+    #[uniform(0)]
+    pub(crate) clip_c: Vec4,
     #[texture(1, visibility(fragment))]
     #[sampler(2, visibility(fragment))]
     pub(crate) lut: Option<Handle<Image>>,
     #[texture(3, visibility(fragment))]
     #[sampler(4, visibility(fragment))]
     pub(crate) image: Handle<Image>,
+    #[texture(5, visibility(fragment))]
+    #[sampler(6, visibility(fragment))]
+    pub(crate) clip_image: Option<Handle<Image>>,
     pub(crate) blend: BlendMode,
 }
 
@@ -239,8 +248,12 @@ impl StageMaterial {
                 post.eyelid_center_x.clamp(0.0, 1.0),
             ),
             post_s: Vec4::new(post.eyelid_center_y.clamp(0.0, 1.0), 0.0, 0.0, 0.0),
+            clip_a: Vec4::ZERO,
+            clip_b: Vec4::ZERO,
+            clip_c: Vec4::ZERO,
             lut,
             image,
+            clip_image: None,
             blend,
         }
     }
@@ -410,6 +423,7 @@ impl StageMaterial {
             || self.post_p.x > ACTIVE
             || self.post_p.w > ACTIVE
             || self.post_q.w < 0.999;
+        let basic = basic || self.clip_a.x > ACTIVE;
         if basic {
             StageShaderClass::Basic
         } else {
@@ -504,8 +518,10 @@ mod tests {
         let shader = include_str!("../../assets/shaders/stage_material.wgsl");
 
         assert_eq!(shader.matches("var<uniform>").count(), 1);
-        assert_eq!(shader.matches("@binding(").count(), 5);
-        for binding in 0..=4 {
+        // LUT, source image, and the optional authored clip image each need one
+        // texture/sampler pair; scalar data still stays in one uniform buffer.
+        assert_eq!(shader.matches("@binding(").count(), 7);
+        for binding in 0..=6 {
             assert!(shader.contains(&format!("@binding({binding})")));
         }
     }

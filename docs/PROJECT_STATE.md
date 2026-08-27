@@ -57,8 +57,10 @@ project / package
   23 partially supported, and 3 explicitly unsupported. This is a compatibility record rather
   than a parity roadmap. Existing behavior remains regression-tested; only security, crash, data
   loss, or Kēne-caused regressions justify maintenance without a new product decision.
-- LetsGal Studio 1.x remains a read-only adapter. The checked-in 1.8 fixture and 1.11 acceptance
+- LetsGal Studio 1.x remains a read-only adapter. The checked-in 1.8 fixture and 1.20 acceptance
   project are active compatibility evidence; Studio extensions and bridge injection are excluded.
+  LetsGal 1.20 multi-target character removal and typed `stageMask` overlay/clip state are native;
+  dynamic Spine and Live2D portraits remain explicitly unsupported.
   A Studio-native ID outside Kēne's path-safe slug grammar is deterministically mapped to a stable
   `letsgal-*` shipping/save ID; `project.json.keine.projectId` is the explicit override.
 - Save v10 and compiled Program v1 are strict envelopes. Other layouts are rejected; there is no
@@ -100,10 +102,11 @@ project / package
   pass by 42.3% and raised its median from 55.2 to the 60 FPS cap; complete classic improved 6.4%
   and combined stress 1.8%. Visual and non-target workloads showed no material regression. Godray
   and remaining combined costs require a new measured task before any further renderer change.
-- T02 closed without a product-code change. The local representative LetsGal project compiled 9
-  scenes and 896 actions with no diagnostics or unresolved static resources; complete adapter
-  load, compilation, and fingerprinting measured 1.1314–1.1420 ms. Tracked adapter tests and the
-  shared acceptance project passed. The external sample remains untracked by design.
+- The original T02 production-project pass closed without a product-code change: the local
+  representative project compiled 9 scenes and 896 actions without diagnostics or unresolved
+  static resources. Its later Studio 1.20 follow-up added native multi-target character removal
+  and typed `stageMask` overlay/clip support, including blocking, rollback, editor replay, and
+  explicit Save v10 rejection while a mask is active. The external sample remains untracked.
 - Release workflow run 17 completed successfully for `a8175f9`, covering the integrated LetsGal
   release-ID fix and the Linux, macOS, and Windows temporary benchmark bundles.
 - T03's available macOS acceptance passed on Apple M5 Pro / Metal at `1db8e15`: title, stage,

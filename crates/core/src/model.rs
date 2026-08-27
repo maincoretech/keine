@@ -13,6 +13,6 @@ pub use state::{
     ActiveParticleEffect, BgmState, CameraShakeState, DialoguePause, EffectCue, EffectEvent,
     EffectState, HostCommandEvent, MenuChoice, MenuState, PersistenceHazard, PersistenceSafety,
     PostProcessAnimation, RestoreError, SceneFrame, ShellEvent, SpriteSequenceState,
-    StageAnimationState, State, VideoState, VocalCue,
+    StageAnimationState, StageMaskState, State, VideoState, VocalCue,
 };
 pub use types::*;

@@ -72,7 +72,8 @@ runtime 以所有 `line <= selected_step` 的 Action 为目标，因此不会把
 
 ## 完整性与边界
 
-- 1.11.0 当前内置的 38 种 runtime block 必须全部编译为 typed core Action；未知内置类型报错；
+- 1.20.0 当前内置的 39 种 runtime block 必须被 adapter 穷尽识别并编译为 typed core
+  语义；其他未知内置类型明确报错；
 - 1.9.1 的 `chapterTreeOrder` 为章节执行顺序主来源：根章节按 tree entry 排列，目录 entry 按
   对应 `chapterFolders[].chapterIds` 展开；缺少新字段的旧项目继续回退 `chapterOrder`；
 - 默认壳 `dialogue-box.json` 的 `text_speed`、`char_fade_in_duration`、
@@ -99,7 +100,7 @@ runtime 以所有 `line <= selected_step` 的 Action 为目标，因此不会把
 - 1.9.2 工程仍可带 `chapterFolders` / `chapterTreeOrder`、`scenes.json`（版本 3 视差层）与
   `characters.json`（版本 2 全局位置/高度比），这些字段的解析保持兼容。
 
-## 1.9.5–1.11.0 增量
+## 1.9.5–1.20.0 增量
 
 - 1.9.5 新增的 `switchParagraphStyle`、`hideFloatingText`、`systemMessage` 已加入内置类型
   合同并降级为 typed core Action：故事段落使用独立样式，命名/无限浮字可按 id 播放退场并
@@ -124,6 +125,18 @@ runtime 以所有 `line <= selected_step` 的 Action 为目标，因此不会把
 - 1.11.0 把自动播放等待指示器从普通等待光标中独立出来，可配置图片、位置、尺寸与动画。
   Kēne 当前对普通和自动播放等待指示器都**明确不支持**：相关 UI JSON 字段安全忽略，不渲染
   替代物。Spine、Live2D 的不支持边界不变。
+- 1.20.0 新增第 39 种内置 block `stageMask`。Kēne 将命名蒙层编译为持久 typed Action/state，
+  原生支持显示/替换/移除、矩形/圆角/椭圆/图片形状、inside/outside、羽化与进退场；overlay
+  支持四种显示层级、纯色/渐变/纹理及其颜色效果，clip 支持 scene/characters/all/selected
+  目标。图片蒙版支持 alpha/luminance 与 stretch/cover/contain；状态参与阻塞、内存回滚和同步
+  seek。Save v10 没有对应 wire 字段，因此活动蒙层期间拒绝磁盘存档。它不降级为 `Curtain`；
+  纹理模糊只作用于蒙层纹理采样，并非区域性舞台 backdrop blur。
+- 1.20.0 的 `removeCharacter.characterTargetsJson` 会按作者选择顺序解析为多个
+  `HideSprite`，空列表或旧工程仍回退 `characterId` / `characterName`。对白与旁白结束行为继续
+  使用既有 `keepDialogue`，无需新增 IR。
+- 1.20.0 的项目 Git/LFS、时光机、批次构建、Android 兼容纹理、章节导入导出、预览画质、
+  文档 AI、新手引导、扩展检查器和 UI 交互音效属于 Studio 编辑器、构建器或壳层，不进入
+  Kēne 剧情 IR。Spine、Live2D 仍然**明确不支持**。
 - 新增 `stageAnimation` 编译为 adapter-neutral 共享舞台时间轴：camera、character、scene layer
   共用真实时间时钟，支持关键帧、循环、倍率、等待，以及 camera/scene/particle/shake/audio
   事件；

@@ -600,6 +600,14 @@ pub enum Action {
         easing: Easing,
         blocking: bool,
     },
+    /// Show, replace, or remove a named stage mask. `None` removes the mask.
+    /// Kept at the tail for stable serialized action tags and fingerprints.
+    StageMask {
+        id: String,
+        mask: Option<Box<crate::types::StageMask>>,
+        duration: f32,
+        blocking: bool,
+    },
 }
 
 /// Fixed system surfaces owned by the engine shell, never by a script adapter.

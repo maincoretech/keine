@@ -3,6 +3,7 @@ pub mod audio;
 pub mod background;
 pub(crate) mod effects;
 pub(crate) mod images;
+pub(crate) mod masks;
 pub mod sprites;
 pub(crate) mod video;
 
@@ -31,6 +32,7 @@ impl ScenePlugin {
 impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(effects::StageEffectsPlugin)
+            .add_plugins(masks::StageMaskPlugin)
             .add_plugins(video::VideoPlugin::new(self.video))
             .insert_resource(audio::VocalPlayback::default())
             .init_resource::<audio::BgmPlayback>()

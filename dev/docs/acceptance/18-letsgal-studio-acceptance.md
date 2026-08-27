@@ -1,4 +1,4 @@
-# LetsGal Studio 1.11.0 原生同步验收
+# LetsGal Studio 1.20.0 原生同步验收
 
 本验收只覆盖原生工程同步，不安装或启用任何 Studio 扩展。Studio 原版 Player 可以关闭；
 画面以独立 keine 窗口为准。
@@ -44,7 +44,7 @@
 18. 快速连续保存 chapter 和 `.studio/state.json`。预期没有永久停留在旧画面；短暂 JSON 读取
     冲突会自动跨帧恢复；即使文件通知被系统合并，200 ms 调试位置轮询也会兜底。
 
-## D. 规定动作与 1.11.0 新语义覆盖
+## D. 规定动作与 1.20.0 新语义覆盖
 
 19. 创建两个虚拟章节目录并交错放置根章节，令 `chapterTreeOrder` 与旧 `chapterOrder` 不同。
     预期 keine 严格按树中目录/章节顺序运行；删掉新字段后仍按旧顺序兼容运行。
@@ -90,22 +90,30 @@
     换位以及三种换位缓动；移除角色后再次更新必须跳过，绝不能让缺席角色重新入场。
 32. 配置普通等待光标和 1.11.0 独立自动播放等待指示器。当前预期是工程正常加载且字段被安全
     忽略，Kēne 不渲染两类指示器；不得把 Studio 壳层预览误计为原生支持。
+33. 在 1.20.0 `removeCharacter` 同时选择两个以上角色。预期每个
+    `characterTargetsJson` 目标都编译为独立 `HideSprite`；旧版单目标字段仍可加载。
+34. 添加 1.20.0 `stageMask` 的显示和移除动作，分别覆盖矩形/圆角/椭圆/图片、inside/outside、
+    overlay 四层与 clip 的 scene/characters/all/selected。预期原生显示、裁剪和进退场按 authored
+    参数执行，selected 只影响所选 id；内存回滚或同步 seek 后状态一致，活动蒙层期间 Save v10
+    明确拒绝磁盘存档，不生成近似 `Curtain`。
+35. 分别把对白与旁白的结束行为设为关闭/保留对话框。预期仍通过 `keepDialogue` 控制，关闭
+    发生在该句被确认之后，后续对白可重新显示对话框。
 
 ## E. 同步控制权与窗口
 
-33. 在 keine 窗口单击、滚轮、按 Enter/Space。预期打字和动画可以继续，但剧情执行位置不会
+36. 在 keine 窗口单击、滚轮、按 Enter/Space。预期打字和动画可以继续，但剧情执行位置不会
     脱离 Studio 当前 block；推进必须在 Studio 选择新 block。
-34. 调整 keine 窗口大小并移动到另一显示器。预期 1920×1080 逻辑视口等比居中，背景、
+37. 调整 keine 窗口大小并移动到另一显示器。预期 1920×1080 逻辑视口等比居中，背景、
     scene layer、角色、粒子、textbox 使用同一裁切区。
-35. 打开/关闭 SAVE、LOAD、CONFIG、BACKLOG。预期不改变 Studio block；返回后画面仍是同一
+38. 打开/关闭 SAVE、LOAD、CONFIG、BACKLOG。预期不改变 Studio block；返回后画面仍是同一
     确定性预览状态；确认存档/清除/设置等持久化操作不应在工程中产生新文件。
 
 ## F. 自动回归
 
 ```bash
+cargo letsgal-test
 cargo test -p keine-loader adapter::editor::letsgal
-cargo test --lib editor_seek
-cargo check --workspace --all-targets
+cargo validate projects/test-project
 ```
 
 失败记录格式：

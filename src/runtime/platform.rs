@@ -400,6 +400,10 @@ fn core_is_animating(state: &GameState, dialogue_length: &mut DialogueLengthCach
         || state.wait_remaining > f32::EPSILON
         || state.intro.is_some()
         || (state.curtain.current - state.curtain.target).abs() > f32::EPSILON
+        || state
+            .stage_masks
+            .values()
+            .any(|mask| (mask.current - mask.target).abs() > f32::EPSILON)
         || state.floating_text.is_some()
         || !state.videos.is_empty()
         || !state.particle_effects.is_empty()

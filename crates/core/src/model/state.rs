@@ -113,6 +113,12 @@ pub struct State {
     pub film_mode: bool,
     #[serde(default)]
     pub curtain: CurtainState,
+    /// Save v10 has no stage-mask wire field. Active masks therefore make a
+    /// disk save inexact, while in-memory rollback still clones this state.
+    #[serde(skip, default)]
+    pub stage_masks: HashMap<String, StageMaskState>,
+    #[serde(skip, default)]
+    pub stage_mask_order: u64,
     #[serde(default)]
     pub floating_text: Option<FloatingTextState>,
     #[serde(default)]
@@ -340,6 +346,10 @@ pub struct RollbackSnapshot {
     pub film_mode: bool,
     #[serde(default)]
     pub curtain: CurtainState,
+    #[serde(skip, default)]
+    pub stage_masks: Arc<HashMap<String, StageMaskState>>,
+    #[serde(skip, default)]
+    pub stage_mask_order: u64,
     #[serde(default)]
     pub floating_text: Option<FloatingTextState>,
     #[serde(default)]
@@ -404,6 +414,7 @@ pub enum PersistenceHazard {
     CameraShake,
     CameraEffect,
     StageAnimation,
+    StageMask,
     Video,
     SpritePosition,
     SpriteKeyframes,
@@ -534,6 +545,18 @@ impl Default for CurtainState {
             blocking: false,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StageMaskState {
+    pub mask: crate::types::StageMask,
+    pub current: f32,
+    pub from: f32,
+    pub target: f32,
+    pub elapsed: f32,
+    pub duration: f32,
+    pub blocking: bool,
+    pub order: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -810,6 +833,7 @@ impl State {
                     .as_ref()
                     .map(|_| Hazard::StageAnimation)
             })
+            .or_else(|| (!self.stage_masks.is_empty()).then_some(Hazard::StageMask))
             .or_else(|| (!self.videos.is_empty()).then_some(Hazard::Video))
             .or_else(|| {
                 self.sprites
@@ -941,6 +965,11 @@ impl State {
                 textbox_auto_hidden: self.textbox_auto_hidden,
                 film_mode: self.film_mode,
                 curtain: self.curtain.clone(),
+                stage_masks: shared_snapshot(
+                    &self.stage_masks,
+                    previous.map(|snapshot| &snapshot.stage_masks),
+                ),
+                stage_mask_order: self.stage_mask_order,
                 floating_text: self.floating_text.clone(),
                 portrait_rule: self.portrait_rule.clone(),
                 dialogue_style: self.dialogue_style.clone(),
@@ -1045,6 +1074,8 @@ impl State {
         self.intro = None;
         self.film_mode = snapshot.film_mode;
         self.curtain = snapshot.curtain;
+        self.stage_masks = snapshot.stage_masks.as_ref().clone();
+        self.stage_mask_order = snapshot.stage_mask_order;
         self.floating_text = snapshot.floating_text;
         self.portrait_rule = snapshot.portrait_rule;
         self.dialogue_style = snapshot.dialogue_style;
@@ -1070,6 +1101,7 @@ impl State {
             || self.system_message.is_some()
             || self.intro.as_ref().is_some_and(|intro| intro.blocking)
             || self.curtain.blocking
+            || self.stage_masks.values().any(|mask| mask.blocking)
             || self
                 .floating_text
                 .as_ref()

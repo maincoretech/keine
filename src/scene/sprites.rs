@@ -318,19 +318,31 @@ pub(crate) fn sync_sprites(
         let mut filter = data.filter;
         filter.blur += transform.blur;
         let animation = animation_uniform(data.films, data.animation.as_ref());
+        let clip = crate::scene::masks::clip_input(
+            &state,
+            group,
+            id,
+            viewport,
+            &render.asset_server,
+            &render.image_roles,
+        );
         let uses_material = data.blend != BlendMode::Alpha
             || !filter.is_identity()
             || !post.is_identity()
-            || animation.z > 0.0;
+            || animation.z > 0.0
+            || clip.is_some();
 
         if let Some(entity) = entities.index.0.get(id).copied() {
             if let Ok((mut current_transform, current_sprite, existing_material)) =
                 entities.rendered.get_mut(entity)
             {
                 if uses_material {
-                    let material = StageMaterial::new(
+                    let mut material = StageMaterial::new(
                         handle, alpha, filter, data.blend, animation, &post, lut,
                     );
+                    if let Some(clip) = clip.clone() {
+                        clip.apply(&mut material);
+                    }
                     let material_handle =
                         upsert_stage_material(existing_material, &mut render.materials, material);
                     let mesh_transform = entity_transform.with_scale(Vec3::new(
@@ -370,9 +382,12 @@ pub(crate) fn sync_sprites(
         ));
         let entity_id = entity.id();
         if uses_material {
-            let material = render.materials.add(StageMaterial::new(
-                handle, alpha, filter, data.blend, animation, &post, lut,
-            ));
+            let mut material =
+                StageMaterial::new(handle, alpha, filter, data.blend, animation, &post, lut);
+            if let Some(clip) = clip {
+                clip.apply(&mut material);
+            }
+            let material = render.materials.add(material);
             entity.insert((
                 Mesh2d(render.quad.0.clone()),
                 MeshMaterial2d(material),

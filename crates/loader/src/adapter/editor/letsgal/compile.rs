@@ -12,7 +12,9 @@ use keine_core::{
     ChoiceTarget, ColorToneMode, Easing, InputValueType, PortraitStyle, Position,
     PostProcessEffect, PostProcessPatch, SayOptions, SceneFit, SceneLayerLayout, SpriteLayout,
     SpriteTransform, StageAnimation, StageAudioCue, StageAudioKind, StageEvent, StageEventKind,
-    StageKeyframe, StageProperty, StageSceneCue, StageSceneLayer, StageTarget, StageTrack,
+    StageKeyframe, StageMask, StageMaskFillMode, StageMaskFit, StageMaskImageChannel,
+    StageMaskMode, StageMaskPlane, StageMaskScope, StageMaskShape, StageMaskTextureBlend,
+    StageMaskVisibility, StageProperty, StageSceneCue, StageSceneLayer, StageTarget, StageTrack,
     SystemMessageMode, SystemMessageSpec, SystemUiSlot, TransformKeyframe, TransformPatch,
     Transition, UserInputSpec, VideoMode, VideoSpec,
 };
@@ -93,8 +95,8 @@ fn core_value(value: &Value) -> Option<keine_core::Value> {
     }
 }
 
-/// Runtime-facing block registry observed in LetsGal Studio 1.11.0's bundled
-/// editor schema. `cmdDraft` is editor-only and therefore intentionally not in
+/// Runtime-facing block registry observed in LetsGal Studio 1.20.0's editor
+/// schema. `cmdDraft` is editor-only and therefore intentionally not in
 /// this compatibility contract.
 pub(super) const BUILTIN_BLOCK_TYPES: &[&str] = &[
     "animateSprite",
@@ -126,6 +128,7 @@ pub(super) const BUILTIN_BLOCK_TYPES: &[&str] = &[
     "showExtensionUI",
     "sound",
     "stageAnimation",
+    "stageMask",
     "stopSound",
     "stopVideo",
     "storyParagraph",
@@ -564,13 +567,7 @@ fn compile_block(
         }
         "showCharacter" => show_character(block, context, span, report),
         "updateCharacter" => update_character(block, context, span, report),
-        "removeCharacter" => report.push(
-            Action::HideSprite {
-                id: character_id(block),
-                transition: fade(block, "animated", 0.2),
-            },
-            span,
-        ),
+        "removeCharacter" => compile_remove_characters(block, span, report),
         "scene" => compile_scene(block, context, span, report),
         "destroyScene" => compile_destroy_scene(block, context, span, report),
         "branch" => compile_branch(block, span, report),
@@ -628,6 +625,7 @@ fn compile_block(
         "resetCamera" => compile_reset_camera(block, span, report),
         "animateSprite" => compile_animate_sprite(block, context, span, report),
         "stageAnimation" => compile_stage_animation(block, context, span, report),
+        "stageMask" => compile_stage_mask(block, span, report),
         "particle" => compile_particle(block, span, report),
         "endChapter" => match context.chapter_next.get(&chapter.id).cloned().flatten() {
             Some(next) => report.push(Action::ChangeScene(next), span),
@@ -680,7 +678,7 @@ fn compile_block(
         "systemMessage" => compile_system_message(block, span, report),
         "enterAutoPlay" => report.push(Action::SetAutoplay { enabled: true }, span),
         "exitAutoPlay" => report.push(Action::SetAutoplay { enabled: false }, span),
-        _ => unreachable!("the 1.11.0 block registry is exhaustively matched"),
+        _ => unreachable!("the 1.20.0 block registry is exhaustively matched"),
     }
 }
 
@@ -773,6 +771,39 @@ fn update_character(
     compile_character(block, context, span, report, true);
 }
 
+#[derive(Deserialize)]
+struct RemoveCharacterTarget {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    name: String,
+}
+
+fn compile_remove_characters(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport) {
+    let mut targets =
+        json_string::<Vec<RemoveCharacterTarget>>(&block.props, "characterTargetsJson")
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|target| {
+                non_empty(if target.id.is_empty() {
+                    target.name
+                } else {
+                    target.id
+                })
+            })
+            .collect::<Vec<_>>();
+    if targets.is_empty() {
+        targets.extend(non_empty(character_id(block)));
+    }
+    let mut seen = BTreeSet::new();
+    targets.retain(|target| seen.insert(target.clone()));
+
+    let transition = fade(block, "animated", 0.2);
+    for id in targets {
+        report.push(Action::HideSprite { id, transition }, span);
+    }
+}
+
 fn compile_character(
     block: &StoryBlock,
     context: &CompileContext<'_>,
@@ -821,7 +852,7 @@ fn compile_character(
                 level: DiagnosticLevel::Error,
                 span,
                 message: format!(
-                    "unsupported LetsGal 1.11.0 dynamic portrait type {kind:?}; \
+                    "unsupported LetsGal 1.20.0 dynamic portrait type {kind:?}; \
                      Kēne currently supports static and sequence portraits only"
                 ),
             });
@@ -1833,6 +1864,197 @@ fn compile_curtain(block: &StoryBlock, span: SourceSpan, report: &mut ParseRepor
         },
         span,
     );
+}
+
+fn compile_stage_mask(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport) {
+    let id = prop_string_or(&block.props, "maskId", "mask");
+    if prop_string(&block.props, "action") == "remove" {
+        report.push(
+            Action::StageMask {
+                id,
+                mask: None,
+                duration: prop_f32(&block.props, "exitDuration", 0.0).max(0.0) / 1000.0,
+                blocking: true,
+            },
+            span,
+        );
+        return;
+    }
+    if prop_string_or(&block.props, "coordinateSpace", "screen") != "screen" {
+        report.diagnostics.push(Diagnostic {
+            level: DiagnosticLevel::Error,
+            span,
+            message: "unsupported stageMask coordinate space; expected screen".into(),
+        });
+        return;
+    }
+
+    let shape = match prop_string_or(&block.props, "shape", "rect").as_str() {
+        "rounded" | "rounded-rect" => StageMaskShape::RoundedRectangle,
+        "ellipse" => StageMaskShape::Ellipse,
+        "image" => StageMaskShape::Image,
+        _ => StageMaskShape::Rectangle,
+    };
+    let image = non_empty(prop_string(&block.props, "image"));
+    if shape == StageMaskShape::Image && image.is_none() {
+        report.diagnostics.push(Diagnostic {
+            level: DiagnosticLevel::Error,
+            span,
+            message: "stageMask image shape has no mask asset".into(),
+        });
+        return;
+    }
+    let fill_mode = match prop_string_or(&block.props, "fillMode", "solid").as_str() {
+        "gradient" => StageMaskFillMode::Gradient,
+        "texture" => StageMaskFillMode::Texture,
+        _ => StageMaskFillMode::Solid,
+    };
+    let texture = non_empty(prop_string(&block.props, "texture"));
+    if fill_mode == StageMaskFillMode::Texture && texture.is_none() {
+        report.diagnostics.push(Diagnostic {
+            level: DiagnosticLevel::Error,
+            span,
+            message: "stageMask texture fill has no texture asset".into(),
+        });
+        return;
+    }
+
+    let mask = StageMask {
+        mode: if prop_string(&block.props, "mode") == "clip" {
+            StageMaskMode::Clip
+        } else {
+            StageMaskMode::Overlay
+        },
+        plane: match prop_string_or(&block.props, "plane", "bottom").as_str() {
+            "behind-scene" => StageMaskPlane::BehindScene,
+            "top" => StageMaskPlane::Top,
+            "topmost" => StageMaskPlane::Topmost,
+            _ => StageMaskPlane::Bottom,
+        },
+        scope: match prop_string_or(&block.props, "scope", "stage").as_str() {
+            "stage" | "scene" => StageMaskScope::Scene,
+            "characters" | "character" => StageMaskScope::Characters,
+            "selected" => StageMaskScope::Selected,
+            _ => StageMaskScope::All,
+        },
+        targets: stage_mask_targets(&block.props),
+        shape,
+        image,
+        image_channel: if prop_string(&block.props, "imageChannel") == "luminance" {
+            StageMaskImageChannel::Luminance
+        } else {
+            StageMaskImageChannel::Alpha
+        },
+        image_fit: stage_mask_fit(&prop_string_or(&block.props, "imageFit", "stretch")),
+        center: [
+            prop_f32(&block.props, "centerX", 50.0).clamp(-500.0, 500.0),
+            prop_f32(&block.props, "centerY", 50.0).clamp(-500.0, 500.0),
+        ],
+        size: [
+            prop_f32(&block.props, "width", 50.0).clamp(0.01, 1000.0),
+            prop_f32(&block.props, "height", 50.0).clamp(0.01, 1000.0),
+        ],
+        rotation: prop_f32(&block.props, "rotation", 0.0).to_radians(),
+        radius: prop_f32(&block.props, "radius", 24.0).max(0.0),
+        visibility: if prop_string(&block.props, "visibility") == "outside" {
+            StageMaskVisibility::Outside
+        } else {
+            StageMaskVisibility::Inside
+        },
+        feather: prop_f32(&block.props, "feather", 0.0).clamp(0.0, 512.0),
+        opacity: (prop_f32(&block.props, "opacity", 100.0) / 100.0).clamp(0.0, 1.0),
+        fill_mode,
+        color: parse_color(&prop_string_or(&block.props, "color", "#000000")),
+        gradient_start: parse_color(&prop_string_or(&block.props, "gradientStart", "#000000")),
+        gradient_end: parse_color(&prop_string_or(&block.props, "gradientEnd", "#243247")),
+        gradient_direction: prop_f32(&block.props, "gradientDirection", 0.0).to_radians(),
+        texture,
+        texture_fit: stage_mask_fit(&prop_string_or(&block.props, "textureFit", "cover")),
+        texture_blend: match prop_string_or(&block.props, "textureBlend", "normal").as_str() {
+            "multiply" => StageMaskTextureBlend::Multiply,
+            "screen" => StageMaskTextureBlend::Screen,
+            "add" => StageMaskTextureBlend::Add,
+            _ => StageMaskTextureBlend::Normal,
+        },
+        texture_scale: (prop_f32(&block.props, "textureScale", 100.0) / 100.0).clamp(0.01, 20.0),
+        texture_opacity: (prop_f32(&block.props, "textureOpacity", 100.0) / 100.0).clamp(0.0, 1.0),
+        blur: if prop_bool(&block.props, "blurEnabled", false) {
+            prop_f32(&block.props, "blurAmount", 8.0).clamp(0.0, 64.0)
+        } else {
+            0.0
+        },
+        vignette_amount: if prop_bool(&block.props, "vignetteEnabled", false) {
+            (prop_f32(&block.props, "vignetteAmount", 35.0) / 100.0).clamp(0.0, 1.0)
+        } else {
+            0.0
+        },
+        vignette_size: (prop_f32(&block.props, "vignetteSize", 55.0) / 100.0).clamp(0.0, 1.0),
+        noise_amount: if prop_bool(&block.props, "noiseEnabled", false) {
+            (prop_f32(&block.props, "noiseAmount", 12.0) / 100.0).clamp(0.0, 1.0)
+        } else {
+            0.0
+        },
+        noise_size: prop_f32(&block.props, "noiseSize", 45.0).clamp(1.0, 512.0),
+        hue: if prop_bool(&block.props, "colorAdjustmentEnabled", false) {
+            prop_f32(&block.props, "colorHue", 0.0).to_radians()
+        } else {
+            0.0
+        },
+        saturation: if prop_bool(&block.props, "colorAdjustmentEnabled", false) {
+            (prop_f32(&block.props, "colorSaturation", 100.0) / 100.0).clamp(0.0, 4.0)
+        } else {
+            1.0
+        },
+        brightness: if prop_bool(&block.props, "colorAdjustmentEnabled", false) {
+            (prop_f32(&block.props, "colorBrightness", 100.0) / 100.0).clamp(0.0, 4.0)
+        } else {
+            1.0
+        },
+    };
+    report.push(
+        Action::StageMask {
+            id,
+            mask: Some(Box::new(mask)),
+            duration: prop_f32(&block.props, "enterDuration", 0.0).max(0.0) / 1000.0,
+            blocking: true,
+        },
+        span,
+    );
+}
+
+fn stage_mask_fit(value: &str) -> StageMaskFit {
+    match value {
+        "cover" => StageMaskFit::Cover,
+        "contain" | "fit" => StageMaskFit::Contain,
+        _ => StageMaskFit::Stretch,
+    }
+}
+
+fn stage_mask_targets(props: &Map<String, Value>) -> Vec<String> {
+    fn collect(value: &Value, targets: &mut Vec<String>) {
+        match value {
+            Value::String(value) if !value.trim().is_empty() => targets.push(value.clone()),
+            Value::Array(values) => values.iter().for_each(|value| collect(value, targets)),
+            Value::Object(value) => {
+                for key in ["id", "targetId", "sceneId", "layerId", "characterId"] {
+                    if let Some(Value::String(id)) = value.get(key)
+                        && !id.trim().is_empty()
+                    {
+                        targets.push(id.clone());
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut targets = Vec::new();
+    if let Some(value) = json_value(props, "targetsJson") {
+        collect(&value, &mut targets);
+    }
+    let mut seen = BTreeSet::new();
+    targets.retain(|target| seen.insert(target.clone()));
+    targets
 }
 
 fn compile_floating_text(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport) {
@@ -3124,8 +3346,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn studio_1110_registry_is_exhaustively_matched() {
-        assert_eq!(BUILTIN_BLOCK_TYPES.len(), 38);
+    fn studio_1200_registry_is_exhaustively_matched() {
+        assert_eq!(BUILTIN_BLOCK_TYPES.len(), 39);
         for required in [
             "playerInput",
             "enterAutoPlay",
@@ -3136,9 +3358,106 @@ mod tests {
             "switchParagraphStyle",
             "systemMessage",
             "updateCharacter",
+            "stageMask",
         ] {
             assert!(BUILTIN_BLOCK_TYPES.contains(&required));
         }
+    }
+
+    #[test]
+    fn studio_1200_remove_character_compiles_every_selected_target() {
+        let block = StoryBlock {
+            id: None,
+            kind: "removeCharacter".into(),
+            content: Value::Null,
+            props: Map::from_iter([
+                (
+                    "characterTargetsJson".into(),
+                    json!(r#"[{"id":"alice","name":"Alice"},{"id":"bob","name":"Bob"}]"#),
+                ),
+                ("characterId".into(), json!("alice")),
+                ("characterName".into(), json!("Alice")),
+            ]),
+            children: Vec::new(),
+            extras: Map::new(),
+        };
+        let mut report = ParseReport::default();
+
+        compile_remove_characters(&block, SourceSpan { line: 1, column: 1 }, &mut report);
+
+        assert!(matches!(
+            &report.actions[..],
+            [
+                Action::HideSprite { id: alice, .. },
+                Action::HideSprite { id: bob, .. }
+            ] if alice == "alice" && bob == "bob"
+        ));
+        assert!(report.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn studio_1200_stage_mask_compiles_typed_geometry_and_fill() {
+        let chapter = ChapterDocument {
+            id: "chapter".into(),
+            name: "chapter".into(),
+            disabled: false,
+            fragments: Vec::new(),
+        };
+        let chapter_next = HashMap::new();
+        let characters = HashMap::new();
+        let scenes = HashMap::new();
+        let voices = HashMap::new();
+        let positions = HashMap::new();
+        let context = CompileContext {
+            entry: "entry",
+            chapter_next: &chapter_next,
+            characters: &characters,
+            scenes: &scenes,
+            voices: &voices,
+            positions: &positions,
+            portrait_height_ratio: None,
+        };
+        let block = StoryBlock {
+            id: None,
+            kind: "stageMask".into(),
+            content: Value::Null,
+            props: Map::from_iter([
+                ("action".into(), json!("show")),
+                ("mode".into(), json!("overlay")),
+                ("maskId".into(), json!("focus")),
+                ("shape".into(), json!("ellipse")),
+                ("visibility".into(), json!("outside")),
+                ("centerX".into(), json!(25)),
+                ("width".into(), json!(40)),
+                ("fillMode".into(), json!("gradient")),
+                ("gradientStart".into(), json!("#112233")),
+                ("enterDuration".into(), json!(500)),
+            ]),
+            children: Vec::new(),
+            extras: Map::new(),
+        };
+        let mut report = ParseReport::default();
+
+        compile_block(
+            &block,
+            &chapter,
+            &context,
+            SourceSpan { line: 1, column: 1 },
+            &mut report,
+        );
+
+        assert!(matches!(
+            &report.actions[..],
+            [Action::StageMask { id, mask: Some(mask), duration, .. }]
+                if id == "focus"
+                    && mask.shape == StageMaskShape::Ellipse
+                    && mask.visibility == StageMaskVisibility::Outside
+                    && mask.fill_mode == StageMaskFillMode::Gradient
+                    && (mask.center[0] - 25.0).abs() <= f32::EPSILON
+                    && (mask.size[0] - 40.0).abs() <= f32::EPSILON
+                    && (*duration - 0.5).abs() <= f32::EPSILON
+        ));
+        assert!(report.diagnostics.is_empty());
     }
 
     #[test]
