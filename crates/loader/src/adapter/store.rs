@@ -315,8 +315,7 @@ mod keine {
 
         #[test]
         fn state_integrity_is_checked_only_when_the_state_is_loaded() {
-            let bytes = KeineStore.encode(&State::new()).unwrap();
-            let mut corrupt = bytes.clone();
+            let mut corrupt = KeineStore.encode(&State::new()).unwrap();
             *corrupt.last_mut().unwrap() ^= 0xff;
 
             assert!(matches!(inspect(&corrupt), StoreStatus::Ready(_)));

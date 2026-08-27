@@ -806,17 +806,15 @@ fn compile_character(
         .and_then(Value::as_str);
     let sequence = match (presentation_kind, presentation) {
         (Some("sequence"), Some(presentation)) => {
-            match portrait_sequence(presentation, character) {
-                Some(sequence) => Some(sequence),
-                None => {
-                    report.diagnostics.push(Diagnostic {
-                        level: DiagnosticLevel::Error,
-                        span,
-                        message: "LetsGal sequence portrait has no resolvable static frames".into(),
-                    });
-                    return;
-                }
-            }
+            let Some(sequence) = portrait_sequence(presentation, character) else {
+                report.diagnostics.push(Diagnostic {
+                    level: DiagnosticLevel::Error,
+                    span,
+                    message: "LetsGal sequence portrait has no resolvable static frames".into(),
+                });
+                return;
+            };
+            Some(sequence)
         }
         (Some(kind @ ("spine" | "live2d")), _) => {
             report.diagnostics.push(Diagnostic {
@@ -1376,7 +1374,6 @@ fn compile_set_variable(block: &StoryBlock, span: SourceSpan, report: &mut Parse
     };
     let operator = prop_string_or(&block.props, "op", "=");
     let expression = match operator.as_str() {
-        "=" => operand,
         "+=" | "-=" | "*=" | "/=" | "%=" => {
             format!("{name} {} ({operand})", &operator[..1])
         }

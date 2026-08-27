@@ -75,6 +75,8 @@ pub(crate) fn sync(settings: Res<RuntimeSettings>, mut labels: Query<(&Localized
     }
 }
 
+// Keep every locale/key pair explicit so each translation remains independently editable.
+#[allow(clippy::match_same_arms)]
 pub(crate) const fn tr(locale: UiLocale, key: UiText) -> &'static str {
     use UiLocale::{En, Ja, ZhCn, ZhTw};
     use UiText::*;

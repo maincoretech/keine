@@ -927,16 +927,15 @@ mod tests {
             .iter()
             .filter(|profile| profile.depth < 0.4)
             .collect::<Vec<_>>();
-        let middle = profiles
+        let has_middle = profiles
             .iter()
-            .filter(|profile| (0.4..0.76).contains(&profile.depth))
-            .collect::<Vec<_>>();
+            .any(|profile| (0.4..0.76).contains(&profile.depth));
         let near = profiles
             .iter()
             .filter(|profile| profile.depth >= 0.76)
             .collect::<Vec<_>>();
 
-        assert!(!far.is_empty() && !middle.is_empty() && !near.is_empty());
+        assert!(!far.is_empty() && has_middle && !near.is_empty());
         assert!(
             near.iter()
                 .map(|profile| profile.size)

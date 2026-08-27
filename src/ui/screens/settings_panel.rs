@@ -159,7 +159,7 @@ impl SettingsWatermark {
         self.target = 0.0;
     }
 
-    pub(crate) fn show_label(&mut self, text: &mut Text, label: &str) {
+    pub(crate) fn show_label(&mut self, text: &Text, label: &str) {
         if text.0 == label && self.pending_label.is_none() {
             self.show();
         } else {
@@ -551,7 +551,7 @@ pub(crate) struct SettingsSyncContext<'w, 's> {
     content: Res<'w, ContentProjectResource>,
     development: Option<Res<'w, DevelopmentSession>>,
     fades: Query<'w, 's, &'static mut MenuFade>,
-    watermarks: Query<'w, 's, (&'static mut SettingsWatermark, &'static mut Text)>,
+    watermarks: Query<'w, 's, (&'static mut SettingsWatermark, &'static Text)>,
     save_roots:
         Query<'w, 's, (Entity, &'static mut Visibility), With<crate::ui::save_load::SaveLoadRoot>>,
     save_proxies: Query<'w, 's, Entity, With<crate::ui::save_load::SaveLoadBlurProxy>>,
@@ -649,8 +649,8 @@ pub fn sync_settings(
                 *visibility = Visibility::Hidden;
             }
         }
-        for (mut watermark, mut label) in &mut context.watermarks {
-            watermark.show_label(&mut label, "CONFIG");
+        for (mut watermark, label) in &mut context.watermarks {
+            watermark.show_label(label, "CONFIG");
         }
         for (entity, mut visibility) in &mut context.roots {
             *visibility = Visibility::Inherited;

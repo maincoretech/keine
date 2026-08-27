@@ -579,16 +579,15 @@ mod tests {
 
     #[test]
     fn rejects_truncation_trailing_bytes_and_reserved_nonzero() {
-        let bytes = encode(&fixture_input()).unwrap();
+        let mut bytes = encode(&fixture_input()).unwrap();
         assert!(matches!(
             decode(&bytes[..20], IR_SCHEMA_VERSION),
             Err(CompiledError::Truncated { .. })
         ));
 
-        let mut padded = bytes.clone();
-        padded.push(0);
+        bytes.push(0);
         assert!(matches!(
-            decode(&padded, IR_SCHEMA_VERSION),
+            decode(&bytes, IR_SCHEMA_VERSION),
             Err(CompiledError::TrailingBytes { .. })
         ));
 

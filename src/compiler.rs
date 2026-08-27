@@ -199,10 +199,7 @@ mod tests {
             }],
         )
         .unwrap();
-        let languages = LoaderRegistry::default()
-            .languages("webgal")
-            .unwrap()
-            .clone();
+        let languages = LoaderRegistry::default().languages("webgal").unwrap();
         build_program(&config, &content, &languages).unwrap();
 
         let output = root.join(".keine/compiled/program.bin");
@@ -237,10 +234,7 @@ mod tests {
             }],
         )
         .unwrap();
-        let languages = LoaderRegistry::default()
-            .languages("webgal")
-            .unwrap()
-            .clone();
+        let languages = LoaderRegistry::default().languages("webgal").unwrap();
         assert!(build_program(&config, &content, &languages).is_err());
 
         let _ = fs::remove_dir_all(&root);

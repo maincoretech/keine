@@ -756,6 +756,8 @@ fn percent_arg(args: &ScriptArgs, key: &str, default: f32) -> f32 {
         / 100.0
 }
 
+// Keep supported aliases explicit even though ease-in-out also is the fallback.
+#[allow(clippy::match_same_arms)]
 fn easing_from_args(args: &ScriptArgs) -> Easing {
     match args
         .get("ease")

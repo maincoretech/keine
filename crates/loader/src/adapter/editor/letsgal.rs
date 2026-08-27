@@ -361,9 +361,8 @@ mod tests {
         )
         .unwrap();
 
-        let error = match LetsGalProjectAdapter.open(&root) {
-            Ok(_) => panic!("invalid explicit shipping ID was accepted"),
-            Err(error) => error,
+        let Err(error) = LetsGalProjectAdapter.open(&root) else {
+            panic!("invalid explicit shipping ID was accepted");
         };
         assert!(error.to_string().contains("keine.projectId"), "{error}");
         let _ = fs::remove_dir_all(root);

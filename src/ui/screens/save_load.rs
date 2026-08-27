@@ -211,8 +211,6 @@ pub(crate) struct SaveLoadPageLabel;
 #[derive(Component)]
 pub(crate) struct SaveLoadSlotMotion {
     scale: f32,
-    x: f32,
-    y: f32,
 }
 
 impl SaveLoadSlotMotion {
@@ -222,13 +220,7 @@ impl SaveLoadSlotMotion {
             Interaction::Hovered => 0.985,
             Interaction::None => 1.0,
         };
-        let (target_x, target_y) = match interaction {
-            Interaction::Hovered | Interaction::Pressed => (0.0, 0.0),
-            Interaction::None => (0.0, 0.0),
-        };
         (self.scale - target_scale).abs() > 0.001
-            || (self.x - target_x).abs() > 0.001
-            || (self.y - target_y).abs() > 0.001
     }
 }
 
@@ -290,7 +282,7 @@ pub(crate) struct SaveLoadSyncContext<'w, 's> {
         's,
         (
             &'static mut crate::ui::settings_panel::SettingsWatermark,
-            &'static mut Text,
+            &'static Text,
         ),
     >,
     settings_roots: SettingsRootVisibilityQuery<'w, 's>,
@@ -470,8 +462,8 @@ pub fn sync_save_load(
                 fade.target = 1.0;
             }
         }
-        for (mut watermark, mut label) in &mut context.watermarks {
-            watermark.show_label(&mut label, mode.watermark());
+        for (mut watermark, label) in &mut context.watermarks {
+            watermark.show_label(label, mode.watermark());
         }
         let Ok(viewport) = context.grid_viewports.single() else {
             return;
@@ -559,8 +551,8 @@ pub fn sync_save_load(
             *visibility = Visibility::Inherited;
         }
     }
-    for (mut watermark, mut label) in &mut context.watermarks {
-        watermark.show_label(&mut label, mode.watermark());
+    for (mut watermark, label) in &mut context.watermarks {
+        watermark.show_label(label, mode.watermark());
     }
     context
         .commands
@@ -973,11 +965,7 @@ fn spawn_slot(
     grid.spawn((
         Button,
         SaveLoadSlot(slot),
-        SaveLoadSlotMotion {
-            scale: 1.0,
-            x: 0.0,
-            y: 0.0,
-        },
+        SaveLoadSlotMotion { scale: 1.0 },
         Interaction::None,
         UiTransform::default(),
         Node {
@@ -1093,21 +1081,11 @@ pub fn animate_save_load_slots(
             Interaction::Hovered => 0.985,
             Interaction::None => 1.0,
         };
-        let (target_x, target_y) = match interaction {
-            Interaction::Hovered | Interaction::Pressed => (0.0, 0.0),
-            Interaction::None => (0.0, 0.0),
-        };
-        if (motion.scale - target_scale).abs() < 0.001
-            && (motion.x - target_x).abs() < 0.001
-            && (motion.y - target_y).abs() < 0.001
-        {
+        if (motion.scale - target_scale).abs() < 0.001 {
             continue;
         }
         motion.scale += (target_scale - motion.scale) * amount;
-        motion.x += (target_x - motion.x) * amount;
-        motion.y += (target_y - motion.y) * amount;
         transform.scale = Vec2::splat(motion.scale);
-        transform.translation = Val2::px(motion.x, motion.y);
     }
 }
 

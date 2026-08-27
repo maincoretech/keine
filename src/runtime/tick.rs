@@ -1132,9 +1132,58 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
         .retain(|_, effect| !effect.finished());
     changed |= state.particle_effects.len() != effect_count;
 
-    if let Some(mut animation) = state.camera_effect_animation.take() {
+    if advance_camera_transitions(state, delta_seconds) {
         changed = true;
         stage_changed = true;
+    }
+
+    for video in state.videos.values_mut() {
+        video.elapsed += delta_seconds;
+        if video.stopping {
+            changed = true;
+            let fade = video.fade_out.max(f32::EPSILON);
+            video.opacity = (video.opacity - video.spec.alpha * delta_seconds / fade).max(0.0);
+        }
+    }
+    let video_count = state.videos.len();
+    state.videos.retain(|_, video| video.opacity > 0.0);
+    changed |= state.videos.len() != video_count;
+
+    if advance_sprite_transitions(state, delta_seconds) {
+        changed = true;
+        stage_changed = true;
+    }
+
+    changed |= advance_background_transitions(state, delta_seconds);
+
+    if state.stage_animation.is_some() {
+        changed = true;
+        stage_changed = true;
+        advance_stage_animation(state, delta_seconds);
+    }
+
+    let avatar_delta = delta_seconds * 3.0;
+    if state.mini_avatar.is_some() {
+        if state.mini_avatar_progress < 1.0 {
+            changed = true;
+            state.mini_avatar_progress = (state.mini_avatar_progress + avatar_delta).min(1.0);
+        }
+    } else {
+        if state.mini_avatar_progress > 0.0 {
+            changed = true;
+            state.mini_avatar_progress = (state.mini_avatar_progress - avatar_delta).max(0.0);
+        }
+    }
+    if stage_changed {
+        state.invalidate_stage();
+    }
+    changed
+}
+
+fn advance_camera_transitions(state: &mut State, delta_seconds: f32) -> bool {
+    let mut changed = false;
+    if let Some(mut animation) = state.camera_effect_animation.take() {
+        changed = true;
         animation.elapsed = (animation.elapsed + delta_seconds).min(animation.duration);
         let progress = animation
             .easing
@@ -1149,7 +1198,6 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
 
     if let Some(mut animation) = state.camera_transform_animation.take() {
         changed = true;
-        stage_changed = true;
         animation.elapsed = (animation.elapsed + delta_seconds).min(animation.duration);
         let progress = animation
             .easing
@@ -1166,7 +1214,6 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
         use keine_core::{CameraShakeAxis, CameraShakeFalloff};
 
         changed = true;
-        stage_changed = true;
         shake.elapsed = (shake.elapsed + delta_seconds).min(shake.spec.duration);
         let progress = shake.elapsed / shake.spec.duration.max(f32::EPSILON);
         let envelope = match shake.spec.falloff {
@@ -1192,19 +1239,11 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
     if shake_finished {
         state.camera_shake = None;
     }
+    changed
+}
 
-    for video in state.videos.values_mut() {
-        video.elapsed += delta_seconds;
-        if video.stopping {
-            changed = true;
-            let fade = video.fade_out.max(f32::EPSILON);
-            video.opacity = (video.opacity - video.spec.alpha * delta_seconds / fade).max(0.0);
-        }
-    }
-    let video_count = state.videos.len();
-    state.videos.retain(|_, video| video.opacity > 0.0);
-    changed |= state.videos.len() != video_count;
-
+fn advance_sprite_transitions(state: &mut State, delta_seconds: f32) -> bool {
+    let mut changed = false;
     for (id, sequence) in &mut state.sprite_sequences {
         if sequence.frames.len() < 2 || !state.sprites.contains_key(id) {
             continue;
@@ -1221,7 +1260,6 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
             if let Some(sprite) = state.sprites.get_mut(id) {
                 sprite.image.clone_from(&sequence.frames[frame]);
                 changed = true;
-                stage_changed = true;
             }
         }
     }
@@ -1229,7 +1267,6 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
     for sprite in state.sprites.values_mut() {
         let keyframes_active = sprite.keyframe_animation.is_some();
         changed |= keyframes_active;
-        stage_changed |= keyframes_active;
         let keyframes_finished = sprite.keyframe_animation.as_mut().is_some_and(|animation| {
             advance_keyframes(&mut sprite.transform, animation, delta_seconds)
         });
@@ -1238,7 +1275,6 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
         }
         if let Some(animation) = &mut sprite.transform_animation {
             changed = true;
-            stage_changed = true;
             animation.elapsed = (animation.elapsed + delta_seconds).min(animation.duration);
             let progress = animation
                 .easing
@@ -1250,7 +1286,6 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
         }
         if let Some(animation) = &mut sprite.position_animation {
             changed = true;
-            stage_changed = true;
             animation.elapsed = (animation.elapsed + delta_seconds).min(animation.duration);
             if animation.elapsed >= animation.duration {
                 sprite.position_animation = None;
@@ -1258,7 +1293,6 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
         }
         if let Some(animation) = &mut sprite.animation {
             changed = true;
-            stage_changed = true;
             animation.elapsed = (animation.elapsed + delta_seconds).min(animation.duration);
             let progress = (animation.elapsed / animation.duration).clamp(0.0, 1.0);
             sprite.transform = sample_preset(animation.base, &animation.preset, progress);
@@ -1282,18 +1316,12 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
             .transition
             .duration()
             .map_or(1.0, |duration| delta_seconds / duration.max(f32::EPSILON));
-        if sprite.entering {
-            if sprite.transition_progress < 1.0 {
-                changed = true;
-                stage_changed = true;
-                sprite.transition_progress = (sprite.transition_progress + delta).min(1.0);
-            }
-        } else {
-            if sprite.transition_progress > 0.0 {
-                changed = true;
-                stage_changed = true;
-                sprite.transition_progress = (sprite.transition_progress - delta).max(0.0);
-            }
+        if sprite.entering && sprite.transition_progress < 1.0 {
+            changed = true;
+            sprite.transition_progress = (sprite.transition_progress + delta).min(1.0);
+        } else if !sprite.entering && sprite.transition_progress > 0.0 {
+            changed = true;
+            sprite.transition_progress = (sprite.transition_progress - delta).max(0.0);
         }
     }
     let sprite_count = state.sprites.len();
@@ -1304,9 +1332,11 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
     state
         .sprite_sequences
         .retain(|id, _| state.sprites.contains_key(id));
-    changed |= sprites_removed;
-    stage_changed |= sprites_removed;
+    changed || sprites_removed
+}
 
+fn advance_background_transitions(state: &mut State, delta_seconds: f32) -> bool {
+    let mut changed = false;
     let transition_finished = if let Some(transition) = &mut state.bg_transition {
         changed = true;
         let delta = transition
@@ -1365,28 +1395,6 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
                 state.bg = None;
             }
         }
-    }
-
-    if state.stage_animation.is_some() {
-        changed = true;
-        stage_changed = true;
-        advance_stage_animation(state, delta_seconds);
-    }
-
-    let avatar_delta = delta_seconds * 3.0;
-    if state.mini_avatar.is_some() {
-        if state.mini_avatar_progress < 1.0 {
-            changed = true;
-            state.mini_avatar_progress = (state.mini_avatar_progress + avatar_delta).min(1.0);
-        }
-    } else {
-        if state.mini_avatar_progress > 0.0 {
-            changed = true;
-            state.mini_avatar_progress = (state.mini_avatar_progress - avatar_delta).max(0.0);
-        }
-    }
-    if stage_changed {
-        state.invalidate_stage();
     }
     changed
 }
@@ -1489,19 +1497,17 @@ fn read_stage_value(
     property: keine_core::StageProperty,
 ) -> Option<f32> {
     use keine_core::{StageProperty as P, StageTarget};
-    if matches!(target, StageTarget::Camera) {
-        return Some(match property {
-            P::X => state.camera_transform.offset_x,
-            P::Y => state.camera_transform.offset_y,
-            P::Zoom | P::ScaleX => state.camera_transform.scale_x,
-            P::ScaleY => state.camera_transform.scale_y,
-            property => read_stage_effect(&state.camera_effect, property)?,
-        });
-    }
     let id = match target {
-        StageTarget::Character { id, .. } => id,
-        StageTarget::SceneLayer { id } => id,
-        StageTarget::Camera => unreachable!(),
+        StageTarget::Camera => {
+            return Some(match property {
+                P::X => state.camera_transform.offset_x,
+                P::Y => state.camera_transform.offset_y,
+                P::Zoom | P::ScaleX => state.camera_transform.scale_x,
+                P::ScaleY => state.camera_transform.scale_y,
+                property => read_stage_effect(&state.camera_effect, property)?,
+            });
+        }
+        StageTarget::Character { id, .. } | StageTarget::SceneLayer { id } => id,
     };
     let sprite = state.sprites.get(id)?;
     Some(match property {
@@ -1524,24 +1530,22 @@ fn write_stage_value(
     value: f32,
 ) {
     use keine_core::{StageProperty as P, StageTarget};
-    if matches!(target, StageTarget::Camera) {
-        match property {
-            P::X => state.camera_transform.offset_x = value,
-            P::Y => state.camera_transform.offset_y = value,
-            P::Zoom => {
-                state.camera_transform.scale_x = value;
-                state.camera_transform.scale_y = value;
-            }
-            P::ScaleX => state.camera_transform.scale_x = value,
-            P::ScaleY => state.camera_transform.scale_y = value,
-            property => write_stage_effect(&mut state.camera_effect, property, value),
-        }
-        return;
-    }
     let id = match target {
-        StageTarget::Character { id, .. } => id,
-        StageTarget::SceneLayer { id } => id,
-        StageTarget::Camera => unreachable!(),
+        StageTarget::Camera => {
+            match property {
+                P::X => state.camera_transform.offset_x = value,
+                P::Y => state.camera_transform.offset_y = value,
+                P::Zoom => {
+                    state.camera_transform.scale_x = value;
+                    state.camera_transform.scale_y = value;
+                }
+                P::ScaleX => state.camera_transform.scale_x = value,
+                P::ScaleY => state.camera_transform.scale_y = value,
+                property => write_stage_effect(&mut state.camera_effect, property, value),
+            }
+            return;
+        }
+        StageTarget::Character { id, .. } | StageTarget::SceneLayer { id } => id,
     };
     let Some(sprite) = state.sprites.get_mut(id) else {
         return;
@@ -2051,8 +2055,9 @@ fn sample_preset(
         AnimationPreset::Blur => {
             result.blur += (progress * std::f32::consts::PI).sin() * 4.0;
         }
-        AnimationPreset::ShockwaveIn | AnimationPreset::ShockwaveOut => {}
-        AnimationPreset::OldFilm
+        AnimationPreset::ShockwaveIn
+        | AnimationPreset::ShockwaveOut
+        | AnimationPreset::OldFilm
         | AnimationPreset::DotFilm
         | AnimationPreset::ReflectionFilm
         | AnimationPreset::GlitchFilm

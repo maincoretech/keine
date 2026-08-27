@@ -1202,9 +1202,7 @@ fn build_opened_app(
             )),
     );
     #[cfg(feature = "audio-opus")]
-    app.add_plugins(crate::runtime::audio::OpusAudioPlugin::new(
-        asset_mounts.clone(),
-    ));
+    app.add_plugins(crate::runtime::audio::OpusAudioPlugin::new(asset_mounts));
     #[cfg(feature = "audio-seekable")]
     app.add_plugins(crate::runtime::audio::SeekableAudioPlugin);
     app.add_plugins((

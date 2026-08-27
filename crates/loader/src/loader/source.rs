@@ -365,9 +365,9 @@ impl Seek for ContentFile {
 /// Shared, indexed Hakutaku snapshot. Cloning this handle is O(1).
 #[derive(Clone)]
 pub struct HakutakuArchive {
-    path: Arc<PathBuf>,
+    path: Arc<Path>,
     package: Package,
-    files: Arc<Vec<PathBuf>>,
+    files: Arc<[PathBuf]>,
     directory_entries: Arc<HashMap<PathBuf, Vec<PathBuf>>>,
 }
 
@@ -414,15 +414,15 @@ impl HakutakuArchive {
             .collect::<Result<Vec<_>>>()?;
         let directory_entries = build_directory_entries(&files);
         Ok(Self {
-            path: Arc::new(path),
+            path: Arc::from(path),
             package,
-            files: Arc::new(files),
+            files: Arc::from(files),
             directory_entries: Arc::new(directory_entries),
         })
     }
 
     pub fn path(&self) -> &Path {
-        &self.path
+        self.path.as_ref()
     }
 
     pub fn read(&self, path: &Path) -> Result<Vec<u8>> {
@@ -465,7 +465,7 @@ impl HakutakuArchive {
     }
 
     fn files_under(&self, prefix: &Path) -> Vec<PathBuf> {
-        relative_files_under(&self.files, prefix)
+        relative_files_under(self.files.as_ref(), prefix)
     }
 }
 

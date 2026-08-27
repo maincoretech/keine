@@ -538,11 +538,10 @@ fn spawn_source_worker(
     revision: u64,
 ) -> VideoSession {
     let (sender, receiver) = sync_channel(1);
-    let worker_path = path.clone();
     let worker = thread::Builder::new()
         .name("keine-video-io".into())
         .spawn(move || {
-            let source = prepare_source(&mounts, Path::new(&worker_path)).map(Arc::new);
+            let source = prepare_source(&mounts, Path::new(&path)).map(Arc::new);
             let _ = sender.send(source);
         })
         .unwrap_or_else(|error| {

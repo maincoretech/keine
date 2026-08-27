@@ -282,10 +282,9 @@ fn apply_binary(operator: &str, left: Value, right: Value) -> Result<Value, Stri
             "-" => checked_integer(left.checked_sub(right), "subtraction"),
             "*" => checked_integer(left.checked_mul(right), "multiplication"),
             "/" if right != 0 => divide_integers(left, right),
-            "/" => Err("division by zero".into()),
             "%" if right == -1 => Ok(Value::Int(0)),
             "%" if right != 0 => checked_integer(left.checked_rem(right), "remainder"),
-            "%" => Err("division by zero".into()),
+            "/" | "%" => Err("division by zero".into()),
             ">" => Ok(Value::Bool(left > right)),
             ">=" => Ok(Value::Bool(left >= right)),
             "<" => Ok(Value::Bool(left < right)),
@@ -310,9 +309,8 @@ fn apply_binary(operator: &str, left: Value, right: Value) -> Result<Value, Stri
         "-" => number(left - right),
         "*" => number(left * right),
         "/" if right != 0.0 => finite_float(left / right),
-        "/" => Err("division by zero".into()),
         "%" if right != 0.0 => number(left % right),
-        "%" => Err("division by zero".into()),
+        "/" | "%" => Err("division by zero".into()),
         _ => Err(format!("unsupported operator {operator}")),
     }
 }
