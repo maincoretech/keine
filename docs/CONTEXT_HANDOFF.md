@@ -1,6 +1,6 @@
 # Kēne context handoff
 
-Updated: 2026-08-27
+Updated: 2026-08-28
 
 ## Start here
 
@@ -11,6 +11,10 @@ with `git status --short` and inspect the latest commit before continuing.
 
 ## Latest integrated work
 
+- `eb8d971` isolates stage clipping behind its own shader specialization. The follow-up Intel UHD
+  620 report restored isolated classic sampling from 54.5 to 60.0 FPS and from 3.671 to 2.117 ms
+  median transparent-pass GPU time, matching the healthy pre-mask baseline for projects without
+  an active mask. Active-mask X280 throughput has not been measured.
 - LetsGal Studio 1.20 `stageMask` now compiles to typed core state and renders native overlay or
   clip masks across scene and character targets. Mask state participates in blocking, rollback,
   and editor replay; Save v10 explicitly rejects an active mask instead of writing partial state.

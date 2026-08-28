@@ -102,6 +102,11 @@ project / package
   pass by 42.3% and raised its median from 55.2 to the 60 FPS cap; complete classic improved 6.4%
   and combined stress 1.8%. Visual and non-target workloads showed no material regression. Godray
   and remaining combined costs require a new measured task before any further renderer change.
+- Native `stageMask` initially added clip coverage to every stage fragment. X280 evidence at
+  `8096fa7` measured the resulting no-mask regression; `eb8d971` moved clipping to an independent
+  shader specialization. The isolated classic-sampling pass returned from 54.5 to 60.0 FPS and
+  from 3.671 to 2.117 ms median GPU time, matching the pre-mask baseline. Active-mask throughput
+  remains unmeasured and must not be inferred from the no-mask result.
 - The original T02 production-project pass closed without a product-code change: the local
   representative project compiled 9 scenes and 896 actions without diagnostics or unresolved
   static resources. Its later Studio 1.20 follow-up added native multi-target character removal

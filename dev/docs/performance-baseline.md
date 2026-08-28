@@ -1730,3 +1730,54 @@ classic and stress move in the same direction, and the fixed-frame visual and
 Apple checks show no material regression. Godray and remaining combined costs
 are future benchmark candidates, not justification for further changes in this
 task.
+
+### 2026-08-28 inactive stage-clip specialization
+
+The first X280 package containing native `stageMask` support,
+`report-26082800.txt` at build identity `8096fa7a8aaa`, exposed a regression in
+projects with no active mask. Clip uniforms, resources and coverage math had
+been added to every `StageMaterial` fragment. The strongest attribution was
+the isolated classic-sampling transparent pass: its median GPU time rose from
+2.096 to 3.671 ms while its CPU time remained negligible.
+
+Commit `eb8d971` gives clipping an independent material specialization and
+compiles the coverage functions and calls only for an active clip. A clip by
+itself also keeps the plain shader class instead of promoting the complete
+basic-effect path. `report-26082801.txt` used the same X280, Intel UHD 620,
+Vulkan backend, 1920x1080 surface, Fifo presentation, Release/LTO profile,
+three-second warm-up and five-second capture as the healthy and regressed
+reports.
+
+| Workload | Metric | Healthy `55f5323` | Regressed `8096fa7` | Specialized `eb8d971` |
+| --- | --- | ---: | ---: | ---: |
+| Isolated classic sampling | Median avg FPS | 60.0 | 54.5 | 60.0 |
+|  | Median 1% low | 52.8 | 48.9 | 55.3 |
+|  | Median P99 | 17.82 ms | 20.33 ms | 17.69 ms |
+|  | Transparent-pass GPU median | 2.096 ms | 3.671 ms | 2.117 ms |
+| Complete classic camera | Median avg FPS | 53.4 | 45.8 | 52.2 |
+|  | Median 1% low | 47.0 | 41.0 | 44.9 |
+|  | Median P99 | 21.05 ms | 24.33 ms | 21.35 ms |
+|  | Transparent-pass GPU median | 3.957 ms | 5.419 ms | 4.040 ms |
+
+The isolated sampling GPU regression was reversed by 42.3% and returned to
+within 1.0% of the healthy GPU baseline. Complete classic recovered 14.0% in
+average FPS and its steady P99 returned to within 1.4% of the healthy report.
+One 54.91 ms frame occurred in the third complete-classic process, but its P99
+remained 21.53 ms and the other two processes had 21.90 and 22.88 ms maxima;
+it is tail-latency evidence rather than renewed shader-throughput regression.
+
+Opening, daily workloads, blur, atmosphere, film-noise and color/lens paths
+remained at the 60 FPS cap. Optical stayed at 56.0 FPS with a 2.126 ms median
+transparent pass versus 59.6 FPS and 1.946 ms in the healthy report; the
+concurrent changes across GPU passes and lack of a matching isolated regression
+do not justify another shader change from this sample. The timed-event group
+had one 39.56 ms frame at the repeated scene-cue boundary, while its GPU pass
+remained 1.7–1.8 ms. That authored workload intentionally performs a scene
+replacement and crossfade, its resources are already included in the active
+action's prefetch window, and the spike did not repeat in all three processes.
+
+Repeat interactive startup was 1.042 s and startup peak RSS was 422.0 MiB.
+This report validates that projects without an active mask no longer pay the
+clip fragment cost. It does not measure the intentional GPU cost of rendering
+an active clip mask on the X280; that requires a separately authored workload
+before making further mask-rendering performance claims.

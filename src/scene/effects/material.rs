@@ -346,6 +346,14 @@ mod animation_tests {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct StageMaterialKey(u8);
 
+const STAGE_BLEND_MASK: u8 = 0b0000_0011;
+const STAGE_SHADER_CLASS_MASK: u8 = 0b0001_1100;
+const STAGE_SHADER_CLASS_SHIFT: u8 = 2;
+// Keep clipping independent from the effect ladder so inactive masks compile
+// out instead of adding a uniform branch to every StageMaterial fragment.
+const STAGE_CLIP_BIT: u8 = 0b0010_0000;
+const ACTIVE_EFFECT_THRESHOLD: f32 = 0.001;
+
 // Keep a bounded ladder instead of specializing every effect combination.
 // Optical is the superset used when blur and outline must coexist.
 #[repr(u8)]
@@ -366,13 +374,18 @@ impl From<&StageMaterial> for StageMaterialKey {
             BlendMode::Multiply => 2,
             BlendMode::Screen => 3,
         };
-        Self(blend | (material.shader_class() as u8) << 2)
+        let clip = if material.clip_a.x > ACTIVE_EFFECT_THRESHOLD {
+            STAGE_CLIP_BIT
+        } else {
+            0
+        };
+        Self(blend | (material.shader_class() as u8) << STAGE_SHADER_CLASS_SHIFT | clip)
     }
 }
 
 impl StageMaterial {
     fn shader_class(&self) -> StageShaderClass {
-        const ACTIVE: f32 = 0.001;
+        const ACTIVE: f32 = ACTIVE_EFFECT_THRESHOLD;
         const RGB_FILM: u8 = 1 << 4;
         let blur = self.filter.x > ACTIVE
             || self.post_a.w > ACTIVE
@@ -423,7 +436,6 @@ impl StageMaterial {
             || self.post_p.x > ACTIVE
             || self.post_p.w > ACTIVE
             || self.post_q.w < 0.999;
-        let basic = basic || self.clip_a.x > ACTIVE;
         if basic {
             StageShaderClass::Basic
         } else {
@@ -449,7 +461,8 @@ impl Material2d for StageMaterial {
         _layout: &MeshVertexBufferLayoutRef,
         key: Material2dKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        let blend_key = key.bind_group_data.0 & 0b11;
+        let material_key = key.bind_group_data.0;
+        let blend_key = material_key & STAGE_BLEND_MASK;
         let blend = match blend_key {
             1 => BlendState {
                 color: BlendComponent {
@@ -478,9 +491,12 @@ impl Material2d for StageMaterial {
             _ => BlendState::ALPHA_BLENDING,
         };
         if let Some(fragment) = descriptor.fragment.as_mut() {
-            let shader_class = key.bind_group_data.0 >> 2;
+            let shader_class = (material_key & STAGE_SHADER_CLASS_MASK) >> STAGE_SHADER_CLASS_SHIFT;
             if shader_class != StageShaderClass::Plain as u8 {
                 fragment.shader_defs.push("STAGE_COMPLEX".into());
+            }
+            if material_key & STAGE_CLIP_BIT != 0 {
+                fragment.shader_defs.push("STAGE_CLIP".into());
             }
             match shader_class {
                 class if class == StageShaderClass::Blur as u8 => {
@@ -610,6 +626,13 @@ mod tests {
         let mut combined = outline;
         combined.filter.x = 1.0;
         assert_eq!(StageMaterialKey::from(&combined).0, 0b10000);
+
+        let mut clipped = plain.clone();
+        clipped.clip_a.x = 0.5;
+        assert_eq!(StageMaterialKey::from(&clipped).0, STAGE_CLIP_BIT);
+
+        clipped.filter.y = 1.2;
+        assert_eq!(StageMaterialKey::from(&clipped).0, STAGE_CLIP_BIT | 0b100);
 
         let mut screen = plain;
         screen.blend = BlendMode::Screen;
