@@ -54,6 +54,7 @@ fn smooth_noise(point: vec2<f32>) -> f32 {
     return mix(lower, upper, blend.y);
 }
 
+#ifdef STAGE_CLIP
 fn rotate_2d(point: vec2<f32>, angle: f32) -> vec2<f32> {
     let sine = sin(angle);
     let cosine = cos(angle);
@@ -118,6 +119,7 @@ fn stage_clip_coverage(world_position: vec2<f32>) -> f32 {
     }
     return mix(1.0, coverage, clamp(material.clip_a.x, 0.0, 1.0));
 }
+#endif
 
 fn distort_uv(uv: vec2<f32>) -> vec2<f32> {
     let dimensions = vec2<f32>(textureDimensions(color_texture));
@@ -656,7 +658,9 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
         );
     }
     color = vec4<f32>(color.rgb, color.a * edge_coverage);
+#ifdef STAGE_CLIP
     color = vec4<f32>(color.rgb, color.a * stage_clip_coverage(mesh.world_position.xy));
+#endif
 #ifdef BLEND_MULTIPLY
     // Pixi/WebGAL's multiply is perceived in display space. Bevy samples the
     // sRGB texture into linear space, so feeding raw linear RGB to the fixed
@@ -671,7 +675,9 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     return color;
 #else
     var color = textureSample(color_texture, color_sampler, mesh.uv) * material.tint;
+#ifdef STAGE_CLIP
     color = vec4<f32>(color.rgb, color.a * stage_clip_coverage(mesh.world_position.xy));
+#endif
 #ifdef BLEND_MULTIPLY
     let perceptual = pow(max(color.rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
     color = vec4<f32>(perceptual * color.a, color.a);
