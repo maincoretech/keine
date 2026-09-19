@@ -12,11 +12,11 @@
 
 证据缩写：
 
-- **P**：[`crates/loader/src/adapter/script/webgal.rs`](../../../crates/loader/src/adapter/script/webgal.rs)
-- **C**：[`crates/core/src/model/action.rs`](../../../crates/core/src/model/action.rs)、[`state.rs`](../../../crates/core/src/model/state.rs)、[`runtime/step.rs`](../../../crates/core/src/runtime/step.rs)
-- **R**：[`src/scene/`](../../../src/scene)、[`src/ui/`](../../../src/ui) 或 [`src/runtime/`](../../../src/runtime) 的消费链路
+- **P**：[`crates/loader/src/adapter/script/webgal.rs`](../../crates/loader/src/adapter/script/webgal.rs)
+- **C**：[`crates/core/src/model/action.rs`](../../crates/core/src/model/action.rs)、[`state.rs`](../../crates/core/src/model/state.rs)、[`runtime/step.rs`](../../crates/core/src/runtime/step.rs)
+- **R**：[`src/scene/`](../../src/scene)、[`src/ui/`](../../src/ui) 或 [`src/runtime/`](../../src/runtime) 的消费链路
 - **T**：上述模块内的 Rust 自动测试
-- **M**：[`projects/test-project`](../../../projects/test-project) 与 [`dev/docs/acceptance`](../acceptance) 中的可玩/人工验收场景；项目或验收步骤存在本身不是视觉通过证明
+- **M**：[`projects/test-project`](../../projects/test-project) 与 [`docs/acceptance`](../acceptance) 中的可玩/人工验收场景；项目或验收步骤存在本身不是视觉通过证明
 
 ## 31 命令逐项结论
 

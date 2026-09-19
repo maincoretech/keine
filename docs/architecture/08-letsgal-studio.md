@@ -1,6 +1,6 @@
-# LetsGal Studio 1.x 原生同步
+# LetsGal Studio 1.x/2.0 原生同步
 
-keine 把 LetsGal 当作一种开放的编辑器工程格式，而不是运行宿主。Studio 与 keine 是两个
+keine 把 LetsGal 1.x/2.0 当作开放的编辑器工程格式，而不是运行宿主。Studio 与 keine 是两个
 独立进程；同步只通过工程目录中的开放 JSON 完成，不安装扩展、不注入 DOM、不修改 ASAR，
 也不启动本机 HTTP/TCP 服务。
 
@@ -10,7 +10,7 @@ keine 把 LetsGal 当作一种开放的编辑器工程格式，而不是运行�
 > 始终使用操作系统默认鼠标指针。
 
 ```text
-LetsGal Studio 1.x
+LetsGal Studio project (1.x / 2.0)
   ├─ project.json
   ├─ chapters/*.json
   ├─ extensions/avg.internal.default-shell/ui/dialogue-box.json
@@ -161,6 +161,23 @@ runtime 以所有 `line <= selected_step` 的 Action 为目标，因此不会把
 - Studio 原版“运行”按钮与 Player 不受 keine 控制，两者不能同时作为同一调试会话的状态源；
 - 本方案明确不支持 Studio 扩展、内嵌预览或反向操控 Studio UI。
 - 个性化鼠标指针不属于剧情同步合同；项目的 `cursor` 外观配置被忽略并安全回退为系统指针。
+
+## 2.0 增量
+
+- 基础 blueprint 调度与章节预处理会在 loader 中编译为既有 flow、condition、choice、
+  assignment 和 scene-call 语义，不把 Studio blueprint 对象带入 core/runtime。
+- session variable 与 slot/shared 变量保持独立的 adapter-neutral 状态域，并参与确定性预览重放。
+- 分层差分立绘、逐帧 portrait timing 和 scene particle layer 进入 typed scene/sprite 状态，
+  资源仍通过受限 `ContentMount` 读取。
+- scene parallax 使用统一的归一化轴；桌面端由鼠标驱动。未来移动端应从陀螺仪提供同一输入，
+  不改 core 或场景模型，当前没有移动端接入。
+- mirror-shatter、限定作用域的 speed-line，以及 automatic/manual background-or-wait loading
+  strategy 使用原生运行状态和效果管线，不调用 Studio Player。
+- external-browser 和 Steam block 在平台边界产生明确错误，不通过 shell 拼接平台行为。
+- 复杂多线 blueprint parity 暂缓。adapter 不嵌入 JS VM、不加载 Studio 扩展，也不为追逐
+  editor 私有路由语义建立第二套流程执行器。
+- Studio 的安装器、云端/社区、录制、构建 UI 和扩展开发不属于同步范围；发行仍只使用
+  Kēne 自己的 Hakutaku/CI 路径。
 
 Windows、macOS 与 Linux 使用同一个 `notify::RecommendedWatcher` 合同；差异只在系统文件通知
 后端。逻辑资源路径统一为 `/`，Windows 路径分隔符不会进入 Program 或 Bevy asset key。

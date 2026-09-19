@@ -59,7 +59,7 @@ caused by Kēne changes.
   verify official documentation or primary sources before finalizing. Record the resulting
   invariant in code, tests, or the commit message.
 - Performance changes require before/after measurements. Workers report raw commands and results;
-  the integration thread updates `dev/docs/performance-baseline.md` to avoid parallel conflicts.
+  the integration thread updates `docs/performance-baseline.md` to avoid parallel conflicts.
 - Visual acceptance uses the Computer Use skill directly against the running application. Do not
   add engine screenshot hooks, readiness state, environment-variable protocols, or ad-hoc GUI
   automation solely to collect evidence. Product code changes require a demonstrated visual defect.
@@ -87,8 +87,8 @@ affected code is not exercised by the default workspace suite.
 3. Modify only the task's declared ownership. If a required change crosses that boundary, stop and
    report the proposed interface change to the orchestrator; do not edit around the boundary.
 4. `AGENTS.md`, `docs/PROJECT_STATE.md`, `docs/tasks/`, `Cargo.toml`, `Cargo.lock`, `.cargo/`,
-   `src/lib.rs`, `src/runtime.rs`, `src/runtime/bootstrap.rs`, `README*`, `dev/docs/TODO.md`,
-   `dev/docs/performance-baseline.md`, and `projects/test-project/` are integration-owned unless a
+   `src/lib.rs`, `src/runtime.rs`, `src/runtime/bootstrap.rs`, `README*`,
+   `docs/performance-baseline.md`, and `projects/test-project/` are integration-owned unless a
    task explicitly grants ownership.
 5. Workers do not merge or push `main`. Commit a focused worker result only when requested, then
    report its commit, files, validation, risks, and interface effects.

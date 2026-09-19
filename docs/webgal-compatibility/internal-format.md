@@ -24,7 +24,7 @@ flowchart LR
 
 ### `Program`
 
-实现位置：[`crates/core/src/model/action.rs`](../../../crates/core/src/model/action.rs)。
+实现位置：[`crates/core/src/model/action.rs`](../../crates/core/src/model/action.rs)。
 
 - `Program` 持有 `HashMap<String, Scene>`；每个 `Scene` 将动作压成 `Box<[Action]>`，构建完成后不再保留多余容量。
 - label 在 `Scene::new` 时一次性建立 `HashMap<String, usize>` 索引，运行时不扫描 Action 列表。
@@ -33,7 +33,7 @@ flowchart LR
 
 ### `State`
 
-实现位置：[`crates/core/src/model/state.rs`](../../../crates/core/src/model/state.rs)。
+实现位置：[`crates/core/src/model/state.rs`](../../crates/core/src/model/state.rs)。
 
 | 状态类别 | 当前表示 | 存档/快照策略 |
 |---|---|---|
@@ -51,7 +51,7 @@ flowchart LR
 
 ### Program fingerprint 与恢复门控
 
-fingerprint 的实现位于 [`crates/core/src/model/action.rs`](../../../crates/core/src/model/action.rs)，用途是判断两个运行状态是否由同一份 typed Program 产生，而不是提供加密认证。
+fingerprint 的实现位于 [`crates/core/src/model/action.rs`](../../crates/core/src/model/action.rs)，用途是判断两个运行状态是否由同一份 typed Program 产生，而不是提供加密认证。
 
 计算过程如下：
 
@@ -75,7 +75,7 @@ fingerprint 在运行态中的约束是：
 
 ### `TransformPatch`
 
-实现位置：[`crates/core/src/model/types.rs`](../../../crates/core/src/model/types.rs)、[`crates/loader/src/adapter/script/webgal.rs`](../../../crates/loader/src/adapter/script/webgal.rs) 和 [`crates/core/src/runtime/step.rs`](../../../crates/core/src/runtime/step.rs)。
+实现位置：[`crates/core/src/model/types.rs`](../../crates/core/src/model/types.rs)、[`crates/loader/src/adapter/script/webgal.rs`](../../crates/loader/src/adapter/script/webgal.rs) 和 [`crates/core/src/runtime/step.rs`](../../crates/core/src/runtime/step.rs)。
 
 WebGAL `setTransform` 是稀疏更新：命令没有写出的字段必须继承目标当前值。`TransformPatch` 用一个 `u8` presence mask 表示 7 个基础字段是否出现，数值仍紧凑存放在 `SpriteTransform` 中。
 
@@ -90,7 +90,7 @@ WebGAL `setTransform` 是稀疏更新：命令没有写出的字段必须继承�
 
 ### Player profile 分离
 
-实现位置：[`src/storage.rs`](../../../src/storage.rs) 和 [`crates/core/src/model/state.rs`](../../../crates/core/src/model/state.rs)。
+实现位置：[`src/storage.rs`](../../src/storage.rs) 和 [`crates/core/src/model/state.rs`](../../crates/core/src/model/state.rs)。
 
 - `global_vars` 使用版本化 Postcard 文件 `saves/profile.bin`，不进入任何单槽 save。
 - runtime 变化经过 0.5 秒 debounce 合并写盘，正常退出时强制 flush。
@@ -102,7 +102,7 @@ WebGAL `setTransform` 是稀疏更新：命令没有写出的字段必须继承�
 
 ### Save v10 与 `SavedState`
 
-实现位置：[`crates/loader/src/adapter/store.rs`](../../../crates/loader/src/adapter/store.rs)。
+实现位置：[`crates/loader/src/adapter/store.rs`](../../crates/loader/src/adapter/store.rs)。
 
 当前 `.sav` 是明确版本化的二进制 envelope，而不是裸 `State`：
 
@@ -121,11 +121,11 @@ WebGAL `setTransform` 是稀疏更新：命令没有写出的字段必须继承�
 
 `decode` 返回 `SavedState`，而不是可直接执行或覆盖当前 runtime 的公开 `State`。其内部 Program 因 `serde(skip)` 为空，但保存的 fingerprint 仍在；`snapshot()` 只提供预览读取，真正恢复必须消费 `SavedState` 并调用 `restore_into(&mut current)`。该方法转入 `State::restore_saved`，统一执行 fingerprint 等值门控、当前 Program 重绑定和 profile 保留，避免调用方绕过不变量。
 
-v10 不尝试兼容其他二进制布局：未知版本由 `inspect` 报告 `Unsupported(version)`，`decode` 直接拒绝。固定时间戳生成的 [`store-v10.sav`](../../../crates/loader/tests/fixtures/store-v10.sav) 由 `save_v10_golden_is_stable` 逐 byte 比较；只有有意升级格式时才应使用 `KEINE_UPDATE_STORE_GOLDEN=1` 重建 fixture，并同步评估是否需要增加版本号。v10 持久化句尾退格、等待推进、系统消息、幕布/浮动文字、立绘规则、文本呈现 override 和 sprite sequence；native video、shared stage timeline、camera/keyframe animation 仍由 `State::persistence_safety()` 拒绝 live save，并由 RAM-only continuation checkpoint 负责返回标题/退出恢复点。版本不匹配时 fail-closed，避免新增字段被其他布局误读。
+v10 不尝试兼容其他二进制布局：未知版本由 `inspect` 报告 `Unsupported(version)`，`decode` 直接拒绝。固定时间戳生成的 [`store-v10.sav`](../../crates/loader/tests/fixtures/store-v10.sav) 由 `save_v10_golden_is_stable` 逐 byte 比较；只有有意升级格式时才应使用 `KEINE_UPDATE_STORE_GOLDEN=1` 重建 fixture，并同步评估是否需要增加版本号。v10 持久化句尾退格、等待推进、系统消息、幕布/浮动文字、立绘规则、文本呈现 override 和 sprite sequence；native video、shared stage timeline、camera/keyframe animation 仍由 `State::persistence_safety()` 拒绝 live save，并由 RAM-only continuation checkpoint 负责返回标题/退出恢复点。版本不匹配时 fail-closed，避免新增字段被其他布局误读。
 
 ### Loader 与热重载
 
-实现位置：[`crates/loader/src/loader/scenes.rs`](../../../crates/loader/src/loader/scenes.rs) 和 [`crates/core/src/model/state.rs`](../../../crates/core/src/model/state.rs)。
+实现位置：[`crates/loader/src/loader/scenes.rs`](../../crates/loader/src/loader/scenes.rs) 和 [`crates/core/src/model/state.rs`](../../crates/core/src/model/state.rs)。
 
 - script 目录递归扫描并稳定排序，嵌套相对路径成为 scene key，避免同名文件静默碰撞。
 - 多内容源按稳定优先级合并，覆盖会产生诊断。
@@ -139,7 +139,7 @@ v10 不尝试兼容其他二进制布局：未知版本由 `inspect` 报告 `Uns
 
 ### CLEAR ALL 生命周期
 
-实现位置：[`src/storage.rs`](../../../src/storage.rs)。
+实现位置：[`src/storage.rs`](../../src/storage.rs)。
 
 `reset_all` 不逐个猜测文件名，而是删除项目整个 `saves/` 运行时数据目录，并同步清空 settings、profile、read history、gallery 与各 writer cache 的内存镜像。操作可重复调用；下一次正常原子写入会按需重建目录，因此旧 cache 不会在下一帧把已经清除的数据写回来。
 

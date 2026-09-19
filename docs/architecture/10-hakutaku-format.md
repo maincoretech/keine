@@ -4,7 +4,7 @@
 > revision `ce8fe3c`。规范字段与字节偏移以 Hakutaku workspace 内的 `FORMAT.md` 为准，
 > 本文件解释架构取舍；当前部署所用
 > 的硬上限和运行时预算见
-> [资源、发行包与持久化限制](../../../docs/resource-limits.md)。
+> [资源、发行包与持久化限制](../resource-limits.md)。
 
 ## 决策摘要
 
@@ -632,7 +632,7 @@ clap、rayon、crossbeam、lru、memmap2、S3/HTTP/TLS、多个压缩 codec。
 - 打包时顺序写吞吐、峰值内存和 crash recovery。
 
 性能验收不使用帧率节流替代运行时成本。结果写入
-`dev/docs/performance-baseline.md`，块大小、read coalescing 阈值、cache admission 和 segment
+`docs/performance-baseline.md`，块大小、read coalescing 阈值、cache admission 和 segment
 target 必须由基准决定，不能因为某个 SSD 型号的宣传参数直接定稿。
 
 正确性测试至少包含：

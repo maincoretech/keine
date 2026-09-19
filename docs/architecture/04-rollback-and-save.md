@@ -11,7 +11,7 @@ keine 将四类生命周期不同的数据分开处理：
 | 长效玩家数据 | global variables、已读历史、CG/BGM 解锁、设置 | `profile.bin`、`read_history.bin`、`gallery.bin`、`settings.bin` | 不被单槽读档或 Backlog 回想覆盖 |
 | 一次性运行事件 | `effect_queue` 等 | 不持久化 | 由呈现层消费，恢复时清空 |
 
-权威剧情状态位于 [`crates/core/src/model/state.rs`](../../../crates/core/src/model/state.rs)。存档 codec 位于 [`crates/loader/src/adapter/store.rs`](../../../crates/loader/src/adapter/store.rs)，文件系统槽位生命周期位于 [`src/storage.rs`](../../../src/storage.rs)。
+权威剧情状态位于 [`crates/core/src/model/state.rs`](../../crates/core/src/model/state.rs)。存档 codec 位于 [`crates/loader/src/adapter/store.rs`](../../crates/loader/src/adapter/store.rs)，文件系统槽位生命周期位于 [`src/storage.rs`](../../src/storage.rs)。
 
 ## Backlog 与回想
 
@@ -85,7 +85,7 @@ metadata 上限为 64 KiB，state payload 上限为 64 MiB，连同 28-byte head
 
 因此脚本 Action 总数不会直接放大存档；长期玩家数据也不会被复制进每个槽位。
 
-固定 golden 位于 [`crates/loader/tests/fixtures/store-v10.sav`](../../../crates/loader/tests/fixtures/store-v10.sav)，由 `save_v10_golden_is_stable` 防止无意改变字节格式。v10 保存可恢复的句尾退格状态，因此动画中途存档会在读档后从同一字符和点击等待阶段继续；舞台时间轴本身仍是恢复时清理的瞬态演出，不写入存档。v10 只接受自身的二进制布局。
+固定 golden 位于 [`crates/loader/tests/fixtures/store-v10.sav`](../../crates/loader/tests/fixtures/store-v10.sav)，由 `save_v10_golden_is_stable` 防止无意改变字节格式。v10 保存可恢复的句尾退格状态，因此动画中途存档会在读档后从同一字符和点击等待阶段继续；舞台时间轴本身仍是恢复时清理的瞬态演出，不写入存档。v10 只接受自身的二进制布局。
 
 v10 进一步持久化脚本游标之后仍会影响后续行为的逻辑表现状态：等待推进、系统消息、
 幕布、浮动文字、立绘规则、对白/段落样式及 reveal override、sprite sequence。FFmpeg
@@ -111,7 +111,7 @@ checkpoint 捕获本身没有文件创建、周期备份或 `fsync`。只有用�
 
 ## SavedState 恢复边界
 
-`StoreAdapter::decode` 不返回可直接运行的 `State`，而是返回 [`SavedState`](../../../crates/loader/src/adapter/store.rs)：
+`StoreAdapter::decode` 不返回可直接运行的 `State`，而是返回 [`SavedState`](../../crates/loader/src/adapter/store.rs)：
 
 ```text
 slot reader

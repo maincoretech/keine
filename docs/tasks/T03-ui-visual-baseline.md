@@ -23,7 +23,7 @@ default workspace test suite open a window.
 
 ## Relevant files / modules
 
-`src/ui/`, `src/ui.rs`, `dev/docs/webgal-compatibility/visual-audit.md`, and existing UI unit tests.
+`src/ui/`, `src/ui.rs`, `docs/webgal-compatibility/visual-audit.md`, and existing UI unit tests.
 
 ## Interfaces it may depend on
 
@@ -33,7 +33,7 @@ the existing frozen core/input contract.
 ## Ownership
 
 - Owns `src/ui/` and `src/ui.rs` only for fixes to defects observed during this task.
-- Owns `dev/docs/webgal-compatibility/visual-audit.md` only for concise verified results.
+- Owns `docs/webgal-compatibility/visual-audit.md` only for concise verified results.
 
 ## Avoid modifying
 

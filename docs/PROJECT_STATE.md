@@ -84,7 +84,7 @@ project / package
 - WebGAL `-continue`, advanced animation tables/keyframes/filters, full input validation, complete
   expression parity, Live2D/Spine/GIF, runtime UI styling, external-browser actions, and
   Steam/debug bridge commands remain known compatibility boundaries. They are not scheduled for closure; see
-  `dev/docs/webgal-compatibility/unsupported.md` for migration facts.
+  `docs/webgal-compatibility/unsupported.md` for migration facts.
 - Automated screenshot/golden coverage is not established across Windows/Linux, 1x DPI,
   ultrawide, and tall windows. Existing semantic tests do not prove pixel equivalence.
 - The full LetsGal commercial sample is intentionally untracked. Local acceptance and loader
@@ -136,10 +136,10 @@ project / package
 
 ## Canonical references
 
-- Project and module map: `dev/docs/PROJECT.md`
-- Current backlog and acceptance status: `dev/docs/TODO.md`
+- Project and module map: `docs/PROJECT.md`
 - Project/media/package contract: `docs/project-and-assets-spec.md`
 - Resource and persistence limits: `docs/resource-limits.md`
-- Architecture contracts: `dev/docs/architecture/`
-- Compatibility evidence: `dev/docs/webgal-compatibility/`
-- Repeatable measurements: `dev/docs/performance-baseline.md`
+- Architecture contracts: `docs/architecture/`
+- Compatibility evidence: `docs/webgal-compatibility/`
+- Acceptance procedures: `docs/acceptance/`
+- Repeatable measurements: `docs/performance-baseline.md`

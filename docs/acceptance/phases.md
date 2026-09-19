@@ -213,7 +213,7 @@ FALLEN_LEAVES。粒子应具有柔边、速度/尺寸/漂移差异；切换时�
 4. 进入 **07 · 音频与流式视频**：三个 `calibration_*.opus` 从 `content/shared/audio`
    播放，`calibration_pan.mp4` 从主资源根增量解码，控制台没有 asset-not-found、Opus
    或 FFmpeg 错误。完整的逐项预期见
-   [`projects/test-project/ACCEPTANCE.md`](../../../projects/test-project/ACCEPTANCE.md)。
+   [`projects/test-project/ACCEPTANCE.md`](../../projects/test-project/ACCEPTANCE.md)。
 
 ### Hakutaku
 
