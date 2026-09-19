@@ -37,15 +37,16 @@ keine/
 │   │       ├── config.rs          游戏配置数据
 │   │       ├── model.rs + model/  model 门面及 Action、State、公共值与渲染参数
 │   │       └── runtime.rs + runtime/ runtime 门面及表达式、确定性 step 执行器
-│   └── loader/                    package: keine-loader
-│       └── src/
-│           ├── adapter.rs + adapter/ 可配置格式 registry 及四类 adapter 实现
-│           │   ├── asset.rs       fs、auto 与 Hakutaku packaged-project 适配
-│           │   ├── editor.rs + editor/ 完整编辑器工程门面与 LetsGal 实现
-│           │   ├── script.rs + script/ 脚本门面与 WebGAL 统一 IR 导出
-│           │   └── store.rs       存档状态格式接口与 keine codec
-│           ├── loader.rs + loader/ 多来源挂载、场景发现和开发热重载
-│           └── lib.rs             通用语言注册表、span、资源与诊断合同
+│   ├── loader/                    package: keine-loader
+│   │   └── src/
+│   │       ├── adapter.rs + adapter/ 可配置格式 registry 及四类 adapter 实现
+│   │       │   ├── asset.rs       fs、auto 与 Hakutaku packaged-project 适配
+│   │       │   ├── editor.rs + editor/ 完整编辑器工程门面与 LetsGal 实现
+│   │       │   ├── script.rs + script/ 脚本门面与 WebGAL 统一 IR 导出
+│   │       │   └── store.rs       存档状态格式接口与 keine codec
+│   │       ├── loader.rs + loader/ 多来源挂载、场景发现和开发热重载
+│   │       └── lib.rs             通用语言注册表、span、资源与诊断合同
+│   └── editor/                    package: keine-editor，独立 GPUI 原生编辑器
 ├── projects/
 │   └── test-project/              唯一端到端测试项目
 ├── .github/workflows/             桌面平台 fmt、Clippy、测试和 release CI
@@ -54,6 +55,8 @@ keine/
 │   ├── PROJECT.md                 项目边界和目录规则
 │   ├── PROJECT_STATE.md           多线程共享的当前能力、接口与限制
 │   ├── EDITOR_HANDOFF.md          Kēne editor 的项目交接与决策边界
+│   ├── editor-phase0.md           Editor 架构、进程和预览技术验证
+│   ├── editor-phase1.md           只读工作台、窗口和持久化合同
 │   ├── architecture/              当前架构与平台合同
 │   ├── webgal-compatibility/      当前 WebGAL 语义、格式与视觉证据
 │   ├── acceptance/                Phase 1–7 总清单与 LetsGal 独立验收

@@ -1,8 +1,8 @@
 # Kēne Editor 开发交接
 
-> 面向下一位负责 editor 的 Codex。本文记录截至 2026-09-20、提交
-> `9a07bd0` 的仓库事实、已确认产品约束和开始开发前仍需确认的决策。
-> 它不是 editor 的详细设计，也不授权绕过 `AGENTS.md` 或直接修改主分支。
+> 面向下一位负责 editor 的 Codex。Editor Phase 0/1 已完成；当前实现状态以
+> `docs/PROJECT_STATE.md`、`docs/editor-phase0.md` 和 `docs/editor-phase1.md` 为准。
+> 本文集中记录跨阶段边界，不授权绕过 `AGENTS.md` 或直接修改主分支。
 
 ## 1. 开始前先读
 
@@ -10,9 +10,10 @@
 
 1. `AGENTS.md`：最高优先级的协作、架构、验证和所有权规则。
 2. `docs/PROJECT_STATE.md`：当前能力、已知限制和任务队列。
-3. 本文：editor 任务的上下文和决策边界。
-4. 本次唯一分配的 `docs/tasks/TXX-*.md`：实际任务范围和文件所有权。
-5. 仅按任务需要查看：
+3. `docs/editor-phase0.md` 和 `docs/editor-phase1.md`：已经实现和验证的 editor 合同。
+4. 本文：跨阶段上下文和决策边界。
+5. 本次唯一分配的 `docs/tasks/TXX-*.md`：实际任务范围和文件所有权。
+6. 仅按任务需要查看：
    - `docs/PROJECT.md`
    - `docs/architecture/05-bevy-architecture.md`
    - `docs/architecture/07-content-loader.md`
@@ -147,18 +148,17 @@ Editor UI
 “标签页”和“可分离预览”是方向，不是已经批准的完整信息架构。下一任务仍需给出可验收
 的界面范围。
 
-## 7. 尚未决定，不能擅自固化
+## 7. 下一阶段仍未决定，不能擅自固化
 
 开始产品代码前必须由用户或任务文件明确：
 
-1. editor 位于本仓库、独立仓库，还是本仓库的独立 package。
-2. GUI 技术栈，以及它是否与 Bevy 运行时同进程。
-3. editor 的原生文档格式、版本策略和保存原子性。
-4. 预览是内嵌、独立窗口还是独立进程；崩溃和热重载怎样处理。
-5. 是否通过配置的本地 `./keine` 引擎工作，以及发布版本怎样解析。
-6. 是否需要扩展机制；若需要，首个真实用例和最小能力是什么。
-7. 第一个 MVP 到底编辑什么：项目配置、脚本、资源、流程图，还是只读浏览。
-8. Git、录制、协作等能力是否进入首版。
+1. 首个可写文档范围，以及格式版本、原子保存和恢复草稿策略。
+2. IME、撤销/重做、冲突检测和外部文件变化的具体合同。
+3. Preview 的宿主形态、进程生命周期、崩溃恢复和热重载边界。
+4. Editor 如何发现、选择和启动匹配版本的 Kēne Engine。
+5. 下一阶段验收的平台、真实工程和完成证据。
+6. 是否需要扩展机制；没有首个真实用例时继续明确不做。
+7. Git、录制、协作、资产管理和构建 UI 是否进入后续独立阶段。
 
 不要用“先搭通用框架”代替这些决策。仓库明确禁止没有当前用例的主题系统、插件框架、
 动态后端抽象、新兼容层和新依赖。
@@ -185,18 +185,16 @@ Editor UI
 
 如果 editor 的设计要求打破其中任何一条，先停止编码，提交接口变更提案。
 
-## 10. 建议的第一个 editor 任务
+## 10. 建议的下一个 editor 任务
 
-在第 7 节决策完成后，首个任务应尽量薄，建议目标为：
+Phase 1 已完成 GPUI 单应用多项目窗口、Dock 工作台、只读文档、Inspector/Output、
+app-data 持久化和 secondary-launch 转发。下一任务应只选择一个可验收闭环：
 
-1. 建立单主窗口壳层和明确的 editor-owned session/document 状态。
-2. 只读打开一个受支持项目，显示场景/文件列表。
-3. 使用现有 loader 编译，并把 `SourceSpan`/`Diagnostic` 映射回对应文档位置。
-4. 提供按需启动/关闭的最小预览，不实现格式写回。
-5. 记录预览生命周期和 editor/engine 接口，避免 UI 直接依赖 runtime 内部资源。
+1. 可写文本链路：IME、撤销/重做、原子保存、外部修改和恢复草稿；或
+2. Preview 链路：Engine 发现/启动、最小控制协议、帧传输和失败恢复。
 
-这个建议刻意不包含流程图、插件、Git、协作、安装器和通用扩展市场。只有第一个真实
-闭环验收后，才扩大范围。
+不要把两条链路、流程图、插件、Git、协作、安装器和通用扩展市场塞进同一任务。只有一个
+真实闭环验收后，才扩大范围。
 
 ## 11. 文件所有权和改动路线
 
@@ -267,13 +265,14 @@ cargo validate projects/test-project
 ## 15. 可直接给下一位 Codex 的启动提示
 
 ```text
-你要为 Kēne 开发 editor。先阅读 AGENTS.md、docs/PROJECT_STATE.md 和
-docs/EDITOR_HANDOFF.md，然后只阅读本次分配的一个 docs/tasks/TXX-*.md。
+你要继续开发 Kēne editor。先阅读 AGENTS.md、docs/PROJECT_STATE.md、
+docs/editor-phase0.md、docs/editor-phase1.md 和 docs/EDITOR_HANDOFF.md，然后只阅读本次
+分配的一个 docs/tasks/TXX-*.md。
 先检查 worktree 和相关 diff，不覆盖未提交修改。不要把
 crates/loader/src/adapter/editor 当成 Kēne editor GUI；它是第三方编辑器项目格式的
 只读适配层。保持 keine-core <- keine-loader <- keine，core/loader 必须 Bevy-free，
-editor 私有文档和 UI 状态不得进入 runtime/core。默认采用单主窗口方向，标签页和按需/
-可分离预览可以设计，但仓库位置、GUI 技术、保存格式、预览进程模型和首个 MVP 若未在
-任务文件确认，先提出最小决策，不要搭通用框架。只改任务所有权范围，完成后跑规定验证
-并提供真实 UI 证据；未经明确要求不要提交、合并或推送。
+editor 私有文档和 UI 状态不得进入 runtime/core。`crates/editor` 已有 GPUI Phase 1 只读
+工作台，不要重建窗口、Dock、项目身份或 app-data 生命周期。任务文件必须明确选择可写文档
+或 Preview 中的一个闭环，不要搭通用框架。只改任务所有权范围，完成后跑规定验证并提供
+真实 UI 证据；未经明确要求不要提交、合并或推送。
 ```
