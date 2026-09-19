@@ -8,7 +8,7 @@ repository = "https://github.com/maincoretech/keine"
 publish = false
 
 [[bin]]
-name = "keine-editor"
+name = "editor"
 path = "src/main.rs"
 
 [dependencies]

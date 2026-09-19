@@ -32,10 +32,10 @@ cargo dev projects/test-project
 视觉验收步骤见
 [`projects/test-project/ACCEPTANCE.md`](projects/test-project/ACCEPTANCE.md)。
 
-可传入工程路径启动原生编辑器：
+构建原生编辑器的 release 二进制：
 
 ```bash
-cargo run -p keine-editor -- projects/test-project
+cargo build --release --workspace --bin editor
 ```
 
 ## 常用命令
@@ -45,7 +45,7 @@ cargo run -p keine-editor -- projects/test-project
 | `cargo validate <工程>` | 不打开窗口校验工程 |
 | `cargo dev <工程>` | 使用开发工具和热重载运行工程 |
 | `cargo dev <工程> --sync` | 跟随已打开的 LetsGal 工程 |
-| `cargo run -p keine-editor -- [<工程>...]` | 打开编辑器，可同时传入一个或多个工程 |
+| `cargo build --release --workspace --bin editor` | 构建原生编辑器的 release 二进制 |
 | `cargo assets --pack <工程>` | 只构建加密 Hakutaku 资源包 |
 | `cargo assets --remap <工程> <旧=新>...` | 安全迁移转换后的资源引用 |
 | `cargo bundle <工程>` | 构建可分发游戏 |
