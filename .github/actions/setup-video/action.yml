@@ -18,10 +18,11 @@ runs:
       if: runner.os == 'Linux'
       shell: bash
       run: |
-        packages=(libasound2-dev libudev-dev)
+        # GPUI's native font discovery links Fontconfig through pkg-config.
+        packages=(libasound2-dev libfontconfig-dev libudev-dev pkg-config)
         if [[ '${{ inputs.enabled }}' == 'true' ]]; then
           packages+=(
-            pkg-config libavcodec-dev libavformat-dev libavutil-dev
+            libavcodec-dev libavformat-dev libavutil-dev
             libswscale-dev libswresample-dev
           )
         fi
