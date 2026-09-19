@@ -5347,7 +5347,7 @@ dependencies = [
 
 [[package]]
 name = "keine"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "bevy",
@@ -5392,7 +5392,7 @@ dependencies = [
 
 [[package]]
 name = "keine-core"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "criterion",
  "log",
@@ -5404,7 +5404,7 @@ dependencies = [
 
 [[package]]
 name = "keine-editor"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "bevy",
  "gpui-kit",
@@ -5412,7 +5412,7 @@ dependencies = [
 
 [[package]]
 name = "keine-loader"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "crc32fast",
@@ -5429,7 +5429,7 @@ dependencies = [
 
 [[package]]
 name = "keine-media"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "libwebp-sys",
 ]
