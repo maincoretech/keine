@@ -5,9 +5,10 @@ pub mod state;
 pub mod types;
 
 pub use action::{
-    Action, ChoiceTarget, Program, SayOptions, StageAnimation, StageAudioCue, StageAudioKind,
-    StageEvent, StageEventKind, StageKeyframe, StageProperty, StageSceneCue, StageSceneLayer,
-    StageTarget, StageTrack, SystemMessageMode, SystemMessageSpec, SystemUiSlot, TransformKeyframe,
+    Action, AssetHint, AssetHintKind, ChoiceTarget, LoadingStrategy, LoadingStrategyMode, Program,
+    SayOptions, StageAnimation, StageAudioCue, StageAudioKind, StageEvent, StageEventKind,
+    StageKeyframe, StageProperty, StageSceneCue, StageSceneLayer, StageTarget, StageTrack,
+    SystemMessageMode, SystemMessageSpec, SystemUiSlot, TransformKeyframe,
 };
 pub use state::{
     ActiveParticleEffect, BgmState, CameraShakeState, DialoguePause, EffectCue, EffectEvent,

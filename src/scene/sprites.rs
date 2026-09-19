@@ -101,6 +101,34 @@ fn sprite_geometry(
             );
             (size, center)
         }
+        SpriteLayout::Composite {
+            canvas,
+            rect,
+            height_ratio,
+        } => {
+            let canvas_width = canvas[0].max(1.0);
+            let canvas_height = canvas[1].max(1.0);
+            let portrait_height = height_ratio
+                .map(|ratio| keine_core::DESIGN_HEIGHT * ratio.max(f32::EPSILON))
+                .unwrap_or(figure_height);
+            let scale = portrait_height / canvas_height;
+            let canvas_size = Vec2::new(canvas_width * scale, portrait_height);
+            let canvas_center_x = match position.x {
+                Anchor::Left(offset) => offset.max(anchor_offset) + canvas_size.x * 0.5,
+                Anchor::Center(offset) => keine_core::DESIGN_WIDTH * 0.5 + offset,
+                Anchor::Right(offset) => {
+                    keine_core::DESIGN_WIDTH - offset.max(anchor_offset) - canvas_size.x * 0.5
+                }
+            };
+            let canvas_bottom = position.y + figure_offset_y;
+            let [x, y, width, height] = rect.unwrap_or([0.0, 0.0, canvas_width, canvas_height]);
+            let size = Vec2::new(width.max(1.0), height.max(1.0)) * scale;
+            let center = Vec2::new(
+                canvas_center_x - canvas_size.x * 0.5 + (x + width * 0.5) * scale,
+                canvas_bottom + (canvas_height - y - height * 0.5) * scale,
+            );
+            (size, center)
+        }
     }
 }
 
@@ -158,6 +186,33 @@ pub(crate) struct SpriteEntityContext<'w, 's> {
     windows: Query<'w, 's, Ref<'static, Window>>,
     cache: Local<'s, SpriteRenderCache>,
     index: Local<'s, SpriteEntityIndex>,
+    last_parallax_axes: Local<'s, Vec2>,
+}
+
+fn scene_parallax_axes(
+    window: &Window,
+    viewport: DesignViewport,
+    config: keine_core::SceneMouseParallax,
+    last: &mut Vec2,
+) -> Vec2 {
+    // Mobile uses gyroscope input for these same normalized axes. Sensor
+    // plumbing is deferred until the mobile host exists; core stays platform-neutral.
+    let Some(cursor) = window.cursor_position() else {
+        if config.return_to_center_on_leave {
+            *last = Vec2::ZERO;
+        }
+        return *last;
+    };
+    let content = Vec2::new(keine_core::DESIGN_WIDTH, keine_core::DESIGN_HEIGHT) * viewport.scale;
+    let raw = ((cursor - viewport.offset) / content * 2.0 - Vec2::ONE)
+        .clamp(Vec2::splat(-1.0), Vec2::ONE);
+    let ease = (config.edge_ease_percent / 100.0).clamp(0.0, 1.0);
+    let exponent = 1.0 + 3.0 * ease;
+    *last = Vec2::new(
+        raw.x.signum() * (1.0 - (1.0 - raw.x.abs()).powf(exponent)),
+        raw.y.signum() * (1.0 - (1.0 - raw.y.abs()).powf(exponent)),
+    );
+    *last
 }
 
 /// Synchronizes character sprites with the engine state via stable sprite IDs.
@@ -182,6 +237,10 @@ pub(crate) fn sync_sprites(
         entities.cache.capture(&state);
     }
     let viewport = DesignViewport::from_window(&window);
+    let parallax = state.scene_mouse_parallax.map(|config| {
+        let axes = scene_parallax_axes(&window, viewport, config, &mut entities.last_parallax_axes);
+        (config, axes)
+    });
     let commands = &mut entities.commands;
     entities.index.0.retain(|id, entity| {
         let retained = state.sprites.contains_key(id);
@@ -242,6 +301,17 @@ pub(crate) fn sync_sprites(
             state.camera_targets.characters()
         };
         let mut camera_zoom = Vec2::ONE;
+        if group == "scene"
+            && let (Some(distance), Some((parallax, axes))) = (data.camera_distance, parallax)
+        {
+            let distance = distance.max(f32::EPSILON);
+            transform.offset_x -=
+                axes.x * parallax.amplitude_percent / 100.0 * keine_core::DESIGN_WIDTH / distance;
+            transform.offset_y +=
+                axes.y * parallax.amplitude_percent / 100.0 * keine_core::DESIGN_HEIGHT / distance;
+            transform.scale_x *= parallax.scale;
+            transform.scale_y *= parallax.scale;
+        }
         if data.camera_distance.is_some() && camera_targeted {
             let distance = data.camera_distance.unwrap_or(1.0).max(f32::EPSILON);
             let shake_x = state

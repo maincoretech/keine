@@ -34,6 +34,7 @@ pub struct ProjectDebugCursor {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ProjectInitialState {
     pub variables: HashMap<String, Value>,
+    pub session_variables: HashMap<String, Value>,
     pub shared_variables: HashMap<String, Value>,
 }
 

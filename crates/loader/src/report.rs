@@ -112,9 +112,20 @@ fn collect_references(
         Action::ShowSprite { image, .. } | Action::UpdateSprite { image, .. } => {
             resource(image, ResourceKind::Figure);
         }
-        Action::ConfigureSpriteSequence { frames, .. } => {
+        Action::ConfigureSpriteSequence { frames, .. }
+        | Action::ConfigureTimedSpriteSequence { frames, .. } => {
             for frame in frames {
                 resource(frame, ResourceKind::Figure);
+            }
+        }
+        Action::SelectSpriteImageByCondition {
+            default_image,
+            variants,
+            ..
+        } => {
+            resource(default_image, ResourceKind::Figure);
+            for (_, image) in variants {
+                resource(image, ResourceKind::Figure);
             }
         }
         Action::Say { options, .. } => {
@@ -180,6 +191,17 @@ fn collect_references(
             }
             if let Some(texture) = &mask.texture {
                 resource(texture, ResourceKind::Particle);
+            }
+        }
+        Action::ConfigureLoading { strategy } => {
+            for hint in &strategy.resources {
+                resource(
+                    &hint.path,
+                    match hint.kind {
+                        keine_core::AssetHintKind::Background => ResourceKind::Background,
+                        keine_core::AssetHintKind::Figure => ResourceKind::Figure,
+                    },
+                );
             }
         }
         Action::MiniAvatar { image } => resource(image, ResourceKind::MiniAvatar),

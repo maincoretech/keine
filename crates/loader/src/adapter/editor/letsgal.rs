@@ -464,6 +464,10 @@ mod tests {
                         | "systemMessage"
                         | "updateCharacter"
                         | "stageMask"
+                        | "loadingStrategy"
+                        | "openExternalUrl"
+                        | "steamAction"
+                        | "unlockSteamAchievement"
                 )
             })
             .collect::<BTreeSet<_>>();

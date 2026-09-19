@@ -84,7 +84,11 @@ mod keine {
     fn encode_at(state: &State, saved_at_unix: u64) -> Result<Vec<u8>> {
         let metadata = postcard::to_stdvec(&metadata(state, saved_at_unix))
             .context("failed to serialize save metadata")?;
-        let state = postcard::to_stdvec(state).context("failed to serialize game state")?;
+        let mut slot_state = state.clone();
+        slot_state
+            .vars
+            .retain(|name, _| !state.session_variable_names.contains(name));
+        let state = postcard::to_stdvec(&slot_state).context("failed to serialize game state")?;
         validate_lengths(metadata.len(), state.len())?;
         let mut output = Vec::with_capacity(HEADER_SIZE + metadata.len() + state.len());
         output.extend_from_slice(&encode_header(
@@ -400,6 +404,7 @@ mod keine {
                     looped: true,
                     elapsed: 1.25,
                     frame: 1,
+                    frame_durations: Vec::new(),
                 },
             );
             state.record_dialogue(1);

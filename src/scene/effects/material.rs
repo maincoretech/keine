@@ -76,6 +76,16 @@ pub(crate) struct StageMaterial {
     #[uniform(0)]
     pub(crate) post_s: Vec4,
     #[uniform(0)]
+    pub(crate) post_t: Vec4,
+    #[uniform(0)]
+    pub(crate) post_u: Vec4,
+    #[uniform(0)]
+    pub(crate) post_v: Vec4,
+    #[uniform(0)]
+    pub(crate) post_w: Vec4,
+    #[uniform(0)]
+    pub(crate) post_x: Vec4,
+    #[uniform(0)]
     pub(crate) clip_a: Vec4,
     #[uniform(0)]
     pub(crate) clip_b: Vec4,
@@ -248,6 +258,36 @@ impl StageMaterial {
                 post.eyelid_center_x.clamp(0.0, 1.0),
             ),
             post_s: Vec4::new(post.eyelid_center_y.clamp(0.0, 1.0), 0.0, 0.0, 0.0),
+            post_t: Vec4::new(
+                post.v2.mirror_shatter_intensity.clamp(0.0, 1.0),
+                post.v2.mirror_shatter_center_x,
+                post.v2.mirror_shatter_center_y,
+                post.v2.mirror_shatter_spread.clamp(0.0, 3.0),
+            ),
+            post_u: Vec4::new(
+                post.v2.mirror_shatter_seed,
+                post.v2.speed_lines_intensity.clamp(0.0, 1.0),
+                post.v2.speed_lines_density.clamp(0.0, 1.0),
+                f32::from(post.v2.speed_lines_radial),
+            ),
+            post_v: Vec4::new(
+                post.v2.speed_lines_angle.to_radians(),
+                post.v2.speed_lines_speed,
+                post.v2.speed_lines_center_x,
+                post.v2.speed_lines_center_y,
+            ),
+            post_w: Vec4::new(
+                f32::from(post.v2.speed_lines_region_ellipse),
+                post.v2.speed_lines_region_x,
+                post.v2.speed_lines_region_y,
+                post.v2.speed_lines_region_width.max(0.0),
+            ),
+            post_x: Vec4::new(
+                post.v2.speed_lines_region_height.max(0.0),
+                post.v2.speed_lines_region_feather.max(0.0),
+                0.0,
+                0.0,
+            ),
             clip_a: Vec4::ZERO,
             clip_b: Vec4::ZERO,
             clip_c: Vec4::ZERO,
@@ -436,6 +476,7 @@ impl StageMaterial {
             || self.post_p.x > ACTIVE
             || self.post_p.w > ACTIVE
             || self.post_q.w < 0.999;
+        let basic = basic || self.post_t.x > ACTIVE || self.post_u.y > ACTIVE;
         if basic {
             StageShaderClass::Basic
         } else {

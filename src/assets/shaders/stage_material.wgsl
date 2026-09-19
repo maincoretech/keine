@@ -24,6 +24,11 @@ struct StageMaterialUniform {
     post_q: vec4<f32>,
     post_r: vec4<f32>,
     post_s: vec4<f32>,
+    post_t: vec4<f32>,
+    post_u: vec4<f32>,
+    post_v: vec4<f32>,
+    post_w: vec4<f32>,
+    post_x: vec4<f32>,
     clip_a: vec4<f32>,
     clip_b: vec4<f32>,
     clip_c: vec4<f32>,
@@ -151,6 +156,17 @@ fn texture_edge_distance_pixels(uv: vec2<f32>) -> f32 {
 fn animate_uv(source: vec2<f32>) -> vec2<f32> {
     let dimensions = vec2<f32>(textureDimensions(color_texture));
     var uv = source;
+    if material.post_t.x > 0.001 {
+        let centered = uv - material.post_t.yz;
+        let radius = length(centered);
+        let angle = atan2(centered.y, centered.x);
+        let sectors = 10.0 + material.post_t.w * 14.0;
+        let shard = floor((angle + 3.14159265) / 6.2831853 * sectors);
+        let band = floor(radius * (5.0 + material.post_t.w * 4.0));
+        let random = noise(vec2<f32>(shard + material.post_u.x * 17.0, band + 31.0));
+        let direction = centered / max(radius, 0.0001);
+        uv += direction * (random - 0.35) * material.post_t.x * 0.035 * smoothstep(0.0, 0.8, radius);
+    }
     if material.post_g.w > 1.01 {
         let pixels = max(vec2<f32>(1.0), dimensions / material.post_g.w);
         uv = (floor(uv * pixels) + vec2<f32>(0.5)) / pixels;
@@ -345,6 +361,30 @@ fn godray(uv: vec2<f32>) -> f32 {
 
 fn apply_post(color: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {
     var result = color;
+    if material.post_t.x > 0.001 {
+        let centered = uv - material.post_t.yz;
+        let radius = length(centered);
+        let sectors = 10.0 + material.post_t.w * 14.0;
+        let spoke = abs(fract((atan2(centered.y, centered.x) + 3.14159265) / 6.2831853 * sectors) - 0.5);
+        let ring = abs(fract(radius * (5.0 + material.post_t.w * 4.0)) - 0.5);
+        let crack = 1.0 - smoothstep(0.465, 0.5, max(spoke, ring));
+        result = vec4<f32>(result.rgb * (1.0 - crack * material.post_t.x * 0.68), result.a);
+    }
+    if material.post_u.y > 0.001 {
+        let center = material.post_v.zw;
+        let delta = uv - center;
+        let radial_angle = atan2(delta.y, delta.x);
+        let directional = dot(uv, vec2<f32>(cos(material.post_v.x), sin(material.post_v.x)));
+        let coordinate = select(directional * 36.0, radial_angle * 26.0, material.post_u.w > 0.5);
+        let phase = coordinate + globals.time * material.post_v.y;
+        let streak = step(1.0 - material.post_u.z * 0.32, noise(vec2<f32>(floor(phase), floor(length(delta) * 34.0))));
+        let half_size = max(vec2<f32>(material.post_w.w, material.post_x.x) * 0.5, vec2<f32>(0.0001));
+        let local = abs((uv - material.post_w.yz) / half_size);
+        let signed = select(max(local.x, local.y), length(local), material.post_w.x > 0.5);
+        let region = 1.0 - smoothstep(1.0 - material.post_x.y, 1.0 + material.post_x.y, signed);
+        let focus = select(1.0, smoothstep(0.05, 0.75, length(delta)), material.post_u.w > 0.5);
+        result = vec4<f32>(result.rgb + vec3<f32>(streak * region * focus * material.post_u.y * 0.45), result.a);
+    }
     result = vec4<f32>(result.rgb * exp2(material.post_f.x), result.a);
     result = vec4<f32>((result.rgb - vec3<f32>(0.5)) * (1.0 + material.post_f.z) + vec3<f32>(0.5), result.a);
     result = vec4<f32>(result.rgb + vec3<f32>(material.post_f.y), result.a);

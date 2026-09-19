@@ -54,6 +54,46 @@ pub struct SystemMessageSpec {
     pub result_variable: Option<String>,
 }
 
+/// Runtime-neutral asset class used by authored loading hints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AssetHintKind {
+    Background,
+    Figure,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetHint {
+    pub path: String,
+    pub kind: AssetHintKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum LoadingStrategyMode {
+    #[default]
+    Auto,
+    Manual,
+}
+
+/// Asset-preparation policy selected by structured editor content.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoadingStrategy {
+    pub mode: LoadingStrategyMode,
+    pub lookahead: u16,
+    pub blocking: bool,
+    pub resources: Vec<AssetHint>,
+}
+
+impl Default for LoadingStrategy {
+    fn default() -> Self {
+        Self {
+            mode: LoadingStrategyMode::Auto,
+            lookahead: 20,
+            blocking: false,
+            resources: Vec::new(),
+        }
+    }
+}
+
 /// One absolute-target segment in an adapter-authored sprite timeline.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TransformKeyframe {
@@ -607,6 +647,33 @@ pub enum Action {
         mask: Option<Box<crate::types::StageMask>>,
         duration: f32,
         blocking: bool,
+    },
+    /// Change speculative asset preparation without coupling core to an asset server.
+    ConfigureLoading {
+        strategy: LoadingStrategy,
+    },
+    ConfigureSceneMouseParallax {
+        parallax: Option<crate::types::SceneMouseParallax>,
+    },
+    SetPostProcessV2 {
+        targets: CameraTargets,
+        effect: Box<crate::types::PostProcessV2>,
+        duration: f32,
+        easing: Easing,
+        blocking: bool,
+    },
+    ConfigureTimedSpriteSequence {
+        id: String,
+        frames: Vec<String>,
+        frame_durations: Vec<f32>,
+        looped: bool,
+    },
+    HideParticleLayers,
+    /// Resolve the first matching image rule using the native expression evaluator.
+    SelectSpriteImageByCondition {
+        id: String,
+        default_image: String,
+        variants: Vec<(String, String)>,
     },
 }
 

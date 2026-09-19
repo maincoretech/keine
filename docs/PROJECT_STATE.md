@@ -10,8 +10,8 @@
 - `keine-core` provides typed actions, immutable `Program`, deterministic `State` transitions,
   expression evaluation, execution limits, rollback checkpoints, and persistence-safety checks.
 - `keine-loader` provides capability-based adapter registration, confined overlay sources,
-  WebGAL parsing, LetsGal 1.x compilation, compiled Program v1, save v10, diagnostics, and optional
-  development hot reload.
+  WebGAL parsing, LetsGal 1.x/2.0 compilation, compiled Program v1, save v10, diagnostics, and
+  optional development hot reload.
 - The Bevy runtime provides 1920x1080 design-space rendering, fixed scene/UI/dialog camera
   composition, reactive lifecycle scheduling, background/sprite/effect synchronization, fixed
   MainCore UI, audio, desktop video, and platform persistence roots.
@@ -57,10 +57,16 @@ project / package
   23 partially supported, and 3 explicitly unsupported. This is a compatibility record rather
   than a parity roadmap. Existing behavior remains regression-tested; only security, crash, data
   loss, or Kēne-caused regressions justify maintenance without a new product decision.
-- LetsGal Studio 1.x remains a read-only adapter. The checked-in 1.8 fixture and 1.20 acceptance
+- LetsGal Studio remains a read-only adapter. The checked-in 1.8 fixture and 1.20 acceptance
   project are active compatibility evidence; Studio extensions and bridge injection are excluded.
   LetsGal 1.20 multi-target character removal and typed `stageMask` overlay/clip state are native;
-  dynamic Spine and Live2D portraits remain explicitly unsupported.
+  2.0 basic blueprint scheduling/chapter preprocessing, session variables, layered differential portraits,
+  per-frame portrait timing, scene particle layers, mouse scene parallax, mirror-shatter and scoped
+  speed-line effects, and automatic/manual background-or-wait loading strategies are native.
+  Desktop parallax reads the mouse; a future mobile host will feed the same normalized axes from
+  its gyroscope without changing core or the scene model.
+  External-browser and Steam blocks remain explicit platform-boundary errors; dynamic Spine and
+  Live2D portraits remain explicitly unsupported.
   A Studio-native ID outside Kēne's path-safe slug grammar is deterministically mapped to a stable
   `letsgal-*` shipping/save ID; `project.json.keine.projectId` is the explicit override.
 - Save v10 and compiled Program v1 are strict envelopes. Other layouts are rejected; there is no
@@ -76,14 +82,17 @@ project / package
 ## Incomplete or intentionally deferred
 
 - WebGAL `-continue`, advanced animation tables/keyframes/filters, full input validation, complete
-  expression parity, Live2D/Spine/GIF, runtime UI styling, and Steam/debug bridge commands remain
-  known compatibility boundaries. They are not scheduled for closure; see
+  expression parity, Live2D/Spine/GIF, runtime UI styling, external-browser actions, and
+  Steam/debug bridge commands remain known compatibility boundaries. They are not scheduled for closure; see
   `dev/docs/webgal-compatibility/unsupported.md` for migration facts.
 - Automated screenshot/golden coverage is not established across Windows/Linux, 1x DPI,
   ultrawide, and tall windows. Existing semantic tests do not prove pixel equivalence.
 - The full LetsGal commercial sample is intentionally untracked. Local acceptance and loader
   benchmarks run when `projects/letsgal` or `KEINE_LETSGAL_PROJECT` is available; clean CI relies
   on tracked fixtures and `projects/test-project`.
+- Complex multi-route blueprint parity remains deferred. Core already owns the native flow,
+  condition, choice, assignment, and scene-call primitives; the adapter does not embed a JS VM or
+  Studio extension host to chase editor-specific routing behavior.
 - Windows ARM64, Windows Media Foundation, Android/iOS launchers, mobile storage adapters, and
   mobile video backends have no release commitment. Desktop behavior must not be weakened in
   anticipation of them.

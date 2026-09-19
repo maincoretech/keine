@@ -656,7 +656,13 @@ fn sync_editor_position(
     let new_preview = || State {
         program: state.program.clone(),
         program_fingerprint: state.program_fingerprint,
-        vars: initial.variables.clone(),
+        vars: initial
+            .variables
+            .iter()
+            .chain(&initial.session_variables)
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect(),
+        session_variable_names: initial.session_variables.keys().cloned().collect(),
         global_vars: initial.shared_variables.clone(),
         ..State::new()
     };
@@ -1276,8 +1282,29 @@ fn advance_sprite_transitions(state: &mut State, delta_seconds: f32) -> bool {
             continue;
         }
         sequence.elapsed += delta_seconds;
-        let sampled = (sequence.elapsed * sequence.fps).floor() as usize;
-        let frame = if sequence.looped {
+        let sampled = if sequence.frame_durations.len() == sequence.frames.len() {
+            let cycle = sequence.frame_durations.iter().sum::<f32>();
+            let mut remaining = if sequence.looped {
+                sequence.elapsed % cycle.max(f32::EPSILON)
+            } else {
+                sequence.elapsed.min(cycle)
+            };
+            sequence
+                .frame_durations
+                .iter()
+                .position(|duration| {
+                    if remaining < *duration {
+                        true
+                    } else {
+                        remaining -= *duration;
+                        false
+                    }
+                })
+                .unwrap_or(sequence.frames.len() - 1)
+        } else {
+            (sequence.elapsed * sequence.fps).floor() as usize
+        };
+        let frame = if sequence.looped && sequence.frame_durations.is_empty() {
             sampled % sequence.frames.len()
         } else {
             sampled.min(sequence.frames.len() - 1)
@@ -2502,6 +2529,7 @@ mod tests {
                 "route".into(),
                 Value::Str("fresh".into()),
             )]),
+            session_variables: std::collections::HashMap::new(),
             shared_variables: std::collections::HashMap::from([("ending".into(), Value::Int(2))]),
         };
 

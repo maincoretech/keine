@@ -1455,6 +1455,8 @@ fn bootstrap_project(
     match content.initial_state() {
         Ok(initial) => {
             state.vars = initial.variables;
+            state.session_variable_names = initial.session_variables.keys().cloned().collect();
+            state.vars.extend(initial.session_variables);
             state.global_vars = initial.shared_variables;
         }
         Err(error) => log::error!("failed to load project variable defaults: {error:#}"),

@@ -524,6 +524,14 @@ fn action_name(action: &Action) -> &'static str {
         Action::WaitForAdvance => "wait-for-advance",
         Action::SelectSpriteImage { .. } => "select-sprite-image",
         Action::UpdateSprite { .. } => "update-sprite",
+        // LetsGal owns this adapter-native loading policy; the WebGAL
+        // showcase intentionally does not manufacture structured editor JSON.
+        Action::ConfigureLoading { .. } => "configure-loading",
+        Action::ConfigureSceneMouseParallax { .. } => "configure-scene-mouse-parallax",
+        Action::SetPostProcessV2 { .. } => "set-post-process-v2",
+        Action::ConfigureTimedSpriteSequence { .. } => "configure-timed-sprite-sequence",
+        Action::HideParticleLayers => "hide-particle-layers",
+        Action::SelectSpriteImageByCondition { .. } => "select-sprite-image-by-condition",
     }
 }
 

@@ -11,15 +11,11 @@ use crate::scene::effects::material::active_lut_preset;
 use crate::scene::images::{ImageRole, ImageRoleRegistry};
 use crate::ui::foundation::UiFonts;
 
-const LOOKAHEAD_ACTIONS: usize = 20;
 const MAX_PREDICTED_ASSETS: usize = 8;
 const MAX_SPECULATIVE_LOADS: usize = 1;
 
-fn prefetch_action_window(cursor: usize) -> std::ops::RangeInclusive<usize> {
-    // Script execution advances the cursor as soon as an action starts. Keep
-    // that active action in the warm set so long timelines can load embedded
-    // event assets before their authored trigger time.
-    cursor.saturating_sub(1)..=cursor.saturating_add(LOOKAHEAD_ACTIONS)
+fn configured_action_window(cursor: usize, lookahead: usize) -> std::ops::RangeInclusive<usize> {
+    cursor.saturating_sub(1)..=cursor.saturating_add(lookahead.clamp(1, 500))
 }
 
 #[derive(Default)]
@@ -100,6 +96,7 @@ pub(crate) struct PrefetchState {
     effects: HashMap<String, String>,
     particles: HashMap<String, Option<String>>,
     lut: Option<String>,
+    loading_strategy: keine_core::LoadingStrategy,
     plan: AssetPlan,
 }
 
@@ -132,6 +129,7 @@ impl PrefetchState {
                 .iter()
                 .all(|(id, effect)| self.particles.get(id) == Some(&effect.effect.texture))
             && self.lut.as_deref() == active_lut_preset(&state.camera_effect)
+            && self.loading_strategy == state.loading_strategy
     }
 
     fn capture(&mut self, state: &GameState) {
@@ -167,6 +165,7 @@ impl PrefetchState {
                 .map(|(id, effect)| (id.clone(), effect.effect.texture.clone())),
         );
         self.lut = active_lut_preset(&state.camera_effect).map(str::to_owned);
+        self.loading_strategy.clone_from(&state.loading_strategy);
     }
 }
 
@@ -301,6 +300,25 @@ fn build_asset_plan(
         plan.require(config.lut_path(lut), ResourceKind::Lut);
     }
 
+    if state.loading_strategy.mode == keine_core::LoadingStrategyMode::Manual {
+        for hint in &state.loading_strategy.resources {
+            let (path, kind) = match hint.kind {
+                keine_core::AssetHintKind::Background => {
+                    (config.bg_path(&hint.path), ResourceKind::Background)
+                }
+                keine_core::AssetHintKind::Figure => {
+                    (config.figure_path(&hint.path), ResourceKind::Figure)
+                }
+            };
+            if state.loading_strategy.blocking {
+                plan.require(path, kind);
+            } else {
+                plan.warm_urgent(path, kind);
+            }
+        }
+        return plan;
+    }
+
     // Predictions are admitted only after the currently visible state is
     // ready. This prevents title/gameplay latency from competing with a burst
     // of speculative decode work on slower CPUs and storage.
@@ -310,16 +328,22 @@ fn build_asset_plan(
         (state.current_scene.clone(), state.cursor)
     };
     if let Some(scene) = manifest.get(&scene_name) {
-        let window = prefetch_action_window(cursor);
+        let lookahead = usize::from(state.loading_strategy.lookahead.clamp(1, 500));
+        let window = configured_action_window(cursor, lookahead);
         for resource in scene
             .resources
             .iter()
             .filter(|resource| window.contains(&resource.action_index))
             .filter(|resource| !resource.is_dynamic())
         {
-            plan.warm_predicted(resource.resolved_path(config), resource.kind);
+            let path = resource.resolved_path(config);
+            if state.loading_strategy.blocking {
+                plan.require(path, resource.kind);
+            } else {
+                plan.warm_predicted(path, resource.kind);
+            }
         }
-        let call_end = cursor.saturating_add(LOOKAHEAD_ACTIONS);
+        let call_end = cursor.saturating_add(lookahead);
         for reference in scene.sub_scenes.iter().filter(|reference| {
             reference.action_index >= cursor && reference.action_index <= call_end
         }) {
@@ -327,10 +351,15 @@ fn build_asset_plan(
                 for resource in called_scene
                     .resources
                     .iter()
-                    .filter(|resource| resource.action_index <= LOOKAHEAD_ACTIONS)
+                    .filter(|resource| resource.action_index <= lookahead)
                     .filter(|resource| !resource.is_dynamic())
                 {
-                    plan.warm_predicted(resource.resolved_path(config), resource.kind);
+                    let path = resource.resolved_path(config);
+                    if state.loading_strategy.blocking {
+                        plan.require(path, resource.kind);
+                    } else {
+                        plan.warm_predicted(path, resource.kind);
+                    }
                 }
             }
         }
@@ -426,11 +455,11 @@ mod tests {
 
     #[test]
     fn prefetch_window_keeps_the_action_that_advanced_the_cursor() {
-        let window = prefetch_action_window(12);
+        let window = configured_action_window(12, 20);
 
         assert!(window.contains(&11));
         assert!(window.contains(&12));
-        assert!(window.contains(&(12 + LOOKAHEAD_ACTIONS)));
+        assert!(window.contains(&(12 + 20)));
         assert!(!window.contains(&10));
     }
 
@@ -500,5 +529,65 @@ mod tests {
 
         assert!(plan.speculative_assets().next().is_none());
         assert!(!plan.retains("characters/{route}.webp"));
+    }
+
+    #[test]
+    fn authored_wait_strategy_makes_lookahead_assets_critical() {
+        let mut state = keine_core::State::new();
+        state.current_scene = "main".into();
+        state.ended = false;
+        state.loading_strategy = keine_core::LoadingStrategy {
+            lookahead: 2,
+            blocking: true,
+            ..default()
+        };
+        let mut manifest = LocalAssetManifest::default();
+        manifest.insert(
+            "main".into(),
+            crate::runtime::resources::LocalSceneAssets {
+                resources: vec![
+                    ResourceRef {
+                        path: "near.webp".into(),
+                        kind: ResourceKind::Figure,
+                        action_index: 2,
+                        span: SourceSpan { line: 1, column: 1 },
+                    },
+                    ResourceRef {
+                        path: "far.webp".into(),
+                        kind: ResourceKind::Figure,
+                        action_index: 3,
+                        span: SourceSpan { line: 2, column: 1 },
+                    },
+                ],
+                ..default()
+            },
+        );
+        let config = GameConfigResource(keine_core::config::GameConfig::default());
+
+        let plan = build_asset_plan(&GameState(state), &config, &manifest);
+
+        assert!(plan.critical.contains_key(&config.figure_path("near.webp")));
+        assert!(!plan.critical.contains_key(&config.figure_path("far.webp")));
+    }
+
+    #[test]
+    fn authored_manual_strategy_uses_declared_hints() {
+        let mut state = keine_core::State::new();
+        state.current_scene = "main".into();
+        state.ended = false;
+        state.loading_strategy = keine_core::LoadingStrategy {
+            mode: keine_core::LoadingStrategyMode::Manual,
+            resources: vec![keine_core::AssetHint {
+                path: "alice.webp".into(),
+                kind: keine_core::AssetHintKind::Figure,
+            }],
+            ..default()
+        };
+        let config = GameConfigResource(keine_core::config::GameConfig::default());
+
+        let plan = build_asset_plan(&GameState(state), &config, &LocalAssetManifest::default());
+
+        assert!(plan.retains(&config.figure_path("alice.webp")));
+        assert!(plan.critical.is_empty());
     }
 }

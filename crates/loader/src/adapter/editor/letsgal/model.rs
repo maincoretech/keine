@@ -23,6 +23,75 @@ pub(super) struct ProjectDocument {
     pub chapter_tree_order: Option<Vec<ChapterTreeEntry>>,
     #[serde(default)]
     pub resolution: Resolution,
+    #[serde(default)]
+    pub schedule_mode: String,
+    #[serde(default)]
+    pub schedule: Option<ScheduleDocument>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ScheduleDocument {
+    #[serde(default)]
+    pub graph: ScheduleGraph,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(super) struct ScheduleGraph {
+    #[serde(default)]
+    pub nodes: Vec<ScheduleNode>,
+    #[serde(default)]
+    pub edges: Vec<ScheduleEdge>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ScheduleNode {
+    pub id: String,
+    pub kind: String,
+    #[serde(default)]
+    pub chapter_id: String,
+    #[serde(default)]
+    pub expression: String,
+    #[serde(default = "default_condition_logic")]
+    pub logic: String,
+    #[serde(default)]
+    pub conditions: Vec<ScheduleCondition>,
+    #[serde(default)]
+    pub options: Vec<ScheduleChoice>,
+    #[serde(default)]
+    pub variable: String,
+    #[serde(default)]
+    pub value: Value,
+}
+
+fn default_condition_logic() -> String {
+    "and".into()
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(super) struct ScheduleCondition {
+    #[serde(default)]
+    pub variable: String,
+    #[serde(default)]
+    pub operator: String,
+    #[serde(default)]
+    pub value: Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(super) struct ScheduleChoice {
+    pub id: String,
+    #[serde(default)]
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(super) struct ScheduleEdge {
+    pub source: String,
+    #[serde(default)]
+    pub port: String,
+    pub target: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -82,6 +151,8 @@ pub(super) struct ChapterDocument {
     pub id: String,
     pub name: String,
     #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
     pub disabled: bool,
     #[serde(default)]
     pub fragments: Vec<StoryFragment>,
@@ -136,6 +207,19 @@ pub(super) struct SceneLayer {
     pub distance: f32,
     #[serde(default)]
     pub offset: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub particle: Option<SceneParticle>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct SceneParticle {
+    #[serde(default)]
+    pub preset: String,
+    #[serde(default)]
+    pub options_json: String,
 }
 
 const fn default_distance() -> f32 {
@@ -231,6 +315,90 @@ pub(super) struct CharacterDefinition {
     pub portrait_skin_config: Option<PortraitSkinConfig>,
     #[serde(default)]
     pub portrait_layout: Option<CharacterPortraitLayout>,
+    #[serde(default)]
+    pub differential_portrait_groups: Vec<DifferentialPortraitGroup>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct DifferentialPortraitGroup {
+    pub id: String,
+    #[serde(default = "default_differential_width")]
+    pub width: f32,
+    #[serde(default = "default_differential_height")]
+    pub height: f32,
+    #[serde(default)]
+    pub layers: Vec<DifferentialPortraitLayer>,
+    #[serde(default)]
+    pub skin_selections: HashMap<String, HashMap<String, Option<String>>>,
+}
+
+const fn default_differential_width() -> f32 {
+    1024.0
+}
+
+const fn default_differential_height() -> f32 {
+    1536.0
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct DifferentialPortraitLayer {
+    pub id: String,
+    #[serde(default)]
+    pub options: Vec<DifferentialPortraitOption>,
+    #[serde(default)]
+    pub default_option_id: Option<String>,
+    #[serde(default = "default_opacity")]
+    pub opacity: f32,
+    #[serde(default)]
+    pub variable_rules: Vec<DifferentialVariableRule>,
+}
+
+const fn default_opacity() -> f32 {
+    1.0
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct DifferentialPortraitOption {
+    pub id: String,
+    #[serde(default)]
+    pub asset_path: String,
+    #[serde(default)]
+    pub rect: Option<DifferentialRect>,
+    #[serde(default = "default_opacity")]
+    pub opacity: f32,
+    #[serde(default)]
+    pub frames: Vec<String>,
+    #[serde(default = "default_differential_fps")]
+    pub fps: f32,
+}
+
+const fn default_differential_fps() -> f32 {
+    12.0
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub(super) struct DifferentialRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct DifferentialVariableRule {
+    pub variable: String,
+    #[serde(default)]
+    pub operator: String,
+    #[serde(default)]
+    pub value: Value,
+    #[serde(default)]
+    pub option_id: Option<String>,
+    #[serde(default)]
+    pub scope: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

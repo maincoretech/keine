@@ -372,6 +372,7 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                             looped: *looped,
                             elapsed: 0.0,
                             frame: 0,
+                            frame_durations: Vec::new(),
                         },
                     );
                 }
@@ -396,6 +397,25 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                             .iter()
                             .find(|(name, _)| name == selected)
                             .map(|(_, image)| image)
+                    })
+                    .unwrap_or(default_image);
+                if let Some(sprite) = state.sprites.get_mut(&id) {
+                    sprite.image = interpolate(image, &state.vars, &state.global_vars);
+                }
+            }
+            Action::SelectSpriteImageByCondition {
+                id,
+                default_image,
+                variants,
+            } => {
+                let id = interpolate(id, &state.vars, &state.global_vars);
+                let image = variants
+                    .iter()
+                    .find_map(|(condition, image)| {
+                        evaluate(condition, &state.vars, &state.global_vars)
+                            .ok()
+                            .filter(crate::Value::truthy)
+                            .map(|_| image)
                     })
                     .unwrap_or(default_image);
                 if let Some(sprite) = state.sprites.get_mut(&id) {
@@ -1018,12 +1038,16 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                     .as_deref()
                     .map(|id| interpolate(id, &state.vars, &state.global_vars));
                 for (id, sprite) in &mut state.sprites {
-                    if !rule.character_ids.contains(id) {
+                    let portrait_id = id
+                        .strip_prefix("character-layer:")
+                        .and_then(|value| value.split_once(':'))
+                        .map_or(id.as_str(), |(character, _)| character);
+                    if !rule.character_ids.contains(portrait_id) {
                         continue;
                     }
                     let style = match speaker_id.as_deref() {
                         None => rule.narration,
-                        Some(speaker) if speaker == id => rule.speaking,
+                        Some(speaker) if speaker == portrait_id => rule.speaking,
                         Some(_) => rule.others,
                     };
                     sprite.filter = crate::VisualFilter {
@@ -1490,6 +1514,80 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                     return StepResult::AwaitPresentation;
                 }
             }
+            Action::ConfigureLoading { strategy } => {
+                state.loading_strategy = strategy.clone();
+            }
+            Action::ConfigureSceneMouseParallax { parallax } => {
+                state.scene_mouse_parallax = *parallax;
+                state.invalidate_stage();
+            }
+            Action::SetPostProcessV2 {
+                targets,
+                effect,
+                duration,
+                easing,
+                blocking,
+            } => {
+                state.camera_effect_targets = *targets;
+                let blocking = *blocking && !next;
+                let mut target = state.camera_effect.clone();
+                target.v2 = (**effect).clone();
+                if *duration <= f32::EPSILON {
+                    state.camera_effect = target;
+                    state.camera_effect_animation = None;
+                } else {
+                    state.camera_effect_animation = Some(crate::state::PostProcessAnimation {
+                        from: state.camera_effect.clone(),
+                        to: target,
+                        elapsed: 0.0,
+                        duration: *duration,
+                        easing: *easing,
+                        blocking,
+                    });
+                }
+                state.invalidate_stage();
+                if blocking && *duration > f32::EPSILON {
+                    return StepResult::AwaitPresentation;
+                }
+            }
+            Action::ConfigureTimedSpriteSequence {
+                id,
+                frames,
+                frame_durations,
+                looped,
+            } => {
+                let id = interpolate(id, &state.vars, &state.global_vars);
+                let frames = frames
+                    .iter()
+                    .map(|frame| interpolate(frame, &state.vars, &state.global_vars))
+                    .filter(|frame| !frame.is_empty())
+                    .collect::<Vec<_>>();
+                if frames.len() == frame_durations.len()
+                    && let Some(first) = frames.first()
+                    && let Some(sprite) = state.sprites.get_mut(&id)
+                {
+                    sprite.image.clone_from(first);
+                    state.sprite_sequences.insert(
+                        id,
+                        crate::state::SpriteSequenceState {
+                            frames,
+                            fps: 1.0,
+                            looped: *looped,
+                            elapsed: 0.0,
+                            frame: 0,
+                            frame_durations: frame_durations
+                                .iter()
+                                .map(|seconds| seconds.max(f32::EPSILON))
+                                .collect(),
+                        },
+                    );
+                }
+            }
+            Action::HideParticleLayers => {
+                state
+                    .particle_effects
+                    .retain(|id, _| !id.starts_with("scene-particle:"));
+            }
             Action::Flow { .. } => unreachable!("flow wrappers are removed before dispatch"),
         }
     }
@@ -1669,6 +1767,7 @@ pub fn end_game(state: &mut State) {
     state.invalidate_stage();
     state.shell_events.clear();
     state.host_commands.clear();
+    state.loading_strategy = Default::default();
     state.scene_stack.clear();
     state.dialogue = None;
     state.previous_dialogue = None;

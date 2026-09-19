@@ -8,12 +8,14 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
-use crate::action::{ChoiceTarget, Program, StageAnimation, SystemMessageMode, SystemUiSlot};
+use crate::action::{
+    ChoiceTarget, LoadingStrategy, Program, StageAnimation, SystemMessageMode, SystemUiSlot,
+};
 use crate::config::TextRevealConfig;
 use crate::types::{
     AnimationPreset, BlendMode, CameraShakeSpec, CameraTargets, DialogueStyle, Easing, FilmEffects,
-    InputValueType, ParticleEffect, PortraitStyle, Position, PostProcessEffect, SpriteLayout,
-    SpriteTransform, Transition, Value, VideoSpec, VisualFilter,
+    InputValueType, ParticleEffect, PortraitStyle, Position, PostProcessEffect, SceneMouseParallax,
+    SpriteLayout, SpriteTransform, Transition, Value, VideoSpec, VisualFilter,
 };
 
 /// The complete game state at any point in time.
@@ -30,6 +32,11 @@ pub struct State {
     pub shell_events: Vec<ShellEvent>,
     #[serde(skip, default)]
     pub host_commands: Vec<HostCommandEvent>,
+    /// Runtime loading policy. It is replayed from script after restoring a save.
+    #[serde(skip, default)]
+    pub loading_strategy: LoadingStrategy,
+    #[serde(skip, default)]
+    pub scene_mouse_parallax: Option<SceneMouseParallax>,
     /// Current scene being executed.
     pub current_scene: String,
     /// Index into the current scene's action list.
@@ -167,6 +174,8 @@ pub struct State {
     /// Profile data is stored independently from individual save slots.
     #[serde(skip, default)]
     pub global_vars: HashMap<String, Value>,
+    #[serde(skip, default)]
+    pub session_variable_names: HashSet<String>,
 
     // ── Backlog / rollback ──
     /// Recent dialogue checkpoints. Scripts are intentionally excluded from
@@ -418,6 +427,9 @@ pub enum PersistenceHazard {
     Video,
     SpritePosition,
     SpriteKeyframes,
+    SceneMouseParallax,
+    PostProcessV2,
+    TimedSpriteSequence,
 }
 
 impl fmt::Display for RestoreError {
@@ -494,6 +506,8 @@ pub struct SpriteSequenceState {
     pub looped: bool,
     pub elapsed: f32,
     pub frame: usize,
+    #[serde(skip, default)]
+    pub frame_durations: Vec<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -846,6 +860,18 @@ impl State {
                     .values()
                     .any(|sprite| sprite.keyframe_animation.is_some())
                     .then_some(Hazard::SpriteKeyframes)
+            })
+            .or_else(|| {
+                self.scene_mouse_parallax
+                    .is_some()
+                    .then_some(Hazard::SceneMouseParallax)
+            })
+            .or_else(|| (!self.camera_effect.v2.is_identity()).then_some(Hazard::PostProcessV2))
+            .or_else(|| {
+                self.sprite_sequences
+                    .values()
+                    .any(|sequence| !sequence.frame_durations.is_empty())
+                    .then_some(Hazard::TimedSpriteSequence)
             });
 
         hazard.map_or(PersistenceSafety::Exact, PersistenceSafety::ActiveTransient)
@@ -904,6 +930,12 @@ impl State {
         }
         saved.program = Arc::clone(&self.program);
         saved.stage_revision = self.stage_revision.wrapping_add(1);
+        saved.session_variable_names = self.session_variable_names.clone();
+        for name in &saved.session_variable_names {
+            if let Some(value) = self.vars.get(name) {
+                saved.vars.insert(name.clone(), value.clone());
+            }
+        }
         saved.global_vars = std::mem::take(&mut self.global_vars);
         saved.read_dialogues = std::mem::take(&mut self.read_dialogues);
         saved.unlocked_cg = std::mem::take(&mut self.unlocked_cg);
@@ -1773,6 +1805,7 @@ mod tests {
                 looped: true,
                 elapsed: 2.0,
                 frame: 1,
+                frame_durations: Vec::new(),
             },
         );
 

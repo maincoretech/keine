@@ -68,6 +68,13 @@ pub enum SpriteLayout {
     /// Height as a fraction of the fixed design viewport.
     ViewportHeight(f32),
     Scene(SceneLayerLayout),
+    /// One image layer within a portrait-sized composition canvas.
+    Composite {
+        canvas: [f32; 2],
+        /// Top-left-origin pixel rectangle inside `canvas`; full canvas when absent.
+        rect: Option<[f32; 4]>,
+        height_ratio: Option<f32>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -645,6 +652,117 @@ impl ParticleEffect {
     }
 }
 
+/// Pointer-derived parallax applied to camera-bound scene layers.
+///
+/// The input source is deliberately outside core: desktop hosts use the mouse,
+/// while mobile hosts should feed the same normalized axes from a gyroscope.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SceneMouseParallax {
+    pub amplitude_percent: f32,
+    pub edge_ease_percent: f32,
+    pub return_to_center_on_leave: bool,
+    pub scale: f32,
+}
+
+impl Default for SceneMouseParallax {
+    fn default() -> Self {
+        Self {
+            amplitude_percent: 4.0,
+            edge_ease_percent: 0.0,
+            return_to_center_on_leave: true,
+            scale: 1.08,
+        }
+    }
+}
+
+/// LetsGal 2.0 camera parameters added after Kēne's stable save schema.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PostProcessV2 {
+    pub mirror_shatter_intensity: f32,
+    pub mirror_shatter_center_x: f32,
+    pub mirror_shatter_center_y: f32,
+    pub mirror_shatter_spread: f32,
+    pub mirror_shatter_seed: f32,
+    pub speed_lines_intensity: f32,
+    pub speed_lines_radial: bool,
+    pub speed_lines_density: f32,
+    pub speed_lines_angle: f32,
+    pub speed_lines_speed: f32,
+    pub speed_lines_center_x: f32,
+    pub speed_lines_center_y: f32,
+    pub speed_lines_region_ellipse: bool,
+    pub speed_lines_region_x: f32,
+    pub speed_lines_region_y: f32,
+    pub speed_lines_region_width: f32,
+    pub speed_lines_region_height: f32,
+    pub speed_lines_region_feather: f32,
+}
+
+impl Default for PostProcessV2 {
+    fn default() -> Self {
+        Self {
+            mirror_shatter_intensity: 0.0,
+            mirror_shatter_center_x: 0.5,
+            mirror_shatter_center_y: 0.5,
+            mirror_shatter_spread: 1.0,
+            mirror_shatter_seed: 0.0,
+            speed_lines_intensity: 0.0,
+            speed_lines_radial: true,
+            speed_lines_density: 0.55,
+            speed_lines_angle: 0.0,
+            speed_lines_speed: 0.0,
+            speed_lines_center_x: 0.5,
+            speed_lines_center_y: 0.5,
+            speed_lines_region_ellipse: false,
+            speed_lines_region_x: 0.5,
+            speed_lines_region_y: 0.5,
+            speed_lines_region_width: 1.0,
+            speed_lines_region_height: 1.0,
+            speed_lines_region_feather: 0.05,
+        }
+    }
+}
+
+impl PostProcessV2 {
+    pub fn is_identity(&self) -> bool {
+        self.mirror_shatter_intensity <= f32::EPSILON && self.speed_lines_intensity <= f32::EPSILON
+    }
+
+    pub fn interpolate(&self, target: &Self, progress: f32) -> Self {
+        let progress = progress.clamp(0.0, 1.0);
+        let lerp = |from: f32, to: f32| from + (to - from) * progress;
+        Self {
+            mirror_shatter_intensity: lerp(
+                self.mirror_shatter_intensity,
+                target.mirror_shatter_intensity,
+            ),
+            mirror_shatter_center_x: lerp(
+                self.mirror_shatter_center_x,
+                target.mirror_shatter_center_x,
+            ),
+            mirror_shatter_center_y: lerp(
+                self.mirror_shatter_center_y,
+                target.mirror_shatter_center_y,
+            ),
+            mirror_shatter_spread: target.mirror_shatter_spread,
+            mirror_shatter_seed: target.mirror_shatter_seed,
+            speed_lines_intensity: lerp(self.speed_lines_intensity, target.speed_lines_intensity),
+            speed_lines_radial: target.speed_lines_radial,
+            speed_lines_density: target.speed_lines_density,
+            speed_lines_angle: lerp(self.speed_lines_angle, target.speed_lines_angle),
+            speed_lines_speed: target.speed_lines_speed,
+            speed_lines_center_x: lerp(self.speed_lines_center_x, target.speed_lines_center_x),
+            speed_lines_center_y: lerp(self.speed_lines_center_y, target.speed_lines_center_y),
+            speed_lines_region_ellipse: target.speed_lines_region_ellipse,
+            speed_lines_region_x: target.speed_lines_region_x,
+            speed_lines_region_y: target.speed_lines_region_y,
+            speed_lines_region_width: target.speed_lines_region_width,
+            speed_lines_region_height: target.speed_lines_region_height,
+            speed_lines_region_feather: target.speed_lines_region_feather,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum VideoMode {
     #[default]
@@ -801,6 +919,8 @@ pub struct PostProcessEffect {
     pub eyelid_softness: f32,
     pub eyelid_center_x: f32,
     pub eyelid_center_y: f32,
+    #[serde(skip, default)]
+    pub v2: PostProcessV2,
 }
 
 impl Default for PostProcessEffect {
@@ -879,6 +999,7 @@ impl Default for PostProcessEffect {
             eyelid_softness: 0.015,
             eyelid_center_x: 0.5,
             eyelid_center_y: 0.5,
+            v2: PostProcessV2::default(),
         }
     }
 }
@@ -902,6 +1023,7 @@ impl PostProcessEffect {
             || (self.fog_intensity > ACTIVE && self.fog_speed.abs() > MOVING)
             || (self.vhs_intensity > ACTIVE
                 && (self.vhs_jitter > ACTIVE || self.vhs_noise > ACTIVE))
+            || (self.v2.speed_lines_intensity > ACTIVE && self.v2.speed_lines_speed.abs() > MOVING)
     }
 }
 
@@ -944,6 +1066,7 @@ impl PostProcessEffect {
             && self.dither_intensity <= f32::EPSILON
             && self.outline_intensity <= f32::EPSILON
             && (self.eyelid_openness - 1.0).abs() <= f32::EPSILON
+            && self.v2.is_identity()
     }
 
     pub fn interpolate(&self, target: &Self, progress: f32) -> Self {
@@ -1044,6 +1167,7 @@ impl PostProcessEffect {
             eyelid_softness: lerp(self.eyelid_softness, target.eyelid_softness),
             eyelid_center_x: lerp(self.eyelid_center_x, target.eyelid_center_x),
             eyelid_center_y: lerp(self.eyelid_center_y, target.eyelid_center_y),
+            v2: self.v2.interpolate(&target.v2, progress),
         }
     }
 }

@@ -8,15 +8,16 @@ use keine_core::config::{
     AdapterConfig, AssetSourceConfig, GameConfig, ProjectMetadata, TextRevealConfig,
 };
 use keine_core::{
-    Action, Anchor, BlendMode, CameraShakeAxis, CameraShakeFalloff, CameraShakeSpec, CameraTargets,
-    ChoiceTarget, ColorToneMode, Easing, InputValueType, PortraitStyle, Position,
-    PostProcessEffect, PostProcessPatch, SayOptions, SceneFit, SceneLayerLayout, SpriteLayout,
-    SpriteTransform, StageAnimation, StageAudioCue, StageAudioKind, StageEvent, StageEventKind,
-    StageKeyframe, StageMask, StageMaskFillMode, StageMaskFit, StageMaskImageChannel,
-    StageMaskMode, StageMaskPlane, StageMaskScope, StageMaskShape, StageMaskTextureBlend,
-    StageMaskVisibility, StageProperty, StageSceneCue, StageSceneLayer, StageTarget, StageTrack,
-    SystemMessageMode, SystemMessageSpec, SystemUiSlot, TransformKeyframe, TransformPatch,
-    Transition, UserInputSpec, VideoMode, VideoSpec,
+    Action, Anchor, AssetHint, AssetHintKind, BlendMode, CameraShakeAxis, CameraShakeFalloff,
+    CameraShakeSpec, CameraTargets, ChoiceTarget, ColorToneMode, Easing, InputValueType,
+    LoadingStrategy, LoadingStrategyMode, PortraitStyle, Position, PostProcessEffect,
+    PostProcessPatch, PostProcessV2, SayOptions, SceneFit, SceneLayerLayout, SceneMouseParallax,
+    SpriteLayout, SpriteTransform, StageAnimation, StageAudioCue, StageAudioKind, StageEvent,
+    StageEventKind, StageKeyframe, StageMask, StageMaskFillMode, StageMaskFit,
+    StageMaskImageChannel, StageMaskMode, StageMaskPlane, StageMaskScope, StageMaskShape,
+    StageMaskTextureBlend, StageMaskVisibility, StageProperty, StageSceneCue, StageSceneLayer,
+    StageTarget, StageTrack, SystemMessageMode, SystemMessageSpec, SystemUiSlot, TransformKeyframe,
+    TransformPatch, Transition, UserInputSpec, VideoMode, VideoSpec,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -24,8 +25,8 @@ use serde_json::{Map, Value, json};
 use super::ProjectSourceReader;
 use super::model::{
     AssetManifest, ChapterDocument, CharacterDefinition, CharactersDocument, DialogueBehavior,
-    ProjectDocument, SceneDefinition, ScenesDocument, StoryBlock, StoryFragment,
-    VariableDeclaration, VariablesDocument,
+    ProjectDocument, SceneDefinition, ScenesDocument, ScheduleCondition, ScheduleGraph,
+    ScheduleNode, StoryBlock, StoryFragment, VariableDeclaration, VariablesDocument,
 };
 use crate::{Diagnostic, DiagnosticLevel, LoadedScene, ParseReport, SourceSpan};
 
@@ -45,6 +46,10 @@ pub(super) fn initial_state(
         if declaration.persistence == "shared" {
             state
                 .shared_variables
+                .insert(declaration.name.clone(), value);
+        } else if declaration.persistence == "session" {
+            state
+                .session_variables
                 .insert(declaration.name.clone(), value);
         } else {
             state.variables.insert(declaration.name.clone(), value);
@@ -95,7 +100,7 @@ fn core_value(value: &Value) -> Option<keine_core::Value> {
     }
 }
 
-/// Runtime-facing block registry observed in LetsGal Studio 1.20.0's editor
+/// Runtime-facing block registry documented by LetsGal Studio 2.0.
 /// schema. `cmdDraft` is editor-only and therefore intentionally not in
 /// this compatibility contract.
 pub(super) const BUILTIN_BLOCK_TYPES: &[&str] = &[
@@ -115,7 +120,9 @@ pub(super) const BUILTIN_BLOCK_TYPES: &[&str] = &[
     "hideFloatingText",
     "hideExtensionUI",
     "if",
+    "loadingStrategy",
     "narration",
+    "openExternalUrl",
     "particle",
     "playerInput",
     "portraitStyleRule",
@@ -135,6 +142,8 @@ pub(super) const BUILTIN_BLOCK_TYPES: &[&str] = &[
     "switchDialogueStyle",
     "switchParagraphStyle",
     "systemMessage",
+    "steamAction",
+    "unlockSteamAchievement",
     "updateCharacter",
     "video",
     "wait",
@@ -399,15 +408,25 @@ pub(super) fn load_chapters(
 
 pub(super) fn compile_project(
     project_root: &Path,
-    _project: &ProjectDocument,
+    project: &ProjectDocument,
     chapters: &[(PathBuf, ChapterDocument)],
     characters: &CharactersDocument,
     scenes: &ScenesDocument,
     manifest: &AssetManifest,
 ) -> Result<Vec<LoadedScene>> {
-    let enabled = chapters
+    let all_enabled = chapters
         .iter()
         .filter(|(_, chapter)| !chapter.disabled)
+        .collect::<Vec<_>>();
+    let chapter_preprocess = all_enabled
+        .iter()
+        .find(|(_, chapter)| chapter.kind == "schedule-preprocessing")
+        .and_then(|(_, chapter)| chapter.fragments.first())
+        .map(|fragment| fragment.id.as_str());
+    let enabled = all_enabled
+        .iter()
+        .copied()
+        .filter(|(_, chapter)| chapter.kind != "schedule-preprocessing")
         .collect::<Vec<_>>();
     // LetsGal's default shell stores its title screen as the first chapter and
     // opens `slot:internal.system.title` from there. keine already owns the
@@ -419,23 +438,52 @@ pub(super) fn compile_project(
                 .first()
                 .is_some_and(|(_, chapter)| is_title_bootstrap(chapter)),
     );
-    let entry = enabled
+    let scheduled = (project.schedule_mode == "advanced")
+        .then_some(project.schedule.as_ref())
+        .flatten()
+        .map(|schedule| &schedule.graph)
+        .filter(|graph| !graph.nodes.is_empty());
+    let linear_entry = enabled
         .get(entry_index)
         .and_then(|(_, chapter)| chapter.fragments.first())
         .map(|fragment| fragment.id.clone())
         .context("LetsGal project has no enabled fragment")?;
+    let entry = scheduled
+        .and_then(schedule_entry)
+        .map(schedule_scene_name)
+        .unwrap_or_else(|| linear_entry.clone());
 
-    let chapter_next = enabled
-        .iter()
-        .enumerate()
-        .map(|(index, (_, chapter))| {
-            let next = enabled
-                .get(index + 1)
-                .and_then(|(_, next)| next.fragments.first())
-                .map(|fragment| fragment.id.clone());
-            (chapter.id.clone(), next)
-        })
-        .collect::<HashMap<_, _>>();
+    const SCHEDULE_RETURN: &str = "__letsgal_schedule_return";
+    let mut chapter_next = if scheduled.is_some() {
+        enabled
+            .iter()
+            .map(|(_, chapter)| {
+                (
+                    ChapterRoute::Chapter(chapter.id.clone()),
+                    Some(SCHEDULE_RETURN.to_owned()),
+                )
+            })
+            .collect::<HashMap<_, _>>()
+    } else {
+        enabled
+            .iter()
+            .enumerate()
+            .map(|(index, (_, chapter))| {
+                let next = enabled
+                    .get(index + 1)
+                    .and_then(|(_, next)| next.fragments.first())
+                    .map(|fragment| fragment.id.clone());
+                (ChapterRoute::Chapter(chapter.id.clone()), next)
+            })
+            .collect::<HashMap<_, _>>()
+    };
+    chapter_next.insert(
+        ChapterRoute::Preprocess,
+        scheduled
+            .is_none()
+            .then(|| chapter_preprocess.map(str::to_owned))
+            .flatten(),
+    );
     let character_map = characters
         .characters
         .iter()
@@ -463,27 +511,239 @@ pub(super) fn compile_project(
     };
 
     let mut loaded = Vec::new();
-    for (path, chapter) in enabled {
+    for (path, chapter) in all_enabled {
         for fragment in &chapter.fragments {
             loaded.push(compile_fragment(path, chapter, fragment, &context));
         }
     }
+    if let Some(graph) = scheduled {
+        loaded.push(LoadedScene {
+            name: SCHEDULE_RETURN.into(),
+            path: project_root.join("project.json"),
+            actions: Vec::new(),
+            action_spans: Vec::new(),
+            diagnostics: Vec::new(),
+            resources: Vec::new(),
+            sub_scenes: Vec::new(),
+        });
+        loaded.extend(compile_schedule(
+            project_root,
+            graph,
+            &enabled,
+            chapter_preprocess,
+        ));
+    }
     // Runtime entry points stay language-neutral while every native fragment
     // keeps its Studio UUID for call/branch/debug stability.
+    let mut start_actions = Vec::new();
+    if scheduled.is_none()
+        && let Some(preprocess) = chapter_preprocess
+    {
+        start_actions.push(Action::CallScene(preprocess.to_owned()));
+    }
+    start_actions.push(Action::ChangeScene(entry.clone()));
     loaded.push(LoadedScene {
         name: "start".into(),
         path: project_root.join("project.json"),
-        actions: vec![Action::ChangeScene(entry.clone())],
-        action_spans: vec![SourceSpan { line: 1, column: 1 }],
+        action_spans: vec![SourceSpan { line: 1, column: 1 }; start_actions.len()],
+        actions: start_actions,
         diagnostics: Vec::new(),
         resources: Vec::new(),
-        sub_scenes: vec![crate::SceneRef {
-            scene: context.entry.to_owned(),
-            action_index: 0,
-            span: SourceSpan { line: 1, column: 1 },
-        }],
+        sub_scenes: scheduled
+            .is_none()
+            .then_some(chapter_preprocess)
+            .flatten()
+            .into_iter()
+            .chain(std::iter::once(context.entry))
+            .enumerate()
+            .map(|(action_index, scene)| crate::SceneRef {
+                scene: scene.to_owned(),
+                action_index,
+                span: SourceSpan { line: 1, column: 1 },
+            })
+            .collect(),
     });
     Ok(loaded)
+}
+
+fn schedule_scene_name(node_id: &str) -> String {
+    format!("letsgal-schedule:{node_id}")
+}
+
+fn schedule_entry(graph: &ScheduleGraph) -> Option<&str> {
+    graph
+        .nodes
+        .iter()
+        .find(|node| node.kind == "start")
+        .map(|node| node.id.as_str())
+}
+
+fn compile_schedule(
+    project_root: &Path,
+    graph: &ScheduleGraph,
+    chapters: &[&(PathBuf, ChapterDocument)],
+    preprocess: Option<&str>,
+) -> Vec<LoadedScene> {
+    let chapters = chapters
+        .iter()
+        .map(|(_, chapter)| (chapter.id.as_str(), chapter))
+        .collect::<HashMap<_, _>>();
+    graph
+        .nodes
+        .iter()
+        .map(|node| {
+            let span = SourceSpan { line: 1, column: 1 };
+            let mut report = ParseReport::default();
+            compile_schedule_node(node, graph, &chapters, preprocess, span, &mut report);
+            LoadedScene {
+                name: schedule_scene_name(&node.id),
+                path: project_root.join("project.json"),
+                actions: report.actions,
+                action_spans: report.spans,
+                diagnostics: report.diagnostics,
+                resources: report.resources,
+                sub_scenes: report.sub_scenes,
+            }
+        })
+        .collect()
+}
+
+fn compile_schedule_node(
+    node: &ScheduleNode,
+    graph: &ScheduleGraph,
+    chapters: &HashMap<&str, &ChapterDocument>,
+    preprocess: Option<&str>,
+    span: SourceSpan,
+    report: &mut ParseReport,
+) {
+    let target = |port: &str| schedule_target(graph, &node.id, port);
+    let change = |target: Option<&str>, report: &mut ParseReport| {
+        if let Some(target) = target {
+            report.push(Action::ChangeScene(schedule_scene_name(target)), span);
+        }
+    };
+    match node.kind.as_str() {
+        "start" => change(target("next"), report),
+        "end" => report.push(Action::End, span),
+        "chapter" => {
+            let Some(chapter) = chapters.get(node.chapter_id.as_str()) else {
+                report.diagnostics.push(Diagnostic {
+                    level: DiagnosticLevel::Error,
+                    span,
+                    message: format!(
+                        "LetsGal schedule chapter {:?} is unresolved",
+                        node.chapter_id
+                    ),
+                });
+                return;
+            };
+            if let Some(preprocess) = preprocess {
+                report.push(Action::CallScene(preprocess.to_owned()), span);
+            }
+            if let Some(fragment) = chapter.fragments.first() {
+                report.push(Action::CallScene(fragment.id.clone()), span);
+            }
+            change(target("next"), report);
+        }
+        "choice" => report.push(
+            Action::Menu {
+                prompt: String::new(),
+                choices: node
+                    .options
+                    .iter()
+                    .filter_map(|option| {
+                        target(&option.id).map(|target| Choice {
+                            text: option.text.clone(),
+                            target: ChoiceTarget::ChangeScene(schedule_scene_name(target)),
+                            show_when: None,
+                            enable_when: None,
+                        })
+                    })
+                    .collect(),
+            },
+            span,
+        ),
+        "condition" | "code" => {
+            let expression = if node.kind == "code" {
+                node.expression.trim().to_owned()
+            } else {
+                schedule_condition_expression(&node.conditions, &node.logic)
+            };
+            if expression.is_empty() {
+                report.diagnostics.push(Diagnostic {
+                    level: DiagnosticLevel::Error,
+                    span,
+                    message: format!("LetsGal schedule node {:?} has no condition", node.id),
+                });
+                return;
+            }
+            for (port, when) in [("true", expression.clone()), ("false", format!("!({expression})"))] {
+                if let Some(target) = target(port) {
+                    report.push(
+                        Action::Flow {
+                            action: Box::new(Action::ChangeScene(schedule_scene_name(target))),
+                            when: Some(when),
+                            next: false,
+                        },
+                        span,
+                    );
+                }
+            }
+        }
+        "set" => {
+            if !node.variable.is_empty() {
+                report.push(
+                    Action::Set {
+                        name: node.variable.clone(),
+                        expression: serde_json::to_string(&node.value)
+                            .unwrap_or_else(|_| "null".into()),
+                        global: false,
+                    },
+                    span,
+                );
+            }
+            change(target("next"), report);
+        }
+        "extension" => report.diagnostics.push(Diagnostic {
+            level: DiagnosticLevel::Error,
+            span,
+            message: "unsupported LetsGal schedule extension strategy; Kēne keeps scheduling in typed native control flow".into(),
+        }),
+        kind => report.diagnostics.push(Diagnostic {
+            level: DiagnosticLevel::Error,
+            span,
+            message: format!("unsupported LetsGal schedule node kind {kind:?}"),
+        }),
+    }
+}
+
+fn schedule_target<'a>(graph: &'a ScheduleGraph, source: &str, port: &str) -> Option<&'a str> {
+    graph
+        .edges
+        .iter()
+        .find(|edge| edge.source == source && edge.port == port)
+        .map(|edge| edge.target.as_str())
+}
+
+fn schedule_condition_expression(conditions: &[ScheduleCondition], logic: &str) -> String {
+    let join = if logic == "or" { " || " } else { " && " };
+    conditions
+        .iter()
+        .filter(|condition| !condition.variable.is_empty())
+        .map(|condition| {
+            let operator = match condition.operator.as_str() {
+                "ne" => "!=",
+                "gt" => ">",
+                "gte" => ">=",
+                "lt" => "<",
+                "lte" => "<=",
+                _ => "==",
+            };
+            let value = serde_json::to_string(&condition.value).unwrap_or_else(|_| "null".into());
+            format!("({} {operator} {value})", condition.variable)
+        })
+        .collect::<Vec<_>>()
+        .join(join)
 }
 
 fn is_title_bootstrap(chapter: &ChapterDocument) -> bool {
@@ -497,12 +757,18 @@ fn is_title_bootstrap(chapter: &ChapterDocument) -> bool {
 
 struct CompileContext<'a> {
     entry: &'a str,
-    chapter_next: &'a HashMap<String, Option<String>>,
+    chapter_next: &'a HashMap<ChapterRoute, Option<String>>,
     characters: &'a HashMap<&'a str, &'a CharacterDefinition>,
     scenes: &'a HashMap<&'a str, &'a SceneDefinition>,
     voices: &'a HashMap<&'a str, &'a str>,
     positions: &'a HashMap<String, (f32, f32, f32)>,
     portrait_height_ratio: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ChapterRoute {
+    Chapter(String),
+    Preprocess,
 }
 
 fn compile_fragment(
@@ -627,11 +893,26 @@ fn compile_block(
         "stageAnimation" => compile_stage_animation(block, context, span, report),
         "stageMask" => compile_stage_mask(block, span, report),
         "particle" => compile_particle(block, span, report),
-        "endChapter" => match context.chapter_next.get(&chapter.id).cloned().flatten() {
-            Some(next) => report.push(Action::ChangeScene(next), span),
+        "loadingStrategy" => compile_loading_strategy(block, context, span, report),
+        "openExternalUrl" => compile_external_url(block, span, report),
+        "steamAction" | "unlockSteamAchievement" => report.diagnostics.push(Diagnostic {
+            level: DiagnosticLevel::Error,
+            span,
+            message: format!(
+                "unsupported LetsGal 2.0 Steam block {:?}; Kēne has no Steam runtime bridge",
+                block.kind
+            ),
+        }),
+        "endChapter" => match context
+            .chapter_next
+            .get(&ChapterRoute::Chapter(chapter.id.clone()))
+            .cloned()
+            .flatten()
+        {
+            Some(next) => push_chapter_change(next, context, span, report),
             None => report.push(Action::End, span),
         },
-        "returnToEntry" => report.push(Action::ChangeScene(context.entry.to_owned()), span),
+        "returnToEntry" => push_chapter_change(context.entry.to_owned(), context, span, report),
         "comment" => report.push(Action::Comment, span),
         "curtain" => compile_curtain(block, span, report),
         "video" => compile_video(block, span, report),
@@ -678,8 +959,132 @@ fn compile_block(
         "systemMessage" => compile_system_message(block, span, report),
         "enterAutoPlay" => report.push(Action::SetAutoplay { enabled: true }, span),
         "exitAutoPlay" => report.push(Action::SetAutoplay { enabled: false }, span),
-        _ => unreachable!("the 1.20.0 block registry is exhaustively matched"),
+        _ => unreachable!("the 2.0 block registry is exhaustively matched"),
     }
+}
+
+fn push_chapter_change(
+    target: String,
+    context: &CompileContext<'_>,
+    span: SourceSpan,
+    report: &mut ParseReport,
+) {
+    if let Some(preprocess) = context
+        .chapter_next
+        .get(&ChapterRoute::Preprocess)
+        .and_then(|preprocess| preprocess.as_ref())
+    {
+        report.push(Action::CallScene(preprocess.clone()), span);
+    }
+    report.push(Action::ChangeScene(target), span);
+}
+
+fn compile_external_url(_block: &StoryBlock, span: SourceSpan, report: &mut ParseReport) {
+    report.diagnostics.push(Diagnostic {
+        level: DiagnosticLevel::Error,
+        span,
+        message: "unsupported LetsGal 2.0 external-browser block; Kēne keeps script execution platform-neutral".into(),
+    });
+}
+
+fn compile_loading_strategy(
+    block: &StoryBlock,
+    context: &CompileContext<'_>,
+    span: SourceSpan,
+    report: &mut ParseReport,
+) {
+    let mode = match prop_string_or(&block.props, "mode", "auto").as_str() {
+        "manual" => LoadingStrategyMode::Manual,
+        _ => LoadingStrategyMode::Auto,
+    };
+    let mut resources = Vec::new();
+    if mode == LoadingStrategyMode::Manual {
+        let values = json_value(&block.props, "resourcesJson")
+            .and_then(|value| value.as_array().cloned())
+            .unwrap_or_default();
+        for value in values {
+            let Some(resource) = value.as_object() else {
+                continue;
+            };
+            match value_str(resource.get("kind")) {
+                "character" => {
+                    let character_id = value_str(resource.get("characterId"));
+                    let expression_name = value_str(resource.get("expression"));
+                    let skin = value_str(resource.get("skin"));
+                    let image = context.characters.get(character_id).and_then(|character| {
+                        character
+                            .expressions
+                            .iter()
+                            .find(|expression| expression.name == expression_name)
+                            .or_else(|| character.expressions.first())
+                            .map(|expression| {
+                                expression
+                                    .skin_assets
+                                    .get(skin)
+                                    .filter(|_| !skin.is_empty())
+                                    .unwrap_or(&expression.asset_path)
+                                    .clone()
+                            })
+                    });
+                    if let Some(path) = image.filter(|path| !path.is_empty()) {
+                        resources.push(AssetHint {
+                            path,
+                            kind: AssetHintKind::Figure,
+                        });
+                    } else {
+                        report.diagnostics.push(Diagnostic {
+                            level: DiagnosticLevel::Warning,
+                            span,
+                            message: format!(
+                                "LetsGal loading strategy character {character_id:?} is unresolved"
+                            ),
+                        });
+                    }
+                }
+                "scene" => {
+                    let scene_id = value_str(resource.get("sceneId"));
+                    if let Some(scene) = context.scenes.get(scene_id) {
+                        resources.extend(
+                            scene
+                                .layers
+                                .iter()
+                                .filter(|layer| !layer.asset_path.is_empty())
+                                .map(|layer| AssetHint {
+                                    path: layer.asset_path.clone(),
+                                    kind: AssetHintKind::Figure,
+                                }),
+                        );
+                    } else {
+                        report.diagnostics.push(Diagnostic {
+                            level: DiagnosticLevel::Warning,
+                            span,
+                            message: format!(
+                                "LetsGal loading strategy scene {scene_id:?} is unresolved"
+                            ),
+                        });
+                    }
+                }
+                kind => report.diagnostics.push(Diagnostic {
+                    level: DiagnosticLevel::Warning,
+                    span,
+                    message: format!("unknown LetsGal loading resource kind {kind:?}"),
+                }),
+            }
+        }
+    }
+    resources.sort_by(|left, right| left.path.cmp(&right.path));
+    resources.dedup();
+    report.push(
+        Action::ConfigureLoading {
+            strategy: LoadingStrategy {
+                mode,
+                lookahead: prop_f32(&block.props, "lookahead", 20.0).clamp(1.0, 500.0) as u16,
+                blocking: prop_string_or(&block.props, "execution", "background") == "wait",
+                resources,
+            },
+        },
+        span,
+    );
 }
 
 fn compile_dialogue(
@@ -713,6 +1118,13 @@ fn compile_dialogue(
     );
     push_dialogue_lifetime(block, span, report);
     if prop_bool(&block.props, "isLast", true) && !prop_bool(&block.props, "keepCharacter", true) {
+        report.push(
+            Action::HideSprites {
+                prefix: differential_layer_prefix(&character_id(block)),
+                transition: Transition::Fade(0.2),
+            },
+            span,
+        );
         report.push(
             Action::HideSprite {
                 id: character_id(block),
@@ -800,6 +1212,13 @@ fn compile_remove_characters(block: &StoryBlock, span: SourceSpan, report: &mut 
 
     let transition = fade(block, "animated", 0.2);
     for id in targets {
+        report.push(
+            Action::HideSprites {
+                prefix: differential_layer_prefix(&id),
+                transition,
+            },
+            span,
+        );
         report.push(Action::HideSprite { id, transition }, span);
     }
 }
@@ -835,6 +1254,23 @@ fn compile_character(
     let presentation_kind = presentation
         .and_then(|presentation| presentation.get("type"))
         .and_then(Value::as_str);
+    let locked_skin = prop_string(&block.props, "skin");
+    let skin_config = character.portrait_skin_config.as_ref();
+    let default_skin = skin_config
+        .map(|config| config.default_skin.as_str())
+        .unwrap_or_default();
+    let active_skin = if locked_skin.is_empty() {
+        default_skin
+    } else {
+        locked_skin.as_str()
+    };
+    let differential = if presentation_kind == Some("differential") {
+        presentation.and_then(|presentation| {
+            differential_portrait(character, presentation, active_skin, span, report)
+        })
+    } else {
+        None
+    };
     let sequence = match (presentation_kind, presentation) {
         (Some("sequence"), Some(presentation)) => {
             let Some(sequence) = portrait_sequence(presentation, character) else {
@@ -847,6 +1283,7 @@ fn compile_character(
             };
             Some(sequence)
         }
+        (Some("differential"), _) => None,
         (Some(kind @ ("spine" | "live2d")), _) => {
             report.diagnostics.push(Diagnostic {
                 level: DiagnosticLevel::Error,
@@ -868,12 +1305,13 @@ fn compile_character(
         }
         (None, _) => None,
     };
-    let locked_skin = prop_string(&block.props, "skin");
-    let skin_config = character.portrait_skin_config.as_ref();
-    let default_skin = skin_config
-        .map(|config| config.default_skin.as_str())
-        .unwrap_or_default();
-    let image = if let Some(sequence) = &sequence {
+    let image = if let Some(differential) = &differential {
+        differential
+            .layers
+            .first()
+            .map(|layer| layer.image.clone())
+            .unwrap_or_default()
+    } else if let Some(sequence) = &sequence {
         sequence.frames[0].clone()
     } else if !locked_skin.is_empty() {
         expression
@@ -923,6 +1361,21 @@ fn compile_character(
         scale_y: distance_scale,
         ..SpriteTransform::default()
     };
+    if let Some(differential) = differential {
+        compile_differential_character(
+            block,
+            character,
+            expression,
+            position,
+            distance_scale,
+            context.portrait_height_ratio,
+            differential,
+            span,
+            report,
+            update,
+        );
+        return;
+    }
     let action = if update {
         let duration = if prop_bool(&block.props, "placementTransitionEnabled", true) {
             prop_f32(&block.props, "placementTransitionDuration", 350.0).max(0.0) / 1000.0
@@ -967,15 +1420,22 @@ fn compile_character(
     };
     report.push(action, span);
     if let Some(sequence) = sequence {
-        report.push(
+        let action = if sequence.frame_durations.is_empty() {
             Action::ConfigureSpriteSequence {
                 id: character.id.clone(),
                 frames: sequence.frames,
                 fps: sequence.fps,
                 looped: sequence.looped,
-            },
-            span,
-        );
+            }
+        } else {
+            Action::ConfigureTimedSpriteSequence {
+                id: character.id.clone(),
+                frames: sequence.frames,
+                frame_durations: sequence.frame_durations,
+                looped: sequence.looped,
+            }
+        };
+        report.push(action, span);
     } else if locked_skin.is_empty()
         && let Some(config) = skin_config
         && !config.attribute_name.is_empty()
@@ -1003,6 +1463,280 @@ fn compile_character(
     }
 }
 
+struct CompiledDifferentialPortrait {
+    canvas: [f32; 2],
+    layers: Vec<CompiledDifferentialLayer>,
+}
+
+struct CompiledDifferentialLayer {
+    layer_id: String,
+    image: String,
+    rect: Option<[f32; 4]>,
+    opacity: f32,
+    frames: Vec<String>,
+    fps: f32,
+    variants: Vec<(String, String)>,
+}
+
+fn differential_portrait(
+    character: &CharacterDefinition,
+    presentation: &Map<String, Value>,
+    skin: &str,
+    span: SourceSpan,
+    report: &mut ParseReport,
+) -> Option<CompiledDifferentialPortrait> {
+    let group_id = value_str(presentation.get("groupId"));
+    let Some(group) = character
+        .differential_portrait_groups
+        .iter()
+        .find(|group| group.id == group_id)
+    else {
+        report.diagnostics.push(Diagnostic {
+            level: DiagnosticLevel::Error,
+            span,
+            message: format!(
+                "LetsGal differential portrait group {group_id:?} is unresolved for character {:?}",
+                character.id
+            ),
+        });
+        return None;
+    };
+    let mut selections = group
+        .layers
+        .iter()
+        .map(|layer| (layer.id.clone(), layer.default_option_id.clone()))
+        .collect::<HashMap<_, _>>();
+    if let Some(skin_selections) = group.skin_selections.get(skin) {
+        selections.extend(skin_selections.clone());
+    }
+    apply_differential_selections(&mut selections, presentation.get("selections"));
+    if let Some(skin_selections) = presentation
+        .get("skinSelections")
+        .and_then(Value::as_object)
+        .and_then(|selections| selections.get(skin))
+    {
+        apply_differential_selections(&mut selections, Some(skin_selections));
+    }
+
+    let layers = group
+        .layers
+        .iter()
+        .filter_map(|layer| {
+            let selected = selections.get(&layer.id).and_then(Option::as_deref)?;
+            let option = layer.options.iter().find(|option| option.id == selected)?;
+            let image = option
+                .frames
+                .first()
+                .filter(|frame| !frame.is_empty())
+                .cloned()
+                .unwrap_or_else(|| option.asset_path.clone());
+            if image.is_empty() {
+                return None;
+            }
+            let variants = layer
+                .variable_rules
+                .iter()
+                .filter_map(|rule| {
+                    let option_id = rule.option_id.as_deref()?;
+                    let option = layer.options.iter().find(|option| option.id == option_id)?;
+                    let image = option
+                        .frames
+                        .first()
+                        .filter(|frame| !frame.is_empty())
+                        .cloned()
+                        .unwrap_or_else(|| option.asset_path.clone());
+                    (!image.is_empty()).then(|| {
+                        let variable = if rule.scope == "global" || rule.variable.contains('.') {
+                            rule.variable.clone()
+                        } else {
+                            format!("{}.{}", character.id, rule.variable)
+                        };
+                        let operator = match rule.operator.as_str() {
+                            "ne" => "!=",
+                            "gt" => ">",
+                            "gte" => ">=",
+                            "lt" => "<",
+                            "lte" => "<=",
+                            _ => "==",
+                        };
+                        let value =
+                            serde_json::to_string(&rule.value).unwrap_or_else(|_| "null".into());
+                        (format!("{variable} {operator} {value}"), image)
+                    })
+                })
+                .collect();
+            Some(CompiledDifferentialLayer {
+                layer_id: layer.id.clone(),
+                image,
+                rect: option
+                    .rect
+                    .map(|rect| [rect.x, rect.y, rect.width, rect.height]),
+                opacity: (layer.opacity * option.opacity).clamp(0.0, 1.0),
+                frames: option.frames.clone(),
+                fps: option.fps.clamp(1.0, 60.0),
+                variants,
+            })
+        })
+        .collect::<Vec<_>>();
+    if layers.is_empty() {
+        report.diagnostics.push(Diagnostic {
+            level: DiagnosticLevel::Error,
+            span,
+            message: format!(
+                "LetsGal differential portrait group {group_id:?} has no selected static layers"
+            ),
+        });
+        return None;
+    }
+    Some(CompiledDifferentialPortrait {
+        canvas: [group.width.max(1.0), group.height.max(1.0)],
+        layers,
+    })
+}
+
+fn apply_differential_selections(
+    selections: &mut HashMap<String, Option<String>>,
+    value: Option<&Value>,
+) {
+    let Some(value) = value.and_then(Value::as_object) else {
+        return;
+    };
+    for (layer, option) in value {
+        let selected = option.as_str().map(str::to_owned);
+        if option.is_null() || selected.is_some() {
+            selections.insert(layer.clone(), selected);
+        }
+    }
+}
+
+fn differential_layer_prefix(character_id: &str) -> String {
+    format!("character-layer:{character_id}:")
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compile_differential_character(
+    block: &StoryBlock,
+    character: &CharacterDefinition,
+    expression: &super::model::CharacterExpression,
+    position: Position,
+    distance_scale: f32,
+    global_height_ratio: Option<f32>,
+    portrait: CompiledDifferentialPortrait,
+    span: SourceSpan,
+    report: &mut ParseReport,
+    update: bool,
+) {
+    let portrait_layout = character.portrait_layout.as_ref();
+    let height_ratio = expression
+        .graphics_override
+        .height_ratio
+        .or_else(|| portrait_layout.and_then(|layout| layout.graphics.height_ratio))
+        .or(global_height_ratio)
+        .filter(|ratio| ratio.is_finite() && *ratio > 0.0);
+    let duration = if prop_bool(&block.props, "placementTransitionEnabled", true) {
+        prop_f32(&block.props, "placementTransitionDuration", 350.0).max(0.0) / 1000.0
+    } else {
+        0.0
+    };
+    if !update {
+        report.push(
+            Action::HideSprites {
+                prefix: differential_layer_prefix(&character.id),
+                transition: Transition::Instant,
+            },
+            span,
+        );
+    }
+    let layer_count = portrait.layers.len();
+    for (index, layer) in portrait.layers.into_iter().enumerate() {
+        let id = if index == 0 {
+            character.id.clone()
+        } else {
+            format!(
+                "{}{}",
+                differential_layer_prefix(&character.id),
+                layer.layer_id
+            )
+        };
+        let layout = SpriteLayout::Composite {
+            canvas: portrait.canvas,
+            rect: layer.rect,
+            height_ratio,
+        };
+        let action = if update {
+            Action::UpdateSprite {
+                id: id.clone(),
+                image: layer.image.clone(),
+                position,
+                layout,
+                scale: distance_scale,
+                duration,
+                easing: easing(&prop_string(&block.props, "placementTransitionEasing")),
+                blocking: prop_bool(&block.props, "placementTransitionBlocking", false),
+            }
+        } else {
+            Action::ShowSprite {
+                id: id.clone(),
+                image: layer.image.clone(),
+                position,
+                layout,
+                transition: fade(block, "animated", 0.2),
+                transform: SpriteTransform {
+                    scale_x: distance_scale,
+                    scale_y: distance_scale,
+                    alpha: layer.opacity,
+                    ..SpriteTransform::default()
+                },
+                z_index: 100 + index as i32,
+                blend: BlendMode::Alpha,
+            }
+        };
+        if index + 1 == layer_count {
+            report.push(action, span);
+        } else {
+            report.push(
+                Action::Flow {
+                    action: Box::new(action),
+                    when: None,
+                    next: true,
+                },
+                span,
+            );
+        }
+        if !layer.variants.is_empty() {
+            report.push(
+                Action::SelectSpriteImageByCondition {
+                    id: id.clone(),
+                    default_image: layer.image.clone(),
+                    variants: layer.variants,
+                },
+                span,
+            );
+        }
+        if layer.frames.len() > 1 {
+            report.push(
+                Action::ConfigureSpriteSequence {
+                    id: id.clone(),
+                    frames: layer.frames,
+                    fps: layer.fps,
+                    looped: true,
+                },
+                span,
+            );
+        }
+        if !update && prop_bool(&block.props, "cameraBound", false) {
+            report.push(
+                Action::SetCameraBinding {
+                    target: id,
+                    bound: true,
+                    distance: prop_f32(&block.props, "cameraDistance", 1.0).max(f32::EPSILON),
+                },
+                span,
+            );
+        }
+    }
+}
+
 fn sorted_skin_assets(skin_assets: &HashMap<String, String>) -> Vec<(String, String)> {
     let mut variants = skin_assets
         .iter()
@@ -1014,6 +1748,7 @@ fn sorted_skin_assets(skin_assets: &HashMap<String, String>) -> Vec<(String, Str
 
 struct PortraitSequence {
     frames: Vec<String>,
+    frame_durations: Vec<f32>,
     fps: f32,
     looped: bool,
 }
@@ -1026,20 +1761,43 @@ fn portrait_sequence(
         .get("frames")
         .or_else(|| presentation.get("frameExpressionNames"))
         .and_then(Value::as_array)?;
-    let frames = frame_values
+    let resolved = frame_values
         .iter()
-        .filter_map(Value::as_str)
-        .filter_map(|frame| {
+        .enumerate()
+        .filter_map(|(index, value)| {
+            let frame = value.as_str()?;
             character
                 .expressions
                 .iter()
                 .find(|expression| expression.name == frame && !expression.asset_path.is_empty())
                 .map(|expression| expression.asset_path.clone())
                 .or_else(|| (!frame.is_empty()).then(|| frame.to_owned()))
+                .map(|path| (index, path))
         })
         .collect::<Vec<_>>();
+    let frames = resolved
+        .iter()
+        .map(|(_, path)| path.clone())
+        .collect::<Vec<_>>();
+    let frame_durations = presentation
+        .get("frameDurationsMs")
+        .and_then(Value::as_array)
+        .filter(|durations| durations.len() == frame_values.len())
+        .map(|durations| {
+            resolved
+                .iter()
+                .map(|(index, _)| {
+                    durations[*index]
+                        .as_f64()
+                        .filter(|duration| duration.is_finite() && *duration > 0.0)
+                        .map_or(1.0 / 12.0, |duration| duration as f32 / 1000.0)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     (!frames.is_empty()).then(|| PortraitSequence {
         frames,
+        frame_durations,
         fps: presentation
             .get("fps")
             .and_then(Value::as_f64)
@@ -1148,6 +1906,23 @@ fn compile_scene(
     span: SourceSpan,
     report: &mut ParseReport,
 ) {
+    let parallax = prop_bool(&block.props, "mouseParallaxEnabled", false).then(|| {
+        let amplitude = prop_f32(&block.props, "mouseParallaxAmplitude", 4.0).clamp(0.0, 100.0);
+        let scale = match prop_string_or(&block.props, "mouseParallaxScaleMode", "auto").as_str() {
+            "custom" | "manual" => {
+                prop_f32(&block.props, "mouseParallaxScale", 1.08).clamp(1.0, 5.0)
+            }
+            _ => (1.0 + 2.0 * amplitude / 100.0).clamp(1.0, 5.0),
+        };
+        SceneMouseParallax {
+            amplitude_percent: amplitude,
+            edge_ease_percent: prop_f32(&block.props, "mouseParallaxEdgeEase", 0.0)
+                .clamp(0.0, 100.0),
+            return_to_center_on_leave: prop_bool(&block.props, "mouseParallaxReturnOnLeave", true),
+            scale,
+        }
+    });
+    report.push(Action::ConfigureSceneMouseParallax { parallax }, span);
     if prop_bool(&block.props, "resetCamera", false) {
         push_camera_reset(0.0, Easing::Linear, false, span, report);
     }
@@ -1196,6 +1971,7 @@ fn compile_scene(
     // runtime step; serial blocking here makes a six-layer scene take seven
     // times the authored duration and leaves stale layers over later scenes.
     push_scene_layer_exits(transition, span, report);
+    report.push(Action::HideParticleLayers, span);
 
     // A Studio scene is one canvas made from peer layers. Treating its first
     // image as keine's full-screen background silently squeezes wide
@@ -1216,7 +1992,7 @@ fn compile_scene(
     for (index, layer) in scene
         .layers
         .iter()
-        .filter(|layer| !layer.asset_path.is_empty())
+        .filter(|layer| layer.kind != "particle" && !layer.asset_path.is_empty())
         .enumerate()
     {
         let layer_offset = parse_position(&layer.offset);
@@ -1255,6 +2031,26 @@ fn compile_scene(
             span,
         );
     }
+    for layer in scene.layers.iter().filter(|layer| layer.kind == "particle") {
+        let particle = layer.particle.as_ref();
+        let options = particle
+            .and_then(|particle| serde_json::from_str(&particle.options_json).ok())
+            .unwrap_or_default();
+        report.push(
+            Action::ShowParticles {
+                id: format!("scene-particle:{}", layer.id),
+                effect: studio_particle_effect(
+                    &layer.asset_path,
+                    particle
+                        .map(|particle| particle.preset.as_str())
+                        .unwrap_or("LIGHT_SNOW"),
+                    options,
+                    0.0,
+                ),
+            },
+            span,
+        );
+    }
     if prop_bool(&block.props, "waitForComplete", false) && duration > 0.0 {
         report.push(Action::Wait { seconds: duration }, span);
     }
@@ -1280,6 +2076,8 @@ fn compile_destroy_scene(
     span: SourceSpan,
     report: &mut ParseReport,
 ) {
+    report.push(Action::ConfigureSceneMouseParallax { parallax: None }, span);
+    report.push(Action::HideParticleLayers, span);
     let transition = fade(block, "animated", 0.2);
     report.push(
         Action::Flow {
@@ -1574,6 +2372,15 @@ fn compile_camera(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport
             blocking: wait,
         });
     }
+    if let Some(effect) = post_process_v2(block) {
+        timed.push(Action::SetPostProcessV2 {
+            targets,
+            effect: Box::new(effect),
+            duration,
+            easing: easing(&prop_string(&block.props, "easing")),
+            blocking: wait,
+        });
+    }
     let timed_len = timed.len();
     for (index, action) in timed.into_iter().enumerate() {
         report.push(
@@ -1612,6 +2419,46 @@ fn compile_camera(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport
             span,
         );
     }
+}
+
+fn post_process_v2(block: &StoryBlock) -> Option<PostProcessV2> {
+    let props = &block.props;
+    let present = [
+        "mirrorShatterIntensity",
+        "mirrorShatterCenterX",
+        "mirrorShatterCenterY",
+        "speedLinesIntensity",
+        "speedLinesRegionMode",
+    ]
+    .iter()
+    .any(|key| props.contains_key(*key));
+    present.then(|| PostProcessV2 {
+        mirror_shatter_intensity: prop_f32(props, "mirrorShatterIntensity", 0.0).clamp(0.0, 1.0),
+        mirror_shatter_center_x: prop_f32(props, "mirrorShatterCenterX", 0.5),
+        mirror_shatter_center_y: prop_f32(props, "mirrorShatterCenterY", 0.5),
+        mirror_shatter_spread: prop_f32(props, "mirrorShatterSpread", 1.0).clamp(0.0, 3.0),
+        mirror_shatter_seed: prop_f32(props, "mirrorShatterSeed", 0.0),
+        speed_lines_intensity: prop_f32(props, "speedLinesIntensity", 0.0).clamp(0.0, 1.0),
+        speed_lines_radial: prop_string_or(props, "speedLinesMode", "radial") == "radial",
+        speed_lines_density: prop_f32(props, "speedLinesDensity", 0.55).clamp(0.0, 1.0),
+        speed_lines_angle: prop_f32(props, "speedLinesAngle", 0.0).clamp(-180.0, 180.0),
+        speed_lines_speed: prop_f32(props, "speedLinesSpeed", 0.0),
+        speed_lines_center_x: prop_f32(props, "speedLinesCenterX", 0.5),
+        speed_lines_center_y: prop_f32(props, "speedLinesCenterY", 0.5),
+        speed_lines_region_ellipse: prop_string_or(props, "speedLinesRegionShape", "rectangle")
+            == "ellipse",
+        speed_lines_region_x: prop_f32(props, "speedLinesRegionX", 0.5),
+        speed_lines_region_y: prop_f32(props, "speedLinesRegionY", 0.5),
+        speed_lines_region_width: prop_f32(props, "speedLinesRegionWidth", 1.0).max(0.0),
+        speed_lines_region_height: prop_f32(props, "speedLinesRegionHeight", 1.0).max(0.0),
+        speed_lines_region_feather: if prop_string_or(props, "speedLinesRegionMode", "full")
+            == "custom"
+        {
+            prop_f32(props, "speedLinesRegionFeather", 0.05).max(0.0)
+        } else {
+            1.0
+        },
+    })
 }
 
 fn camera_targets(block: &StoryBlock) -> CameraTargets {
@@ -1833,6 +2680,13 @@ fn push_camera_reset(
             eyelid_center_x: Some(defaults.eyelid_center_x),
             eyelid_center_y: Some(defaults.eyelid_center_y),
         }),
+        duration,
+        easing,
+        blocking: wait,
+    });
+    timed.push(Action::SetPostProcessV2 {
+        targets,
+        effect: Box::default(),
         duration,
         easing,
         blocking: wait,
@@ -2280,6 +3134,26 @@ struct StudioParticleOverrides {
     gravity: Option<f32>,
 }
 
+fn studio_particle_effect(
+    texture: &str,
+    preset: &str,
+    options: StudioParticleOverrides,
+    fade_in: f32,
+) -> keine_core::ParticleEffect {
+    keine_core::ParticleEffect {
+        texture: (!texture.is_empty()).then(|| texture.to_owned()),
+        preset: if preset.is_empty() {
+            "LIGHT_SNOW".into()
+        } else {
+            preset.to_owned()
+        },
+        count: options.count.unwrap_or(0).min(u16::MAX as u32) as u16,
+        wind: options.wind,
+        gravity: options.gravity,
+        fade_in,
+    }
+}
+
 fn compile_particle(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport) {
     let id = prop_string_or(
         &block.props,
@@ -2300,18 +3174,15 @@ fn compile_particle(block: &StoryBlock, span: SourceSpan, report: &mut ParseRepo
     let texture = prop_string(&block.props, "textureUri");
     let options =
         json_string::<StudioParticleOverrides>(&block.props, "optionsJson").unwrap_or_default();
-    let count = options.count.unwrap_or(0).min(u16::MAX as u32) as u16;
     report.push(
         Action::ShowParticles {
             id,
-            effect: keine_core::ParticleEffect {
-                texture: (!texture.is_empty()).then_some(texture),
-                preset: prop_string_or(&block.props, "preset", "LIGHT_SNOW"),
-                count,
-                wind: options.wind,
-                gravity: options.gravity,
-                fade_in: prop_f32(&block.props, "fadeInDuration", 500.0).max(0.0) / 1000.0,
-            },
+            effect: studio_particle_effect(
+                &texture,
+                &prop_string_or(&block.props, "preset", "LIGHT_SNOW"),
+                options,
+                prop_f32(&block.props, "fadeInDuration", 500.0).max(0.0) / 1000.0,
+            ),
         },
         span,
     );
@@ -3346,8 +4217,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn studio_1200_registry_is_exhaustively_matched() {
-        assert_eq!(BUILTIN_BLOCK_TYPES.len(), 39);
+    fn studio_200_registry_is_exhaustively_matched() {
+        assert_eq!(BUILTIN_BLOCK_TYPES.len(), 43);
         for required in [
             "playerInput",
             "enterAutoPlay",
@@ -3359,6 +4230,10 @@ mod tests {
             "systemMessage",
             "updateCharacter",
             "stageMask",
+            "loadingStrategy",
+            "openExternalUrl",
+            "steamAction",
+            "unlockSteamAchievement",
         ] {
             assert!(BUILTIN_BLOCK_TYPES.contains(&required));
         }
@@ -3388,9 +4263,14 @@ mod tests {
         assert!(matches!(
             &report.actions[..],
             [
+                Action::HideSprites { prefix: alice_layers, .. },
                 Action::HideSprite { id: alice, .. },
+                Action::HideSprites { prefix: bob_layers, .. },
                 Action::HideSprite { id: bob, .. }
-            ] if alice == "alice" && bob == "bob"
+            ] if alice_layers == "character-layer:alice:"
+                && alice == "alice"
+                && bob_layers == "character-layer:bob:"
+                && bob == "bob"
         ));
         assert!(report.diagnostics.is_empty());
     }
@@ -3400,6 +4280,7 @@ mod tests {
         let chapter = ChapterDocument {
             id: "chapter".into(),
             name: "chapter".into(),
+            kind: String::new(),
             disabled: false,
             fragments: Vec::new(),
         };
@@ -3465,6 +4346,7 @@ mod tests {
         let chapter = ChapterDocument {
             id: "chapter".into(),
             name: "chapter".into(),
+            kind: String::new(),
             disabled: false,
             fragments: Vec::new(),
         };
@@ -4020,6 +4902,7 @@ mod tests {
             props.insert("key".into(), json!("value"));
             props.insert("aLit".into(), json!("1"));
             props.insert("thenFragmentId".into(), json!("entry"));
+            props.insert("url".into(), json!("https://example.com"));
             if *kind == "stageAnimation" {
                 props.insert(
                     "clipJson".into(),
@@ -4044,17 +4927,31 @@ mod tests {
             );
             // An empty camera block is a valid no-op in Studio. Every other
             // built-in must still lower to at least one runtime action.
-            if *kind != "camera" {
+            if !matches!(
+                *kind,
+                "camera" | "openExternalUrl" | "steamAction" | "unlockSteamAchievement"
+            ) {
                 assert!(!report.actions.is_empty(), "{kind} did not emit runtime IR");
             }
-            assert!(
-                report
-                    .diagnostics
-                    .iter()
-                    .all(|diagnostic| diagnostic.level != DiagnosticLevel::Error),
-                "{kind} emitted an error: {:?}",
-                report.diagnostics
-            );
+            if matches!(
+                *kind,
+                "openExternalUrl" | "steamAction" | "unlockSteamAchievement"
+            ) {
+                assert!(report.diagnostics.iter().any(|diagnostic| {
+                    diagnostic.level == DiagnosticLevel::Error
+                        && (diagnostic.message.contains("no Steam runtime bridge")
+                            || diagnostic.message.contains("platform-neutral"))
+                }));
+            } else {
+                assert!(
+                    report
+                        .diagnostics
+                        .iter()
+                        .all(|diagnostic| diagnostic.level != DiagnosticLevel::Error),
+                    "{kind} emitted an error: {:?}",
+                    report.diagnostics
+                );
+            }
             if *kind != "callExtensionFunction" {
                 assert!(
                     report
@@ -4572,12 +5469,12 @@ mod tests {
         );
 
         assert!(matches!(
-            report.actions.first(),
+            report.actions.get(1),
             Some(Action::Flow { action, next: true, .. })
                 if matches!(action.as_ref(), Action::ShakeCamera { shake, .. } if shake.duration == 0.0)
         ));
         assert!(matches!(
-            report.actions.get(1),
+            report.actions.get(2),
             Some(Action::Flow { action, next: true, .. })
                 if matches!(action.as_ref(), Action::SetCameraTransform { duration, .. } if *duration == 0.0)
         ));
@@ -4590,7 +5487,7 @@ mod tests {
                     if matches!(action.as_ref(), Action::ShowSprite { image, .. } if image == "winter.png")
             ))
             .unwrap();
-        assert!(show_index >= 4, "scene appeared before the camera reset");
+        assert!(show_index >= 5, "scene appeared before the camera reset");
     }
 
     #[test]
@@ -4905,17 +5802,18 @@ mod tests {
         );
 
         assert!(matches!(
-            &report.actions[0],
+            &report.actions[1],
             Action::Flow { action, next: true, .. }
                 if matches!(action.as_ref(), Action::HideSprites { prefix, .. } if prefix == "scene-layer:")
         ));
+        assert!(matches!(&report.actions[2], Action::HideParticleLayers));
         assert!(matches!(
-            &report.actions[1],
+            &report.actions[3],
             Action::Flow { action, next: true, .. }
                 if matches!(action.as_ref(), Action::HideBg { .. })
         ));
         assert!(matches!(
-            &report.actions[2],
+            &report.actions[4],
             Action::Flow { action, next: true, .. }
                 if matches!(action.as_ref(), Action::ShowSprite {
                     id,
@@ -4925,22 +5823,22 @@ mod tests {
                 } if id == "scene-layer:new-bg" && image == "new-bg.png")
         ));
         assert!(matches!(
-            &report.actions[3],
+            &report.actions[5],
             Action::SetCameraBinding { target, distance, .. }
                 if target == "scene-layer:new-bg" && *distance == 1.0
         ));
         assert!(matches!(
-            &report.actions[4],
+            &report.actions[6],
             Action::Flow { action, next: true, .. }
                 if matches!(action.as_ref(), Action::ShowSprite { id, .. } if id == "scene-layer:new-overlay")
         ));
         assert!(matches!(
-            &report.actions[5],
+            &report.actions[7],
             Action::SetCameraBinding { target, distance, .. }
                 if target == "scene-layer:new-overlay" && *distance == 1.0
         ));
         assert!(matches!(
-            report.actions[6],
+            report.actions[8],
             Action::Wait { seconds } if seconds == 0.4
         ));
     }
@@ -5271,5 +6169,274 @@ mod tests {
                 ..
             }] if path == "voice/009.wav"
         ));
+    }
+
+    #[test]
+    fn studio_200_manual_loading_strategy_resolves_authored_assets() {
+        let character: CharacterDefinition = serde_json::from_value(json!({
+            "id": "alice",
+            "name": "Alice",
+            "expressions": [{"name":"smile","assetPath":"characters/alice.webp"}]
+        }))
+        .unwrap();
+        let scene: SceneDefinition = serde_json::from_value(json!({
+            "id": "room",
+            "layers": [{"id":"base","assetPath":"background/room.webp"}]
+        }))
+        .unwrap();
+        let characters = HashMap::from([("alice", &character)]);
+        let scenes = HashMap::from([("room", &scene)]);
+        let chapter_next = HashMap::new();
+        let voices = HashMap::new();
+        let positions = HashMap::new();
+        let context = CompileContext {
+            entry: "entry",
+            chapter_next: &chapter_next,
+            characters: &characters,
+            scenes: &scenes,
+            voices: &voices,
+            positions: &positions,
+            portrait_height_ratio: None,
+        };
+        let block: StoryBlock = serde_json::from_value(json!({
+            "type": "loadingStrategy",
+            "props": {
+                "mode": "manual",
+                "execution": "wait",
+                "resourcesJson": "[{\"kind\":\"character\",\"characterId\":\"alice\",\"expression\":\"smile\"},{\"kind\":\"scene\",\"sceneId\":\"room\"}]"
+            }
+        }))
+        .unwrap();
+        let mut report = ParseReport::default();
+
+        compile_loading_strategy(
+            &block,
+            &context,
+            SourceSpan { line: 1, column: 1 },
+            &mut report,
+        );
+
+        assert!(matches!(
+            report.actions.as_slice(),
+            [Action::ConfigureLoading { strategy }]
+                if strategy.mode == LoadingStrategyMode::Manual
+                    && strategy.blocking
+                    && strategy.resources.len() == 2
+        ));
+        assert_eq!(report.resources.len(), 2);
+        assert!(report.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn studio_200_chapter_preprocess_wraps_entry_and_transitions() {
+        let project: ProjectDocument = serde_json::from_value(json!({
+            "id": "project", "name": "Project"
+        }))
+        .unwrap();
+        let chapters = vec![
+            (
+                PathBuf::from("pre.json"),
+                serde_json::from_value(json!({
+                    "id":"pre-chapter", "name":"Pre", "kind":"schedule-preprocessing",
+                    "fragments":[{"id":"pre", "blocks":[{"type":"comment"}]}]
+                }))
+                .unwrap(),
+            ),
+            (
+                PathBuf::from("one.json"),
+                serde_json::from_value(json!({
+                    "id":"one-chapter", "name":"One",
+                    "fragments":[{"id":"one", "blocks":[{"type":"endChapter"}]}]
+                }))
+                .unwrap(),
+            ),
+            (
+                PathBuf::from("two.json"),
+                serde_json::from_value(json!({
+                    "id":"two-chapter", "name":"Two",
+                    "fragments":[{"id":"two", "blocks":[{"type":"comment"}]}]
+                }))
+                .unwrap(),
+            ),
+        ];
+
+        let loaded = compile_project(
+            Path::new("."),
+            &project,
+            &chapters,
+            &CharactersDocument::default(),
+            &ScenesDocument::default(),
+            &AssetManifest::default(),
+        )
+        .unwrap();
+
+        let start = loaded.iter().find(|scene| scene.name == "start").unwrap();
+        assert_eq!(
+            start.actions,
+            vec![
+                Action::CallScene("pre".into()),
+                Action::ChangeScene("one".into())
+            ]
+        );
+        let first = loaded.iter().find(|scene| scene.name == "one").unwrap();
+        assert_eq!(
+            first.actions,
+            vec![
+                Action::CallScene("pre".into()),
+                Action::ChangeScene("two".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn studio_200_blueprint_schedule_lowers_to_native_flow() {
+        let project: ProjectDocument = serde_json::from_value(json!({
+            "id": "project", "name": "Project", "scheduleMode": "advanced",
+            "schedule": {"graph": {
+                "nodes": [
+                    {"id":"start","kind":"start"},
+                    {"id":"set","kind":"set","variable":"route","value":1},
+                    {"id":"chapter","kind":"chapter","chapterId":"chapter"},
+                    {"id":"end","kind":"end"}
+                ],
+                "edges": [
+                    {"source":"start","port":"next","target":"set"},
+                    {"source":"set","port":"next","target":"chapter"},
+                    {"source":"chapter","port":"next","target":"end"}
+                ]
+            }}
+        }))
+        .unwrap();
+        let chapters = vec![(
+            PathBuf::from("chapter.json"),
+            serde_json::from_value(json!({
+                "id":"chapter", "name":"Chapter",
+                "fragments":[{"id":"chapter-main", "blocks":[{"type":"endChapter"}]}]
+            }))
+            .unwrap(),
+        )];
+
+        let loaded = compile_project(
+            Path::new("."),
+            &project,
+            &chapters,
+            &CharactersDocument::default(),
+            &ScenesDocument::default(),
+            &AssetManifest::default(),
+        )
+        .unwrap();
+
+        let start = loaded.iter().find(|scene| scene.name == "start").unwrap();
+        assert_eq!(
+            start.actions,
+            vec![Action::ChangeScene("letsgal-schedule:start".into())]
+        );
+        let set = loaded
+            .iter()
+            .find(|scene| scene.name == "letsgal-schedule:set")
+            .unwrap();
+        assert!(matches!(
+            set.actions.as_slice(),
+            [Action::Set { name, expression, .. }, Action::ChangeScene(target)]
+                if name == "route" && expression == "1" && target == "letsgal-schedule:chapter"
+        ));
+        let chapter = loaded
+            .iter()
+            .find(|scene| scene.name == "letsgal-schedule:chapter")
+            .unwrap();
+        assert_eq!(
+            chapter.actions,
+            vec![
+                Action::CallScene("chapter-main".into()),
+                Action::ChangeScene("letsgal-schedule:end".into())
+            ]
+        );
+        let body = loaded
+            .iter()
+            .find(|scene| scene.name == "chapter-main")
+            .unwrap();
+        assert_eq!(
+            body.actions,
+            vec![Action::ChangeScene("__letsgal_schedule_return".into())]
+        );
+    }
+
+    #[test]
+    fn studio_200_differential_portrait_uses_native_layered_sprites() {
+        let character: CharacterDefinition = serde_json::from_value(json!({
+            "id":"alice", "name":"Alice",
+            "expressions":[{
+                "name":"smile", "presentation":{
+                    "type":"differential", "groupId":"face",
+                    "selections":{"eyes":"open"}
+                }
+            }],
+            "differentialPortraitGroups":[{
+                "id":"face", "width":1000, "height":1500,
+                "layers":[
+                    {"id":"base", "defaultOptionId":"body", "options":[
+                        {"id":"body", "assetPath":"characters/body.webp"}
+                    ]},
+                    {"id":"eyes", "defaultOptionId":"closed", "variableRules":[
+                        {"variable":"mood", "operator":"eq", "value":"happy", "optionId":"open"}
+                    ], "options":[
+                        {"id":"closed", "assetPath":"characters/closed.webp"},
+                        {"id":"open", "assetPath":"characters/open.webp", "rect":{"x":100,"y":200,"width":800,"height":500}}
+                    ]}
+                ]
+            }]
+        }))
+        .unwrap();
+        let characters = HashMap::from([("alice", &character)]);
+        let chapter_next = HashMap::new();
+        let scenes = HashMap::new();
+        let voices = HashMap::new();
+        let positions = HashMap::new();
+        let context = CompileContext {
+            entry: "entry",
+            chapter_next: &chapter_next,
+            characters: &characters,
+            scenes: &scenes,
+            voices: &voices,
+            positions: &positions,
+            portrait_height_ratio: Some(0.8),
+        };
+        let block: StoryBlock = serde_json::from_value(json!({
+            "type":"showCharacter",
+            "props":{"characterId":"alice","expression":"smile","animated":false}
+        }))
+        .unwrap();
+        let mut report = ParseReport::default();
+
+        compile_character(
+            &block,
+            &context,
+            SourceSpan { line: 1, column: 1 },
+            &mut report,
+            false,
+        );
+
+        assert!(report.actions.iter().any(|action| matches!(
+            action,
+            Action::Flow { action, .. }
+                if matches!(action.as_ref(), Action::ShowSprite {
+                    id, image, layout: SpriteLayout::Composite { canvas, .. }, ..
+                } if id == "alice" && image == "characters/body.webp" && *canvas == [1000.0, 1500.0])
+        )));
+        assert!(report.actions.iter().any(|action| matches!(
+            action,
+            Action::ShowSprite {
+                id, image, layout: SpriteLayout::Composite { rect: Some(rect), .. }, ..
+            } if id == "character-layer:alice:eyes"
+                && image == "characters/open.webp"
+                && *rect == [100.0, 200.0, 800.0, 500.0]
+        )));
+        assert!(report.actions.iter().any(|action| matches!(
+            action,
+            Action::SelectSpriteImageByCondition { id, variants, .. }
+                if id == "character-layer:alice:eyes"
+                    && variants[0].0 == "alice.mood == \"happy\""
+        )));
+        assert!(report.diagnostics.is_empty());
     }
 }
