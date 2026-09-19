@@ -5407,7 +5407,10 @@ name = "keine-editor"
 version = "0.9.0"
 dependencies = [
  "bevy",
+ "fs2",
  "gpui-kit",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

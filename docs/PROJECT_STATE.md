@@ -28,9 +28,10 @@
   release feature sets, WebP fuzz smoke, and Linux FFmpeg ASan acceptance. Desktop video fixtures
   cover no-audio, long-GOP, tail-`moov`, damaged-header, rewind, cancellation, FS, and encrypted
   Hakutaku sources.
-- `keine-editor` provides the Phase 0 GPUI/Dock process shell, physical project routing on Unix,
-  editor-owned app-data selection, bounded local control-protocol spike, and a windowless
-  scene/UI/dialog composition benchmark. It is excluded from the root Engine's default build.
+- `keine-editor` provides the Phase 1 read-only workbench: Empty Workbench and Open Recent/Folder,
+  one physical project per native window, secondary-launch routing, real project discovery and
+  source-backed document tabs, upstream Dock layout interactions, schema-versioned app-data layout
+  persistence, and Reset Layout. It remains excluded from the root Engine's default build.
 
 ## Architecture and interfaces
 
@@ -101,9 +102,10 @@ project / package
   anticipation of them.
 - Windows/Linux video remains software-decoded RGBA upload. Hardware decode or zero-copy work
   requires real target hardware, distribution, and device-loss evidence first.
-- The Editor's production authoring host, shared-memory mapping, GPUI frame upload, adaptive
-  preview scheduling, and workbench are not implemented. Phase 0 selects a raw latest-frame-wins
-  triple buffer; a native child surface or compression requires end-to-end release evidence.
+- The Editor's writable document model, production authoring host, shared-memory mapping, GPUI
+  frame upload, and adaptive preview scheduling are not implemented. Phase 0 selects a raw
+  latest-frame-wins triple buffer; a native child surface or compression requires end-to-end
+  release evidence.
 
 ## Known status
 
@@ -123,7 +125,7 @@ project / package
   from 3.671 to 2.117 ms median GPU time, matching the pre-mask baseline. Active-mask throughput
   remains unmeasured and must not be inferred from the no-mask result.
 - The original T02 production-project pass closed without a product-code change: the local
-  representative project compiled 9 scenes and 896 actions without diagnostics or unresolved
+  representative project compiled 9 scenes and 1020 actions without diagnostics or unresolved
   static resources. Its later Studio 1.20 follow-up added native multi-target character removal
   and typed `stageMask` overlay/clip support, including blocking, rollback, editor replay, and
   explicit Save v10 rejection while a mask is active. The external sample remains untracked.
@@ -137,6 +139,18 @@ project / package
   The three-frame Bevy Screenshot pipeline completed about 52 captures/s in both dev and release;
   the release 1080p raw slot copy averaged about 0.12 ms. Active preview still targets 60 fps,
   while unchanged and occluded previews must avoid continuous work for portable battery use.
+- Editor Phase 1 opens the tracked test project and the local LetsGal fixture in independent macOS
+  windows, restores editor-owned Dock state, and displays two real read-only documents without
+  launching the Engine or Preview. Its accepted shell is fully dark with independent borderless
+  9 px tonal Dock cards, borderless filled tabs and activity rail, even 4 px view gaps, aligned outer
+  edges, and a `#BAEBFF` accent whose derivatives stay near the neutral axis. The complete top-left
+  brand tile is blue for saved state; a future dirty document changes that tile to red rather than
+  adding a badge or bottom strip. Tab drops insert, empty tab-bar space appends, the broad content
+  centre merges, and only narrow nearest-edge zones split; tab-bar and content targets are mutually
+  exclusive and content-target movement is eased. Singleton Explorer, Inspector, and Output views
+  use integrated card titles rather than fake tabs. Document tab selection and close use restrained
+  reduced-motion-aware transitions. Explorer preserves long paths through horizontal scrolling,
+  with a subtle scrollbar and right-edge overflow fade.
 
 ## Active task queue
 

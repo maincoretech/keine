@@ -6,7 +6,10 @@ use bevy as _;
 mod app;
 pub mod app_data;
 pub mod frame_transport;
+pub mod instance;
 pub mod ipc;
+pub mod persistence;
 pub mod project_key;
+pub mod workspace;
 
 pub use app::run;

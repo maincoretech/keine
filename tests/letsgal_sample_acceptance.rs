@@ -42,7 +42,7 @@ fn official_sample_compiles_and_resolves_every_static_resource() {
             .iter()
             .map(|scene| scene.actions.len())
             .sum::<usize>(),
-        896
+        1020
     );
 
     let diagnostics = scenes

@@ -35,6 +35,34 @@ impl ProjectKey {
     pub fn path(&self) -> &Path {
         &self.display_path
     }
+
+    /// Deterministic, non-secret app-data key for this physical project.
+    pub fn workspace_id(&self) -> String {
+        let mut hash = FNV_OFFSET;
+        match &self.identity {
+            #[cfg(unix)]
+            PhysicalIdentity::Unix { device, inode } => {
+                hash_bytes(&mut hash, b"unix\0");
+                hash_bytes(&mut hash, &device.to_le_bytes());
+                hash_bytes(&mut hash, &inode.to_le_bytes());
+            }
+            PhysicalIdentity::Path(path) => {
+                hash_bytes(&mut hash, b"path\0");
+                hash_bytes(&mut hash, path.to_string_lossy().as_bytes());
+            }
+        }
+        format!("{hash:016x}")
+    }
+}
+
+const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+const FNV_PRIME: u64 = 0x00000100000001b3;
+
+fn hash_bytes(hash: &mut u64, bytes: &[u8]) {
+    for byte in bytes {
+        *hash ^= u64::from(*byte);
+        *hash = hash.wrapping_mul(FNV_PRIME);
+    }
 }
 
 impl PartialEq for ProjectKey {
@@ -147,5 +175,13 @@ mod tests {
             ProjectKey::from_path(direct).unwrap(),
             ProjectKey::from_path(dotted).unwrap()
         );
+    }
+
+    #[test]
+    fn workspace_id_is_stable_for_equivalent_paths() {
+        let direct = ProjectKey::from_path(".").unwrap();
+        let absolute = ProjectKey::from_path(std::env::current_dir().unwrap()).unwrap();
+        assert_eq!(direct.workspace_id(), absolute.workspace_id());
+        assert_eq!(direct.workspace_id().len(), 16);
     }
 }
