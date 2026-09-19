@@ -33,6 +33,12 @@ Use `cargo run --features hot-reload -- dev projects/test-project` when FFmpeg
 development libraries are unavailable. The visual acceptance checklist is in
 [`projects/test-project/ACCEPTANCE.md`](projects/test-project/ACCEPTANCE.md).
 
+Open the native editor with an optional project path:
+
+```bash
+cargo run -p keine-editor -- projects/test-project
+```
+
 ## Commands
 
 | Command | Purpose |
@@ -40,6 +46,7 @@ development libraries are unavailable. The visual acceptance checklist is in
 | `cargo validate <project>` | Validate a project without opening a window |
 | `cargo dev <project>` | Run a project with development tools and hot reload |
 | `cargo dev <project> --sync` | Follow an open LetsGal project |
+| `cargo run -p keine-editor -- [<project>...]` | Open the editor, optionally with one or more projects |
 | `cargo assets --pack <project>` | Build only the encrypted Hakutaku resource package |
 | `cargo assets --remap <project> <old=new>...` | Safely migrate converted asset references |
 | `cargo bundle <project>` | Build a distributable game |
