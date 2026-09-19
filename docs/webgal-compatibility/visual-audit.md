@@ -4,7 +4,7 @@
 
 仓库目前没有可复现的自动视觉回归基线，也不保留某个示例项目的人工截图作为引擎基线。单元测试可以证明布局数学、状态迁移和部分渲染辅助逻辑，但不能证明最终画面、动画观感、音频或跨平台一致性。
 
-因此跨平台视觉一致性仍不能由自动测试证明。`dev/docs/acceptance/` 只定义步骤，不代表已经
+因此跨平台视觉一致性仍不能由自动测试证明。`docs/acceptance/` 只定义步骤，不代表已经
 执行通过；下方人工验收记录只对明确列出的环境和状态有效。
 
 ## 2026-08-27 macOS 人工验收
@@ -60,7 +60,7 @@
 建议目录：
 
 ```text
-dev/docs/webgal-compatibility/artifacts/
+docs/webgal-compatibility/artifacts/
   YYYY-MM-DD/<platform>/<case>/
     metadata.json
     actual.png

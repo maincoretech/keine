@@ -1,7 +1,7 @@
 # keine project map
 
-keine 是 Bevy 0.19 构建的专用视觉小说引擎，兼容 WebGAL 脚本。模块按依赖方向组织，
-不是按平台或 UI 页面拆成大量 crate。
+keine 是 Bevy 0.19 构建的专用视觉小说引擎，可运行原生项目、WebGAL 脚本、LetsGal Studio
+工程和 Hakutaku 包。模块按依赖方向组织，不是按平台或 UI 页面拆成大量 crate。
 
 ## Workspace
 
@@ -51,14 +51,19 @@ keine/
 ├── .github/workflows/             桌面平台 fmt、Clippy、测试和 release CI
 ├── dev/scripts/                   发布/打包辅助脚本
 ├── docs/
+│   ├── PROJECT.md                 项目边界和目录规则
 │   ├── PROJECT_STATE.md           多线程共享的当前能力、接口与限制
-│   └── tasks/                     独立线程任务、所有权与依赖
-└── dev/docs/
-    ├── architecture/              当前架构与平台合同
-    ├── webgal-compatibility/      当前 WebGAL 语义、格式与视觉证据
-    ├── acceptance/                Phase 1–7 总清单与 LetsGal 独立验收
-    ├── PROJECT.md                 项目边界和目录规则
-    └── TODO.md                    产品能力 backlog 与验收清单
+│   ├── EDITOR_HANDOFF.md          Kēne editor 的项目交接与决策边界
+│   ├── architecture/              当前架构与平台合同
+│   ├── webgal-compatibility/      当前 WebGAL 语义、格式与视觉证据
+│   ├── acceptance/                Phase 1–7 总清单与 LetsGal 独立验收
+│   ├── tasks/                     当前独立任务、所有权与依赖
+│   ├── performance-baseline.md    可复现的性能测量与设备证据
+│   ├── project-and-assets-spec.md 项目、媒体和发行包合同
+│   └── resource-limits.md         输入、内存和持久化限制
+└── dev/
+    ├── scripts/                   发布、验收和开发辅助脚本
+    └── fixtures/                  开发与平台验收夹具
 ```
 
 ## Plugin ownership
@@ -93,8 +98,8 @@ keine/
 - adapter 顶层只按 `asset`、`editor`、`script`、`store` 能力类别组织。
 - 需要跨多个 JSON 建立引用关系的格式放入 `editor/<format>/`（如
   `editor/letsgal/`）；它只负责检测、统一 IR 编译、资源挂载和调试游标。
-- 特定编辑器的安装包放在该 adapter 的宿主子模块；根 runtime 只保留格式无关的本地桥接
-  协议，普通启动不得启用桥接或导入具体 adapter 类型。
+- 第三方 editor adapter 保持只读检测、统一 IR 编译、资源挂载和调试位置同步；不得承担
+  GUI、格式写回、安装包注入或 editor 私有协议。
 - Hakutaku 属于 packaged-project adapter，格式与打包协议由独立 Hakutaku workspace 负责。
 - 完整资源包也由 asset adapter 作为通用 `ProjectAdapter` 打开；bootstrap 不按扩展名分支。
 - Bevy 仅通过只读 `ContentMount/ContentFile` overlay reader 消费统一逻辑路径；包格式和语言
