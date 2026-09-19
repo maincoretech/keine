@@ -25,6 +25,7 @@ use gpui_kit::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::app_data::APP_ID;
 use crate::instance::{InstanceReceiver, PrimaryInstance, Startup, acquire_or_forward};
 use crate::persistence::AppPersistence;
 use crate::project_key::ProjectKey;
@@ -1742,7 +1743,7 @@ fn window_options(index: usize, cx: &App) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(offset_bounds(index, cx))),
         window_min_size: Some(size(px(720.), px(480.))),
-        app_id: Some("moe.maincore.keine-editor".into()),
+        app_id: Some(APP_ID.into()),
         ..Default::default()
     }
 }

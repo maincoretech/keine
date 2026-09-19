@@ -2,7 +2,7 @@ use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 
-const APP_ID: &str = "moe.maincore.keine-editor";
+pub(crate) const APP_ID: &str = "moe.maincore.keine-editor";
 
 /// Selects the editor-owned app-data root. Project content is never a fallback.
 pub fn root() -> io::Result<PathBuf> {
