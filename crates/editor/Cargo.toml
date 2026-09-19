@@ -1,0 +1,25 @@
+[package]
+name = "keine-editor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Native GPUI editor for Kēne projects"
+repository = "https://github.com/maincoretech/keine"
+publish = false
+
+[[bin]]
+name = "keine-editor"
+path = "src/main.rs"
+
+[dependencies]
+gpui-kit = { workspace = true }
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
+bevy = { workspace = true, features = [
+    "bevy_core_pipeline",
+    "bevy_render",
+    "bevy_sprite",
+    "bevy_sprite_render",
+    "bevy_winit",
+] }

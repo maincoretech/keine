@@ -1781,3 +1781,37 @@ This report validates that projects without an active mask no longer pay the
 clip fragment cost. It does not measure the intentional GPU cost of rendering
 an active clip mask on the X280; that requires a separately authored workload
 before making further mask-rendering performance claims.
+
+### 2026-09-20 editor offscreen preview Phase 0
+
+The `keine-editor` Phase 0 example renders the scene, normal UI, and dialog
+cameras into one 1920x1080 `Rgba8UnormSrgb` image without `WinitPlugin` or a
+primary window. Pixel checks prove all three ordered layers contribute. The
+measurement uses Apple M5 Pro / Metal, submits at most one screenshot request
+per authoring-preview frame, and permits at most three requests in flight. The
+release command builds the Editor example, not the root `keine` Engine binary.
+
+```text
+cargo run -p keine-editor --example phase0_offscreen
+cargo run --release -p keine-editor --example phase0_offscreen
+```
+
+| Profile | Warm samples | Median request latency | P95 | Completed throughput |
+| --- | ---: | ---: | ---: | ---: |
+| dev (`opt-level = 1`) | 120 | 38.317 ms | 40.179 ms | 51.92 fps |
+| release/LTO | 120 | 38.506 ms | 40.533 ms | 51.74 fps |
+
+The release raw-buffer loop copied 960x540 RGBA at 70.75 GiB/s and 1920x1080
+RGBA at 63.52 GiB/s. One 1080p slot copy averaged about 0.12 ms, and the three
+fixed slots reserve 23.7 MiB. The generic Bevy Screenshot path, rather than the
+CPU copy, is the current limiting stage. Same-frame batches of Screenshot
+requests were not reliable, so this is a feasibility baseline rather than the
+production asynchronous extraction design.
+
+The preview product target remains 60 fps for active input, animation, video,
+or timeline playback. Stable content should stop rendering and copying through
+event-driven lifecycle scheduling; occluded, minimized, and background views
+should suspend or reduce work. When the Phase 3 transport exists, release CI
+must benchmark end-to-end Engine readback, shared-slot publication, GPUI upload,
+active throughput, and idle activity before any compression, zero-copy, or
+native child-surface work is approved.

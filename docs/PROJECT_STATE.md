@@ -28,6 +28,9 @@
   release feature sets, WebP fuzz smoke, and Linux FFmpeg ASan acceptance. Desktop video fixtures
   cover no-audio, long-GOP, tail-`moov`, damaged-header, rewind, cancellation, FS, and encrypted
   Hakutaku sources.
+- `keine-editor` provides the Phase 0 GPUI/Dock process shell, physical project routing on Unix,
+  editor-owned app-data selection, bounded local control-protocol spike, and a windowless
+  scene/UI/dialog composition benchmark. It is excluded from the root Engine's default build.
 
 ## Architecture and interfaces
 
@@ -98,6 +101,9 @@ project / package
   anticipation of them.
 - Windows/Linux video remains software-decoded RGBA upload. Hardware decode or zero-copy work
   requires real target hardware, distribution, and device-loss evidence first.
+- The Editor's production authoring host, shared-memory mapping, GPUI frame upload, adaptive
+  preview scheduling, and workbench are not implemented. Phase 0 selects a raw latest-frame-wins
+  triple buffer; a native child surface or compression requires end-to-end release evidence.
 
 ## Known status
 
@@ -127,6 +133,10 @@ project / package
   dialogs, Backlog, Save/Load, Config, Extra, continuation, system Zoom, and native fullscreen
   showed no reproducible UI defect. Windows requires the user's remote credential; Windows,
   Linux, 1× DPI, and frame-by-frame transition evidence remain explicitly unverified.
+- Editor Phase 0 proved 1920x1080 three-camera windowless composition on Apple M5 Pro / Metal.
+  The three-frame Bevy Screenshot pipeline completed about 52 captures/s in both dev and release;
+  the release 1080p raw slot copy averaged about 0.12 ms. Active preview still targets 60 fps,
+  while unchanged and occluded previews must avoid continuous work for portable battery use.
 
 ## Active task queue
 
