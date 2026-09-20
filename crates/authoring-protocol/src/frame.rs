@@ -7,7 +7,7 @@ use memmap2::{MmapMut, MmapOptions};
 use serde::{Deserialize, Serialize};
 
 const MAGIC: [u8; 8] = *b"KNEFRM01";
-const FRAME_SCHEMA: u32 = 1;
+const FRAME_SCHEMA: u32 = 2;
 const BYTES_PER_PIXEL: u32 = 4;
 pub const FRAME_SLOT_COUNT: usize = 3;
 const SLOT_FREE: u64 = 0;
@@ -20,7 +20,7 @@ const SLOT_READING: u64 = 3;
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PixelFormat {
-    Rgba8Srgb,
+    Bgra8Srgb,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -181,7 +181,7 @@ impl SharedFrameConsumer {
                         width: 0,
                         height: 0,
                         stride: 0,
-                        pixel_format: PixelFormat::Rgba8Srgb as u32,
+                        pixel_format: PixelFormat::Bgra8Srgb as u32,
                         data_len: 0,
                     });
             }
@@ -198,7 +198,7 @@ impl SharedFrameConsumer {
             session_generation,
             max_width,
             max_height,
-            pixel_format: PixelFormat::Rgba8Srgb,
+            pixel_format: PixelFormat::Bgra8Srgb,
         };
         validate_header(&map, &descriptor)?;
         Ok(Self {
@@ -463,7 +463,7 @@ fn write_claimed_frame(
         (*slot_ptr).width = frame.width;
         (*slot_ptr).height = frame.height;
         (*slot_ptr).stride = frame.stride;
-        (*slot_ptr).pixel_format = PixelFormat::Rgba8Srgb as u32;
+        (*slot_ptr).pixel_format = PixelFormat::Bgra8Srgb as u32;
         (*slot_ptr).data_len = frame.bytes.len() as u64;
         std::ptr::copy_nonoverlapping(
             frame.bytes.as_ptr(),
@@ -485,7 +485,7 @@ fn copy_claimed_frame(
     let data_len = usize::try_from(slot.data_len)
         .map_err(|_| invalid_mapping("preview frame length overflow"))?;
     validate_frame(header, slot.width, slot.height, slot.stride, data_len)?;
-    if slot.pixel_format != PixelFormat::Rgba8Srgb as u32 {
+    if slot.pixel_format != PixelFormat::Bgra8Srgb as u32 {
         return Err(invalid_mapping("unsupported preview pixel format"));
     }
     let offset = header.slot_offsets[slot_index] as usize + std::mem::size_of::<SharedSlot>();
@@ -505,7 +505,7 @@ fn copy_claimed_frame(
             width: slot.width,
             height: slot.height,
             stride: slot.stride,
-            pixel_format: PixelFormat::Rgba8Srgb,
+            pixel_format: PixelFormat::Bgra8Srgb,
         },
         bytes,
     })

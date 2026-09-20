@@ -3,6 +3,8 @@
 #[cfg(feature = "publisher")]
 mod compiler;
 #[cfg(feature = "publisher")]
+mod project_migration;
+#[cfg(feature = "publisher")]
 mod publisher;
 mod render;
 #[cfg(feature = "publisher")]

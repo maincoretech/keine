@@ -12,7 +12,7 @@ pub use frame::{
     PixelFormat, SharedFrameConsumer, SharedFrameProducer, remove_stale_mapping,
 };
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 pub const MAX_MESSAGE_BYTES: usize = 256 * 1024;
 pub const MAX_DOCUMENT_BYTES: usize = 1024 * 1024;
 pub const SNAPSHOT_CHUNK_BYTES: usize = 128 * 1024;

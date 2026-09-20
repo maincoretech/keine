@@ -269,6 +269,13 @@ impl DocumentManager {
         self.documents.values()
     }
 
+    pub fn source_overrides(&self) -> std::collections::BTreeMap<PathBuf, String> {
+        self.documents
+            .iter()
+            .map(|(path, document)| (path.clone(), document.borrow().contents().to_owned()))
+            .collect()
+    }
+
     fn recovery_path(&self, relative_path: &Path) -> PathBuf {
         let mut hash = 0xcbf29ce484222325u64;
         for byte in relative_path.to_string_lossy().as_bytes() {

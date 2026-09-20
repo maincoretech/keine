@@ -1,5 +1,7 @@
 [alias]
 configure = "run --features configure -- configure"
+# Native Editor development session. Additional arguments are project paths.
+editor = "run --manifest-path crates/editor/Cargo.toml --"
 # Interactive preview; add `--sync` to follow an open LetsGal project.
 # Machines without FFmpeg development libraries can use
 # `cargo run --features hot-reload -- dev` for the same session without video.
@@ -11,12 +13,14 @@ dev = "run --features configure,hot-reload,video-native,video-ffmpeg -- dev"
 # (`full`, `scene-ui`, `scene-dialog`, or `scene`) is reserved for measuring
 # per-camera render overhead without changing normal runtime composition.
 perf = "run --release --features video-native,video-ffmpeg -- benchmark"
+# DEPRECATED: transitional alias scheduled for removal after startup measurement
+# moves under the Eiyashou-first `cargo perf startup` command surface.
 # Builds once, then lets the release executable spawn isolated child processes
 # and report startup medians/p95 without including Cargo in the measurements.
 startup-perf = "run --release --features startup-metrics -- benchmark-startup"
-# Local official LetsGal sample acceptance and loader/compiler baseline. The
-# commercial sample itself stays outside Git; both commands explain how to
-# install it when projects/letsgal is absent.
+# DEPRECATED: these compatibility-only aliases are scheduled for removal from
+# the public command surface. Their underlying checks remain until LetsGal's
+# read-only compatibility evidence has a replacement in CI.
 letsgal-test = "test --test letsgal_sample_acceptance"
 letsgal-perf = "bench -p keine-loader --bench letsgal_project"
 validate = "run -- check"
@@ -26,3 +30,6 @@ assets = "run --release --no-default-features --features publisher --target-dir 
 # Keep the bundle runner outside target/release: Windows cannot replace a
 # running keine.exe when the child build produces the hardened game engine.
 bundle = "run --release --no-default-features --features publisher --target-dir target/publisher-runner -- bundle"
+# One-shot compatibility conversion. The source stays read-only and the new
+# target is published only after the generated Eiyashou project validates.
+migrate = "run --release --no-default-features --features publisher --target-dir target/publisher-runner -- migrate"

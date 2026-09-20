@@ -848,6 +848,10 @@ mod tests {
         let mut config = keine_core::config::GameConfig::default();
         config.project.id = id.to_owned();
         config.adapter.script = script_adapter.to_owned();
+        if script_adapter == "keine" {
+            fs::write(root.join("assets.yaml"), "{}\n").unwrap();
+            fs::write(root.join("characters.yaml"), "{}\n").unwrap();
+        }
         fs::write(
             root.join("config.yaml"),
             noyalib::to_string(&config).unwrap(),

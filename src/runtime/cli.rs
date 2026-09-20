@@ -98,6 +98,10 @@ pub(super) enum CliCommand {
         rules: Vec<(String, String)>,
         yes: bool,
     },
+    Migrate {
+        source: PathBuf,
+        target: PathBuf,
+    },
     Run {
         project: PathBuf,
         mode: InteractiveMode,
@@ -149,6 +153,12 @@ const COMMANDS: &[CommandHelp] = &[
         cargo_name: "bundle",
         args: "<project> [--output <dir>] [--benchmark]",
         summary: "Build a complete distributable game",
+    },
+    CommandHelp {
+        binary_name: "migrate",
+        cargo_name: "migrate",
+        args: "<source-project> <target-project>",
+        summary: "Convert a compatibility project to native Eiyashou",
     },
     #[cfg(feature = "hot-reload")]
     CommandHelp {
@@ -226,6 +236,13 @@ pub(super) fn parse(args: &[OsString]) -> Result<CliCommand> {
         }
         Some("assets") => parse_assets(args),
         Some("bundle") => parse_bundle(args),
+        Some("migrate") => {
+            const USAGE: &str = "keine migrate <source-project> <target-project>";
+            let source = required_path(args, 1, USAGE)?;
+            let target = required_path(args, 2, USAGE)?;
+            require_no_extra_args(args, 3, USAGE)?;
+            Ok(CliCommand::Migrate { source, target })
+        }
         Some("package") => anyhow::bail!(
             "`keine package` was split by responsibility; use `keine assets --pack <project>` for a resource package or `keine bundle <project>` for a complete game"
         ),
@@ -637,6 +654,32 @@ mod tests {
             CliCommand::AssetsPack { output, .. }
                 if output == Path::new(DEFAULT_ASSET_PACKAGE_OUTPUT)
         ));
+    }
+
+    #[test]
+    fn migrate_requires_exactly_two_project_paths() {
+        let command = parse(&[
+            "migrate".into(),
+            "legacy-project".into(),
+            "native-project".into(),
+        ])
+        .unwrap();
+        assert!(matches!(
+            command,
+            CliCommand::Migrate { source, target }
+                if source == Path::new("legacy-project")
+                    && target == Path::new("native-project")
+        ));
+        assert!(parse(&["migrate".into(), "legacy-project".into()]).is_err());
+        assert!(
+            parse(&[
+                "migrate".into(),
+                "legacy-project".into(),
+                "native-project".into(),
+                "extra".into(),
+            ])
+            .is_err()
+        );
     }
 
     #[test]

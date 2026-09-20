@@ -50,12 +50,18 @@
   it never translates compatibility input. The bounded binary authoring protocol launches one
   prebuilt Engine child per project for handshake, validation, diagnostics, source snapshots and
   patches, source/runtime cursor exchange, lifecycle, runtime input, and real embedded Preview.
-  Preview is an explicit singleton view with independent Show and Start actions, Edit/Play input
-  scopes, visibility pause, and bounded Stop/Close cleanup. The Engine owns the normal three-camera
+  Preview is an explicit singleton view placed above Inspector in the default right-hand stack;
+  Engine Start remains manual. Edit/Play input scopes, edge-triggered visibility pause, and bounded
+  Stop/Close cleanup remain independent of layout. Panel visibility comes
+  from Dock activation rather than render-frequency inference, so unchanged UI cannot oscillate
+  the child and audio between pause/resume. The Engine owns the normal three-camera
   composition in a hidden 1920x1080 target and publishes raw frames through a project/session/
-  revision-checked latest-frame-wins shared-memory triple buffer; the Editor only letterboxes and
-  uploads the newest complete frame. The editor remains excluded from the root Engine's default
-  build.
+  revision-checked latest-frame-wins shared-memory triple buffer. Production frames are BGRA,
+  only one GPU readback may be in flight, and the Editor transfers and uploads each newest complete
+  frame once without a per-pixel channel swap. The editor remains excluded from the root Engine's
+  default build. `cargo migrate <source-project> <target-project>` opens a compatibility source
+  read-only, rejects semantics that Eiyashou cannot preserve, stages confined referenced assets,
+  emits `.shou` plus native manifests, validates the result, and only then installs a new target.
 
 ## Architecture and interfaces
 
@@ -87,6 +93,10 @@ project / package
   loss, or Kēne-caused regressions justify maintenance without a new product decision.
 - LetsGal Studio remains a read-only adapter. The checked-in 1.8 fixture and 1.20 acceptance
   project are active compatibility evidence; Studio extensions and bridge injection are excluded.
+  New authoring work and the public development command surface are Eiyashou-first. The legacy
+  `cargo startup-perf`, `cargo letsgal-test`, and `cargo letsgal-perf` aliases are deprecated and
+  scheduled for removal; this marks command-surface cleanup, not removal of the read-only adapter
+  or its required compatibility regression coverage.
   LetsGal 1.20 multi-target character removal and typed `stageMask` overlay/clip state are native;
   2.0 basic blueprint scheduling/chapter preprocessing, session variables, layered differential portraits,
   per-frame portrait timing, scene particle layers, mouse scene parallax, mirror-shatter and scoped
@@ -131,14 +141,17 @@ project / package
   anticipation of them.
 - Windows/Linux video remains software-decoded RGBA upload. Hardware decode or zero-copy work
   requires real target hardware, distribution, and device-loss evidence first.
-- Editor Phase 4 native-window visual acceptance remains open on an unlocked macOS desktop, along
-  with representative live audio/video and cross-platform GPU/GUI evidence. Native child surfaces,
-  frame compression, and GPU sharing remain unapproved unless end-to-end evidence identifies the
-  raw triple buffer as the bottleneck.
+- Phase 4 native-window Preview acceptance is complete on macOS. Representative cross-platform
+  GPU/GUI, audio/video, DPI, input, and packaging evidence belongs to Phase 7. Native child
+  surfaces, frame compression, and GPU sharing remain unapproved unless end-to-end evidence
+  identifies the raw triple buffer as the bottleneck.
 - Eiyashou v1 intentionally does not expose the deferred advanced runtime surface listed in its
   language reference: camera/post-process/particle timelines, arbitrary code execution, runtime UI
   skinning, import systems, dynamic Live2D/Spine/GIF authoring, SE loop/pan, or non-blocking video.
   These are out of v1 rather than incomplete v1 behavior.
+- Compatibility projects that use editor-specific particles, masks, timelines, conditional legacy
+  expressions, or other semantics outside Eiyashou v1 are deliberately rejected by `cargo migrate`
+  instead of receiving a partial conversion. They require manual Eiyashou redesign.
 
 ## Known status
 
@@ -201,8 +214,19 @@ project / package
   project/session/revision metadata, and drops stale frames instead of queueing latency. On Apple
   M5 Pro / Metal, three automated Start/Pause/Resume/Stop cycles produced a visible composited frame
   in 142–161 ms, showed no frame overwrite, bounded paused publication to the three in-flight
-  captures, removed every mapping, and left no authoring child process. The final real Editor
-  window pass is still pending because Computer Use found the Mac locked.
+  captures, removed every mapping, and left no authoring child process. The user accepted the final
+  live macOS Editor Preview pass on 2026-09-21.
+- Editor Phase 5 keeps Text, Cards, and continuous Dialogue as projections of the same authoritative
+  Eiyashou source document. Card/dialogue selection drives Inspector and the Preview source cursor;
+  the context-aware Insert Palette, confined Asset Browser, bounded Character/Scene managers, and
+  navigable Problems view all edit or inspect that same source path. The Performance view reports
+  only measured Preview transport counters, not invented CPU/GPU timing. Normal-scale macOS
+  Computer Use acceptance covered the five-row continuous-dialogue fixture and every new tool view,
+  then closed the test application. `.shou` Text mode now highlights the authoritative native token
+  stream, keeps a compact black line-number gutter with source-text spacing, and supports the same
+  restrained close transition from either the close affordance or middle click. A real untracked
+  LetsGal project sustained embedded Preview output after the visible-panel lifecycle fix; the
+  acceptance bundle and every child process were removed afterward.
 
 ## Active task queue
 
@@ -211,7 +235,8 @@ project / package
 | [T13](tasks/T13-native-dsl-adapter.md) | complete | Eiyashou adapter and typed core boundary |
 | [T14](tasks/T14-release-source-exclusion.md) | complete | compiled-only Hakutaku release content |
 | [T15](tasks/T15-eiyashou-editor-projection.md) | complete | source-first Editor projection and explicit migration |
-| [T16](tasks/T16-editor-phase4-preview.md) | visual acceptance | real embedded Preview and bounded raw frame transport |
+| [T16](tasks/T16-editor-phase4-preview.md) | complete | real embedded Preview and bounded raw frame transport |
+| [T17](tasks/T17-editor-phase5-authoring-ux.md) | complete | source-safe core VN authoring workflow |
 | [T03](tasks/T03-ui-visual-baseline.md) | user acceptance | UI and cross-platform visual evidence |
 
 ## Canonical references

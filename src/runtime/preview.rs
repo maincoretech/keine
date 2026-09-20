@@ -18,7 +18,10 @@ use super::resources::{GameState, LocalAssetManifest};
 
 const PREVIEW_WIDTH: u32 = keine_core::DESIGN_WIDTH as u32;
 const PREVIEW_HEIGHT: u32 = keine_core::DESIGN_HEIGHT as u32;
-const MAX_IN_FLIGHT_CAPTURES: usize = 3;
+// A preview is latest-frame-wins. Queuing readbacks cannot improve what the
+// editor displays, but it can make the render thread and audio mixer fight
+// several old 1080p captures at once.
+const MAX_IN_FLIGHT_CAPTURES: usize = 1;
 
 pub(crate) struct AuthoringPreviewConfig {
     pub(crate) producer: SharedFrameProducer,
@@ -134,7 +137,9 @@ fn setup_target(
     let target = images.add(Image::new_target_texture(
         PREVIEW_WIDTH,
         PREVIEW_HEIGHT,
-        TextureFormat::Rgba8UnormSrgb,
+        // GPUI uploads RenderImage bytes as BGRA. Capturing that layout here
+        // removes an 8 MiB per-frame channel-swap pass in the editor.
+        TextureFormat::Bgra8UnormSrgb,
         None,
     ));
     for (entity, mut camera) in &mut cameras {

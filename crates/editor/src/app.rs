@@ -1,10 +1,10 @@
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use gpui_kit::base::motion::{Transition, transition};
 use gpui_kit::base::{Placement, ResizeHandleContext};
@@ -14,7 +14,7 @@ use gpui_kit::component::dock::{
     InsertTarget, NodeId, Panel, PanelBuildContext, PanelEvent, PanelHandle, PanelId, PanelInfo,
     PanelState, PanelStyle, TabGroupContext, TabGroupRenderer, panel_handle, register_panel,
 };
-use gpui_kit::component::input::{Editor, EditorState, Input, InputEvent, InputState};
+use gpui_kit::component::input::{Editor, EditorState, Input, InputEvent, InputState, Position};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, Theme, ThemeMode};
 use gpui_kit::{
@@ -28,6 +28,10 @@ use gpui_kit::{
 use serde::{Deserialize, Serialize};
 
 use crate::app_data::APP_ID;
+use crate::authoring::{
+    AuthoringIndex, AuthoringSelection, InsertKind, ProblemSeverity, append_character,
+    append_scene, dialogues_for_source, insert_statement, replace_dialogue_text,
+};
 use crate::document::{DocumentHandle, DocumentManager, SaveError, is_eiyashou_authoring_document};
 use crate::instance::{InstanceReceiver, PrimaryInstance, Startup, acquire_or_forward};
 use crate::migration::MigrationPlan;
@@ -35,6 +39,7 @@ use crate::persistence::AppPersistence;
 use crate::preview::{PreviewController, PreviewLifecycle, PreviewMode, map_preview_point};
 use crate::project_key::ProjectKey;
 use crate::projection::EiyashouProjection;
+use crate::syntax::eiyashou_highlighter_factory;
 use crate::workspace::{WorkspaceFile, WorkspaceSession};
 
 const CANVAS: u32 = 0x11151b;
@@ -49,8 +54,16 @@ const PRIMARY: u32 = 0xbaebff;
 const PRIMARY_DIM: u32 = 0x30434d;
 const SUCCESS: u32 = 0x69c38d;
 const LAYOUT_SCHEMA: usize = 1;
-const VIEW_GAP_PX: f32 = 2.;
+// Each Dock group owns one half-gap. Adjacent groups therefore have a 4 px
+// gutter, while the window and activity rail contribute the matching other
+// half at the workspace edge. Keep this as the single spacing owner instead
+// of adding per-panel margins.
+const VIEW_INSET_PX: f32 = 2.;
 const VIEW_RADIUS_PX: f32 = 9.;
+// GPUI reserves one leading digit plus input padding before the widest visible
+// line number. Crop that reserve while keeping the built-in right margin as a
+// distinct dark gap before source text.
+const EDITOR_GUTTER_TRIM_PX: f32 = 18.;
 const TAB_MOTION_DURATION: Duration = Duration::from_millis(140);
 const PREVIEW_POLL_INTERVAL: Duration = Duration::from_millis(16);
 
@@ -59,6 +72,11 @@ const DOCUMENT_PANEL: &str = "keine.editor.document";
 const INSPECTOR_PANEL: &str = "keine.editor.inspector";
 const OUTPUT_PANEL: &str = "keine.editor.output";
 const PREVIEW_PANEL: &str = "keine.editor.preview";
+const ASSETS_PANEL: &str = "keine.editor.assets";
+const CHARACTERS_PANEL: &str = "keine.editor.characters";
+const SCENES_PANEL: &str = "keine.editor.scenes";
+const PROBLEMS_PANEL: &str = "keine.editor.problems";
+const PERFORMANCE_PANEL: &str = "keine.editor.performance";
 
 actions!(
     keine_editor,
@@ -125,6 +143,9 @@ fn configure_dark_theme(cx: &mut App) {
     theme.scrollbar_thumb = hsla(0.55, 0.18, 0.72, 0.22);
     theme.scrollbar_thumb_hover = hsla(0.55, 0.24, 0.78, 0.38);
     theme.input = theme_color(BORDER);
+    Arc::make_mut(&mut theme.highlight_theme)
+        .style
+        .editor_gutter_background = Some(theme_color(0x090c10));
     theme.popover = theme_color(SURFACE);
     theme.popover_foreground = theme_color(INK);
     theme.button = theme_color(SURFACE);
@@ -161,14 +182,18 @@ impl<W: Copy> WindowRegistry<W> {
 
 struct WorkspaceDocuments {
     manager: DocumentManager,
+    files: Vec<WorkspaceFile>,
+    authoring: AuthoringIndex,
     notice: String,
     selection: Option<(PathBuf, usize, usize)>,
     diagnostics: Vec<keine_authoring::Diagnostic>,
     dock: Option<WeakEntity<DockArea>>,
     document_node: Option<NodeId>,
     panels: HashMap<PathBuf, PanelId>,
+    editors: HashMap<PathBuf, WeakEntity<EditorState>>,
     preview: Arc<PreviewController>,
     preview_panel: Option<PanelId>,
+    tools: HashMap<&'static str, PanelId>,
 }
 
 struct EditorDocuments {
@@ -192,18 +217,26 @@ impl EditorDocuments {
         if !self.workspaces.contains_key(&canonical) {
             let manager =
                 DocumentManager::new(canonical.clone(), self.persistence.recovery_dir(&key))?;
+            let files = WorkspaceSession::open(&canonical)
+                .map(|session| session.files().to_vec())
+                .unwrap_or_default();
+            let authoring = AuthoringIndex::load(&canonical, &files, &BTreeMap::new());
             self.workspaces.insert(
                 canonical.clone(),
                 WorkspaceDocuments {
                     manager,
+                    files,
+                    authoring,
                     notice: "Ready".into(),
                     selection: None,
                     diagnostics: Vec::new(),
                     dock: None,
                     document_node: None,
                     panels: HashMap::new(),
+                    editors: HashMap::new(),
                     preview: PreviewController::new(key),
                     preview_panel: None,
+                    tools: HashMap::new(),
                 },
             );
         }
@@ -250,6 +283,21 @@ impl EditorDocuments {
         }
     }
 
+    fn refresh_authoring(&mut self, root: &Path) {
+        if let Ok(workspace) = self.ensure_workspace(root) {
+            let overrides = workspace.manager.source_overrides();
+            workspace.authoring = AuthoringIndex::load(root, &workspace.files, &overrides);
+        }
+    }
+
+    fn authoring(&self, root: &Path) -> AuthoringIndex {
+        ProjectKey::from_path(root)
+            .ok()
+            .and_then(|key| self.workspaces.get(key.path()))
+            .map(|workspace| workspace.authoring.clone())
+            .unwrap_or_default()
+    }
+
     fn selection(&self, root: &Path) -> Option<&(PathBuf, usize, usize)> {
         let key = ProjectKey::from_path(root).ok()?;
         self.workspaces.get(key.path())?.selection.as_ref()
@@ -285,11 +333,27 @@ impl EditorDocuments {
         }
     }
 
+    fn register_editor(&mut self, root: &Path, relative: PathBuf, editor: WeakEntity<EditorState>) {
+        if let Ok(workspace) = self.ensure_workspace(root) {
+            workspace.editors.insert(relative, editor);
+        }
+    }
+
+    fn editor_for(&self, root: &Path, relative: &Path) -> Option<WeakEntity<EditorState>> {
+        let key = ProjectKey::from_path(root).ok()?;
+        self.workspaces
+            .get(key.path())?
+            .editors
+            .get(relative)
+            .cloned()
+    }
+
     fn unregister_panel(&mut self, root: &Path, relative: &Path, panel: PanelId) {
         if let Ok(workspace) = self.ensure_workspace(root)
             && workspace.panels.get(relative) == Some(&panel)
         {
             workspace.panels.remove(relative);
+            workspace.editors.remove(relative);
         }
     }
 
@@ -331,6 +395,14 @@ impl EditorDocuments {
         })
     }
 
+    fn runtime_diagnostics(&self, root: &Path) -> Vec<keine_authoring::Diagnostic> {
+        ProjectKey::from_path(root)
+            .ok()
+            .and_then(|key| self.workspaces.get(key.path()))
+            .map(|workspace| workspace.diagnostics.clone())
+            .unwrap_or_default()
+    }
+
     fn preview(&mut self, root: &Path) -> io::Result<Arc<PreviewController>> {
         Ok(self.ensure_workspace(root)?.preview.clone())
     }
@@ -370,6 +442,21 @@ impl EditorDocuments {
     fn set_preview_panel(&mut self, root: &Path, panel: Option<PanelId>) {
         if let Ok(workspace) = self.ensure_workspace(root) {
             workspace.preview_panel = panel;
+        }
+    }
+
+    fn tool_panel(&self, root: &Path, name: &'static str) -> Option<PanelId> {
+        let key = ProjectKey::from_path(root).ok()?;
+        self.workspaces.get(key.path())?.tools.get(name).copied()
+    }
+
+    fn set_tool_panel(&mut self, root: &Path, name: &'static str, panel: Option<PanelId>) {
+        if let Ok(workspace) = self.ensure_workspace(root) {
+            if let Some(panel) = panel {
+                workspace.tools.insert(name, panel);
+            } else {
+                workspace.tools.remove(name);
+            }
         }
     }
 }
@@ -479,6 +566,42 @@ enum PanelPayload {
     Inspector { root: PathBuf },
     Output { root: PathBuf },
     Preview { root: PathBuf },
+    Assets { root: PathBuf },
+    Characters { root: PathBuf },
+    Scenes { root: PathBuf },
+    Problems { root: PathBuf },
+    Performance { root: PathBuf },
+}
+
+#[derive(Clone, Copy)]
+enum ToolKind {
+    Assets,
+    Characters,
+    Scenes,
+    Problems,
+    Performance,
+}
+
+impl ToolKind {
+    fn panel_name(self) -> &'static str {
+        match self {
+            Self::Assets => ASSETS_PANEL,
+            Self::Characters => CHARACTERS_PANEL,
+            Self::Scenes => SCENES_PANEL,
+            Self::Problems => PROBLEMS_PANEL,
+            Self::Performance => PERFORMANCE_PANEL,
+        }
+    }
+
+    fn payload(self, root: PathBuf) -> PanelPayload {
+        match self {
+            Self::Assets => PanelPayload::Assets { root },
+            Self::Characters => PanelPayload::Characters { root },
+            Self::Scenes => PanelPayload::Scenes { root },
+            Self::Problems => PanelPayload::Problems { root },
+            Self::Performance => PanelPayload::Performance { root },
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -502,6 +625,22 @@ enum PanelContent {
         file_count: usize,
     },
     Preview {
+        root: PathBuf,
+        controller: Arc<PreviewController>,
+    },
+    Assets {
+        root: PathBuf,
+    },
+    Characters {
+        root: PathBuf,
+    },
+    Scenes {
+        root: PathBuf,
+    },
+    Problems {
+        root: PathBuf,
+    },
+    Performance {
         root: PathBuf,
         controller: Arc<PreviewController>,
     },
@@ -531,11 +670,16 @@ impl PanelContent {
                     Some(document) => document.borrow().contents().to_owned(),
                     None => std::fs::read_to_string(root.join(&relative))?,
                 };
+                let language = language_for_path(&relative);
                 let editor = cx.new(|cx| {
-                    EditorState::new(window, cx)
+                    let mut editor = EditorState::new(window, cx)
                         .default_value(contents)
-                        .language(language_for_path(&relative))
-                        .folding(false)
+                        .language(language)
+                        .folding(false);
+                    if language == "eiyashou" {
+                        editor.set_highlighter_factory(eiyashou_highlighter_factory(), cx);
+                    }
+                    editor
                 });
                 Ok(Self::Document {
                     root,
@@ -571,6 +715,14 @@ impl PanelContent {
                 controller.set_panel_visible(true);
                 Ok(Self::Preview { root, controller })
             }
+            PanelPayload::Assets { root } => Ok(Self::Assets { root }),
+            PanelPayload::Characters { root } => Ok(Self::Characters { root }),
+            PanelPayload::Scenes { root } => Ok(Self::Scenes { root }),
+            PanelPayload::Problems { root } => Ok(Self::Problems { root }),
+            PanelPayload::Performance { root } => {
+                let controller = cx.global_mut::<EditorDocuments>().preview(&root)?;
+                Ok(Self::Performance { root, controller })
+            }
         }
     }
 
@@ -584,6 +736,11 @@ impl PanelContent {
             Self::Inspector { root, .. } => PanelPayload::Inspector { root: root.clone() },
             Self::Output { root, .. } => PanelPayload::Output { root: root.clone() },
             Self::Preview { root, .. } => PanelPayload::Preview { root: root.clone() },
+            Self::Assets { root } => PanelPayload::Assets { root: root.clone() },
+            Self::Characters { root } => PanelPayload::Characters { root: root.clone() },
+            Self::Scenes { root } => PanelPayload::Scenes { root: root.clone() },
+            Self::Problems { root } => PanelPayload::Problems { root: root.clone() },
+            Self::Performance { root, .. } => PanelPayload::Performance { root: root.clone() },
         }
     }
 
@@ -594,6 +751,11 @@ impl PanelContent {
             Self::Inspector { .. } => INSPECTOR_PANEL,
             Self::Output { .. } => OUTPUT_PANEL,
             Self::Preview { .. } => PREVIEW_PANEL,
+            Self::Assets { .. } => ASSETS_PANEL,
+            Self::Characters { .. } => CHARACTERS_PANEL,
+            Self::Scenes { .. } => SCENES_PANEL,
+            Self::Problems { .. } => PROBLEMS_PANEL,
+            Self::Performance { .. } => PERFORMANCE_PANEL,
         }
     }
 
@@ -609,6 +771,11 @@ impl PanelContent {
             Self::Inspector { .. } => "Inspector".into(),
             Self::Output { .. } => "Output".into(),
             Self::Preview { .. } => "Preview".into(),
+            Self::Assets { .. } => "Assets".into(),
+            Self::Characters { .. } => "Characters".into(),
+            Self::Scenes { .. } => "Scenes".into(),
+            Self::Problems { .. } => "Problems".into(),
+            Self::Performance { .. } => "Performance".into(),
         }
     }
 }
@@ -618,12 +785,14 @@ struct WorkbenchPanel {
     focus: FocusHandle,
     document_mode: DocumentMode,
     card_editors: Vec<CardNameEditor>,
+    dialogue_editors: Vec<DialogueTextEditor>,
+    tool_inputs: Vec<Entity<InputState>>,
+    timeline: VecDeque<TimelineSample>,
     recovery_epoch: u64,
     preview_image: Option<Arc<RenderImage>>,
     preview_frame_id: u64,
     preview_lifecycle: PreviewLifecycle,
     preview_bounds: Arc<Mutex<Option<Bounds<Pixels>>>>,
-    preview_last_render: Instant,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -632,11 +801,23 @@ enum DocumentMode {
     #[default]
     Text,
     Card,
+    Dialogue,
 }
 
 struct CardNameEditor {
     scene_index: usize,
     state: Entity<InputState>,
+}
+
+struct DialogueTextEditor {
+    line: usize,
+    state: Entity<InputState>,
+}
+
+#[derive(Clone, Copy)]
+struct TimelineSample {
+    published: u64,
+    overwritten: u64,
 }
 
 impl WorkbenchPanel {
@@ -654,18 +835,28 @@ impl WorkbenchPanel {
             PanelContent::Preview { root, .. } => Some(root.clone()),
             _ => None,
         };
+        let tool_registration = match &content {
+            PanelContent::Assets { root } => Some((root.clone(), ASSETS_PANEL)),
+            PanelContent::Characters { root } => Some((root.clone(), CHARACTERS_PANEL)),
+            PanelContent::Scenes { root } => Some((root.clone(), SCENES_PANEL)),
+            PanelContent::Problems { root } => Some((root.clone(), PROBLEMS_PANEL)),
+            PanelContent::Performance { root, .. } => Some((root.clone(), PERFORMANCE_PANEL)),
+            _ => None,
+        };
         let panel = cx.new(|cx| {
             let mut panel = Self {
                 content,
                 focus: cx.focus_handle(),
                 document_mode: DocumentMode::Text,
                 card_editors: Vec::new(),
+                dialogue_editors: Vec::new(),
+                tool_inputs: Vec::new(),
+                timeline: VecDeque::with_capacity(60),
                 recovery_epoch: 0,
                 preview_image: None,
                 preview_frame_id: 0,
                 preview_lifecycle: PreviewLifecycle::Off,
                 preview_bounds: Arc::new(Mutex::new(None)),
-                preview_last_render: Instant::now(),
                 _subscriptions: Vec::new(),
             };
             if let PanelContent::Document {
@@ -725,6 +916,7 @@ impl WorkbenchPanel {
                                 position.character as usize,
                             );
                             if changed {
+                                cx.global_mut::<EditorDocuments>().refresh_authoring(&root);
                                 panel.recovery_epoch = panel.recovery_epoch.wrapping_add(1);
                                 let epoch = panel.recovery_epoch;
                                 let document = document_for_change.clone();
@@ -777,6 +969,21 @@ impl WorkbenchPanel {
                     panel._subscriptions.push(change_subscription);
                 }
             }
+            match &panel.content {
+                PanelContent::Characters { .. } => {
+                    for placeholder in ["Character id", "Display name", "Color (optional)"] {
+                        panel.tool_inputs.push(
+                            cx.new(|cx| InputState::new(window, cx).placeholder(placeholder)),
+                        );
+                    }
+                }
+                PanelContent::Scenes { .. } => {
+                    panel
+                        .tool_inputs
+                        .push(cx.new(|cx| InputState::new(window, cx).placeholder("Scene id")));
+                }
+                _ => {}
+            }
             panel.rebuild_card_editors(window, cx);
             if let PanelContent::Preview { root, controller } = &panel.content {
                 let root = root.clone();
@@ -810,18 +1017,66 @@ impl WorkbenchPanel {
                 })
                 .detach();
             }
+            if let PanelContent::Performance { controller, .. } = &panel.content {
+                let controller = controller.clone();
+                cx.spawn(async move |panel, cx| {
+                    loop {
+                        let interval = match controller.snapshot().lifecycle {
+                            PreviewLifecycle::Running | PreviewLifecycle::Starting => {
+                                Duration::from_millis(500)
+                            }
+                            _ => Duration::from_secs(2),
+                        };
+                        cx.background_executor().timer(interval).await;
+                        if panel
+                            .update(cx, |panel, cx| {
+                                let stats = controller.snapshot().frame_stats;
+                                let sample = TimelineSample {
+                                    published: stats.published,
+                                    overwritten: stats.overwritten,
+                                };
+                                if panel.timeline.back().is_none_or(|last| {
+                                    last.published != sample.published
+                                        || last.overwritten != sample.overwritten
+                                }) {
+                                    if panel.timeline.len() == 60 {
+                                        panel.timeline.pop_front();
+                                    }
+                                    panel.timeline.push_back(sample);
+                                    cx.notify();
+                                }
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                })
+                .detach();
+            }
             panel
         });
         if let Some((root, relative)) = registration {
-            cx.global_mut::<EditorDocuments>().register_panel(
-                &root,
-                relative,
-                PanelId::from(panel.entity_id()),
-            );
+            let editor = match &panel.read(cx).content {
+                PanelContent::Document { editor, .. } => Some(editor.downgrade()),
+                _ => None,
+            };
+            let documents = cx.global_mut::<EditorDocuments>();
+            documents.register_panel(&root, relative.clone(), PanelId::from(panel.entity_id()));
+            if let Some(editor) = editor {
+                documents.register_editor(&root, relative, editor);
+            }
         }
         if let Some(root) = preview_registration {
             cx.global_mut::<EditorDocuments>()
                 .set_preview_panel(&root, Some(PanelId::from(panel.entity_id())));
+        }
+        if let Some((root, name)) = tool_registration {
+            cx.global_mut::<EditorDocuments>().set_tool_panel(
+                &root,
+                name,
+                Some(PanelId::from(panel.entity_id())),
+            );
         }
         Ok(panel)
     }
@@ -832,9 +1087,7 @@ impl WorkbenchPanel {
         controller: &PreviewController,
         cx: &mut Context<Self>,
     ) -> bool {
-        controller
-            .set_panel_visible(self.preview_last_render.elapsed() < Duration::from_millis(500));
-        let snapshot = controller.snapshot();
+        let snapshot = controller.take_snapshot();
         let lifecycle_changed = self.preview_lifecycle != snapshot.lifecycle;
         cx.global_mut::<EditorDocuments>()
             .set_diagnostics(root, snapshot.diagnostics.clone());
@@ -845,24 +1098,23 @@ impl WorkbenchPanel {
         if frame.metadata.frame_id == self.preview_frame_id {
             return lifecycle_changed;
         }
-        let Some(mut bytes) = tightly_packed_bgra(&frame) else {
+        let frame = Arc::try_unwrap(frame).unwrap_or_else(|frame| (*frame).clone());
+        let metadata = frame.metadata;
+        let Some(bytes) = take_tightly_packed_bgra(frame) else {
             return lifecycle_changed;
         };
-        for pixel in bytes.chunks_exact_mut(4) {
-            pixel.swap(0, 2);
-        }
-        let Some(buffer) =
-            image::RgbaImage::from_raw(frame.metadata.width, frame.metadata.height, bytes)
+        let Some(buffer) = image::RgbaImage::from_raw(metadata.width, metadata.height, bytes)
         else {
             return lifecycle_changed;
         };
-        self.preview_frame_id = frame.metadata.frame_id;
+        self.preview_frame_id = metadata.frame_id;
         self.preview_image = Some(Arc::new(RenderImage::new([image::Frame::new(buffer)])));
         true
     }
 
     fn rebuild_card_editors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.card_editors.clear();
+        self.dialogue_editors.clear();
         let PanelContent::Document {
             root,
             relative,
@@ -918,6 +1170,180 @@ impl WorkbenchPanel {
             self.card_editors
                 .push(CardNameEditor { scene_index, state });
         }
+
+        let dialogues = dialogues_for_source(relative, document.borrow().contents());
+        for dialogue in dialogues.into_iter().filter(|dialogue| dialogue.editable) {
+            let line = dialogue.line;
+            let state = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .default_value(dialogue.text)
+                    .placeholder("Dialogue")
+            });
+            let document = document.clone();
+            let source_editor = editor.clone();
+            let root = root.clone();
+            let relative = relative.clone();
+            let state_for_change = state.clone();
+            let subscription = cx.subscribe(&state, move |_, _, event: &InputEvent, cx| {
+                if !matches!(event, InputEvent::Change) {
+                    return;
+                }
+                let value = state_for_change.read(cx).value().to_string();
+                let source = document.borrow().contents().to_owned();
+                let current = dialogues_for_source(&relative, &source)
+                    .into_iter()
+                    .find(|dialogue| dialogue.line == line);
+                let result = current
+                    .as_ref()
+                    .ok_or_else(|| "dialogue no longer exists".to_owned())
+                    .and_then(|dialogue| {
+                        replace_dialogue_text(&source, dialogue, &value)
+                            .map_err(|error| error.to_string())
+                    });
+                match result {
+                    Ok(edited) => {
+                        let result = cx.update_window(window_handle, |_, window, cx| {
+                            source_editor.update(cx, |editor, cx| {
+                                editor.replace_all(edited, window, cx);
+                            });
+                        });
+                        let notice = match result {
+                            Ok(()) => "Dialogue updated from visual view".to_owned(),
+                            Err(error) => format!("Dialogue edit failed: {error}"),
+                        };
+                        cx.global_mut::<EditorDocuments>().set_notice(&root, notice);
+                    }
+                    Err(error) => cx
+                        .global_mut::<EditorDocuments>()
+                        .set_notice(&root, format!("Dialogue edit blocked: {error}")),
+                }
+                cx.refresh_windows();
+            });
+            self._subscriptions.push(subscription);
+            self.dialogue_editors
+                .push(DialogueTextEditor { line, state });
+        }
+    }
+
+    fn insert_from_palette(
+        &mut self,
+        kind: InsertKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let PanelContent::Document {
+            root,
+            document: Some(document),
+            editor,
+            ..
+        } = &self.content
+        else {
+            return;
+        };
+        let source = document.borrow().contents().to_owned();
+        let line = document.borrow().selection().line;
+        let index = cx.global::<EditorDocuments>().authoring(root);
+        match insert_statement(&source, line, kind, &index) {
+            Ok(edited) => {
+                editor.update(cx, |editor, cx| editor.replace_all(edited, window, cx));
+                cx.global_mut::<EditorDocuments>().set_notice(
+                    root,
+                    format!("Inserted {} at a source line boundary", kind.label()),
+                );
+            }
+            Err(error) => cx
+                .global_mut::<EditorDocuments>()
+                .set_notice(root, format!("Insert blocked: {error}")),
+        }
+        cx.refresh_windows();
+    }
+
+    fn add_character(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let PanelContent::Characters { root } = &self.content else {
+            return;
+        };
+        if self.tool_inputs.len() != 3 {
+            return;
+        }
+        let id = self.tool_inputs[0].read(cx).value().to_string();
+        let name = self.tool_inputs[1].read(cx).value().to_string();
+        let color = self.tool_inputs[2].read(cx).value().to_string();
+        let index = cx.global::<EditorDocuments>().authoring(root);
+        let Some(path) = index.characters_manifest else {
+            cx.global_mut::<EditorDocuments>()
+                .set_notice(root, "Character manifest is unavailable");
+            return;
+        };
+        let result = cx
+            .global_mut::<EditorDocuments>()
+            .open(root, &path)
+            .map_err(|error| error.to_string())
+            .and_then(|document| {
+                append_character(
+                    document.borrow().contents(),
+                    id.trim(),
+                    name.trim(),
+                    Some(color.trim()),
+                )
+                .map_err(|error| error.to_string())
+            });
+        match result {
+            Ok(edited) => {
+                apply_workspace_edit(root, &path, edited, window, cx);
+                for input in &self.tool_inputs {
+                    input.update(cx, |input, cx| input.set_value("", window, cx));
+                }
+                cx.global_mut::<EditorDocuments>()
+                    .set_notice(root, format!("Added character `{}`", id.trim()));
+            }
+            Err(error) => cx
+                .global_mut::<EditorDocuments>()
+                .set_notice(root, format!("Character edit blocked: {error}")),
+        }
+        cx.refresh_windows();
+    }
+
+    fn add_scene(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let PanelContent::Scenes { root } = &self.content else {
+            return;
+        };
+        let Some(input) = self.tool_inputs.first() else {
+            return;
+        };
+        let id = input.read(cx).value().to_string();
+        let index = cx.global::<EditorDocuments>().authoring(root);
+        let selected = cx
+            .global::<EditorDocuments>()
+            .selection(root)
+            .map(|(path, _, _)| path.clone());
+        let path = selected
+            .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("shou"))
+            .or_else(|| index.scenes.first().map(|scene| scene.path.clone()));
+        let Some(path) = path else {
+            cx.global_mut::<EditorDocuments>()
+                .set_notice(root, "No Eiyashou source is available");
+            return;
+        };
+        let result = cx
+            .global_mut::<EditorDocuments>()
+            .open(root, &path)
+            .map_err(|error| error.to_string())
+            .and_then(|document| {
+                append_scene(document.borrow().contents(), id.trim())
+                    .map_err(|error| error.to_string())
+            });
+        match result {
+            Ok(edited) => {
+                apply_workspace_edit(root, &path, edited, window, cx);
+                input.update(cx, |input, cx| input.set_value("", window, cx));
+                cx.global_mut::<EditorDocuments>()
+                    .set_notice(root, format!("Added scene `{}`", id.trim()));
+            }
+            Err(error) => cx
+                .global_mut::<EditorDocuments>()
+                .set_notice(root, format!("Scene edit blocked: {error}")),
+        }
+        cx.refresh_windows();
     }
 }
 
@@ -936,6 +1362,12 @@ impl BasePanel for WorkbenchPanel {
         }
     }
 
+    fn set_active(&mut self, active: bool, _: &mut Window, _: &mut Context<Self>) {
+        if let PanelContent::Preview { controller, .. } = &self.content {
+            controller.set_panel_visible(active);
+        }
+    }
+
     fn on_removed(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         match &self.content {
             PanelContent::Document { root, relative, .. } => {
@@ -945,13 +1377,30 @@ impl BasePanel for WorkbenchPanel {
                 documents.clear_document_node(root);
             }
             PanelContent::Preview { root, controller } => {
-                self.preview_last_render = Instant::now();
-                controller.set_panel_visible(true);
                 controller.stop();
                 controller.set_panel_visible(false);
                 cx.global_mut::<EditorDocuments>()
                     .set_preview_panel(root, None);
             }
+            PanelContent::Assets { root } => {
+                cx.global_mut::<EditorDocuments>()
+                    .set_tool_panel(root, ASSETS_PANEL, None)
+            }
+            PanelContent::Characters { root } => {
+                cx.global_mut::<EditorDocuments>()
+                    .set_tool_panel(root, CHARACTERS_PANEL, None)
+            }
+            PanelContent::Scenes { root } => {
+                cx.global_mut::<EditorDocuments>()
+                    .set_tool_panel(root, SCENES_PANEL, None)
+            }
+            PanelContent::Problems { root } => {
+                cx.global_mut::<EditorDocuments>()
+                    .set_tool_panel(root, PROBLEMS_PANEL, None)
+            }
+            PanelContent::Performance { root, .. } => cx
+                .global_mut::<EditorDocuments>()
+                .set_tool_panel(root, PERFORMANCE_PANEL, None),
             _ => {}
         }
     }
@@ -1063,43 +1512,103 @@ impl Render for WorkbenchPanel {
                     .into_any_element()
             }
             PanelContent::Document {
+                root,
                 relative,
                 document,
                 editor,
-                ..
             } => {
                 let eiyashou = document.is_some()
                     && relative.extension().and_then(|value| value.to_str()) == Some("shou");
                 let mode = self.document_mode;
-                let header =
-                    eiyashou.then(|| {
-                        let text_selected = mode == DocumentMode::Text;
-                        let card_selected = mode == DocumentMode::Card;
-                        div()
-                            .h(px(34.))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_end()
-                            .gap_1()
-                            .px_2()
-                            .bg(rgb(CHROME))
-                            .child(document_mode_button("Text", text_selected).on_click(
-                                cx.listener(move |this, _, _, cx| {
-                                    this.document_mode = DocumentMode::Text;
-                                    cx.notify();
-                                }),
-                            ))
-                            .child(document_mode_button("Card", card_selected).on_click(
-                                cx.listener(move |this, _, window, cx| {
-                                    this.rebuild_card_editors(window, cx);
-                                    this.document_mode = DocumentMode::Card;
-                                    cx.notify();
-                                }),
-                            ))
-                    });
+                let authoring = cx.global::<EditorDocuments>().authoring(root);
+                let palette_kinds = [
+                    InsertKind::Narration,
+                    InsertKind::Dialogue,
+                    InsertKind::Background,
+                    InsertKind::Figure,
+                    InsertKind::Choice,
+                ]
+                .into_iter()
+                .filter(|kind| match kind {
+                    InsertKind::Narration => true,
+                    InsertKind::Dialogue => !authoring.characters.is_empty(),
+                    InsertKind::Background => authoring
+                        .assets
+                        .iter()
+                        .any(|asset| asset.kind == crate::authoring::AssetKind::Background),
+                    InsertKind::Figure => authoring
+                        .assets
+                        .iter()
+                        .any(|asset| asset.kind == crate::authoring::AssetKind::Figure),
+                    InsertKind::Choice => !authoring.scenes.is_empty(),
+                })
+                .collect::<Vec<_>>();
+                let header = eiyashou.then(|| {
+                    let text_selected = mode == DocumentMode::Text;
+                    let card_selected = mode == DocumentMode::Card;
+                    let dialogue_selected = mode == DocumentMode::Dialogue;
+                    div()
+                        .h(px(34.))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_1()
+                        .px_2()
+                        .bg(rgb(CHROME))
+                        .child(div().flex().gap_1().children(palette_kinds.into_iter().map(
+                            |kind| {
+                                palette_button(kind.label()).on_click(cx.listener(
+                                    move |this, _, window, cx| {
+                                        this.insert_from_palette(kind, window, cx)
+                                    },
+                                ))
+                            },
+                        )))
+                        .child(
+                            div()
+                                .flex()
+                                .gap_1()
+                                .child(document_mode_button("Text", text_selected).on_click(
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.document_mode = DocumentMode::Text;
+                                        cx.notify();
+                                    }),
+                                ))
+                                .child(document_mode_button("Cards", card_selected).on_click(
+                                    cx.listener(move |this, _, window, cx| {
+                                        this.rebuild_card_editors(window, cx);
+                                        this.document_mode = DocumentMode::Card;
+                                        cx.notify();
+                                    }),
+                                ))
+                                .child(
+                                    document_mode_button("Dialogue", dialogue_selected).on_click(
+                                        cx.listener(move |this, _, window, cx| {
+                                            this.rebuild_card_editors(window, cx);
+                                            this.document_mode = DocumentMode::Dialogue;
+                                            cx.notify();
+                                        }),
+                                    ),
+                                ),
+                        )
+                });
                 let body = if eiyashou && mode == DocumentMode::Card {
-                    render_card_projection(document.as_ref().unwrap(), &self.card_editors, cx)
+                    render_card_projection(
+                        root,
+                        relative,
+                        document.as_ref().unwrap(),
+                        &self.card_editors,
+                        cx,
+                    )
+                } else if eiyashou && mode == DocumentMode::Dialogue {
+                    render_dialogue_projection(
+                        root,
+                        relative,
+                        document.as_ref().unwrap(),
+                        &self.dialogue_editors,
+                        cx,
+                    )
                 } else {
                     Editor::new(editor)
                         .appearance(false)
@@ -1107,7 +1616,7 @@ impl Render for WorkbenchPanel {
                         .readonly(document.is_none())
                         .size_full()
                         .relative()
-                        .left(px(-4.))
+                        .left(px(-EDITOR_GUTTER_TRIM_PX))
                         .p_1()
                         .font_family(mono)
                         .text_sm()
@@ -1283,6 +1792,7 @@ impl Render for WorkbenchPanel {
             }
             PanelContent::Inspector { root, file_count } => {
                 let document_count = cx.global::<EditorDocuments>().open_document_count(root);
+                let index = cx.global::<EditorDocuments>().authoring(root);
                 div()
                     .size_full()
                     .flex()
@@ -1294,8 +1804,122 @@ impl Render for WorkbenchPanel {
                     .child(property_row("Text files", file_count.to_string()))
                     .child(property_row("Open documents", document_count.to_string()))
                     .child(section_label("SELECTION"))
-                    .child(selection_summary(root, cx))
+                    .child(selection_summary(root, &index, cx))
                     .into_any_element()
+            }
+            PanelContent::Assets { root } => {
+                render_assets(root, &cx.global::<EditorDocuments>().authoring(root))
+            }
+            PanelContent::Characters { root } => {
+                let index = cx.global::<EditorDocuments>().authoring(root);
+                let inputs = self.tool_inputs.clone();
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .p_2()
+                    .gap_2()
+                    .child(section_label("CHARACTER MANIFEST"))
+                    .when(inputs.len() == 3, |this| {
+                        this.child(tool_input(&inputs[0]))
+                            .child(tool_input(&inputs[1]))
+                            .child(tool_input(&inputs[2]))
+                            .child(tool_action("Add character").on_click(
+                                cx.listener(|this, _, window, cx| this.add_character(window, cx)),
+                            ))
+                    })
+                    .child(div().h(px(1.)).bg(rgb(SURFACE)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .children(index.characters.into_iter().enumerate().map(
+                                |(row, character)| {
+                                    div()
+                                        .id(("character-row", row))
+                                        .p_2()
+                                        .rounded(px(7.))
+                                        .bg(rgb(PANEL))
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(rgb(INK))
+                                                .child(character.name),
+                                        )
+                                        .child(div().text_xs().text_color(rgb(MUTED)).child(
+                                            format!(
+                                                    "{}{}",
+                                                    character.id,
+                                                    character
+                                                        .color
+                                                        .map(|color| format!(" · {color}"))
+                                                        .unwrap_or_default()
+                                                ),
+                                        ))
+                                },
+                            ))
+                            .overflow_scrollbar()
+                            .id("character-list"),
+                    )
+                    .into_any_element()
+            }
+            PanelContent::Scenes { root } => {
+                let index = cx.global::<EditorDocuments>().authoring(root);
+                let input = self.tool_inputs.first().cloned();
+                let root_for_rows = root.clone();
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .p_2()
+                    .gap_2()
+                    .child(section_label("SCENE DECLARATIONS"))
+                    .when_some(input, |this, input| {
+                        this.child(tool_input(&input))
+                            .child(tool_action("Add scene").on_click(
+                                cx.listener(|this, _, window, cx| this.add_scene(window, cx)),
+                            ))
+                    })
+                    .child(div().h(px(1.)).bg(rgb(SURFACE)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .children(index.scenes.into_iter().enumerate().map(|(row, scene)| {
+                                let root = root_for_rows.clone();
+                                let path = scene.path.clone();
+                                let line = scene.line;
+                                div()
+                                    .id(("scene-row", row))
+                                    .p_2()
+                                    .rounded(px(7.))
+                                    .bg(rgb(PANEL))
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                                    .on_click(move |_, window, cx| {
+                                        navigate_source(&root, &path, line, 1, window, cx)
+                                    })
+                                    .child(div().text_sm().text_color(rgb(INK)).child(scene.name))
+                                    .child(div().text_xs().text_color(rgb(MUTED)).child(format!(
+                                        "{}:{}",
+                                        scene.path.display(),
+                                        scene.line
+                                    )))
+                            }))
+                            .overflow_scrollbar()
+                            .id("scene-list"),
+                    )
+                    .into_any_element()
+            }
+            PanelContent::Problems { root } => render_problems(root, cx),
+            PanelContent::Performance { controller, .. } => {
+                render_performance(controller, &self.timeline)
             }
             PanelContent::Output { root, file_count } => div()
                 .size_full()
@@ -1328,7 +1952,7 @@ impl Render for WorkbenchPanel {
     }
 }
 
-fn tightly_packed_bgra(frame: &keine_authoring::OwnedFrame) -> Option<Vec<u8>> {
+fn take_tightly_packed_bgra(frame: keine_authoring::OwnedFrame) -> Option<Vec<u8>> {
     let row_bytes = usize::try_from(frame.metadata.width).ok()?.checked_mul(4)?;
     let stride = usize::try_from(frame.metadata.stride).ok()?;
     let height = usize::try_from(frame.metadata.height).ok()?;
@@ -1336,7 +1960,7 @@ fn tightly_packed_bgra(frame: &keine_authoring::OwnedFrame) -> Option<Vec<u8>> {
         return None;
     }
     if stride == row_bytes {
-        return Some(frame.bytes.clone());
+        return Some(frame.bytes);
     }
     let mut packed = Vec::with_capacity(row_bytes.checked_mul(height)?);
     for row in frame.bytes.chunks_exact(stride) {
@@ -1397,10 +2021,10 @@ fn output_line(label: &'static str, color: u32, value: String) -> impl IntoEleme
 
 fn document_mode_button(label: &'static str, selected: bool) -> Stateful<Div> {
     div()
-        .id(if label == "Text" {
-            "document-mode-text"
-        } else {
-            "document-mode-card"
+        .id(match label {
+            "Text" => "document-mode-text",
+            "Cards" => "document-mode-card",
+            _ => "document-mode-dialogue",
         })
         .h(px(25.))
         .px_2()
@@ -1415,23 +2039,108 @@ fn document_mode_button(label: &'static str, selected: bool) -> Stateful<Div> {
         .child(label)
 }
 
+fn palette_button(label: &'static str) -> Stateful<Div> {
+    div()
+        .id(match label {
+            "Narration" => "insert-narration",
+            "Dialogue" => "insert-dialogue",
+            "Background" => "insert-background",
+            "Figure" => "insert-figure",
+            _ => "insert-choice",
+        })
+        .h(px(25.))
+        .px_2()
+        .flex()
+        .items_center()
+        .rounded(px(6.))
+        .bg(rgb(PANEL))
+        .text_xs()
+        .text_color(rgb(0xafbac5))
+        .cursor_pointer()
+        .hover(|style| style.bg(rgb(SURFACE_HOVER)).text_color(rgb(PRIMARY)))
+        .child(label)
+}
+
+fn tool_input(state: &Entity<InputState>) -> impl IntoElement {
+    div()
+        .h(px(30.))
+        .rounded(px(7.))
+        .bg(rgb(SURFACE))
+        .px_2()
+        .child(
+            Input::new(state)
+                .appearance(false)
+                .bordered(false)
+                .size_full()
+                .text_sm()
+                .text_color(rgb(INK)),
+        )
+}
+
+fn tool_action(label: &'static str) -> Stateful<Div> {
+    div()
+        .id(if label == "Add character" {
+            "add-character"
+        } else {
+            "add-scene"
+        })
+        .h(px(28.))
+        .px_3()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(7.))
+        .bg(rgb(PRIMARY_DIM))
+        .text_xs()
+        .text_color(rgb(PRIMARY))
+        .cursor_pointer()
+        .hover(|style| style.bg(rgb(SURFACE_HOVER)).text_color(rgb(INK)))
+        .child(label)
+}
+
 fn render_card_projection(
+    root: &Path,
+    relative: &Path,
     document: &DocumentHandle,
     editors: &[CardNameEditor],
-    _cx: &App,
+    cx: &mut Context<WorkbenchPanel>,
 ) -> AnyElement {
     let projection = EiyashouProjection::parse(document.borrow().contents());
+    let selected_line = cx
+        .global::<EditorDocuments>()
+        .selection(root)
+        .filter(|(path, _, _)| path == relative)
+        .map(|(_, line, _)| *line);
+    let root = root.to_owned();
+    let relative = relative.to_owned();
     let scene_cards = editors.iter().filter_map(|editor| {
         let scene = projection.scenes.get(editor.scene_index)?;
+        let line = document
+            .borrow()
+            .contents()
+            .get(..scene.name_range.start)
+            .map(|prefix| prefix.bytes().filter(|byte| *byte == b'\n').count())
+            .unwrap_or_default();
+        let root = root.clone();
+        let relative = relative.clone();
         Some(
             div()
+                .id(("scene-card", editor.scene_index))
                 .w_full()
                 .flex()
                 .flex_col()
                 .gap_2()
                 .p_3()
                 .rounded(px(9.))
-                .bg(rgb(PANEL))
+                .bg(rgb(if selected_line == Some(line) {
+                    SURFACE
+                } else {
+                    PANEL
+                }))
+                .cursor_pointer()
+                .on_click(cx.listener(move |_, _, _, cx| {
+                    set_authoring_selection(&root, relative.clone(), line, 0, cx);
+                }))
                 .child(
                     div()
                         .text_xs()
@@ -1496,7 +2205,369 @@ fn render_card_projection(
         .into_any_element()
 }
 
-fn selection_summary(root: &Path, cx: &App) -> AnyElement {
+fn render_dialogue_projection(
+    root: &Path,
+    relative: &Path,
+    document: &DocumentHandle,
+    editors: &[DialogueTextEditor],
+    cx: &mut Context<WorkbenchPanel>,
+) -> AnyElement {
+    let dialogues = dialogues_for_source(relative, document.borrow().contents());
+    let selected_line = cx
+        .global::<EditorDocuments>()
+        .selection(root)
+        .filter(|(path, _, _)| path == relative)
+        .map(|(_, line, _)| *line);
+    let root = root.to_owned();
+    let relative = relative.to_owned();
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .p_2()
+        .children(editors.iter().enumerate().filter_map(|(row, editor)| {
+            let dialogue = dialogues
+                .iter()
+                .find(|dialogue| dialogue.line == editor.line)?;
+            let root = root.clone();
+            let relative = relative.clone();
+            let line = dialogue.line.saturating_sub(1);
+            Some(
+                div()
+                    .id(("dialogue-row", row))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .p_2()
+                    .rounded(px(8.))
+                    .bg(rgb(if selected_line == Some(line) {
+                        SURFACE
+                    } else {
+                        PANEL
+                    }))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        set_authoring_selection(&root, relative.clone(), line, 0, cx);
+                    }))
+                    .child(
+                        div()
+                            .w(px(92.))
+                            .flex_none()
+                            .text_xs()
+                            .text_color(rgb(PRIMARY))
+                            .child(if dialogue.speaker.is_empty() {
+                                "Narration".to_owned()
+                            } else {
+                                dialogue.speaker.clone()
+                            }),
+                    )
+                    .child(
+                        div()
+                            .h(px(30.))
+                            .flex_1()
+                            .rounded(px(7.))
+                            .bg(rgb(SURFACE))
+                            .px_2()
+                            .child(
+                                Input::new(&editor.state)
+                                    .appearance(false)
+                                    .bordered(false)
+                                    .size_full()
+                                    .text_sm()
+                                    .text_color(rgb(INK)),
+                            ),
+                    ),
+            )
+        }))
+        .when(editors.is_empty(), |this| {
+            this.child(
+                div()
+                    .p_3()
+                    .text_sm()
+                    .text_color(rgb(MUTED))
+                    .child("No editable dialogue in this source"),
+            )
+        })
+        .overflow_scrollbar()
+        .id("eiyashou-dialogue-view")
+        .into_any_element()
+}
+
+fn render_assets(root: &Path, index: &AuthoringIndex) -> AnyElement {
+    let root = root.to_owned();
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .p_2()
+        .gap_1()
+        .child(section_label("ASSET BROWSER"))
+        .child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .children(index.assets.iter().enumerate().map(|(row, asset)| {
+                    let root = root.clone();
+                    let path = index
+                        .assets_manifest
+                        .clone()
+                        .unwrap_or_else(|| PathBuf::from("assets.yaml"));
+                    div()
+                        .id(("asset-row", row))
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .p_2()
+                        .rounded(px(7.))
+                        .bg(rgb(PANEL))
+                        .cursor_pointer()
+                        .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                        .on_click(move |_, window, cx| {
+                            navigate_source(&root, &path, 1, 1, window, cx)
+                        })
+                        .child(
+                            div()
+                                .w(px(72.))
+                                .flex_none()
+                                .text_xs()
+                                .text_color(rgb(PRIMARY))
+                                .child(asset.kind.label()),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(div().text_sm().text_color(rgb(INK)).child(asset.id.clone()))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(if asset.exists {
+                                            MUTED
+                                        } else {
+                                            0xdb7780
+                                        }))
+                                        .child(asset.path.display().to_string()),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child(format!("{} refs", asset.reference_count)),
+                        )
+                }))
+                .overflow_scrollbar()
+                .id("asset-list"),
+        )
+        .into_any_element()
+}
+
+fn render_problems(root: &Path, cx: &mut Context<WorkbenchPanel>) -> AnyElement {
+    let index = cx.global::<EditorDocuments>().authoring(root);
+    let runtime = cx.global::<EditorDocuments>().runtime_diagnostics(root);
+    let root = root.to_owned();
+    let authoring_rows = index.problems.into_iter().enumerate().map({
+        let root = root.clone();
+        move |(row, problem)| {
+            let root = root.clone();
+            let path = problem.path.clone();
+            let line = problem.line;
+            let column = problem.column;
+            problem_row(
+                ("authoring-problem", row),
+                match problem.severity {
+                    ProblemSeverity::Warning => 0xd2aa62,
+                    ProblemSeverity::Error => 0xdb7780,
+                },
+                problem.path.display().to_string(),
+                problem.line,
+                problem.column,
+                problem.message,
+            )
+            .on_click(move |_, window, cx| navigate_source(&root, &path, line, column, window, cx))
+        }
+    });
+    let runtime_rows = runtime.into_iter().enumerate().map({
+        let root = root.clone();
+        move |(row, diagnostic)| {
+            let root = root.clone();
+            let path = diagnostic.path.clone();
+            let line = diagnostic.line;
+            let column = diagnostic.column;
+            problem_row(
+                ("runtime-problem", row),
+                match diagnostic.level {
+                    keine_authoring::DiagnosticLevel::Warning => 0xd2aa62,
+                    keine_authoring::DiagnosticLevel::Error => 0xdb7780,
+                },
+                diagnostic.path.display().to_string(),
+                diagnostic.line,
+                diagnostic.column,
+                diagnostic.message,
+            )
+            .on_click(move |_, window, cx| navigate_source(&root, &path, line, column, window, cx))
+        }
+    });
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .p_2()
+        .gap_1()
+        .child(section_label("PARSE · VALIDATION · RUNTIME"))
+        .child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .children(authoring_rows)
+                .children(runtime_rows)
+                .overflow_scrollbar()
+                .id("problem-list"),
+        )
+        .into_any_element()
+}
+
+fn problem_row(
+    id: (&'static str, usize),
+    color: u32,
+    path: String,
+    line: usize,
+    column: usize,
+    message: String,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .p_2()
+        .rounded(px(7.))
+        .bg(rgb(PANEL))
+        .cursor_pointer()
+        .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+        .child(div().text_xs().text_color(rgb(color)).child(message))
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child(format!("{path}:{line}:{column}")),
+        )
+}
+
+fn render_performance(
+    controller: &PreviewController,
+    timeline: &VecDeque<TimelineSample>,
+) -> AnyElement {
+    let snapshot = controller.snapshot();
+    let latest = timeline.back().copied().unwrap_or(TimelineSample {
+        published: snapshot.frame_stats.published,
+        overwritten: snapshot.frame_stats.overwritten,
+    });
+    let deltas = timeline
+        .iter()
+        .zip(timeline.iter().skip(1))
+        .map(|(before, after)| after.published.saturating_sub(before.published))
+        .collect::<Vec<_>>();
+    let peak = deltas.iter().copied().max().unwrap_or(1).max(1);
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .p_3()
+        .gap_3()
+        .child(section_label("PREVIEW TRANSPORT"))
+        .child(property_row(
+            "Published frames",
+            latest.published.to_string(),
+        ))
+        .child(property_row(
+            "Overwritten frames",
+            latest.overwritten.to_string(),
+        ))
+        .child(property_row("Samples", timeline.len().to_string()))
+        .child(
+            div()
+                .h(px(84.))
+                .flex()
+                .items_end()
+                .gap(px(2.))
+                .px_1()
+                .rounded(px(8.))
+                .bg(rgb(0x10151b))
+                .children(deltas.into_iter().map(|delta| {
+                    let height = 4. + (delta as f32 / peak as f32) * 68.;
+                    div()
+                        .w(px(5.))
+                        .h(px(height))
+                        .rounded(px(2.))
+                        .bg(rgb(PRIMARY))
+                })),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child("500 ms transport samples · not CPU/GPU frame time"),
+        )
+        .into_any_element()
+}
+
+fn set_authoring_selection(
+    root: &Path,
+    relative: PathBuf,
+    line: usize,
+    column: usize,
+    cx: &mut App,
+) {
+    cx.global_mut::<EditorDocuments>()
+        .set_selection(root, relative.clone(), line, column);
+    if let Ok(preview) = cx.global_mut::<EditorDocuments>().preview(root) {
+        preview.set_cursor(relative, line + 1, column + 1);
+    }
+    cx.refresh_windows();
+}
+
+fn apply_workspace_edit(
+    root: &Path,
+    relative: &Path,
+    edited: String,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    open_workspace_document(root, relative, window, cx);
+    if let Some(editor) = cx.global::<EditorDocuments>().editor_for(root, relative) {
+        let _ = editor.update(cx, |editor, cx| editor.replace_all(edited, window, cx));
+    }
+}
+
+fn navigate_source(
+    root: &Path,
+    relative: &Path,
+    line: usize,
+    column: usize,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    open_workspace_document(root, relative, window, cx);
+    if let Some(editor) = cx.global::<EditorDocuments>().editor_for(root, relative) {
+        let _ = editor.update(cx, |editor, cx| {
+            editor.set_cursor_position(
+                Position::new(
+                    line.saturating_sub(1) as u32,
+                    column.saturating_sub(1) as u32,
+                ),
+                window,
+                cx,
+            );
+        });
+    }
+}
+
+fn selection_summary(root: &Path, index: &AuthoringIndex, cx: &App) -> AnyElement {
     match cx.global::<EditorDocuments>().selection(root) {
         Some((path, line, column)) => {
             let diagnostics = cx
@@ -1514,6 +2585,19 @@ fn selection_summary(root: &Path, cx: &App) -> AnyElement {
                     ))
                 })
                 .collect::<Vec<_>>();
+            let authoring = match index.selection(path, *line) {
+                AuthoringSelection::Source => "Source selection".to_owned(),
+                AuthoringSelection::Scene(scene) => format!("Scene · {}", scene.name),
+                AuthoringSelection::Dialogue(dialogue) => format!(
+                    "{} · {}",
+                    if dialogue.speaker.is_empty() {
+                        "Narration"
+                    } else {
+                        dialogue.speaker.as_str()
+                    },
+                    dialogue.text
+                ),
+            };
             div()
                 .flex()
                 .flex_col()
@@ -1522,6 +2606,7 @@ fn selection_summary(root: &Path, cx: &App) -> AnyElement {
                 .text_color(rgb(0xb8c4cf))
                 .child(path.display().to_string())
                 .child(format!("Line {}, column {}", line + 1, column + 1))
+                .child(div().text_color(rgb(PRIMARY)).child(authoring))
                 .children(diagnostics)
                 .into_any_element()
         }
@@ -1535,6 +2620,7 @@ fn selection_summary(root: &Path, cx: &App) -> AnyElement {
 
 fn language_for_path(path: &Path) -> &'static str {
     match path.extension().and_then(|extension| extension.to_str()) {
+        Some("shou") => "eiyashou",
         Some("json") => "json",
         Some("yaml" | "yml") => "yaml",
         _ => "plaintext",
@@ -1548,6 +2634,11 @@ fn register_workbench_panels(cx: &mut App) {
         INSPECTOR_PANEL,
         OUTPUT_PANEL,
         PREVIEW_PANEL,
+        ASSETS_PANEL,
+        CHARACTERS_PANEL,
+        SCENES_PANEL,
+        PROBLEMS_PANEL,
+        PERFORMANCE_PANEL,
     ] {
         register_panel(cx, name, |context, window, cx| {
             let panel = workbench_panel(context, window, cx).unwrap_or_else(|error| {
@@ -1690,7 +2781,15 @@ impl EditorTabGroupSkin {
         if panel_name == DOCUMENT_PANEL {
             return None;
         }
-        let is_preview = panel_name == PREVIEW_PANEL;
+        let is_closable_tool = matches!(
+            panel_name,
+            PREVIEW_PANEL
+                | ASSETS_PANEL
+                | CHARACTERS_PANEL
+                | SCENES_PANEL
+                | PROBLEMS_PANEL
+                | PERFORMANCE_PANEL
+        );
         let panel_id = panel.panel_id(cx);
         let close_group = group.clone();
 
@@ -1737,10 +2836,10 @@ impl EditorTabGroupSkin {
                 .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                 .text_color(rgb(0xb8c2cc))
                 .child(title)
-                .when(is_preview, |this| {
+                .when(is_closable_tool, |this| {
                     this.child(
                         div()
-                            .id(("close-preview", node.as_u64()))
+                            .id(("close-tool-view", node.as_u64()))
                             .size(px(24.))
                             .flex()
                             .items_center()
@@ -1902,8 +3001,8 @@ impl TabGroupRenderer for EditorTabGroupSkin {
         self.inner
             .frame(group, window, cx)
             .border_0()
-            .p(px(VIEW_GAP_PX))
-            .rounded(px(VIEW_RADIUS_PX + VIEW_GAP_PX))
+            .p(px(VIEW_INSET_PX))
+            .rounded(px(VIEW_RADIUS_PX + VIEW_INSET_PX))
             .overflow_hidden()
             .bg(rgb(CANVAS))
     }
@@ -1925,6 +3024,7 @@ impl TabGroupRenderer for EditorTabGroupSkin {
             .content_frame(group, window, cx)
             .border_0()
             .rounded_b(px(VIEW_RADIUS_PX))
+            .overflow_hidden()
             .bg(rgb(PANEL))
             .on_drag_move(move |event: &DragMoveEvent<EditorPanelDrag>, _, cx| {
                 let target = event.bounds.contains(&event.event.position).then(|| {
@@ -2008,6 +3108,7 @@ impl TabGroupRenderer for EditorTabGroupSkin {
                 let closable = group.is_closable() && panel.closable(cx);
                 let select_group = group.clone();
                 let close_group = group.clone();
+                let middle_close_group = group.clone();
                 let drop_group = group.clone();
                 let item_drop_group = group.clone();
                 let drag_content_overlays = all_content_overlays.clone();
@@ -2042,6 +3143,7 @@ impl TabGroupRenderer for EditorTabGroupSkin {
                     cx,
                 );
                 let close_motion = self.tab_motion.clone();
+                let middle_close_motion = self.tab_motion.clone();
                 div()
                     .id(("editor-tab", panel_id.as_u64()))
                     .h(px(28.))
@@ -2067,6 +3169,14 @@ impl TabGroupRenderer for EditorTabGroupSkin {
                             .child(title),
                     )
                     .on_click(move |_, window, cx| select_group.select_tab(ix, window, cx))
+                    .when(closable, |this| {
+                        this.on_mouse_down(MouseButton::Middle, move |_, window, cx| {
+                            cx.stop_propagation();
+                            middle_close_motion.update(cx, |motion, cx| {
+                                motion.close(panel_id, middle_close_group.clone(), window, cx);
+                            });
+                        })
+                    })
                     .when_some(drag, |this, drag| {
                         this.on_drag(drag, move |drag, offset, _, cx| {
                             cx.stop_propagation();
@@ -2354,6 +3464,14 @@ fn install_default_layout(
         cx,
     )
     .expect("workspace inspector must be constructible");
+    let preview = WorkbenchPanel::from_payload(
+        PanelPayload::Preview {
+            root: session.root().to_owned(),
+        },
+        window,
+        cx,
+    )
+    .expect("workspace preview must be constructible");
     let output = WorkbenchPanel::from_payload(
         PanelPayload::Output {
             root: session.root().to_owned(),
@@ -2379,8 +3497,16 @@ fn install_default_layout(
             None,
         )
         .child(
-            DockLayout::tabs().panel_view(panel_handle(inspector), cx),
-            Some(px(230.)),
+            DockLayout::v_split()
+                .child(
+                    DockLayout::tabs().panel_view(panel_handle(preview), cx),
+                    None,
+                )
+                .child(
+                    DockLayout::tabs().panel_view(panel_handle(inspector), cx),
+                    None,
+                ),
+            Some(px(520.)),
         );
     dock.update(cx, |dock, cx| dock.set_center(layout, window, cx));
 }
@@ -2596,6 +3722,41 @@ impl WorkbenchWindow {
         cx.refresh_windows();
     }
 
+    fn show_tool(&mut self, kind: ToolKind, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(workspace) = self.workspace.as_ref() else {
+            return;
+        };
+        let root = workspace.session.root().to_owned();
+        let name = kind.panel_name();
+        if let Some(panel) = cx.global::<EditorDocuments>().tool_panel(&root, name) {
+            workspace
+                .dock
+                .update(cx, |dock, cx| dock.select_panel(panel, window, cx));
+            return;
+        }
+        let panel = match WorkbenchPanel::from_payload(kind.payload(root.clone()), window, cx) {
+            Ok(panel) => panel,
+            Err(error) => {
+                cx.global_mut::<EditorDocuments>()
+                    .set_notice(&root, format!("Could not show tool: {error}"));
+                cx.refresh_windows();
+                return;
+            }
+        };
+        let panel_id = PanelId::from(panel.entity_id());
+        workspace.dock.update(cx, |dock, cx| {
+            dock.add_panel_view(
+                panel_handle(panel),
+                DockPlacement::Right,
+                Some(px(340.)),
+                window,
+                cx,
+            );
+            dock.select_panel(panel_id, window, cx);
+        });
+        cx.refresh_windows();
+    }
+
     fn migrate_eiyashou(
         &mut self,
         _: &MigrateEiyashou,
@@ -2742,6 +3903,29 @@ impl WorkbenchWindow {
             cx.global::<EditorDocuments>()
                 .has_dirty_documents(workspace.session.root())
         });
+        let (
+            assets_open,
+            characters_open,
+            scenes_open,
+            problems_open,
+            performance_open,
+            preview_open,
+        ) = self
+            .workspace
+            .as_ref()
+            .map(|workspace| {
+                let root = workspace.session.root();
+                let documents = cx.global::<EditorDocuments>();
+                (
+                    documents.tool_panel(root, ASSETS_PANEL).is_some(),
+                    documents.tool_panel(root, CHARACTERS_PANEL).is_some(),
+                    documents.tool_panel(root, SCENES_PANEL).is_some(),
+                    documents.tool_panel(root, PROBLEMS_PANEL).is_some(),
+                    documents.tool_panel(root, PERFORMANCE_PANEL).is_some(),
+                    documents.preview_panel(root).is_some(),
+                )
+            })
+            .unwrap_or_default();
         let rail = div()
             .id("activity-rail-content")
             .size_full()
@@ -2785,8 +3969,43 @@ impl WorkbenchWindow {
                             .text_color(rgb(PRIMARY)),
                     ),
             )
-            .child(activity_icon("activity-search", IconName::Search))
-            .child(activity_icon("activity-inspector", IconName::Inspector))
+            .child(activity_divider())
+            .when(self.workspace.is_some(), |this| {
+                this.child(
+                    activity_tool("activity-assets", IconName::Palette, assets_open).on_click(
+                        cx.listener(|this, _, window, cx| {
+                            this.show_tool(ToolKind::Assets, window, cx)
+                        }),
+                    ),
+                )
+                .child(
+                    activity_tool("activity-characters", IconName::User, characters_open).on_click(
+                        cx.listener(|this, _, window, cx| {
+                            this.show_tool(ToolKind::Characters, window, cx)
+                        }),
+                    ),
+                )
+                .child(
+                    activity_tool("activity-scenes", IconName::Map, scenes_open).on_click(
+                        cx.listener(|this, _, window, cx| {
+                            this.show_tool(ToolKind::Scenes, window, cx)
+                        }),
+                    ),
+                )
+                .child(activity_divider())
+                .child(
+                    activity_tool("activity-problems", IconName::TriangleAlert, problems_open)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.show_tool(ToolKind::Problems, window, cx)
+                        })),
+                )
+                .child(
+                    activity_tool("activity-performance", IconName::Cpu, performance_open)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.show_tool(ToolKind::Performance, window, cx)
+                        })),
+                )
+            })
             .when(self.workspace.is_some(), |this| {
                 this.child(
                     div()
@@ -2796,32 +4015,16 @@ impl WorkbenchWindow {
                         .items_center()
                         .justify_center()
                         .rounded(px(7.))
+                        .when(preview_open, |style| style.bg(rgb(SURFACE)))
                         .cursor_pointer()
                         .hover(|style| style.bg(rgb(SURFACE_HOVER)))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.toggle_engine(&ToggleEngine, window, cx)
                         }))
-                        .child(Icon::new(IconName::Play).small().text_color(rgb(PRIMARY))),
-                )
-            })
-            .when(self.workspace.is_some(), |this| {
-                this.child(
-                    div()
-                        .id("activity-migrate-eiyashou")
-                        .size(px(30.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(7.))
-                        .cursor_pointer()
-                        .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.migrate_eiyashou(&MigrateEiyashou, window, cx)
-                        }))
                         .child(
-                            Icon::new(IconName::Replace)
+                            Icon::new(IconName::Play)
                                 .small()
-                                .text_color(rgb(0x74818e)),
+                                .text_color(rgb(if preview_open { PRIMARY } else { 0x84919d })),
                         ),
                 )
             })
@@ -2844,25 +4047,45 @@ impl WorkbenchWindow {
                     ),
             )
             .when(self.workspace.is_some(), |this| {
-                this.child(
-                    div()
-                        .id("activity-reset-layout")
-                        .size(px(30.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(7.))
-                        .cursor_pointer()
-                        .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.reset_layout(&ResetLayout, window, cx)
-                        }))
-                        .child(
-                            Icon::new(IconName::RotateCw)
-                                .small()
-                                .text_color(rgb(0x74818e)),
-                        ),
-                )
+                this.child(activity_divider())
+                    .child(
+                        div()
+                            .id("activity-migrate-eiyashou")
+                            .size(px(30.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(7.))
+                            .cursor_pointer()
+                            .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.migrate_eiyashou(&MigrateEiyashou, window, cx)
+                            }))
+                            .child(
+                                Icon::new(IconName::Replace)
+                                    .small()
+                                    .text_color(rgb(0x74818e)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("activity-reset-layout")
+                            .size(px(30.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(7.))
+                            .cursor_pointer()
+                            .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.reset_layout(&ResetLayout, window, cx)
+                            }))
+                            .child(
+                                Icon::new(IconName::RotateCw)
+                                    .small()
+                                    .text_color(rgb(0x74818e)),
+                            ),
+                    )
             });
 
         div()
@@ -2870,7 +4093,7 @@ impl WorkbenchWindow {
             .w(px(42.))
             .h_full()
             .flex_none()
-            .p(px(VIEW_GAP_PX))
+            .p(px(VIEW_INSET_PX))
             .child(rail)
     }
 
@@ -3022,7 +4245,7 @@ impl Render for WorkbenchWindow {
             .size_full()
             .flex()
             .flex_col()
-            .p(px(VIEW_GAP_PX))
+            .p(px(VIEW_INSET_PX))
             .bg(rgb(CANVAS))
             .text_color(rgb(INK))
             .child(
@@ -3037,7 +4260,7 @@ impl Render for WorkbenchWindow {
     }
 }
 
-fn activity_icon(id: &'static str, icon: IconName) -> impl IntoElement {
+fn activity_tool(id: &'static str, icon: IconName, active: bool) -> Stateful<Div> {
     div()
         .id(id)
         .size(px(30.))
@@ -3045,7 +4268,18 @@ fn activity_icon(id: &'static str, icon: IconName) -> impl IntoElement {
         .items_center()
         .justify_center()
         .rounded(px(7.))
-        .child(Icon::new(icon).small().text_color(rgb(0x74818e)))
+        .when(active, |style| style.bg(rgb(SURFACE)))
+        .cursor_pointer()
+        .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+        .child(
+            Icon::new(icon)
+                .small()
+                .text_color(rgb(if active { PRIMARY } else { 0x84919d })),
+        )
+}
+
+fn activity_divider() -> Div {
+    div().w(px(18.)).h(px(1.)).my(px(1.)).bg(rgb(0x27313b))
 }
 
 fn prompt_open_folder(editor: WeakEntity<EditorApp>, cx: &mut App) {

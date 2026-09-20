@@ -27,6 +27,7 @@ git clone https://github.com/maincoretech/keine.git
 cd keine
 cargo validate projects/test-project
 cargo dev projects/test-project
+cargo editor projects/test-project
 ```
 
 Use `cargo run --features hot-reload -- dev projects/test-project` when FFmpeg
@@ -46,9 +47,11 @@ cargo build --release --workspace --bin editor
 | `cargo validate <project>` | Validate a project without opening a window |
 | `cargo dev <project>` | Run a project with development tools and hot reload |
 | `cargo dev <project> --sync` | Follow an open LetsGal project |
+| `cargo editor [project]` | Open the native Editor, optionally with a project |
 | `cargo build --release --workspace --bin editor` | Build the native editor release binary |
 | `cargo assets --pack <project>` | Build only the encrypted Hakutaku resource package |
 | `cargo assets --remap <project> <old=new>...` | Safely migrate converted asset references |
+| `cargo migrate <source-project> <target-project>` | Convert a compatibility project to native Eiyashou |
 | `cargo bundle <project>` | Build a distributable game |
 | `cargo bundle <project> --benchmark` | Build a separate `-benchmark` performance package |
 | `cargo configure` | Configure built-in content adapters and runtime capabilities |
@@ -70,6 +73,12 @@ workflow is:
 3. Iterate with `cargo dev <project>`; add `--sync` for an open LetsGal project.
 4. Build the release with `cargo bundle <project>`.
 5. Run the generated release before distributing the complete output directory.
+
+`cargo migrate <source-project> <target-project>` opens the source through its
+read-only adapter and creates a new native Eiyashou project. The command never
+rewrites the source or an existing target. It fails before publishing output
+when source diagnostics, unsupported compatibility-only semantics, missing
+assets, confinement checks, or native validation prevent a lossless conversion.
 
 The default release is written to `target/bundle/`:
 

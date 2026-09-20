@@ -2,10 +2,9 @@
 
 ## Status
 
-Implementation and automated acceptance are complete in the integration thread. Live Computer Use
-acceptance remains open because the macOS host was locked during the final pass. This task completes
-Phase 4 only; it does not authorize Phase 5 authoring features, a release, a tag, a commit, or a
-push.
+Complete in the integration thread. Automated acceptance passed and the user accepted the live
+macOS Preview behavior on 2026-09-21. This task completes Phase 4 only; it does not authorize
+Phase 5 authoring features, a release, a tag, a commit, or a push.
 
 ## Depends on
 
@@ -22,8 +21,8 @@ stopped preview work sleeps for portable battery use.
 
 ## Required behavior
 
-- Preview is absent by default. Showing the view does not start the Engine; Start is explicit,
-  with only an app-local optional auto-start preference.
+- Preview occupies the upper half of the default right-hand stack above Inspector. Showing the
+  view does not start the Engine; Start is explicit.
 - Moving, splitting, resizing, or restoring the Preview view does not restart a running session.
 - Closing Preview stops the owned session and releases runtime, media, frame transport, and child
   process resources within a bounded wait.
@@ -101,7 +100,6 @@ and live Computer Use acceptance. Stop after the Phase 4 gate.
   `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`,
   `cargo validate projects/test-project`, and `cargo build --workspace --bin keine --bin editor`
   pass.
-- Computer Use could not enumerate native apps because the Mac was locked. P01–P09 window-level
-  interaction, text-input observation while previewing, and the representative live media pass
-  therefore remain the final acceptance gate; they must not be inferred from compilation or the
-  offscreen process test.
+- The user accepted the live macOS Preview pass on 2026-09-21. Cross-platform packaging, DPI,
+  input, and representative hardware coverage remain Phase 7 hardening rather than an open
+  Phase 4 gate.

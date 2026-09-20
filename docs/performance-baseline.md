@@ -1846,3 +1846,41 @@ running. A reliable OS CPU sample and the text-input latency observation still
 require the unlocked real Editor window; the locked host prevented Computer Use
 from performing that part of the acceptance. No compression, GPU sharing, or
 native child-surface change is justified by the current evidence.
+
+### 2026-09-21 editor Preview stability follow-up
+
+The previous Editor inferred Preview visibility from whether GPUI had rendered
+the panel in the last 500 ms. Unchanged reactive UI correctly stopped rendering,
+but that timeout then reported `Hidden`; the status change caused another render
+and resume, producing a repeatable `Live`/`Hidden` pause cycle that also paused
+and resumed audio. The follow-up uses Dock panel activation and window visibility
+as edge-triggered lifecycle inputs instead.
+
+It also changes the production transport to BGRA, transfers each latest frame
+out of the controller once, and limits the Engine to one screenshot readback in
+flight. That removes an Editor-side 1920x1080 clone plus per-pixel red/blue swap
+and prevents obsolete readbacks from competing with the current frame and audio.
+The active target remains 60 Hz; unchanged content may sleep reactively.
+
+On Apple M5 Pro / Metal with the real local LetsGal project, the old debug run
+showed Editor RSS samples of 1,419,584 KiB at 25 seconds and 607,408 KiB at 57
+seconds, with Engine RSS of 119,024 and 127,312 KiB. Those samples occurred while
+the faulty lifecycle repeatedly paused, so their CPU values are not a valid
+throughput baseline. After the fix, at 81 seconds Editor RSS was 161,232 KiB and
+CPU 23.4%; at 57 seconds the Engine was 153,504 KiB and CPU 0.9%. The visible
+Preview remained `Live` across repeated observations, reaching frame 113 with 2
+overwrites instead of returning to `Hidden`. The manual observation proves the
+lifecycle and memory behavior on this host; it does not constitute an automated
+audible-quality measurement.
+
+The existing real-child integration acceptance remained bounded:
+
+```text
+cargo test --test authoring_preview -- --ignored --nocapture
+cycle 1: first frame 216 ms, published 2, overwritten 0
+cycle 2: first frame 155 ms, published 2, overwritten 0
+cycle 3: first frame 155 ms, published 2, overwritten 0
+```
+
+Each pause stayed bounded, each stop removed its mapping and child, and the
+post-test process check found no retained authoring child.

@@ -108,6 +108,26 @@ impl PreviewController {
             .clone()
     }
 
+    /// Returns one coherent state sample and transfers the latest frame to the
+    /// presenter. Old frames stay latest-only instead of being cloned once by
+    /// the snapshot and again into GPUI's image buffer.
+    pub fn take_snapshot(&self) -> PreviewSnapshot {
+        let mut snapshot = self
+            .snapshot
+            .lock()
+            .expect("preview snapshot lock poisoned");
+        PreviewSnapshot {
+            lifecycle: snapshot.lifecycle.clone(),
+            mode: snapshot.mode,
+            revision: snapshot.revision,
+            frame: snapshot.frame.take(),
+            last_frame_at: snapshot.last_frame_at,
+            frame_stats: snapshot.frame_stats,
+            runtime_position: snapshot.runtime_position.clone(),
+            diagnostics: snapshot.diagnostics.clone(),
+        }
+    }
+
     pub fn start(&self) {
         let _ = self.commands.send(PreviewCommand::Start);
     }
@@ -486,6 +506,7 @@ pub fn map_preview_point(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use keine_authoring::{FrameMetadata, PixelFormat};
 
     #[test]
     fn letterbox_mapping_rejects_bars_and_preserves_design_coordinates() {
@@ -516,5 +537,32 @@ mod tests {
     fn only_play_mode_forwards_runtime_input() {
         assert!(!forwards_runtime_input(PreviewMode::Edit));
         assert!(forwards_runtime_input(PreviewMode::Play));
+    }
+
+    #[test]
+    fn presenter_takes_each_latest_frame_only_once() {
+        let (commands, _receiver) = mpsc::channel();
+        let frame = Arc::new(OwnedFrame {
+            metadata: FrameMetadata {
+                project_key: 1,
+                session_generation: 2,
+                document_revision: 3,
+                frame_id: 4,
+                width: 1,
+                height: 1,
+                stride: 4,
+                pixel_format: PixelFormat::Bgra8Srgb,
+            },
+            bytes: vec![1, 2, 3, 4],
+        });
+        let snapshot = Arc::new(Mutex::new(PreviewSnapshot {
+            frame: Some(frame.clone()),
+            ..PreviewSnapshot::default()
+        }));
+        let controller = PreviewController { commands, snapshot };
+
+        let first = controller.take_snapshot().frame.unwrap();
+        assert!(Arc::ptr_eq(&first, &frame));
+        assert!(controller.take_snapshot().frame.is_none());
     }
 }

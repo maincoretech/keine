@@ -299,6 +299,19 @@ impl ContentProject {
             .any(|mount| mount.contains_file(path))
     }
 
+    /// Read one logical asset from the same highest-priority mount used by
+    /// runtime lookup. This keeps publisher tools inside the adapter's
+    /// confinement boundary instead of reaching into source project paths.
+    pub fn read_asset(&self, path: &Path) -> Result<Vec<u8>> {
+        self.sources
+            .iter()
+            .rev()
+            .filter_map(|source| source.asset.as_ref())
+            .find(|mount| mount.contains_file(path))
+            .with_context(|| format!("asset does not exist: {}", path.display()))?
+            .read(path)
+    }
+
     pub fn asset_mounts(&self) -> Vec<ContentMount> {
         self.sources
             .iter()

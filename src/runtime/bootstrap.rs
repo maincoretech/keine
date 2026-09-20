@@ -324,6 +324,19 @@ fn execute_command(
                 anyhow::bail!("asset migration tools are not compiled; run `cargo assets --help`");
             }
         }
+        CliCommand::Migrate { source, target } => {
+            #[cfg(feature = "publisher")]
+            return crate::project_migration::run(
+                &resolve_project_path(source),
+                &resolve_project_path(target),
+                &loader,
+            );
+            #[cfg(not(feature = "publisher"))]
+            {
+                let _ = (source, target);
+                anyhow::bail!("migration tools are not compiled; run `cargo migrate --help`");
+            }
+        }
         CliCommand::Check { project } => (project, ProjectAction::Check),
         CliCommand::Run {
             project,
