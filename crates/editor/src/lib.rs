@@ -11,6 +11,7 @@ pub mod frame_transport;
 pub mod instance;
 pub mod migration;
 pub mod persistence;
+pub mod preview;
 pub mod project_key;
 pub mod projection;
 pub mod workspace;

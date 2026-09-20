@@ -9,7 +9,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use keine_authoring::{
-    Capability, ClientCommand, ClientMessage, LifecycleState, PROTOCOL_VERSION, ServerMessage,
+    Capability, ClientCommand, ClientMessage, FrameTransportDescriptor, LifecycleState,
+    MAX_DOCUMENT_BYTES, PROTOCOL_VERSION, PreviewInput, SNAPSHOT_CHUNK_BYTES, ServerMessage,
     ServerResponse, ValidationReport, read_message, write_message,
 };
 
@@ -120,7 +121,10 @@ impl EngineProcess {
             } if protocol_version == PROTOCOL_VERSION
                 && [
                     Capability::Validate,
-                    Capability::NoFramePreview,
+                    Capability::RawFramePreview,
+                    Capability::SourceSnapshots,
+                    Capability::RuntimeInput,
+                    Capability::SourceCursor,
                     Capability::Lifecycle,
                 ]
                 .iter()
@@ -149,8 +153,91 @@ impl EngineProcess {
         }
     }
 
-    pub fn start(&mut self) -> io::Result<LifecycleState> {
-        self.lifecycle(ClientCommand::Start)
+    pub fn apply_snapshot(
+        &mut self,
+        path: &Path,
+        revision: u64,
+        contents: &[u8],
+    ) -> io::Result<()> {
+        if contents.len() > MAX_DOCUMENT_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "preview document exceeds the 1 MiB protocol limit",
+            ));
+        }
+        match self.request(ClientCommand::BeginDocumentSnapshot {
+            path: path.to_owned(),
+            revision,
+            total_bytes: contents.len() as u32,
+        })? {
+            ServerResponse::SnapshotApplied { document_revision }
+                if document_revision == revision => {}
+            other => return Err(unexpected("snapshot begin", &other)),
+        }
+        for (index, bytes) in contents.chunks(SNAPSHOT_CHUNK_BYTES).enumerate() {
+            match self.request(ClientCommand::AppendDocumentSnapshot {
+                revision,
+                offset: (index * SNAPSHOT_CHUNK_BYTES) as u32,
+                bytes: bytes.to_vec(),
+            })? {
+                ServerResponse::SnapshotApplied { document_revision }
+                    if document_revision == revision => {}
+                other => return Err(unexpected("snapshot chunk", &other)),
+            }
+        }
+        match self.request(ClientCommand::CommitDocumentSnapshot { revision })? {
+            ServerResponse::SnapshotApplied { document_revision }
+                if document_revision == revision =>
+            {
+                Ok(())
+            }
+            other => Err(unexpected("snapshot commit", &other)),
+        }
+    }
+
+    pub fn start_preview(
+        &mut self,
+        transport: FrameTransportDescriptor,
+        document_revision: u64,
+    ) -> io::Result<LifecycleState> {
+        self.lifecycle(ClientCommand::StartPreview {
+            transport,
+            document_revision,
+        })
+    }
+
+    pub fn apply_patch(
+        &mut self,
+        path: &Path,
+        base_revision: u64,
+        revision: u64,
+        range: std::ops::Range<usize>,
+        replacement: &[u8],
+    ) -> io::Result<()> {
+        let start = u32::try_from(range.start).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "preview patch start exceeds u32",
+            )
+        })?;
+        let end = u32::try_from(range.end).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidInput, "preview patch end exceeds u32")
+        })?;
+        match self.request(ClientCommand::ApplyDocumentPatch {
+            path: path.to_owned(),
+            base_revision,
+            revision,
+            start,
+            end,
+            replacement: replacement.to_vec(),
+        })? {
+            ServerResponse::SnapshotApplied { document_revision }
+                if document_revision == revision =>
+            {
+                Ok(())
+            }
+            other => Err(unexpected("document patch", &other)),
+        }
     }
 
     pub fn pause(&mut self) -> io::Result<LifecycleState> {
@@ -163,6 +250,41 @@ impl EngineProcess {
 
     pub fn stop(&mut self) -> io::Result<LifecycleState> {
         self.lifecycle(ClientCommand::Stop)
+    }
+
+    pub fn input(&mut self, document_revision: u64, event: PreviewInput) -> io::Result<()> {
+        match self.request(ClientCommand::Input {
+            document_revision,
+            event,
+        })? {
+            ServerResponse::InputAccepted {
+                document_revision: accepted,
+            } if accepted == document_revision => Ok(()),
+            other => Err(unexpected("input acknowledgement", &other)),
+        }
+    }
+
+    pub fn set_execution_cursor(
+        &mut self,
+        document_revision: u64,
+        path: &Path,
+        line: usize,
+        column: usize,
+    ) -> io::Result<(PathBuf, usize, usize)> {
+        match self.request(ClientCommand::SetExecutionCursor {
+            document_revision,
+            path: path.to_owned(),
+            line,
+            column,
+        })? {
+            ServerResponse::SourceLocation {
+                document_revision: accepted,
+                path,
+                line,
+                column,
+            } if accepted == document_revision => Ok((path, line, column)),
+            other => Err(unexpected("source location", &other)),
+        }
     }
 
     pub fn shutdown(&mut self) -> io::Result<()> {

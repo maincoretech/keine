@@ -18,14 +18,14 @@ use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 use bevy::prelude::*;
 use bevy::render::diagnostic::RenderDiagnosticsPlugin;
 use bevy::window::{PrimaryWindow, WindowResolution};
-use bevy::winit::WINIT_WINDOWS;
+use bevy::winit::{WINIT_WINDOWS, WinitPlugin};
 use keine_core::config::GameConfig;
 use keine_core::{Action, DESIGN_HEIGHT, DESIGN_WIDTH, Program, State};
 #[cfg(feature = "hot-reload")]
 use keine_loader::ScriptWatcher;
 use keine_loader::{
-    ContentProject, DiagnosticLevel, LoaderRegistry, load_project_with, load_scenes_with,
-    load_startup_scenes_with,
+    ContentProject, DiagnosticLevel, LoaderRegistry, SourceMount, load_project_with,
+    load_scenes_with, load_startup_scenes_with,
 };
 
 use crate::render::blur::{BlurCamera, BlurPlugin, DialogCamera, SceneBlurCamera, UiBlurCamera};
@@ -133,7 +133,7 @@ const PORTABLE_BENCHMARK_SECTIONS: &[BenchmarkSection] = &[
     ),
 ];
 
-#[derive(Clone, Default)]
+#[derive(Default)]
 struct LaunchOptions {
     development: bool,
     editor_sync: bool,
@@ -141,6 +141,7 @@ struct LaunchOptions {
     startup_capture: Option<crate::ui::performance::StartupCapture>,
     hidden_window: bool,
     video: crate::scene::video::VideoSelection,
+    authoring_preview: Option<super::preview::AuthoringPreviewConfig>,
 }
 
 #[derive(SystemParam)]
@@ -252,7 +253,7 @@ fn execute_command(
     super::platform::apply_hardening();
     let (project_path, action) = match command {
         CliCommand::AuthoringHost { endpoint, token } => {
-            return super::authoring::run(&endpoint, &token, loader);
+            return super::authoring::run(&endpoint, &token, loader, video);
         }
         #[cfg(feature = "configure")]
         CliCommand::Configure => {
@@ -387,6 +388,7 @@ fn execute_command(
             hidden_window: startup_capture.is_some()
                 || std::env::var_os(RUNTIME_BENCHMARK_CHILD_ENV).is_some(),
             video,
+            authoring_preview: None,
         },
     );
     if let Some(capture) = startup_capture {
@@ -1148,6 +1150,49 @@ pub fn build_app_with_loader(
     ))
 }
 
+pub(crate) fn build_authoring_preview_app(
+    project_path: &Path,
+    overlay_root: Option<&Path>,
+    loader: &LoaderRegistry,
+    video: crate::scene::video::VideoSelection,
+    preview: super::preview::AuthoringPreviewConfig,
+) -> Result<App> {
+    let OpenedProject {
+        root: project_root,
+        config,
+        mut content,
+        packaged,
+    } = open_project(project_path, loader)?;
+    if let Some(overlay_root) = overlay_root {
+        let mut overlay = SourceMount::project("authoring-preview", overlay_root.to_owned());
+        overlay.asset = None;
+        content.sources.push(overlay);
+    }
+    let languages = loader
+        .languages(&config.adapter.script)
+        .context("failed to select script adapter")?;
+    let store = loader
+        .store(&config.adapter.store)
+        .context("failed to select store adapter")?;
+    let persistence_root =
+        crate::storage::persistence_root(&project_root, &config.project, packaged)?;
+    Ok(build_opened_app(
+        project_root,
+        persistence_root,
+        config,
+        content,
+        languages,
+        store,
+        LaunchOptions {
+            editor_sync: true,
+            hidden_window: true,
+            video,
+            authoring_preview: Some(preview),
+            ..default()
+        },
+    ))
+}
+
 fn build_opened_app(
     project_root: PathBuf,
     persistence_root: PathBuf,
@@ -1174,36 +1219,41 @@ fn build_opened_app(
     // Retina/HiDPI monitors. Studio sync is a normal independent window; no
     // host overlay or focus interception is involved.
     initial_resolution.set_scale_factor_override(Some(1.0));
-    app.add_plugins(
-        DefaultPlugins
-            .build()
-            .set(AssetPlugin {
-                watch_for_changes_override: Some(watch_assets),
-                ..default()
-            })
-            .set(WindowPlugin {
-                primary_window: Some(Window {
-                    title: config.title.clone(),
-                    resolution: initial_resolution,
-                    // Startup reports keep the real winit window and wgpu
-                    // surface but hide them from the desktop/taskbar. A truly
-                    // headless render target would omit the startup costs this
-                    // benchmark is intended to measure.
-                    visible: !options.hidden_window,
-                    ..default()
-                }),
-                // Keep the native window alive until the shutdown pipeline has
-                // flushed persistence. Despawning it immediately can race the
-                // final winit `Destroyed` event and produce an unknown-window
-                // warning during an otherwise successful exit.
-                close_when_requested: false,
-                ..default()
-            })
-            .set(ImagePlugin::default())
-            .set(super::platform::log_plugin(
-                options.benchmark.is_some() || options.startup_capture.is_some(),
-            )),
-    );
+    let authoring_preview = options.authoring_preview.is_some();
+    let window_plugin = WindowPlugin {
+        primary_window: (!authoring_preview).then(|| Window {
+            title: config.title.clone(),
+            resolution: initial_resolution,
+            // Startup reports keep the real winit window and wgpu
+            // surface but hide them from the desktop/taskbar. A truly
+            // headless render target would omit the startup costs this
+            // benchmark is intended to measure.
+            visible: !options.hidden_window,
+            ..default()
+        }),
+        // Keep the native window alive until the shutdown pipeline has
+        // flushed persistence. Despawning it immediately can race the
+        // final winit `Destroyed` event and produce an unknown-window
+        // warning during an otherwise successful exit.
+        close_when_requested: false,
+        ..default()
+    };
+    let plugins = DefaultPlugins
+        .build()
+        .set(AssetPlugin {
+            watch_for_changes_override: Some(watch_assets),
+            ..default()
+        })
+        .set(window_plugin)
+        .set(ImagePlugin::default())
+        .set(super::platform::log_plugin(
+            options.benchmark.is_some() || options.startup_capture.is_some(),
+        ));
+    if authoring_preview {
+        app.add_plugins(plugins.disable::<WinitPlugin>());
+    } else {
+        app.add_plugins(plugins);
+    }
     #[cfg(feature = "audio-opus")]
     app.add_plugins(crate::runtime::audio::OpusAudioPlugin::new(asset_mounts));
     #[cfg(feature = "audio-seekable")]
@@ -1220,10 +1270,16 @@ fn build_opened_app(
     .insert_resource(ScriptLanguages(languages))
     .insert_resource(StoreCodec(store))
     .insert_resource(GameConfigResource(config))
-    .add_systems(PreStartup, bootstrap_project)
-    .add_systems(PostStartup, set_primary_window_icon);
+    .add_systems(PreStartup, bootstrap_project);
+    if !authoring_preview {
+        app.add_systems(PostStartup, set_primary_window_icon);
+    }
     if options.editor_sync {
         app.init_resource::<EditorSyncSession>();
+    }
+    if let Some(preview) = options.authoring_preview {
+        app.init_resource::<PersistenceDisabled>();
+        app.add_plugins(super::preview::AuthoringPreviewPlugin::new(preview));
     }
     if options.development {
         app.init_resource::<DevelopmentSession>();
@@ -1564,6 +1620,7 @@ fn bootstrap_project(
                 manifest.insert(
                     scene.name.clone(),
                     LocalSceneAssets {
+                        source_path: scene.path.clone(),
                         resources: scene.resources,
                         sub_scenes: scene.sub_scenes,
                         action_spans: scene.action_spans,

@@ -84,8 +84,9 @@ pub struct PersistenceDisabled;
 #[derive(Resource, Default, Deref, DerefMut)]
 pub struct LocalAssetManifest(pub HashMap<String, LocalSceneAssets>);
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct LocalSceneAssets {
+    pub source_path: PathBuf,
     pub resources: Vec<ResourceRef>,
     pub sub_scenes: Vec<SceneRef>,
     pub action_spans: Vec<keine_loader::SourceSpan>,

@@ -521,6 +521,7 @@ fn build_hot_reload(
         manifest.insert(
             scene.name.clone(),
             LocalSceneAssets {
+                source_path: scene.path.clone(),
                 resources: scene.resources,
                 sub_scenes: scene.sub_scenes,
                 action_spans: scene.action_spans,
@@ -691,6 +692,45 @@ fn sync_editor_position(
     preview.stage_revision = state.stage_revision.wrapping_add(1);
     *state = preview;
     true
+}
+
+pub(crate) fn sync_editor_source_position(
+    content: &keine_loader::ContentProject,
+    state: &mut State,
+    asset_manifest: &LocalAssetManifest,
+    source_path: &std::path::Path,
+    source_line: usize,
+) -> bool {
+    let logical = source_path.strip_prefix("scripts").unwrap_or(source_path);
+    let candidate = asset_manifest
+        .iter()
+        .filter(|(_, scene)| {
+            scene.source_path == source_path
+                || scene.source_path == logical
+                || source_path.ends_with(&scene.source_path)
+                || scene.source_path.ends_with(logical)
+        })
+        .filter_map(|(name, scene)| {
+            let distance = scene
+                .action_spans
+                .iter()
+                .map(|span| span.line.abs_diff(source_line))
+                .min()?;
+            Some((distance, name.as_str()))
+        })
+        .min_by_key(|(distance, _)| *distance)
+        .map(|(_, name)| name);
+    let Some(scene_name) = candidate else {
+        log::warn!(
+            "editor selected source {} with no runtime scene",
+            source_path.display()
+        );
+        return false;
+    };
+    let Ok(initial) = content.initial_state() else {
+        return false;
+    };
+    sync_editor_position(state, asset_manifest, scene_name, source_line, initial)
 }
 
 const MAX_EDITOR_REPLAY_STEPS: usize = 65_536;

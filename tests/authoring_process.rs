@@ -5,8 +5,8 @@ use std::process::Command;
 use std::time::Duration;
 
 use keine_authoring::{
-    ClientCommand, ClientMessage, ErrorCode, LifecycleState, PROTOCOL_VERSION, ServerMessage,
-    ServerResponse, read_message, write_message,
+    ClientCommand, ClientMessage, ErrorCode, PROTOCOL_VERSION, ServerMessage, ServerResponse,
+    read_message, write_message,
 };
 use keine_editor::engine::EngineProcess;
 
@@ -19,16 +19,12 @@ fn project() -> PathBuf {
 }
 
 #[test]
-fn editor_and_engine_complete_the_phase3_control_lifecycle() {
+fn editor_and_engine_complete_the_control_handshake() {
     let mut process = EngineProcess::launch(&engine(), &project(), 41).unwrap();
     process.ping().unwrap();
     let report = process.validate().unwrap();
     assert_eq!(report.errors, 0, "{:#?}", report.diagnostics);
     assert!(report.scenes > 0);
-    assert_eq!(process.start().unwrap(), LifecycleState::Running);
-    assert_eq!(process.pause().unwrap(), LifecycleState::Paused);
-    assert_eq!(process.resume().unwrap(), LifecycleState::Running);
-    assert_eq!(process.stop().unwrap(), LifecycleState::Stopped);
     process.shutdown().unwrap();
 }
 
@@ -38,6 +34,16 @@ fn one_crashed_engine_does_not_break_another_project_session() {
     let mut second = EngineProcess::launch(&engine(), &project(), 102).unwrap();
     first.kill_for_test().unwrap();
     second.ping().unwrap();
+    second.shutdown().unwrap();
+}
+
+#[test]
+fn stopping_one_project_session_does_not_break_another() {
+    let mut first = EngineProcess::launch(&engine(), &project(), 201).unwrap();
+    let mut second = EngineProcess::launch(&engine(), &project(), 202).unwrap();
+    first.stop().unwrap();
+    second.ping().unwrap();
+    first.shutdown().unwrap();
     second.shutdown().unwrap();
 }
 

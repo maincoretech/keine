@@ -48,8 +48,14 @@
   remain typed across `.shou` file boundaries after mount overrides are resolved. An
   explicit preview-before-apply command only renames already-valid legacy Eiyashou `.txt` sources;
   it never translates compatibility input. The bounded binary authoring protocol launches one
-  prebuilt Engine child per project for handshake, validation, diagnostics, and no-frame lifecycle
-  control. The editor remains excluded from the root Engine's default build.
+  prebuilt Engine child per project for handshake, validation, diagnostics, source snapshots and
+  patches, source/runtime cursor exchange, lifecycle, runtime input, and real embedded Preview.
+  Preview is an explicit singleton view with independent Show and Start actions, Edit/Play input
+  scopes, visibility pause, and bounded Stop/Close cleanup. The Engine owns the normal three-camera
+  composition in a hidden 1920x1080 target and publishes raw frames through a project/session/
+  revision-checked latest-frame-wins shared-memory triple buffer; the Editor only letterboxes and
+  uploads the newest complete frame. The editor remains excluded from the root Engine's default
+  build.
 
 ## Architecture and interfaces
 
@@ -125,11 +131,10 @@ project / package
   anticipation of them.
 - Windows/Linux video remains software-decoded RGBA upload. Hardware decode or zero-copy work
   requires real target hardware, distribution, and device-loss evidence first.
-- The Editor's shared-memory mapping, GPUI frame upload, complete Preview view, live document
-  snapshot/patch flow, runtime input forwarding, and adaptive preview scheduling are not
-  implemented. Phase 0 selects a raw
-  latest-frame-wins triple buffer; a native child surface or compression requires end-to-end
-  release evidence.
+- Editor Phase 4 native-window visual acceptance remains open on an unlocked macOS desktop, along
+  with representative live audio/video and cross-platform GPU/GUI evidence. Native child surfaces,
+  frame compression, and GPU sharing remain unapproved unless end-to-end evidence identifies the
+  raw triple buffer as the bottleneck.
 - Eiyashou v1 intentionally does not expose the deferred advanced runtime surface listed in its
   language reference: camera/post-process/particle timelines, arbitrary code execution, runtime UI
   skinning, import systems, dynamic Live2D/Spine/GIF authoring, SE loop/pan, or non-blocking video.
@@ -189,7 +194,15 @@ project / package
   a hidden Engine authoring-host mode. The Editor directly launches a prebuilt Engine executable,
   validates version/capabilities, opens and validates one project per child, exposes source
   diagnostics and no-frame lifecycle, and performs bounded shutdown. Process tests cover protocol
-  mismatch and two isolated sessions; frame transport remains Phase 4.
+  mismatch and two isolated sessions. Phase 4 extends this boundary without moving rendering into
+  the Editor process.
+- Editor Phase 4 implements the real embedded Preview path without a second Engine OS window. The
+  file-backed 1920x1080 RGBA triple buffer reserves three fixed slots (about 23.7 MiB), validates
+  project/session/revision metadata, and drops stale frames instead of queueing latency. On Apple
+  M5 Pro / Metal, three automated Start/Pause/Resume/Stop cycles produced a visible composited frame
+  in 142–161 ms, showed no frame overwrite, bounded paused publication to the three in-flight
+  captures, removed every mapping, and left no authoring child process. The final real Editor
+  window pass is still pending because Computer Use found the Mac locked.
 
 ## Active task queue
 
@@ -198,6 +211,7 @@ project / package
 | [T13](tasks/T13-native-dsl-adapter.md) | complete | Eiyashou adapter and typed core boundary |
 | [T14](tasks/T14-release-source-exclusion.md) | complete | compiled-only Hakutaku release content |
 | [T15](tasks/T15-eiyashou-editor-projection.md) | complete | source-first Editor projection and explicit migration |
+| [T16](tasks/T16-editor-phase4-preview.md) | visual acceptance | real embedded Preview and bounded raw frame transport |
 | [T03](tasks/T03-ui-visual-baseline.md) | user acceptance | UI and cross-platform visual evidence |
 
 ## Canonical references

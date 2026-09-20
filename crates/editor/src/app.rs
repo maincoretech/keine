@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use gpui_kit::base::motion::{Transition, transition};
 use gpui_kit::base::{Placement, ResizeHandleContext};
@@ -20,18 +20,19 @@ use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, Theme,
 use gpui_kit::{
     AnyElement, AnyView, App, AppContext as _, Axis, Bounds, Context, Div, DragMoveEvent, Empty,
     Entity, EventEmitter, FocusHandle, Focusable, Global, Hsla, IntoElement, KeyBinding,
-    PathPromptOptions, Pixels, Point, PromptButton, PromptLevel, Render, SharedString, Stateful,
-    Subscription, WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, actions, div,
-    hsla, linear_color_stop, linear_gradient, prelude::*, px, rgb, size,
+    MouseButton, ObjectFit, PathPromptOptions, Pixels, Point, PromptButton, PromptLevel, Render,
+    RenderImage, SharedString, Stateful, Subscription, WeakEntity, Window, WindowBounds,
+    WindowHandle, WindowOptions, actions, canvas, div, hsla, img, linear_color_stop,
+    linear_gradient, prelude::*, px, rgb, size,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::app_data::APP_ID;
 use crate::document::{DocumentHandle, DocumentManager, SaveError, is_eiyashou_authoring_document};
-use crate::engine::{EngineLocator, EngineProcess};
 use crate::instance::{InstanceReceiver, PrimaryInstance, Startup, acquire_or_forward};
 use crate::migration::MigrationPlan;
 use crate::persistence::AppPersistence;
+use crate::preview::{PreviewController, PreviewLifecycle, PreviewMode, map_preview_point};
 use crate::project_key::ProjectKey;
 use crate::projection::EiyashouProjection;
 use crate::workspace::{WorkspaceFile, WorkspaceSession};
@@ -51,11 +52,13 @@ const LAYOUT_SCHEMA: usize = 1;
 const VIEW_GAP_PX: f32 = 2.;
 const VIEW_RADIUS_PX: f32 = 9.;
 const TAB_MOTION_DURATION: Duration = Duration::from_millis(140);
+const PREVIEW_POLL_INTERVAL: Duration = Duration::from_millis(16);
 
 const EXPLORER_PANEL: &str = "keine.editor.explorer";
 const DOCUMENT_PANEL: &str = "keine.editor.document";
 const INSPECTOR_PANEL: &str = "keine.editor.inspector";
 const OUTPUT_PANEL: &str = "keine.editor.output";
+const PREVIEW_PANEL: &str = "keine.editor.preview";
 
 actions!(
     keine_editor,
@@ -164,6 +167,8 @@ struct WorkspaceDocuments {
     dock: Option<WeakEntity<DockArea>>,
     document_node: Option<NodeId>,
     panels: HashMap<PathBuf, PanelId>,
+    preview: Arc<PreviewController>,
+    preview_panel: Option<PanelId>,
 }
 
 struct EditorDocuments {
@@ -197,6 +202,8 @@ impl EditorDocuments {
                     dock: None,
                     document_node: None,
                     panels: HashMap::new(),
+                    preview: PreviewController::new(key),
+                    preview_panel: None,
                 },
             );
         }
@@ -323,6 +330,48 @@ impl EditorDocuments {
             diagnostic.path == relative || diagnostic.path.ends_with(relative)
         })
     }
+
+    fn preview(&mut self, root: &Path) -> io::Result<Arc<PreviewController>> {
+        Ok(self.ensure_workspace(root)?.preview.clone())
+    }
+
+    fn preview_documents(&self, root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        let Ok(key) = ProjectKey::from_path(root) else {
+            return Vec::new();
+        };
+        let Some(workspace) = self.workspaces.get(key.path()) else {
+            return Vec::new();
+        };
+        workspace
+            .manager
+            .documents()
+            .filter_map(|document| {
+                let document = document.borrow();
+                (document
+                    .relative_path()
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    == Some("shou"))
+                .then(|| {
+                    (
+                        document.relative_path().to_owned(),
+                        document.contents().as_bytes().to_vec(),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    fn preview_panel(&self, root: &Path) -> Option<PanelId> {
+        let key = ProjectKey::from_path(root).ok()?;
+        self.workspaces.get(key.path())?.preview_panel
+    }
+
+    fn set_preview_panel(&mut self, root: &Path, panel: Option<PanelId>) {
+        if let Ok(workspace) = self.ensure_workspace(root) {
+            workspace.preview_panel = panel;
+        }
+    }
 }
 
 struct EditorApp {
@@ -429,6 +478,7 @@ enum PanelPayload {
     Document { root: PathBuf, relative: PathBuf },
     Inspector { root: PathBuf },
     Output { root: PathBuf },
+    Preview { root: PathBuf },
 }
 
 #[derive(Clone)]
@@ -450,6 +500,10 @@ enum PanelContent {
     Output {
         root: PathBuf,
         file_count: usize,
+    },
+    Preview {
+        root: PathBuf,
+        controller: Arc<PreviewController>,
     },
 }
 
@@ -512,6 +566,11 @@ impl PanelContent {
                         file_count: 0,
                     })
                 }),
+            PanelPayload::Preview { root } => {
+                let controller = cx.global_mut::<EditorDocuments>().preview(&root)?;
+                controller.set_panel_visible(true);
+                Ok(Self::Preview { root, controller })
+            }
         }
     }
 
@@ -524,6 +583,7 @@ impl PanelContent {
             },
             Self::Inspector { root, .. } => PanelPayload::Inspector { root: root.clone() },
             Self::Output { root, .. } => PanelPayload::Output { root: root.clone() },
+            Self::Preview { root, .. } => PanelPayload::Preview { root: root.clone() },
         }
     }
 
@@ -533,6 +593,7 @@ impl PanelContent {
             Self::Document { .. } => DOCUMENT_PANEL,
             Self::Inspector { .. } => INSPECTOR_PANEL,
             Self::Output { .. } => OUTPUT_PANEL,
+            Self::Preview { .. } => PREVIEW_PANEL,
         }
     }
 
@@ -547,6 +608,7 @@ impl PanelContent {
                 .into(),
             Self::Inspector { .. } => "Inspector".into(),
             Self::Output { .. } => "Output".into(),
+            Self::Preview { .. } => "Preview".into(),
         }
     }
 }
@@ -557,6 +619,11 @@ struct WorkbenchPanel {
     document_mode: DocumentMode,
     card_editors: Vec<CardNameEditor>,
     recovery_epoch: u64,
+    preview_image: Option<Arc<RenderImage>>,
+    preview_frame_id: u64,
+    preview_lifecycle: PreviewLifecycle,
+    preview_bounds: Arc<Mutex<Option<Bounds<Pixels>>>>,
+    preview_last_render: Instant,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -583,6 +650,10 @@ impl WorkbenchPanel {
             PanelContent::Document { root, relative, .. } => Some((root.clone(), relative.clone())),
             _ => None,
         };
+        let preview_registration = match &content {
+            PanelContent::Preview { root, .. } => Some(root.clone()),
+            _ => None,
+        };
         let panel = cx.new(|cx| {
             let mut panel = Self {
                 content,
@@ -590,6 +661,11 @@ impl WorkbenchPanel {
                 document_mode: DocumentMode::Text,
                 card_editors: Vec::new(),
                 recovery_epoch: 0,
+                preview_image: None,
+                preview_frame_id: 0,
+                preview_lifecycle: PreviewLifecycle::Off,
+                preview_bounds: Arc::new(Mutex::new(None)),
+                preview_last_render: Instant::now(),
                 _subscriptions: Vec::new(),
             };
             if let PanelContent::Document {
@@ -614,6 +690,16 @@ impl WorkbenchPanel {
                             position.line as usize,
                             position.character as usize,
                         );
+                        if let Ok(preview) = cx
+                            .global_mut::<EditorDocuments>()
+                            .preview(&root_for_selection)
+                        {
+                            preview.set_cursor(
+                                relative_for_selection.clone(),
+                                position.line as usize + 1,
+                                position.character as usize + 1,
+                            );
+                        }
                         cx.refresh_windows();
                     }));
                 if let Some(document) = document {
@@ -643,6 +729,7 @@ impl WorkbenchPanel {
                                 let epoch = panel.recovery_epoch;
                                 let document = document_for_change.clone();
                                 let root = root.clone();
+                                let relative = relative.clone();
                                 cx.global_mut::<EditorDocuments>()
                                     .set_notice(&root, "Unsaved changes");
                                 cx.spawn(async move |panel, cx| {
@@ -660,6 +747,23 @@ impl WorkbenchPanel {
                                                 };
                                             cx.global_mut::<EditorDocuments>()
                                                 .set_notice(&root, notice);
+                                            if relative
+                                                .extension()
+                                                .and_then(|extension| extension.to_str())
+                                                == Some("shou")
+                                                && let Ok(preview) = cx
+                                                    .global_mut::<EditorDocuments>()
+                                                    .preview(&root)
+                                            {
+                                                preview.apply_snapshot(
+                                                    relative.clone(),
+                                                    document
+                                                        .borrow()
+                                                        .contents()
+                                                        .as_bytes()
+                                                        .to_vec(),
+                                                );
+                                            }
                                             cx.refresh_windows();
                                         }
                                     });
@@ -674,6 +778,38 @@ impl WorkbenchPanel {
                 }
             }
             panel.rebuild_card_editors(window, cx);
+            if let PanelContent::Preview { root, controller } = &panel.content {
+                let root = root.clone();
+                let controller = controller.clone();
+                cx.spawn(async move |panel, cx| {
+                    loop {
+                        let snapshot = controller.snapshot();
+                        let interval = if matches!(
+                            snapshot.lifecycle,
+                            PreviewLifecycle::Starting | PreviewLifecycle::Running
+                        ) && snapshot
+                            .last_frame_at
+                            .is_some_and(|instant| instant.elapsed() < Duration::from_millis(250))
+                        {
+                            PREVIEW_POLL_INTERVAL
+                        } else {
+                            Duration::from_millis(250)
+                        };
+                        cx.background_executor().timer(interval).await;
+                        if panel
+                            .update(cx, |panel, cx| {
+                                if panel.refresh_preview(&root, &controller, cx) {
+                                    cx.notify();
+                                }
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                })
+                .detach();
+            }
             panel
         });
         if let Some((root, relative)) = registration {
@@ -683,7 +819,46 @@ impl WorkbenchPanel {
                 PanelId::from(panel.entity_id()),
             );
         }
+        if let Some(root) = preview_registration {
+            cx.global_mut::<EditorDocuments>()
+                .set_preview_panel(&root, Some(PanelId::from(panel.entity_id())));
+        }
         Ok(panel)
+    }
+
+    fn refresh_preview(
+        &mut self,
+        root: &Path,
+        controller: &PreviewController,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        controller
+            .set_panel_visible(self.preview_last_render.elapsed() < Duration::from_millis(500));
+        let snapshot = controller.snapshot();
+        let lifecycle_changed = self.preview_lifecycle != snapshot.lifecycle;
+        cx.global_mut::<EditorDocuments>()
+            .set_diagnostics(root, snapshot.diagnostics.clone());
+        self.preview_lifecycle = snapshot.lifecycle;
+        let Some(frame) = snapshot.frame else {
+            return lifecycle_changed;
+        };
+        if frame.metadata.frame_id == self.preview_frame_id {
+            return lifecycle_changed;
+        }
+        let Some(mut bytes) = tightly_packed_bgra(&frame) else {
+            return lifecycle_changed;
+        };
+        for pixel in bytes.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+        }
+        let Some(buffer) =
+            image::RgbaImage::from_raw(frame.metadata.width, frame.metadata.height, bytes)
+        else {
+            return lifecycle_changed;
+        };
+        self.preview_frame_id = frame.metadata.frame_id;
+        self.preview_image = Some(Arc::new(RenderImage::new([image::Frame::new(buffer)])));
+        true
     }
 
     fn rebuild_card_editors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -762,11 +937,22 @@ impl BasePanel for WorkbenchPanel {
     }
 
     fn on_removed(&mut self, _: &mut Window, cx: &mut Context<Self>) {
-        if let PanelContent::Document { root, relative, .. } = &self.content {
-            let panel = PanelId::from(cx.entity_id());
-            let documents = cx.global_mut::<EditorDocuments>();
-            documents.unregister_panel(root, relative, panel);
-            documents.clear_document_node(root);
+        match &self.content {
+            PanelContent::Document { root, relative, .. } => {
+                let panel = PanelId::from(cx.entity_id());
+                let documents = cx.global_mut::<EditorDocuments>();
+                documents.unregister_panel(root, relative, panel);
+                documents.clear_document_node(root);
+            }
+            PanelContent::Preview { root, controller } => {
+                self.preview_last_render = Instant::now();
+                controller.set_panel_visible(true);
+                controller.stop();
+                controller.set_panel_visible(false);
+                cx.global_mut::<EditorDocuments>()
+                    .set_preview_panel(root, None);
+            }
+            _ => {}
         }
     }
 }
@@ -940,6 +1126,161 @@ impl Render for WorkbenchPanel {
                     .child(div().flex_1().min_h_0().child(body))
                     .into_any_element()
             }
+            PanelContent::Preview { root, controller } => {
+                let snapshot = controller.snapshot();
+                let running = matches!(
+                    snapshot.lifecycle,
+                    PreviewLifecycle::Running | PreviewLifecycle::Paused
+                );
+                let status = match &snapshot.lifecycle {
+                    PreviewLifecycle::Off => "Stopped".to_owned(),
+                    PreviewLifecycle::Starting => "Starting…".to_owned(),
+                    PreviewLifecycle::Running => format!(
+                        "Live · frame {} · dropped {}",
+                        snapshot.frame_stats.published, snapshot.frame_stats.overwritten
+                    ),
+                    PreviewLifecycle::Paused => "Paused while hidden".to_owned(),
+                    PreviewLifecycle::Failed(error) => format!("Failed · {error}"),
+                };
+                let start = controller.clone();
+                let start_root = root.clone();
+                let stop = controller.clone();
+                let edit = controller.clone();
+                let play = controller.clone();
+                let input = controller.clone();
+                let keyboard_input = controller.clone();
+                let mode = snapshot.mode;
+                let bounds = self.preview_bounds.clone();
+                let surface_bounds = self.preview_bounds.clone();
+                let preview_focus = self.focus.clone();
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .bg(rgb(0x10151b))
+                    .child(
+                        div()
+                            .h(px(38.))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .px_2()
+                            .bg(rgb(CHROME))
+                            .child(preview_control("Edit", mode == PreviewMode::Edit).on_click(
+                                move |_, _, cx| {
+                                    edit.set_mode(PreviewMode::Edit);
+                                    cx.refresh_windows();
+                                },
+                            ))
+                            .child(preview_control("Play", mode == PreviewMode::Play).on_click(
+                                move |_, _, cx| {
+                                    play.set_mode(PreviewMode::Play);
+                                    cx.refresh_windows();
+                                },
+                            ))
+                            .child(div().flex_1())
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(match snapshot.lifecycle {
+                                        PreviewLifecycle::Failed(_) => 0xdb7780,
+                                        PreviewLifecycle::Running => SUCCESS,
+                                        _ => MUTED,
+                                    }))
+                                    .child(status),
+                            )
+                            .child(if running {
+                                preview_control("Stop", false).on_click(move |_, _, cx| {
+                                    stop.stop();
+                                    cx.refresh_windows();
+                                })
+                            } else {
+                                preview_control("Start", true).on_click(move |_, _, cx| {
+                                    for (path, contents) in cx
+                                        .global::<EditorDocuments>()
+                                        .preview_documents(&start_root)
+                                    {
+                                        start.apply_snapshot(path, contents);
+                                    }
+                                    start.start();
+                                    cx.refresh_windows();
+                                })
+                            }),
+                    )
+                    .child(
+                        div()
+                            .id("preview-surface")
+                            .relative()
+                            .flex_1()
+                            .min_h_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .bg(rgb(0x090c10))
+                            .cursor_pointer()
+                            .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                                preview_focus.focus(window, cx);
+                                if mode != PreviewMode::Play {
+                                    return;
+                                }
+                                let bounds =
+                                    *bounds.lock().expect("preview surface bounds lock poisoned");
+                                let Some(bounds) = bounds else {
+                                    return;
+                                };
+                                let local_x = f32::from(event.position.x - bounds.origin.x);
+                                let local_y = f32::from(event.position.y - bounds.origin.y);
+                                if let Some((x, y)) = map_preview_point(
+                                    f32::from(bounds.size.width),
+                                    f32::from(bounds.size.height),
+                                    local_x,
+                                    local_y,
+                                ) {
+                                    input.input(keine_authoring::PreviewInput::PointerPressed {
+                                        x,
+                                        y,
+                                    });
+                                }
+                            })
+                            .on_key_down(move |event, _, cx| {
+                                if mode == PreviewMode::Play
+                                    && !event.keystroke.modifiers.control
+                                    && !event.keystroke.modifiers.alt
+                                    && !event.keystroke.modifiers.platform
+                                    && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                {
+                                    keyboard_input.input(keine_authoring::PreviewInput::Advance);
+                                    cx.stop_propagation();
+                                }
+                            })
+                            .when_some(self.preview_image.clone(), |this, image| {
+                                this.child(img(image).size_full().object_fit(ObjectFit::Contain))
+                            })
+                            .when(self.preview_image.is_none(), |this| {
+                                this.child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(rgb(MUTED))
+                                        .child("Start Preview to render the current project"),
+                                )
+                            })
+                            .child(
+                                canvas(
+                                    move |surface, _, _| {
+                                        *surface_bounds
+                                            .lock()
+                                            .expect("preview surface bounds lock poisoned") =
+                                            Some(surface);
+                                    },
+                                    |_, _, _, _| {},
+                                )
+                                .absolute()
+                                .inset_0(),
+                            ),
+                    )
+                    .into_any_element()
+            }
             PanelContent::Inspector { root, file_count } => {
                 let document_count = cx.global::<EditorDocuments>().open_document_count(root);
                 div()
@@ -985,6 +1326,44 @@ impl Render for WorkbenchPanel {
             .text_color(rgb(INK))
             .child(body)
     }
+}
+
+fn tightly_packed_bgra(frame: &keine_authoring::OwnedFrame) -> Option<Vec<u8>> {
+    let row_bytes = usize::try_from(frame.metadata.width).ok()?.checked_mul(4)?;
+    let stride = usize::try_from(frame.metadata.stride).ok()?;
+    let height = usize::try_from(frame.metadata.height).ok()?;
+    if stride < row_bytes || frame.bytes.len() != stride.checked_mul(height)? {
+        return None;
+    }
+    if stride == row_bytes {
+        return Some(frame.bytes.clone());
+    }
+    let mut packed = Vec::with_capacity(row_bytes.checked_mul(height)?);
+    for row in frame.bytes.chunks_exact(stride) {
+        packed.extend_from_slice(&row[..row_bytes]);
+    }
+    Some(packed)
+}
+
+fn preview_control(label: &'static str, selected: bool) -> Stateful<Div> {
+    div()
+        .id(match label {
+            "Edit" => "preview-edit",
+            "Play" => "preview-play",
+            "Start" => "preview-start",
+            _ => "preview-stop",
+        })
+        .h(px(26.))
+        .px_2()
+        .flex()
+        .items_center()
+        .rounded(px(7.))
+        .bg(rgb(if selected { SURFACE } else { CHROME }))
+        .text_xs()
+        .text_color(rgb(if selected { PRIMARY } else { MUTED }))
+        .cursor_pointer()
+        .hover(|style| style.bg(rgb(SURFACE_HOVER)).text_color(rgb(INK)))
+        .child(label)
 }
 
 fn section_label(label: &'static str) -> impl IntoElement {
@@ -1168,6 +1547,7 @@ fn register_workbench_panels(cx: &mut App) {
         DOCUMENT_PANEL,
         INSPECTOR_PANEL,
         OUTPUT_PANEL,
+        PREVIEW_PANEL,
     ] {
         register_panel(cx, name, |context, window, cx| {
             let panel = workbench_panel(context, window, cx).unwrap_or_else(|error| {
@@ -1306,9 +1686,13 @@ impl EditorTabGroupSkin {
         let [panel] = group.panels() else {
             return None;
         };
-        if panel.panel_name(cx) == DOCUMENT_PANEL {
+        let panel_name = panel.panel_name(cx);
+        if panel_name == DOCUMENT_PANEL {
             return None;
         }
+        let is_preview = panel_name == PREVIEW_PANEL;
+        let panel_id = panel.panel_id(cx);
+        let close_group = group.clone();
 
         let title = PanelHandle::of(panel)
             .and_then(|handle| handle.tab_name(cx))
@@ -1323,6 +1707,7 @@ impl EditorTabGroupSkin {
         let title = div()
             .id(("editor-view-title-drag", node.as_u64()))
             .h_full()
+            .flex_1()
             .flex()
             .items_center()
             .pr_2()
@@ -1352,6 +1737,25 @@ impl EditorTabGroupSkin {
                 .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                 .text_color(rgb(0xb8c2cc))
                 .child(title)
+                .when(is_preview, |this| {
+                    this.child(
+                        div()
+                            .id(("close-preview", node.as_u64()))
+                            .size(px(24.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(6.))
+                            .cursor_pointer()
+                            .text_color(rgb(MUTED))
+                            .hover(|style| style.bg(rgb(SURFACE_HOVER)).text_color(rgb(INK)))
+                            .on_click(move |_, window, cx| {
+                                cx.stop_propagation();
+                                close_group.close(panel_id, window, cx);
+                            })
+                            .child(Icon::new(IconName::Close).xsmall()),
+                    )
+                })
                 .into_any_element(),
         )
     }
@@ -1986,21 +2390,10 @@ struct WorkbenchWindow {
     persistence: AppPersistence,
     workspace: Option<ProjectWorkspace>,
     recents: Vec<PathBuf>,
-    engine: Option<EngineProcess>,
-    engine_status: EngineStatus,
-    engine_generation: u64,
     allow_close: bool,
     close_prompt_open: bool,
     focus: FocusHandle,
-}
-
-#[derive(Clone, Debug)]
-enum EngineStatus {
-    Off,
-    Starting,
-    Ready,
-    Stopping,
-    Failed(String),
+    _window_subscriptions: Vec<Subscription>,
 }
 
 fn install_close_guard(window: &mut Window, workbench: WeakEntity<WorkbenchWindow>, cx: &App) {
@@ -2008,6 +2401,7 @@ fn install_close_guard(window: &mut Window, workbench: WeakEntity<WorkbenchWindo
         workbench
             .update(cx, |workbench, cx| {
                 if workbench.allow_close || !workbench.has_unsaved_documents(cx) {
+                    workbench.stop_preview(cx);
                     true
                 } else {
                     workbench.confirm_close(window, cx);
@@ -2027,17 +2421,18 @@ impl WorkbenchWindow {
         cx: &mut Context<Self>,
     ) -> Self {
         install_close_guard(window, cx.weak_entity(), cx);
+        let activation = cx.observe_window_activation(window, |this, window, cx| {
+            this.set_preview_visible(window.is_window_active(), cx);
+        });
         Self {
             editor,
             persistence,
             workspace: None,
             recents,
-            engine: None,
-            engine_status: EngineStatus::Off,
-            engine_generation: 0,
             allow_close: false,
             close_prompt_open: false,
             focus: cx.focus_handle(),
+            _window_subscriptions: vec![activation],
         }
     }
 
@@ -2049,18 +2444,19 @@ impl WorkbenchWindow {
         cx: &mut Context<Self>,
     ) -> Self {
         install_close_guard(window, cx.weak_entity(), cx);
+        let activation = cx.observe_window_activation(window, |this, window, cx| {
+            this.set_preview_visible(window.is_window_active(), cx);
+        });
         let workspace = ProjectWorkspace::new(session, &persistence, window, cx);
         Self {
             editor,
             persistence,
             workspace: Some(workspace),
             recents: Vec::new(),
-            engine: None,
-            engine_status: EngineStatus::Off,
-            engine_generation: 0,
             allow_close: false,
             close_prompt_open: false,
             focus: cx.focus_handle(),
+            _window_subscriptions: vec![activation],
         }
     }
 
@@ -2070,6 +2466,7 @@ impl WorkbenchWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.stop_preview(cx);
         self.workspace = Some(ProjectWorkspace::new(
             session,
             &self.persistence,
@@ -2077,9 +2474,39 @@ impl WorkbenchWindow {
             cx,
         ));
         self.recents.clear();
-        self.engine = None;
-        self.engine_status = EngineStatus::Off;
         cx.notify();
+    }
+
+    fn stop_preview(&mut self, cx: &mut Context<Self>) {
+        let Some(root) = self
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.session.root().to_owned())
+        else {
+            return;
+        };
+        if let Ok(preview) = cx.global_mut::<EditorDocuments>().preview(&root) {
+            preview.stop();
+            preview.set_panel_visible(false);
+        }
+    }
+
+    fn set_preview_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
+        let Some(root) = self
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.session.root().to_owned())
+        else {
+            return;
+        };
+        if cx
+            .global::<EditorDocuments>()
+            .preview_panel(&root)
+            .is_some()
+            && let Ok(preview) = cx.global_mut::<EditorDocuments>().preview(&root)
+        {
+            preview.set_window_visible(visible);
+        }
     }
 
     fn open_folder(&mut self, _: &OpenFolder, _: &mut Window, cx: &mut Context<Self>) {
@@ -2126,88 +2553,47 @@ impl WorkbenchWindow {
         cx.refresh_windows();
     }
 
-    fn toggle_engine(&mut self, _: &ToggleEngine, _: &mut Window, cx: &mut Context<Self>) {
-        if matches!(
-            self.engine_status,
-            EngineStatus::Starting | EngineStatus::Stopping
-        ) {
-            return;
-        }
-        let Some(root) = self
-            .workspace
-            .as_ref()
-            .map(|workspace| workspace.session.root().to_owned())
-        else {
+    fn toggle_engine(&mut self, _: &ToggleEngine, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(workspace) = self.workspace.as_ref() else {
             return;
         };
-        if let Some(mut engine) = self.engine.take() {
-            self.engine_status = EngineStatus::Stopping;
-            cx.global_mut::<EditorDocuments>()
-                .set_notice(&root, "Stopping Engine authoring host…");
-            let shutdown = cx
-                .background_executor()
-                .spawn(async move { engine.shutdown() });
-            cx.spawn(async move |this, cx| {
-                let result = shutdown.await;
-                let _ = this.update(cx, |this, cx| {
-                    this.engine_status = match result {
-                        Ok(()) => EngineStatus::Off,
-                        Err(error) => EngineStatus::Failed(error.to_string()),
-                    };
-                    let notice = match &this.engine_status {
-                        EngineStatus::Off => "Engine authoring host stopped".to_owned(),
-                        EngineStatus::Failed(error) => format!("Engine stop failed: {error}"),
-                        _ => unreachable!(),
-                    };
-                    cx.global_mut::<EditorDocuments>().set_notice(&root, notice);
-                    cx.notify();
-                    cx.refresh_windows();
-                });
-            })
-            .detach();
-            cx.notify();
+        let root = workspace.session.root().to_owned();
+        if let Some(panel) = cx.global::<EditorDocuments>().preview_panel(&root) {
+            workspace
+                .dock
+                .update(cx, |dock, cx| dock.select_panel(panel, window, cx));
+            if let Ok(preview) = cx.global_mut::<EditorDocuments>().preview(&root) {
+                preview.set_panel_visible(true);
+            }
             return;
         }
-
-        self.engine_generation = self.engine_generation.wrapping_add(1).max(1);
-        let generation = self.engine_generation;
-        self.engine_status = EngineStatus::Starting;
-        cx.global_mut::<EditorDocuments>()
-            .set_notice(&root, "Starting Engine authoring host…");
-        let project = root.clone();
-        let launch = cx.background_executor().spawn(async move {
-            let executable = EngineLocator::current()?.locate()?;
-            let mut engine = EngineProcess::launch(&executable, &project, generation)?;
-            let report = engine.validate()?;
-            Ok::<_, io::Error>((engine, report))
-        });
-        cx.spawn(async move |this, cx| {
-            let result = launch.await;
-            let _ = this.update(cx, |this, cx| {
-                match result {
-                    Ok((engine, report)) => {
-                        let summary = format!(
-                            "{} scenes · {} actions · {} warnings · {} errors",
-                            report.scenes, report.actions, report.warnings, report.errors
-                        );
-                        this.engine = Some(engine);
-                        this.engine_status = EngineStatus::Ready;
-                        let documents = cx.global_mut::<EditorDocuments>();
-                        documents.set_diagnostics(&root, report.diagnostics);
-                        documents.set_notice(&root, format!("Engine ready · {summary}"));
-                    }
-                    Err(error) => {
-                        this.engine_status = EngineStatus::Failed(error.to_string());
-                        cx.global_mut::<EditorDocuments>()
-                            .set_notice(&root, format!("Engine failed: {error}"));
-                    }
-                }
-                cx.notify();
+        let panel = match WorkbenchPanel::from_payload(
+            PanelPayload::Preview { root: root.clone() },
+            window,
+            cx,
+        ) {
+            Ok(panel) => panel,
+            Err(error) => {
+                cx.global_mut::<EditorDocuments>()
+                    .set_notice(&root, format!("Could not show Preview: {error}"));
                 cx.refresh_windows();
-            });
-        })
-        .detach();
-        cx.notify();
+                return;
+            }
+        };
+        let panel_id = PanelId::from(panel.entity_id());
+        workspace.dock.update(cx, |dock, cx| {
+            dock.add_panel_view(
+                panel_handle(panel),
+                DockPlacement::Right,
+                Some(px(520.)),
+                window,
+                cx,
+            );
+            dock.select_panel(panel_id, window, cx);
+        });
+        cx.global_mut::<EditorDocuments>()
+            .set_notice(&root, "Preview shown · press Start when ready");
+        cx.refresh_windows();
     }
 
     fn migrate_eiyashou(
@@ -2402,15 +2788,9 @@ impl WorkbenchWindow {
             .child(activity_icon("activity-search", IconName::Search))
             .child(activity_icon("activity-inspector", IconName::Inspector))
             .when(self.workspace.is_some(), |this| {
-                let color = match &self.engine_status {
-                    EngineStatus::Ready => SUCCESS,
-                    EngineStatus::Failed(_) => 0xdb7780,
-                    EngineStatus::Starting | EngineStatus::Stopping => PRIMARY,
-                    EngineStatus::Off => 0x74818e,
-                };
                 this.child(
                     div()
-                        .id("activity-engine")
+                        .id("activity-preview")
                         .size(px(30.))
                         .flex()
                         .items_center()
@@ -2421,7 +2801,7 @@ impl WorkbenchWindow {
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.toggle_engine(&ToggleEngine, window, cx)
                         }))
-                        .child(Icon::new(IconName::Play).small().text_color(rgb(color))),
+                        .child(Icon::new(IconName::Play).small().text_color(rgb(PRIMARY))),
                 )
             })
             .when(self.workspace.is_some(), |this| {

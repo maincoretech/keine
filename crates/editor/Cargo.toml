@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 fs2 = { workspace = true }
 gpui-kit = { workspace = true }
+image = { workspace = true }
 keine-authoring = { workspace = true }
 keine-core = { workspace = true }
 keine-loader = { workspace = true }

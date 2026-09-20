@@ -5,17 +5,26 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-pub const PROTOCOL_VERSION: u32 = 1;
-pub const MAX_MESSAGE_BYTES: usize = 256 * 1024;
+mod frame;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub use frame::{
+    FRAME_SLOT_COUNT, FrameMetadata, FrameTransportDescriptor, FrameTransportStats, OwnedFrame,
+    PixelFormat, SharedFrameConsumer, SharedFrameProducer, remove_stale_mapping,
+};
+
+pub const PROTOCOL_VERSION: u32 = 2;
+pub const MAX_MESSAGE_BYTES: usize = 256 * 1024;
+pub const MAX_DOCUMENT_BYTES: usize = 1024 * 1024;
+pub const SNAPSHOT_CHUNK_BYTES: usize = 128 * 1024;
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ClientMessage {
     pub generation: u64,
     pub request_id: u64,
     pub command: ClientCommand,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum ClientCommand {
     Hello {
         protocol_version: u32,
@@ -27,12 +36,53 @@ pub enum ClientCommand {
     },
     CloseProject,
     Validate,
-    Start,
+    BeginDocumentSnapshot {
+        path: PathBuf,
+        revision: u64,
+        total_bytes: u32,
+    },
+    AppendDocumentSnapshot {
+        revision: u64,
+        offset: u32,
+        bytes: Vec<u8>,
+    },
+    CommitDocumentSnapshot {
+        revision: u64,
+    },
+    ApplyDocumentPatch {
+        path: PathBuf,
+        base_revision: u64,
+        revision: u64,
+        start: u32,
+        end: u32,
+        replacement: Vec<u8>,
+    },
+    StartPreview {
+        transport: FrameTransportDescriptor,
+        document_revision: u64,
+    },
     Pause,
     Resume,
     Stop,
+    Input {
+        document_revision: u64,
+        event: PreviewInput,
+    },
+    SetExecutionCursor {
+        document_revision: u64,
+        path: PathBuf,
+        line: usize,
+        column: usize,
+    },
     Ping,
     Shutdown,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+pub enum PreviewInput {
+    Advance,
+    PointerPressed { x: f32, y: f32 },
+    Choice { index: usize },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -60,6 +110,18 @@ pub enum ServerResponse {
     Lifecycle {
         state: LifecycleState,
     },
+    SnapshotApplied {
+        document_revision: u64,
+    },
+    InputAccepted {
+        document_revision: u64,
+    },
+    SourceLocation {
+        document_revision: u64,
+        path: PathBuf,
+        line: usize,
+        column: usize,
+    },
     Pong,
     Bye,
     Error {
@@ -75,7 +137,10 @@ pub enum Capability {
     LetsGalProject,
     WebGalProject,
     Validate,
-    NoFramePreview,
+    RawFramePreview,
+    SourceSnapshots,
+    RuntimeInput,
+    SourceCursor,
     Lifecycle,
 }
 
@@ -97,6 +162,7 @@ pub enum ErrorCode {
     ProjectNotOpen,
     ProjectOpenFailed,
     ValidationFailed,
+    StaleRevision,
     Internal,
 }
 

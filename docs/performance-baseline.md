@@ -1815,3 +1815,34 @@ should suspend or reduce work. When the Phase 3 transport exists, release CI
 must benchmark end-to-end Engine readback, shared-slot publication, GPUI upload,
 active throughput, and idle activity before any compression, zero-copy, or
 native child-surface work is approved.
+
+### 2026-09-20 editor embedded preview Phase 4
+
+The production Preview keeps the Engine as a child process and keeps control on
+the authenticated loopback protocol, but moves frames through a file-backed
+shared-memory triple buffer. The mapping has exactly three fixed 1920x1080 RGBA
+slots (about 23.7 MiB); publication is latest-frame-wins and validates project,
+session, document revision, frame sequence, dimensions, stride, and format.
+Editor panel resize only changes the letterbox/upload projection, so the Engine
+render-target rebuild count is zero.
+
+The explicit local GPU acceptance command was:
+
+```text
+cargo test --test authoring_preview -- --ignored --nocapture
+```
+
+On Apple M5 Pro / Metal, the final measured three-cycle run completed in 4.45 seconds.
+Visible first frames arrived in 149, 142, and 161 ms. The cycles had 3, 4, and 3
+publications respectively, with zero overwritten frames. Each Pause observed for
+500 ms added no more than the three already in-flight captures; Stop removed the
+mapping before the next cycle, and the final process-list check found no
+authoring child. This proves bounded queueing and repeated cleanup, not a 60 fps
+throughput number.
+
+The control worker sleeps at 250 ms while stopped, paused, hidden, or unchanged,
+and the Editor only requests 16 ms polling while the preview is starting or
+running. A reliable OS CPU sample and the text-input latency observation still
+require the unlocked real Editor window; the locked host prevented Computer Use
+from performing that part of the acceptance. No compression, GPU sharing, or
+native child-surface change is justified by the current evidence.

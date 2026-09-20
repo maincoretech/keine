@@ -8,5 +8,6 @@ repository = "https://github.com/maincoretech/keine"
 publish = false
 
 [dependencies]
+memmap2 = { workspace = true }
 postcard = { workspace = true }
 serde = { workspace = true }

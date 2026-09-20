@@ -10,6 +10,7 @@ pub(crate) mod host;
 #[cfg(any(feature = "publisher", feature = "startup-metrics"))]
 pub(crate) mod package_benchmark;
 pub(crate) mod platform;
+pub(crate) mod preview;
 pub(crate) mod resources;
 pub(crate) mod script_driver;
 pub(crate) mod tick;

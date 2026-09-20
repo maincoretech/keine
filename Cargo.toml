@@ -147,6 +147,8 @@ wgpu = { version = "29.0.4", default-features = false, features = ["metal"] }
 crossterm = "0.29.0"
 fs2 = "0.4"
 gpui-kit = { version = "=0.6.4" }
+image = "0.25.10"
+memmap2 = "0.9.11"
 
 # Bevy 0.19 requests synthetic macOS redraws from `about_to_wait`. The pinned
 # fix keeps reactive idle asleep while preserving redraw-driven continuous

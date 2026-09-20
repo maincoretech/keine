@@ -52,11 +52,8 @@ pub struct FrameView<'a> {
     pub bytes: &'a [u8],
 }
 
-/// Phase 0 model for the shared-memory frame region.
-///
-/// The production mapping can place these three fixed-capacity slots in shared
-/// memory without changing the publication policy: the producer never blocks,
-/// and the consumer observes only the newest complete frame.
+/// Phase 0 in-process benchmark model retained by the offscreen example.
+/// Production Preview uses `keine_authoring::SharedFrameConsumer` instead.
 pub struct LatestFrameBuffer {
     slots: [FrameSlot; SLOT_COUNT],
     capacity: usize,
@@ -97,7 +94,6 @@ impl LatestFrameBuffer {
         if bytes.len() != byte_len {
             return Err(FrameError::PayloadLength);
         }
-
         let slot_index = self.next_slot;
         let slot = &mut self.slots[slot_index];
         slot.bytes.clear();
@@ -146,7 +142,6 @@ mod tests {
                 .publish(metadata(frame_id, 4, 2), &[frame_id as u8; 32])
                 .unwrap();
         }
-
         let latest = frames.latest().unwrap();
         assert_eq!(latest.metadata.frame_id, 19);
         assert_eq!(latest.bytes, [19; 32]);
