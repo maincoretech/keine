@@ -1,0 +1,254 @@
+name: Project release
+
+# A game repository calls this workflow by a full Kēne commit SHA. The job
+# checks out the workflow-owning repository at that same resolved SHA, making
+# the workflow and the Engine source one immutable release input.
+on:
+  workflow_call:
+    inputs:
+      project-path:
+        description: Project directory relative to the game repository root
+        required: false
+        type: string
+        default: .
+      artifact-name:
+        description: Uploaded Linux release artifact name
+        required: false
+        type: string
+        default: game-linux-x64
+      retention-days:
+        description: Artifact retention period
+        required: false
+        type: number
+        default: 14
+    secrets:
+      HAKUTAKU_IDENTITY_BASE64:
+        description: Base64-encoded stable Hakutaku publisher identity
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  bundle-linux:
+    name: Linux x64 release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      RUST_TOOLCHAIN: 1.97.1
+    steps:
+      - name: Verify immutable Kēne workflow reference
+        id: keine
+        shell: bash
+        env:
+          WORKFLOW_REF: ${{ job.workflow_ref }}
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          requested_ref="${WORKFLOW_REF##*@}"
+          if [[ ! "$requested_ref" =~ ^[0-9A-Fa-f]{40}$ ]]; then
+            echo 'The project must call this workflow with a full 40-character Kēne commit SHA.' >&2
+            echo "Received workflow reference: $WORKFLOW_REF" >&2
+            exit 2
+          fi
+          if [[ "${requested_ref,,}" != "${WORKFLOW_SHA,,}" ]]; then
+            echo 'The requested Kēne ref did not resolve to the workflow commit.' >&2
+            exit 2
+          fi
+          echo "repository=$WORKFLOW_REPOSITORY" >> "$GITHUB_OUTPUT"
+          echo "sha=${WORKFLOW_SHA,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate release inputs
+        shell: bash
+        env:
+          ARTIFACT_NAME: ${{ inputs.artifact-name }}
+          PROJECT_INPUT: ${{ inputs.project-path }}
+          RETENTION_DAYS: ${{ inputs.retention-days }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$ARTIFACT_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
+            echo 'artifact-name must be 1-64 ASCII letters, digits, dots, underscores, or hyphens.' >&2
+            exit 2
+          fi
+          if [[ -z "$PROJECT_INPUT" || "$PROJECT_INPUT" == *$'\n'* || "$PROJECT_INPUT" == *$'\r'* ]]; then
+            echo 'project-path must be non-empty and contain no line breaks.' >&2
+            exit 2
+          fi
+          if (( RETENTION_DAYS < 1 || RETENTION_DAYS > 90 )); then
+            echo 'retention-days must be between 1 and 90.' >&2
+            exit 2
+          fi
+
+      - name: Check out game project
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: project
+          persist-credentials: false
+
+      - name: Check out pinned Kēne source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ steps.keine.outputs.repository }}
+          ref: ${{ steps.keine.outputs.sha }}
+          path: keine-engine
+          persist-credentials: false
+
+      - name: Resolve confined project path
+        id: project
+        shell: bash
+        env:
+          PROJECT_INPUT: ${{ inputs.project-path }}
+        run: |
+          set -euo pipefail
+          project_root="$(cd project && pwd -P)"
+          candidate="$project_root/$PROJECT_INPUT"
+          if [[ ! -d "$candidate" ]]; then
+            echo "Project directory does not exist below the caller checkout: $PROJECT_INPUT" >&2
+            exit 2
+          fi
+          project_path="$(cd "$candidate" && pwd -P)"
+          case "$project_path" in
+            "$project_root"|"$project_root"/*) ;;
+            *)
+              echo 'project-path must stay inside the caller repository checkout.' >&2
+              exit 2
+              ;;
+          esac
+          engine_sha="$(git -C keine-engine rev-parse HEAD)"
+          if [[ "$engine_sha" != '${{ steps.keine.outputs.sha }}' ]]; then
+            echo 'Checked-out Kēne source does not match the reusable workflow commit.' >&2
+            exit 2
+          fi
+          echo "path=$project_path" >> "$GITHUB_OUTPUT"
+
+      - name: Select pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4716b85f2fac3e324e64fa2810f6b5c3905760a5 # 1.97.1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Detect canonical shipping features
+        shell: bash
+        env:
+          PROJECT_PATH: ${{ steps.project.outputs.path }}
+        run: |
+          set -euo pipefail
+          source keine-engine/dev/scripts/shipping-features.sh
+          features="$(detect_shipping_features "$PROJECT_PATH")"
+          echo "KEINE_RELEASE_FEATURES=$features" >> "$GITHUB_ENV"
+
+      - name: Restore Rust release cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          # Caller source, finished bundles, and publisher material are never cached.
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            keine-engine/target/release
+            keine-engine/target/runner
+          key: project-release-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.keine.outputs.sha }}-${{ hashFiles('keine-engine/Cargo.lock', 'keine-engine/**/Cargo.toml', 'keine-engine/rust-toolchain.toml') }}-${{ env.KEINE_RELEASE_FEATURES }}
+          restore-keys: |
+            project-release-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.keine.outputs.sha }}-${{ hashFiles('keine-engine/Cargo.lock', 'keine-engine/**/Cargo.toml', 'keine-engine/rust-toolchain.toml') }}-
+
+      - name: Install Linux platform dependencies
+        uses: ./keine-engine/.github/actions/setup-video
+        with:
+          enabled: ${{ contains(env.KEINE_RELEASE_FEATURES, 'video-ffmpeg') }}
+
+      - name: Build publisher runner from pinned source
+        working-directory: keine-engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --no-default-features --features publisher --target-dir target/runner
+
+      - name: Restore stable publisher identity
+        shell: bash
+        env:
+          HAKUTAKU_IDENTITY_BASE64: ${{ secrets.HAKUTAKU_IDENTITY_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$HAKUTAKU_IDENTITY_BASE64" ]]; then
+            echo 'HAKUTAKU_IDENTITY_BASE64 is required for a formal project release.' >&2
+            exit 2
+          fi
+          umask 077
+          identity_dir="$RUNNER_TEMP/keine-project-release/identity"
+          mkdir -p "$identity_dir"
+          identity_path="$identity_dir/publisher.hakutaku-key"
+          printf '%s' "$HAKUTAKU_IDENTITY_BASE64" | openssl base64 -d -A -out "$identity_path"
+          if [[ ! -s "$identity_path" ]]; then
+            echo 'Decoded publisher identity is empty.' >&2
+            exit 2
+          fi
+
+      - name: Build formal release
+        id: bundle
+        working-directory: keine-engine
+        shell: bash
+        env:
+          ARTIFACT_NAME: ${{ inputs.artifact-name }}
+          PROJECT_PATH: ${{ steps.project.outputs.path }}
+        run: |
+          set -euo pipefail
+          export KEINE_HAKUTAKU_IDENTITY="$RUNNER_TEMP/keine-project-release/identity/publisher.hakutaku-key"
+          output_root="target/project-release"
+          output_path="$output_root/$ARTIFACT_NAME"
+          mkdir -p "$output_root"
+          target/runner/release/keine bundle "$PROJECT_PATH" --output "$output_path"
+          echo "path=$(pwd -P)/$output_path" >> "$GITHUB_OUTPUT"
+
+      - name: Remove publisher identity
+        if: always()
+        shell: bash
+        run: |
+          identity_dir="$RUNNER_TEMP/keine-project-release/identity"
+          rm -f -- "$identity_dir/publisher.hakutaku-key"
+          rmdir "$identity_dir" 2>/dev/null || true
+
+      - name: Verify runnable Linux artifact
+        shell: bash
+        env:
+          BUNDLE_PATH: ${{ steps.bundle.outputs.path }}
+        run: |
+          set -euo pipefail
+          test -x "$BUNDLE_PATH/keine"
+          test -f "$BUNDLE_PATH/game.haku"
+          test -d "$BUNDLE_PATH/data"
+          if ldd "$BUNDLE_PATH/keine" | grep -q 'not found'; then
+            echo 'Linux release has unresolved dynamic libraries.' >&2
+            exit 1
+          fi
+          (cd /tmp && "$BUNDLE_PATH/keine" --version)
+
+      - name: Write release provenance
+        shell: bash
+        env:
+          BUNDLE_PATH: ${{ steps.bundle.outputs.path }}
+          KEINE_REPOSITORY: ${{ steps.keine.outputs.repository }}
+          KEINE_SHA: ${{ steps.keine.outputs.sha }}
+        run: |
+          set -euo pipefail
+          rustc_version="$(rustc --version)"
+          cat > "$BUNDLE_PATH/KEINE-PROVENANCE.txt" <<EOF
+          format=1
+          project_repository=$GITHUB_REPOSITORY
+          project_sha=$GITHUB_SHA
+          keine_repository=$KEINE_REPOSITORY
+          keine_sha=$KEINE_SHA
+          rust_toolchain=$RUST_TOOLCHAIN
+          rustc_version=$rustc_version
+          runner_image=ubuntu-24.04
+          runner_os=$RUNNER_OS
+          runner_arch=$RUNNER_ARCH
+          release_features=$KEINE_RELEASE_FEATURES
+          workflow_run=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+          EOF
+
+      - name: Upload formal release
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ steps.bundle.outputs.path }}/
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}

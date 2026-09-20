@@ -102,13 +102,13 @@ runtime. The first operation that needs a publisher identity creates
 distributed game. Later bundles reuse unchanged content segments when the
 previous output is available.
 
-The manual GitHub **Release** workflow defaults to a temporary publisher
-identity, so forks, `test-project`, and benchmark bundles need no secret setup.
-Temporary identities are deleted with the runner and are not suitable for
-shipping updates. For a stable production lineage, run `cargo assets --pack`
-once on a trusted machine, base64-encode the generated identity, store it as
-the `HAKUTAKU_IDENTITY_BASE64` repository secret, and select `stable` in the
-workflow. Never commit either form of the identity.
+The manual GitHub **Release** workflow in this repository defaults to a temporary publisher
+identity, so forks, `test-project`, and benchmark bundles need no secret setup. Temporary identities
+are deleted with the runner and are not suitable for shipping updates. A real game repository uses
+the pinned [Project CI release workflow](docs/project-ci-release.md): its clean runner installs Rust
+1.97.1 and platform dependencies, checks out the exact Kēne workflow commit, rebuilds the hardened
+Engine, restores the stable publisher identity only below runner-temporary storage, and uploads the
+complete release with provenance. Never commit either form of the identity.
 
 Create a macOS application bundle with:
 
@@ -201,5 +201,6 @@ gallery without loading a second compressed copy.
 - [Rendering and Bevy architecture](docs/architecture/05-bevy-architecture.md)
 - [Saves and rollback](docs/architecture/04-rollback-and-save.md)
 - [Hakutaku packaging](docs/architecture/06-hakutaku-packaging.md)
+- [Project CI formal releases](docs/project-ci-release.md)
 - [LetsGal integration](docs/architecture/08-letsgal-studio.md)
 - [WebGAL compatibility](docs/webgal-compatibility/README.md)

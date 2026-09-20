@@ -86,10 +86,12 @@ target/bundle/
 组装匹配的运行时。首次需要发布身份时会创建 `.keine/publisher.hakutaku-key`；请备份
 它，并且不要随游戏分发。保留上一版输出时，后续打包会复用未变化的内容 segment。
 
-GitHub 手动 **Release** workflow 默认使用临时发布身份，因此 fork、`test-project` 和
-benchmark 构建不需要预配 Secret；临时身份随 runner 删除，不适合正式更新。正式发行时，先在
-可信机器运行一次 `cargo assets --pack`，把生成的 identity 转成 base64 后保存为仓库 Secret
-`HAKUTAKU_IDENTITY_BASE64`，再在 workflow 中选择 `stable`。两种形态都不得提交到 Git。
+本仓库的 GitHub 手动 **Release** workflow 默认使用临时发布身份，因此 fork、
+`test-project` 和 benchmark 构建不需要预配 Secret；临时身份随 runner 删除，不适合正式更新。
+真实游戏仓库应使用固定提交的 [Project CI 正式发行 workflow](docs/project-ci-release.md)：干净
+runner 显式安装 Rust 1.97.1 与平台依赖，从该 workflow 的同一个 Kēne 提交重建 hardened Engine，
+仅在 runner 临时目录恢复稳定发布身份，然后上传带 provenance 的完整产物。identity 的原文件与
+base64 形态都不得提交到 Git。
 
 生成 macOS 应用包：
 
@@ -143,5 +145,6 @@ cargo validate projects/test-project
 - [渲染与 Bevy 架构](docs/architecture/05-bevy-architecture.md)
 - [存档与回滚](docs/architecture/04-rollback-and-save.md)
 - [Hakutaku 打包](docs/architecture/06-hakutaku-packaging.md)
+- [Project CI 正式发行](docs/project-ci-release.md)
 - [LetsGal 集成](docs/architecture/08-letsgal-studio.md)
 - [WebGAL 兼容性](docs/webgal-compatibility/README.md)
