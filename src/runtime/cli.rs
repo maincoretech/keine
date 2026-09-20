@@ -67,6 +67,10 @@ impl InteractiveMode {
 
 #[derive(Debug)]
 pub(super) enum CliCommand {
+    AuthoringHost {
+        endpoint: String,
+        token: String,
+    },
     #[cfg(feature = "configure")]
     Configure,
     Check {
@@ -200,6 +204,12 @@ pub(super) fn parse(args: &[OsString]) -> Result<CliCommand> {
         return Ok(run(PathBuf::new(), InteractiveMode::Shipping));
     };
     match command.to_str() {
+        Some("__authoring-host") => {
+            let endpoint = required_utf8(args, 1, "internal authoring host")?;
+            let token = required_utf8(args, 2, "internal authoring host")?;
+            require_no_extra_args(args, 3, "internal authoring host")?;
+            Ok(CliCommand::AuthoringHost { endpoint, token })
+        }
         #[cfg(feature = "configure")]
         Some("configure") => {
             require_no_extra_args(args, 1, "keine configure")?;
@@ -513,6 +523,14 @@ fn required_path(args: &[OsString], index: usize, usage: &str) -> Result<PathBuf
         .filter(|value| !value.is_empty())
         .with_context(|| format!("missing project path; usage: {usage}"))?;
     Ok(PathBuf::from(value))
+}
+
+fn required_utf8(args: &[OsString], index: usize, usage: &str) -> Result<String> {
+    args.get(index)
+        .context(format!("missing argument; usage: {usage}"))?
+        .to_str()
+        .map(str::to_owned)
+        .context("argument is not valid UTF-8")
 }
 
 fn require_no_extra_args(args: &[OsString], expected: usize, usage: &str) -> Result<()> {

@@ -20,6 +20,8 @@ pub use runtime::{build_app_with_loader, run, run_cli, run_with_loader};
 #[cfg(test)]
 use criterion as _;
 #[cfg(test)]
+use keine_editor as _;
+#[cfg(test)]
 use libwebp_sys as _;
 
 #[doc(hidden)]

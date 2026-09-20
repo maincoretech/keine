@@ -5360,7 +5360,9 @@ dependencies = [
  "futures-lite",
  "hakutaku-core",
  "hakutaku-pack",
+ "keine-authoring",
  "keine-core",
+ "keine-editor",
  "keine-loader",
  "keine-media",
  "libc",
@@ -5391,6 +5393,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "keine-authoring"
+version = "0.9.1"
+dependencies = [
+ "postcard",
+ "serde",
+]
+
+[[package]]
 name = "keine-core"
 version = "0.9.1"
 dependencies = [
@@ -5409,6 +5419,8 @@ dependencies = [
  "bevy",
  "fs2",
  "gpui-kit",
+ "keine-authoring",
+ "postcard",
  "serde",
  "serde_json",
 ]

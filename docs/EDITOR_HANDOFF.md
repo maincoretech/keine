@@ -1,7 +1,8 @@
 # Kēne Editor 开发交接
 
-> 面向下一位负责 editor 的 Codex。Editor Phase 0/1 已完成；当前实现状态以
-> `docs/PROJECT_STATE.md`、`docs/editor-phase0.md` 和 `docs/editor-phase1.md` 为准。
+> 面向下一位负责 editor 的 Codex。Editor Phase 0–3 已完成；当前实现状态以
+> `docs/PROJECT_STATE.md`、`docs/editor-phase0.md`、`docs/editor-phase1.md`、
+> `docs/editor-phase2.md` 和 `docs/editor-phase3.md` 为准。
 > 本文集中记录跨阶段边界，不授权绕过 `AGENTS.md` 或直接修改主分支。
 
 ## 1. 开始前先读
@@ -10,7 +11,7 @@
 
 1. `AGENTS.md`：最高优先级的协作、架构、验证和所有权规则。
 2. `docs/PROJECT_STATE.md`：当前能力、已知限制和任务队列。
-3. `docs/editor-phase0.md` 和 `docs/editor-phase1.md`：已经实现和验证的 editor 合同。
+3. `docs/editor-phase0.md` 到 `docs/editor-phase3.md`：已经实现和验证的 editor 合同。
 4. 本文：跨阶段上下文和决策边界。
 5. 本次唯一分配的 `docs/tasks/TXX-*.md`：实际任务范围和文件所有权。
 6. 仅按任务需要查看：
@@ -152,11 +153,11 @@ Editor UI
 
 开始产品代码前必须由用户或任务文件明确：
 
-1. 首个可写文档范围，以及格式版本、原子保存和恢复草稿策略。
-2. IME、撤销/重做、冲突检测和外部文件变化的具体合同。
-3. Preview 的宿主形态、进程生命周期、崩溃恢复和热重载边界。
-4. Editor 如何发现、选择和启动匹配版本的 Kēne Engine。
-5. 下一阶段验收的平台、真实工程和完成证据。
+1. Kēne Native DSL 的具体语法、版本和迁移规则；不得以 JSON 作为底层作者格式。
+2. Phase 4 帧通道的共享内存布局、代际、背压和平台封装。
+3. Preview View、显示/遮挡状态、输入焦点和运行生命周期的交互合同。
+4. document revision 如何通过 snapshot/patch 进入 Engine，旧 revision 如何丢弃。
+5. 下一阶段验收的平台、真实工程、功耗和完成证据。
 6. 是否需要扩展机制；没有首个真实用例时继续明确不做。
 7. Git、录制、协作、资产管理和构建 UI 是否进入后续独立阶段。
 
@@ -187,14 +188,16 @@ Editor UI
 
 ## 10. 建议的下一个 editor 任务
 
-Phase 1 已完成 GPUI 单应用多项目窗口、Dock 工作台、只读文档、Inspector/Output、
-app-data 持久化和 secondary-launch 转发。下一任务应只选择一个可验收闭环：
+Phase 2 已完成 Native YAML/TXT 的安全文本编辑，Phase 3 已完成预编译 Engine 的最小
+二进制控制协议与无画面生命周期。下一任务应只做 Phase 4 Preview frame transport：
 
-1. 可写文本链路：IME、撤销/重做、原子保存、外部修改和恢复草稿；或
-2. Preview 链路：Engine 发现/启动、最小控制协议、帧传输和失败恢复。
+1. 按 Phase 0 结论实现有界 latest-frame-wins raw frame slot；
+2. 明确 generation/frame metadata、断连与进程退出清理；
+3. 在 GPUI Preview View 上传并显示画面，控制消息不传帧；
+4. 以 active 60 fps、unchanged/hidden/occluded 降功耗的实测证据验收。
 
-不要把两条链路、流程图、插件、Git、协作、安装器和通用扩展市场塞进同一任务。只有一个
-真实闭环验收后，才扩大范围。
+Native DSL 的具体方案应先独立讨论并形成决策，不要在 Phase 4 顺手发明语法。也不要同时
+加入流程图、插件、Git、协作、安装器或通用扩展市场。
 
 ## 11. 文件所有权和改动路线
 
@@ -266,13 +269,14 @@ cargo validate projects/test-project
 
 ```text
 你要继续开发 Kēne editor。先阅读 AGENTS.md、docs/PROJECT_STATE.md、
-docs/editor-phase0.md、docs/editor-phase1.md 和 docs/EDITOR_HANDOFF.md，然后只阅读本次
+docs/editor-phase0.md 到 docs/editor-phase3.md 和 docs/EDITOR_HANDOFF.md，然后只阅读本次
 分配的一个 docs/tasks/TXX-*.md。
 先检查 worktree 和相关 diff，不覆盖未提交修改。不要把
 crates/loader/src/adapter/editor 当成 Kēne editor GUI；它是第三方编辑器项目格式的
 只读适配层。保持 keine-core <- keine-loader <- keine，core/loader 必须 Bevy-free，
-editor 私有文档和 UI 状态不得进入 runtime/core。`crates/editor` 已有 GPUI Phase 1 只读
-工作台，不要重建窗口、Dock、项目身份或 app-data 生命周期。任务文件必须明确选择可写文档
-或 Preview 中的一个闭环，不要搭通用框架。只改任务所有权范围，完成后跑规定验证并提供
+editor 私有文档和 UI 状态不得进入 runtime/core。`crates/editor` 已有 GPUI Phase 3
+工作台、Native YAML/TXT 安全文档模型和预编译 Engine 二进制控制边界；不要重建窗口、
+Dock、项目身份、app-data 生命周期或 IPC。下一任务默认只做 Phase 4 帧传输/Preview
+闭环，不要搭通用框架，也不要以 JSON 代替 Native DSL。只改任务所有权范围，完成后跑规定验证并提供
 真实 UI 证据；未经明确要求不要提交、合并或推送。
 ```

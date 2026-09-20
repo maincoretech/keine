@@ -123,6 +123,10 @@ impl AppPersistence {
         self.workspace_dir(project).join("layout.json")
     }
 
+    pub fn recovery_dir(&self, project: &ProjectKey) -> PathBuf {
+        self.workspace_dir(project).join("recovery")
+    }
+
     fn workspace_dir(&self, project: &ProjectKey) -> PathBuf {
         self.root.join("projects").join(project.workspace_id())
     }

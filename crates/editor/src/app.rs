@@ -14,22 +14,25 @@ use gpui_kit::component::dock::{
     PanelBuildContext, PanelEvent, PanelHandle, PanelInfo, PanelState, PanelStyle, TabGroupContext,
     TabGroupRenderer, panel_handle, register_panel,
 };
+use gpui_kit::component::input::{Editor, EditorState, InputEvent};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, Theme, ThemeMode};
 use gpui_kit::{
     AnyElement, AnyView, App, AppContext as _, Axis, Bounds, Context, Div, DragMoveEvent, Empty,
-    Entity, EventEmitter, FocusHandle, Focusable, Hsla, IntoElement, KeyBinding, PathPromptOptions,
-    Pixels, Point, Render, SharedString, Stateful, Subscription, WeakEntity, Window, WindowBounds,
-    WindowHandle, WindowOptions, actions, div, hsla, linear_color_stop, linear_gradient,
-    prelude::*, px, rgb, size,
+    Entity, EventEmitter, FocusHandle, Focusable, Global, Hsla, IntoElement, KeyBinding,
+    PathPromptOptions, Pixels, Point, PromptButton, PromptLevel, Render, SharedString, Stateful,
+    Subscription, WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, actions, div,
+    hsla, linear_color_stop, linear_gradient, prelude::*, px, rgb, size,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::app_data::APP_ID;
+use crate::document::{DocumentHandle, DocumentManager, SaveError};
+use crate::engine::{EngineLocator, EngineProcess};
 use crate::instance::{InstanceReceiver, PrimaryInstance, Startup, acquire_or_forward};
 use crate::persistence::AppPersistence;
 use crate::project_key::ProjectKey;
-use crate::workspace::{TextDocument, WorkspaceFile, WorkspaceSession};
+use crate::workspace::{WorkspaceFile, WorkspaceSession};
 
 const CANVAS: u32 = 0x11151b;
 const CHROME: u32 = 0x151a21;
@@ -52,7 +55,10 @@ const DOCUMENT_PANEL: &str = "keine.editor.document";
 const INSPECTOR_PANEL: &str = "keine.editor.inspector";
 const OUTPUT_PANEL: &str = "keine.editor.output";
 
-actions!(keine_editor, [OpenFolder, ResetLayout]);
+actions!(
+    keine_editor,
+    [OpenFolder, ResetLayout, Save, SaveAll, ToggleEngine]
+);
 
 fn theme_color(value: u32) -> Hsla {
     rgb(value).into()
@@ -141,6 +147,114 @@ impl<W: Copy> WindowRegistry<W> {
     }
 }
 
+struct WorkspaceDocuments {
+    manager: DocumentManager,
+    notice: String,
+    selection: Option<(PathBuf, usize, usize)>,
+    diagnostics: Vec<keine_authoring::Diagnostic>,
+}
+
+struct EditorDocuments {
+    persistence: AppPersistence,
+    workspaces: HashMap<PathBuf, WorkspaceDocuments>,
+}
+
+impl Global for EditorDocuments {}
+
+impl EditorDocuments {
+    fn new(persistence: AppPersistence) -> Self {
+        Self {
+            persistence,
+            workspaces: HashMap::new(),
+        }
+    }
+
+    fn ensure_workspace(&mut self, root: &Path) -> io::Result<&mut WorkspaceDocuments> {
+        let key = ProjectKey::from_path(root)?;
+        let canonical = key.path().to_owned();
+        if !self.workspaces.contains_key(&canonical) {
+            let manager =
+                DocumentManager::new(canonical.clone(), self.persistence.recovery_dir(&key))?;
+            self.workspaces.insert(
+                canonical.clone(),
+                WorkspaceDocuments {
+                    manager,
+                    notice: "Ready".into(),
+                    selection: None,
+                    diagnostics: Vec::new(),
+                },
+            );
+        }
+        Ok(self
+            .workspaces
+            .get_mut(&canonical)
+            .expect("workspace inserted above"))
+    }
+
+    fn open(&mut self, root: &Path, relative: &Path) -> io::Result<DocumentHandle> {
+        self.ensure_workspace(root)?.manager.open(relative)
+    }
+
+    fn has_dirty_documents(&self, root: &Path) -> bool {
+        ProjectKey::from_path(root)
+            .ok()
+            .and_then(|key| self.workspaces.get(key.path()))
+            .is_some_and(|workspace| workspace.manager.has_dirty_documents())
+    }
+
+    fn save_all(&mut self, root: &Path) -> Result<usize, SaveError> {
+        self.ensure_workspace(root)
+            .map_err(SaveError::from)?
+            .manager
+            .save_all()
+    }
+
+    fn set_notice(&mut self, root: &Path, notice: impl Into<String>) {
+        if let Ok(workspace) = self.ensure_workspace(root) {
+            workspace.notice = notice.into();
+        }
+    }
+
+    fn notice(&self, root: &Path) -> Option<&str> {
+        let key = ProjectKey::from_path(root).ok()?;
+        self.workspaces
+            .get(key.path())
+            .map(|state| state.notice.as_str())
+    }
+
+    fn set_selection(&mut self, root: &Path, relative: PathBuf, line: usize, column: usize) {
+        if let Ok(workspace) = self.ensure_workspace(root) {
+            workspace.selection = Some((relative, line, column));
+        }
+    }
+
+    fn selection(&self, root: &Path) -> Option<&(PathBuf, usize, usize)> {
+        let key = ProjectKey::from_path(root).ok()?;
+        self.workspaces.get(key.path())?.selection.as_ref()
+    }
+
+    fn set_diagnostics(&mut self, root: &Path, diagnostics: Vec<keine_authoring::Diagnostic>) {
+        if let Ok(workspace) = self.ensure_workspace(root) {
+            workspace.diagnostics = diagnostics;
+        }
+    }
+
+    fn diagnostics_for<'a>(
+        &'a self,
+        root: &Path,
+        relative: &Path,
+    ) -> impl Iterator<Item = &'a keine_authoring::Diagnostic> {
+        let diagnostics = ProjectKey::from_path(root)
+            .ok()
+            .and_then(|key| self.workspaces.get(key.path()))
+            .map(|workspace| workspace.diagnostics.as_slice())
+            .unwrap_or_default();
+        diagnostics.iter().filter(move |diagnostic| {
+            diagnostic.path == relative || diagnostic.path.ends_with(relative)
+        })
+    }
+}
+
 struct EditorApp {
     this: WeakEntity<EditorApp>,
     windows: WindowRegistry<WindowHandle<WorkbenchWindow>>,
@@ -178,7 +292,7 @@ impl EditorApp {
         let handle = cx
             .open_window(window_options(0, cx), move |window, cx| {
                 window.set_window_title("Kēne Editor");
-                cx.new(|cx| WorkbenchWindow::empty(editor, persistence, recents, cx))
+                cx.new(|cx| WorkbenchWindow::empty(editor, persistence, recents, window, cx))
             })
             .expect("failed to open Kēne Editor workbench");
         self.empty_window = Some(handle);
@@ -255,7 +369,9 @@ enum PanelContent {
     },
     Document {
         root: PathBuf,
-        document: TextDocument,
+        relative: PathBuf,
+        document: Option<DocumentHandle>,
+        editor: Entity<EditorState>,
     },
     Inspector {
         root: PathBuf,
@@ -269,27 +385,41 @@ enum PanelContent {
 }
 
 impl PanelContent {
-    fn from_payload(payload: PanelPayload) -> Self {
+    fn from_payload(payload: PanelPayload, window: &mut Window, cx: &mut App) -> io::Result<Self> {
         match payload {
             PanelPayload::Explorer { root } => WorkspaceSession::open(&root)
                 .map(|session| Self::Explorer {
                     root: root.clone(),
                     files: session.files().to_vec(),
                 })
-                .unwrap_or(Self::Explorer {
-                    root,
-                    files: Vec::new(),
+                .or_else(|_| {
+                    Ok(Self::Explorer {
+                        root,
+                        files: Vec::new(),
+                    })
                 }),
             PanelPayload::Document { root, relative } => {
-                let contents = std::fs::read_to_string(root.join(&relative))
-                    .unwrap_or_else(|error| format!("Unable to read document: {error}"));
-                Self::Document {
+                let document = if is_native_authoring_document(&root, &relative) {
+                    Some(cx.global_mut::<EditorDocuments>().open(&root, &relative)?)
+                } else {
+                    None
+                };
+                let contents = match &document {
+                    Some(document) => document.borrow().contents().to_owned(),
+                    None => std::fs::read_to_string(root.join(&relative))?,
+                };
+                let editor = cx.new(|cx| {
+                    EditorState::new(window, cx)
+                        .default_value(contents)
+                        .language(language_for_path(&relative))
+                        .folding(false)
+                });
+                Ok(Self::Document {
                     root,
-                    document: TextDocument {
-                        relative_path: relative,
-                        contents,
-                    },
-                }
+                    relative,
+                    document,
+                    editor,
+                })
             }
             PanelPayload::Inspector { root } => WorkspaceSession::open(&root)
                 .map(|session| Self::Inspector {
@@ -297,19 +427,23 @@ impl PanelContent {
                     file_count: session.files().len(),
                     document_count: session.documents().len(),
                 })
-                .unwrap_or(Self::Inspector {
-                    root,
-                    file_count: 0,
-                    document_count: 0,
+                .or_else(|_| {
+                    Ok(Self::Inspector {
+                        root,
+                        file_count: 0,
+                        document_count: 0,
+                    })
                 }),
             PanelPayload::Output { root } => WorkspaceSession::open(&root)
                 .map(|session| Self::Output {
                     root: root.clone(),
                     file_count: session.files().len(),
                 })
-                .unwrap_or(Self::Output {
-                    root,
-                    file_count: 0,
+                .or_else(|_| {
+                    Ok(Self::Output {
+                        root,
+                        file_count: 0,
+                    })
                 }),
         }
     }
@@ -317,9 +451,9 @@ impl PanelContent {
     fn payload(&self) -> PanelPayload {
         match self {
             Self::Explorer { root, .. } => PanelPayload::Explorer { root: root.clone() },
-            Self::Document { root, document } => PanelPayload::Document {
+            Self::Document { root, relative, .. } => PanelPayload::Document {
                 root: root.clone(),
-                relative: document.relative_path.clone(),
+                relative: relative.clone(),
             },
             Self::Inspector { root, .. } => PanelPayload::Inspector { root: root.clone() },
             Self::Output { root, .. } => PanelPayload::Output { root: root.clone() },
@@ -338,8 +472,7 @@ impl PanelContent {
     fn title(&self) -> SharedString {
         match self {
             Self::Explorer { .. } => "Explorer".into(),
-            Self::Document { document, .. } => document
-                .relative_path
+            Self::Document { relative, .. } => relative
                 .file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("Document")
@@ -354,14 +487,107 @@ impl PanelContent {
 struct WorkbenchPanel {
     content: PanelContent,
     focus: FocusHandle,
+    recovery_epoch: u64,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl WorkbenchPanel {
-    fn new(content: PanelContent, cx: &mut App) -> Entity<Self> {
-        cx.new(|cx| Self {
-            content,
-            focus: cx.focus_handle(),
-        })
+    fn from_payload(
+        payload: PanelPayload,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> io::Result<Entity<Self>> {
+        let content = PanelContent::from_payload(payload, window, cx)?;
+        Ok(cx.new(|cx| {
+            let mut panel = Self {
+                content,
+                focus: cx.focus_handle(),
+                recovery_epoch: 0,
+                _subscriptions: Vec::new(),
+            };
+            if let PanelContent::Document {
+                root,
+                relative,
+                document,
+                editor,
+            } = &panel.content
+            {
+                let root = root.clone();
+                let relative = relative.clone();
+                let editor_for_selection = editor.clone();
+                let root_for_selection = root.clone();
+                let relative_for_selection = relative.clone();
+                panel
+                    ._subscriptions
+                    .push(cx.observe(editor, move |_, _, cx| {
+                        let position = editor_for_selection.read(cx).cursor_position();
+                        cx.global_mut::<EditorDocuments>().set_selection(
+                            &root_for_selection,
+                            relative_for_selection.clone(),
+                            position.line as usize,
+                            position.character as usize,
+                        );
+                        cx.refresh_windows();
+                    }));
+                if let Some(document) = document {
+                    let document_for_change = document.clone();
+                    let change_subscription = cx.subscribe(
+                        editor,
+                        move |panel: &mut WorkbenchPanel, editor, event: &InputEvent, cx| {
+                            if !matches!(event, InputEvent::Change) {
+                                return;
+                            }
+                            let editor = editor.read(cx);
+                            let contents = editor.value().to_string();
+                            let position = editor.cursor_position();
+                            let changed =
+                                document_for_change.borrow_mut().replace_contents(contents);
+                            document_for_change
+                                .borrow_mut()
+                                .set_selection(position.line as usize, position.character as usize);
+                            cx.global_mut::<EditorDocuments>().set_selection(
+                                &root,
+                                relative.clone(),
+                                position.line as usize,
+                                position.character as usize,
+                            );
+                            if changed {
+                                panel.recovery_epoch = panel.recovery_epoch.wrapping_add(1);
+                                let epoch = panel.recovery_epoch;
+                                let document = document_for_change.clone();
+                                let root = root.clone();
+                                cx.global_mut::<EditorDocuments>()
+                                    .set_notice(&root, "Unsaved changes");
+                                cx.spawn(async move |panel, cx| {
+                                    cx.background_executor()
+                                        .timer(Duration::from_millis(350))
+                                        .await;
+                                    let _ = panel.update(cx, |panel, cx| {
+                                        if panel.recovery_epoch == epoch {
+                                            let notice =
+                                                match document.borrow_mut().persist_recovery() {
+                                                    Ok(()) => "Recovery draft saved".to_owned(),
+                                                    Err(error) => {
+                                                        format!("Recovery draft failed: {error}")
+                                                    }
+                                                };
+                                            cx.global_mut::<EditorDocuments>()
+                                                .set_notice(&root, notice);
+                                            cx.refresh_windows();
+                                        }
+                                    });
+                                })
+                                .detach();
+                            }
+                            cx.notify();
+                            cx.refresh_windows();
+                        },
+                    );
+                    panel._subscriptions.push(change_subscription);
+                }
+            }
+            panel
+        }))
     }
 }
 
@@ -477,18 +703,27 @@ impl Render for WorkbenchPanel {
                     )
                     .into_any_element()
             }
-            PanelContent::Document { document, .. } => div()
+            PanelContent::Document {
+                document, editor, ..
+            } => div()
                 .id("document-content")
                 .size_full()
-                .overflow_scroll()
                 .rounded_b(px(VIEW_RADIUS_PX))
                 .bg(rgb(0x10151b))
-                .p_3()
-                .font_family(mono)
-                .text_xs()
-                .line_height(px(20.))
-                .text_color(rgb(0xb8c4cf))
-                .child(document_preview(&document.contents))
+                .overflow_hidden()
+                .child(
+                    Editor::new(editor)
+                        .appearance(false)
+                        .bordered(false)
+                        .readonly(document.is_none())
+                        .size_full()
+                        .relative()
+                        .left(px(-4.))
+                        .p_1()
+                        .font_family(mono)
+                        .text_sm()
+                        .text_color(rgb(0xc4ced8)),
+                )
                 .into_any_element(),
             PanelContent::Inspector {
                 root,
@@ -505,12 +740,7 @@ impl Render for WorkbenchPanel {
                 .child(property_row("Text files", file_count.to_string()))
                 .child(property_row("Open documents", document_count.to_string()))
                 .child(section_label("SELECTION"))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(MUTED))
-                        .child("No structured selection"),
-                )
+                .child(selection_summary(root, cx))
                 .into_any_element(),
             PanelContent::Output { root, file_count } => div()
                 .size_full()
@@ -527,6 +757,12 @@ impl Render for WorkbenchPanel {
                     PRIMARY,
                     format!("{file_count} text files discovered"),
                 ))
+                .when_some(
+                    cx.global::<EditorDocuments>()
+                        .notice(root)
+                        .map(str::to_owned),
+                    |this, notice| this.child(output_line("EDIT", PRIMARY, notice)),
+                )
                 .into_any_element(),
         };
         div()
@@ -566,12 +802,61 @@ fn output_line(label: &'static str, color: u32, value: String) -> impl IntoEleme
         .child(value)
 }
 
-fn document_preview(contents: &str) -> SharedString {
-    let mut preview = contents.lines().take(600).collect::<Vec<_>>().join("\n");
-    if contents.lines().nth(600).is_some() {
-        preview.push_str("\n\n… document preview limited to 600 lines");
+fn selection_summary(root: &Path, cx: &App) -> AnyElement {
+    match cx.global::<EditorDocuments>().selection(root) {
+        Some((path, line, column)) => {
+            let diagnostics = cx
+                .global::<EditorDocuments>()
+                .diagnostics_for(root, path)
+                .take(3)
+                .map(|diagnostic| {
+                    let color = match diagnostic.level {
+                        keine_authoring::DiagnosticLevel::Warning => 0xd2aa62,
+                        keine_authoring::DiagnosticLevel::Error => 0xdb7780,
+                    };
+                    div().text_color(rgb(color)).child(format!(
+                        "{}:{}  {}",
+                        diagnostic.line, diagnostic.column, diagnostic.message
+                    ))
+                })
+                .collect::<Vec<_>>();
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .text_xs()
+                .text_color(rgb(0xb8c4cf))
+                .child(path.display().to_string())
+                .child(format!("Line {}, column {}", line + 1, column + 1))
+                .children(diagnostics)
+                .into_any_element()
+        }
+        None => div()
+            .text_xs()
+            .text_color(rgb(MUTED))
+            .child("No source selection")
+            .into_any_element(),
     }
-    preview.into()
+}
+
+fn language_for_path(path: &Path) -> &'static str {
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some("json") => "json",
+        Some("yaml" | "yml") => "yaml",
+        _ => "plaintext",
+    }
+}
+
+fn is_native_authoring_document(root: &Path, relative: &Path) -> bool {
+    if !root.join("config.yaml").is_file() {
+        return false;
+    }
+    relative == Path::new("config.yaml")
+        || (relative.starts_with("scripts")
+            && relative
+                .extension()
+                .and_then(|extension| extension.to_str())
+                == Some("txt"))
 }
 
 fn register_workbench_panels(cx: &mut App) {
@@ -581,24 +866,38 @@ fn register_workbench_panels(cx: &mut App) {
         INSPECTOR_PANEL,
         OUTPUT_PANEL,
     ] {
-        register_panel(cx, name, |context, _, cx| {
-            panel_handle(WorkbenchPanel::new(panel_content(context), cx))
+        register_panel(cx, name, |context, window, cx| {
+            let panel = workbench_panel(context, window, cx).unwrap_or_else(|error| {
+                WorkbenchPanel::from_payload(
+                    PanelPayload::Output {
+                        root: PathBuf::new(),
+                    },
+                    window,
+                    cx,
+                )
+                .unwrap_or_else(|_| panic!("could not construct fallback panel: {error}"))
+            });
+            panel_handle(panel)
         });
     }
 }
 
-fn panel_content(context: PanelBuildContext<'_>) -> PanelContent {
+fn workbench_panel(
+    context: PanelBuildContext<'_>,
+    window: &mut Window,
+    cx: &mut App,
+) -> io::Result<Entity<WorkbenchPanel>> {
     match context.info() {
         PanelInfo::Panel(value) => serde_json::from_value::<PanelPayload>(value.clone())
-            .map(PanelContent::from_payload)
-            .unwrap_or_else(|_| PanelContent::Output {
+            .map_err(io::Error::other)
+            .and_then(|payload| WorkbenchPanel::from_payload(payload, window, cx)),
+        _ => WorkbenchPanel::from_payload(
+            PanelPayload::Output {
                 root: PathBuf::new(),
-                file_count: 0,
-            }),
-        _ => PanelContent::Output {
-            root: PathBuf::new(),
-            file_count: 0,
-        },
+            },
+            window,
+            cx,
+        ),
     }
 }
 
@@ -1302,72 +1601,59 @@ fn install_default_layout(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let explorer = WorkbenchPanel::new(
-        PanelContent::Explorer {
+    let explorer = WorkbenchPanel::from_payload(
+        PanelPayload::Explorer {
             root: session.root().to_owned(),
-            files: session.files().to_vec(),
         },
+        window,
         cx,
-    );
+    )
+    .expect("workspace explorer must be constructible");
     let mut documents = session
         .documents()
         .iter()
-        .cloned()
         .map(|document| {
-            WorkbenchPanel::new(
-                PanelContent::Document {
+            WorkbenchPanel::from_payload(
+                PanelPayload::Document {
                     root: session.root().to_owned(),
-                    document,
+                    relative: document.relative_path.clone(),
                 },
+                window,
                 cx,
             )
+            .expect("indexed document must remain readable")
         })
         .collect::<Vec<_>>();
-    while documents.len() < 2 {
-        let number = documents.len() + 1;
-        documents.push(WorkbenchPanel::new(
-            PanelContent::Document {
-                root: session.root().to_owned(),
-                document: TextDocument {
-                    relative_path: PathBuf::from(format!("No document {number}")),
-                    contents: "No additional readable text document was found.".into(),
-                },
-            },
-            cx,
-        ));
+    let inspector = WorkbenchPanel::from_payload(
+        PanelPayload::Inspector {
+            root: session.root().to_owned(),
+        },
+        window,
+        cx,
+    )
+    .expect("workspace inspector must be constructible");
+    let output = WorkbenchPanel::from_payload(
+        PanelPayload::Output {
+            root: session.root().to_owned(),
+        },
+        window,
+        cx,
+    )
+    .expect("workspace output must be constructible");
+    let mut document_tabs = DockLayout::tabs();
+    for document in documents.drain(..) {
+        document_tabs = document_tabs.panel_view(panel_handle(document), cx);
     }
-    let inspector = WorkbenchPanel::new(
-        PanelContent::Inspector {
-            root: session.root().to_owned(),
-            file_count: session.files().len(),
-            document_count: session.documents().len(),
-        },
-        cx,
-    );
-    let output = WorkbenchPanel::new(
-        PanelContent::Output {
-            root: session.root().to_owned(),
-            file_count: session.files().len(),
-        },
-        cx,
-    );
     let layout = DockLayout::h_split()
         .child(
             DockLayout::tabs().panel_view(panel_handle(explorer), cx),
             Some(px(220.)),
         )
         .child(
-            DockLayout::v_split()
-                .child(
-                    DockLayout::tabs()
-                        .panel_view(panel_handle(documents.remove(0)), cx)
-                        .panel_view(panel_handle(documents.remove(0)), cx),
-                    None,
-                )
-                .child(
-                    DockLayout::tabs().panel_view(panel_handle(output), cx),
-                    Some(px(150.)),
-                ),
+            DockLayout::v_split().child(document_tabs, None).child(
+                DockLayout::tabs().panel_view(panel_handle(output), cx),
+                Some(px(150.)),
+            ),
             None,
         )
         .child(
@@ -1382,8 +1668,36 @@ struct WorkbenchWindow {
     persistence: AppPersistence,
     workspace: Option<ProjectWorkspace>,
     recents: Vec<PathBuf>,
-    has_unsaved_changes: bool,
+    engine: Option<EngineProcess>,
+    engine_status: EngineStatus,
+    engine_generation: u64,
+    allow_close: bool,
+    close_prompt_open: bool,
     focus: FocusHandle,
+}
+
+#[derive(Clone, Debug)]
+enum EngineStatus {
+    Off,
+    Starting,
+    Ready,
+    Stopping,
+    Failed(String),
+}
+
+fn install_close_guard(window: &mut Window, workbench: WeakEntity<WorkbenchWindow>, cx: &App) {
+    window.on_window_should_close(cx, move |window, cx| {
+        workbench
+            .update(cx, |workbench, cx| {
+                if workbench.allow_close || !workbench.has_unsaved_documents(cx) {
+                    true
+                } else {
+                    workbench.confirm_close(window, cx);
+                    false
+                }
+            })
+            .unwrap_or(true)
+    });
 }
 
 impl WorkbenchWindow {
@@ -1391,14 +1705,20 @@ impl WorkbenchWindow {
         editor: WeakEntity<EditorApp>,
         persistence: AppPersistence,
         recents: Vec<PathBuf>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        install_close_guard(window, cx.weak_entity(), cx);
         Self {
             editor,
             persistence,
             workspace: None,
             recents,
-            has_unsaved_changes: false,
+            engine: None,
+            engine_status: EngineStatus::Off,
+            engine_generation: 0,
+            allow_close: false,
+            close_prompt_open: false,
             focus: cx.focus_handle(),
         }
     }
@@ -1410,13 +1730,18 @@ impl WorkbenchWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        install_close_guard(window, cx.weak_entity(), cx);
         let workspace = ProjectWorkspace::new(session, &persistence, window, cx);
         Self {
             editor,
             persistence,
             workspace: Some(workspace),
             recents: Vec::new(),
-            has_unsaved_changes: false,
+            engine: None,
+            engine_status: EngineStatus::Off,
+            engine_generation: 0,
+            allow_close: false,
+            close_prompt_open: false,
             focus: cx.focus_handle(),
         }
     }
@@ -1434,7 +1759,8 @@ impl WorkbenchWindow {
             cx,
         ));
         self.recents.clear();
-        self.has_unsaved_changes = false;
+        self.engine = None;
+        self.engine_status = EngineStatus::Off;
         cx.notify();
     }
 
@@ -1454,8 +1780,185 @@ impl WorkbenchWindow {
         cx.notify();
     }
 
+    fn save(&mut self, _: &Save, _: &mut Window, cx: &mut Context<Self>) {
+        self.save_documents(cx);
+    }
+
+    fn save_all(&mut self, _: &SaveAll, _: &mut Window, cx: &mut Context<Self>) {
+        self.save_documents(cx);
+    }
+
+    fn save_documents(&mut self, cx: &mut Context<Self>) {
+        let Some(root) = self
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.session.root().to_owned())
+        else {
+            return;
+        };
+        let result = cx.global_mut::<EditorDocuments>().save_all(&root);
+        let notice = match result {
+            Ok(0) => "No changes to save".to_owned(),
+            Ok(1) => "Saved 1 document".to_owned(),
+            Ok(count) => format!("Saved {count} documents"),
+            Err(error) => format!("Save blocked: {error}"),
+        };
+        cx.global_mut::<EditorDocuments>().set_notice(&root, notice);
+        cx.notify();
+        cx.refresh_windows();
+    }
+
+    fn toggle_engine(&mut self, _: &ToggleEngine, _: &mut Window, cx: &mut Context<Self>) {
+        if matches!(
+            self.engine_status,
+            EngineStatus::Starting | EngineStatus::Stopping
+        ) {
+            return;
+        }
+        let Some(root) = self
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.session.root().to_owned())
+        else {
+            return;
+        };
+        if let Some(mut engine) = self.engine.take() {
+            self.engine_status = EngineStatus::Stopping;
+            cx.global_mut::<EditorDocuments>()
+                .set_notice(&root, "Stopping Engine authoring host…");
+            let shutdown = cx
+                .background_executor()
+                .spawn(async move { engine.shutdown() });
+            cx.spawn(async move |this, cx| {
+                let result = shutdown.await;
+                let _ = this.update(cx, |this, cx| {
+                    this.engine_status = match result {
+                        Ok(()) => EngineStatus::Off,
+                        Err(error) => EngineStatus::Failed(error.to_string()),
+                    };
+                    let notice = match &this.engine_status {
+                        EngineStatus::Off => "Engine authoring host stopped".to_owned(),
+                        EngineStatus::Failed(error) => format!("Engine stop failed: {error}"),
+                        _ => unreachable!(),
+                    };
+                    cx.global_mut::<EditorDocuments>().set_notice(&root, notice);
+                    cx.notify();
+                    cx.refresh_windows();
+                });
+            })
+            .detach();
+            cx.notify();
+            return;
+        }
+
+        self.engine_generation = self.engine_generation.wrapping_add(1).max(1);
+        let generation = self.engine_generation;
+        self.engine_status = EngineStatus::Starting;
+        cx.global_mut::<EditorDocuments>()
+            .set_notice(&root, "Starting Engine authoring host…");
+        let project = root.clone();
+        let launch = cx.background_executor().spawn(async move {
+            let executable = EngineLocator::current()?.locate()?;
+            let mut engine = EngineProcess::launch(&executable, &project, generation)?;
+            let report = engine.validate()?;
+            Ok::<_, io::Error>((engine, report))
+        });
+        cx.spawn(async move |this, cx| {
+            let result = launch.await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok((engine, report)) => {
+                        let summary = format!(
+                            "{} scenes · {} actions · {} warnings · {} errors",
+                            report.scenes, report.actions, report.warnings, report.errors
+                        );
+                        this.engine = Some(engine);
+                        this.engine_status = EngineStatus::Ready;
+                        let documents = cx.global_mut::<EditorDocuments>();
+                        documents.set_diagnostics(&root, report.diagnostics);
+                        documents.set_notice(&root, format!("Engine ready · {summary}"));
+                    }
+                    Err(error) => {
+                        this.engine_status = EngineStatus::Failed(error.to_string());
+                        cx.global_mut::<EditorDocuments>()
+                            .set_notice(&root, format!("Engine failed: {error}"));
+                    }
+                }
+                cx.notify();
+                cx.refresh_windows();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn has_unsaved_documents(&self, cx: &App) -> bool {
+        self.workspace.as_ref().is_some_and(|workspace| {
+            cx.global::<EditorDocuments>()
+                .has_dirty_documents(workspace.session.root())
+        })
+    }
+
+    fn confirm_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.close_prompt_open {
+            return;
+        }
+        self.close_prompt_open = true;
+        let receiver = window.prompt(
+            PromptLevel::Warning,
+            "Save changes before closing?",
+            Some("Unsaved source changes have a recovery draft, but are not in the project yet."),
+            &[
+                PromptButton::Other("Save and Close".into()),
+                PromptButton::Other("Close Without Saving".into()),
+                PromptButton::Cancel("Cancel".into()),
+            ],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = receiver.await.ok();
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.close_prompt_open = false;
+                match answer {
+                    Some(0) => {
+                        let Some(root) = this
+                            .workspace
+                            .as_ref()
+                            .map(|workspace| workspace.session.root().to_owned())
+                        else {
+                            this.allow_close = true;
+                            window.remove_window();
+                            return;
+                        };
+                        match cx.global_mut::<EditorDocuments>().save_all(&root) {
+                            Ok(_) => {
+                                this.allow_close = true;
+                                window.remove_window();
+                            }
+                            Err(error) => {
+                                cx.global_mut::<EditorDocuments>()
+                                    .set_notice(&root, format!("Save blocked: {error}"));
+                                cx.refresh_windows();
+                            }
+                        }
+                    }
+                    Some(1) => {
+                        this.allow_close = true;
+                        window.remove_window();
+                    }
+                    _ => {}
+                }
+            });
+        })
+        .detach();
+    }
+
     fn render_activity_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let editor = self.editor.clone();
+        let has_unsaved_changes = self.workspace.as_ref().is_some_and(|workspace| {
+            cx.global::<EditorDocuments>()
+                .has_dirty_documents(workspace.session.root())
+        });
         let rail = div()
             .id("activity-rail-content")
             .size_full()
@@ -1474,7 +1977,7 @@ impl WorkbenchWindow {
                     .items_center()
                     .justify_center()
                     .rounded(px(7.))
-                    .bg(if self.has_unsaved_changes {
+                    .bg(if has_unsaved_changes {
                         rgb(0xdb7780)
                     } else {
                         rgb(PRIMARY)
@@ -1501,6 +2004,29 @@ impl WorkbenchWindow {
             )
             .child(activity_icon("activity-search", IconName::Search))
             .child(activity_icon("activity-inspector", IconName::Inspector))
+            .when(self.workspace.is_some(), |this| {
+                let color = match &self.engine_status {
+                    EngineStatus::Ready => SUCCESS,
+                    EngineStatus::Failed(_) => 0xdb7780,
+                    EngineStatus::Starting | EngineStatus::Stopping => PRIMARY,
+                    EngineStatus::Off => 0x74818e,
+                };
+                this.child(
+                    div()
+                        .id("activity-engine")
+                        .size(px(30.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(7.))
+                        .cursor_pointer()
+                        .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.toggle_engine(&ToggleEngine, window, cx)
+                        }))
+                        .child(Icon::new(IconName::Play).small().text_color(rgb(color))),
+                )
+            })
             .child(div().flex_1())
             .child(
                 div()
@@ -1690,6 +2216,9 @@ impl Render for WorkbenchWindow {
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::open_folder))
             .on_action(cx.listener(Self::reset_layout))
+            .on_action(cx.listener(Self::save))
+            .on_action(cx.listener(Self::save_all))
+            .on_action(cx.listener(Self::toggle_engine))
             .relative()
             .size_full()
             .flex()
@@ -1804,14 +2333,21 @@ pub fn run() {
         .run(move |cx: &mut App| {
             gpui_kit::init(cx);
             configure_dark_theme(cx);
+            let persistence = AppPersistence::new(app_data.clone());
+            cx.set_global(EditorDocuments::new(persistence.clone()));
             register_workbench_panels(cx);
             cx.bind_keys([
                 KeyBinding::new("cmd-o", OpenFolder, Some("KeineWorkbench")),
                 KeyBinding::new("ctrl-o", OpenFolder, Some("KeineWorkbench")),
+                KeyBinding::new("cmd-s", Save, Some("KeineWorkbench")),
+                KeyBinding::new("ctrl-s", Save, Some("KeineWorkbench")),
+                KeyBinding::new("cmd-shift-s", SaveAll, Some("KeineWorkbench")),
+                KeyBinding::new("ctrl-shift-s", SaveAll, Some("KeineWorkbench")),
+                KeyBinding::new("cmd-shift-r", ToggleEngine, Some("KeineWorkbench")),
+                KeyBinding::new("ctrl-shift-r", ToggleEngine, Some("KeineWorkbench")),
                 KeyBinding::new("cmd-shift-0", ResetLayout, Some("KeineWorkbench")),
                 KeyBinding::new("ctrl-shift-0", ResetLayout, Some("KeineWorkbench")),
             ]);
-            let persistence = AppPersistence::new(app_data.clone());
             let editor = cx.new(|cx| EditorApp::new(cx.weak_entity(), persistence, instance));
             let weak_editor = editor.downgrade();
             editor.update(cx, |editor, cx| {

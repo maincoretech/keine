@@ -1,5 +1,6 @@
 pub(crate) mod asset_reader;
 pub(crate) mod audio;
+pub(crate) mod authoring;
 pub(crate) mod bootstrap;
 pub(crate) mod bounded_input;
 mod cli;

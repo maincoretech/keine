@@ -251,6 +251,9 @@ fn execute_command(
     #[cfg(feature = "hardened")]
     super::platform::apply_hardening();
     let (project_path, action) = match command {
+        CliCommand::AuthoringHost { endpoint, token } => {
+            return super::authoring::run(&endpoint, &token, loader);
+        }
         #[cfg(feature = "configure")]
         CliCommand::Configure => {
             anyhow::bail!("engine configuration must run before project setup")
@@ -1328,11 +1331,45 @@ fn check_project(
     content: &ContentProject,
     languages: &keine_loader::ScriptLanguageRegistry,
 ) -> Result<()> {
+    let report = validate_project(config, content, languages)?;
+    for diagnostic in &report.diagnostics {
+        eprintln!(
+            "{}: {}:{}:{}: {}",
+            match diagnostic.level {
+                keine_authoring::DiagnosticLevel::Warning => "warning",
+                keine_authoring::DiagnosticLevel::Error => "error",
+            },
+            diagnostic.path.display(),
+            diagnostic.line,
+            diagnostic.column,
+            diagnostic.message
+        );
+    }
+    if report.errors > 0 {
+        anyhow::bail!(
+            "project check failed with {} error(s) and {} warning(s)",
+            report.errors,
+            report.warnings
+        );
+    }
+    println!(
+        "project valid · {} · {} scene(s) · {} action(s) · {} source(s) · {} warning(s)",
+        report.title, report.scenes, report.actions, report.sources, report.warnings,
+    );
+    Ok(())
+}
+
+pub(crate) fn validate_project(
+    config: &GameConfig,
+    content: &ContentProject,
+    languages: &keine_loader::ScriptLanguageRegistry,
+) -> Result<keine_authoring::ValidationReport> {
     let scenes =
         load_scenes_with(content, languages).context("failed to compile project scenes")?;
     let mut actions = 0usize;
     let mut warnings = 0usize;
     let mut errors = 0usize;
+    let mut diagnostics = Vec::new();
     let mut missing_resources = HashSet::new();
     for scene in &scenes {
         actions += scene.actions.len();
@@ -1340,20 +1377,20 @@ fn check_project(
             let level = match diagnostic.level {
                 DiagnosticLevel::Warning => {
                     warnings += 1;
-                    "warning"
+                    keine_authoring::DiagnosticLevel::Warning
                 }
                 DiagnosticLevel::Error => {
                     errors += 1;
-                    "error"
+                    keine_authoring::DiagnosticLevel::Error
                 }
             };
-            eprintln!(
-                "{level}: {}:{}:{}: {}",
-                scene.path.display(),
-                diagnostic.span.line,
-                diagnostic.span.column,
-                diagnostic.message
-            );
+            diagnostics.push(keine_authoring::Diagnostic {
+                level,
+                path: scene.path.clone(),
+                line: diagnostic.span.line,
+                column: diagnostic.span.column,
+                message: diagnostic.message.clone(),
+            });
         }
         for resource in &scene.resources {
             let path = resource.resolved_path(config);
@@ -1365,25 +1402,25 @@ fn check_project(
             }
             if !content.contains_asset(Path::new(&path)) {
                 errors += 1;
-                eprintln!(
-                    "error: {}:{}:{}: resource does not exist: {path}",
-                    scene.path.display(),
-                    resource.span.line,
-                    resource.span.column,
-                );
+                diagnostics.push(keine_authoring::Diagnostic {
+                    level: keine_authoring::DiagnosticLevel::Error,
+                    path: scene.path.clone(),
+                    line: resource.span.line,
+                    column: resource.span.column,
+                    message: format!("resource does not exist: {path}"),
+                });
             }
         }
     }
-    if errors > 0 {
-        anyhow::bail!("project check failed with {errors} error(s) and {warnings} warning(s)");
-    }
-    println!(
-        "project valid · {} · {} scene(s) · {actions} action(s) · {} source(s) · {warnings} warning(s)",
-        config.title,
-        scenes.len(),
-        content.sources.len(),
-    );
-    Ok(())
+    Ok(keine_authoring::ValidationReport {
+        title: config.title.clone(),
+        scenes: scenes.len(),
+        actions,
+        sources: content.sources.len(),
+        warnings,
+        errors,
+        diagnostics,
+    })
 }
 
 #[derive(Debug)]

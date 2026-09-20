@@ -28,10 +28,14 @@
   release feature sets, WebP fuzz smoke, and Linux FFmpeg ASan acceptance. Desktop video fixtures
   cover no-audio, long-GOP, tail-`moov`, damaged-header, rewind, cancellation, FS, and encrypted
   Hakutaku sources.
-- `keine-editor` provides the Phase 1 read-only workbench: Empty Workbench and Open Recent/Folder,
+- `keine-editor` provides the Phase 3 workbench: Empty Workbench and Open Recent/Folder,
   one physical project per native window, secondary-launch routing, real project discovery and
   source-backed document tabs, upstream Dock layout interactions, schema-versioned app-data layout
-  persistence, and Reset Layout. It remains excluded from the root Engine's default build.
+  persistence, and Reset Layout. Native `config.yaml` and `scripts/*.txt` have source-preserving
+  editing, IME/undo, conflict-safe atomic save, and app-data recovery; compatibility JSON remains
+  read-only. A bounded binary authoring protocol launches one prebuilt Engine child per project for
+  handshake, validation, diagnostics, and no-frame lifecycle control. The editor remains excluded
+  from the root Engine's default build.
 
 ## Architecture and interfaces
 
@@ -102,14 +106,15 @@ project / package
   anticipation of them.
 - Windows/Linux video remains software-decoded RGBA upload. Hardware decode or zero-copy work
   requires real target hardware, distribution, and device-loss evidence first.
-- The Editor's writable document model, production authoring host, shared-memory mapping, GPUI
-  frame upload, and adaptive preview scheduling are not implemented. Phase 0 selects a raw
+- The Editor's shared-memory mapping, GPUI frame upload, complete Preview view, live document
+  snapshot/patch flow, runtime input forwarding, and adaptive preview scheduling are not
+  implemented. Phase 0 selects a raw
   latest-frame-wins triple buffer; a native child surface or compression requires end-to-end
   release evidence.
 
 ## Known status
 
-- No confirmed P0/P1 defect is open on current main.
+- No confirmed P0-P3 defect is open on current main.
 - The main evidence gaps are cross-platform visual acceptance and representative packaged-project
   runs on low-end hardware and slow storage, not missing safety boundaries in the canonical
   WebP/Opus/Hakutaku paths.
@@ -151,6 +156,16 @@ project / package
   use integrated card titles rather than fake tabs. Document tab selection and close use restrained
   reduced-motion-aware transitions. Explorer preserves long paths through horizontal scrolling,
   with a subtle scrollbar and right-edge overflow fade.
+- Editor Phase 2 makes only native `config.yaml` and `scripts/*.txt` writable. One authoritative
+  source document owns text, revisions, dirty state, selection, undo/redo, external-change checks,
+  atomic saves, and binary app-data recovery. LetsGal and other JSON documents remain read-only.
+  The line-number gutter omits the unused folding column, and macOS acceptance covered Unicode
+  input, dirty/saved indication, save, recovery, selection, and the unsaved-close prompt.
+- Editor Phase 3 adds a Bevy-free, 256 KiB-bounded, length-prefixed Postcard control protocol and
+  a hidden Engine authoring-host mode. The Editor directly launches a prebuilt Engine executable,
+  validates version/capabilities, opens and validates one project per child, exposes source
+  diagnostics and no-frame lifecycle, and performs bounded shutdown. Process tests cover protocol
+  mismatch and two isolated sessions; frame transport remains Phase 4.
 
 ## Active task queue
 

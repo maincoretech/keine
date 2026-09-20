@@ -1,0 +1,12 @@
+[package]
+name = "keine-authoring"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Versioned Kēne editor-to-engine authoring protocol"
+repository = "https://github.com/maincoretech/keine"
+publish = false
+
+[dependencies]
+postcard = { workspace = true }
+serde = { workspace = true }
