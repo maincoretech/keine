@@ -2,7 +2,7 @@
 
 ## Status
 
-In progress in the integration tree.
+Complete.
 
 ## Depends on
 
@@ -54,8 +54,25 @@ notarization, and representative cross-platform release acceptance.
 
 ## External acceptance record
 
-Pending until the reusable workflow is committed and invoked from a private game repository. Do
-not mark this task complete based only on local validation or the same-repository smoke caller.
+On 2026-09-21, the private repository
+`shiftz300/keine-project-ci-acceptance` invoked the reusable workflow from project commit
+`b007f16b46ea618eb2ae3935f7ee64a6e658a9d4`, pinned to Kēne commit
+`0e39761675d9d8e3400ba30fe41364aabd1072ca`. The required
+`HAKUTAKU_IDENTITY_BASE64` repository secret contained the base64-encoded stable test-project
+identity and was restored only below `RUNNER_TEMP`.
+
+[Run 35544083557](https://github.com/shiftz300/keine-project-ci-acceptance/actions/runs/35544083557)
+completed successfully on `ubuntu-24.04` in 37m51s. It compiled four scenes and 95 actions with
+zero warnings, selected `ui-sounds`, built the publisher and hardened Engine from source with Rust
+1.97.1, removed the decoded identity, ran the Linux executable, wrote provenance, and uploaded the
+`keine-phase6-linux-x64` artifact. The 24 MB artifact digest was
+`sha256:c0fa8e3121b67842af0cf81c3de04ec22645e61dff40b3be938a8b42e28f8928`.
+
+The downloaded ZIP matched that digest and passed an independent archive integrity check. It
+contained a stripped executable x86-64 Linux PIE, `game.haku`, three `data/*.taku` runtime assets,
+the icon, and `KEINE-PROVENANCE.txt`. It contained no `.shou`, JSON/YAML, Rust source, Cargo
+manifest, or publisher key. Provenance recorded the exact project and Kēne commits, Rust 1.97.1,
+`ubuntu-24.04`, Linux X64, `ui-sounds`, and the run URL.
 
 ## Local acceptance record
 

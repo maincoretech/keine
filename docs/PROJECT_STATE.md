@@ -35,7 +35,11 @@
   from a caller pinned to a full Kēne commit SHA. It selects Rust 1.97.1 and platform dependencies
   on a clean runner, rebuilds the hardened Engine from that same workflow commit, confines the
   stable publisher identity to runner-temporary storage, excludes caller/bundle/identity data from
-  caches, verifies the runnable result, and writes non-secret release provenance.
+  caches, verifies the runnable result, and writes non-secret release provenance. Private-repo
+  clean-runner acceptance passed at Kēne `0e39761675d9d8e3400ba30fe41364aabd1072ca` in
+  [run 35544083557](https://github.com/shiftz300/keine-project-ci-acceptance/actions/runs/35544083557);
+  the independently downloaded artifact matched its published digest and contained no source or
+  publisher key.
 - Save, backup, settings, profile, history, gallery, and preview paths have explicit input limits,
   transactional replacement, and post-commit cleanup warning semantics.
 - CI covers Linux, macOS, Windows x64, dependency advisories, platform media feature contracts,
@@ -242,7 +246,7 @@ project / package
 | [T15](tasks/T15-eiyashou-editor-projection.md) | complete | source-first Editor projection and explicit migration |
 | [T16](tasks/T16-editor-phase4-preview.md) | complete | real embedded Preview and bounded raw frame transport |
 | [T17](tasks/T17-editor-phase5-authoring-ux.md) | complete | source-safe core VN authoring workflow |
-| [T19](tasks/T19-project-ci-release.md) | in progress | Phase 6 pinned Project CI release chain |
+| [T19](tasks/T19-project-ci-release.md) | complete | Phase 6 pinned Project CI release chain |
 | [T03](tasks/T03-ui-visual-baseline.md) | user acceptance | UI and cross-platform visual evidence |
 
 ## Canonical references
