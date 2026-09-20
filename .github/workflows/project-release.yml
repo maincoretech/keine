@@ -124,8 +124,6 @@ jobs:
 
       - name: Select pinned Rust toolchain
         uses: dtolnay/rust-toolchain@4716b85f2fac3e324e64fa2810f6b5c3905760a5 # 1.97.1
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Detect canonical shipping features
         shell: bash
