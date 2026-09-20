@@ -9,7 +9,7 @@ mod keine {
     use super::{SavedState, StoreAdapter, StoreMetadata, StoreStatus};
 
     const MAGIC: [u8; 8] = *b"KEINE\0\0\0";
-    const VERSION: u32 = 10;
+    const VERSION: u32 = 11;
     const HEADER_SIZE: usize = 28;
     const MAX_METADATA_SIZE: usize = 64 * 1024;
     const MAX_STATE_SIZE: usize = 64 * 1024 * 1024;
@@ -372,6 +372,7 @@ mod keine {
             state.cursor = 2;
             state.dialogue = Some(Dialogue {
                 speaker: "Mio".into(),
+                speaker_color: None,
                 text: "Tomorrow, together.".into(),
                 markup: "[Tomorrow](bold), together.".into(),
                 visible_chars: 7,
@@ -413,6 +414,7 @@ mod keine {
             state.read_dialogues.insert(DialogueKey {
                 scene: "main".into(),
                 action_index: 1,
+                source_id: None,
             });
             state
                 .unlocked_cg
@@ -447,7 +449,7 @@ mod keine {
         }
 
         #[test]
-        fn save_v10_golden_is_stable() {
+        fn save_v11_golden_is_stable() {
             let mut state = State::new();
             state.install_program(Program::from_scenes([(
                 "main".into(),
@@ -458,12 +460,12 @@ mod keine {
             let bytes = encode_at(&state, 1_700_000_000).unwrap();
             if std::env::var_os("KEINE_UPDATE_STORE_GOLDEN").is_some() {
                 let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("tests/fixtures/store-v10.sav");
+                    .join("tests/fixtures/store-v11.sav");
                 std::fs::create_dir_all(path.parent().unwrap()).unwrap();
                 std::fs::write(path, &bytes).unwrap();
                 return;
             }
-            let expected = include_bytes!("../../tests/fixtures/store-v10.sav");
+            let expected = include_bytes!("../../tests/fixtures/store-v11.sav");
 
             assert_eq!(bytes.as_slice(), expected);
         }

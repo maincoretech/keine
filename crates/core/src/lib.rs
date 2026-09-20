@@ -15,15 +15,17 @@ pub use model::ShellEvent;
 pub use model::types::*;
 pub use model::{
     Action, ActiveParticleEffect, AssetHint, AssetHintKind, BgmState, CameraShakeState,
-    ChoiceTarget, DialoguePause, EffectCue, EffectEvent, EffectState, HostCommandEvent,
-    LoadingStrategy, LoadingStrategyMode, MenuChoice, MenuState, PersistenceHazard,
-    PersistenceSafety, PostProcessAnimation, Program, RestoreError, SayOptions, SceneFrame,
-    SpriteSequenceState, StageAnimation, StageAnimationState, StageAudioCue, StageAudioKind,
-    StageEvent, StageEventKind, StageKeyframe, StageMaskState, StageProperty, StageSceneCue,
-    StageSceneLayer, StageTarget, StageTrack, State, SystemMessageMode, SystemMessageSpec,
-    SystemUiSlot, TransformKeyframe, VideoState, VocalCue,
+    ChoiceTarget, DialoguePause, EffectCue, EffectEvent, EffectState, EiyashouAssignOp,
+    EiyashouBinaryOp, EiyashouChoice, EiyashouDialogue, EiyashouExpr, EiyashouListOperation,
+    EiyashouPlace, EiyashouScalarType, EiyashouText, EiyashouTextPart, EiyashouType,
+    EiyashouUnaryOp, HostCommandEvent, LoadingStrategy, LoadingStrategyMode, MenuChoice, MenuState,
+    PersistenceHazard, PersistenceSafety, PostProcessAnimation, Program, RestoreError, SayOptions,
+    SceneFrame, SpriteSequenceState, StageAnimation, StageAnimationState, StageAudioCue,
+    StageAudioKind, StageEvent, StageEventKind, StageKeyframe, StageMaskState, StageProperty,
+    StageSceneCue, StageSceneLayer, StageTarget, StageTrack, State, SystemMessageMode,
+    SystemMessageSpec, SystemUiSlot, TransformKeyframe, VideoState, VocalCue,
 };
-pub use runtime::StepResult;
+pub use runtime::{ScriptRuntimeError, StepResult};
 
 // Criterion is a bench-only dev-dependency; the lib-test build sees it as
 // available and the crate-level lint would otherwise report it as unused.

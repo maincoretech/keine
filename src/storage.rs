@@ -188,6 +188,7 @@ mod tests {
         state.read_dialogues.insert(DialogueKey {
             scene: "main".into(),
             action_index: 7,
+            source_id: None,
         });
         state
             .unlocked_cg

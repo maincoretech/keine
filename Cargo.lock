@@ -5420,6 +5420,8 @@ dependencies = [
  "fs2",
  "gpui-kit",
  "keine-authoring",
+ "keine-core",
+ "keine-loader",
  "postcard",
  "serde",
  "serde_json",

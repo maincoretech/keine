@@ -17,6 +17,7 @@ use keine_core::config::GameConfig;
 use keine_loader::compiled::{CompiledSceneV1, EncodeInput, ProgramMetadataV1, encode};
 use keine_loader::{
     ContentProject, DiagnosticLevel, LoadedScene, ScriptLanguageRegistry, load_scenes_with,
+    validate_native_entry_flow,
 };
 
 pub(crate) fn build_program(
@@ -24,8 +25,11 @@ pub(crate) fn build_program(
     content: &ContentProject,
     languages: &ScriptLanguageRegistry,
 ) -> Result<()> {
-    let scenes =
+    let mut scenes =
         load_scenes_with(content, languages).context("failed to compile project scenes")?;
+    if config.adapter.script.eq_ignore_ascii_case("keine") {
+        validate_native_entry_flow(&mut scenes, &config.script.entry);
+    }
     let warnings = validate_scenes(config, content, &scenes)?;
     let action_count = scenes
         .iter()
@@ -107,6 +111,14 @@ fn validate_scenes(
                 errors.push(format!("resource does not exist: {path}"));
             }
         }
+    }
+    if config.adapter.script.eq_ignore_ascii_case("keine")
+        && !scenes.iter().any(|scene| scene.name == config.script.entry)
+    {
+        errors.push(format!(
+            "native script entry scene {:?} does not exist",
+            config.script.entry
+        ));
     }
     if !errors.is_empty() {
         for error in &errors {
@@ -235,6 +247,34 @@ mod tests {
         )
         .unwrap();
         let languages = LoaderRegistry::default().languages("webgal").unwrap();
+        assert!(build_program(&config, &content, &languages).is_err());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn native_bundle_rejects_a_missing_configured_entry_scene() {
+        let root = std::env::temp_dir().join(format!(
+            "keine-program-build-native-entry-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(root.join("scripts")).unwrap();
+        fs::create_dir_all(root.join("assets")).unwrap();
+        fs::write(root.join("scripts/story.shou"), "scene opening { \"Hi\" }").unwrap();
+
+        let mut config = GameConfig::default();
+        config.adapter.script = "keine".into();
+        config.script.entry = "missing".into();
+        let content = load_project(
+            &root,
+            &[keine_core::config::AssetSourceConfig {
+                path: ".".to_string(),
+                format: "fs".to_string(),
+            }],
+        )
+        .unwrap();
+        let languages = LoaderRegistry::default().languages("keine").unwrap();
+
         assert!(build_program(&config, &content, &languages).is_err());
 
         let _ = fs::remove_dir_all(&root);

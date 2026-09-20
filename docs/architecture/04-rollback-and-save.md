@@ -7,7 +7,7 @@ keine 将四类生命周期不同的数据分开处理：
 | 数据域 | 当前表示 | 持久化位置 | 恢复规则 |
 |---|---|---|---|
 | 编译脚本 | `Arc<Program>` | 不进入存档 | 启动或热重载时由当前项目安装 |
-| 剧情时间点 | `State` 中的执行、舞台、交互、音频和局部变量 | v10 槽位 `.sav` | 只能恢复到 fingerprint 相同的当前 `Program` |
+| 剧情时间点 | `State` 中的执行、舞台、交互、音频和局部变量 | v11 槽位 `.sav` | 只能恢复到 fingerprint 相同的当前 `Program` |
 | 长效玩家数据 | global variables、已读历史、CG/BGM 解锁、设置 | `profile.bin`、`read_history.bin`、`gallery.bin`、`settings.bin` | 不被单槽读档或 Backlog 回想覆盖 |
 | 一次性运行事件 | `effect_queue` 等 | 不持久化 | 由呈现层消费，恢复时清空 |
 
@@ -45,11 +45,11 @@ keine 将四类生命周期不同的数据分开处理：
 - `State`、槽位 metadata 和每个 `RollbackSnapshot` 都携带该值；
 - `Program::insert_scene` 与 `State::install_program` 会同步重新计算或安装该值。
 
-fingerprint 是确定性的兼容身份，不是密码学签名，也不替代文件完整性校验。v10 存档分别以 CRC32 校验 metadata 与 state payload。
+fingerprint 是确定性的兼容身份，不是密码学签名，也不替代文件完整性校验。v11 存档分别以 CRC32 校验 metadata 与 state payload。
 
-## v10 二进制存档格式
+## v11 二进制存档格式
 
-当前原生存档版本为严格的 **v10**。一个 `slot_N.sav` 由 28-byte 固定 header、Postcard metadata 和 Postcard state payload 顺序组成：
+当前原生存档版本为严格的 **v11**。一个 `slot_N.sav` 由 28-byte 固定 header、Postcard metadata 和 Postcard state payload 顺序组成：
 
 ```text
 offset  size  field
@@ -85,9 +85,9 @@ metadata 上限为 64 KiB，state payload 上限为 64 MiB，连同 28-byte head
 
 因此脚本 Action 总数不会直接放大存档；长期玩家数据也不会被复制进每个槽位。
 
-固定 golden 位于 [`crates/loader/tests/fixtures/store-v10.sav`](../../crates/loader/tests/fixtures/store-v10.sav)，由 `save_v10_golden_is_stable` 防止无意改变字节格式。v10 保存可恢复的句尾退格状态，因此动画中途存档会在读档后从同一字符和点击等待阶段继续；舞台时间轴本身仍是恢复时清理的瞬态演出，不写入存档。v10 只接受自身的二进制布局。
+固定 golden 位于 [`crates/loader/tests/fixtures/store-v11.sav`](../../crates/loader/tests/fixtures/store-v11.sav)，由 `save_v11_golden_is_stable` 防止无意改变字节格式。v11 保存可恢复的句尾退格状态，因此动画中途存档会在读档后从同一字符和点击等待阶段继续；舞台时间轴本身仍是恢复时清理的瞬态演出，不写入存档。v11 只接受自身的二进制布局。
 
-v10 进一步持久化脚本游标之后仍会影响后续行为的逻辑表现状态：等待推进、系统消息、
+v11 进一步持久化脚本游标之后仍会影响后续行为的逻辑表现状态：等待推进、系统消息、
 幕布、浮动文字、立绘规则、对白/段落样式及 reveal override、sprite sequence。FFmpeg
 decoder、共享 stage timeline、camera/keyframe animation 等 native 时间轴仍不进入 payload。
 
@@ -149,7 +149,7 @@ saves/
 发行版使用由稳定 `project.id` 决定的平台用户数据目录。内容根始终只读；旧发行版遗留在
 内容旁的 sidecar 只会在新目录不存在时复制一次，永不反向覆盖或自动删除。
 
-预览 WebP 不嵌入 `.sav`，也不参与 v10 CRC。保存时由独立相机直接渲染到不超过
+预览 WebP 不嵌入 `.sav`，也不参与 v11 CRC。保存时由独立相机直接渲染到不超过
 480x270、保持当前窗口宽高比的目标，随后在有界后台队列中以质量 80 的有损 WebP
 编码；不回读全窗口纹理，也不在渲染线程缩放或编码。存档页通过 `IoTaskPool` 按当前页
 异步解码，强 `Handle<Image>` 缓存仅保留十个可见槽位。
@@ -174,6 +174,6 @@ writer cache。
 - version 不是 10：`inspect` 返回 `StoreStatus::Unsupported(version)`，`decode` 返回错误；当前没有旧版本迁移器；
 - magic、长度、metadata CRC32 或 metadata schema 无法解析：`Corrupt` 或 decode error；
 - state 截断或 state CRC32 不匹配：槽位前缀仍可展示，但实际 LOAD 返回 decode error；
-- v10 内容有效但 Program fingerprint 不匹配：文件格式有效，剧情恢复被 `ProgramMismatch` 拒绝。
+- v11 内容有效但 Program fingerprint 不匹配：文件格式有效，剧情恢复被 `ProgramMismatch` 拒绝。
 
 旧版本不能通过“尽量反序列化”静默加载。若未来需要迁移，应增加明确的版本 adapter、输入上限、迁移测试与新的固定 golden，并保持解码结果只能通过 `SavedState::restore_into` 进入运行态。

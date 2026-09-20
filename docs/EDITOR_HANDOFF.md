@@ -145,6 +145,9 @@ Editor UI
 - 预览不必始终开启，应允许按需显示；可分离预览是可接受方向。
 - UI 应保持清晰、实用，不为小场景引入大型框架或复杂抽象。
 - 实现应遵循 Rust 原生思路，不照搬 LetsGal/Electron 的进程、shell 或 JS 架构。
+- 工程目录/工程包可由预编译 Editor 与 Engine 编辑、预览和交付，不要求作者电脑安装
+  Rust；正式发行包必须由具备固定 Rust toolchain 和平台依赖的构建环境从固定 Keine
+  revision 重新编译匹配 Engine，通常由项目 CI 完成。两种产物不得混为一谈。
 
 “标签页”和“可分离预览”是方向，不是已经批准的完整信息架构。下一任务仍需给出可验收
 的界面范围。
@@ -153,7 +156,7 @@ Editor UI
 
 开始产品代码前必须由用户或任务文件明确：
 
-1. Kēne Native DSL 的具体语法、版本和迁移规则；不得以 JSON 作为底层作者格式。
+1. Eiyashou 的具体语法、版本和迁移规则；不得以 JSON 作为底层作者格式。
 2. Phase 4 帧通道的共享内存布局、代际、背压和平台封装。
 3. Preview View、显示/遮挡状态、输入焦点和运行生命周期的交互合同。
 4. document revision 如何通过 snapshot/patch 进入 Engine，旧 revision 如何丢弃。
@@ -179,7 +182,7 @@ Editor UI
 - 设计空间固定为 1920x1080；viewport/letterbox 转换只有一个所有者。
 - scene、normal UI、dialog 三类相机职责和合成顺序不可被 editor preview 绕过。
 - 内容通过有序、只读、受根目录限制的 mount 进入；后挂载覆盖先挂载。
-- Save v10 只在 Program fingerprint 匹配时恢复；profile、历史、画廊和设置不随槽回滚。
+- Save v11 只在 Program fingerprint 匹配时恢复；profile、历史、画廊和设置不随槽回滚。
 - shipping 持久化使用稳定 `project.id` 对应的平台用户数据目录，不写入只读 bundle。
 - publisher 身份和密钥不得记录、提交、缓存或传给无关子进程。
 - WebP 和 Ogg Opus 是生产图像/音频规范；Hakutaku v1 是唯一打包项目格式。
@@ -196,7 +199,7 @@ Phase 2 已完成 Native YAML/TXT 的安全文本编辑，Phase 3 已完成预�
 3. 在 GPUI Preview View 上传并显示画面，控制消息不传帧；
 4. 以 active 60 fps、unchanged/hidden/occluded 降功耗的实测证据验收。
 
-Native DSL 的具体方案应先独立讨论并形成决策，不要在 Phase 4 顺手发明语法。也不要同时
+Eiyashou 的具体方案应先独立讨论并形成决策，不要在 Phase 4 顺手发明语法。也不要同时
 加入流程图、插件、Git、协作、安装器或通用扩展市场。
 
 ## 11. 文件所有权和改动路线
@@ -277,6 +280,6 @@ crates/loader/src/adapter/editor 当成 Kēne editor GUI；它是第三方编辑
 editor 私有文档和 UI 状态不得进入 runtime/core。`crates/editor` 已有 GPUI Phase 3
 工作台、Native YAML/TXT 安全文档模型和预编译 Engine 二进制控制边界；不要重建窗口、
 Dock、项目身份、app-data 生命周期或 IPC。下一任务默认只做 Phase 4 帧传输/Preview
-闭环，不要搭通用框架，也不要以 JSON 代替 Native DSL。只改任务所有权范围，完成后跑规定验证并提供
+闭环，不要搭通用框架，也不要以 JSON 代替 Eiyashou。只改任务所有权范围，完成后跑规定验证并提供
 真实 UI 证据；未经明确要求不要提交、合并或推送。
 ```

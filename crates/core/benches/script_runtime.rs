@@ -27,6 +27,7 @@ fn run_through(state: &mut State) -> usize {
         match step::step(state) {
             StepResult::EndOfScene => break,
             StepResult::ExecutionLimit => continue,
+            StepResult::RuntimeError(error) => panic!("runtime error: {error:?}"),
             result => panic!("comment-only program must not yield: {result:?}"),
         }
     }
@@ -68,6 +69,7 @@ fn run_mixed_dialogue(state: &mut State) -> usize {
             }
             StepResult::EndOfScene => break,
             StepResult::ExecutionLimit => continue,
+            StepResult::RuntimeError(error) => panic!("runtime error: {error:?}"),
             result => panic!("mixed dialogue program yielded unexpectedly: {result:?}"),
         }
     }

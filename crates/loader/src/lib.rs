@@ -11,9 +11,10 @@ mod source_input;
 
 pub use adapter::{
     AdaptedProject, AdapterCategory, AdapterDescriptor, FormatAdapter, KeineStore, LoaderRegistry,
+    NativeDocument, NativeLanguage, NativeSceneSyntax, NativeToken, NativeTokenKind,
     ProjectAdapter, ProjectDebugCursor, ProjectInitialState, SavedState, StoreAdapter,
-    StoreMetadata, StoreStatus, StructuredSceneLoader, WebGalLanguage, parse_webgal,
-    parse_webgal_report,
+    StoreMetadata, StoreStatus, StructuredSceneLoader, WebGalLanguage, parse_native_document,
+    parse_native_scenes, parse_webgal, parse_webgal_report,
 };
 pub use compiled::{
     CompiledError, CompiledProgramV1, CompiledSceneV1, DecodedProgram, ENVELOPE_VERSION,
@@ -21,13 +22,14 @@ pub use compiled::{
     encode,
 };
 pub use hakutaku_core::OpenPolicy;
-pub use language::{ScriptLanguage, ScriptLanguageRegistry};
+pub use language::{ParsedScene, ScriptLanguage, ScriptLanguageRegistry};
 #[cfg(feature = "hot-reload")]
 pub use loader::ScriptWatcher;
 pub use loader::{
     ContentBackend, ContentFile, ContentMount, ContentProject, HakutakuArchive, LoadedScene,
     SourceMount, load_hakutaku_project, load_hakutaku_project_from_archive, load_project,
     load_project_with, load_scenes, load_scenes_with, load_startup_scenes_with,
+    validate_native_entry_flow,
 };
 pub use report::{
     Diagnostic, DiagnosticLevel, ParseReport, ResourceKind, ResourceRef, SceneRef, SourceSpan,

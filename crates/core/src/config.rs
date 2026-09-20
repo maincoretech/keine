@@ -78,6 +78,11 @@ pub struct GameConfig {
     #[serde(default)]
     pub adapter: AdapterConfig,
 
+    /// Native script-language configuration. This remains subordinate to
+    /// `adapter.script`; compatibility adapters do not consume these fields.
+    #[serde(default)]
+    pub script: ScriptConfig,
+
     /// Asset path mappings (key → relative path under assets/).
     #[serde(default)]
     pub assets: AssetMap,
@@ -204,6 +209,111 @@ pub struct AdapterConfig {
     /// Save-state codec selected from `adapter/store/*`.
     #[serde(default = "default_store_adapter")]
     pub store: String,
+}
+
+/// Project-wide options owned by the selected script adapter.
+///
+/// Keeping these fields in `GameConfig` gives configuration one deserializer
+/// and one validation boundary. They are interpreted only when
+/// `adapter.script` selects the native `keine` language.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScriptConfig {
+    #[serde(default = "default_native_script_version")]
+    pub version: u32,
+    #[serde(default = "default_script_entry")]
+    pub entry: String,
+    #[serde(default = "default_assets_manifest")]
+    pub assets: String,
+    #[serde(default = "default_characters_manifest")]
+    pub characters: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EiyashouAssetManifest {
+    #[serde(default)]
+    pub backgrounds: HashMap<String, String>,
+    #[serde(default)]
+    pub figures: HashMap<String, String>,
+    #[serde(default)]
+    pub voices: HashMap<String, String>,
+    #[serde(default)]
+    pub bgm: HashMap<String, String>,
+    #[serde(default, rename = "se")]
+    pub effects: HashMap<String, String>,
+    #[serde(default)]
+    pub videos: HashMap<String, String>,
+    #[serde(flatten)]
+    unknown: HashMap<String, noyalib::Value>,
+}
+
+impl EiyashouAssetManifest {
+    pub fn from_yaml(yaml: &str) -> Result<Self, noyalib::Error> {
+        noyalib::from_str(yaml)
+    }
+
+    pub fn unknown_namespaces(&self) -> impl Iterator<Item = &str> {
+        self.unknown.keys().map(String::as_str)
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EiyashouCharacterManifest {
+    #[serde(default)]
+    pub characters: HashMap<String, EiyashouCharacter>,
+    #[serde(flatten)]
+    unknown: HashMap<String, noyalib::Value>,
+}
+
+impl EiyashouCharacterManifest {
+    pub fn from_yaml(yaml: &str) -> Result<Self, noyalib::Error> {
+        noyalib::from_str(yaml)
+    }
+
+    pub fn unknown_fields(&self) -> impl Iterator<Item = &str> {
+        self.unknown.keys().map(String::as_str)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EiyashouCharacter {
+    pub name: String,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(flatten)]
+    unknown: HashMap<String, noyalib::Value>,
+}
+
+impl EiyashouCharacter {
+    pub fn unknown_fields(&self) -> impl Iterator<Item = &str> {
+        self.unknown.keys().map(String::as_str)
+    }
+}
+
+const fn default_native_script_version() -> u32 {
+    1
+}
+
+fn default_script_entry() -> String {
+    "start".into()
+}
+
+fn default_assets_manifest() -> String {
+    "assets.yaml".into()
+}
+
+fn default_characters_manifest() -> String {
+    "characters.yaml".into()
+}
+
+impl Default for ScriptConfig {
+    fn default() -> Self {
+        Self {
+            version: default_native_script_version(),
+            entry: default_script_entry(),
+            assets: default_assets_manifest(),
+            characters: default_characters_manifest(),
+        }
+    }
 }
 
 fn default_script_adapter() -> String {
@@ -450,6 +560,7 @@ impl Default for GameConfig {
             project: ProjectMetadata::default(),
             features: FeatureConfig::default(),
             adapter: AdapterConfig::default(),
+            script: ScriptConfig::default(),
             assets: AssetMap::default(),
             fonts: FontConfig::default(),
             styles: StyleConfig::default(),
@@ -492,6 +603,42 @@ impl GameConfig {
     /// render, decode and timing consumers cannot disagree about malformed
     /// values.
     pub fn validate(&self) -> Result<(), ConfigValidationError> {
+        if self.adapter.script.eq_ignore_ascii_case("keine") {
+            if self.script.version != 1 {
+                return Err(ConfigValidationError::new(
+                    "script.version",
+                    "must be 1 for adapter.script: keine",
+                ));
+            }
+            if self.script.entry.trim().is_empty() {
+                return Err(ConfigValidationError::new(
+                    "script.entry",
+                    "must not be empty for adapter.script: keine",
+                ));
+            }
+            for (field, value) in [
+                ("script.assets", self.script.assets.as_str()),
+                ("script.characters", self.script.characters.as_str()),
+            ] {
+                if value.trim().is_empty() {
+                    return Err(ConfigValidationError::new(
+                        field,
+                        "must name a project-relative manifest",
+                    ));
+                }
+                if Path::new(value).is_absolute()
+                    || Path::new(value)
+                        .components()
+                        .any(|component| matches!(component, std::path::Component::ParentDir))
+                {
+                    return Err(ConfigValidationError::new(
+                        field,
+                        "must remain inside the project root",
+                    ));
+                }
+            }
+        }
+
         finite_f32("layout.anchor_offset", self.layout.anchor_offset)?;
         positive_bounded_f32(
             "layout.sprite_height",
@@ -865,6 +1012,69 @@ adapter:
         assert_eq!(cfg.adapter.asset[2].format, "auto");
         assert_eq!(cfg.adapter.script, "webgal");
         assert_eq!(cfg.adapter.store, "keine");
+    }
+
+    #[test]
+    fn parses_native_script_configuration_under_the_single_game_config() {
+        let cfg = GameConfig::from_yaml(
+            r#"
+adapter:
+  script: keine
+script:
+  version: 1
+  entry: opening
+  assets: manifests/assets.yaml
+  characters: manifests/characters.yaml
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(cfg.script.version, 1);
+        assert_eq!(cfg.script.entry, "opening");
+        assert_eq!(cfg.script.assets, "manifests/assets.yaml");
+        assert_eq!(cfg.script.characters, "manifests/characters.yaml");
+    }
+
+    #[test]
+    fn native_script_configuration_rejects_unknown_versions_and_escaping_paths() {
+        let version_error = GameConfig::from_yaml(
+            r#"
+adapter:
+  script: keine
+script:
+  version: 2
+"#,
+        )
+        .unwrap_err();
+        assert!(version_error.to_string().contains("script.version"));
+
+        let path_error = GameConfig::from_yaml(
+            r#"
+adapter:
+  script: keine
+script:
+  assets: ../assets.yaml
+"#,
+        )
+        .unwrap_err();
+        assert!(path_error.to_string().contains("script.assets"));
+    }
+
+    #[test]
+    fn compatibility_script_adapters_ignore_native_script_options() {
+        let cfg = GameConfig::from_yaml(
+            r#"
+adapter:
+  script: webgal
+script:
+  version: 99
+  entry: ""
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(cfg.adapter.script, "webgal");
+        assert_eq!(cfg.script.version, 99);
     }
 
     #[test]

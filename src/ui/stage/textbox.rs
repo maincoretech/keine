@@ -4,7 +4,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
 use keine_core::config::{GameConfig, LayoutConfig, TextRevealConfig, TextRevealEffect};
-use keine_core::{DESIGN_HEIGHT, DESIGN_WIDTH, DialogueStyle};
+use keine_core::{DESIGN_HEIGHT, DESIGN_WIDTH, DialogueStyle, Rgba};
 
 use crate::render::blur::{DialogCamera, UiBlurCamera};
 use crate::runtime::resources::{DialogueLengthCache, GameConfigResource, GameState};
@@ -62,7 +62,11 @@ pub(crate) struct QuickPreviewLayer;
 type SpeakerTextQuery<'w, 's> = Query<
     'w,
     's,
-    (&'static mut Text, &'static mut TextFont),
+    (
+        &'static mut Text,
+        &'static mut TextFont,
+        &'static mut TextColor,
+    ),
     (With<SpeakerText>, Without<DialogueText>),
 >;
 const RUBY_FONT_SCALE: f32 = 0.44;
@@ -151,6 +155,7 @@ pub(crate) struct TextboxUpdateResources<'w> {
 #[derive(Default)]
 pub(crate) struct TextboxRenderCache {
     speaker: String,
+    speaker_color: Option<Rgba>,
     dialogue: String,
     dialogue_length: DialogueLengthCache,
     visible_chars: usize,
@@ -722,17 +727,19 @@ pub fn update_textbox(
     // as LetsGal when `keepDialogue` is enabled. It remains a visual fallback;
     // only a live `dialogue` is interactive and advances the VM.
     let visible_dialogue = state.dialogue.as_ref().or(state.previous_dialogue.as_ref());
-    let (speaker, markup, visible_chars) = visible_dialogue.map_or(("", "", 0), |dialogue| {
-        (
-            dialogue.speaker.as_str(),
-            dialogue.markup.as_str(),
-            if state.dialogue.is_some() {
-                dialogue.visible_chars
-            } else {
-                cache.dialogue_length.count(&dialogue.text)
-            },
-        )
-    });
+    let (speaker, speaker_color, markup, visible_chars) =
+        visible_dialogue.map_or(("", None, "", 0), |dialogue| {
+            (
+                dialogue.speaker.as_str(),
+                dialogue.speaker_color,
+                dialogue.markup.as_str(),
+                if state.dialogue.is_some() {
+                    dialogue.visible_chars
+                } else {
+                    cache.dialogue_length.count(&dialogue.text)
+                },
+            )
+        });
 
     let layout = &config.layout;
     let centered = state.active_text_style.is_centered();
@@ -753,6 +760,7 @@ pub fn update_textbox(
         .advance(target_left, resources.time.delta_secs());
     let width = 100.0 - left;
     let speaker_changed = cache.speaker != speaker;
+    let speaker_color_changed = cache.speaker_color != speaker_color;
     let dialogue_changed = cache.dialogue != markup;
     let visibility_changed = cache.visible_chars != visible_chars;
     let layout_changed = cache.left != Some(left);
@@ -808,13 +816,16 @@ pub fn update_textbox(
             }
         }
     }
-    if (speaker_changed || style_changed)
-        && let Ok((mut text, mut font)) = speaker_text.single_mut()
+    if (speaker_changed || speaker_color_changed || style_changed)
+        && let Ok((mut text, mut font, mut color)) = speaker_text.single_mut()
     {
         text.0.clear();
         text.0.push_str(speaker);
         font.font_size =
             FontSize::Px(config.fonts.speaker_size * if centered { 26.0 / 34.0 } else { 1.0 });
+        color.0 = speaker_color.map_or(Color::WHITE, |color| {
+            Color::srgba(color.r, color.g, color.b, color.a)
+        });
     }
     let scale = match resources.settings.text_size {
         0 => 0.86,
@@ -880,6 +891,7 @@ pub fn update_textbox(
         cache.speaker.clear();
         cache.speaker.push_str(speaker);
     }
+    cache.speaker_color = speaker_color;
     if dialogue_changed {
         cache.dialogue.clear();
         cache.dialogue.push_str(markup);

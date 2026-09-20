@@ -94,7 +94,7 @@
     `characterTargetsJson` 目标都编译为独立 `HideSprite`；旧版单目标字段仍可加载。
 34. 添加 1.20.0 `stageMask` 的显示和移除动作，分别覆盖矩形/圆角/椭圆/图片、inside/outside、
     overlay 四层与 clip 的 scene/characters/all/selected。预期原生显示、裁剪和进退场按 authored
-    参数执行，selected 只影响所选 id；内存回滚或同步 seek 后状态一致，活动蒙层期间 Save v10
+    参数执行，selected 只影响所选 id；内存回滚或同步 seek 后状态一致，活动蒙层期间 Save v11
     明确拒绝磁盘存档，不生成近似 `Curtain`。
 35. 分别把对白与旁白的结束行为设为关闭/保留对话框。预期仍通过 `keepDialogue` 控制，关闭
     发生在该句被确认之后，后续对白可重新显示对话框。

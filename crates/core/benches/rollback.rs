@@ -59,6 +59,7 @@ fn stressed_state() -> State {
     }
     state.dialogue = Some(Dialogue {
         speaker: "benchmark".to_string(),
+        speaker_color: None,
         text: "checkpoint".to_string(),
         markup: "checkpoint".to_string(),
         visible_chars: 10,

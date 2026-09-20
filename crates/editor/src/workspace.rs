@@ -133,7 +133,7 @@ fn should_descend(name: &str) -> bool {
 fn is_text_document(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|extension| extension.to_str()),
-        Some("txt" | "json" | "yaml" | "yml" | "toml" | "md" | "webgal")
+        Some("shou" | "txt" | "json" | "yaml" | "yml" | "toml" | "md" | "webgal")
     )
 }
 
@@ -165,8 +165,8 @@ mod tests {
         let root = std::env::temp_dir().join(format!("keine-editor-workspace-{nonce}"));
         fs::create_dir_all(root.join("scripts")).unwrap();
         fs::create_dir_all(root.join("target")).unwrap();
-        fs::write(root.join("scripts/02.txt"), "second").unwrap();
-        fs::write(root.join("scripts/01.txt"), "first").unwrap();
+        fs::write(root.join("scripts/02.shou"), "second").unwrap();
+        fs::write(root.join("scripts/01.shou"), "first").unwrap();
         fs::write(root.join("project.json"), "{}").unwrap();
         fs::write(root.join("target/ignored.txt"), "ignored").unwrap();
         root
@@ -179,12 +179,12 @@ mod tests {
         assert_eq!(session.documents().len(), 2);
         assert_eq!(
             session.documents()[0].relative_path,
-            Path::new("scripts/01.txt")
+            Path::new("scripts/01.shou")
         );
         assert_eq!(session.documents()[0].contents, "first");
         assert_eq!(
             session.documents()[1].relative_path,
-            Path::new("scripts/02.txt")
+            Path::new("scripts/02.shou")
         );
         assert!(
             session

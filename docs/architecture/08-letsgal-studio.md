@@ -129,7 +129,7 @@ runtime 以所有 `line <= selected_step` 的 Action 为目标，因此不会把
   原生支持显示/替换/移除、矩形/圆角/椭圆/图片形状、inside/outside、羽化与进退场；overlay
   支持四种显示层级、纯色/渐变/纹理及其颜色效果，clip 支持 scene/characters/all/selected
   目标。图片蒙版支持 alpha/luminance 与 stretch/cover/contain；状态参与阻塞、内存回滚和同步
-  seek。Save v10 没有对应 wire 字段，因此活动蒙层期间拒绝磁盘存档。它不降级为 `Curtain`；
+  seek。Save v11 没有对应 wire 字段，因此活动蒙层期间拒绝磁盘存档。它不降级为 `Curtain`；
   纹理模糊只作用于蒙层纹理采样，并非区域性舞台 backdrop blur。
 - 1.20.0 的 `removeCharacter.characterTargetsJson` 会按作者选择顺序解析为多个
   `HideSprite`，空列表或旧工程仍回退 `characterId` / `characterName`。对白与旁白结束行为继续

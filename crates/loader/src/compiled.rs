@@ -31,7 +31,7 @@ use crate::{LoadedScene, ResourceRef, SceneRef};
 
 pub const PROGRAM_MAGIC: [u8; 8] = *b"KEINEPG\0";
 pub const ENVELOPE_VERSION: u32 = 1;
-pub const IR_SCHEMA_VERSION: u32 = 1;
+pub const IR_SCHEMA_VERSION: u32 = 3;
 pub const FIXED_HEADER_LEN: usize = 64;
 
 /// Upper bounds for the envelope. Values follow the v2 plan; they are
@@ -564,7 +564,7 @@ mod tests {
         assert!(matches!(
             decode(&bytes, IR_SCHEMA_VERSION),
             Err(CompiledError::UnsupportedSchema {
-                expected: 1,
+                expected: IR_SCHEMA_VERSION,
                 found: 99
             })
         ));
@@ -673,7 +673,7 @@ mod tests {
     }
 
     fn const_hex() -> Vec<u8> {
-        const HEX: &str = "4b45494e45504700010000000100000000000000160000001900000000000000200f16e1d813f0f720c8f62ed624edd80000000000000000000000000000000005302e382e3105302e382e310677656267616c01020001057374617274021c0f0573636f72650531202b2031000000";
+        const HEX: &str = "4b45494e45504700010000000300000000000000160000001900000000000000200f16e1d813f0f720c8f62ed624edd80000000000000000000000000000000005302e382e3105302e382e310677656267616c01020001057374617274021c0f0573636f72650531202b2031000000";
         (0..HEX.len())
             .step_by(2)
             .map(|index| u8::from_str_radix(&HEX[index..index + 2], 16).unwrap())

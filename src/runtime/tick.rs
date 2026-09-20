@@ -656,6 +656,7 @@ fn sync_editor_position(
     let new_preview = || State {
         program: state.program.clone(),
         program_fingerprint: state.program_fingerprint,
+        script_entry: state.script_entry.clone(),
         vars: initial
             .variables
             .iter()
@@ -760,6 +761,7 @@ pub(crate) fn seek_editor_state(
                 return preview.current_scene == target_scene && preview.cursor >= target;
             }
             keine_core::StepResult::ExecutionLimit => return false,
+            keine_core::StepResult::RuntimeError(_) => return false,
         }
     }
     log::warn!("editor seek exceeded the deterministic replay limit");
@@ -797,12 +799,14 @@ fn restart_after_program_reload(state: &mut State, program: Program) {
     let next_stage_revision = state.stage_revision.wrapping_add(1);
     let previous_scene = state.current_scene.clone();
     let was_ended = state.ended;
+    let script_entry = state.script_entry.clone();
     let vars = std::mem::take(&mut state.vars);
     let global_vars = std::mem::take(&mut state.global_vars);
     let unlocked_cg = std::mem::take(&mut state.unlocked_cg);
     let unlocked_bgm = std::mem::take(&mut state.unlocked_bgm);
 
     let mut restarted = State {
+        script_entry,
         vars,
         global_vars,
         unlocked_cg,
@@ -2285,6 +2289,7 @@ mod tests {
         state.cursor = 1;
         state.dialogue = Some(Dialogue {
             speaker: String::new(),
+            speaker_color: None,
             text: "abcdefghij".into(),
             markup: "abcdefghij".into(),
             visible_chars: 0,

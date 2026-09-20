@@ -532,6 +532,14 @@ fn action_name(action: &Action) -> &'static str {
         Action::ConfigureTimedSpriteSequence { .. } => "configure-timed-sprite-sequence",
         Action::HideParticleLayers => "hide-particle-layers",
         Action::SelectSpriteImageByCondition { .. } => "select-sprite-image-by-condition",
+        Action::MoveSprite { .. } => "move-sprite",
+        Action::ReturnScene => "return-scene",
+        Action::EiyashouSay(_) => "eiyashou-say",
+        Action::EiyashouMenu { .. } => "eiyashou-menu",
+        Action::EiyashouSet { .. } => "eiyashou-set",
+        Action::EiyashouList { .. } => "eiyashou-list",
+        Action::EiyashouJumpIf { .. } => "eiyashou-jump-if",
+        Action::EiyashouBgm { .. } => "eiyashou-bgm",
     }
 }
 

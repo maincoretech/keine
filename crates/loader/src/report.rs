@@ -133,7 +133,15 @@ fn collect_references(
                 resource(vocal, ResourceKind::Voice);
             }
         }
+        Action::EiyashouSay(dialogue) => {
+            if let Some(vocal) = &dialogue.options.vocal {
+                resource(vocal, ResourceKind::Voice);
+            }
+        }
         Action::Bgm { file, .. } => resource(file, ResourceKind::Bgm),
+        Action::EiyashouBgm {
+            file: Some(file), ..
+        } => resource(file, ResourceKind::Bgm),
         Action::Effect {
             file: Some(file), ..
         } => resource(file, ResourceKind::Effect),
@@ -220,6 +228,19 @@ fn collect_references(
             });
         }
         Action::Menu { choices, .. } => {
+            for choice in choices {
+                if let ChoiceTarget::ChangeScene(scene) | ChoiceTarget::CallScene(scene) =
+                    &choice.target
+                {
+                    report.sub_scenes.push(SceneRef {
+                        scene: scene.clone(),
+                        action_index,
+                        span,
+                    });
+                }
+            }
+        }
+        Action::EiyashouMenu { choices, .. } => {
             for choice in choices {
                 if let ChoiceTarget::ChangeScene(scene) | ChoiceTarget::CallScene(scene) =
                     &choice.target

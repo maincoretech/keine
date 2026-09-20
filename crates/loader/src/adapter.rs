@@ -20,7 +20,11 @@ pub use asset::FormatAdapter;
 pub use editor::{
     LetsGalProjectAdapter, ProjectDebugCursor, ProjectInitialState, StructuredSceneLoader,
 };
-pub use script::{WebGalLanguage, parse_webgal, parse_webgal_report};
+pub(crate) use script::eiyashou_semantic_diagnostics;
+pub use script::{
+    NativeDocument, NativeLanguage, NativeSceneSyntax, NativeToken, NativeTokenKind,
+    WebGalLanguage, parse_native_document, parse_native_scenes, parse_webgal, parse_webgal_report,
+};
 pub use store::{KeineStore, SavedState, StoreAdapter, StoreMetadata, StoreStatus};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

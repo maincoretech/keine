@@ -36,6 +36,13 @@ struct PreparedProject {
     identity: Identity,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReleaseSourceKind {
+    Native,
+    WebGal,
+    LetsGal,
+}
+
 pub fn pack_project(
     project: &Path,
     loader: &keine_loader::LoaderRegistry,
@@ -91,16 +98,16 @@ fn prepare_project(
         bail!("project directory does not exist: {}", project.display());
     }
     let staging = tempdir().context("failed to create staging directory")?;
-    let staged = staging.path().join("project");
-    copy_tree(project, &staged)?;
+    let source = staging.path().join("source");
+    copy_tree(project, &source)?;
 
     let OpenedProject {
         config, content, ..
-    } = open_project(&staged, loader)?;
+    } = open_project(&source, loader)?;
     validate_shipping_identity(&config.project)?;
     println!("release project identity: {}", config.project.id);
     validate_shipping_media(&content)?;
-    let config_path = staged.join("config.yaml");
+    let config_path = source.join("config.yaml");
     if !config_path.is_file() {
         // LetsGal source: materialize the adapter-derived config (asset
         // aliases, layout, styles) so the packaged archive can be opened
@@ -113,6 +120,8 @@ fn prepare_project(
         .languages(&config.adapter.script)
         .context("failed to select script adapter")?;
     build_program(&config, &content, &languages)?;
+    let staged = staging.path().join("project");
+    materialize_release_payload(&source, &staged, &config, &content)?;
     // Do not create or load publisher secrets until every project-owned
     // validation and compilation step has succeeded.
     let identity = load_or_create_identity(project)?;
@@ -121,6 +130,134 @@ fn prepare_project(
         staged,
         identity,
     })
+}
+
+fn materialize_release_payload(
+    source: &Path,
+    output: &Path,
+    config: &keine_core::config::GameConfig,
+    content: &keine_loader::ContentProject,
+) -> Result<()> {
+    let kind = release_source_kind(config, content)?;
+    let source = source
+        .canonicalize()
+        .with_context(|| format!("failed to resolve release source {}", source.display()))?;
+    fs::create_dir_all(output)?;
+    copy_required_release_file(&source, output, Path::new("config.yaml"))?;
+    copy_required_release_file(&source, output, Path::new(".keine/compiled/program.bin"))?;
+
+    for mount in content.asset_mounts() {
+        let asset_root = mount
+            .filesystem_root()
+            .context("release asset mounts must be filesystem-backed")?;
+        if !asset_root.exists() {
+            continue;
+        }
+        let asset_root = asset_root.canonicalize().with_context(|| {
+            format!(
+                "failed to resolve release asset mount {}",
+                asset_root.display()
+            )
+        })?;
+        let relative = asset_root.strip_prefix(&source).with_context(|| {
+            format!(
+                "release asset mount {} escaped staged project {}",
+                asset_root.display(),
+                source.display()
+            )
+        })?;
+        if relative.as_os_str().is_empty() {
+            bail!(
+                "release asset mount cannot cover the complete project root; runtime assets and author sources must have separate paths"
+            );
+        }
+        copy_runtime_assets(&asset_root, &output.join(relative), kind, Path::new(""))?;
+    }
+    Ok(())
+}
+
+fn release_source_kind(
+    config: &keine_core::config::GameConfig,
+    content: &keine_loader::ContentProject,
+) -> Result<ReleaseSourceKind> {
+    match content.project_adapter() {
+        Some("letsgal") => Ok(ReleaseSourceKind::LetsGal),
+        Some(adapter) => {
+            bail!("release source exclusion is not defined for project adapter {adapter:?}")
+        }
+        None if config.adapter.script.eq_ignore_ascii_case("keine") => {
+            Ok(ReleaseSourceKind::Native)
+        }
+        None if config.adapter.script.eq_ignore_ascii_case("webgal") => {
+            Ok(ReleaseSourceKind::WebGal)
+        }
+        None => bail!(
+            "release source exclusion is not defined for script adapter {:?}",
+            config.adapter.script
+        ),
+    }
+}
+
+fn copy_required_release_file(source: &Path, output: &Path, relative: &Path) -> Result<()> {
+    let from = source.join(relative);
+    if !from.is_file() {
+        bail!("release payload is missing required {}", relative.display());
+    }
+    let to = output.join(relative);
+    let parent = to.parent().context("required release file has no parent")?;
+    fs::create_dir_all(parent)?;
+    fs::copy(&from, &to).with_context(|| {
+        format!(
+            "failed to copy required release file {} to {}",
+            from.display(),
+            to.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn copy_runtime_assets(
+    from: &Path,
+    to: &Path,
+    kind: ReleaseSourceKind,
+    relative: &Path,
+) -> Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let name = entry.file_name();
+        let name_text = name.to_string_lossy();
+        let relative = relative.join(&name);
+        if file_type.is_symlink() {
+            bail!(
+                "release projects cannot contain symbolic links: {}",
+                entry.path().display()
+            );
+        }
+        if (file_type.is_dir() && is_ignored_directory(&name_text))
+            || (!file_type.is_dir() && is_ignored_file(&name_text))
+            || is_adapter_authoring_asset(kind, &relative)
+        {
+            continue;
+        }
+        let target = to.join(&name);
+        if file_type.is_dir() {
+            copy_runtime_assets(&entry.path(), &target, kind, &relative)?;
+        } else if file_type.is_file() {
+            fs::copy(entry.path(), &target)?;
+        } else {
+            bail!(
+                "release projects cannot contain special files: {}",
+                entry.path().display()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn is_adapter_authoring_asset(kind: ReleaseSourceKind, relative: &Path) -> bool {
+    kind == ReleaseSourceKind::LetsGal && relative == Path::new(".manifest.json")
 }
 
 fn serialize_config_deterministically(config: &keine_core::config::GameConfig) -> Result<String> {
@@ -700,6 +837,170 @@ const BENCHMARK_README: &str = "Kēne performance benchmark\n\nWindows: double-c
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hakutaku_core::OpenPolicy;
+    use keine_loader::HakutakuArchive;
+    use keine_loader::compiled::{IR_SCHEMA_VERSION, decode};
+
+    fn write_config_project(root: &Path, id: &str, script_adapter: &str) {
+        fs::create_dir_all(root.join("assets")).unwrap();
+        fs::create_dir_all(root.join("scripts")).unwrap();
+        fs::write(root.join("assets/runtime.webp"), b"runtime asset").unwrap();
+        let mut config = keine_core::config::GameConfig::default();
+        config.project.id = id.to_owned();
+        config.adapter.script = script_adapter.to_owned();
+        fs::write(
+            root.join("config.yaml"),
+            noyalib::to_string(&config).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn publish_test_archive(project: &Path) -> HakutakuArchive {
+        let output = project.parent().unwrap().join(format!(
+            "{}-release",
+            project.file_name().unwrap().to_string_lossy()
+        ));
+        let prepared = prepare_project(project, &keine_loader::LoaderRegistry::default()).unwrap();
+        publish_prepared(&prepared.staged, &prepared.identity, &output, |_| Ok(())).unwrap();
+        HakutakuArchive::open_with_keys(
+            &output.join("game.haku"),
+            prepared.identity.root_key(),
+            prepared.identity.public_key(),
+            OpenPolicy::TrustFirstRelease,
+        )
+        .unwrap()
+    }
+
+    fn archive_files(archive: &HakutakuArchive) -> Vec<PathBuf> {
+        fn visit(archive: &HakutakuArchive, directory: &Path, files: &mut Vec<PathBuf>) {
+            for entry in archive.read_directory(directory) {
+                if archive.contains_file(&entry) {
+                    files.push(entry);
+                } else if archive.is_directory(&entry) {
+                    visit(archive, &entry, files);
+                }
+            }
+        }
+
+        let mut files = Vec::new();
+        visit(archive, Path::new(""), &mut files);
+        files.sort();
+        files
+    }
+
+    fn assert_compiled_release(archive: &HakutakuArchive) {
+        let files = archive_files(archive);
+        assert_eq!(
+            files,
+            [
+                PathBuf::from(".keine/compiled/program.bin"),
+                PathBuf::from("assets/runtime.webp"),
+                PathBuf::from("config.yaml"),
+            ]
+        );
+        let program = archive
+            .read(Path::new(".keine/compiled/program.bin"))
+            .unwrap();
+        let decoded = decode(&program, IR_SCHEMA_VERSION).unwrap();
+        assert!(!decoded.scenes.is_empty());
+        let config = archive.read(Path::new("config.yaml")).unwrap();
+        let config =
+            keine_core::config::GameConfig::from_yaml(std::str::from_utf8(&config).unwrap())
+                .unwrap();
+        let content = keine_loader::load_hakutaku_project_from_archive(
+            archive.clone(),
+            &config.adapter.asset,
+        )
+        .unwrap();
+        assert!(content.contains_asset(Path::new("runtime.webp")));
+    }
+
+    #[test]
+    fn webgal_release_contains_only_compiled_program_config_and_runtime_assets() {
+        let root = tempdir().unwrap();
+        let project = root.path().join("webgal");
+        write_config_project(&project, "release-webgal", "webgal");
+        fs::write(
+            project.join("scripts/start.txt"),
+            "comment:author source;\n",
+        )
+        .unwrap();
+        fs::write(project.join("author-notes.txt"), "editor-only notes").unwrap();
+
+        let archive = publish_test_archive(&project);
+
+        assert_compiled_release(&archive);
+    }
+
+    #[test]
+    fn native_release_contains_only_compiled_program_config_and_runtime_assets() {
+        let root = tempdir().unwrap();
+        let project = root.path().join("native");
+        write_config_project(&project, "release-native", "keine");
+        fs::write(
+            project.join("scripts/start.shou"),
+            "scene start { \"Hello\" }",
+        )
+        .unwrap();
+        fs::write(project.join("author-notes.md"), "editor-only notes").unwrap();
+
+        let archive = publish_test_archive(&project);
+
+        assert_compiled_release(&archive);
+    }
+
+    #[test]
+    fn letsgal_release_excludes_the_complete_editor_project() {
+        let root = tempdir().unwrap();
+        let project = root.path().join("letsgal");
+        fs::create_dir_all(project.join("assets")).unwrap();
+        fs::create_dir_all(project.join("chapters")).unwrap();
+        fs::create_dir_all(project.join(".studio")).unwrap();
+        fs::create_dir_all(project.join("extensions/author.plugin")).unwrap();
+        fs::write(project.join("assets/runtime.webp"), b"runtime asset").unwrap();
+        fs::write(
+            project.join("assets/.manifest.json"),
+            r#"{"version":1,"entries":{}}"#,
+        )
+        .unwrap();
+        fs::write(
+            project.join("project.json"),
+            r#"{"id":"release-letsgal","name":"Release","engineVersion":"1.20.0","chapterOrder":["Start"],"resolution":{"width":1920,"height":1080},"keine":{"projectId":"release-letsgal"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            project.join("chapters/Start.json"),
+            r#"{"id":"chapter-start","name":"Start","fragments":[{"id":"opening","name":"Opening","blocks":[{"type":"narration","content":[{"type":"text","text":"Hello"}],"props":{}}]}]}"#,
+        )
+        .unwrap();
+        fs::write(project.join("characters.json"), "{}").unwrap();
+        fs::write(project.join("scenes.json"), "{}").unwrap();
+        fs::write(project.join("project.variables.json"), "{}").unwrap();
+        fs::write(project.join(".studio/state.json"), "{}").unwrap();
+        fs::write(project.join("extensions/author.plugin/config.json"), "{}").unwrap();
+
+        let archive = publish_test_archive(&project);
+
+        assert_compiled_release(&archive);
+    }
+
+    #[test]
+    fn source_exclusion_fails_closed_for_an_unknown_script_adapter() {
+        let root = tempdir().unwrap();
+        fs::create_dir_all(root.path().join("assets")).unwrap();
+        fs::create_dir_all(root.path().join("scripts")).unwrap();
+        let content = keine_loader::load_project(
+            root.path(),
+            &[keine_core::config::AssetSourceConfig::default()],
+        )
+        .unwrap();
+        let mut config = keine_core::config::GameConfig::default();
+        config.adapter.script = "future-authoring-format".into();
+
+        let error = release_source_kind(&config, &content).unwrap_err();
+
+        assert!(error.to_string().contains("not defined"));
+    }
 
     #[test]
     fn video_content_enables_the_platform_backend() {

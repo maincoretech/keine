@@ -10,6 +10,10 @@ use std::io::{self, Write};
 use serde::{Deserialize, Serialize};
 
 use crate::config::TextRevealConfig;
+use crate::model::eiyashou::{
+    EiyashouAssignOp, EiyashouChoice, EiyashouDialogue, EiyashouExpr, EiyashouListOperation,
+    EiyashouPlace, EiyashouText,
+};
 use crate::types::{
     AnimationPreset, BlendMode, CameraShakeSpec, CameraTargets, DialogueStyle, Easing,
     ParticleEffect, PortraitStyle, Position, PostProcessPatch, SceneLayerLayout, SpriteLayout,
@@ -674,6 +678,51 @@ pub enum Action {
         id: String,
         default_image: String,
         variants: Vec<(String, String)>,
+    },
+    /// Move an already-visible sprite to a logical design-space position.
+    ///
+    /// Unlike `UpdateSprite`, this preserves the sprite image, layout and
+    /// scale. Kept at the tail for stable serialized tags.
+    MoveSprite {
+        id: String,
+        position: Position,
+        duration: f32,
+        easing: Easing,
+        blocking: bool,
+    },
+    /// Return from the most recent `CallScene` frame.
+    ReturnScene,
+    /// Display strict plain-text Eiyashou dialogue with stable source identity.
+    EiyashouSay(EiyashouDialogue),
+    /// Display an Eiyashou menu whose text and visibility use typed expressions.
+    EiyashouMenu {
+        prompt: EiyashouText,
+        choices: Vec<EiyashouChoice>,
+    },
+    /// Assign a typed Eiyashou value. `initialize_once` implements `let`.
+    EiyashouSet {
+        target: EiyashouPlace,
+        expression: EiyashouExpr,
+        operation: EiyashouAssignOp,
+        initialize_once: bool,
+    },
+    /// Mutate one homogeneous Eiyashou list as a standalone statement.
+    EiyashouList {
+        variable: String,
+        operation: EiyashouListOperation,
+    },
+    /// Jump to a compiler-private label after evaluating a strict bool.
+    EiyashouJumpIf {
+        condition: EiyashouExpr,
+        label: String,
+        jump_when: bool,
+    },
+    /// Eiyashou BGM playback mode and crossfade contract.
+    EiyashouBgm {
+        file: Option<String>,
+        volume: f32,
+        fade_seconds: f32,
+        looped: bool,
     },
 }
 

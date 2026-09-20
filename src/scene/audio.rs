@@ -187,8 +187,16 @@ pub fn sync_bgm(
         return;
     };
 
-    for (entity, _) in &players {
-        commands.entity(entity).despawn();
+    for (entity, mut player) in &mut players {
+        if duration <= f32::EPSILON {
+            commands.entity(entity).despawn();
+        } else {
+            player.elapsed = 0.0;
+            player.duration = duration;
+            player.fade_from = player.envelope;
+            player.direction = FadeDirection::Out;
+            context.activity.0 = true;
+        }
     }
     let fading = duration > f32::EPSILON;
     let base_volume = context.state.bgm.volume.clamp(0.0, 1.0);
@@ -213,7 +221,11 @@ pub fn sync_bgm(
         &context.asset_server,
         context.config.bgm_path(file),
         PlaybackSettings {
-            mode: PlaybackMode::Loop,
+            mode: if context.state.bgm.looped {
+                PlaybackMode::Loop
+            } else {
+                PlaybackMode::Despawn
+            },
             volume: Volume::Linear(if fading {
                 0.0
             } else {

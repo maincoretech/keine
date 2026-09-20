@@ -1,12 +1,15 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use keine_core::{Action, ChoiceTarget};
+use keine_core::{
+    Action, ChoiceTarget, EiyashouExpr, EiyashouListOperation, EiyashouPlace, EiyashouText,
+    EiyashouTextPart,
+};
 
 use crate::{
     ContentMount, ContentProject, Diagnostic, DiagnosticLevel, ResourceRef, SceneRef,
-    ScriptLanguageRegistry, source_input::SourceReader,
+    ScriptLanguageRegistry, adapter::eiyashou_semantic_diagnostics, source_input::SourceReader,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -57,9 +60,120 @@ pub fn load_scenes_with(
         }
     }
     let mut scenes = merged.into_values().collect::<Vec<_>>();
+    validate_eiyashou_project_semantics(&mut scenes);
+    apply_eiyashou_project(project, &mut scenes);
     validate_scene_references(&mut scenes);
     validate_control_flow_references(&mut scenes);
+    validate_native_scene_graph(&mut scenes);
     Ok(scenes)
+}
+
+fn validate_eiyashou_project_semantics(scenes: &mut [LoadedScene]) {
+    let native_indices = scenes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, scene)| is_native_scene_path(&scene.path).then_some(index))
+        .collect::<Vec<_>>();
+    let diagnostics = {
+        let inputs = native_indices
+            .iter()
+            .map(|index| {
+                let scene = &scenes[*index];
+                (scene.actions.as_slice(), scene.action_spans.as_slice())
+            })
+            .collect::<Vec<_>>();
+        eiyashou_semantic_diagnostics(&inputs)
+    };
+    for (index, diagnostics) in native_indices.into_iter().zip(diagnostics) {
+        scenes[index].diagnostics.extend(diagnostics);
+    }
+}
+
+fn apply_eiyashou_project(project: &ContentProject, scenes: &mut [LoadedScene]) {
+    let Some(project_data) = &project.eiyashou else {
+        return;
+    };
+    let mut used = HashSet::<(crate::ResourceKind, String)>::new();
+    let mut pending = Vec::<(usize, Diagnostic)>::new();
+    for (scene_index, scene) in scenes.iter_mut().enumerate() {
+        if !is_native_scene_path(&scene.path) {
+            continue;
+        }
+        for (action_index, action) in scene.actions.iter_mut().enumerate() {
+            if let Action::EiyashouSay(dialogue) = action
+                && !dialogue.speaker.is_empty()
+            {
+                match project_data.characters.get(&dialogue.speaker) {
+                    Some(character) => {
+                        dialogue.speaker.clone_from(&character.name);
+                        dialogue.speaker_color = character.color;
+                    }
+                    None => pending.push((
+                        scene_index,
+                        Diagnostic {
+                            level: DiagnosticLevel::Error,
+                            span: scene
+                                .action_spans
+                                .get(action_index)
+                                .copied()
+                                .unwrap_or(crate::SourceSpan { line: 1, column: 1 }),
+                            message: format!(
+                                "undefined character id `{}` in dialogue",
+                                dialogue.speaker
+                            ),
+                        },
+                    )),
+                }
+            }
+        }
+        for resource in &scene.resources {
+            used.insert((resource.kind, resource.path.clone()));
+            if !project_data
+                .assets
+                .get(&resource.kind)
+                .is_some_and(|ids| ids.contains(&resource.path))
+            {
+                pending.push((
+                    scene_index,
+                    Diagnostic {
+                        level: DiagnosticLevel::Error,
+                        span: resource.span,
+                        message: format!(
+                            "undefined {:?} resource id `{}`",
+                            resource.kind, resource.path
+                        ),
+                    },
+                ));
+            }
+        }
+    }
+    for (scene_index, diagnostic) in pending {
+        scenes[scene_index].diagnostics.push(diagnostic);
+    }
+    let Some(first_native) = scenes
+        .iter_mut()
+        .find(|scene| is_native_scene_path(&scene.path))
+    else {
+        return;
+    };
+    for warning in &project_data.warnings {
+        first_native.diagnostics.push(Diagnostic {
+            level: DiagnosticLevel::Warning,
+            span: crate::SourceSpan { line: 1, column: 1 },
+            message: warning.clone(),
+        });
+    }
+    for (kind, ids) in &project_data.assets {
+        for id in ids {
+            if !used.contains(&(*kind, id.clone())) {
+                first_native.diagnostics.push(Diagnostic {
+                    level: DiagnosticLevel::Warning,
+                    span: crate::SourceSpan { line: 1, column: 1 },
+                    message: format!("unused {:?} resource `{id}`", kind),
+                });
+            }
+        }
+    }
 }
 
 /// Loads startup scenes while allowing a packaged loader to transfer its
@@ -87,19 +201,672 @@ fn load_directory(
 
     let mut scenes = Vec::with_capacity(paths.len());
     for path in paths {
-        scenes.push(load_scene(scripts, path, languages, source_reader)?);
+        scenes.extend(load_scene(scripts, path, languages, source_reader)?);
     }
-    let mut names = HashSet::with_capacity(scenes.len());
-    for scene in &scenes {
-        if !names.insert(scene.name.clone()) {
-            anyhow::bail!(
-                "duplicate scene name {:?} in {}",
-                scene.name,
-                scripts.prefix().display()
-            );
+    let mut names = BTreeMap::<String, PathBuf>::new();
+    for scene in &mut scenes {
+        if let Some(previous) = names.insert(scene.name.clone(), scene.path.clone()) {
+            if is_native_scene_path(&scene.path) {
+                scene.diagnostics.push(Diagnostic {
+                    level: DiagnosticLevel::Error,
+                    span: scene
+                        .action_spans
+                        .first()
+                        .copied()
+                        .unwrap_or(crate::SourceSpan { line: 1, column: 1 }),
+                    message: format!(
+                        "duplicate native scene {:?}; first declared in {}",
+                        scene.name,
+                        previous.display()
+                    ),
+                });
+            } else {
+                anyhow::bail!(
+                    "duplicate scene name {:?} in {}",
+                    scene.name,
+                    scripts.prefix().display()
+                );
+            }
         }
     }
     Ok(scenes)
+}
+
+fn validate_native_scene_graph(scenes: &mut [LoadedScene]) {
+    let native_names = scenes
+        .iter()
+        .filter(|scene| is_native_scene_path(&scene.path))
+        .map(|scene| scene.name.clone())
+        .collect::<HashSet<_>>();
+    if native_names.is_empty() {
+        return;
+    }
+
+    let mut call_edges = Vec::<(String, String, crate::SourceSpan)>::new();
+    let mut non_yielding_goto_edges = Vec::<(String, String, crate::SourceSpan)>::new();
+    let mut local_cycles = Vec::<(String, crate::SourceSpan)>::new();
+    for scene in scenes
+        .iter()
+        .filter(|scene| native_names.contains(&scene.name))
+    {
+        if let Some(index) = non_yielding_cycle_index(&scene.actions) {
+            local_cycles.push((
+                scene.name.clone(),
+                scene
+                    .action_spans
+                    .get(index)
+                    .copied()
+                    .unwrap_or(crate::SourceSpan { line: 1, column: 1 }),
+            ));
+        }
+        let mut yielded = false;
+        for (index, action) in scene.actions.iter().enumerate() {
+            let span = scene
+                .action_spans
+                .get(index)
+                .copied()
+                .unwrap_or(crate::SourceSpan { line: 1, column: 1 });
+            collect_native_call_edges(action, &scene.name, span, &mut call_edges);
+            if action_yields(action) {
+                yielded = true;
+            }
+            if let Action::ChangeScene(target) = action {
+                if !yielded && native_names.contains(target) {
+                    non_yielding_goto_edges.push((scene.name.clone(), target.clone(), span));
+                }
+                break;
+            }
+        }
+    }
+
+    let recursive_calls = cyclic_edge_indices(&call_edges);
+    let spinning_gotos = cyclic_edge_indices(&non_yielding_goto_edges);
+    for index in recursive_calls {
+        let (source, target, span) = &call_edges[index];
+        push_native_graph_error(
+            scenes,
+            source,
+            *span,
+            format!("recursive native scene call `{source}` -> `{target}` is not allowed"),
+        );
+    }
+    for index in spinning_gotos {
+        let (source, target, span) = &non_yielding_goto_edges[index];
+        push_native_graph_error(
+            scenes,
+            source,
+            *span,
+            format!(
+                "native control-flow cycle `{source}` -> `{target}` can repeat without yielding"
+            ),
+        );
+    }
+    for (scene, span) in local_cycles {
+        push_native_graph_error(
+            scenes,
+            &scene,
+            span,
+            "native control-flow cycle can repeat without yielding".into(),
+        );
+    }
+}
+
+/// Reject an explicit native `return` on any path that can be reached without
+/// first entering through `CallScene`. This entry-aware pass lives above the
+/// parser because the configured entry belongs to project configuration.
+pub fn validate_native_entry_flow(scenes: &mut [LoadedScene], entry: &str) {
+    let native_names = scenes
+        .iter()
+        .filter(|scene| is_native_scene_path(&scene.path))
+        .map(|scene| scene.name.clone())
+        .collect::<HashSet<_>>();
+    if !native_names.contains(entry) {
+        return;
+    }
+
+    let mut pending = VecDeque::from([(entry.to_owned(), false)]);
+    let mut visited = HashSet::new();
+    let mut invalid_returns = Vec::new();
+    while let Some((name, has_call_frame)) = pending.pop_front() {
+        if !visited.insert((name.clone(), has_call_frame)) {
+            continue;
+        }
+        let Some(scene) = scenes.iter().find(|scene| scene.name == name) else {
+            continue;
+        };
+        for (index, action) in scene.actions.iter().enumerate() {
+            let action = unwrap_flow(action);
+            let span = scene
+                .action_spans
+                .get(index)
+                .copied()
+                .unwrap_or(crate::SourceSpan { line: 1, column: 1 });
+            match action {
+                Action::ReturnScene => {
+                    if !has_call_frame {
+                        invalid_returns.push((name.clone(), span));
+                    }
+                    break;
+                }
+                Action::ChangeScene(target) => {
+                    if native_names.contains(target) {
+                        pending.push_back((target.clone(), has_call_frame));
+                    }
+                    break;
+                }
+                Action::CallScene(target) => {
+                    if native_names.contains(target) {
+                        pending.push_back((target.clone(), true));
+                    }
+                }
+                Action::Menu { choices, .. } => {
+                    let mut can_resume = false;
+                    for choice in choices {
+                        match &choice.target {
+                            ChoiceTarget::ChangeScene(target) => {
+                                if native_names.contains(target) {
+                                    pending.push_back((target.clone(), has_call_frame));
+                                }
+                            }
+                            ChoiceTarget::CallScene(target) => {
+                                if native_names.contains(target) {
+                                    pending.push_back((target.clone(), true));
+                                }
+                                can_resume = true;
+                            }
+                            ChoiceTarget::Label(_) => can_resume = true,
+                        }
+                    }
+                    if !can_resume {
+                        break;
+                    }
+                }
+                Action::EiyashouMenu { choices, .. } => {
+                    let mut can_resume = false;
+                    for choice in choices {
+                        match &choice.target {
+                            ChoiceTarget::ChangeScene(target) => {
+                                if native_names.contains(target) {
+                                    pending.push_back((target.clone(), has_call_frame));
+                                }
+                            }
+                            ChoiceTarget::CallScene(target) => {
+                                if native_names.contains(target) {
+                                    pending.push_back((target.clone(), true));
+                                }
+                                can_resume = true;
+                            }
+                            ChoiceTarget::Label(_) => can_resume = true,
+                        }
+                    }
+                    if !can_resume {
+                        break;
+                    }
+                }
+                Action::End => break,
+                _ => {}
+            }
+        }
+    }
+
+    for (scene, span) in invalid_returns {
+        push_native_graph_error(
+            scenes,
+            &scene,
+            span,
+            "native `return` is reachable with an empty call stack".into(),
+        );
+    }
+    validate_eiyashou_project_initialization(scenes, entry, &native_names);
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct FlowContext {
+    scene: String,
+    action: usize,
+    stack: Vec<(String, usize)>,
+}
+
+/// Validate global Eiyashou variables from the configured entry across scene
+/// changes and the (non-recursive) call stack. Parser-local validation handles
+/// branches within one source; this project pass prevents a scene from reading
+/// a declaration that exists elsewhere but is not guaranteed on every route.
+fn validate_eiyashou_project_initialization(
+    scenes: &mut [LoadedScene],
+    entry: &str,
+    native_names: &HashSet<String>,
+) {
+    let scene_indices = scenes
+        .iter()
+        .enumerate()
+        .filter(|(_, scene)| native_names.contains(&scene.name))
+        .map(|(index, scene)| (scene.name.clone(), index))
+        .collect::<HashMap<_, _>>();
+    let labels = scenes
+        .iter()
+        .filter(|scene| native_names.contains(&scene.name))
+        .map(|scene| {
+            let labels = scene
+                .actions
+                .iter()
+                .enumerate()
+                .filter_map(|(index, action)| match unwrap_flow(action) {
+                    Action::Label(label) => Some((label.clone(), index)),
+                    _ => None,
+                })
+                .collect::<HashMap<_, _>>();
+            (scene.name.clone(), labels)
+        })
+        .collect::<HashMap<_, _>>();
+    let Some(&entry_index) = scene_indices.get(entry) else {
+        return;
+    };
+    if scenes[entry_index].actions.is_empty() {
+        return;
+    }
+
+    let start = FlowContext {
+        scene: entry.to_owned(),
+        action: 0,
+        stack: Vec::new(),
+    };
+    let mut incoming = HashMap::from([(start.clone(), HashSet::<String>::new())]);
+    let mut pending = VecDeque::from([start]);
+    while let Some(context) = pending.pop_front() {
+        let initialized = incoming.get(&context).cloned().unwrap_or_default();
+        let Some(&scene_index) = scene_indices.get(&context.scene) else {
+            continue;
+        };
+        let Some(action) = scenes[scene_index].actions.get(context.action) else {
+            continue;
+        };
+        let mut after = initialized;
+        if let Action::EiyashouSet {
+            target: EiyashouPlace::Variable(name),
+            initialize_once: true,
+            ..
+        } = unwrap_flow(action)
+        {
+            after.insert(name.clone());
+        }
+        for next in project_successors(&context, action, &labels, native_names.len()) {
+            let changed = match incoming.get_mut(&next) {
+                Some(existing) => {
+                    let intersection = existing.intersection(&after).cloned().collect();
+                    if *existing == intersection {
+                        false
+                    } else {
+                        *existing = intersection;
+                        true
+                    }
+                }
+                None => {
+                    incoming.insert(next.clone(), after.clone());
+                    true
+                }
+            };
+            if changed {
+                pending.push_back(next);
+            }
+        }
+    }
+
+    let mut errors = HashSet::new();
+    for (context, initialized) in incoming {
+        let Some(&scene_index) = scene_indices.get(&context.scene) else {
+            continue;
+        };
+        let Some(action) = scenes[scene_index].actions.get(context.action) else {
+            continue;
+        };
+        let mut reads = HashSet::new();
+        collect_eiyashou_action_reads(unwrap_flow(action), &mut reads);
+        for variable in reads.difference(&initialized) {
+            errors.insert((scene_index, context.action, variable.clone()));
+        }
+    }
+    for (scene_index, action_index, variable) in errors {
+        let span = scenes[scene_index]
+            .action_spans
+            .get(action_index)
+            .copied()
+            .unwrap_or(crate::SourceSpan { line: 1, column: 1 });
+        scenes[scene_index].diagnostics.push(Diagnostic {
+            level: DiagnosticLevel::Error,
+            span,
+            message: format!(
+                "variable `{variable}` may be uninitialized on a route from configured entry `{entry}`"
+            ),
+        });
+    }
+}
+
+fn project_successors(
+    context: &FlowContext,
+    action: &Action,
+    labels: &HashMap<String, HashMap<String, usize>>,
+    max_stack: usize,
+) -> Vec<FlowContext> {
+    let next = || FlowContext {
+        scene: context.scene.clone(),
+        action: context.action + 1,
+        stack: context.stack.clone(),
+    };
+    let target = |scene: &str, action: usize, stack: Vec<(String, usize)>| FlowContext {
+        scene: scene.to_owned(),
+        action,
+        stack,
+    };
+    let action = unwrap_flow(action);
+    match action {
+        Action::Jump(label) => labels
+            .get(&context.scene)
+            .and_then(|labels| labels.get(label))
+            .map(|index| vec![target(&context.scene, *index, context.stack.clone())])
+            .unwrap_or_default(),
+        Action::EiyashouJumpIf { label, .. } => {
+            let mut values = vec![next()];
+            if let Some(index) = labels
+                .get(&context.scene)
+                .and_then(|labels| labels.get(label))
+            {
+                values.push(target(&context.scene, *index, context.stack.clone()));
+            }
+            values
+        }
+        Action::ChangeScene(scene) => vec![target(scene, 0, context.stack.clone())],
+        Action::CallScene(scene) if context.stack.len() < max_stack => {
+            let mut stack = context.stack.clone();
+            stack.push((context.scene.clone(), context.action + 1));
+            vec![target(scene, 0, stack)]
+        }
+        Action::CallScene(_) => Vec::new(),
+        Action::ReturnScene => context
+            .stack
+            .split_last()
+            .map(|((scene, action), stack)| vec![target(scene, *action, stack.to_vec())])
+            .unwrap_or_default(),
+        Action::EiyashouMenu { choices, .. } => choices
+            .iter()
+            .filter_map(|choice| match &choice.target {
+                ChoiceTarget::Label(label) => labels
+                    .get(&context.scene)
+                    .and_then(|labels| labels.get(label))
+                    .map(|index| target(&context.scene, *index, context.stack.clone())),
+                ChoiceTarget::ChangeScene(scene) => Some(target(scene, 0, context.stack.clone())),
+                ChoiceTarget::CallScene(scene) if context.stack.len() < max_stack => {
+                    let mut stack = context.stack.clone();
+                    stack.push((context.scene.clone(), context.action + 1));
+                    Some(target(scene, 0, stack))
+                }
+                ChoiceTarget::CallScene(_) => None,
+            })
+            .collect(),
+        Action::End => Vec::new(),
+        _ => vec![next()],
+    }
+}
+
+fn collect_eiyashou_action_reads(action: &Action, reads: &mut HashSet<String>) {
+    match action {
+        Action::EiyashouSay(dialogue) => collect_eiyashou_text_reads(&dialogue.text, reads),
+        Action::EiyashouMenu { prompt, choices } => {
+            collect_eiyashou_text_reads(prompt, reads);
+            for choice in choices {
+                collect_eiyashou_text_reads(&choice.text, reads);
+                if let Some(condition) = &choice.show_when {
+                    collect_eiyashou_expression_reads(condition, reads);
+                }
+            }
+        }
+        Action::EiyashouSet {
+            target,
+            expression,
+            initialize_once,
+            ..
+        } => {
+            collect_eiyashou_expression_reads(expression, reads);
+            match target {
+                EiyashouPlace::Variable(name) if !initialize_once => {
+                    reads.insert(name.clone());
+                }
+                EiyashouPlace::Index { variable, index } => {
+                    reads.insert(variable.clone());
+                    collect_eiyashou_expression_reads(index, reads);
+                }
+                _ => {}
+            }
+        }
+        Action::EiyashouList {
+            variable,
+            operation,
+        } => {
+            reads.insert(variable.clone());
+            match operation {
+                EiyashouListOperation::Append(value) | EiyashouListOperation::Remove(value) => {
+                    collect_eiyashou_expression_reads(value, reads);
+                }
+                EiyashouListOperation::Insert { index, value } => {
+                    collect_eiyashou_expression_reads(index, reads);
+                    collect_eiyashou_expression_reads(value, reads);
+                }
+                EiyashouListOperation::Pop { index, into } => {
+                    if let Some(index) = index {
+                        collect_eiyashou_expression_reads(index, reads);
+                    }
+                    reads.insert(into.clone());
+                }
+                EiyashouListOperation::Clear => {}
+            }
+        }
+        Action::EiyashouJumpIf { condition, .. } => {
+            collect_eiyashou_expression_reads(condition, reads);
+        }
+        _ => {}
+    }
+}
+
+fn collect_eiyashou_text_reads(text: &EiyashouText, reads: &mut HashSet<String>) {
+    for part in &text.parts {
+        if let EiyashouTextPart::Expression(expression) = part {
+            collect_eiyashou_expression_reads(expression, reads);
+        }
+    }
+}
+
+fn collect_eiyashou_expression_reads(expression: &EiyashouExpr, reads: &mut HashSet<String>) {
+    match expression {
+        EiyashouExpr::Variable(name) => {
+            reads.insert(name.clone());
+        }
+        EiyashouExpr::List(values) => {
+            for value in values {
+                collect_eiyashou_expression_reads(value, reads);
+            }
+        }
+        EiyashouExpr::Unary { value, .. } | EiyashouExpr::Length(value) => {
+            collect_eiyashou_expression_reads(value, reads);
+        }
+        EiyashouExpr::Binary { left, right, .. } => {
+            collect_eiyashou_expression_reads(left, reads);
+            collect_eiyashou_expression_reads(right, reads);
+        }
+        EiyashouExpr::Index { list, index } => {
+            collect_eiyashou_expression_reads(list, reads);
+            collect_eiyashou_expression_reads(index, reads);
+        }
+        EiyashouExpr::Literal(_) | EiyashouExpr::EmptyList(_) => {}
+    }
+}
+
+fn unwrap_flow(mut action: &Action) -> &Action {
+    while let Action::Flow { action: inner, .. } = action {
+        action = inner;
+    }
+    action
+}
+
+fn is_native_scene_path(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("shou"))
+}
+
+fn collect_native_call_edges(
+    action: &Action,
+    source: &str,
+    span: crate::SourceSpan,
+    edges: &mut Vec<(String, String, crate::SourceSpan)>,
+) {
+    match action {
+        Action::CallScene(target) => edges.push((source.to_owned(), target.clone(), span)),
+        Action::Menu { choices, .. } => {
+            for choice in choices {
+                if let ChoiceTarget::CallScene(target) = &choice.target {
+                    edges.push((source.to_owned(), target.clone(), span));
+                }
+            }
+        }
+        Action::EiyashouMenu { choices, .. } => {
+            for choice in choices {
+                if let ChoiceTarget::CallScene(target) = &choice.target {
+                    edges.push((source.to_owned(), target.clone(), span));
+                }
+            }
+        }
+        Action::Flow { action, .. } => collect_native_call_edges(action, source, span, edges),
+        _ => {}
+    }
+}
+
+fn action_yields(action: &Action) -> bool {
+    match action {
+        Action::Say { .. }
+        | Action::Menu { .. }
+        | Action::EiyashouSay(_)
+        | Action::EiyashouMenu { .. } => true,
+        Action::Wait { seconds } => *seconds > 0.0,
+        Action::PlayVideo { video } => video.wait_for_finished,
+        Action::MoveSprite {
+            duration, blocking, ..
+        } => *blocking && *duration > 0.0,
+        Action::Flow { action, .. } => action_yields(action),
+        _ => false,
+    }
+}
+
+fn non_yielding_cycle_index(actions: &[Action]) -> Option<usize> {
+    let labels = actions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, action)| match action {
+            Action::Label(label) => Some((label.as_str(), index)),
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut colors = vec![0u8; actions.len()];
+    fn visit(
+        index: usize,
+        actions: &[Action],
+        labels: &BTreeMap<&str, usize>,
+        colors: &mut [u8],
+    ) -> Option<usize> {
+        if action_yields(&actions[index]) {
+            return None;
+        }
+        match colors[index] {
+            1 => return Some(index),
+            2 => return None,
+            _ => {}
+        }
+        colors[index] = 1;
+        for successor in native_action_successors(index, actions, labels) {
+            if let Some(cycle) = visit(successor, actions, labels, colors) {
+                return Some(cycle);
+            }
+        }
+        colors[index] = 2;
+        None
+    }
+    for index in 0..actions.len() {
+        if let Some(cycle) = visit(index, actions, &labels, &mut colors) {
+            return Some(cycle);
+        }
+    }
+    None
+}
+
+fn native_action_successors(
+    index: usize,
+    actions: &[Action],
+    labels: &BTreeMap<&str, usize>,
+) -> Vec<usize> {
+    let next = (index + 1 < actions.len()).then_some(index + 1);
+    match &actions[index] {
+        Action::Jump(label) => labels.get(label.as_str()).copied().into_iter().collect(),
+        Action::EiyashouJumpIf { label, .. } => labels
+            .get(label.as_str())
+            .copied()
+            .into_iter()
+            .chain(next)
+            .collect(),
+        Action::Menu { choices, .. } => choices
+            .iter()
+            .filter_map(|choice| match &choice.target {
+                ChoiceTarget::Label(label) => labels.get(label.as_str()).copied(),
+                _ => None,
+            })
+            .collect(),
+        Action::EiyashouMenu { choices, .. } => choices
+            .iter()
+            .filter_map(|choice| match &choice.target {
+                ChoiceTarget::Label(label) => labels.get(label.as_str()).copied(),
+                _ => None,
+            })
+            .collect(),
+        Action::ChangeScene(_) | Action::ReturnScene | Action::End => Vec::new(),
+        _ => next.into_iter().collect(),
+    }
+}
+
+fn cyclic_edge_indices(edges: &[(String, String, crate::SourceSpan)]) -> Vec<usize> {
+    edges
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (source, target, _))| {
+            let mut pending = vec![target.as_str()];
+            let mut visited = HashSet::new();
+            while let Some(node) = pending.pop() {
+                if node == source {
+                    return Some(index);
+                }
+                if visited.insert(node) {
+                    pending.extend(
+                        edges
+                            .iter()
+                            .filter(|(candidate, _, _)| candidate == node)
+                            .map(|(_, next, _)| next.as_str()),
+                    );
+                }
+            }
+            None
+        })
+        .collect()
+}
+
+fn push_native_graph_error(
+    scenes: &mut [LoadedScene],
+    source: &str,
+    span: crate::SourceSpan,
+    message: String,
+) {
+    if let Some(scene) = scenes.iter_mut().find(|scene| scene.name == source) {
+        scene.diagnostics.push(Diagnostic {
+            level: DiagnosticLevel::Error,
+            span,
+            message,
+        });
+    }
 }
 
 fn script_paths(
@@ -199,6 +966,14 @@ fn validate_label_references(
                 }
             }
         }
+        Action::EiyashouMenu { choices, .. } => {
+            for choice in choices {
+                if let ChoiceTarget::Label(label) = &choice.target {
+                    validate(label);
+                }
+            }
+        }
+        Action::EiyashouJumpIf { label, .. } => validate(label),
         Action::Flow { action, .. } => {
             validate_label_references(action, span, labels, diagnostics);
         }
@@ -211,7 +986,7 @@ fn load_scene(
     path: PathBuf,
     languages: &ScriptLanguageRegistry,
     source_reader: &SourceReader,
-) -> Result<LoadedScene> {
+) -> Result<Vec<LoadedScene>> {
     let language = languages
         .language_for(&path)
         .with_context(|| format!("unsupported script format: {}", path.display()))?;
@@ -227,16 +1002,22 @@ fn load_scene(
         .with_context(|| format!("script has no valid UTF-8 path: {}", path.display()))?
         .replace('\\', "/");
 
-    let report = language.parse(&source);
-    Ok(LoadedScene {
-        name,
-        path,
-        actions: report.actions,
-        action_spans: report.spans,
-        diagnostics: report.diagnostics,
-        resources: report.resources,
-        sub_scenes: report.sub_scenes,
-    })
+    Ok(language
+        .parse_scenes(&source)
+        .into_iter()
+        .map(|parsed| {
+            let report = parsed.report;
+            LoadedScene {
+                name: parsed.name.unwrap_or_else(|| name.clone()),
+                path: path.clone(),
+                actions: report.actions,
+                action_spans: report.spans,
+                diagnostics: report.diagnostics,
+                resources: report.resources,
+                sub_scenes: report.sub_scenes,
+            }
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -253,6 +1034,7 @@ mod tests {
             root: root.to_owned(),
             sources: vec![crate::SourceMount::project("project", root.to_owned())],
             scene_loader: None,
+            eiyashou: None,
         }
     }
 
@@ -260,6 +1042,7 @@ mod tests {
     fn detects_supported_languages() {
         let languages = ScriptLanguageRegistry::default();
         assert!(languages.supports(Path::new("scene.txt")));
+        assert!(languages.supports(Path::new("scene.shou")));
         assert!(!languages.supports(Path::new("scene.md")));
     }
 
@@ -284,6 +1067,236 @@ mod tests {
                 .map(|scene| scene.name.as_str())
                 .collect::<Vec<_>>(),
             ["a", "b"]
+        );
+        let _ = fs::remove_dir_all(project_root);
+    }
+
+    #[test]
+    fn loads_multiple_native_scenes_from_one_source_file() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let project_root = std::env::temp_dir().join(format!("keine-native-scenes-{nonce}"));
+        let root = project_root.join("scripts");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("chapter.shou"),
+            r#"
+scene opening {
+  "Start",
+  goto(ending)
+}
+
+scene ending {
+  video(credits, skippable: false),
+  "End"
+}
+"#,
+        )
+        .unwrap();
+
+        let scenes = load_scenes(&project(&project_root)).unwrap();
+
+        assert_eq!(
+            scenes
+                .iter()
+                .map(|scene| scene.name.as_str())
+                .collect::<Vec<_>>(),
+            ["ending", "opening"]
+        );
+        assert!(scenes.iter().all(|scene| scene.diagnostics.is_empty()));
+        assert!(
+            scenes
+                .iter()
+                .find(|scene| scene.name == "opening")
+                .unwrap()
+                .sub_scenes
+                .iter()
+                .any(|reference| reference.scene == "ending")
+        );
+        assert!(
+            scenes
+                .iter()
+                .find(|scene| scene.name == "ending")
+                .unwrap()
+                .resources
+                .iter()
+                .any(|resource| resource.path == "credits")
+        );
+        let _ = fs::remove_dir_all(project_root);
+    }
+
+    #[test]
+    fn native_variables_are_typed_across_source_files() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let project_root = std::env::temp_dir().join(format!("keine-native-types-{nonce}"));
+        let root = project_root.join("scripts");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("opening.shou"),
+            r#"scene opening { let visits = 1, goto(ending) }"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("ending.shou"),
+            r#"scene ending { visits += 1, "Visits: ${visits}" }"#,
+        )
+        .unwrap();
+
+        let scenes = load_scenes(&project(&project_root)).unwrap();
+
+        assert!(
+            scenes
+                .iter()
+                .flat_map(|scene| &scene.diagnostics)
+                .all(|diagnostic| !diagnostic.message.contains("unknown variable"))
+        );
+        let _ = fs::remove_dir_all(project_root);
+    }
+
+    #[test]
+    fn native_scene_graph_rejects_recursive_calls_and_non_yielding_goto_cycles() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let project_root = std::env::temp_dir().join(format!("keine-native-flow-{nonce}"));
+        let root = project_root.join("scripts");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("flow.shou"),
+            r#"
+scene call_a { call(call_b) }
+scene call_b { call(call_a) }
+scene spin_a { goto(spin_b) }
+scene spin_b { goto(spin_a) }
+scene allowed_a { "yield", goto(allowed_b) }
+scene allowed_b { goto(allowed_a) }
+"#,
+        )
+        .unwrap();
+
+        let scenes = load_scenes(&project(&project_root)).unwrap();
+        let messages = scenes
+            .iter()
+            .flat_map(|scene| scene.diagnostics.iter())
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("recursive native scene call"))
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("can repeat without yielding"))
+        );
+        assert!(
+            !scenes
+                .iter()
+                .find(|scene| scene.name == "allowed_a")
+                .unwrap()
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("without yielding"))
+        );
+        let _ = fs::remove_dir_all(project_root);
+    }
+
+    #[test]
+    fn native_entry_flow_rejects_only_returns_reachable_without_call_frames() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let project_root = std::env::temp_dir().join(format!("keine-native-return-{nonce}"));
+        let root = project_root.join("scripts");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("flow.shou"),
+            r#"
+scene start { call(legal), goto(empty_path) }
+scene legal { return }
+scene empty_path { return }
+"#,
+        )
+        .unwrap();
+
+        let mut scenes = load_scenes(&project(&project_root)).unwrap();
+        validate_native_entry_flow(&mut scenes, "start");
+
+        assert!(
+            scenes
+                .iter()
+                .find(|scene| scene.name == "legal")
+                .unwrap()
+                .diagnostics
+                .iter()
+                .all(|diagnostic| !diagnostic.message.contains("empty call stack"))
+        );
+        assert!(
+            scenes
+                .iter()
+                .find(|scene| scene.name == "empty_path")
+                .unwrap()
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("empty call stack"))
+        );
+        let _ = fs::remove_dir_all(project_root);
+    }
+
+    #[test]
+    fn native_entry_flow_checks_initialization_across_scene_routes() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let project_root = std::env::temp_dir().join(format!("keine-native-init-{nonce}"));
+        let root = project_root.join("scripts");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("flow.shou"),
+            r#"
+scene start {
+  choice("route") {
+    "without": goto(read_without_init),
+    "with": goto(setup)
+  }
+}
+scene setup { let name = "Rin", goto(read_after_init) }
+scene read_without_init { "${name}" }
+scene read_after_init { "${name}" }
+"#,
+        )
+        .unwrap();
+
+        let mut scenes = load_scenes(&project(&project_root)).unwrap();
+        validate_native_entry_flow(&mut scenes, "start");
+
+        assert!(
+            scenes
+                .iter()
+                .find(|scene| scene.name == "read_without_init")
+                .unwrap()
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("route from configured entry"))
+        );
+        assert!(
+            scenes
+                .iter()
+                .find(|scene| scene.name == "read_after_init")
+                .unwrap()
+                .diagnostics
+                .iter()
+                .all(|diagnostic| !diagnostic.message.contains("route from configured entry"))
         );
         let _ = fs::remove_dir_all(project_root);
     }
@@ -459,6 +1472,7 @@ mod tests {
                 crate::SourceMount::project("project", patch_project),
             ],
             scene_loader: None,
+            eiyashou: None,
         };
 
         let scenes = load_scenes(&project).unwrap();

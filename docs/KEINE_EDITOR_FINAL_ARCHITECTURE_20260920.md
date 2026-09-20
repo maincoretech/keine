@@ -1,13 +1,13 @@
 # Keine Editor 最终架构与分阶段实施交接
 
 - 文档日期：20260920
-- 文档版本：2.0 Final
+- 文档版本：2.1 Final
 - 适用仓库：`maincoretech/keine`
 - 交付对象：Codex / 后续开发者
 - 状态：**产品与架构约束。不是已完成代码的说明。**
 - 本文完整替代此前所有 `KEINE_EDITOR_CODEX_HANDOFF_20260919.md` / `KEINE_EDITOR_CODEX_HANDOFF_20260920.md` 版本。
 
-> **一句话目标：**Keine Engine 与 Keine Editor 保持在**同一个 Git/Cargo monorepo** 中，但编译为**两个独立原生程序**。Editor 使用 GPUI，按 VS Code/Zed 风格管理一个项目窗口内的可停靠 View；不同项目可以多开窗口，同一物理项目只能由一个窗口持有。Editor 与 Engine 在本地通过版本化 IPC 协作完成真实 VN 预览。普通作者/协作者只安装编译好的 Editor 与 Engine，**不需要 Rust、Cargo、源码树或本机编译依赖**。正式游戏发行由项目 CI 使用固定 Keine revision 执行现有生产构建链。
+> **一句话目标：**Keine Engine 与 Keine Editor 保持在**同一个 Git/Cargo monorepo** 中，但编译为**两个独立原生程序**。Editor 使用 GPUI，按 VS Code/Zed 风格管理一个项目窗口内的可停靠 View；不同项目可以多开窗口，同一物理项目只能由一个窗口持有。Editor 与 Engine 在本地通过版本化 IPC 协作完成真实 VN 预览。普通作者/协作者使用预编译的 Editor 与 Engine 编辑、预览或交付**工程包**时，**不需要本地 Rust、Cargo、源码树或编译依赖**。构建**正式发行包**必须在构建环境中安装固定 Rust toolchain 与平台依赖，从固定 Keine revision 重新编译匹配的 Engine；该环境通常是项目 CI。
 
 ---
 
@@ -52,7 +52,7 @@ git status --short
 | D05 | 不修改现有业务命令 | `dev`、`bundle`、`validate`、`assets`、`perf` 等保持现有语义，不增加 `--editor`。 |
 | D06 | Engine 与 Editor 是独立程序 | 两个进程、两个可执行产物、独立安装/更新；Editor 不把 Engine 打进自身安装包。 |
 | D07 | 本地通过 IPC 协作 | 真实预览由独立 Keine Engine 进程执行；Editor 不在 GPUI 内复制一套 VN runtime。 |
-| D08 | 协作者不需要 Rust | 正常创作路径不得调用 `cargo` / `rustc` / `rustup`，不得要求 Keine 源码树或 FFmpeg 开发包。 |
+| D08 | 工程创作与工程包不需要 Rust | 正常编辑、预览和工程包交付不得调用 `cargo` / `rustc` / `rustup`，不得要求 Keine 源码树或 FFmpeg 开发包；此约束不适用于正式发行包的构建环境。 |
 | D09 | 一个项目一个窗口 | 不同项目可以多开窗口；同一物理项目只能有一个可写 Workspace/Window。重复打开聚焦已有窗口。 |
 | D10 | 无项目选择窗体 | 不新增 Welcome/Project Picker/首次 workspace 向导。无项目时显示空 Workbench。 |
 | D11 | VS Code/Zed 式 Dock | 主要 View/文档标签可排序、跨组移动、横纵分屏、合并、resize、zoom；同一项目内自由拼贴。 |
@@ -61,8 +61,8 @@ git status --short
 | D14 | Preview 属于项目会话 | 移动/重排 Preview 不重启 Engine；关闭 Preview 才停止该项目预览。 |
 | D15 | 不做 Editor 插件系统 | 不新增 EditorRegistry、Extension SDK、插件生命周期、工坊。普通模块即可。 |
 | D16 | 现有 adapter 不当 Editor 插件 | loader adapter 继续负责运行时内容/工程/存储适配；作者文档写回属于 Editor 文档层。 |
-| D17 | 正式发行交给 CI | 项目可放 private repo；CI checkout 固定 Keine revision，并执行现有正式 `cargo bundle` 链。 |
-| D18 | 不重写当前 publisher | 当前 per-project engine build / Hakutaku key embedding 可继续存在于 CI；不为无 Rust 作者体验提前重构成 runtime pack。 |
+| D17 | 正式发行构建必须有 toolchain | 项目可放 private repo；构建环境必须安装固定 Rust toolchain 与平台依赖，checkout 固定 Keine revision，从源码编译匹配的 Engine 并执行现有正式 `cargo bundle` 链。通常由 CI 承担。 |
+| D18 | 不重写当前 publisher | 当前 per-project engine build / Hakutaku key embedding 可继续存在于 CI；不为无需本地 Rust 的工程创作体验提前重构成 runtime pack。 |
 | D19 | Engine 不由 Editor 管理 | Editor 可以发现/选择 Engine executable 并检查兼容性，但不下载、安装、更新、切 commit 或编译 Engine。 |
 | D20 | 不扩大引擎路线图 | 不因 Editor 顺带追齐 WebGAL/LetsGal 全功能、Live2D/Spine、移动端、协作或社区。 |
 
@@ -734,7 +734,7 @@ video
 
 ---
 
-# 11. 正式发行：Project CI，而不是作者电脑
+# 11. 正式发行：toolchain 在构建环境，通常是 Project CI
 
 ## 11.1 游戏项目与 Keine 源码分开
 
@@ -760,9 +760,11 @@ Writer / Artist / Director
 → game project directory
 ```
 
-不需要 Rust。
+这里的产物是仍可继续编辑、预览和交接的**工程目录/工程包**，不是交付给玩家的正式发行包。只要安装了预编译 Editor 与 Engine，这条路径不需要本地 Rust toolchain。
 
 ## 11.3 正式 shipping
+
+正式发行包包含为当前项目从源码构建的匹配 Engine 和 Hakutaku 资源，因此构建机**必须**具备固定 Rust toolchain 与目标平台依赖。作者电脑可以不安装这些依赖，是因为构建职责移到了 CI，而不是因为发行构建不再需要 toolchain。
 
 ```text
 push/tag game project
@@ -773,7 +775,7 @@ push/tag game project
 → artifact / signing / release
 ```
 
-**当前 `cargo bundle` 内部会为项目构建匹配的 hardened engine，并处理 Hakutaku publisher key material。这个成本留在 CI 是可接受且当前最小风险的方案。**不要为了 Editor 先重写 publisher。
+**当前 `cargo bundle` 内部会从固定 Keine 源码为项目构建匹配的 hardened engine，并处理 Hakutaku publisher key material。这个成本留在 CI 是可接受且当前最小风险的方案。**不要把预编译 Editor/Engine 重新打包成正式发行物，也不要为了 Editor 先重写 publisher。
 
 ## 11.4 固定 Keine revision
 
@@ -1205,7 +1207,16 @@ Live2D/Spine
 
 ### 目标
 
-让没有 Rust 的作者能把项目提交到私有/公开 repo，由 CI 完成正式发行。
+让作者在本机没有 Rust 的情况下编辑、预览和交付工程包；正式发行时，由具备固定 Rust toolchain 与平台依赖的 CI 从固定 Keine revision 开始，重新编译匹配的 Engine 并产出发行包。
+
+### 产物与工具链边界
+
+| 产物 | 内容与用途 | toolchain 要求 |
+|---|---|---|
+| 工程目录/工程包 | 可继续编辑的配置、脚本、资产和工程元数据；供 Editor 打开、Engine 预览或交给协作者 | 作者电脑无需 Rust；使用预编译 Editor 与 Engine |
+| 正式发行包 | 面向玩家的平台产物；包含从固定 Keine 源码为该项目构建的 hardened Engine 与 Hakutaku 资源 | 构建环境必须安装固定 Rust toolchain 与平台依赖，并从头构建 |
+
+“作者无需本地 toolchain”只表示把发行构建职责移到 CI，绝不表示正式发行包可以绕过 Engine 源码构建。
 
 ### 第一条真实项目先手写验证
 
@@ -1217,6 +1228,8 @@ game repo
 → cargo bundle <project>
 → collect artifact
 ```
+
+第一条真实流水线必须从 clean runner 开始显式安装/选择固定 toolchain；不得依赖 runner 上碰巧存在的 Rust、复用作者电脑的 Engine binary，或把工程包直接改名为发行包。
 
 ### 验证后再抽 reusable workflow
 
@@ -1306,7 +1319,7 @@ P1 + P2 + P3 + P4
 安全编辑
 独立 Engine IPC
 真实内嵌预览
-无 Rust 协作者体验
+无需本地 Rust 的工程创作与交付体验
 ```
 
 P5 是体验扩展，P6 是正式生产链，P7 是发布硬化。
@@ -1344,11 +1357,12 @@ P5 是体验扩展，P6 是正式生产链，P7 是发布硬化。
 | P07 | frame/diagnostic stale revision 被丢弃 | P4 |
 | P08 | 真实合成包括 UI/transition/post-process | P4 |
 | P09 | A Preview Stop 不影响 B | P4 |
-| C01 | private game repo clean CI 可 `cargo bundle` | P6 |
+| C01 | private game repo 的 clean CI 可安装固定 toolchain，并从固定 Keine 源码 `cargo bundle` | P6 |
 | C02 | CI 使用固定 Keine ref | P6 |
 | C03 | publisher secret 不进入作者项目/日志 | P6 |
+| C04 | 工程包无需本地 toolchain；正式发行包构建环境必须有 toolchain 并从头构建 Engine | P6 |
 | R01 | Editor/Engine 分别发布、可分别安装 | P7 |
-| R02 | 普通作者文档不要求 Rust/Cargo | P3–P7 |
+| R02 | 普通作者的编辑、预览和工程包交付文档不要求本地 Rust/Cargo；发行文档明确 CI toolchain 前置条件 | P3–P7 |
 
 ---
 
@@ -1472,7 +1486,7 @@ prepare project
 → assemble release
 ```
 
-这意味着正式 shipping 本来就需要 Rust/toolchain；本文选择把这个成本放在 CI，而不是重写进 Editor。
+这意味着正式 shipping 必须使用 Rust toolchain 从固定源码重新构建匹配 Engine；本文只把这个成本放在 CI，而不是消除它或重写进 Editor。工程包仍可由预编译 Editor/Engine 创建、打开和交付。
 
 ---
 

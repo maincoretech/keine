@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
+use keine_core::config::GameConfig;
+
 const RECOVERY_SCHEMA: u32 = 1;
 const MAX_DOCUMENT_BYTES: u64 = 1024 * 1024;
 const MAX_RECOVERY_BYTES: u64 = MAX_DOCUMENT_BYTES * 2 + 4096;
@@ -78,6 +80,27 @@ impl SourceDocument {
         self.contents = contents;
         self.revision = self.revision.wrapping_add(1).max(1);
         true
+    }
+
+    pub fn replace_range(
+        &mut self,
+        range: std::ops::Range<usize>,
+        replacement: &str,
+    ) -> io::Result<bool> {
+        if range.start > range.end
+            || !self.contents.is_char_boundary(range.start)
+            || !self.contents.is_char_boundary(range.end)
+            || self.contents.get(range.clone()).is_none()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "source edit range is stale or not on UTF-8 boundaries",
+            ));
+        }
+        let mut contents = self.contents.clone();
+        contents.replace_range(range, replacement);
+        ensure_document_size(&contents)?;
+        Ok(self.replace_contents(contents))
     }
 
     pub fn persist_recovery(&mut self) -> io::Result<()> {
@@ -162,6 +185,7 @@ pub struct DocumentManager {
     project_root: PathBuf,
     recovery_root: PathBuf,
     documents: HashMap<PathBuf, DocumentHandle>,
+    policy: AuthoringPolicy,
 }
 
 impl DocumentManager {
@@ -169,6 +193,7 @@ impl DocumentManager {
         let project_root = project_root.canonicalize()?;
         fs::create_dir_all(&recovery_root)?;
         Ok(Self {
+            policy: AuthoringPolicy::load(&project_root),
             project_root,
             recovery_root,
             documents: HashMap::new(),
@@ -177,10 +202,10 @@ impl DocumentManager {
 
     pub fn open(&mut self, relative_path: impl AsRef<Path>) -> io::Result<DocumentHandle> {
         let relative_path = checked_relative(relative_path.as_ref())?;
-        if !is_native_authoring_path(&relative_path) {
+        if !self.policy.is_writable(&relative_path) {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "only native config.yaml and scripts/*.txt sources are writable",
+                "only Eiyashou config, configured manifests, and scripts/**/*.shou are writable",
             ));
         }
         if let Some(document) = self.documents.get(&relative_path) {
@@ -254,6 +279,47 @@ impl DocumentManager {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+struct AuthoringPolicy {
+    enabled: bool,
+    assets: PathBuf,
+    characters: PathBuf,
+}
+
+impl AuthoringPolicy {
+    fn load(project_root: &Path) -> Self {
+        let Ok(source) = fs::read_to_string(project_root.join("config.yaml")) else {
+            return Self::default();
+        };
+        let Ok(config) = GameConfig::from_yaml(&source) else {
+            return Self::default();
+        };
+        if config.adapter.script != "keine" {
+            return Self::default();
+        }
+        Self {
+            enabled: true,
+            assets: PathBuf::from(config.script.assets),
+            characters: PathBuf::from(config.script.characters),
+        }
+    }
+
+    fn is_writable(&self, path: &Path) -> bool {
+        self.enabled
+            && (path == Path::new("config.yaml")
+                || path == self.assets
+                || path == self.characters
+                || (path.starts_with("scripts")
+                    && path
+                        .extension()
+                        .is_some_and(|extension| extension == "shou")))
+    }
+}
+
+pub fn is_eiyashou_authoring_document(project_root: &Path, relative: &Path) -> bool {
+    AuthoringPolicy::load(project_root).is_writable(relative)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct RecoveryDraft {
     schema: u32,
@@ -276,12 +342,6 @@ fn checked_relative(path: &Path) -> io::Result<PathBuf> {
         ));
     }
     Ok(path.to_owned())
-}
-
-fn is_native_authoring_path(path: &Path) -> bool {
-    path == Path::new("config.yaml")
-        || (path.starts_with("scripts")
-            && path.extension().is_some_and(|extension| extension == "txt"))
 }
 
 fn read_source(path: &Path) -> io::Result<Vec<u8>> {
@@ -456,10 +516,16 @@ mod tests {
         let project = root.join("project");
         let recovery = root.join("app-data/recovery");
         fs::create_dir_all(project.join("scripts")).unwrap();
-        fs::write(project.join("config.yaml"), "title: Fixture\n").unwrap();
         fs::write(
-            project.join("scripts/main.txt"),
-            "intro:hello;\nfutureCommand:opaque payload;\n",
+            project.join("config.yaml"),
+            "title: Fixture\nadapter:\n  script: keine\nscript:\n  version: 1\n  entry: opening\n",
+        )
+        .unwrap();
+        fs::write(project.join("assets.yaml"), "backgrounds: {}\n").unwrap();
+        fs::write(project.join("characters.yaml"), "characters: {}\n").unwrap();
+        fs::write(
+            project.join("scripts/main.shou"),
+            "scene opening { \"hello\" }\n",
         )
         .unwrap();
         let manager = DocumentManager::new(project.clone(), recovery).unwrap();
@@ -469,9 +535,9 @@ mod tests {
     #[test]
     fn opening_without_changes_preserves_exact_bytes() {
         let (root, project, mut manager) = fixture();
-        let path = project.join("scripts/main.txt");
+        let path = project.join("scripts/main.shou");
         let before = fs::read(&path).unwrap();
-        let document = manager.open("scripts/main.txt").unwrap();
+        let document = manager.open("scripts/main.shou").unwrap();
         assert!(!document.borrow().is_dirty());
         drop(document);
         drop(manager);
@@ -482,7 +548,7 @@ mod tests {
     #[test]
     fn save_round_trips_unknown_source_and_clears_recovery() {
         let (root, project, mut manager) = fixture();
-        let document = manager.open("scripts/main.txt").unwrap();
+        let document = manager.open("scripts/main.shou").unwrap();
         let mut contents = document.borrow().contents().to_owned();
         contents.push_str("narrator:追加文本;\n");
         document.borrow_mut().replace_contents(contents.clone());
@@ -490,7 +556,7 @@ mod tests {
         assert!(document.borrow().recovery_path.is_file());
         document.borrow_mut().save().unwrap();
         assert_eq!(
-            fs::read_to_string(project.join("scripts/main.txt")).unwrap(),
+            fs::read_to_string(project.join("scripts/main.shou")).unwrap(),
             contents
         );
         assert!(!document.borrow().recovery_path.exists());
@@ -501,17 +567,17 @@ mod tests {
     #[test]
     fn external_modification_is_never_overwritten() {
         let (root, project, mut manager) = fixture();
-        let document = manager.open("scripts/main.txt").unwrap();
+        let document = manager.open("scripts/main.shou").unwrap();
         document
             .borrow_mut()
             .replace_contents("editor version".into());
-        fs::write(project.join("scripts/main.txt"), "external version").unwrap();
+        fs::write(project.join("scripts/main.shou"), "external version").unwrap();
         assert!(matches!(
             document.borrow_mut().save(),
             Err(SaveError::ExternalModification { .. })
         ));
         assert_eq!(
-            fs::read_to_string(project.join("scripts/main.txt")).unwrap(),
+            fs::read_to_string(project.join("scripts/main.shou")).unwrap(),
             "external version"
         );
         fs::remove_dir_all(root).unwrap();
@@ -520,7 +586,7 @@ mod tests {
     #[test]
     fn recovery_restores_only_against_the_same_disk_base() {
         let (root, project, mut manager) = fixture();
-        let document = manager.open("scripts/main.txt").unwrap();
+        let document = manager.open("scripts/main.shou").unwrap();
         document.borrow_mut().replace_contents("draft".into());
         document.borrow_mut().persist_recovery().unwrap();
         drop(document);
@@ -528,15 +594,15 @@ mod tests {
 
         let mut reopened =
             DocumentManager::new(project.clone(), root.join("app-data/recovery")).unwrap();
-        let document = reopened.open("scripts/main.txt").unwrap();
+        let document = reopened.open("scripts/main.shou").unwrap();
         assert_eq!(document.borrow().contents(), "draft");
         assert_eq!(document.borrow().recovery_state(), RecoveryState::Restored);
         drop(document);
         drop(reopened);
 
-        fs::write(project.join("scripts/main.txt"), "external version").unwrap();
+        fs::write(project.join("scripts/main.shou"), "external version").unwrap();
         let mut conflicted = DocumentManager::new(project, root.join("app-data/recovery")).unwrap();
-        let document = conflicted.open("scripts/main.txt").unwrap();
+        let document = conflicted.open("scripts/main.shou").unwrap();
         assert_eq!(document.borrow().contents(), "external version");
         assert_eq!(
             document.borrow().recovery_state(),
@@ -548,9 +614,44 @@ mod tests {
     #[test]
     fn manager_reuses_one_authoritative_document() {
         let (root, _, mut manager) = fixture();
-        let first = manager.open("scripts/main.txt").unwrap();
-        let second = manager.open("scripts/main.txt").unwrap();
+        let first = manager.open("scripts/main.shou").unwrap();
+        let second = manager.open("scripts/main.shou").unwrap();
         assert!(Rc::ptr_eq(&first, &second));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn configured_manifests_share_the_writable_source_path() {
+        let (root, project, manager) = fixture();
+        drop(manager);
+        fs::create_dir_all(project.join("manifests")).unwrap();
+        fs::write(
+            project.join("manifests/resources.yaml"),
+            "backgrounds: {}\n",
+        )
+        .unwrap();
+        fs::write(project.join("manifests/cast.yaml"), "characters: {}\n").unwrap();
+        fs::write(
+            project.join("config.yaml"),
+            "title: Fixture\nadapter:\n  script: keine\nscript:\n  version: 1\n  entry: opening\n  assets: manifests/resources.yaml\n  characters: manifests/cast.yaml\n",
+        )
+        .unwrap();
+        let mut manager = DocumentManager::new(project, root.join("app-data/recovery")).unwrap();
+        assert!(manager.open("manifests/resources.yaml").is_ok());
+        assert!(manager.open("manifests/cast.yaml").is_ok());
+        let error = manager.open("scripts/legacy.txt").unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bounded_edits_preserve_source_outside_the_range() {
+        let (root, _, mut manager) = fixture();
+        let document = manager.open("scripts/main.shou").unwrap();
+        let before = document.borrow().contents().to_owned();
+        let range = before.find("opening").unwrap()..before.find("opening").unwrap() + 7;
+        assert!(document.borrow_mut().replace_range(range, "intro").unwrap());
+        assert_eq!(document.borrow().contents(), "scene intro { \"hello\" }\n");
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -566,7 +667,7 @@ mod tests {
     #[test]
     fn edited_sources_and_recovery_inputs_remain_bounded() {
         let (root, project, mut manager) = fixture();
-        let document = manager.open("scripts/main.txt").unwrap();
+        let document = manager.open("scripts/main.shou").unwrap();
         let recovery_path = document.borrow().recovery_path.clone();
         document
             .borrow_mut()
@@ -584,7 +685,7 @@ mod tests {
 
         fs::write(&recovery_path, vec![0; MAX_RECOVERY_BYTES as usize + 1]).unwrap();
         let mut reopened = DocumentManager::new(project, root.join("app-data/recovery")).unwrap();
-        let document = reopened.open("scripts/main.txt").unwrap();
+        let document = reopened.open("scripts/main.shou").unwrap();
         assert_eq!(document.borrow().recovery_state(), RecoveryState::None);
         fs::remove_dir_all(root).unwrap();
     }

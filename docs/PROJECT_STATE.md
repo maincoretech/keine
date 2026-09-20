@@ -10,8 +10,14 @@
 - `keine-core` provides typed actions, immutable `Program`, deterministic `State` transitions,
   expression evaluation, execution limits, rollback checkpoints, and persistence-safety checks.
 - `keine-loader` provides capability-based adapter registration, confined overlay sources,
-  WebGAL parsing, LetsGal 1.x/2.0 compilation, compiled Program v1, save v10, diagnostics, and
+  WebGAL parsing, LetsGal 1.x/2.0 compilation, compiled Program envelope v1 / IR schema v3,
+  save v11, diagnostics, and
   optional development hot reload.
+- The Eiyashou v1 `keine` script adapter owns `.shou` lexing, lossless source ranges, typed
+  validation, and lowering in Bevy-free Rust. It implements strict expressions/interpolation,
+  once-only variables, homogeneous lists, structured branches/loops, choices, scene flow, stable
+  source identity, project manifests, character presentation, scene/media actions, non-looping
+  blocking video, typed BGM playback mode, and real crossfade state.
 - The Bevy runtime provides 1920x1080 design-space rendering, fixed scene/UI/dialog camera
   composition, reactive lifecycle scheduling, background/sprite/effect synchronization, fixed
   MainCore UI, audio, desktop video, and platform persistence roots.
@@ -22,20 +28,28 @@
 - Publisher preparation validates and compiles project-owned input before loading or creating an
   identity. Failed release assembly preserves the previous runnable package, and generated
   LetsGal configuration and portrait variants have deterministic ordering.
+- Formal Hakutaku release payloads are rebuilt from an allowlisted runtime boundary after script
+  compilation. They contain runtime config, `program.bin`, and mounted runtime assets, but no
+  Native/WebGAL scripts or LetsGal authoring project. Unknown authoring adapters fail closed.
 - Save, backup, settings, profile, history, gallery, and preview paths have explicit input limits,
   transactional replacement, and post-commit cleanup warning semantics.
 - CI covers Linux, macOS, Windows x64, dependency advisories, platform media feature contracts,
   release feature sets, WebP fuzz smoke, and Linux FFmpeg ASan acceptance. Desktop video fixtures
   cover no-audio, long-GOP, tail-`moov`, damaged-header, rewind, cancellation, FS, and encrypted
   Hakutaku sources.
-- `keine-editor` provides the Phase 3 workbench: Empty Workbench and Open Recent/Folder,
+- `keine-editor` provides the Eiyashou authoring workbench: Empty Workbench and Open Recent/Folder,
   one physical project per native window, secondary-launch routing, real project discovery and
   source-backed document tabs, upstream Dock layout interactions, schema-versioned app-data layout
-  persistence, and Reset Layout. Native `config.yaml` and `scripts/*.txt` have source-preserving
-  editing, IME/undo, conflict-safe atomic save, and app-data recovery; compatibility JSON remains
-  read-only. A bounded binary authoring protocol launches one prebuilt Engine child per project for
-  handshake, validation, diagnostics, and no-frame lifecycle control. The editor remains excluded
-  from the root Engine's default build.
+  persistence, and Reset Layout. Native `config.yaml`, configured manifests, and
+  `scripts/**/*.shou` have source-preserving editing, IME/undo, conflict-safe atomic save, and
+  app-data recovery; compatibility JSON remains read-only. Text and Card modes share one source,
+  Card edits replace bounded source ranges, and unknown syntax remains visible/read-only. An
+  Eiyashou project's merged native scene set owns one declaration/type scope, so global variables
+  remain typed across `.shou` file boundaries after mount overrides are resolved. An
+  explicit preview-before-apply command only renames already-valid legacy Eiyashou `.txt` sources;
+  it never translates compatibility input. The bounded binary authoring protocol launches one
+  prebuilt Engine child per project for handshake, validation, diagnostics, and no-frame lifecycle
+  control. The editor remains excluded from the root Engine's default build.
 
 ## Architecture and interfaces
 
@@ -77,10 +91,15 @@ project / package
   Live2D portraits remain explicitly unsupported.
   A Studio-native ID outside Kēne's path-safe slug grammar is deterministically mapped to a stable
   `letsgal-*` shipping/save ID; `project.json.keine.projectId` is the explicit override.
-- Save v10 and compiled Program v1 are strict envelopes. Other layouts are rejected; there is no
-  best-effort legacy decoder.
+- Save v11 and compiled Program envelope v1 / IR schema v3 are strict contracts. Other layouts are
+  rejected; there is no best-effort legacy decoder.
 - Hakutaku v1 is the sole release package. Publisher encryption raises extraction cost but is not
   DRM and does not promise secrecy from a user controlling the client.
+- An editable project directory or project package can be authored, previewed, and handed off with
+  prebuilt Editor and Engine binaries and does not require a local Rust toolchain. A formal release
+  package is different: its build environment, normally project CI, must install the pinned Rust
+  toolchain and platform dependencies, check out the pinned Kēne revision, and build the matching
+  hardened Engine from source. A project package is never repackaged directly as a release.
 - macOS ships AVFoundation/Metal video; Windows/Linux ship the reduced FFmpeg decode feature set.
   Canonical video is MP4/M4V with H.264 + AAC; other FFmpeg containers are compatibility inputs.
 - UI layout, input scopes, blur composition, and animations use logical design-space units and
@@ -111,6 +130,10 @@ project / package
   implemented. Phase 0 selects a raw
   latest-frame-wins triple buffer; a native child surface or compression requires end-to-end
   release evidence.
+- Eiyashou v1 intentionally does not expose the deferred advanced runtime surface listed in its
+  language reference: camera/post-process/particle timelines, arbitrary code execution, runtime UI
+  skinning, import systems, dynamic Live2D/Spine/GIF authoring, SE loop/pan, or non-blocking video.
+  These are out of v1 rather than incomplete v1 behavior.
 
 ## Known status
 
@@ -133,7 +156,7 @@ project / package
   representative project compiled 9 scenes and 1020 actions without diagnostics or unresolved
   static resources. Its later Studio 1.20 follow-up added native multi-target character removal
   and typed `stageMask` overlay/clip support, including blocking, rollback, editor replay, and
-  explicit Save v10 rejection while a mask is active. The external sample remains untracked.
+  explicit Save v11 rejection while a mask is active. The external sample remains untracked.
 - Release workflow run 17 completed successfully for `a8175f9`, covering the integrated LetsGal
   release-ID fix and the Linux, macOS, and Windows temporary benchmark bundles.
 - T03's available macOS acceptance passed on Apple M5 Pro / Metal at `1db8e15`: title, stage,
@@ -156,9 +179,10 @@ project / package
   use integrated card titles rather than fake tabs. Document tab selection and close use restrained
   reduced-motion-aware transitions. Explorer preserves long paths through horizontal scrolling,
   with a subtle scrollbar and right-edge overflow fade.
-- Editor Phase 2 makes only native `config.yaml` and `scripts/*.txt` writable. One authoritative
-  source document owns text, revisions, dirty state, selection, undo/redo, external-change checks,
-  atomic saves, and binary app-data recovery. LetsGal and other JSON documents remain read-only.
+- Editor authoring makes Eiyashou `config.yaml`, configured resource/character manifests, and
+  `scripts/**/*.shou` writable. One authoritative source document owns text, revisions, dirty
+  state, selection, undo/redo, external-change checks, atomic saves, and binary app-data recovery.
+  LetsGal, WebGAL compatibility input, and JSON documents remain read-only.
   The line-number gutter omits the unused folding column, and macOS acceptance covered Unicode
   input, dirty/saved indication, save, recovery, selection, and the unsaved-close prompt.
 - Editor Phase 3 adds a Bevy-free, 256 KiB-bounded, length-prefixed Postcard control protocol and
@@ -171,6 +195,9 @@ project / package
 
 | Task | Scheduling | Boundary |
 |---|---|---|
+| [T13](tasks/T13-native-dsl-adapter.md) | complete | Eiyashou adapter and typed core boundary |
+| [T14](tasks/T14-release-source-exclusion.md) | complete | compiled-only Hakutaku release content |
+| [T15](tasks/T15-eiyashou-editor-projection.md) | complete | source-first Editor projection and explicit migration |
 | [T03](tasks/T03-ui-visual-baseline.md) | user acceptance | UI and cross-platform visual evidence |
 
 ## Canonical references

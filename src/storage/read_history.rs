@@ -10,7 +10,7 @@ use crate::runtime::resources::{
     EditorSyncSession, GameState, PersistenceDisabled, PersistenceRoot,
 };
 
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const MAX_HISTORY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_HISTORY_ENTRIES: usize = 1_000_000;
 
@@ -137,6 +137,7 @@ mod tests {
         let expected = HashSet::from([DialogueKey {
             scene: "main".into(),
             action_index: 7,
+            source_id: None,
         }]);
 
         save(&expected, &root).unwrap();

@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::action::{
@@ -25,6 +26,11 @@ pub struct State {
     /// Immutable compiled script data, shared by snapshots and omitted from saves.
     #[serde(skip, default)]
     pub program: Arc<Program>,
+    /// Configured project entry retained outside save data. Native projects
+    /// set this explicitly; compatibility adapters keep their established
+    /// `start`/`main` discovery behavior.
+    #[serde(skip, default)]
+    pub script_entry: Option<String>,
     /// Stable identity of the compiled program this state was created against.
     pub program_fingerprint: u64,
     /// Typed, transient commands consumed by the engine-owned UI shell.
@@ -96,6 +102,10 @@ pub struct State {
     pub dialogue: Option<Dialogue>,
     /// Last settled dialogue, used by WebGAL `-concat`.
     pub previous_dialogue: Option<Dialogue>,
+    /// Stable Eiyashou identity for the active dialogue. Compatibility
+    /// adapters leave this empty and keep scene/action-position semantics.
+    #[serde(default)]
+    pub active_dialogue_source_id: Option<String>,
     /// Active sentence-tail deletion. This is persisted so loading a save
     /// resumes the same visual character and click-wait phase.
     #[serde(default)]
@@ -120,7 +130,7 @@ pub struct State {
     pub film_mode: bool,
     #[serde(default)]
     pub curtain: CurtainState,
-    /// Save v10 has no stage-mask wire field. Active masks therefore make a
+    /// Save v11 has no stage-mask wire field. Active masks therefore make a
     /// disk save inexact, while in-memory rollback still clones this state.
     #[serde(skip, default)]
     pub stage_masks: HashMap<String, StageMaskState>,
@@ -264,7 +274,13 @@ pub struct BgmState {
     pub file: Option<String>,
     pub volume: f32,
     pub fade_seconds: f32,
+    #[serde(default = "default_bgm_looped")]
+    pub looped: bool,
     pub revision: u64,
+}
+
+const fn default_bgm_looped() -> bool {
+    true
 }
 
 impl Default for BgmState {
@@ -273,6 +289,7 @@ impl Default for BgmState {
             file: None,
             volume: 1.0,
             fade_seconds: 0.0,
+            looped: true,
             revision: 0,
         }
     }
@@ -309,10 +326,40 @@ pub struct VocalCue {
     pub fade_out: f32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DialogueKey {
     pub scene: String,
     pub action_index: usize,
+    #[serde(default)]
+    pub source_id: Option<String>,
+}
+
+impl PartialEq for DialogueKey {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.source_id, &other.source_id) {
+            (Some(left), Some(right)) => left == right,
+            (None, None) => self.scene == other.scene && self.action_index == other.action_index,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for DialogueKey {}
+
+impl Hash for DialogueKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match &self.source_id {
+            Some(source_id) => {
+                1u8.hash(state);
+                source_id.hash(state);
+            }
+            None => {
+                0u8.hash(state);
+                self.scene.hash(state);
+                self.action_index.hash(state);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -349,6 +396,8 @@ pub struct RollbackSnapshot {
     #[serde(default)]
     pub sprite_sequences: HashMap<String, SpriteSequenceState>,
     pub dialogue: Dialogue,
+    #[serde(default)]
+    pub dialogue_source_id: Option<String>,
     pub mini_avatar: Option<String>,
     pub textbox_hidden: bool,
     pub textbox_auto_hidden: bool,
@@ -457,6 +506,8 @@ pub struct MenuChoice {
     pub text: String,
     pub target: ChoiceTarget,
     pub enabled: bool,
+    #[serde(default)]
+    pub source_id: Option<String>,
 }
 
 /// A sprite displayed on screen.
@@ -773,6 +824,9 @@ pub struct BgTransition {
 pub struct Dialogue {
     /// Speaker name.
     pub speaker: String,
+    /// Optional author-defined speaker color.
+    #[serde(default)]
+    pub speaker_color: Option<crate::types::Rgba>,
     /// Full text content.
     pub text: String,
     /// Interpolated source preserving WebGAL style/ruby markup for the UI backend.
@@ -929,6 +983,7 @@ impl State {
             });
         }
         saved.program = Arc::clone(&self.program);
+        saved.script_entry = self.script_entry.clone();
         saved.stage_revision = self.stage_revision.wrapping_add(1);
         saved.session_variable_names = self.session_variable_names.clone();
         for name in &saved.session_variable_names {
@@ -954,6 +1009,7 @@ impl State {
         let key = DialogueKey {
             scene: self.current_scene.clone(),
             action_index,
+            source_id: self.active_dialogue_source_id.clone(),
         };
         let previous = self.backlog.last().map(|entry| &entry.snapshot);
         let sprites = shared_snapshot(&self.sprites, previous.map(|snapshot| &snapshot.sprites));
@@ -992,6 +1048,7 @@ impl State {
                 sprites,
                 sprite_sequences: self.sprite_sequences.clone(),
                 dialogue,
+                dialogue_source_id: self.active_dialogue_source_id.clone(),
                 mini_avatar: self.mini_avatar.clone(),
                 textbox_hidden: self.textbox_hidden,
                 textbox_auto_hidden: self.textbox_auto_hidden,
@@ -1029,6 +1086,7 @@ impl State {
         self.dialogue.as_ref().map(|_| DialogueKey {
             scene: self.current_scene.clone(),
             action_index: self.cursor.saturating_sub(1),
+            source_id: self.active_dialogue_source_id.clone(),
         })
     }
 
@@ -1084,6 +1142,7 @@ impl State {
         self.sprites = snapshot.sprites.as_ref().clone();
         self.sprite_sequences = snapshot.sprite_sequences;
         self.dialogue = Some(snapshot.dialogue);
+        self.active_dialogue_source_id = snapshot.dialogue_source_id;
         self.previous_dialogue = None;
         self.dialogue_retraction = None;
         self.mini_avatar = snapshot.mini_avatar;
@@ -1248,6 +1307,7 @@ mod tests {
     fn dialogue(text: &str) -> Dialogue {
         Dialogue {
             speaker: "MainCore".into(),
+            speaker_color: None,
             text: text.into(),
             markup: text.into(),
             visible_chars: 0,
@@ -1410,6 +1470,7 @@ mod tests {
             file: Some("checkpoint.opus".into()),
             volume: 0.8,
             fade_seconds: 0.4,
+            looped: true,
             revision: 7,
         };
         let mut checkpoint = dialogue("checkpoint");
@@ -1489,6 +1550,21 @@ mod tests {
         ]));
 
         assert!(state.backlog.is_empty());
+    }
+
+    #[test]
+    fn restoring_a_save_preserves_the_current_projects_script_entry() {
+        let program = Program::from_scenes([("opening".into(), vec![Action::Comment])]);
+        let mut current = State::new();
+        current.install_program(program);
+        current.current_scene = "opening".into();
+        current.script_entry = Some("opening".into());
+
+        let mut saved = current.clone();
+        saved.script_entry = None;
+        current.restore_saved(saved).unwrap();
+
+        assert_eq!(current.script_entry.as_deref(), Some("opening"));
     }
 
     #[test]
@@ -1694,6 +1770,7 @@ mod tests {
         state.read_dialogues.insert(DialogueKey {
             scene: "main".into(),
             action_index: 7,
+            source_id: None,
         });
         state
             .unlocked_cg
@@ -1711,6 +1788,7 @@ mod tests {
         saved.read_dialogues.insert(DialogueKey {
             scene: "old".into(),
             action_index: 1,
+            source_id: None,
         });
         saved.unlocked_cg.insert("old.webp".into(), "Old".into());
         saved.unlocked_bgm.insert("old.opus".into(), "Old".into());

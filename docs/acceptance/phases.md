@@ -89,7 +89,7 @@ cargo dev projects/test-project
 9. 在上述演出期间选择返回标题或正常关闭窗口，再 CONTINUE，确认从该演出开始前最后一个
    可恢复 checkpoint 继续；本次会话尚无 checkpoint 时不得覆盖已有 quick save。
 10. 普通 dialogue/typewriter、transform animation、幕布/浮动文字、system message 和
-    sprite sequence 状态应能正常写入 v10 并恢复。
+    sprite sequence 状态应能正常写入 v11 并恢复。
 
 ### D. LOAD 与删除
 

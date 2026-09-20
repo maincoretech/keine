@@ -1364,8 +1364,11 @@ pub(crate) fn validate_project(
     content: &ContentProject,
     languages: &keine_loader::ScriptLanguageRegistry,
 ) -> Result<keine_authoring::ValidationReport> {
-    let scenes =
+    let mut scenes =
         load_scenes_with(content, languages).context("failed to compile project scenes")?;
+    if config.adapter.script.eq_ignore_ascii_case("keine") {
+        keine_loader::validate_native_entry_flow(&mut scenes, &config.script.entry);
+    }
     let mut actions = 0usize;
     let mut warnings = 0usize;
     let mut errors = 0usize;
@@ -1412,6 +1415,21 @@ pub(crate) fn validate_project(
             }
         }
     }
+    if config.adapter.script.eq_ignore_ascii_case("keine")
+        && !scenes.iter().any(|scene| scene.name == config.script.entry)
+    {
+        errors += 1;
+        diagnostics.push(keine_authoring::Diagnostic {
+            level: keine_authoring::DiagnosticLevel::Error,
+            path: content.root.join("config.yaml"),
+            line: 1,
+            column: 1,
+            message: format!(
+                "native script entry scene {:?} does not exist",
+                config.script.entry
+            ),
+        });
+    }
     Ok(keine_authoring::ValidationReport {
         title: config.title.clone(),
         scenes: scenes.len(),
@@ -1447,9 +1465,10 @@ pub(crate) fn open_project(project_path: &Path, loader: &LoaderRegistry) -> Resu
         .with_context(|| format!("failed to read {}", config_path.display()))?;
     let yaml = std::str::from_utf8(&bytes)
         .with_context(|| format!("project config is not UTF-8: {}", config_path.display()))?;
-    let config = GameConfig::from_yaml(yaml)
+    let mut config = GameConfig::from_yaml(yaml)
         .with_context(|| format!("invalid project config {}", config_path.display()))?;
-    let content = load_project_with(project_path, &config.adapter.asset, loader)?;
+    let mut content = load_project_with(project_path, &config.adapter.asset, loader)?;
+    content.prepare_eiyashou(&mut config)?;
     Ok(OpenedProject {
         root: content.root.clone(),
         config,
@@ -1489,6 +1508,9 @@ fn bootstrap_project(
     );
 
     let mut state = State::new();
+    if config.adapter.script.eq_ignore_ascii_case("keine") {
+        state.script_entry = Some(config.script.entry.clone());
+    }
     match content.initial_state() {
         Ok(initial) => {
             state.vars = initial.variables;
@@ -1510,7 +1532,18 @@ fn bootstrap_project(
     let mut action_count = 0;
     let mut manifest = LocalAssetManifest::default();
     match load_startup_scenes_with(&content, &languages) {
-        Ok(scenes) => {
+        Ok(mut scenes) => {
+            if config.adapter.script.eq_ignore_ascii_case("keine") {
+                keine_loader::validate_native_entry_flow(&mut scenes, &config.script.entry);
+            }
+            let reject_native_program = config.adapter.script.eq_ignore_ascii_case("keine")
+                && (!scenes.iter().any(|scene| scene.name == config.script.entry)
+                    || scenes.iter().any(|scene| {
+                        scene
+                            .diagnostics
+                            .iter()
+                            .any(|diagnostic| diagnostic.level == DiagnosticLevel::Error)
+                    }));
             let mut program_scenes = Vec::with_capacity(scenes.len());
             for scene in scenes {
                 scene_count += 1;
@@ -1538,7 +1571,14 @@ fn bootstrap_project(
                 );
                 program_scenes.push((scene.name, scene.actions));
             }
-            state.install_program(Program::from_scenes(program_scenes));
+            if reject_native_program {
+                log::error!(
+                    target: "keine::runtime",
+                    "native script diagnostics contain errors; refusing to install the authored Program"
+                );
+            } else {
+                state.install_program(Program::from_scenes(program_scenes));
+            }
         }
         Err(error) => log::error!("failed to load scripts: {error:#}"),
     }
@@ -1579,6 +1619,7 @@ fn bootstrap_project(
             let new_preview = || State {
                 program: state.program.clone(),
                 program_fingerprint: state.program_fingerprint,
+                script_entry: state.script_entry.clone(),
                 vars: state.vars.clone(),
                 global_vars: state.global_vars.clone(),
                 ..State::new()

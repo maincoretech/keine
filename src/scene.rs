@@ -70,8 +70,16 @@ impl Plugin for ScenePlugin {
 
 use keine_core::State;
 
-/// Prefer WebGAL's conventional `start`, with `main` as a language-neutral fallback.
+/// Honor an explicitly configured native entry. Compatibility adapters prefer
+/// WebGAL's conventional `start`, with `main` as a language-neutral fallback.
 pub fn entry_scene(state: &State) -> String {
+    if let Some(entry) = state.script_entry.as_deref() {
+        return if state.program.contains_scene(entry) {
+            entry.to_owned()
+        } else {
+            String::new()
+        };
+    }
     ["start", "main"]
         .into_iter()
         .find(|name| state.program.contains_scene(name))
@@ -92,5 +100,17 @@ mod tests {
         assert_eq!(entry_scene(&state), "main");
         state.insert_scene("start".into(), Vec::new());
         assert_eq!(entry_scene(&state), "start");
+    }
+
+    #[test]
+    fn entry_scene_honors_native_configuration_and_fails_closed_when_missing() {
+        let mut state = State::new();
+        state.insert_scene("opening".into(), Vec::new());
+        state.insert_scene("start".into(), Vec::new());
+        state.script_entry = Some("opening".into());
+        assert_eq!(entry_scene(&state), "opening");
+
+        state.script_entry = Some("missing".into());
+        assert_eq!(entry_scene(&state), "");
     }
 }

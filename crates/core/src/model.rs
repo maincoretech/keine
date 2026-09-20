@@ -1,6 +1,7 @@
 //! Serializable, language-neutral visual-novel model.
 
 pub mod action;
+pub mod eiyashou;
 pub mod state;
 pub mod types;
 
@@ -9,6 +10,11 @@ pub use action::{
     SayOptions, StageAnimation, StageAudioCue, StageAudioKind, StageEvent, StageEventKind,
     StageKeyframe, StageProperty, StageSceneCue, StageSceneLayer, StageTarget, StageTrack,
     SystemMessageMode, SystemMessageSpec, SystemUiSlot, TransformKeyframe,
+};
+pub use eiyashou::{
+    EiyashouAssignOp, EiyashouBinaryOp, EiyashouChoice, EiyashouDialogue, EiyashouExpr,
+    EiyashouListOperation, EiyashouPlace, EiyashouScalarType, EiyashouText, EiyashouTextPart,
+    EiyashouType, EiyashouUnaryOp,
 };
 pub use state::{
     ActiveParticleEffect, BgmState, CameraShakeState, DialoguePause, EffectCue, EffectEvent,

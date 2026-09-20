@@ -12,6 +12,10 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::action::Action;
 use crate::action::ChoiceTarget;
 use crate::expression::{evaluate, interpolate};
+use crate::runtime::eiyashou::{
+    EiyashouRuntimeError, assign as assign_eiyashou, evaluate as evaluate_eiyashou,
+    mutate_list as mutate_eiyashou_list, render_text as render_eiyashou_text,
+};
 use crate::state::{
     BgTransition, Dialogue, DialogueRetraction, IntroState, KeyframeAnimation, MenuChoice,
     MenuState, PresetAnimation, SceneFrame, Sprite, State, TransformAnimation, TransitionRule,
@@ -33,6 +37,16 @@ pub enum StepResult {
     EndOfScene,
     /// Forward execution exceeded the deterministic safety limit.
     ExecutionLimit,
+    /// Authored control flow reached a state that cannot be executed.
+    RuntimeError(ScriptRuntimeError),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptRuntimeError {
+    ReturnWithoutCall,
+    NoVisibleChoice,
+    MissingLabel,
+    Eiyashou(EiyashouRuntimeError),
 }
 
 const MAX_FORWARD_ACTIONS: usize = 1024;
@@ -500,6 +514,7 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                 text,
                 options,
             } => {
+                state.active_dialogue_source_id = None;
                 let paragraph = std::mem::take(&mut state.next_text_is_paragraph);
                 state.active_text_style = if paragraph {
                     state.paragraph_style.clone()
@@ -549,6 +564,7 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                 debug!("Say: {}: {}", speaker, text);
                 state.dialogue = Some(Dialogue {
                     speaker,
+                    speaker_color: None,
                     text,
                     markup,
                     visible_chars: 0,
@@ -566,6 +582,38 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                     return StepResult::AwaitClick;
                 }
             }
+            Action::EiyashouSay(dialogue) => {
+                state.active_dialogue_source_id = Some(dialogue.source_id.clone());
+                state.active_text_style = state.dialogue_style.clone();
+                state.active_typewriter_speed = None;
+                state.active_text_reveal = None;
+                if state.textbox_auto_hidden {
+                    state.textbox_hidden = false;
+                    state.textbox_auto_hidden = false;
+                }
+                let text = match render_eiyashou_text(&dialogue.text, &state.vars) {
+                    Ok(text) => text,
+                    Err(error) => {
+                        return StepResult::RuntimeError(ScriptRuntimeError::Eiyashou(error));
+                    }
+                };
+                state.dialogue = Some(Dialogue {
+                    speaker: dialogue.speaker.clone(),
+                    speaker_color: dialogue.speaker_color,
+                    markup: text.clone(),
+                    text,
+                    visible_chars: 0,
+                    pauses: Vec::new(),
+                    vocal: dialogue.options.vocal.clone(),
+                    volume: dialogue.options.volume.clamp(0.0, 1.0),
+                    auto_advance: false,
+                });
+                state.record_dialogue(state.cursor - 1);
+                state.menu = None;
+                if !next {
+                    return StepResult::AwaitClick;
+                }
+            }
             Action::RetractDialogue { source, keep } => {
                 let requested_source = interpolate(source, &state.vars, &state.global_vars);
                 let keep = interpolate(keep, &state.vars, &state.global_vars);
@@ -575,6 +623,7 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                     .or_else(|| state.previous_dialogue.take())
                     .unwrap_or_else(|| Dialogue {
                         speaker: String::new(),
+                        speaker_color: None,
                         text: requested_source.clone(),
                         markup: requested_source.clone(),
                         visible_chars: requested_source.chars().count(),
@@ -628,6 +677,7 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                         text: interpolate(&choice.text, &state.vars, &state.global_vars),
                         target: interpolate_choice_target(&choice.target, state),
                         enabled: condition_matches(choice.enable_when.as_deref(), state),
+                        source_id: None,
                     })
                     .collect::<Vec<_>>();
                 if choices.is_empty() {
@@ -640,8 +690,104 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                     choices,
                 });
                 state.dialogue = None;
+                state.active_dialogue_source_id = None;
                 return StepResult::AwaitChoice;
             }
+            Action::EiyashouMenu { prompt, choices } => {
+                let mut visible = Vec::new();
+                for choice in choices {
+                    if let Some(condition) = &choice.show_when {
+                        match evaluate_eiyashou(condition, &state.vars) {
+                            Ok(crate::Value::Bool(true)) => {}
+                            Ok(crate::Value::Bool(false)) => continue,
+                            Ok(_) => {
+                                return StepResult::RuntimeError(ScriptRuntimeError::Eiyashou(
+                                    EiyashouRuntimeError::TypeMismatch,
+                                ));
+                            }
+                            Err(error) => {
+                                return StepResult::RuntimeError(ScriptRuntimeError::Eiyashou(
+                                    error,
+                                ));
+                            }
+                        }
+                    }
+                    let text = match render_eiyashou_text(&choice.text, &state.vars) {
+                        Ok(text) => text,
+                        Err(error) => {
+                            return StepResult::RuntimeError(ScriptRuntimeError::Eiyashou(error));
+                        }
+                    };
+                    visible.push(MenuChoice {
+                        text,
+                        target: choice.target.clone(),
+                        enabled: true,
+                        source_id: Some(choice.source_id.clone()),
+                    });
+                }
+                if visible.is_empty() {
+                    return StepResult::RuntimeError(ScriptRuntimeError::NoVisibleChoice);
+                }
+                state.menu = Some(MenuState {
+                    prompt: match render_eiyashou_text(prompt, &state.vars) {
+                        Ok(prompt) => prompt,
+                        Err(error) => {
+                            return StepResult::RuntimeError(ScriptRuntimeError::Eiyashou(error));
+                        }
+                    },
+                    choices: visible,
+                });
+                state.dialogue = None;
+                state.active_dialogue_source_id = None;
+                return StepResult::AwaitChoice;
+            }
+            Action::EiyashouSet {
+                target,
+                expression,
+                operation,
+                initialize_once,
+            } => {
+                if let Err(error) = assign_eiyashou(
+                    &mut state.vars,
+                    target,
+                    expression,
+                    *operation,
+                    *initialize_once,
+                ) {
+                    return StepResult::RuntimeError(ScriptRuntimeError::Eiyashou(error));
+                }
+            }
+            Action::EiyashouList {
+                variable,
+                operation,
+            } => match mutate_eiyashou_list(&mut state.vars, variable, operation) {
+                Ok(true) => {}
+                Ok(false) => log::warn!("Eiyashou list remove did not find a matching value"),
+                Err(error) => {
+                    return StepResult::RuntimeError(ScriptRuntimeError::Eiyashou(error));
+                }
+            },
+            Action::EiyashouJumpIf {
+                condition,
+                label,
+                jump_when,
+            } => match evaluate_eiyashou(condition, &state.vars) {
+                Ok(crate::Value::Bool(value)) if value == *jump_when => {
+                    let Some(index) = program.label(&state.current_scene, label) else {
+                        return StepResult::RuntimeError(ScriptRuntimeError::MissingLabel);
+                    };
+                    state.cursor = index;
+                }
+                Ok(crate::Value::Bool(_)) => {}
+                Ok(_) => {
+                    return StepResult::RuntimeError(ScriptRuntimeError::Eiyashou(
+                        EiyashouRuntimeError::TypeMismatch,
+                    ));
+                }
+                Err(error) => {
+                    return StepResult::RuntimeError(ScriptRuntimeError::Eiyashou(error));
+                }
+            },
             Action::Jump(label) => {
                 let label = interpolate(label, &state.vars, &state.global_vars);
                 if let Some(idx) = program.label(&state.current_scene, &label) {
@@ -673,6 +819,14 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                     log::warn!("CallScene target does not exist: {scene}");
                 }
             }
+            Action::ReturnScene => {
+                let Some(frame) = state.scene_stack.pop() else {
+                    log::error!("ReturnScene reached with an empty call stack");
+                    return StepResult::RuntimeError(ScriptRuntimeError::ReturnWithoutCall);
+                };
+                state.current_scene = frame.scene;
+                state.cursor = frame.cursor;
+            }
             Action::End => {
                 debug!("End");
                 if cleanup_on_end {
@@ -689,6 +843,19 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                 state.bgm.file = (file != "none" && !file.is_empty()).then_some(file);
                 state.bgm.volume = volume.clamp(0.0, 1.0);
                 state.bgm.fade_seconds = fade_seconds.max(0.0);
+                state.bgm.looped = true;
+                state.bgm.revision = state.bgm.revision.wrapping_add(1);
+            }
+            Action::EiyashouBgm {
+                file,
+                volume,
+                fade_seconds,
+                looped,
+            } => {
+                state.bgm.file = file.clone();
+                state.bgm.volume = volume.clamp(0.0, 1.0);
+                state.bgm.fade_seconds = fade_seconds.max(0.0);
+                state.bgm.looped = *looped;
                 state.bgm.revision = state.bgm.revision.wrapping_add(1);
             }
             Action::Effect { file, volume, id } => {
@@ -881,6 +1048,7 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                     .map(|page| interpolate(page, &state.vars, &state.global_vars))
                     .collect();
                 state.dialogue = None;
+                state.active_dialogue_source_id = None;
                 state.intro = Some(IntroState {
                     pages,
                     page: 0,
@@ -995,6 +1163,38 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                 } else {
                     sprite.transform = target_transform;
                     sprite.transform_animation = None;
+                    sprite.position_animation = None;
+                }
+            }
+            Action::MoveSprite {
+                id,
+                position,
+                duration,
+                easing,
+                blocking,
+            } => {
+                let id = interpolate(id, &state.vars, &state.global_vars);
+                let duration = duration.max(0.0);
+                let state_blocking = *blocking && !next;
+                let Some(sprite) = state.sprites.get_mut(&id) else {
+                    log::error!("MoveSprite target does not exist: {id}");
+                    continue;
+                };
+                let from = sprite.position;
+                sprite.position = *position;
+                if duration > f32::EPSILON {
+                    sprite.position_animation = Some(crate::state::PositionAnimation {
+                        from,
+                        to: *position,
+                        elapsed: 0.0,
+                        duration,
+                        easing: *easing,
+                        blocking: state_blocking,
+                    });
+                    if state_blocking {
+                        return StepResult::AwaitPresentation;
+                    }
+                } else {
                     sprite.position_animation = None;
                 }
             }
@@ -1667,6 +1867,7 @@ fn enter_scene(state: &mut State, scene: &str) -> bool {
     state.current_scene = scene.to_owned();
     state.cursor = 0;
     state.dialogue = None;
+    state.active_dialogue_source_id = None;
     state.dialogue_retraction = None;
     state.menu = None;
     state.stage_animation = None;
@@ -1771,6 +1972,7 @@ pub fn end_game(state: &mut State) {
     state.scene_stack.clear();
     state.dialogue = None;
     state.previous_dialogue = None;
+    state.active_dialogue_source_id = None;
     state.dialogue_retraction = None;
     state.menu = None;
     state.bg = None;
@@ -2032,7 +2234,10 @@ mod tests {
     use super::*;
     use crate::action::{Choice, SayOptions};
     use crate::types::{BlendMode, Easing, Position, SpriteTransform, TransformPatch};
-    use crate::{Value, VisualFilter};
+    use crate::{
+        EiyashouAssignOp, EiyashouChoice, EiyashouDialogue, EiyashouExpr, EiyashouListOperation,
+        EiyashouPlace, EiyashouText, EiyashouTextPart, Value, VisualFilter,
+    };
 
     #[test]
     fn inline_wait_is_removed_from_text_and_retained_as_timing() {
@@ -2370,6 +2575,44 @@ mod tests {
 
         assert_eq!(step(&mut state), StepResult::EndOfScene);
         assert!(!state.sprites.contains_key("hero"));
+    }
+
+    #[test]
+    fn move_sprite_preserves_content_and_animates_only_position() {
+        let mut state = state_with(vec![
+            Action::ShowSprite {
+                id: "hero".into(),
+                image: "calm.webp".into(),
+                position: Position::left(0.0),
+                layout: crate::SpriteLayout::ViewportHeight(0.8),
+                transition: Transition::Instant,
+                transform: SpriteTransform {
+                    scale_x: 1.2,
+                    scale_y: 1.2,
+                    ..SpriteTransform::default()
+                },
+                z_index: 100,
+                blend: BlendMode::Alpha,
+            },
+            Action::MoveSprite {
+                id: "hero".into(),
+                position: Position::right(0.0),
+                duration: 0.3,
+                easing: Easing::EaseOut,
+                blocking: true,
+            },
+        ]);
+
+        assert_eq!(step(&mut state), StepResult::AwaitPresentation);
+        let sprite = &state.sprites["hero"];
+        assert_eq!(sprite.image, "calm.webp");
+        assert_eq!(sprite.layout, crate::SpriteLayout::ViewportHeight(0.8));
+        assert_eq!(sprite.transform.scale_x, 1.2);
+        assert_eq!(sprite.position, Position::right(0.0));
+        let animation = sprite.position_animation.as_ref().unwrap();
+        assert_eq!(animation.from, Position::left(0.0));
+        assert_eq!(animation.to, Position::right(0.0));
+        assert!(animation.blocking);
     }
 
     #[test]
@@ -2713,6 +2956,46 @@ mod tests {
     }
 
     #[test]
+    fn explicit_scene_return_resumes_after_the_call() {
+        let mut state = state_with(vec![
+            Action::CallScene("aside".into()),
+            Action::Say {
+                speaker: String::new(),
+                text: "back".into(),
+                options: SayOptions::default(),
+            },
+        ]);
+        state.insert_scene(
+            "aside".into(),
+            vec![
+                Action::ReturnScene,
+                Action::Say {
+                    speaker: String::new(),
+                    text: "unreachable".into(),
+                    options: SayOptions::default(),
+                },
+            ],
+        );
+
+        assert_eq!(step(&mut state), StepResult::AwaitClick);
+        assert_eq!(state.current_scene, "main");
+        assert_eq!(state.dialogue.as_ref().unwrap().text, "back");
+        assert!(state.scene_stack.is_empty());
+    }
+
+    #[test]
+    fn explicit_scene_return_without_a_call_fails_closed() {
+        let mut state = state_with(vec![Action::ReturnScene]);
+
+        assert_eq!(
+            step(&mut state),
+            StepResult::RuntimeError(ScriptRuntimeError::ReturnWithoutCall)
+        );
+        assert_eq!(state.current_scene, "main");
+        assert_eq!(state.cursor, 1);
+    }
+
+    #[test]
     fn nested_scene_calls_restore_in_lifo_order() {
         let mut state = state_with(vec![Action::CallScene("first".into())]);
         state.insert_scene(
@@ -2893,6 +3176,76 @@ mod tests {
         select_choice(&mut state, 1);
         assert_eq!(state.current_scene, "chapter");
         assert_eq!(step(&mut state), StepResult::AwaitClick);
+    }
+
+    #[test]
+    fn eiyashou_executes_typed_state_plain_text_and_stable_ids() {
+        let variable = EiyashouExpr::Variable("score".into());
+        let mut state = state_with(vec![
+            Action::EiyashouSet {
+                target: EiyashouPlace::Variable("score".into()),
+                expression: EiyashouExpr::Literal(Value::Int(3)),
+                operation: EiyashouAssignOp::Replace,
+                initialize_once: true,
+            },
+            Action::EiyashouSet {
+                target: EiyashouPlace::Variable("items".into()),
+                expression: EiyashouExpr::List(vec![EiyashouExpr::Literal(Value::Int(1))]),
+                operation: EiyashouAssignOp::Replace,
+                initialize_once: true,
+            },
+            Action::EiyashouList {
+                variable: "items".into(),
+                operation: EiyashouListOperation::Append(EiyashouExpr::Literal(Value::Int(2))),
+            },
+            Action::EiyashouSay(EiyashouDialogue {
+                speaker: "Rin".into(),
+                speaker_color: None,
+                text: EiyashouText {
+                    parts: vec![
+                        EiyashouTextPart::Literal("[plain] ".into()),
+                        EiyashouTextPart::Expression(variable),
+                    ],
+                },
+                options: SayOptions::default(),
+                source_id: "line-score".into(),
+            }),
+        ]);
+
+        assert_eq!(step(&mut state), StepResult::AwaitClick);
+        let dialogue = state.dialogue.as_ref().unwrap();
+        assert_eq!(dialogue.text, "[plain] 3");
+        assert_eq!(dialogue.markup, "[plain] 3");
+        assert_eq!(
+            state.active_dialogue_source_id.as_deref(),
+            Some("line-score")
+        );
+        assert_eq!(
+            state.vars.get("items"),
+            Some(&Value::Array(vec![Value::Int(1), Value::Int(2)]))
+        );
+        assert_eq!(
+            state.current_dialogue_key().unwrap().source_id.as_deref(),
+            Some("line-score")
+        );
+    }
+
+    #[test]
+    fn eiyashou_choice_with_no_visible_option_is_a_runtime_error() {
+        let mut state = state_with(vec![Action::EiyashouMenu {
+            prompt: EiyashouText::literal("prompt"),
+            choices: vec![EiyashouChoice {
+                text: EiyashouText::literal("hidden"),
+                target: ChoiceTarget::Label("none".into()),
+                show_when: Some(EiyashouExpr::Literal(Value::Bool(false))),
+                source_id: "hidden-choice".into(),
+            }],
+        }]);
+
+        assert_eq!(
+            step(&mut state),
+            StepResult::RuntimeError(ScriptRuntimeError::NoVisibleChoice)
+        );
     }
 
     #[test]

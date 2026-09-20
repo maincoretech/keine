@@ -2,7 +2,18 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::ParseReport;
-use crate::adapter::WebGalLanguage;
+use crate::adapter::{NativeLanguage, WebGalLanguage};
+
+/// One scene produced from a source file.
+///
+/// Compatibility languages normally return a single unnamed scene and keep
+/// deriving its name from the file path. Eiyashou `.shou` files name every
+/// scene in source and can therefore return more than one item.
+#[derive(Debug, Clone, Default)]
+pub struct ParsedScene {
+    pub name: Option<String>,
+    pub report: ParseReport,
+}
 
 /// Converts one authoring-language syntax into keine's language-neutral IR.
 ///
@@ -12,6 +23,13 @@ pub trait ScriptLanguage: Send + Sync {
     fn name(&self) -> &'static str;
     fn extensions(&self) -> &'static [&'static str];
     fn parse(&self, source: &str) -> ParseReport;
+
+    fn parse_scenes(&self, source: &str) -> Vec<ParsedScene> {
+        vec![ParsedScene {
+            name: None,
+            report: self.parse(source),
+        }]
+    }
 
     fn supports(&self, path: &Path) -> bool {
         path.extension()
@@ -31,7 +49,7 @@ pub struct ScriptLanguageRegistry {
 
 impl Default for ScriptLanguageRegistry {
     fn default() -> Self {
-        Self::new().with(WebGalLanguage)
+        Self::new().with(WebGalLanguage).with(NativeLanguage)
     }
 }
 
@@ -123,5 +141,12 @@ mod tests {
             "Story"
         );
         assert!(registry.language_for(Path::new("notes.md")).is_none());
+        assert_eq!(
+            registry
+                .language_for(Path::new("chapter.shou"))
+                .unwrap()
+                .name(),
+            "keine"
+        );
     }
 }

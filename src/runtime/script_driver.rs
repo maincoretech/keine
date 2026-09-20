@@ -17,6 +17,7 @@ pub(crate) enum ScriptOutcome {
 pub(crate) enum ReturnReason {
     EndOfScene,
     ExecutionLimit,
+    RuntimeError,
 }
 
 impl ScriptOutcome {
@@ -46,6 +47,15 @@ fn resume_inner(state: &mut State) -> ScriptOutcome {
                 state.cursor,
             );
             ScriptOutcome::ReturnToTitle(ReturnReason::ExecutionLimit)
+        }
+        StepResult::RuntimeError(error) => {
+            log::error!(
+                target: "keine::runtime",
+                "script execution stopped at {}:{} after runtime error {error:?}; returning to title",
+                state.current_scene,
+                state.cursor,
+            );
+            ScriptOutcome::ReturnToTitle(ReturnReason::RuntimeError)
         }
         StepResult::AwaitClick
         | StepResult::AwaitChoice

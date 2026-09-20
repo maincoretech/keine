@@ -454,6 +454,7 @@ mod tests {
 
         state.dialogue = Some(keine_core::state::Dialogue {
             speaker: "A".into(),
+            speaker_color: None,
             text: "hello".into(),
             markup: "hello".into(),
             visible_chars: 1,

@@ -28,7 +28,7 @@ caused by Kēne changes.
   must not introduce independent physical-pixel coordinate systems.
 - Scene, normal UI, and dialog cameras have fixed responsibilities. Rendering effects must
   preserve that composition order.
-- Save v10 restores only against a matching Program fingerprint. Profile, read history, gallery,
+- Save v11 restores only against a matching Program fingerprint. Profile, read history, gallery,
   and settings remain outside slot rollback. Unsupported binary layouts fail closed.
 - Shipping persistence lives in the platform user-data directory identified by stable
   `project.id`, never beside a read-only bundle.

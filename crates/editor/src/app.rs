@@ -10,11 +10,11 @@ use gpui_kit::base::motion::{Transition, transition};
 use gpui_kit::base::{Placement, ResizeHandleContext};
 use gpui_kit::component::dock::{
     AnyDrag, BasePanel, BasePanelView, DockArea, DockAreaRenderer, DockContext, DockEvent,
-    DockLayout, DockSkin, DragPanel, DropIndicator, DropPlaceholderBounds, NodeId, Panel,
-    PanelBuildContext, PanelEvent, PanelHandle, PanelInfo, PanelState, PanelStyle, TabGroupContext,
-    TabGroupRenderer, panel_handle, register_panel,
+    DockLayout, DockPlacement, DockSkin, DragPanel, DropIndicator, DropPlaceholderBounds,
+    InsertTarget, NodeId, Panel, PanelBuildContext, PanelEvent, PanelHandle, PanelId, PanelInfo,
+    PanelState, PanelStyle, TabGroupContext, TabGroupRenderer, panel_handle, register_panel,
 };
-use gpui_kit::component::input::{Editor, EditorState, InputEvent};
+use gpui_kit::component::input::{Editor, EditorState, Input, InputEvent, InputState};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, Theme, ThemeMode};
 use gpui_kit::{
@@ -27,11 +27,13 @@ use gpui_kit::{
 use serde::{Deserialize, Serialize};
 
 use crate::app_data::APP_ID;
-use crate::document::{DocumentHandle, DocumentManager, SaveError};
+use crate::document::{DocumentHandle, DocumentManager, SaveError, is_eiyashou_authoring_document};
 use crate::engine::{EngineLocator, EngineProcess};
 use crate::instance::{InstanceReceiver, PrimaryInstance, Startup, acquire_or_forward};
+use crate::migration::MigrationPlan;
 use crate::persistence::AppPersistence;
 use crate::project_key::ProjectKey;
+use crate::projection::EiyashouProjection;
 use crate::workspace::{WorkspaceFile, WorkspaceSession};
 
 const CANVAS: u32 = 0x11151b;
@@ -57,7 +59,14 @@ const OUTPUT_PANEL: &str = "keine.editor.output";
 
 actions!(
     keine_editor,
-    [OpenFolder, ResetLayout, Save, SaveAll, ToggleEngine]
+    [
+        OpenFolder,
+        ResetLayout,
+        Save,
+        SaveAll,
+        ToggleEngine,
+        MigrateEiyashou
+    ]
 );
 
 fn theme_color(value: u32) -> Hsla {
@@ -152,6 +161,9 @@ struct WorkspaceDocuments {
     notice: String,
     selection: Option<(PathBuf, usize, usize)>,
     diagnostics: Vec<keine_authoring::Diagnostic>,
+    dock: Option<WeakEntity<DockArea>>,
+    document_node: Option<NodeId>,
+    panels: HashMap<PathBuf, PanelId>,
 }
 
 struct EditorDocuments {
@@ -182,6 +194,9 @@ impl EditorDocuments {
                     notice: "Ready".into(),
                     selection: None,
                     diagnostics: Vec::new(),
+                    dock: None,
+                    document_node: None,
+                    panels: HashMap::new(),
                 },
             );
         }
@@ -237,6 +252,61 @@ impl EditorDocuments {
         if let Ok(workspace) = self.ensure_workspace(root) {
             workspace.diagnostics = diagnostics;
         }
+    }
+
+    fn set_dock(&mut self, root: &Path, dock: WeakEntity<DockArea>) {
+        if let Ok(workspace) = self.ensure_workspace(root) {
+            workspace.dock = Some(dock);
+        }
+    }
+
+    fn set_document_node(&mut self, root: &Path, node: NodeId) {
+        if let Ok(workspace) = self.ensure_workspace(root) {
+            workspace.document_node = Some(node);
+        }
+    }
+
+    fn clear_document_node(&mut self, root: &Path) {
+        if let Ok(workspace) = self.ensure_workspace(root) {
+            workspace.document_node = None;
+        }
+    }
+
+    fn register_panel(&mut self, root: &Path, relative: PathBuf, panel: PanelId) {
+        if let Ok(workspace) = self.ensure_workspace(root) {
+            workspace.panels.insert(relative, panel);
+        }
+    }
+
+    fn unregister_panel(&mut self, root: &Path, relative: &Path, panel: PanelId) {
+        if let Ok(workspace) = self.ensure_workspace(root)
+            && workspace.panels.get(relative) == Some(&panel)
+        {
+            workspace.panels.remove(relative);
+        }
+    }
+
+    fn document_dock(&self, root: &Path) -> Option<(WeakEntity<DockArea>, Option<NodeId>)> {
+        let key = ProjectKey::from_path(root).ok()?;
+        let workspace = self.workspaces.get(key.path())?;
+        Some((workspace.dock.clone()?, workspace.document_node))
+    }
+
+    fn panel_for(&self, root: &Path, relative: &Path) -> Option<PanelId> {
+        let key = ProjectKey::from_path(root).ok()?;
+        self.workspaces
+            .get(key.path())?
+            .panels
+            .get(relative)
+            .copied()
+    }
+
+    fn open_document_count(&self, root: &Path) -> usize {
+        ProjectKey::from_path(root)
+            .ok()
+            .and_then(|key| self.workspaces.get(key.path()))
+            .map(|workspace| workspace.panels.len())
+            .unwrap_or_default()
     }
 
     fn diagnostics_for<'a>(
@@ -376,7 +446,6 @@ enum PanelContent {
     Inspector {
         root: PathBuf,
         file_count: usize,
-        document_count: usize,
     },
     Output {
         root: PathBuf,
@@ -399,7 +468,7 @@ impl PanelContent {
                     })
                 }),
             PanelPayload::Document { root, relative } => {
-                let document = if is_native_authoring_document(&root, &relative) {
+                let document = if is_eiyashou_authoring_document(&root, &relative) {
                     Some(cx.global_mut::<EditorDocuments>().open(&root, &relative)?)
                 } else {
                     None
@@ -425,13 +494,11 @@ impl PanelContent {
                 .map(|session| Self::Inspector {
                     root: root.clone(),
                     file_count: session.files().len(),
-                    document_count: session.documents().len(),
                 })
                 .or_else(|_| {
                     Ok(Self::Inspector {
                         root,
                         file_count: 0,
-                        document_count: 0,
                     })
                 }),
             PanelPayload::Output { root } => WorkspaceSession::open(&root)
@@ -487,8 +554,22 @@ impl PanelContent {
 struct WorkbenchPanel {
     content: PanelContent,
     focus: FocusHandle,
+    document_mode: DocumentMode,
+    card_editors: Vec<CardNameEditor>,
     recovery_epoch: u64,
     _subscriptions: Vec<Subscription>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum DocumentMode {
+    #[default]
+    Text,
+    Card,
+}
+
+struct CardNameEditor {
+    scene_index: usize,
+    state: Entity<InputState>,
 }
 
 impl WorkbenchPanel {
@@ -498,10 +579,16 @@ impl WorkbenchPanel {
         cx: &mut App,
     ) -> io::Result<Entity<Self>> {
         let content = PanelContent::from_payload(payload, window, cx)?;
-        Ok(cx.new(|cx| {
+        let registration = match &content {
+            PanelContent::Document { root, relative, .. } => Some((root.clone(), relative.clone())),
+            _ => None,
+        };
+        let panel = cx.new(|cx| {
             let mut panel = Self {
                 content,
                 focus: cx.focus_handle(),
+                document_mode: DocumentMode::Text,
+                card_editors: Vec::new(),
                 recovery_epoch: 0,
                 _subscriptions: Vec::new(),
             };
@@ -586,8 +673,76 @@ impl WorkbenchPanel {
                     panel._subscriptions.push(change_subscription);
                 }
             }
+            panel.rebuild_card_editors(window, cx);
             panel
-        }))
+        });
+        if let Some((root, relative)) = registration {
+            cx.global_mut::<EditorDocuments>().register_panel(
+                &root,
+                relative,
+                PanelId::from(panel.entity_id()),
+            );
+        }
+        Ok(panel)
+    }
+
+    fn rebuild_card_editors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.card_editors.clear();
+        let PanelContent::Document {
+            root,
+            relative,
+            document: Some(document),
+            editor,
+        } = &self.content
+        else {
+            return;
+        };
+        if relative.extension().and_then(|value| value.to_str()) != Some("shou") {
+            return;
+        }
+
+        let projection = EiyashouProjection::parse(document.borrow().contents());
+        let window_handle = window.window_handle();
+        for (scene_index, scene) in projection.scenes.into_iter().enumerate() {
+            let state = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .default_value(scene.name)
+                    .placeholder("Scene name")
+            });
+            let document = document.clone();
+            let source_editor = editor.clone();
+            let root = root.clone();
+            let state_for_change = state.clone();
+            let subscription = cx.subscribe(&state, move |_, _, event: &InputEvent, cx| {
+                if !matches!(event, InputEvent::Change) {
+                    return;
+                }
+                let new_name = state_for_change.read(cx).value().to_string();
+                let source = document.borrow().contents().to_owned();
+                let projection = EiyashouProjection::parse(&source);
+                match projection.rename_scene(&source, scene_index, &new_name) {
+                    Ok(edited) => {
+                        let result = cx.update_window(window_handle, |_, window, cx| {
+                            source_editor.update(cx, |editor, cx| {
+                                editor.replace_all(edited, window, cx);
+                            });
+                        });
+                        let notice = match result {
+                            Ok(()) => "Scene name updated from Card view".to_owned(),
+                            Err(error) => format!("Card edit failed to reach Text view: {error}"),
+                        };
+                        cx.global_mut::<EditorDocuments>().set_notice(&root, notice);
+                    }
+                    Err(error) => cx
+                        .global_mut::<EditorDocuments>()
+                        .set_notice(&root, format!("Card edit blocked: {error}")),
+                }
+                cx.refresh_windows();
+            });
+            self._subscriptions.push(subscription);
+            self.card_editors
+                .push(CardNameEditor { scene_index, state });
+        }
     }
 }
 
@@ -603,6 +758,15 @@ impl BasePanel for WorkbenchPanel {
             info: PanelInfo::panel(
                 serde_json::to_value(self.content.payload()).unwrap_or(serde_json::Value::Null),
             ),
+        }
+    }
+
+    fn on_removed(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        if let PanelContent::Document { root, relative, .. } = &self.content {
+            let panel = PanelId::from(cx.entity_id());
+            let documents = cx.global_mut::<EditorDocuments>();
+            documents.unregister_panel(root, relative, panel);
+            documents.clear_document_node(root);
         }
     }
 }
@@ -625,7 +789,7 @@ impl Focusable for WorkbenchPanel {
 }
 
 impl Render for WorkbenchPanel {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mono = Theme::global(cx).mono_font_family.clone();
         let body = match &self.content {
             PanelContent::Explorer { root, files } => {
@@ -634,6 +798,7 @@ impl Render for WorkbenchPanel {
                     .and_then(|name| name.to_str())
                     .unwrap_or("PROJECT")
                     .to_uppercase();
+                let project_root = root.clone();
                 div()
                     .size_full()
                     .flex()
@@ -661,6 +826,8 @@ impl Render for WorkbenchPanel {
                                     .flex_col()
                                     .children(files.iter().take(400).enumerate().map(
                                         |(index, file)| {
+                                            let root = project_root.clone();
+                                            let relative = file.relative_path.clone();
                                             div()
                                                 .id(("explorer-file", index))
                                                 .h(px(25.))
@@ -675,7 +842,13 @@ impl Render for WorkbenchPanel {
                                                 .whitespace_nowrap()
                                                 .text_xs()
                                                 .text_color(rgb(0xa9b5c1))
+                                                .cursor_pointer()
                                                 .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                                                .on_click(move |_, window, cx| {
+                                                    open_workspace_document(
+                                                        &root, &relative, window, cx,
+                                                    );
+                                                })
                                                 .child(
                                                     Icon::new(IconName::FileText)
                                                         .xsmall()
@@ -704,14 +877,44 @@ impl Render for WorkbenchPanel {
                     .into_any_element()
             }
             PanelContent::Document {
-                document, editor, ..
-            } => div()
-                .id("document-content")
-                .size_full()
-                .rounded_b(px(VIEW_RADIUS_PX))
-                .bg(rgb(0x10151b))
-                .overflow_hidden()
-                .child(
+                relative,
+                document,
+                editor,
+                ..
+            } => {
+                let eiyashou = document.is_some()
+                    && relative.extension().and_then(|value| value.to_str()) == Some("shou");
+                let mode = self.document_mode;
+                let header =
+                    eiyashou.then(|| {
+                        let text_selected = mode == DocumentMode::Text;
+                        let card_selected = mode == DocumentMode::Card;
+                        div()
+                            .h(px(34.))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_end()
+                            .gap_1()
+                            .px_2()
+                            .bg(rgb(CHROME))
+                            .child(document_mode_button("Text", text_selected).on_click(
+                                cx.listener(move |this, _, _, cx| {
+                                    this.document_mode = DocumentMode::Text;
+                                    cx.notify();
+                                }),
+                            ))
+                            .child(document_mode_button("Card", card_selected).on_click(
+                                cx.listener(move |this, _, window, cx| {
+                                    this.rebuild_card_editors(window, cx);
+                                    this.document_mode = DocumentMode::Card;
+                                    cx.notify();
+                                }),
+                            ))
+                    });
+                let body = if eiyashou && mode == DocumentMode::Card {
+                    render_card_projection(document.as_ref().unwrap(), &self.card_editors, cx)
+                } else {
                     Editor::new(editor)
                         .appearance(false)
                         .bordered(false)
@@ -722,26 +925,37 @@ impl Render for WorkbenchPanel {
                         .p_1()
                         .font_family(mono)
                         .text_sm()
-                        .text_color(rgb(0xc4ced8)),
-                )
-                .into_any_element(),
-            PanelContent::Inspector {
-                root,
-                file_count,
-                document_count,
-            } => div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .p_3()
-                .gap_3()
-                .child(section_label("WORKSPACE"))
-                .child(property_row("Path", root.display().to_string()))
-                .child(property_row("Text files", file_count.to_string()))
-                .child(property_row("Open documents", document_count.to_string()))
-                .child(section_label("SELECTION"))
-                .child(selection_summary(root, cx))
-                .into_any_element(),
+                        .text_color(rgb(0xc4ced8))
+                        .into_any_element()
+                };
+                div()
+                    .id("document-content")
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .rounded_b(px(VIEW_RADIUS_PX))
+                    .bg(rgb(0x10151b))
+                    .overflow_hidden()
+                    .when_some(header, |this, header| this.child(header))
+                    .child(div().flex_1().min_h_0().child(body))
+                    .into_any_element()
+            }
+            PanelContent::Inspector { root, file_count } => {
+                let document_count = cx.global::<EditorDocuments>().open_document_count(root);
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .p_3()
+                    .gap_3()
+                    .child(section_label("WORKSPACE"))
+                    .child(property_row("Path", root.display().to_string()))
+                    .child(property_row("Text files", file_count.to_string()))
+                    .child(property_row("Open documents", document_count.to_string()))
+                    .child(section_label("SELECTION"))
+                    .child(selection_summary(root, cx))
+                    .into_any_element()
+            }
             PanelContent::Output { root, file_count } => div()
                 .size_full()
                 .flex()
@@ -802,6 +1016,107 @@ fn output_line(label: &'static str, color: u32, value: String) -> impl IntoEleme
         .child(value)
 }
 
+fn document_mode_button(label: &'static str, selected: bool) -> Stateful<Div> {
+    div()
+        .id(if label == "Text" {
+            "document-mode-text"
+        } else {
+            "document-mode-card"
+        })
+        .h(px(25.))
+        .px_2()
+        .flex()
+        .items_center()
+        .rounded(px(6.))
+        .bg(rgb(if selected { SURFACE } else { CHROME }))
+        .text_xs()
+        .text_color(rgb(if selected { INK } else { MUTED }))
+        .cursor_pointer()
+        .hover(|style| style.bg(rgb(SURFACE_HOVER)).text_color(rgb(INK)))
+        .child(label)
+}
+
+fn render_card_projection(
+    document: &DocumentHandle,
+    editors: &[CardNameEditor],
+    _cx: &App,
+) -> AnyElement {
+    let projection = EiyashouProjection::parse(document.borrow().contents());
+    let scene_cards = editors.iter().filter_map(|editor| {
+        let scene = projection.scenes.get(editor.scene_index)?;
+        Some(
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .p_3()
+                .rounded(px(9.))
+                .bg(rgb(PANEL))
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                        .text_color(rgb(PRIMARY))
+                        .child(format!("SCENE {}", editor.scene_index + 1)),
+                )
+                .child(
+                    div()
+                        .h(px(30.))
+                        .rounded(px(7.))
+                        .bg(rgb(SURFACE))
+                        .px_2()
+                        .child(
+                            Input::new(&editor.state)
+                                .appearance(false)
+                                .bordered(false)
+                                .size_full()
+                                .text_sm()
+                                .text_color(rgb(INK)),
+                        ),
+                )
+                .child(div().text_xs().text_color(rgb(MUTED)).child(format!(
+                    "Source bytes {}..{}",
+                    scene.source_range.start, scene.source_range.end
+                ))),
+        )
+    });
+    let read_only_cards = projection
+        .read_only
+        .into_iter()
+        .enumerate()
+        .map(|(index, card)| {
+            div()
+                .id(("read-only-card", index))
+                .w_full()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .p_3()
+                .rounded(px(9.))
+                .bg(rgb(0x1f242a))
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                        .text_color(rgb(0xd2aa62))
+                        .child("READ-ONLY SOURCE"),
+                )
+                .child(div().text_xs().text_color(rgb(MUTED)).child(card.message))
+        });
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_2()
+        .children(scene_cards)
+        .children(read_only_cards)
+        .overflow_scrollbar()
+        .id("eiyashou-card-view")
+        .into_any_element()
+}
+
 fn selection_summary(root: &Path, cx: &App) -> AnyElement {
     match cx.global::<EditorDocuments>().selection(root) {
         Some((path, line, column)) => {
@@ -845,18 +1160,6 @@ fn language_for_path(path: &Path) -> &'static str {
         Some("yaml" | "yml") => "yaml",
         _ => "plaintext",
     }
-}
-
-fn is_native_authoring_document(root: &Path, relative: &Path) -> bool {
-    if !root.join("config.yaml").is_file() {
-        return false;
-    }
-    relative == Path::new("config.yaml")
-        || (relative.starts_with("scripts")
-            && relative
-                .extension()
-                .and_then(|extension| extension.to_str())
-                == Some("txt"))
 }
 
 fn register_workbench_panels(cx: &mut App) {
@@ -911,6 +1214,7 @@ struct ProjectWorkspace {
 /// so every tab has the compact close affordance expected by an editor.
 struct EditorDockSkin {
     inner: Rc<DockSkin>,
+    root: PathBuf,
     dock: Rc<RefCell<Option<WeakEntity<DockArea>>>>,
     drop_overlays: Rc<RefCell<HashMap<NodeId, Entity<EditorDropOverlay>>>>,
     tab_motion: Entity<EditorTabMotion>,
@@ -966,6 +1270,7 @@ impl DockAreaRenderer for EditorDockSkin {
     fn tab_group_renderer(&self) -> Rc<dyn TabGroupRenderer> {
         Rc::new(EditorTabGroupSkin {
             inner: DockAreaRenderer::tab_group_renderer(self.inner.as_ref()),
+            root: self.root.clone(),
             dock: self.dock.clone(),
             drop_overlays: self.drop_overlays.clone(),
             tab_motion: self.tab_motion.clone(),
@@ -975,6 +1280,7 @@ impl DockAreaRenderer for EditorDockSkin {
 
 struct EditorTabGroupSkin {
     inner: Rc<dyn TabGroupRenderer>,
+    root: PathBuf,
     dock: Rc<RefCell<Option<WeakEntity<DockArea>>>>,
     drop_overlays: Rc<RefCell<HashMap<NodeId, Entity<EditorDropOverlay>>>>,
     tab_motion: Entity<EditorTabMotion>,
@@ -1261,6 +1567,14 @@ impl TabGroupRenderer for EditorTabGroupSkin {
         window: &mut Window,
         cx: &mut App,
     ) -> AnyElement {
+        if group
+            .panels()
+            .iter()
+            .any(|panel| panel.panel_name(cx) == DOCUMENT_PANEL)
+        {
+            cx.global_mut::<EditorDocuments>()
+                .set_document_node(&self.root, group.node());
+        }
         if let Some(title_bar) = self.singleton_title_bar(group, cx) {
             return title_bar;
         }
@@ -1546,6 +1860,7 @@ impl ProjectWorkspace {
         let tab_motion = cx.new(|_| EditorTabMotion::default());
         let dock_ref_for_skin = dock_ref.clone();
         let drop_overlays_for_skin = drop_overlays.clone();
+        let root_for_skin = session.root().to_owned();
         let dock = cx.new(|cx| {
             let dock_skin = DockSkin::new(cx);
             skin = Some(dock_skin.clone());
@@ -1557,12 +1872,15 @@ impl ProjectWorkspace {
             )
             .with_renderer(Rc::new(EditorDockSkin {
                 inner: dock_skin,
+                root: root_for_skin,
                 dock: dock_ref_for_skin,
                 drop_overlays: drop_overlays_for_skin,
                 tab_motion,
             }))
         });
         *dock_ref.borrow_mut() = Some(dock.downgrade());
+        cx.global_mut::<EditorDocuments>()
+            .set_dock(session.root(), dock.downgrade());
         let skin = skin.expect("DockSkin::new runs inside DockArea construction");
         skin.set_panel_style(PanelStyle::TabBar, cx);
         skin.set_toggle_button_visible(false, cx);
@@ -1892,6 +2210,85 @@ impl WorkbenchWindow {
         cx.notify();
     }
 
+    fn migrate_eiyashou(
+        &mut self,
+        _: &MigrateEiyashou,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(root) = self
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.session.root().to_owned())
+        else {
+            return;
+        };
+        if self.has_unsaved_documents(cx) {
+            cx.global_mut::<EditorDocuments>()
+                .set_notice(&root, "Save or discard source changes before migration");
+            cx.refresh_windows();
+            return;
+        }
+        let plan = match MigrationPlan::preview(&root) {
+            Ok(plan) => plan,
+            Err(error) => {
+                cx.global_mut::<EditorDocuments>()
+                    .set_notice(&root, format!("Migration preview failed: {error}"));
+                cx.refresh_windows();
+                return;
+            }
+        };
+        if plan.changes.is_empty() {
+            cx.global_mut::<EditorDocuments>()
+                .set_notice(&root, "No eligible legacy Eiyashou sources were found");
+            cx.refresh_windows();
+            return;
+        }
+        let detail = plan.diff_preview();
+        let receiver = window.prompt(
+            PromptLevel::Warning,
+            "Apply Eiyashou source migration?",
+            Some(&detail),
+            &[
+                PromptButton::Other("Apply Renames".into()),
+                PromptButton::Cancel("Cancel".into()),
+            ],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = receiver.await.ok();
+            let _ = this.update_in(cx, |this, window, cx| {
+                if answer != Some(0) {
+                    cx.global_mut::<EditorDocuments>()
+                        .set_notice(&root, "Migration cancelled after preview");
+                    cx.refresh_windows();
+                    return;
+                }
+                match plan.apply() {
+                    Ok(count) => match WorkspaceSession::open(&root) {
+                        Ok(session) => {
+                            this.open_session(session, window, cx);
+                            cx.global_mut::<EditorDocuments>().set_notice(
+                                &root,
+                                format!("Migrated {count} source file(s) to .shou"),
+                            );
+                        }
+                        Err(error) => cx.global_mut::<EditorDocuments>().set_notice(
+                            &root,
+                            format!("Migration applied, but workspace refresh failed: {error}"),
+                        ),
+                    },
+                    Err(error) => cx
+                        .global_mut::<EditorDocuments>()
+                        .set_notice(&root, format!("Migration failed: {error}")),
+                }
+                cx.notify();
+                cx.refresh_windows();
+            });
+        })
+        .detach();
+    }
+
     fn has_unsaved_documents(&self, cx: &App) -> bool {
         self.workspace.as_ref().is_some_and(|workspace| {
             cx.global::<EditorDocuments>()
@@ -2025,6 +2422,27 @@ impl WorkbenchWindow {
                             this.toggle_engine(&ToggleEngine, window, cx)
                         }))
                         .child(Icon::new(IconName::Play).small().text_color(rgb(color))),
+                )
+            })
+            .when(self.workspace.is_some(), |this| {
+                this.child(
+                    div()
+                        .id("activity-migrate-eiyashou")
+                        .size(px(30.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(7.))
+                        .cursor_pointer()
+                        .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.migrate_eiyashou(&MigrateEiyashou, window, cx)
+                        }))
+                        .child(
+                            Icon::new(IconName::Replace)
+                                .small()
+                                .text_color(rgb(0x74818e)),
+                        ),
                 )
             })
             .child(div().flex_1())
@@ -2219,6 +2637,7 @@ impl Render for WorkbenchWindow {
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::save_all))
             .on_action(cx.listener(Self::toggle_engine))
+            .on_action(cx.listener(Self::migrate_eiyashou))
             .relative()
             .size_full()
             .flex()
@@ -2266,6 +2685,52 @@ fn prompt_open_folder(editor: WeakEntity<EditorApp>, cx: &mut App) {
 
 fn open_paths(editor: &WeakEntity<EditorApp>, paths: Vec<PathBuf>, cx: &mut App) {
     let _ = editor.update(cx, |editor, cx| editor.open_paths(paths, cx));
+}
+
+fn open_workspace_document(root: &Path, relative: &Path, window: &mut Window, cx: &mut App) {
+    let existing = cx.global::<EditorDocuments>().panel_for(root, relative);
+    let Some((dock, document_node)) = cx.global::<EditorDocuments>().document_dock(root) else {
+        return;
+    };
+    if let Some(panel) = existing {
+        let _ = dock.update(cx, |dock, cx| dock.select_panel(panel, window, cx));
+        return;
+    }
+    let panel = match WorkbenchPanel::from_payload(
+        PanelPayload::Document {
+            root: root.to_owned(),
+            relative: relative.to_owned(),
+        },
+        window,
+        cx,
+    ) {
+        Ok(panel) => panel,
+        Err(error) => {
+            cx.global_mut::<EditorDocuments>().set_notice(
+                root,
+                format!("Could not open {}: {error}", relative.display()),
+            );
+            cx.refresh_windows();
+            return;
+        }
+    };
+    let panel_id = PanelId::from(panel.entity_id());
+    let _ = dock.update(cx, |dock, cx| {
+        dock.add_panel_view(panel_handle(panel), DockPlacement::Center, None, window, cx);
+        if let Some(node) = document_node {
+            dock.move_panel(
+                panel_id,
+                InsertTarget::Tabs {
+                    node,
+                    ix: None,
+                    activate: true,
+                },
+                window,
+                cx,
+            );
+        }
+        dock.select_panel(panel_id, window, cx);
+    });
 }
 
 fn window_options(index: usize, cx: &App) -> WindowOptions {
@@ -2345,6 +2810,8 @@ pub fn run() {
                 KeyBinding::new("ctrl-shift-s", SaveAll, Some("KeineWorkbench")),
                 KeyBinding::new("cmd-shift-r", ToggleEngine, Some("KeineWorkbench")),
                 KeyBinding::new("ctrl-shift-r", ToggleEngine, Some("KeineWorkbench")),
+                KeyBinding::new("cmd-shift-m", MigrateEiyashou, Some("KeineWorkbench")),
+                KeyBinding::new("ctrl-shift-m", MigrateEiyashou, Some("KeineWorkbench")),
                 KeyBinding::new("cmd-shift-0", ResetLayout, Some("KeineWorkbench")),
                 KeyBinding::new("ctrl-shift-0", ResetLayout, Some("KeineWorkbench")),
             ]);

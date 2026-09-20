@@ -1,9 +1,10 @@
 //! Deterministic state-machine execution and transition math.
 
+pub mod eiyashou;
 pub mod expression;
 pub mod step;
 
-pub use step::StepResult;
+pub use step::{ScriptRuntimeError, StepResult};
 
 /// Transition easing functions shared by the state machine and renderer.
 pub mod dissolve {
