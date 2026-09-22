@@ -1,13 +1,16 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::fs;
 use std::io;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::base::motion::{Transition, transition};
-use gpui_kit::base::{Placement, ResizeHandleContext};
+use gpui_kit::base::{InteractiveElementExt as _, Placement, ResizeHandleContext, ScrollbarMode};
 use gpui_kit::component::dock::{
     AnyDrag, BasePanel, BasePanelView, DockArea, DockAreaRenderer, DockContext, DockEvent,
     DockLayout, DockPlacement, DockSkin, DragPanel, DropIndicator, DropPlaceholderBounds,
@@ -15,43 +18,50 @@ use gpui_kit::component::dock::{
     PanelState, PanelStyle, TabGroupContext, TabGroupRenderer, panel_handle, register_panel,
 };
 use gpui_kit::component::input::{Editor, EditorState, Input, InputEvent, InputState, Position};
+use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, Theme, ThemeMode};
+use gpui_kit::component::{
+    ActiveTheme as _, Icon, IconName, Sizable as _, Theme, ThemeMode, WindowExt as _,
+};
 use gpui_kit::{
-    AnyElement, AnyView, App, AppContext as _, Axis, Bounds, Context, Div, DragMoveEvent, Empty,
-    Entity, EventEmitter, FocusHandle, Focusable, Global, Hsla, IntoElement, KeyBinding,
-    MouseButton, ObjectFit, PathPromptOptions, Pixels, Point, PromptButton, PromptLevel, Render,
-    RenderImage, SharedString, Stateful, Subscription, WeakEntity, Window, WindowBounds,
-    WindowHandle, WindowOptions, actions, canvas, div, hsla, img, linear_color_stop,
-    linear_gradient, prelude::*, px, rgb, size,
+    Anchor, Animation, AnimationExt as _, AnyElement, AnyView, App, AppContext as _, Axis, Bounds,
+    ClickEvent, ClipboardItem, Context, Div, DragMoveEvent, Element, Empty, Entity, EventEmitter,
+    ExternalPaths, FocusHandle, Focusable, Global, Hsla, InteractiveElement, IntoElement,
+    KeyBinding, MouseButton, MouseDownEvent, ObjectFit, ParentElement, PathPromptOptions, Pixels,
+    Point, PromptButton, PromptLevel, Render, RenderImage, ScrollAnchor, ScrollHandle,
+    SharedString, Stateful, Styled, Subscription, WeakEntity, Window, WindowBounds, WindowHandle,
+    WindowOptions, actions, anchored, canvas, deferred, div, ease_out_quint, fill, hsla, img,
+    linear_color_stop, linear_gradient, prelude::*, px, radians, rgb, size,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::app_data::APP_ID;
 use crate::authoring::{
     AuthoringIndex, AuthoringSelection, InsertKind, ProblemSeverity, append_character,
-    append_scene, dialogues_for_source, insert_statement, replace_dialogue_text,
+    append_scene, dialogues_for_source, escape_eiyashou_string, insert_statement,
+    replace_dialogue_text,
 };
 use crate::document::{DocumentHandle, DocumentManager, SaveError, is_eiyashou_authoring_document};
+use crate::file_ops::{self, ImportResult};
 use crate::instance::{InstanceReceiver, PrimaryInstance, Startup, acquire_or_forward};
 use crate::migration::MigrationPlan;
-use crate::persistence::AppPersistence;
+use crate::persistence::{AppPersistence, BlockPickerPreferences};
 use crate::preview::{PreviewController, PreviewLifecycle, PreviewMode, map_preview_point};
 use crate::project_key::ProjectKey;
-use crate::projection::EiyashouProjection;
+use crate::projection::{BlockKind, EiyashouProjection, MoveDirection, TextBlockMetadata};
 use crate::syntax::eiyashou_highlighter_factory;
-use crate::workspace::{WorkspaceFile, WorkspaceSession};
+use crate::workspace::{WorkspaceEntryKind, WorkspaceFile, WorkspaceSession};
 
-const CANVAS: u32 = 0x11151b;
-const CHROME: u32 = 0x151a21;
-const PANEL: u32 = 0x19212a;
-const SURFACE: u32 = 0x222d38;
-const SURFACE_HOVER: u32 = 0x2b3743;
-const BORDER: u32 = 0x3a4855;
-const INK: u32 = 0xd7dee6;
-const MUTED: u32 = 0x98a3ae;
+const CANVAS: u32 = 0x070809;
+const CHROME: u32 = 0x0b0d10;
+const PANEL: u32 = 0x101317;
+const SURFACE: u32 = 0x191e23;
+const SURFACE_HOVER: u32 = 0x222a31;
+const BORDER: u32 = 0x2d343b;
+const INK: u32 = 0xd8dadd;
+const MUTED: u32 = 0x92979e;
 const PRIMARY: u32 = 0xbaebff;
-const PRIMARY_DIM: u32 = 0x30434d;
+const PRIMARY_DIM: u32 = 0x243138;
 const SUCCESS: u32 = 0x69c38d;
 const LAYOUT_SCHEMA: usize = 1;
 // Each Dock group owns one half-gap. Adjacent groups therefore have a 4 px
@@ -60,12 +70,18 @@ const LAYOUT_SCHEMA: usize = 1;
 // of adding per-panel margins.
 const VIEW_INSET_PX: f32 = 2.;
 const VIEW_RADIUS_PX: f32 = 9.;
+const ACTIVITY_RAIL_WIDTH_PX: f32 = 50.;
+const ACTIVITY_ITEM_SIZE_PX: f32 = 36.;
+const ACTIVITY_BRAND_SIZE_PX: f32 = 34.;
+const ACTIVITY_ICON_SIZE_PX: f32 = 18.;
 // GPUI reserves one leading digit plus input padding before the widest visible
 // line number. Crop that reserve while keeping the built-in right margin as a
 // distinct dark gap before source text.
 const EDITOR_GUTTER_TRIM_PX: f32 = 18.;
 const TAB_MOTION_DURATION: Duration = Duration::from_millis(140);
 const PREVIEW_POLL_INTERVAL: Duration = Duration::from_millis(16);
+const FILE_CONTEXT_MENU_WIDTH_PX: f32 = 144.;
+const FILE_CONTEXT_MENU_HEIGHT_PX: f32 = 120.;
 
 const EXPLORER_PANEL: &str = "keine.editor.explorer";
 const DOCUMENT_PANEL: &str = "keine.editor.document";
@@ -86,7 +102,18 @@ actions!(
         Save,
         SaveAll,
         ToggleEngine,
-        MigrateEiyashou
+        MigrateEiyashou,
+        CopyBlocks,
+        PasteBlocks,
+        DeleteBlocks,
+        BeginTextBlock,
+        ToggleBlockPicker,
+        BlockPickerNext,
+        BlockPickerPrevious,
+        AcceptBlockPicker,
+        CloseBlockPicker,
+        MoveBlocksUp,
+        MoveBlocksDown
     ]
 );
 
@@ -110,8 +137,8 @@ fn configure_dark_theme(cx: &mut App) {
     theme.primary_foreground = theme_color(0x121a1e);
     theme.secondary = theme_color(SURFACE);
     theme.secondary_hover = theme_color(SURFACE_HOVER);
-    theme.secondary_active = theme_color(0x202a34);
-    theme.secondary_foreground = theme_color(0xbec7d0);
+    theme.secondary_active = theme_color(0x202428);
+    theme.secondary_foreground = theme_color(0xbfc3c7);
     theme.success = theme_color(SUCCESS);
     theme.success_foreground = theme_color(0x0b1b11);
     theme.warning = theme_color(0xd2aa62);
@@ -123,35 +150,36 @@ fn configure_dark_theme(cx: &mut App) {
     theme.ring = theme_color(PRIMARY);
     theme.drag_border = theme_color(PRIMARY);
     theme.drop_target = hsla(0.55, 0.38, 0.72, 0.22);
-    theme.selection = theme_color(0x344752);
+    theme.selection = theme_color(0x29353b);
     theme.sidebar = theme_color(CHROME);
     theme.sidebar_border = theme_color(BORDER);
-    theme.sidebar_foreground = theme_color(0xa2adb8);
+    theme.sidebar_foreground = theme_color(0x9da2a8);
     theme.sidebar_accent = theme_color(PRIMARY_DIM);
     theme.sidebar_accent_foreground = theme_color(PRIMARY);
     theme.tab = theme_color(PANEL);
     theme.tab_bar = theme_color(CHROME);
     theme.tab_bar_segmented = theme_color(SURFACE);
-    theme.tab_foreground = theme_color(0x929da8);
+    theme.tab_foreground = theme_color(0x8e9399);
     theme.tab_active = theme_color(SURFACE);
     theme.tab_active_foreground = theme_color(INK);
     theme.title_bar = theme_color(CHROME);
     theme.title_bar_border = theme_color(BORDER);
     theme.status_bar = theme_color(CHROME);
     theme.status_bar_border = theme_color(BORDER);
-    theme.scrollbar = hsla(0.57, 0.12, 0.12, 0.08);
-    theme.scrollbar_thumb = hsla(0.55, 0.18, 0.72, 0.22);
-    theme.scrollbar_thumb_hover = hsla(0.55, 0.24, 0.78, 0.38);
+    theme.scrollbar_mode = ScrollbarMode::Scrolling;
+    theme.scrollbar = hsla(0.58, 0.04, 0.10, 0.08);
+    theme.scrollbar_thumb = hsla(0.56, 0.06, 0.56, 0.32);
+    theme.scrollbar_thumb_hover = hsla(0.55, 0.14, 0.70, 0.48);
     theme.input = theme_color(BORDER);
     Arc::make_mut(&mut theme.highlight_theme)
         .style
-        .editor_gutter_background = Some(theme_color(0x090c10));
+        .editor_gutter_background = Some(theme_color(0x050607));
     theme.popover = theme_color(SURFACE);
     theme.popover_foreground = theme_color(INK);
     theme.button = theme_color(SURFACE);
     theme.button_hover = theme_color(SURFACE_HOVER);
-    theme.button_active = theme_color(0x202a34);
-    theme.button_foreground = theme_color(0xc0c9d2);
+    theme.button_active = theme_color(0x202428);
+    theme.button_foreground = theme_color(0xc1c4c8);
     theme.radius = px(7.);
     theme.radius_lg = px(10.);
     theme.shadow = false;
@@ -186,6 +214,7 @@ struct WorkspaceDocuments {
     authoring: AuthoringIndex,
     notice: String,
     selection: Option<(PathBuf, usize, usize)>,
+    block_selection: Option<(PathBuf, Vec<usize>)>,
     diagnostics: Vec<keine_authoring::Diagnostic>,
     dock: Option<WeakEntity<DockArea>>,
     document_node: Option<NodeId>,
@@ -198,6 +227,7 @@ struct WorkspaceDocuments {
 
 struct EditorDocuments {
     persistence: AppPersistence,
+    block_picker_preferences: BlockPickerPreferences,
     workspaces: HashMap<PathBuf, WorkspaceDocuments>,
 }
 
@@ -205,8 +235,10 @@ impl Global for EditorDocuments {}
 
 impl EditorDocuments {
     fn new(persistence: AppPersistence) -> Self {
+        let block_picker_preferences = persistence.load_block_picker_preferences();
         Self {
             persistence,
+            block_picker_preferences,
             workspaces: HashMap::new(),
         }
     }
@@ -229,6 +261,7 @@ impl EditorDocuments {
                     authoring,
                     notice: "Ready".into(),
                     selection: None,
+                    block_selection: None,
                     diagnostics: Vec::new(),
                     dock: None,
                     document_node: None,
@@ -283,11 +316,78 @@ impl EditorDocuments {
         }
     }
 
+    fn set_block_selection(&mut self, root: &Path, relative: PathBuf, mut starts: Vec<usize>) {
+        starts.sort_unstable();
+        starts.dedup();
+        if let Ok(workspace) = self.ensure_workspace(root) {
+            workspace.block_selection = (!starts.is_empty()).then_some((relative, starts));
+        }
+    }
+
+    fn clear_block_selection(&mut self, root: &Path) {
+        if let Ok(workspace) = self.ensure_workspace(root) {
+            workspace.block_selection = None;
+        }
+    }
+
+    fn block_selection(&self, root: &Path) -> Option<&(PathBuf, Vec<usize>)> {
+        let key = ProjectKey::from_path(root).ok()?;
+        self.workspaces.get(key.path())?.block_selection.as_ref()
+    }
+
+    fn block_picker_preferences(&self) -> &BlockPickerPreferences {
+        &self.block_picker_preferences
+    }
+
+    fn update_block_picker_preferences(
+        &mut self,
+        update: impl FnOnce(&mut BlockPickerPreferences),
+    ) -> io::Result<()> {
+        update(&mut self.block_picker_preferences);
+        self.persistence
+            .save_block_picker_preferences(&self.block_picker_preferences)
+    }
+
     fn refresh_authoring(&mut self, root: &Path) {
         if let Ok(workspace) = self.ensure_workspace(root) {
             let overrides = workspace.manager.source_overrides();
             workspace.authoring = AuthoringIndex::load(root, &workspace.files, &overrides);
         }
+    }
+
+    fn refresh_files(&mut self, root: &Path) -> io::Result<Vec<WorkspaceFile>> {
+        let files = WorkspaceSession::open(root)?.files().to_vec();
+        let workspace = self.ensure_workspace(root)?;
+        workspace.files.clone_from(&files);
+        let overrides = workspace.manager.source_overrides();
+        workspace.authoring = AuthoringIndex::load(root, &workspace.files, &overrides);
+        Ok(files)
+    }
+
+    fn asset_manifest_is_clean(&mut self, root: &Path) -> bool {
+        let Ok(workspace) = self.ensure_workspace(root) else {
+            return false;
+        };
+        let Some(path) = workspace.authoring.assets_manifest.as_ref() else {
+            return false;
+        };
+        workspace
+            .manager
+            .document(path)
+            .is_none_or(|document| !document.borrow().is_dirty())
+    }
+
+    fn adopt_manifest_update(
+        &mut self,
+        root: &Path,
+        relative: &Path,
+        source: String,
+    ) -> io::Result<Option<WeakEntity<EditorState>>> {
+        let workspace = self.ensure_workspace(root)?;
+        if let Some(document) = workspace.manager.document(relative) {
+            document.borrow_mut().adopt_saved_contents(source)?;
+        }
+        Ok(workspace.editors.get(relative).cloned())
     }
 
     fn authoring(&self, root: &Path) -> AuthoringIndex {
@@ -296,6 +396,49 @@ impl EditorDocuments {
             .and_then(|key| self.workspaces.get(key.path()))
             .map(|workspace| workspace.authoring.clone())
             .unwrap_or_default()
+    }
+
+    fn explicit_source_ids(&self, root: &Path) -> HashSet<String> {
+        let Ok(key) = ProjectKey::from_path(root) else {
+            return HashSet::new();
+        };
+        let Some(workspace) = self.workspaces.get(key.path()) else {
+            return HashSet::new();
+        };
+        let overrides = workspace.manager.source_overrides();
+        workspace
+            .files
+            .iter()
+            .filter(|file| {
+                file.relative_path
+                    .extension()
+                    .is_some_and(|value| value == "shou")
+            })
+            .filter_map(|file| {
+                overrides
+                    .get(&file.relative_path)
+                    .cloned()
+                    .or_else(|| fs::read_to_string(root.join(&file.relative_path)).ok())
+            })
+            .flat_map(|source| {
+                EiyashouProjection::parse(&source)
+                    .scenes
+                    .into_iter()
+                    .flat_map(|scene| scene.blocks)
+                    .filter_map(|block| block.stable_id)
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    fn source(&self, root: &Path, relative: &Path) -> Option<String> {
+        let key = ProjectKey::from_path(root).ok()?;
+        let workspace = self.workspaces.get(key.path())?;
+        workspace
+            .manager
+            .source_overrides()
+            .remove(relative)
+            .or_else(|| fs::read_to_string(root.join(relative)).ok())
     }
 
     fn selection(&self, root: &Path) -> Option<&(PathBuf, usize, usize)> {
@@ -784,8 +927,20 @@ struct WorkbenchPanel {
     content: PanelContent,
     focus: FocusHandle,
     document_mode: DocumentMode,
-    card_editors: Vec<CardNameEditor>,
-    dialogue_editors: Vec<DialogueTextEditor>,
+    block_text_editors: Vec<BlockTextEditor>,
+    collapsed_scenes: HashSet<String>,
+    selected_blocks: HashSet<usize>,
+    block_selection_anchor: Option<usize>,
+    draft_text: Option<DraftTextBlock>,
+    block_drop_target: Option<usize>,
+    block_picker_open: bool,
+    block_picker_index: usize,
+    block_picker_category: Option<&'static str>,
+    block_picker_customize: bool,
+    block_picker_input: Entity<InputState>,
+    view_scroll: ScrollHandle,
+    block_scroll_anchor: ScrollAnchor,
+    block_scroll_pending: bool,
     tool_inputs: Vec<Entity<InputState>>,
     timeline: VecDeque<TimelineSample>,
     recovery_epoch: u64,
@@ -794,24 +949,100 @@ struct WorkbenchPanel {
     preview_lifecycle: PreviewLifecycle,
     preview_bounds: Arc<Mutex<Option<Bounds<Pixels>>>>,
     _subscriptions: Vec<Subscription>,
+    visual_subscriptions: Vec<Subscription>,
+    inspector_key: Option<InspectorEditKey>,
+    inspector_inputs: Vec<Entity<InputState>>,
+    inspector_subscriptions: Vec<Subscription>,
+    file_selection: Option<PathBuf>,
+    file_collapsed: HashSet<PathBuf>,
+    file_clipboard: Option<PathBuf>,
+    file_edit: Option<FileEditMode>,
+    file_name_input: Entity<InputState>,
+    file_commit_requested: bool,
+    file_progress: Option<FileProgress>,
+    file_context_menu: Option<FileContextMenu>,
+    file_context_epoch: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum DocumentMode {
     #[default]
     Text,
-    Card,
-    Dialogue,
+    Block,
 }
 
-struct CardNameEditor {
-    scene_index: usize,
+struct BlockTextEditor {
+    text_start: usize,
     state: Entity<InputState>,
 }
 
-struct DialogueTextEditor {
-    line: usize,
+#[derive(Clone, Debug)]
+enum FileEditMode {
+    NewFile { parent: PathBuf },
+    NewFolder { parent: PathBuf },
+    Rename { path: PathBuf },
+}
+
+#[derive(Clone, Debug)]
+struct FileProgress {
+    completed: usize,
+    total: usize,
+}
+
+#[derive(Clone, Debug)]
+struct FileContextMenu {
+    path: PathBuf,
+    position: Point<Pixels>,
+    epoch: u64,
+    closing: bool,
+}
+
+#[derive(Clone, Debug)]
+struct FileDrag {
+    relative: PathBuf,
+}
+
+impl Render for FileDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_1()
+            .rounded(px(5.))
+            .bg(rgb(SURFACE))
+            .text_xs()
+            .child(
+                self.relative
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("File")
+                    .to_owned(),
+            )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct InspectorEditKey {
+    path: PathBuf,
+    block_start: usize,
+    metadata: TextBlockMetadata,
+}
+
+#[derive(Clone)]
+struct BlockDrag {
+    selected: HashSet<usize>,
+}
+
+struct DraftTextBlock {
+    target: DraftInsertionTarget,
+    text_range: Option<Range<usize>>,
+    last_escaped: String,
     state: Entity<InputState>,
+}
+
+#[derive(Clone, Copy)]
+enum DraftInsertionTarget {
+    After(usize),
+    SceneEnd(usize),
 }
 
 #[derive(Clone, Copy)]
@@ -844,12 +1075,29 @@ impl WorkbenchPanel {
             _ => None,
         };
         let panel = cx.new(|cx| {
+            let block_picker_input =
+                cx.new(|cx| InputState::new(window, cx).placeholder("Search blocks"));
+            let file_name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Name"));
+            let view_scroll = ScrollHandle::new();
+            let block_scroll_anchor = ScrollAnchor::for_handle(view_scroll.clone());
             let mut panel = Self {
                 content,
                 focus: cx.focus_handle(),
                 document_mode: DocumentMode::Text,
-                card_editors: Vec::new(),
-                dialogue_editors: Vec::new(),
+                block_text_editors: Vec::new(),
+                collapsed_scenes: HashSet::new(),
+                selected_blocks: HashSet::new(),
+                block_selection_anchor: None,
+                draft_text: None,
+                block_drop_target: None,
+                block_picker_open: false,
+                block_picker_index: 0,
+                block_picker_category: None,
+                block_picker_customize: false,
+                block_picker_input: block_picker_input.clone(),
+                view_scroll,
+                block_scroll_anchor,
+                block_scroll_pending: false,
                 tool_inputs: Vec::new(),
                 timeline: VecDeque::with_capacity(60),
                 recovery_epoch: 0,
@@ -858,7 +1106,38 @@ impl WorkbenchPanel {
                 preview_lifecycle: PreviewLifecycle::Off,
                 preview_bounds: Arc::new(Mutex::new(None)),
                 _subscriptions: Vec::new(),
+                visual_subscriptions: Vec::new(),
+                inspector_key: None,
+                inspector_inputs: Vec::new(),
+                inspector_subscriptions: Vec::new(),
+                file_selection: None,
+                file_collapsed: HashSet::new(),
+                file_clipboard: None,
+                file_edit: None,
+                file_name_input: file_name_input.clone(),
+                file_commit_requested: false,
+                file_progress: None,
+                file_context_menu: None,
+                file_context_epoch: 0,
             };
+            panel._subscriptions.push(cx.subscribe(
+                &block_picker_input,
+                |panel: &mut WorkbenchPanel, _, event: &InputEvent, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        panel.block_picker_index = 0;
+                        cx.notify();
+                    }
+                },
+            ));
+            panel._subscriptions.push(cx.subscribe(
+                &file_name_input,
+                move |panel: &mut WorkbenchPanel, _, event: &InputEvent, cx| {
+                    if matches!(event, InputEvent::PressEnter { .. }) {
+                        panel.file_commit_requested = true;
+                        cx.notify();
+                    }
+                },
+            ));
             if let PanelContent::Document {
                 root,
                 relative,
@@ -881,6 +1160,8 @@ impl WorkbenchPanel {
                             position.line as usize,
                             position.character as usize,
                         );
+                        cx.global_mut::<EditorDocuments>()
+                            .clear_block_selection(&root_for_selection);
                         if let Ok(preview) = cx
                             .global_mut::<EditorDocuments>()
                             .preview(&root_for_selection)
@@ -984,7 +1265,7 @@ impl WorkbenchPanel {
                 }
                 _ => {}
             }
-            panel.rebuild_card_editors(window, cx);
+            panel.rebuild_visual_editors(window, cx);
             if let PanelContent::Preview { root, controller } = &panel.content {
                 let root = root.clone();
                 let controller = controller.clone();
@@ -1112,9 +1393,148 @@ impl WorkbenchPanel {
         true
     }
 
-    fn rebuild_card_editors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.card_editors.clear();
-        self.dialogue_editors.clear();
+    fn refresh_inspector_editors(
+        &mut self,
+        root: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let selected = cx
+            .global::<EditorDocuments>()
+            .block_selection(root)
+            .filter(|(_, starts)| starts.len() == 1)
+            .map(|(path, starts)| (path.clone(), starts[0]))
+            .or_else(|| {
+                let (path, line, column) = cx.global::<EditorDocuments>().selection(root)?.clone();
+                let source = cx.global::<EditorDocuments>().source(root, &path)?;
+                projected_block_at(&source, line, column)
+                    .map(|(_, block)| (path, block.source_range.start))
+            });
+        let next = selected.and_then(|(path, block_start)| {
+            if path.extension().and_then(|extension| extension.to_str()) != Some("shou") {
+                return None;
+            }
+            let source = cx.global::<EditorDocuments>().source(root, &path)?;
+            let metadata =
+                EiyashouProjection::parse(&source).text_block_metadata(&source, block_start)?;
+            Some(InspectorEditKey {
+                path,
+                block_start,
+                metadata,
+            })
+        });
+        if self.inspector_key == next {
+            return;
+        }
+        self.inspector_key = next.clone();
+        self.inspector_inputs.clear();
+        self.inspector_subscriptions.clear();
+        let Some(key) = next else {
+            return;
+        };
+        let values = [
+            key.metadata
+                .speaker
+                .clone()
+                .unwrap_or_else(|| "Narrator".to_owned()),
+            key.metadata.voice.clone().unwrap_or_default(),
+            key.metadata.stable_id.clone().unwrap_or_default(),
+        ];
+        let placeholders = ["Narrator / character id", "Voice id", "Stable ID"];
+        self.inspector_inputs = values
+            .into_iter()
+            .zip(placeholders)
+            .map(|(value, placeholder)| {
+                cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .default_value(value)
+                        .placeholder(placeholder)
+                })
+            })
+            .collect();
+        let inputs = self.inspector_inputs.clone();
+        let window_handle = window.window_handle();
+        for input in &inputs {
+            let inputs = inputs.clone();
+            let root = root.to_owned();
+            let key = key.clone();
+            self.inspector_subscriptions.push(cx.subscribe(
+                input,
+                move |_, _, event: &InputEvent, cx| {
+                    if !matches!(event, InputEvent::PressEnter { .. }) {
+                        return;
+                    }
+                    let values = inputs
+                        .iter()
+                        .map(|input| input.read(cx).value().to_string())
+                        .collect::<Vec<_>>();
+                    let speaker = values[0].trim();
+                    let voice = values[1].trim();
+                    let stable_id = values[2].trim();
+                    let metadata = TextBlockMetadata {
+                        speaker: (!speaker.is_empty() && !speaker.eq_ignore_ascii_case("Narrator"))
+                            .then(|| speaker.to_owned()),
+                        voice: (!voice.is_empty()).then(|| voice.to_owned()),
+                        stable_id: (!stable_id.is_empty()).then(|| stable_id.to_owned()),
+                    };
+                    if metadata == key.metadata {
+                        return;
+                    }
+                    let Some(source) = cx.global::<EditorDocuments>().source(&root, &key.path)
+                    else {
+                        return;
+                    };
+                    if metadata.stable_id != key.metadata.stable_id
+                        && metadata.stable_id.as_ref().is_some_and(|id| {
+                            cx.global::<EditorDocuments>()
+                                .explicit_source_ids(&root)
+                                .contains(id)
+                        })
+                    {
+                        cx.global_mut::<EditorDocuments>()
+                            .set_notice(&root, "Stable ID already exists");
+                        cx.refresh_windows();
+                        return;
+                    }
+                    match EiyashouProjection::parse(&source).replace_text_block_metadata(
+                        &source,
+                        key.block_start,
+                        &metadata,
+                    ) {
+                        Ok(edited) => {
+                            let result = cx.update_window(window_handle, |_, window, cx| {
+                                apply_workspace_edit(&root, &key.path, edited, window, cx);
+                            });
+                            if result.is_ok() {
+                                cx.global_mut::<EditorDocuments>().set_block_selection(
+                                    &root,
+                                    key.path.clone(),
+                                    vec![key.block_start],
+                                );
+                            }
+                            cx.global_mut::<EditorDocuments>().set_notice(
+                                &root,
+                                if result.is_ok() {
+                                    "Text properties updated".to_owned()
+                                } else {
+                                    "Text properties update failed".to_owned()
+                                },
+                            );
+                        }
+                        Err(error) => cx
+                            .global_mut::<EditorDocuments>()
+                            .set_notice(&root, format!("Text properties blocked: {error}")),
+                    }
+                    cx.refresh_windows();
+                },
+            ));
+        }
+    }
+
+    fn rebuild_visual_editors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.block_text_editors.clear();
+        self.visual_subscriptions.clear();
+        self.draft_text = None;
         let PanelContent::Document {
             root,
             relative,
@@ -1128,56 +1548,14 @@ impl WorkbenchPanel {
             return;
         }
 
-        let projection = EiyashouProjection::parse(document.borrow().contents());
         let window_handle = window.window_handle();
-        for (scene_index, scene) in projection.scenes.into_iter().enumerate() {
-            let state = cx.new(|cx| {
-                InputState::new(window, cx)
-                    .default_value(scene.name)
-                    .placeholder("Scene name")
-            });
-            let document = document.clone();
-            let source_editor = editor.clone();
-            let root = root.clone();
-            let state_for_change = state.clone();
-            let subscription = cx.subscribe(&state, move |_, _, event: &InputEvent, cx| {
-                if !matches!(event, InputEvent::Change) {
-                    return;
-                }
-                let new_name = state_for_change.read(cx).value().to_string();
-                let source = document.borrow().contents().to_owned();
-                let projection = EiyashouProjection::parse(&source);
-                match projection.rename_scene(&source, scene_index, &new_name) {
-                    Ok(edited) => {
-                        let result = cx.update_window(window_handle, |_, window, cx| {
-                            source_editor.update(cx, |editor, cx| {
-                                editor.replace_all(edited, window, cx);
-                            });
-                        });
-                        let notice = match result {
-                            Ok(()) => "Scene name updated from Card view".to_owned(),
-                            Err(error) => format!("Card edit failed to reach Text view: {error}"),
-                        };
-                        cx.global_mut::<EditorDocuments>().set_notice(&root, notice);
-                    }
-                    Err(error) => cx
-                        .global_mut::<EditorDocuments>()
-                        .set_notice(&root, format!("Card edit blocked: {error}")),
-                }
-                cx.refresh_windows();
-            });
-            self._subscriptions.push(subscription);
-            self.card_editors
-                .push(CardNameEditor { scene_index, state });
-        }
-
         let dialogues = dialogues_for_source(relative, document.borrow().contents());
         for dialogue in dialogues.into_iter().filter(|dialogue| dialogue.editable) {
             let line = dialogue.line;
             let state = cx.new(|cx| {
                 InputState::new(window, cx)
                     .default_value(dialogue.text)
-                    .placeholder("Dialogue")
+                    .placeholder("Text")
             });
             let document = document.clone();
             let source_editor = editor.clone();
@@ -1208,20 +1586,538 @@ impl WorkbenchPanel {
                             });
                         });
                         let notice = match result {
-                            Ok(()) => "Dialogue updated from visual view".to_owned(),
-                            Err(error) => format!("Dialogue edit failed: {error}"),
+                            Ok(()) => "Text updated from Blocks".to_owned(),
+                            Err(error) => format!("Block text edit failed: {error}"),
                         };
                         cx.global_mut::<EditorDocuments>().set_notice(&root, notice);
                     }
                     Err(error) => cx
                         .global_mut::<EditorDocuments>()
-                        .set_notice(&root, format!("Dialogue edit blocked: {error}")),
+                        .set_notice(&root, format!("Block text edit blocked: {error}")),
                 }
                 cx.refresh_windows();
             });
-            self._subscriptions.push(subscription);
-            self.dialogue_editors
-                .push(DialogueTextEditor { line, state });
+            self.visual_subscriptions.push(subscription);
+            self.block_text_editors.push(BlockTextEditor {
+                text_start: dialogue.text_range.start,
+                state,
+            });
+        }
+    }
+
+    fn toggle_block_picker(
+        &mut self,
+        _: &ToggleBlockPicker,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.document_mode != DocumentMode::Block {
+            return;
+        }
+        self.block_picker_open = !self.block_picker_open;
+        self.block_picker_index = 0;
+        if self.block_picker_open {
+            self.block_picker_input
+                .update(cx, |state, cx| state.focus(window, cx));
+        } else {
+            self.focus.focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn block_picker_next(&mut self, _: &BlockPickerNext, _: &mut Window, cx: &mut Context<Self>) {
+        let count = self.filtered_picker_kinds(cx).len();
+        if count > 0 {
+            self.block_picker_index = (self.block_picker_index + 1).min(count - 1);
+            cx.notify();
+        }
+    }
+
+    fn block_picker_previous(
+        &mut self,
+        _: &BlockPickerPrevious,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.block_picker_index = self.block_picker_index.saturating_sub(1);
+        cx.notify();
+    }
+
+    fn accept_block_picker(
+        &mut self,
+        _: &AcceptBlockPicker,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let kinds = self.filtered_picker_kinds(cx);
+        let Some(kind) = kinds.get(self.block_picker_index).copied() else {
+            return;
+        };
+        self.block_picker_open = false;
+        self.insert_from_palette(kind, window, cx);
+        self.rebuild_visual_editors(window, cx);
+        self.focus.focus(window, cx);
+        cx.notify();
+    }
+
+    fn close_block_picker(
+        &mut self,
+        _: &CloseBlockPicker,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.block_picker_open = false;
+        self.focus.focus(window, cx);
+        cx.notify();
+    }
+
+    fn filtered_picker_kinds(&self, cx: &App) -> Vec<InsertKind> {
+        let query = self
+            .block_picker_input
+            .read(cx)
+            .value()
+            .to_string()
+            .to_lowercase();
+        picker_kinds(
+            cx.global::<EditorDocuments>().block_picker_preferences(),
+            &query,
+            self.block_picker_category,
+            self.block_picker_customize,
+        )
+    }
+
+    fn change_picker_preferences(
+        &self,
+        cx: &mut Context<Self>,
+        update: impl FnOnce(&mut BlockPickerPreferences),
+    ) {
+        let result = cx
+            .global_mut::<EditorDocuments>()
+            .update_block_picker_preferences(update);
+        if let Err(error) = result
+            && let PanelContent::Document { root, .. } = &self.content
+        {
+            cx.global_mut::<EditorDocuments>()
+                .set_notice(root, format!("Picker preferences not saved: {error}"));
+        }
+        cx.refresh_windows();
+    }
+
+    fn toggle_picker_favorite(&self, kind: InsertKind, cx: &mut Context<Self>) {
+        self.change_picker_preferences(cx, move |preferences| {
+            toggle_preference(&mut preferences.favorites, kind.label());
+        });
+    }
+
+    fn toggle_picker_hidden(&self, kind: InsertKind, cx: &mut Context<Self>) {
+        self.change_picker_preferences(cx, move |preferences| {
+            toggle_preference(&mut preferences.hidden, kind.label());
+        });
+    }
+
+    fn move_picker_item(&self, kind: InsertKind, delta: isize, cx: &mut Context<Self>) {
+        self.change_picker_preferences(cx, move |preferences| {
+            let universe = InsertKind::ALL
+                .into_iter()
+                .map(InsertKind::label)
+                .collect::<Vec<_>>();
+            let group = InsertKind::ALL
+                .into_iter()
+                .filter(|candidate| candidate.category() == kind.category())
+                .map(InsertKind::label)
+                .collect::<Vec<_>>();
+            move_group_preference(
+                &mut preferences.item_order,
+                kind.label(),
+                &group,
+                &universe,
+                delta,
+            );
+        });
+    }
+
+    fn move_picker_category(&self, category: &'static str, delta: isize, cx: &mut Context<Self>) {
+        self.change_picker_preferences(cx, move |preferences| {
+            move_preference(
+                &mut preferences.category_order,
+                category,
+                &PICKER_CATEGORIES,
+                delta,
+            );
+        });
+    }
+
+    fn begin_text_block(
+        &mut self,
+        _: &BeginTextBlock,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.document_mode != DocumentMode::Block {
+            return;
+        }
+        if let Some(draft) = &self.draft_text {
+            draft.state.update(cx, |state, cx| state.focus(window, cx));
+            return;
+        }
+        let PanelContent::Document {
+            root,
+            relative,
+            document: Some(document),
+            editor,
+        } = &self.content
+        else {
+            return;
+        };
+        let source = document.borrow().contents().to_owned();
+        let projection = EiyashouProjection::parse(&source);
+        let selected_line = cx
+            .global::<EditorDocuments>()
+            .selection(root)
+            .filter(|(path, _, _)| path == relative)
+            .map_or(0, |(_, line, _)| *line);
+        let target = self
+            .selected_blocks
+            .iter()
+            .copied()
+            .max()
+            .map(DraftInsertionTarget::After)
+            .or_else(|| {
+                projection
+                    .scenes
+                    .iter()
+                    .filter(|scene| {
+                        source
+                            .get(..scene.name_range.start)
+                            .map(|prefix| prefix.bytes().filter(|byte| *byte == b'\n').count())
+                            .is_some_and(|line| line <= selected_line)
+                    })
+                    .max_by_key(|scene| scene.source_range.start)
+                    .map(|scene| {
+                        scene.blocks.last().map_or(
+                            DraftInsertionTarget::SceneEnd(scene.source_range.start),
+                            |block| DraftInsertionTarget::After(block.source_range.start),
+                        )
+                    })
+            })
+            .or_else(|| {
+                projection.scenes.first().map(|scene| {
+                    scene.blocks.last().map_or(
+                        DraftInsertionTarget::SceneEnd(scene.source_range.start),
+                        |block| DraftInsertionTarget::After(block.source_range.start),
+                    )
+                })
+            });
+        let Some(target) = target else {
+            cx.global_mut::<EditorDocuments>()
+                .set_notice(root, "No Scene available");
+            cx.refresh_windows();
+            return;
+        };
+        if let Some(scene) = projection.scenes.iter().find(|scene| match target {
+            DraftInsertionTarget::After(start) => scene
+                .blocks
+                .iter()
+                .any(|block| block.source_range.start == start),
+            DraftInsertionTarget::SceneEnd(start) => scene.source_range.start == start,
+        }) {
+            self.collapsed_scenes.remove(&scene.name);
+        }
+        let state = cx.new(|cx| InputState::new(window, cx).placeholder("Text"));
+        let state_for_change = state.clone();
+        let document = document.clone();
+        let source_editor = editor.clone();
+        let root = root.clone();
+        let window_handle = window.window_handle();
+        let subscription = cx.subscribe(&state, move |panel, _, event: &InputEvent, cx| {
+            if !matches!(event, InputEvent::Change) {
+                return;
+            }
+            let value = state_for_change.read(cx).value().to_string();
+            let escaped = escape_eiyashou_string(&value);
+            let source = document.borrow().contents().to_owned();
+            let Some(draft) = panel
+                .draft_text
+                .as_mut()
+                .filter(|draft| draft.state.entity_id() == state_for_change.entity_id())
+            else {
+                return;
+            };
+            let edit = if let Some(range) = draft.text_range.clone() {
+                if source.get(range.clone()) != Some(draft.last_escaped.as_str()) {
+                    Err("source changed; refresh the Block view".to_owned())
+                } else {
+                    let start = range.start;
+                    let mut edited = source;
+                    edited.replace_range(range, &escaped);
+                    draft.text_range = Some(start..start + escaped.len());
+                    draft.last_escaped.clone_from(&escaped);
+                    Ok(edited)
+                }
+            } else if value.is_empty() {
+                return;
+            } else {
+                let statement = format!("\"{escaped}\"");
+                let projection = EiyashouProjection::parse(&source);
+                match draft.target {
+                    DraftInsertionTarget::After(start) => {
+                        projection.insert_block_after(&source, start, &statement)
+                    }
+                    DraftInsertionTarget::SceneEnd(start) => {
+                        projection.insert_block_in_scene(&source, start, &statement)
+                    }
+                }
+                .map(|(edited, range)| {
+                    draft.text_range = Some(range.start + 1..range.end - 1);
+                    draft.last_escaped.clone_from(&escaped);
+                    panel.selected_blocks.clear();
+                    panel.selected_blocks.insert(range.start);
+                    panel.block_selection_anchor = Some(range.start);
+                    edited
+                })
+                .map_err(|error| error.to_string())
+            };
+            match edit {
+                Ok(edited) => {
+                    let result = cx.update_window(window_handle, |_, window, cx| {
+                        source_editor.update(cx, |editor, cx| {
+                            editor.replace_all(edited, window, cx);
+                        });
+                    });
+                    let notice = match result {
+                        Ok(()) => "Text updated".to_owned(),
+                        Err(error) => format!("Text edit failed: {error}"),
+                    };
+                    cx.global_mut::<EditorDocuments>().set_notice(&root, notice);
+                }
+                Err(error) => cx
+                    .global_mut::<EditorDocuments>()
+                    .set_notice(&root, format!("Text edit blocked: {error}")),
+            }
+            cx.notify();
+            cx.refresh_windows();
+        });
+        self.visual_subscriptions.push(subscription);
+        self.draft_text = Some(DraftTextBlock {
+            target,
+            text_range: None,
+            last_escaped: String::new(),
+            state: state.clone(),
+        });
+        state.update(cx, |state, cx| state.focus(window, cx));
+        cx.notify();
+    }
+
+    fn copy_selected_blocks(&mut self, _: &CopyBlocks, _: &mut Window, cx: &mut Context<Self>) {
+        if self.document_mode != DocumentMode::Block {
+            return;
+        }
+        let PanelContent::Document {
+            root,
+            document: Some(document),
+            ..
+        } = &self.content
+        else {
+            return;
+        };
+        let source = document.borrow().contents().to_owned();
+        match EiyashouProjection::parse(&source).copy_blocks(&source, &self.selected_blocks) {
+            Ok(value) => {
+                cx.write_to_clipboard(ClipboardItem::new_string(value));
+                cx.global_mut::<EditorDocuments>()
+                    .set_notice(root, "Blocks copied");
+            }
+            Err(error) => cx
+                .global_mut::<EditorDocuments>()
+                .set_notice(root, format!("Copy blocked: {error}")),
+        }
+        cx.refresh_windows();
+    }
+
+    fn paste_blocks(&mut self, _: &PasteBlocks, window: &mut Window, cx: &mut Context<Self>) {
+        if self.document_mode != DocumentMode::Block {
+            return;
+        }
+        let Some(fragment) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            self.set_block_notice("Paste blocked: clipboard has no text".into(), cx);
+            return;
+        };
+        let fragment = fragment.trim();
+        if fragment.is_empty() {
+            self.set_block_notice("Paste blocked: clipboard is empty".into(), cx);
+            return;
+        }
+        let wrapper = format!("scene __paste {{ {fragment} }}");
+        let fragment_projection = EiyashouProjection::parse(&wrapper);
+        let fragment_blocks = fragment_projection
+            .scenes
+            .first()
+            .map(|scene| scene.blocks.as_slice())
+            .unwrap_or_default();
+        if fragment_blocks.is_empty()
+            || !fragment_projection.read_only.is_empty()
+            || fragment_blocks.iter().any(|block| block.read_only)
+        {
+            self.set_block_notice("Paste blocked: not valid block source".into(), cx);
+            return;
+        }
+        let mut pasted_ids = HashSet::new();
+        if fragment_blocks
+            .iter()
+            .filter_map(|block| block.stable_id.as_deref())
+            .any(|id| !pasted_ids.insert(id.to_owned()))
+        {
+            self.set_block_notice("Paste blocked: duplicate stable ID".into(), cx);
+            return;
+        }
+        let PanelContent::Document {
+            root,
+            document: Some(document),
+            ..
+        } = &self.content
+        else {
+            return;
+        };
+        let project_ids = cx.global::<EditorDocuments>().explicit_source_ids(root);
+        if pasted_ids.iter().any(|id| project_ids.contains(id)) {
+            self.set_block_notice("Paste blocked: stable ID already exists".into(), cx);
+            return;
+        }
+        let Some(after_start) = self.selected_blocks.iter().copied().max() else {
+            self.set_block_notice("Paste blocked: select an insertion block".into(), cx);
+            return;
+        };
+        let source = document.borrow().contents().to_owned();
+        match EiyashouProjection::parse(&source).insert_block_after(&source, after_start, fragment)
+        {
+            Ok((edited, _)) => self.apply_block_source(edited, "Blocks pasted", window, cx),
+            Err(error) => self.set_block_notice(format!("Paste blocked: {error}"), cx),
+        }
+    }
+
+    fn delete_selected_blocks(
+        &mut self,
+        _: &DeleteBlocks,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.document_mode != DocumentMode::Block {
+            return;
+        }
+        let source = match &self.content {
+            PanelContent::Document {
+                document: Some(document),
+                ..
+            } => document.borrow().contents().to_owned(),
+            _ => return,
+        };
+        match EiyashouProjection::parse(&source).delete_blocks(&source, &self.selected_blocks) {
+            Ok(edited) => self.apply_block_source(edited, "Blocks deleted", window, cx),
+            Err(error) => self.set_block_notice(format!("Delete blocked: {error}"), cx),
+        }
+    }
+
+    fn move_selected_blocks_up(
+        &mut self,
+        _: &MoveBlocksUp,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_selected_blocks(MoveDirection::Up, window, cx);
+    }
+
+    fn move_selected_blocks_down(
+        &mut self,
+        _: &MoveBlocksDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_selected_blocks(MoveDirection::Down, window, cx);
+    }
+
+    fn move_selected_blocks(
+        &mut self,
+        direction: MoveDirection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.document_mode != DocumentMode::Block {
+            return;
+        }
+        let source = match &self.content {
+            PanelContent::Document {
+                document: Some(document),
+                ..
+            } => document.borrow().contents().to_owned(),
+            _ => return,
+        };
+        match EiyashouProjection::parse(&source).move_blocks(
+            &source,
+            &self.selected_blocks,
+            direction,
+        ) {
+            Ok(edited) => self.apply_block_source(edited, "Blocks moved", window, cx),
+            Err(error) => self.set_block_notice(format!("Move blocked: {error}"), cx),
+        }
+    }
+
+    fn drop_blocks(
+        &mut self,
+        drag: &BlockDrag,
+        target_start: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.document_mode != DocumentMode::Block {
+            return;
+        }
+        let source = match &self.content {
+            PanelContent::Document {
+                document: Some(document),
+                ..
+            } => document.borrow().contents().to_owned(),
+            _ => return,
+        };
+        match EiyashouProjection::parse(&source).move_blocks_to(
+            &source,
+            &drag.selected,
+            target_start,
+        ) {
+            Ok(edited) if edited != source => {
+                self.apply_block_source(edited, "Blocks moved", window, cx)
+            }
+            Ok(_) => {}
+            Err(error) => self.set_block_notice(format!("Move blocked: {error}"), cx),
+        }
+    }
+
+    fn apply_block_source(
+        &mut self,
+        edited: String,
+        notice: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let PanelContent::Document { root, editor, .. } = &self.content else {
+            return;
+        };
+        let root = root.clone();
+        let editor = editor.clone();
+        editor.update(cx, |editor, cx| editor.replace_all(edited, window, cx));
+        self.selected_blocks.clear();
+        self.block_selection_anchor = None;
+        self.rebuild_visual_editors(window, cx);
+        cx.global_mut::<EditorDocuments>()
+            .clear_block_selection(&root);
+        cx.global_mut::<EditorDocuments>().set_notice(&root, notice);
+        cx.notify();
+        cx.refresh_windows();
+    }
+
+    fn set_block_notice(&self, notice: String, cx: &mut Context<Self>) {
+        if let PanelContent::Document { root, .. } = &self.content {
+            cx.global_mut::<EditorDocuments>().set_notice(root, notice);
+            cx.refresh_windows();
         }
     }
 
@@ -1345,6 +2241,349 @@ impl WorkbenchPanel {
         }
         cx.refresh_windows();
     }
+
+    fn explorer_root(&self) -> Option<PathBuf> {
+        match &self.content {
+            PanelContent::Explorer { root, .. } => Some(root.clone()),
+            _ => None,
+        }
+    }
+
+    fn selected_directory(&self) -> PathBuf {
+        let PanelContent::Explorer { files, .. } = &self.content else {
+            return PathBuf::new();
+        };
+        let Some(selected) = self.file_selection.as_ref() else {
+            return PathBuf::new();
+        };
+        if files
+            .iter()
+            .find(|file| &file.relative_path == selected)
+            .is_some_and(WorkspaceFile::is_dir)
+        {
+            selected.clone()
+        } else {
+            selected
+                .parent()
+                .unwrap_or_else(|| Path::new(""))
+                .to_owned()
+        }
+    }
+
+    fn begin_file_edit(
+        &mut self,
+        mode: FileEditMode,
+        initial: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.file_name_input
+            .update(cx, |input, cx| input.set_value(initial, window, cx));
+        self.file_edit = Some(mode);
+        self.file_name_input
+            .update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
+    }
+
+    fn open_file_context_menu(
+        &mut self,
+        path: PathBuf,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        self.file_context_epoch = self.file_context_epoch.wrapping_add(1);
+        self.file_selection = Some(path.clone());
+        self.file_context_menu = Some(FileContextMenu {
+            path,
+            position,
+            epoch: self.file_context_epoch,
+            closing: false,
+        });
+        cx.notify();
+    }
+
+    fn close_file_context_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(menu) = self.file_context_menu.as_mut() else {
+            return;
+        };
+        if menu.closing {
+            return;
+        }
+        self.file_context_epoch = self.file_context_epoch.wrapping_add(1);
+        menu.epoch = self.file_context_epoch;
+        menu.closing = true;
+        let epoch = menu.epoch;
+        let delay = if cx.reduce_motion() {
+            Duration::ZERO
+        } else {
+            Duration::from_millis(90)
+        };
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(delay).await;
+            let _ = this.update_in(cx, |this, _, cx| {
+                if this
+                    .file_context_menu
+                    .as_ref()
+                    .is_some_and(|menu| menu.epoch == epoch && menu.closing)
+                {
+                    this.file_context_menu = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn commit_file_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(root) = self.explorer_root() else {
+            return;
+        };
+        let Some(mode) = self.file_edit.clone() else {
+            return;
+        };
+        let name = self.file_name_input.read(cx).value().trim().to_owned();
+        let result = match mode {
+            FileEditMode::NewFile { parent } => {
+                file_ops::create_file(&root, &parent, &name).map(|_| None)
+            }
+            FileEditMode::NewFolder { parent } => {
+                file_ops::create_directory(&root, &parent, &name).map(|_| None)
+            }
+            FileEditMode::Rename { path } => {
+                if !self.manifest_mutation_ready(&root, window, cx) {
+                    return;
+                }
+                file_ops::rename_entry(&root, &path, &name).map(Some)
+            }
+        };
+        match result {
+            Ok(update) => {
+                self.file_edit = None;
+                if let Some(update) = update {
+                    self.accept_file_result(&root, update, window, cx);
+                } else {
+                    self.refresh_explorer(&root, cx);
+                }
+            }
+            Err(error) => window.push_notification(Notification::error(short_error(&error)), cx),
+        }
+        cx.notify();
+    }
+
+    fn manifest_mutation_ready(
+        &self,
+        root: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if cx
+            .global_mut::<EditorDocuments>()
+            .asset_manifest_is_clean(root)
+        {
+            true
+        } else {
+            window.push_notification(Notification::warning("Save assets.yaml first"), cx);
+            false
+        }
+    }
+
+    fn accept_file_result(
+        &mut self,
+        root: &Path,
+        result: ImportResult,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some((relative, source)) = result.manifest_update {
+            match cx.global_mut::<EditorDocuments>().adopt_manifest_update(
+                root,
+                &relative,
+                source.clone(),
+            ) {
+                Ok(Some(editor)) => {
+                    let _ = editor.update(cx, |editor, cx| {
+                        editor.replace_all(source, window, cx);
+                    });
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    window.push_notification(Notification::error(short_error(&error)), cx)
+                }
+            }
+        }
+        self.refresh_explorer(root, cx);
+    }
+
+    fn refresh_explorer(&mut self, root: &Path, cx: &mut Context<Self>) {
+        match cx.global_mut::<EditorDocuments>().refresh_files(root) {
+            Ok(refreshed) => {
+                if let PanelContent::Explorer { files, .. } = &mut self.content {
+                    *files = refreshed;
+                }
+            }
+            Err(error) => cx
+                .global_mut::<EditorDocuments>()
+                .set_notice(root, format!("File refresh failed: {error}")),
+        }
+        cx.refresh_windows();
+    }
+
+    fn paste_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(root) = self.explorer_root() else {
+            return;
+        };
+        let Some(source) = self.file_clipboard.clone() else {
+            return;
+        };
+        if !self.manifest_mutation_ready(&root, window, cx) {
+            return;
+        }
+        let target = self.selected_directory();
+        match file_ops::copy_entry(&root, &source, &target) {
+            Ok(results) => {
+                for result in results {
+                    self.accept_file_result(&root, result, window, cx);
+                }
+                window.push_notification(Notification::success("Copied"), cx);
+            }
+            Err(error) => window.push_notification(Notification::error(short_error(&error)), cx),
+        }
+    }
+
+    fn move_file(
+        &mut self,
+        source: &Path,
+        target: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(root) = self.explorer_root() else {
+            return;
+        };
+        if !self.manifest_mutation_ready(&root, window, cx) {
+            return;
+        }
+        match file_ops::move_entry(&root, source, target) {
+            Ok(result) => self.accept_file_result(&root, result, window, cx),
+            Err(error) => window.push_notification(Notification::error(short_error(&error)), cx),
+        }
+    }
+
+    fn confirm_delete_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(root) = self.explorer_root() else {
+            return;
+        };
+        let Some(path) = self.file_selection.clone() else {
+            return;
+        };
+        let receiver = window.prompt(
+            PromptLevel::Warning,
+            "Delete selected item?",
+            Some(&path.display().to_string()),
+            &[
+                PromptButton::Other("Delete".into()),
+                PromptButton::Cancel("Cancel".into()),
+            ],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if receiver.await.ok() != Some(0) {
+                return;
+            }
+            let _ = this.update_in(cx, |this, window, cx| {
+                match file_ops::delete_entry(&root, &path) {
+                    Ok(()) => {
+                        this.file_selection = None;
+                        this.refresh_explorer(&root, cx);
+                        window.push_notification(Notification::success("Deleted"), cx);
+                    }
+                    Err(error) => {
+                        window.push_notification(Notification::error(short_error(&error)), cx)
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn start_external_import(
+        &mut self,
+        paths: Vec<PathBuf>,
+        target: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(root) = self.explorer_root() else {
+            return;
+        };
+        if paths.is_empty() || !self.manifest_mutation_ready(&root, window, cx) {
+            return;
+        }
+        self.file_progress = Some(FileProgress {
+            completed: 0,
+            total: paths.len(),
+        });
+        let total = paths.len();
+        let background = cx.background_executor().clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let mut succeeded = 0;
+            let mut failed = 0;
+            let mut last_manifest = None;
+            for (index, source) in paths.into_iter().enumerate() {
+                let root_for_task = root.clone();
+                let target_for_task = target.clone();
+                let result = background
+                    .spawn(async move {
+                        file_ops::import_external(&root_for_task, &target_for_task, &source)
+                    })
+                    .await;
+                match result {
+                    Ok(result) => {
+                        succeeded += 1;
+                        if result.manifest_update.is_some() {
+                            last_manifest = result.manifest_update;
+                        }
+                    }
+                    Err(_) => failed += 1,
+                }
+                let _ = this.update_in(cx, |this, _, cx| {
+                    this.file_progress = Some(FileProgress {
+                        completed: index + 1,
+                        total,
+                    });
+                    cx.notify();
+                });
+            }
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.file_progress = None;
+                if let Some((relative, source)) = last_manifest {
+                    let result = ImportResult {
+                        destination: PathBuf::new(),
+                        manifest_update: Some((relative, source)),
+                        registered: true,
+                    };
+                    this.accept_file_result(&root, result, window, cx);
+                } else {
+                    this.refresh_explorer(&root, cx);
+                }
+                if failed == 0 {
+                    window.push_notification(
+                        Notification::success(format!("Imported {succeeded}")),
+                        cx,
+                    );
+                } else {
+                    window.push_notification(
+                        Notification::warning(format!("Imported {succeeded} · {failed} failed")),
+                        cx,
+                    );
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
 }
 
 impl BasePanel for WorkbenchPanel {
@@ -1424,91 +2663,509 @@ impl Focusable for WorkbenchPanel {
 }
 
 impl Render for WorkbenchPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.file_commit_requested {
+            self.file_commit_requested = false;
+            self.commit_file_edit(window, cx);
+        }
+        if let PanelContent::Inspector { root, .. } = &self.content {
+            let root = root.clone();
+            self.refresh_inspector_editors(&root, window, cx);
+        }
         let mono = Theme::global(cx).mono_font_family.clone();
         let body = match &self.content {
             PanelContent::Explorer { root, files } => {
-                let project_name = root
+                let project_root = root.clone();
+                let files = files.clone();
+                let project_name = project_root
                     .file_name()
                     .and_then(|name| name.to_str())
                     .unwrap_or("PROJECT")
                     .to_uppercase();
-                let project_root = root.clone();
-                div()
-                    .size_full()
-                    .flex()
-                    .flex_col()
-                    .child(
+                let selected = self.file_selection.clone();
+                let selected_directory = selected
+                    .as_ref()
+                    .and_then(|path| {
+                        files
+                            .iter()
+                            .find(|file| &file.relative_path == path)
+                            .map(|file| {
+                                if file.is_dir() {
+                                    path.clone()
+                                } else {
+                                    path.parent().unwrap_or_else(|| Path::new("")).to_owned()
+                                }
+                            })
+                    })
+                    .unwrap_or_default();
+                let visible = files
+                    .iter()
+                    .filter(|file| {
+                        let mut ancestor = file.relative_path.parent();
+                        while let Some(path) = ancestor {
+                            if self.file_collapsed.contains(path) {
+                                return false;
+                            }
+                            ancestor = path.parent();
+                        }
+                        true
+                    })
+                    .take(800)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let new_file_parent = selected_directory.clone();
+                let new_folder_parent = selected_directory.clone();
+                let refresh_root = project_root.clone();
+                let external_root_target = PathBuf::new();
+                let internal_root_target = PathBuf::new();
+                let header =
+                    div()
+                        .h(px(30.))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .pl_3()
+                        .pr_1()
+                        .text_xs()
+                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                        .text_color(rgb(MUTED))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .whitespace_nowrap()
+                                .overflow_hidden()
+                                .child(project_name),
+                        )
+                        .child(file_action_icon("file-new", AssetIconName::File).on_click(
+                            cx.listener(move |this, _, window, cx| {
+                                this.begin_file_edit(
+                                    FileEditMode::NewFile {
+                                        parent: new_file_parent.clone(),
+                                    },
+                                    "",
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        ))
+                        .child(
+                            file_action_icon("folder-new", AssetIconName::Folder).on_click(
+                                cx.listener(move |this, _, window, cx| {
+                                    this.begin_file_edit(
+                                        FileEditMode::NewFolder {
+                                            parent: new_folder_parent.clone(),
+                                        },
+                                        "",
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                            ),
+                        )
+                        .when(self.file_clipboard.is_some(), |this| {
+                            this.child(
+                                file_action_icon("file-paste", AssetIconName::Copy).on_click(
+                                    cx.listener(|this, _, window, cx| this.paste_file(window, cx)),
+                                ),
+                            )
+                        })
+                        .child(
+                            file_action_icon("file-refresh", AssetIconName::RotateCw).on_click(
+                                cx.listener(move |this, _, _, cx| {
+                                    this.refresh_explorer(&refresh_root, cx)
+                                }),
+                            ),
+                        );
+                let edit_row =
+                    self.file_edit.as_ref().map(|_| {
                         div()
-                            .h(px(28.))
+                            .h(px(30.))
+                            .flex_none()
                             .flex()
                             .items_center()
-                            .px_3()
-                            .text_xs()
-                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                            .text_color(rgb(MUTED))
-                            .child(project_name),
-                    )
-                    .child(
-                        div()
-                            .relative()
-                            .flex_1()
-                            .min_h_0()
+                            .gap_1()
+                            .mx_2()
+                            .px_1()
+                            .rounded(px(6.))
+                            .bg(rgb(SURFACE))
+                            .child(
+                                div().flex_1().min_w_0().child(
+                                    Input::new(&self.file_name_input)
+                                        .appearance(false)
+                                        .bordered(false)
+                                        .size_full()
+                                        .text_xs()
+                                        .text_color(rgb(INK)),
+                                ),
+                            )
+                            .child(
+                                file_action_icon("file-edit-accept", AssetIconName::Check)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.commit_file_edit(window, cx)
+                                    })),
+                            )
+                            .child(
+                                file_action_icon("file-edit-cancel", AssetIconName::Close)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.file_edit = None;
+                                        cx.notify();
+                                    })),
+                            )
+                    });
+                let progress = self.file_progress.as_ref().map(|progress| {
+                    div()
+                        .h(px(24.))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px_2()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child(
+                            Icon::new(IconName::LoaderCircle)
+                                .xsmall()
+                                .text_color(rgb(PRIMARY)),
+                        )
+                        .child(format!(
+                            "Importing {} / {}",
+                            progress.completed, progress.total
+                        ))
+                });
+                let context_menu = self.file_context_menu.clone().map(|menu| {
+                    let rename_path = menu.path.clone();
+                    let rename_name = menu
+                        .path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or_default()
+                        .to_owned();
+                    let copy_path = menu.path.clone();
+                    let reveal_root = project_root.clone();
+                    let reveal_path = menu.path.clone();
+                    let delete_path = menu.path.clone();
+                    let closing = menu.closing;
+                    let motion_duration = if closing { 90 } else { 120 };
+                    let menu_surface = div()
+                        .id(("file-context-surface", menu.epoch))
+                        .w(px(FILE_CONTEXT_MENU_WIDTH_PX))
+                        .h(px(FILE_CONTEXT_MENU_HEIGHT_PX))
+                        .overflow_hidden()
+                        .p_1()
+                        .rounded(px(7.))
+                        .border_1()
+                        .border_color(rgb(BORDER))
+                        .bg(rgb(SURFACE))
+                        .shadow_lg()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            file_context_menu_item(
+                                "file-context-rename",
+                                AssetIconName::Replace,
+                                "Rename",
+                                false,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    this.close_file_context_menu(window, cx);
+                                    this.begin_file_edit(
+                                        FileEditMode::Rename {
+                                            path: rename_path.clone(),
+                                        },
+                                        &rename_name,
+                                        window,
+                                        cx,
+                                    );
+                                },
+                            )),
+                        )
+                        .child(
+                            file_context_menu_item(
+                                "file-context-copy",
+                                AssetIconName::Copy,
+                                "Copy",
+                                false,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    this.file_clipboard = Some(copy_path.clone());
+                                    this.close_file_context_menu(window, cx);
+                                    cx.notify();
+                                },
+                            )),
+                        )
+                        .child(
+                            file_context_menu_item(
+                                "file-context-reveal",
+                                AssetIconName::ExternalLink,
+                                "Reveal",
+                                false,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    reveal_workspace_path(&reveal_root, &reveal_path);
+                                    this.close_file_context_menu(window, cx);
+                                },
+                            )),
+                        )
+                        .child(
+                            file_context_menu_item(
+                                "file-context-delete",
+                                AssetIconName::Delete,
+                                "Delete",
+                                true,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    this.file_selection = Some(delete_path.clone());
+                                    this.close_file_context_menu(window, cx);
+                                    this.confirm_delete_file(window, cx);
+                                },
+                            )),
+                        )
+                        .with_animation(
+                            ("file-context-motion", menu.epoch),
+                            Animation::new(Duration::from_millis(motion_duration))
+                                .with_easing(ease_out_quint()),
+                            move |surface, delta| {
+                                let progress = if closing { 1. - delta } else { delta };
+                                let scale = 0.94 + progress * 0.06;
+                                surface
+                                    .opacity(progress)
+                                    .w(px(FILE_CONTEXT_MENU_WIDTH_PX * scale))
+                                    .h(px(FILE_CONTEXT_MENU_HEIGHT_PX * scale))
+                            },
+                        );
+                    deferred(
+                        anchored()
+                            .anchor(Anchor::TopLeft)
+                            .position(menu.position)
+                            .snap_to_window_with_margin(px(6.))
                             .child(
                                 div()
-                                    .size_full()
+                                    .w(px(FILE_CONTEXT_MENU_WIDTH_PX))
+                                    .h(px(FILE_CONTEXT_MENU_HEIGHT_PX))
+                                    .on_mouse_down_out(cx.listener(|this, _, window, cx| {
+                                        this.close_file_context_menu(window, cx)
+                                    }))
+                                    .child(menu_surface),
+                            ),
+                    )
+                    .priority(100)
+                });
+                let content = div()
+                    .flex()
+                    .flex_col()
+                    .child(header)
+                    .children(edit_row)
+                    .children(progress)
+                    .child(
+                        div()
+                            .id("explorer-drop-root")
+                            .w_full()
+                            .min_h(px(80.))
+                            .drag_over::<ExternalPaths>(|style, _, _, _| {
+                                style.bg(rgb(SURFACE_HOVER))
+                            })
+                            .drag_over::<FileDrag>(|style, _, _, _| style.bg(rgb(SURFACE_HOVER)))
+                            .on_drop(cx.listener(move |this, paths: &ExternalPaths, window, cx| {
+                                this.start_external_import(
+                                    paths.paths().to_vec(),
+                                    external_root_target.clone(),
+                                    window,
+                                    cx,
+                                );
+                            }))
+                            .on_drop(cx.listener(move |this, drag: &FileDrag, window, cx| {
+                                this.move_file(&drag.relative, &internal_root_target, window, cx);
+                            }))
+                            .child(
+                                div()
+                                    .w_full()
+                                    .min_w_0()
                                     .flex()
                                     .flex_col()
-                                    .children(files.iter().take(400).enumerate().map(
+                                    .children(visible.into_iter().enumerate().map(
                                         |(index, file)| {
                                             let root = project_root.clone();
                                             let relative = file.relative_path.clone();
+                                            let click_relative = relative.clone();
+                                            let context_relative = relative.clone();
+                                            let drag = FileDrag {
+                                                relative: relative.clone(),
+                                            };
+                                            let is_dir = file.kind == WorkspaceEntryKind::Directory;
+                                            let openable = !is_dir
+                                                && matches!(
+                                                    relative
+                                                        .extension()
+                                                        .and_then(|extension| extension.to_str()),
+                                                    Some(
+                                                        "shou"
+                                                            | "txt"
+                                                            | "json"
+                                                            | "yaml"
+                                                            | "yml"
+                                                            | "toml"
+                                                            | "md"
+                                                            | "webgal"
+                                                    )
+                                                );
+                                            let depth =
+                                                relative.components().count().saturating_sub(1);
+                                            let name = relative
+                                                .file_name()
+                                                .and_then(|name| name.to_str())
+                                                .unwrap_or("File")
+                                                .to_owned();
+                                            let row_selected = selected.as_ref() == Some(&relative);
+                                            let collapsed = self.file_collapsed.contains(&relative);
+                                            let drop_target = relative.clone();
+                                            let external_target = relative.clone();
                                             div()
                                                 .id(("explorer-file", index))
                                                 .h(px(25.))
-                                                .w_auto()
-                                                .min_w_full()
+                                                .w_full()
                                                 .flex_none()
                                                 .flex()
                                                 .items_center()
-                                                .gap_2()
-                                                .px_2()
+                                                .gap_1()
+                                                .pl(px(5. + depth as f32 * 14.))
+                                                .pr_2()
                                                 .rounded(px(5.))
                                                 .whitespace_nowrap()
                                                 .text_xs()
-                                                .text_color(rgb(0xa9b5c1))
+                                                .text_color(rgb(if row_selected {
+                                                    INK
+                                                } else {
+                                                    MUTED
+                                                }))
+                                                .when(row_selected, |style| {
+                                                    style.bg(rgb(SURFACE_HOVER))
+                                                })
                                                 .cursor_pointer()
                                                 .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-                                                .on_click(move |_, window, cx| {
-                                                    open_workspace_document(
-                                                        &root, &relative, window, cx,
-                                                    );
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        this.file_selection =
+                                                            Some(click_relative.clone());
+                                                        if is_dir {
+                                                            if !this
+                                                                .file_collapsed
+                                                                .insert(click_relative.clone())
+                                                            {
+                                                                this.file_collapsed
+                                                                    .remove(&click_relative);
+                                                            }
+                                                            cx.notify();
+                                                        } else if openable {
+                                                            open_workspace_document(
+                                                                &root,
+                                                                &click_relative,
+                                                                window,
+                                                                cx,
+                                                            );
+                                                        }
+                                                    },
+                                                ))
+                                                .on_mouse_down(
+                                                    MouseButton::Right,
+                                                    cx.listener(
+                                                        move |this,
+                                                              event: &MouseDownEvent,
+                                                              _,
+                                                              cx| {
+                                                            this.open_file_context_menu(
+                                                                context_relative.clone(),
+                                                                event.position,
+                                                                cx,
+                                                            );
+                                                            cx.stop_propagation();
+                                                        },
+                                                    ),
+                                                )
+                                                .on_drag(drag, |drag: &FileDrag, _, _, cx| {
+                                                    cx.new(|_| drag.clone())
+                                                })
+                                                .when(is_dir, |row| {
+                                                    row.drag_over::<FileDrag>(|style, _, _, _| {
+                                                    style.bg(rgb(PRIMARY_DIM))
+                                                })
+                                                .drag_over::<ExternalPaths>(|style, _, _, _| {
+                                                    style.bg(rgb(PRIMARY_DIM))
+                                                })
+                                                .on_drop(cx.listener(
+                                                    move |this, drag: &FileDrag, window, cx| {
+                                                        this.move_file(
+                                                            &drag.relative,
+                                                            &drop_target,
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    },
+                                                ))
+                                                .on_drop(cx.listener(
+                                                    move |this,
+                                                          paths: &ExternalPaths,
+                                                          window,
+                                                          cx| {
+                                                        this.start_external_import(
+                                                            paths.paths().to_vec(),
+                                                            external_target.clone(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    },
+                                                ))
                                                 })
                                                 .child(
-                                                    Icon::new(IconName::FileText)
-                                                        .xsmall()
-                                                        .text_color(rgb(0x76bfdc)),
+                                                    Icon::new(if is_dir {
+                                                        if collapsed {
+                                                            IconName::ChevronRight
+                                                        } else {
+                                                            IconName::ChevronDown
+                                                        }
+                                                    } else {
+                                                        IconName::File
+                                                    })
+                                                    .xsmall()
+                                                    .text_color(rgb(if is_dir {
+                                                        MUTED
+                                                    } else {
+                                                        PRIMARY
+                                                    })),
                                                 )
-                                                .child(file.relative_path.display().to_string())
+                                                .when(is_dir, |row| {
+                                                    row.child(
+                                                        Icon::new(if collapsed {
+                                                            IconName::FolderClosed
+                                                        } else {
+                                                            IconName::FolderOpen
+                                                        })
+                                                        .xsmall()
+                                                        .text_color(rgb(PRIMARY)),
+                                                    )
+                                                })
+                                                .child(name)
                                         },
                                     ))
-                                    .overflow_scrollbar()
+                                    .overflow_x_scrollbar()
                                     .id("explorer-files"),
-                            )
-                            .child(
-                                div()
-                                    .absolute()
-                                    .top_0()
-                                    .right_0()
-                                    .bottom(px(10.))
-                                    .w(px(14.))
-                                    .bg(linear_gradient(
-                                        90.,
-                                        linear_color_stop(hsla(0.57, 0.18, 0.12, 0.), 0.),
-                                        linear_color_stop(hsla(0.57, 0.18, 0.12, 0.72), 1.),
-                                    )),
                             ),
-                    )
+                    );
+                div()
+                    .relative()
+                    .size_full()
+                    .min_h_0()
+                    .child(vertical_overflow_view(
+                        "explorer-vertical-scroll",
+                        &self.view_scroll,
+                        content,
+                    ))
+                    .children(context_menu)
                     .into_any_element()
             }
             PanelContent::Document {
@@ -1520,119 +3177,160 @@ impl Render for WorkbenchPanel {
                 let eiyashou = document.is_some()
                     && relative.extension().and_then(|value| value.to_str()) == Some("shou");
                 let mode = self.document_mode;
-                let authoring = cx.global::<EditorDocuments>().authoring(root);
-                let palette_kinds = [
-                    InsertKind::Narration,
-                    InsertKind::Dialogue,
-                    InsertKind::Background,
-                    InsertKind::Figure,
-                    InsertKind::Choice,
-                ]
-                .into_iter()
-                .filter(|kind| match kind {
-                    InsertKind::Narration => true,
-                    InsertKind::Dialogue => !authoring.characters.is_empty(),
-                    InsertKind::Background => authoring
-                        .assets
-                        .iter()
-                        .any(|asset| asset.kind == crate::authoring::AssetKind::Background),
-                    InsertKind::Figure => authoring
-                        .assets
-                        .iter()
-                        .any(|asset| asset.kind == crate::authoring::AssetKind::Figure),
-                    InsertKind::Choice => !authoring.scenes.is_empty(),
-                })
-                .collect::<Vec<_>>();
+                let text_root = root.clone();
+                let text_relative = relative.clone();
+                let text_editor = editor.clone();
                 let header = eiyashou.then(|| {
                     let text_selected = mode == DocumentMode::Text;
-                    let card_selected = mode == DocumentMode::Card;
-                    let dialogue_selected = mode == DocumentMode::Dialogue;
+                    let block_selected = mode == DocumentMode::Block;
                     div()
                         .h(px(34.))
                         .flex_none()
                         .flex()
                         .items_center()
-                        .justify_between()
+                        .justify_end()
                         .gap_1()
                         .px_2()
                         .bg(rgb(CHROME))
-                        .child(div().flex().gap_1().children(palette_kinds.into_iter().map(
-                            |kind| {
-                                palette_button(kind.label()).on_click(cx.listener(
-                                    move |this, _, window, cx| {
-                                        this.insert_from_palette(kind, window, cx)
-                                    },
-                                ))
-                            },
-                        )))
                         .child(
                             div()
                                 .flex()
                                 .gap_1()
                                 .child(document_mode_button("Text", text_selected).on_click(
-                                    cx.listener(move |this, _, _, cx| {
-                                        this.document_mode = DocumentMode::Text;
-                                        cx.notify();
-                                    }),
-                                ))
-                                .child(document_mode_button("Cards", card_selected).on_click(
                                     cx.listener(move |this, _, window, cx| {
-                                        this.rebuild_card_editors(window, cx);
-                                        this.document_mode = DocumentMode::Card;
+                                        this.document_mode = DocumentMode::Text;
+                                        if let Some((_, line, column)) = cx
+                                            .global::<EditorDocuments>()
+                                            .selection(&text_root)
+                                            .filter(|(path, _, _)| path == &text_relative)
+                                        {
+                                            let line = *line;
+                                            let column = *column;
+                                            text_editor.update(cx, |editor, cx| {
+                                                editor.set_cursor_position(
+                                                    Position::new(line as u32, column as u32),
+                                                    window,
+                                                    cx,
+                                                );
+                                            });
+                                        }
                                         cx.notify();
                                     }),
                                 ))
-                                .child(
-                                    document_mode_button("Dialogue", dialogue_selected).on_click(
-                                        cx.listener(move |this, _, window, cx| {
-                                            this.rebuild_card_editors(window, cx);
-                                            this.document_mode = DocumentMode::Dialogue;
-                                            cx.notify();
-                                        }),
-                                    ),
-                                ),
+                                .child(document_mode_button("Blocks", block_selected).on_click(
+                                    cx.listener(move |this, _, window, cx| {
+                                        this.rebuild_visual_editors(window, cx);
+                                        this.document_mode = DocumentMode::Block;
+                                        this.block_scroll_pending = true;
+                                        if let PanelContent::Document { root, relative, .. } =
+                                            &this.content
+                                        {
+                                            cx.global_mut::<EditorDocuments>().set_block_selection(
+                                                root,
+                                                relative.clone(),
+                                                this.selected_blocks.iter().copied().collect(),
+                                            );
+                                        }
+                                        cx.notify();
+                                    }),
+                                )),
                         )
                 });
-                let body = if eiyashou && mode == DocumentMode::Card {
-                    render_card_projection(
-                        root,
-                        relative,
-                        document.as_ref().unwrap(),
-                        &self.card_editors,
-                        cx,
-                    )
-                } else if eiyashou && mode == DocumentMode::Dialogue {
-                    render_dialogue_projection(
-                        root,
-                        relative,
-                        document.as_ref().unwrap(),
-                        &self.dialogue_editors,
+                let body = if eiyashou && mode == DocumentMode::Block {
+                    render_block_projection(
+                        BlockProjectionView {
+                            root,
+                            relative,
+                            document: document.as_ref().unwrap(),
+                            editors: &self.block_text_editors,
+                            collapsed_scenes: &self.collapsed_scenes,
+                            selected_blocks: &self.selected_blocks,
+                            draft_text: self.draft_text.as_ref(),
+                            drop_target: self.block_drop_target,
+                            scroll_handle: &self.view_scroll,
+                            scroll_anchor: &self.block_scroll_anchor,
+                            scroll_pending: self.block_scroll_pending,
+                        },
+                        window,
                         cx,
                     )
                 } else {
-                    Editor::new(editor)
-                        .appearance(false)
-                        .bordered(false)
-                        .readonly(document.is_none())
-                        .size_full()
-                        .relative()
+                    let editor_for_fade = editor.clone();
+                    div()
+                        .absolute()
+                        .top_0()
+                        .right_0()
+                        .bottom_0()
                         .left(px(-EDITOR_GUTTER_TRIM_PX))
-                        .p_1()
-                        .font_family(mono)
-                        .text_sm()
-                        .text_color(rgb(0xc4ced8))
+                        .child(
+                            Editor::new(editor)
+                                .appearance(false)
+                                .bordered(false)
+                                .readonly(document.is_none())
+                                .h(gpui_kit::relative(1.))
+                                .w_full()
+                                .p_1()
+                                .font_family(mono)
+                                .text_size(px(13.))
+                                .text_color(rgb(0xc8cbd0)),
+                        )
+                        .child(bottom_overflow_fade(move |cx| {
+                            let editor = editor_for_fade.read(cx);
+                            let row_count = editor.value().lines().count();
+                            editor
+                                .visible_row_range()
+                                .is_some_and(|visible| visible.end < row_count)
+                        }))
                         .into_any_element()
                 };
+                let picker = (eiyashou && mode == DocumentMode::Block && self.block_picker_open)
+                    .then(|| {
+                        let query = self
+                            .block_picker_input
+                            .read(cx)
+                            .value()
+                            .to_string()
+                            .to_lowercase();
+                        let preferences = cx
+                            .global::<EditorDocuments>()
+                            .block_picker_preferences()
+                            .clone();
+                        let kinds = picker_kinds(
+                            &preferences,
+                            &query,
+                            self.block_picker_category,
+                            self.block_picker_customize,
+                        );
+                        render_block_picker(
+                            &kinds,
+                            &self.block_picker_input,
+                            self.block_picker_index,
+                            self.block_picker_category,
+                            self.block_picker_customize,
+                            &preferences,
+                            cx,
+                        )
+                    });
+                if eiyashou && mode == DocumentMode::Block {
+                    self.block_scroll_pending = false;
+                }
                 div()
                     .id("document-content")
                     .size_full()
                     .flex()
                     .flex_col()
                     .rounded_b(px(VIEW_RADIUS_PX))
-                    .bg(rgb(0x10151b))
+                    .bg(rgb(CANVAS))
                     .overflow_hidden()
                     .when_some(header, |this, header| this.child(header))
-                    .child(div().flex_1().min_h_0().child(body))
+                    .child(
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_h_0()
+                            .child(body)
+                            .when_some(picker, |this, picker| this.child(picker)),
+                    )
                     .into_any_element()
             }
             PanelContent::Preview { root, controller } => {
@@ -1666,7 +3364,7 @@ impl Render for WorkbenchPanel {
                     .size_full()
                     .flex()
                     .flex_col()
-                    .bg(rgb(0x10151b))
+                    .bg(rgb(CANVAS))
                     .child(
                         div()
                             .h(px(38.))
@@ -1726,7 +3424,7 @@ impl Render for WorkbenchPanel {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .bg(rgb(0x090c10))
+                            .bg(rgb(0x050607))
                             .cursor_pointer()
                             .on_mouse_down(MouseButton::Left, move |event, window, cx| {
                                 preview_focus.focus(window, cx);
@@ -1793,28 +3491,40 @@ impl Render for WorkbenchPanel {
             PanelContent::Inspector { root, file_count } => {
                 let document_count = cx.global::<EditorDocuments>().open_document_count(root);
                 let index = cx.global::<EditorDocuments>().authoring(root);
-                div()
-                    .size_full()
+                let has_selection = cx.global::<EditorDocuments>().selection(root).is_some();
+                let inputs = self.inspector_inputs.clone();
+                let content = div()
                     .flex()
                     .flex_col()
                     .p_3()
                     .gap_3()
-                    .child(section_label("WORKSPACE"))
-                    .child(property_row("Path", root.display().to_string()))
-                    .child(property_row("Text files", file_count.to_string()))
-                    .child(property_row("Open documents", document_count.to_string()))
-                    .child(section_label("SELECTION"))
-                    .child(selection_summary(root, &index, cx))
-                    .into_any_element()
+                    .when(has_selection, |this| {
+                        this.child(section_label("SELECTION"))
+                            .child(selection_summary(root, &index, cx))
+                            .when(inputs.len() == 3, |this| {
+                                this.child(section_label("TEXT"))
+                                    .child(property_input("Speaker", &inputs[0]))
+                                    .child(property_input("Voice", &inputs[1]))
+                                    .child(property_input("Stable ID", &inputs[2]))
+                            })
+                    })
+                    .when(!has_selection, |this| {
+                        this.child(section_label("WORKSPACE"))
+                            .child(property_row("Path", root.display().to_string()))
+                            .child(property_row("Text files", file_count.to_string()))
+                            .child(property_row("Open documents", document_count.to_string()))
+                    });
+                vertical_overflow_view("inspector-scroll", &self.view_scroll, content)
             }
-            PanelContent::Assets { root } => {
-                render_assets(root, &cx.global::<EditorDocuments>().authoring(root))
-            }
+            PanelContent::Assets { root } => render_assets(
+                root,
+                &cx.global::<EditorDocuments>().authoring(root),
+                &self.view_scroll,
+            ),
             PanelContent::Characters { root } => {
                 let index = cx.global::<EditorDocuments>().authoring(root);
                 let inputs = self.tool_inputs.clone();
-                div()
-                    .size_full()
+                let content = div()
                     .flex()
                     .flex_col()
                     .p_2()
@@ -1830,14 +3540,12 @@ impl Render for WorkbenchPanel {
                     })
                     .child(div().h(px(1.)).bg(rgb(SURFACE)))
                     .child(
-                        div()
-                            .flex_1()
-                            .min_h_0()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .children(index.characters.into_iter().enumerate().map(
-                                |(row, character)| {
+                        div().flex().flex_col().gap_1().children(
+                            index
+                                .characters
+                                .into_iter()
+                                .enumerate()
+                                .map(|(row, character)| {
                                     div()
                                         .id(("character-row", row))
                                         .p_2()
@@ -1859,19 +3567,16 @@ impl Render for WorkbenchPanel {
                                                         .unwrap_or_default()
                                                 ),
                                         ))
-                                },
-                            ))
-                            .overflow_scrollbar()
-                            .id("character-list"),
-                    )
-                    .into_any_element()
+                                }),
+                        ),
+                    );
+                vertical_overflow_view("character-scroll", &self.view_scroll, content)
             }
             PanelContent::Scenes { root } => {
                 let index = cx.global::<EditorDocuments>().authoring(root);
                 let input = self.tool_inputs.first().cloned();
                 let root_for_rows = root.clone();
-                div()
-                    .size_full()
+                let content = div()
                     .flex()
                     .flex_col()
                     .p_2()
@@ -1884,68 +3589,72 @@ impl Render for WorkbenchPanel {
                             ))
                     })
                     .child(div().h(px(1.)).bg(rgb(SURFACE)))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_h_0()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .children(index.scenes.into_iter().enumerate().map(|(row, scene)| {
-                                let root = root_for_rows.clone();
-                                let path = scene.path.clone();
-                                let line = scene.line;
-                                div()
-                                    .id(("scene-row", row))
-                                    .p_2()
-                                    .rounded(px(7.))
-                                    .bg(rgb(PANEL))
-                                    .cursor_pointer()
-                                    .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-                                    .on_click(move |_, window, cx| {
-                                        navigate_source(&root, &path, line, 1, window, cx)
-                                    })
-                                    .child(div().text_sm().text_color(rgb(INK)).child(scene.name))
-                                    .child(div().text_xs().text_color(rgb(MUTED)).child(format!(
-                                        "{}:{}",
-                                        scene.path.display(),
-                                        scene.line
-                                    )))
-                            }))
-                            .overflow_scrollbar()
-                            .id("scene-list"),
-                    )
-                    .into_any_element()
+                    .child(div().flex().flex_col().gap_1().children(
+                        index.scenes.into_iter().enumerate().map(|(row, scene)| {
+                            let root = root_for_rows.clone();
+                            let path = scene.path.clone();
+                            let line = scene.line;
+                            div()
+                                .id(("scene-row", row))
+                                .p_2()
+                                .rounded(px(7.))
+                                .bg(rgb(PANEL))
+                                .cursor_pointer()
+                                .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                                .on_click(move |_, window, cx| {
+                                    navigate_source(&root, &path, line, 1, window, cx)
+                                })
+                                .child(div().text_sm().text_color(rgb(INK)).child(scene.name))
+                                .child(div().text_xs().text_color(rgb(MUTED)).child(format!(
+                                    "{}:{}",
+                                    scene.path.display(),
+                                    scene.line
+                                )))
+                        }),
+                    ));
+                vertical_overflow_view("scene-scroll", &self.view_scroll, content)
             }
-            PanelContent::Problems { root } => render_problems(root, cx),
+            PanelContent::Problems { root } => render_problems(root, &self.view_scroll, cx),
             PanelContent::Performance { controller, .. } => {
-                render_performance(controller, &self.timeline)
+                render_performance(controller, &self.timeline, &self.view_scroll)
             }
-            PanelContent::Output { root, file_count } => div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .p_3()
-                .gap_2()
-                .font_family(mono)
-                .text_xs()
-                .text_color(rgb(0xaebbc7))
-                .child(output_line("READY", SUCCESS, root.display().to_string()))
-                .child(output_line(
-                    "INDEX",
-                    PRIMARY,
-                    format!("{file_count} text files discovered"),
-                ))
-                .when_some(
-                    cx.global::<EditorDocuments>()
-                        .notice(root)
-                        .map(str::to_owned),
-                    |this, notice| this.child(output_line("EDIT", PRIMARY, notice)),
-                )
-                .into_any_element(),
+            PanelContent::Output { root, file_count } => {
+                let content = div()
+                    .flex()
+                    .flex_col()
+                    .p_3()
+                    .gap_2()
+                    .font_family(mono)
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child(output_line("READY", SUCCESS, root.display().to_string()))
+                    .child(output_line(
+                        "INDEX",
+                        PRIMARY,
+                        format!("{file_count} text files discovered"),
+                    ))
+                    .when_some(
+                        cx.global::<EditorDocuments>()
+                            .notice(root)
+                            .map(str::to_owned),
+                        |this, notice| this.child(output_line("EDIT", PRIMARY, notice)),
+                    );
+                vertical_overflow_view("output-scroll", &self.view_scroll, content)
+            }
         };
         div()
             .track_focus(&self.focus)
+            .on_action(cx.listener(Self::toggle_block_picker))
+            .on_action(cx.listener(Self::block_picker_next))
+            .on_action(cx.listener(Self::block_picker_previous))
+            .on_action(cx.listener(Self::accept_block_picker))
+            .on_action(cx.listener(Self::close_block_picker))
+            .on_action(cx.listener(Self::begin_text_block))
+            .on_action(cx.listener(Self::copy_selected_blocks))
+            .on_action(cx.listener(Self::paste_blocks))
+            .on_action(cx.listener(Self::delete_selected_blocks))
+            .on_action(cx.listener(Self::move_selected_blocks_up))
+            .on_action(cx.listener(Self::move_selected_blocks_down))
             .size_full()
             .text_color(rgb(INK))
             .child(body)
@@ -2008,7 +3717,28 @@ fn property_row(label: &'static str, value: String) -> impl IntoElement {
         .border_b_1()
         .border_color(rgb(BORDER))
         .child(div().text_xs().text_color(rgb(MUTED)).child(label))
-        .child(div().text_xs().text_color(rgb(0xb8c4cf)).child(value))
+        .child(div().text_xs().text_color(rgb(INK)).child(value))
+}
+
+fn property_input(label: &'static str, state: &Entity<InputState>) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .pb_2()
+        .border_b_1()
+        .border_color(rgb(BORDER))
+        .child(div().text_xs().text_color(rgb(MUTED)).child(label))
+        .child(
+            div().h(px(28.)).child(
+                Input::new(state)
+                    .appearance(false)
+                    .bordered(false)
+                    .size_full()
+                    .text_xs()
+                    .text_color(rgb(INK)),
+            ),
+        )
 }
 
 fn output_line(label: &'static str, color: u32, value: String) -> impl IntoElement {
@@ -2021,10 +3751,10 @@ fn output_line(label: &'static str, color: u32, value: String) -> impl IntoEleme
 
 fn document_mode_button(label: &'static str, selected: bool) -> Stateful<Div> {
     div()
-        .id(match label {
-            "Text" => "document-mode-text",
-            "Cards" => "document-mode-card",
-            _ => "document-mode-dialogue",
+        .id(if label == "Text" {
+            "document-mode-text"
+        } else {
+            "document-mode-block"
         })
         .h(px(25.))
         .px_2()
@@ -2036,28 +3766,6 @@ fn document_mode_button(label: &'static str, selected: bool) -> Stateful<Div> {
         .text_color(rgb(if selected { INK } else { MUTED }))
         .cursor_pointer()
         .hover(|style| style.bg(rgb(SURFACE_HOVER)).text_color(rgb(INK)))
-        .child(label)
-}
-
-fn palette_button(label: &'static str) -> Stateful<Div> {
-    div()
-        .id(match label {
-            "Narration" => "insert-narration",
-            "Dialogue" => "insert-dialogue",
-            "Background" => "insert-background",
-            "Figure" => "insert-figure",
-            _ => "insert-choice",
-        })
-        .h(px(25.))
-        .px_2()
-        .flex()
-        .items_center()
-        .rounded(px(6.))
-        .bg(rgb(PANEL))
-        .text_xs()
-        .text_color(rgb(0xafbac5))
-        .cursor_pointer()
-        .hover(|style| style.bg(rgb(SURFACE_HOVER)).text_color(rgb(PRIMARY)))
         .child(label)
 }
 
@@ -2098,206 +3806,1160 @@ fn tool_action(label: &'static str) -> Stateful<Div> {
         .child(label)
 }
 
-fn render_card_projection(
-    root: &Path,
-    relative: &Path,
-    document: &DocumentHandle,
-    editors: &[CardNameEditor],
-    cx: &mut Context<WorkbenchPanel>,
-) -> AnyElement {
-    let projection = EiyashouProjection::parse(document.borrow().contents());
-    let selected_line = cx
-        .global::<EditorDocuments>()
-        .selection(root)
-        .filter(|(path, _, _)| path == relative)
-        .map(|(_, line, _)| *line);
-    let root = root.to_owned();
-    let relative = relative.to_owned();
-    let scene_cards = editors.iter().filter_map(|editor| {
-        let scene = projection.scenes.get(editor.scene_index)?;
-        let line = document
-            .borrow()
-            .contents()
-            .get(..scene.name_range.start)
-            .map(|prefix| prefix.bytes().filter(|byte| *byte == b'\n').count())
-            .unwrap_or_default();
-        let root = root.clone();
-        let relative = relative.clone();
-        Some(
-            div()
-                .id(("scene-card", editor.scene_index))
-                .w_full()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .p_3()
-                .rounded(px(9.))
-                .bg(rgb(if selected_line == Some(line) {
-                    SURFACE
-                } else {
-                    PANEL
-                }))
-                .cursor_pointer()
-                .on_click(cx.listener(move |_, _, _, cx| {
-                    set_authoring_selection(&root, relative.clone(), line, 0, cx);
-                }))
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                        .text_color(rgb(PRIMARY))
-                        .child(format!("SCENE {}", editor.scene_index + 1)),
-                )
-                .child(
-                    div()
-                        .h(px(30.))
-                        .rounded(px(7.))
-                        .bg(rgb(SURFACE))
-                        .px_2()
-                        .child(
-                            Input::new(&editor.state)
-                                .appearance(false)
-                                .bordered(false)
-                                .size_full()
-                                .text_sm()
-                                .text_color(rgb(INK)),
-                        ),
-                )
-                .child(div().text_xs().text_color(rgb(MUTED)).child(format!(
-                    "Source bytes {}..{}",
-                    scene.source_range.start, scene.source_range.end
-                ))),
-        )
-    });
-    let read_only_cards = projection
-        .read_only
-        .into_iter()
-        .enumerate()
-        .map(|(index, card)| {
-            div()
-                .id(("read-only-card", index))
-                .w_full()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .p_3()
-                .rounded(px(9.))
-                .bg(rgb(0x1f242a))
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                        .text_color(rgb(0xd2aa62))
-                        .child("READ-ONLY SOURCE"),
-                )
-                .child(div().text_xs().text_color(rgb(MUTED)).child(card.message))
-        });
-    div()
-        .size_full()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .p_2()
-        .children(scene_cards)
-        .children(read_only_cards)
-        .overflow_scrollbar()
-        .id("eiyashou-card-view")
-        .into_any_element()
+const PICKER_CATEGORIES: [&str; 5] = ["Text", "Scene", "Media", "Flow", "Data"];
+
+fn toggle_preference(values: &mut Vec<String>, value: &str) {
+    if let Some(index) = values.iter().position(|candidate| candidate == value) {
+        values.remove(index);
+    } else {
+        values.push(value.to_owned());
+    }
 }
 
-fn render_dialogue_projection(
-    root: &Path,
-    relative: &Path,
-    document: &DocumentHandle,
-    editors: &[DialogueTextEditor],
+fn move_preference(values: &mut Vec<String>, value: &str, universe: &[&str], delta: isize) {
+    let mut ordered = values
+        .iter()
+        .map(String::as_str)
+        .filter(|candidate| universe.contains(candidate))
+        .collect::<Vec<_>>();
+    for candidate in universe {
+        if !ordered.contains(candidate) {
+            ordered.push(candidate);
+        }
+    }
+    let Some(index) = ordered.iter().position(|candidate| *candidate == value) else {
+        return;
+    };
+    let target = index.saturating_add_signed(delta).min(ordered.len() - 1);
+    ordered.swap(index, target);
+    *values = ordered.into_iter().map(str::to_owned).collect();
+}
+
+fn move_group_preference(
+    values: &mut Vec<String>,
+    value: &str,
+    group: &[&str],
+    universe: &[&str],
+    delta: isize,
+) {
+    let mut ordered = values
+        .iter()
+        .map(String::as_str)
+        .filter(|candidate| universe.contains(candidate))
+        .collect::<Vec<_>>();
+    for candidate in universe {
+        if !ordered.contains(candidate) {
+            ordered.push(candidate);
+        }
+    }
+    let group_positions = ordered
+        .iter()
+        .enumerate()
+        .filter(|(_, candidate)| group.contains(candidate))
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let Some(group_index) = group_positions
+        .iter()
+        .position(|index| ordered[*index] == value)
+    else {
+        return;
+    };
+    let target = group_index
+        .saturating_add_signed(delta)
+        .min(group_positions.len() - 1);
+    ordered.swap(group_positions[group_index], group_positions[target]);
+    *values = ordered.into_iter().map(str::to_owned).collect();
+}
+
+fn preference_rank(values: &[String], value: &str, fallback: usize) -> usize {
+    values
+        .iter()
+        .position(|candidate| candidate == value)
+        .unwrap_or(values.len() + fallback)
+}
+
+fn ordered_picker_categories(preferences: &BlockPickerPreferences) -> Vec<&'static str> {
+    let mut categories = PICKER_CATEGORIES.to_vec();
+    categories.sort_by_key(|category| {
+        preference_rank(
+            &preferences.category_order,
+            category,
+            PICKER_CATEGORIES
+                .iter()
+                .position(|candidate| candidate == category)
+                .unwrap_or(usize::MAX / 2),
+        )
+    });
+    categories
+}
+
+fn picker_kinds(
+    preferences: &BlockPickerPreferences,
+    query: &str,
+    selected_category: Option<&str>,
+    customize: bool,
+) -> Vec<InsertKind> {
+    let categories = ordered_picker_categories(preferences);
+    let mut kinds = InsertKind::ALL
+        .into_iter()
+        .filter(|kind| {
+            let matches_query = query.is_empty()
+                || kind.search_terms().contains(query)
+                || kind.label().to_lowercase().contains(query);
+            if !matches_query {
+                return false;
+            }
+            if !query.is_empty() {
+                return true;
+            }
+            let visible = customize
+                || !preferences
+                    .hidden
+                    .iter()
+                    .any(|candidate| candidate == kind.label());
+            visible
+                && match selected_category {
+                    Some("Favorites") => preferences
+                        .favorites
+                        .iter()
+                        .any(|candidate| candidate == kind.label()),
+                    Some(category) => kind.category() == category,
+                    None => true,
+                }
+        })
+        .collect::<Vec<_>>();
+    kinds.sort_by_key(|kind| {
+        let category_rank = categories
+            .iter()
+            .position(|category| *category == kind.category())
+            .unwrap_or(categories.len());
+        let item_fallback = InsertKind::ALL
+            .iter()
+            .position(|candidate| candidate == kind)
+            .unwrap_or(usize::MAX / 2);
+        (
+            category_rank,
+            preference_rank(&preferences.item_order, kind.label(), item_fallback),
+        )
+    });
+    kinds
+}
+
+fn insert_kind_icon(kind: InsertKind) -> AssetIconName {
+    match kind {
+        InsertKind::Narration => AssetIconName::MessageSquareText,
+        InsertKind::Dialogue => AssetIconName::User,
+        InsertKind::Background => AssetIconName::Image,
+        InsertKind::Figure => AssetIconName::PersonStanding,
+        InsertKind::Choice | InsertKind::Conditional => AssetIconName::GitBranch,
+        InsertKind::Loop => AssetIconName::Repeat2,
+        InsertKind::Variable => AssetIconName::Braces,
+        InsertKind::Goto | InsertKind::Call | InsertKind::Return => AssetIconName::Workflow,
+        InsertKind::Wait => AssetIconName::Clock,
+        InsertKind::Hide => AssetIconName::EyeOff,
+        InsertKind::Move => AssetIconName::Move,
+        InsertKind::Bgm => AssetIconName::Music,
+        InsertKind::Effect => AssetIconName::Volume2,
+        InsertKind::Video => AssetIconName::Film,
+    }
+}
+
+fn render_block_picker(
+    kinds: &[InsertKind],
+    input: &Entity<InputState>,
+    selected_index: usize,
+    selected_category: Option<&'static str>,
+    customize: bool,
+    preferences: &BlockPickerPreferences,
     cx: &mut Context<WorkbenchPanel>,
 ) -> AnyElement {
-    let dialogues = dialogues_for_source(relative, document.borrow().contents());
-    let selected_line = cx
-        .global::<EditorDocuments>()
-        .selection(root)
-        .filter(|(path, _, _)| path == relative)
-        .map(|(_, line, _)| *line);
-    let root = root.to_owned();
-    let relative = relative.to_owned();
-    div()
-        .size_full()
-        .flex()
-        .flex_col()
-        .gap_1()
-        .p_2()
-        .children(editors.iter().enumerate().filter_map(|(row, editor)| {
-            let dialogue = dialogues
-                .iter()
-                .find(|dialogue| dialogue.line == editor.line)?;
-            let root = root.clone();
-            let relative = relative.clone();
-            let line = dialogue.line.saturating_sub(1);
-            Some(
+    let mut rows = Vec::new();
+    let mut previous_category = None;
+    for (index, kind) in kinds.iter().copied().enumerate() {
+        let category = kind.category();
+        if previous_category != Some(category) {
+            rows.push(
                 div()
-                    .id(("dialogue-row", row))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .p_2()
-                    .rounded(px(8.))
-                    .bg(rgb(if selected_line == Some(line) {
-                        SURFACE
+                    .pt_2()
+                    .px_2()
+                    .text_xs()
+                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                    .text_color(rgb(MUTED))
+                    .child(category.to_uppercase())
+                    .into_any_element(),
+            );
+            previous_category = Some(category);
+        }
+        let icon = insert_kind_icon(kind);
+        let favorite = preferences
+            .favorites
+            .iter()
+            .any(|candidate| candidate == kind.label());
+        let hidden = preferences
+            .hidden
+            .iter()
+            .any(|candidate| candidate == kind.label());
+        let mut row = div()
+            .id(("block-picker-item", index))
+            .h(px(34.))
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_2()
+            .rounded(px(6.))
+            .bg(rgb(if index == selected_index {
+                SURFACE
+            } else {
+                PANEL
+            }))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.block_picker_open = false;
+                this.insert_from_palette(kind, window, cx);
+                this.rebuild_visual_editors(window, cx);
+                this.focus.focus(window, cx);
+                cx.notify();
+            }))
+            .child(
+                Icon::new(icon)
+                    .xsmall()
+                    .text_color(rgb(if index == selected_index {
+                        PRIMARY
                     } else {
-                        PANEL
-                    }))
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        set_authoring_selection(&root, relative.clone(), line, 0, cx);
-                    }))
-                    .child(
-                        div()
-                            .w(px(92.))
-                            .flex_none()
-                            .text_xs()
-                            .text_color(rgb(PRIMARY))
-                            .child(if dialogue.speaker.is_empty() {
-                                "Narration".to_owned()
+                        MUTED
+                    })),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .text_sm()
+                    .text_color(rgb(if hidden { MUTED } else { INK }))
+                    .child(kind.label()),
+            );
+        if customize {
+            row = row
+                .child(
+                    div()
+                        .id(("picker-favorite", index))
+                        .size(px(24.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(5.))
+                        .hover(|style| style.bg(rgb(SURFACE)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.toggle_picker_favorite(kind, cx);
+                            cx.notify();
+                        }))
+                        .child(
+                            Icon::new(if favorite {
+                                AssetIconName::StarFill
                             } else {
-                                dialogue.speaker.clone()
-                            }),
-                    )
-                    .child(
-                        div()
-                            .h(px(30.))
-                            .flex_1()
-                            .rounded(px(7.))
-                            .bg(rgb(SURFACE))
-                            .px_2()
-                            .child(
-                                Input::new(&editor.state)
+                                AssetIconName::Star
+                            })
+                            .xsmall()
+                            .text_color(rgb(if favorite {
+                                PRIMARY
+                            } else {
+                                MUTED
+                            })),
+                        ),
+                )
+                .child(
+                    div()
+                        .id(("picker-up", index))
+                        .size(px(24.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(5.))
+                        .hover(|style| style.bg(rgb(SURFACE)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.move_picker_item(kind, -1, cx);
+                            cx.notify();
+                        }))
+                        .child(
+                            Icon::new(AssetIconName::ArrowUp)
+                                .xsmall()
+                                .text_color(rgb(MUTED)),
+                        ),
+                )
+                .child(
+                    div()
+                        .id(("picker-down", index))
+                        .size(px(24.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(5.))
+                        .hover(|style| style.bg(rgb(SURFACE)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.move_picker_item(kind, 1, cx);
+                            cx.notify();
+                        }))
+                        .child(
+                            Icon::new(AssetIconName::ArrowDown)
+                                .xsmall()
+                                .text_color(rgb(MUTED)),
+                        ),
+                )
+                .child(
+                    div()
+                        .id(("picker-visible", index))
+                        .size(px(24.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(5.))
+                        .hover(|style| style.bg(rgb(SURFACE)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.toggle_picker_hidden(kind, cx);
+                            cx.notify();
+                        }))
+                        .child(
+                            Icon::new(if hidden {
+                                AssetIconName::EyeOff
+                            } else {
+                                AssetIconName::Eye
+                            })
+                            .xsmall()
+                            .text_color(rgb(if hidden {
+                                MUTED
+                            } else {
+                                PRIMARY
+                            })),
+                        ),
+                );
+        } else if favorite {
+            row = row.child(
+                Icon::new(AssetIconName::StarFill)
+                    .xsmall()
+                    .text_color(rgb(PRIMARY)),
+            );
+        }
+        rows.push(row.into_any_element());
+    }
+    let categories = std::iter::once(None)
+        .chain(std::iter::once(Some("Favorites")))
+        .chain(ordered_picker_categories(preferences).into_iter().map(Some))
+        .collect::<Vec<_>>();
+    div()
+        .id("block-picker-overlay")
+        .absolute()
+        .top_0()
+        .right_0()
+        .bottom_0()
+        .left_0()
+        .p_3()
+        .flex()
+        .bg(hsla(0., 0., 0.01, 0.84))
+        .child(
+            div()
+                .id("block-picker")
+                .key_context("KeineBlockPicker")
+                .size_full()
+                .min_w_0()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .rounded(px(10.))
+                .border_1()
+                .border_color(rgb(BORDER))
+                .bg(rgb(PANEL))
+                .overflow_hidden()
+                .child(
+                    div()
+                        .h(px(44.))
+                        .flex_none()
+                        .px_3()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .bg(rgb(CHROME))
+                        .child(
+                            div().flex_1().min_w_0().child(
+                                Input::new(input)
+                                    .prefix(
+                                        Icon::new(AssetIconName::Search)
+                                            .xsmall()
+                                            .text_color(rgb(MUTED)),
+                                    )
                                     .appearance(false)
                                     .bordered(false)
                                     .size_full()
                                     .text_sm()
                                     .text_color(rgb(INK)),
                             ),
-                    ),
-            )
-        }))
-        .when(editors.is_empty(), |this| {
-            this.child(
-                div()
-                    .p_3()
-                    .text_sm()
-                    .text_color(rgb(MUTED))
-                    .child("No editable dialogue in this source"),
-            )
-        })
-        .overflow_scrollbar()
-        .id("eiyashou-dialogue-view")
+                        )
+                        .child(
+                            div()
+                                .id("block-picker-customize")
+                                .size(px(28.))
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(6.))
+                                .bg(rgb(if customize { SURFACE } else { CHROME }))
+                                .cursor_pointer()
+                                .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.block_picker_customize = !this.block_picker_customize;
+                                    this.block_picker_index = 0;
+                                    cx.notify();
+                                }))
+                                .child(
+                                    Icon::new(AssetIconName::SlidersHorizontal)
+                                        .xsmall()
+                                        .text_color(rgb(if customize { PRIMARY } else { MUTED })),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .flex()
+                        .child(
+                            div()
+                                .w(px(112.))
+                                .flex_none()
+                                .p_2()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .bg(rgb(CHROME))
+                                .children(categories.into_iter().enumerate().map(
+                                    |(index, category)| {
+                                        let selected = selected_category == category;
+                                        let label = category.unwrap_or("All");
+                                        let mut row = div()
+                                            .id(("block-picker-category", index))
+                                            .h(px(30.))
+                                            .px_2()
+                                            .flex()
+                                            .items_center()
+                                            .rounded(px(6.))
+                                            .bg(rgb(if selected { SURFACE } else { CHROME }))
+                                            .text_xs()
+                                            .text_color(rgb(if selected { PRIMARY } else { MUTED }))
+                                            .cursor_pointer()
+                                            .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.block_picker_category = category;
+                                                this.block_picker_index = 0;
+                                                cx.notify();
+                                            }))
+                                            .child(div().flex_1().child(label));
+                                        if let Some(category) = category.filter(|category| {
+                                            customize && *category != "Favorites"
+                                        }) {
+                                            row = row
+                                                .child(
+                                                    div()
+                                                        .id(("picker-category-up", index))
+                                                        .size(px(20.))
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_center()
+                                                        .on_click(cx.listener(
+                                                            move |this, _, _, cx| {
+                                                                cx.stop_propagation();
+                                                                this.move_picker_category(
+                                                                    category, -1, cx,
+                                                                );
+                                                                cx.notify();
+                                                            },
+                                                        ))
+                                                        .child(
+                                                            Icon::new(AssetIconName::ChevronUp)
+                                                                .xsmall(),
+                                                        ),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .id(("picker-category-down", index))
+                                                        .size(px(20.))
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_center()
+                                                        .on_click(cx.listener(
+                                                            move |this, _, _, cx| {
+                                                                cx.stop_propagation();
+                                                                this.move_picker_category(
+                                                                    category, 1, cx,
+                                                                );
+                                                                cx.notify();
+                                                            },
+                                                        ))
+                                                        .child(
+                                                            Icon::new(AssetIconName::ChevronDown)
+                                                                .xsmall(),
+                                                        ),
+                                                );
+                                        }
+                                        row
+                                    },
+                                )),
+                        )
+                        .child(
+                            div()
+                                .relative()
+                                .flex_1()
+                                .min_w_0()
+                                .min_h_0()
+                                .p_2()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .children(rows)
+                                .overflow_y_scrollbar()
+                                .id("block-picker-results"),
+                        ),
+                ),
+        )
         .into_any_element()
 }
 
-fn render_assets(root: &Path, index: &AuthoringIndex) -> AnyElement {
-    let root = root.to_owned();
-    div()
+fn block_card_label(kind: &BlockKind, source: &str) -> String {
+    match kind {
+        BlockKind::Dialogue { speaker } => speaker.clone(),
+        BlockKind::Command | BlockKind::Control => source
+            .split(|character: char| character == '(' || character.is_whitespace())
+            .next()
+            .filter(|value| !value.is_empty())
+            .map(title_case)
+            .unwrap_or_else(|| kind.label().to_owned()),
+        _ => kind.label().to_owned(),
+    }
+}
+
+fn block_card_summary(kind: &BlockKind, source: &str, line: usize) -> String {
+    match kind {
+        BlockKind::Narration | BlockKind::Dialogue { .. } => {
+            format!("Dynamic text · L{}", line + 1)
+        }
+        BlockKind::Choice
+        | BlockKind::Conditional
+        | BlockKind::ElseIf
+        | BlockKind::Else
+        | BlockKind::Loop
+        | BlockKind::Control => String::new(),
+        BlockKind::ChoiceOption => first_quoted_text(source).unwrap_or_default(),
+        BlockKind::Declaration => source
+            .strip_prefix("let ")
+            .and_then(|tail| tail.split_whitespace().next())
+            .unwrap_or_default()
+            .to_owned(),
+        BlockKind::Assignment => source
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .to_owned(),
+        BlockKind::Command => source
+            .split_once('(')
+            .and_then(|(_, tail)| tail.split([',', ')']).next())
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_owned(),
+        BlockKind::Unsupported => format!("Unsupported syntax · L{}", line + 1),
+    }
+}
+
+fn first_quoted_text(source: &str) -> Option<String> {
+    let start = source.find('"')? + 1;
+    let mut escaped = false;
+    for (offset, character) in source[start..].char_indices() {
+        if character == '"' && !escaped {
+            return Some(source[start..start + offset].to_owned());
+        }
+        escaped = character == '\\' && !escaped;
+        if character != '\\' {
+            escaped = false;
+        }
+    }
+    None
+}
+
+fn title_case(value: &str) -> String {
+    let mut characters = value.chars();
+    let Some(first) = characters.next() else {
+        return String::new();
+    };
+    first.to_uppercase().chain(characters).collect()
+}
+
+fn bottom_overflow_fade(visible: impl Fn(&App) -> bool + 'static) -> impl IntoElement {
+    canvas(
+        move |_, _, cx| visible(cx),
+        |bounds, visible, window, _| {
+            if visible {
+                window.paint_quad(fill(
+                    bounds,
+                    linear_gradient(
+                        180.,
+                        linear_color_stop(hsla(0., 0., 0.01, 0.), 0.),
+                        linear_color_stop(hsla(0., 0., 0.01, 0.22), 1.),
+                    ),
+                ));
+            }
+        },
+    )
+    .absolute()
+    .left_0()
+    .right_0()
+    .bottom_0()
+    .h(px(28.))
+}
+
+fn vertical_overflow_view<E>(id: &'static str, handle: &ScrollHandle, content: E) -> AnyElement
+where
+    E: InteractiveElement + Styled + ParentElement + Element + 'static,
+{
+    let fade_handle = handle.clone();
+    let area = div()
+        .id(format!("{id}-area"))
         .size_full()
+        .min_h_0()
+        .track_scroll(handle)
+        .overflow_y_scroll()
+        .lock_scroll_axis()
+        .child(content.w_full().h_auto().min_h_full().flex_none());
+    div()
+        .id(id)
+        .relative()
+        .size_full()
+        .min_h_0()
+        .overflow_hidden()
+        .child(area)
+        .child(bottom_overflow_fade(move |_| {
+            let max = fade_handle.max_offset().y;
+            max > px(1.) && max + fade_handle.offset().y > px(1.)
+        }))
+        .vertical_scrollbar(handle)
+        .into_any_element()
+}
+
+struct BlockProjectionView<'a> {
+    root: &'a Path,
+    relative: &'a Path,
+    document: &'a DocumentHandle,
+    editors: &'a [BlockTextEditor],
+    collapsed_scenes: &'a HashSet<String>,
+    selected_blocks: &'a HashSet<usize>,
+    draft_text: Option<&'a DraftTextBlock>,
+    drop_target: Option<usize>,
+    scroll_handle: &'a ScrollHandle,
+    scroll_anchor: &'a ScrollAnchor,
+    scroll_pending: bool,
+}
+
+fn draft_text_row(draft: &DraftTextBlock, indent: f32, id: usize) -> AnyElement {
+    div()
+        .w_full()
+        .min_w_0()
+        .pl(px(indent))
+        .child(
+            div()
+                .id(("draft-text-block", id))
+                .w_full()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .gap_2()
+                .min_h(px(38.))
+                .px_2()
+                .rounded(px(7.))
+                .bg(rgb(SURFACE))
+                .child(
+                    Icon::new(AssetIconName::MessageSquarePlus)
+                        .xsmall()
+                        .text_color(rgb(PRIMARY)),
+                )
+                .child(
+                    div()
+                        .w(px(64.))
+                        .flex_none()
+                        .text_xs()
+                        .text_color(rgb(PRIMARY))
+                        .child("Text"),
+                )
+                .child(
+                    div().h(px(30.)).flex_1().min_w_0().child(
+                        Input::new(&draft.state)
+                            .appearance(false)
+                            .bordered(false)
+                            .size_full()
+                            .text_sm()
+                            .text_color(rgb(INK)),
+                    ),
+                ),
+        )
+        .into_any_element()
+}
+
+fn render_block_projection(
+    view: BlockProjectionView<'_>,
+    window: &mut Window,
+    cx: &mut Context<WorkbenchPanel>,
+) -> AnyElement {
+    let BlockProjectionView {
+        root,
+        relative,
+        document,
+        editors,
+        collapsed_scenes,
+        selected_blocks,
+        draft_text,
+        drop_target,
+        scroll_handle,
+        scroll_anchor,
+        scroll_pending,
+    } = view;
+    let source = document.borrow().contents().to_owned();
+    let projection = EiyashouProjection::parse(&source);
+    let block_order = Arc::new(
+        projection
+            .scenes
+            .iter()
+            .flat_map(|scene| scene.blocks.iter().map(|block| block.source_range.start))
+            .collect::<Vec<_>>(),
+    );
+    let selected_position = cx
+        .global::<EditorDocuments>()
+        .selection(root)
+        .filter(|(path, _, _)| path == relative)
+        .map(|(_, line, column)| (*line, *column));
+    let selected_line = selected_position.map(|(line, _)| line);
+    let selected_start = selected_position.and_then(|(line, column)| {
+        projected_block_at(&source, line, column).map(|(_, block)| block.source_range.start)
+    });
+    let root = root.to_owned();
+    let relative = relative.to_owned();
+    let mut rows = Vec::new();
+    for (scene_index, scene) in projection.scenes.into_iter().enumerate() {
+        let collapsed = collapsed_scenes.contains(&scene.name);
+        let scene_name = scene.name.clone();
+        let scene_root = root.clone();
+        let scene_relative = relative.clone();
+        let collapse_progress = transition(
+            (
+                format!("block-scene-{}-{scene_index}", relative.display()),
+                "collapse",
+            ),
+            if collapsed { 0. } else { 1. },
+            Transition::new(Duration::from_millis(120)),
+            window,
+            cx,
+        );
+        let scene_line = document
+            .borrow()
+            .contents()
+            .get(..scene.name_range.start)
+            .map(|prefix| prefix.bytes().filter(|byte| *byte == b'\n').count())
+            .unwrap_or_default();
+        let block_count = scene.blocks.len();
+        let header = div()
+            .id(("scene-section", scene_index))
+            .w_full()
+            .flex()
+            .items_center()
+            .gap_2()
+            .h(px(32.))
+            .px_2()
+            .rounded(px(7.))
+            .bg(rgb(if selected_line == Some(scene_line) {
+                SURFACE
+            } else {
+                PANEL
+            }))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                if !this.collapsed_scenes.remove(&scene_name) {
+                    this.collapsed_scenes.insert(scene_name.clone());
+                }
+                this.selected_blocks.clear();
+                this.block_selection_anchor = None;
+                cx.global_mut::<EditorDocuments>()
+                    .clear_block_selection(&scene_root);
+                set_authoring_selection(&scene_root, scene_relative.clone(), scene_line, 0, cx);
+                cx.notify();
+            }))
+            .child(
+                Icon::new(IconName::ChevronRight)
+                    .xsmall()
+                    .rotate(radians(collapse_progress * std::f32::consts::FRAC_PI_2))
+                    .text_color(rgb(MUTED)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .text_sm()
+                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                    .text_color(rgb(INK))
+                    .child(scene.name),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child(block_count.to_string()),
+            )
+            .into_any_element();
+        let mut scene_rows = Vec::new();
+        let mut scene_body_height = 0.;
+        for (block_index, block) in scene.blocks.into_iter().enumerate() {
+            let row_id = block.source_range.start;
+            let line = block.line;
+            let column = block.column;
+            let root = root.clone();
+            let relative = relative.clone();
+            let source_root = root.clone();
+            let source_relative = relative.clone();
+            let selected = selected_blocks.contains(&row_id) || selected_start == Some(row_id);
+            let icon = match &block.kind {
+                BlockKind::Narration | BlockKind::Dialogue { .. } => {
+                    AssetIconName::MessageSquareText
+                }
+                BlockKind::Choice
+                | BlockKind::ChoiceOption
+                | BlockKind::Conditional
+                | BlockKind::ElseIf => AssetIconName::GitBranch,
+                BlockKind::Else => AssetIconName::Workflow,
+                BlockKind::Loop => AssetIconName::Repeat2,
+                BlockKind::Declaration | BlockKind::Assignment => AssetIconName::Braces,
+                BlockKind::Command | BlockKind::Control => AssetIconName::Play,
+                BlockKind::Unsupported => AssetIconName::TriangleAlert,
+            };
+            let label = block_card_label(&block.kind, &block.summary);
+            let text_state = block.text_range.as_ref().and_then(|range| {
+                editors
+                    .iter()
+                    .find(|editor| editor.text_start == range.start)
+                    .map(|editor| &editor.state)
+                    .or_else(|| {
+                        draft_text
+                            .filter(|draft| {
+                                draft
+                                    .text_range
+                                    .as_ref()
+                                    .is_some_and(|draft_range| draft_range.start == range.start)
+                            })
+                            .map(|draft| &draft.state)
+                    })
+            });
+            let is_text = matches!(
+                &block.kind,
+                BlockKind::Narration | BlockKind::Dialogue { .. }
+            );
+            let is_structure = matches!(
+                &block.kind,
+                BlockKind::Choice
+                    | BlockKind::ChoiceOption
+                    | BlockKind::Conditional
+                    | BlockKind::ElseIf
+                    | BlockKind::Else
+                    | BlockKind::Loop
+            );
+            let source_summary = block_card_summary(&block.kind, &block.summary, block.line);
+            let order = block_order.clone();
+            let drag_selection = if selected_blocks.contains(&row_id) {
+                selected_blocks.clone()
+            } else {
+                HashSet::from([row_id])
+            };
+            let movable = !matches!(&block.kind, BlockKind::ElseIf | BlockKind::Else);
+            let grip = if movable {
+                div()
+                    .id(("block-grip", row_id))
+                    .size(px(18.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_move()
+                    .on_drag(
+                        BlockDrag {
+                            selected: drag_selection,
+                        },
+                        |_, _, _, cx| cx.new(|_| Empty),
+                    )
+                    .child(
+                        Icon::new(AssetIconName::GripVertical)
+                            .xsmall()
+                            .text_color(rgb(0x686e75)),
+                    )
+                    .into_any_element()
+            } else {
+                div().size(px(18.)).into_any_element()
+            };
+            let row_height = if is_text {
+                38.
+            } else if is_structure {
+                28.
+            } else {
+                32.
+            };
+            scene_body_height += row_height + 4.;
+            let drop_line_opacity = transition(
+                (format!("block-drop-line-{row_id}"), "opacity"),
+                f32::from(drop_target == Some(row_id) && cx.has_active_drag()),
+                Transition::new(Duration::from_millis(90)),
+                window,
+                cx,
+            );
+            let block_indent = 8. + block.depth as f32 * 18.;
+            let mut row = div()
+                .id(("block-row", scene_index * 10_000 + block_index))
+                .relative()
+                .w_full()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .gap_2()
+                .min_h(px(row_height))
+                .px_2()
+                .rounded(px(7.))
+                .bg(rgb(if selected {
+                    SURFACE
+                } else if is_structure {
+                    CANVAS
+                } else {
+                    PANEL
+                }))
+                .cursor_pointer()
+                .anchor_scroll((selected_start == Some(row_id)).then(|| scroll_anchor.clone()))
+                .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    let modifiers = event.modifiers();
+                    if modifiers.shift {
+                        let anchor = this.block_selection_anchor.unwrap_or(row_id);
+                        if let (Some(anchor_index), Some(row_index)) = (
+                            order.iter().position(|candidate| *candidate == anchor),
+                            order.iter().position(|candidate| *candidate == row_id),
+                        ) {
+                            let start = anchor_index.min(row_index);
+                            let end = anchor_index.max(row_index);
+                            this.selected_blocks.clear();
+                            this.selected_blocks
+                                .extend(order[start..=end].iter().copied());
+                        }
+                    } else if modifiers.platform || modifiers.control {
+                        if !this.selected_blocks.remove(&row_id) {
+                            this.selected_blocks.insert(row_id);
+                        }
+                        this.block_selection_anchor = Some(row_id);
+                    } else {
+                        this.selected_blocks.clear();
+                        this.selected_blocks.insert(row_id);
+                        this.block_selection_anchor = Some(row_id);
+                    }
+                    cx.global_mut::<EditorDocuments>().set_block_selection(
+                        &root,
+                        relative.clone(),
+                        this.selected_blocks.iter().copied().collect(),
+                    );
+                    set_authoring_selection(&root, relative.clone(), line, column, cx);
+                    cx.notify();
+                }))
+                .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                    if cx.has_active_drag() && this.block_drop_target != Some(row_id) {
+                        this.block_drop_target = Some(row_id);
+                        cx.notify();
+                    }
+                }))
+                .on_drop(cx.listener(move |this, drag: &BlockDrag, window, cx| {
+                    cx.stop_propagation();
+                    this.block_drop_target = None;
+                    this.drop_blocks(drag, row_id, window, cx);
+                }))
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(-1.))
+                        .left(px(8.))
+                        .right(px(8.))
+                        .h(px(2.))
+                        .rounded_full()
+                        .bg(rgb(PRIMARY))
+                        .opacity(drop_line_opacity),
+                )
+                .child(grip)
+                .child(Icon::new(icon).xsmall().text_color(rgb(if block.read_only {
+                    0xd2aa62
+                } else {
+                    MUTED
+                })))
+                .child(
+                    div()
+                        .w(px(64.))
+                        .flex_shrink_1()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .text_xs()
+                        .text_color(rgb(if is_text { PRIMARY } else { MUTED }))
+                        .child(label),
+                );
+            row = if let Some(state) = text_state.filter(|_| !block.read_only) {
+                row.child(
+                    div().h(px(30.)).flex_1().min_w_0().child(
+                        Input::new(state)
+                            .appearance(false)
+                            .bordered(false)
+                            .size_full()
+                            .text_sm()
+                            .text_color(rgb(INK)),
+                    ),
+                )
+            } else {
+                row.child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .text_sm()
+                        .text_color(rgb(if block.read_only { 0xd2aa62 } else { INK }))
+                        .child(source_summary),
+                )
+            };
+            if block.read_only {
+                row = row.child(
+                    div()
+                        .id(("open-source", row_id))
+                        .size(px(24.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(6.))
+                        .hover(|style| style.bg(rgb(SURFACE)))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.document_mode = DocumentMode::Text;
+                            navigate_source(
+                                &source_root,
+                                &source_relative,
+                                line + 1,
+                                column + 1,
+                                window,
+                                cx,
+                            );
+                            cx.notify();
+                        }))
+                        .child(Icon::new(IconName::FileText).xsmall()),
+                );
+            }
+            scene_rows.push(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .pl(px(block_indent))
+                    .child(row)
+                    .into_any_element(),
+            );
+            if let Some(draft) = draft_text.filter(|draft| {
+                matches!(draft.target, DraftInsertionTarget::After(start) if start == row_id)
+                    && draft.text_range.is_none()
+            }) {
+                scene_body_height += 42.;
+                scene_rows.push(draft_text_row(draft, block_indent, row_id));
+            }
+        }
+        if let Some(draft) = draft_text.filter(|draft| {
+            matches!(
+                draft.target,
+                DraftInsertionTarget::SceneEnd(start) if start == scene.source_range.start
+            ) && draft.text_range.is_none()
+        }) {
+            scene_body_height += 42.;
+            scene_rows.push(draft_text_row(draft, 8., scene.source_range.start));
+        }
+        scene_body_height = (scene_body_height - 4.).max(0.);
+        rows.push(
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(header)
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(scene_body_height * collapse_progress))
+                        .opacity(collapse_progress)
+                        .overflow_hidden()
+                        .child(
+                            div()
+                                .w_full()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .children(scene_rows),
+                        ),
+                )
+                .into_any_element(),
+        );
+    }
+    rows.extend(
+        projection
+            .read_only
+            .into_iter()
+            .enumerate()
+            .map(|(index, card)| {
+                div()
+                    .id(("projection-diagnostic", index))
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .min_h(px(30.))
+                    .px_2()
+                    .rounded(px(7.))
+                    .bg(rgb(SURFACE))
+                    .child(
+                        Icon::new(IconName::TriangleAlert)
+                            .xsmall()
+                            .text_color(rgb(0xd2aa62)),
+                    )
+                    .child(div().text_xs().text_color(rgb(MUTED)).child(card.message))
+                    .into_any_element()
+            }),
+    );
+    if scroll_pending && selected_start.is_some() {
+        scroll_anchor.scroll_to(window, cx);
+    }
+    let content = div()
+        .id("eiyashou-block-content")
+        .relative()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .p_2()
+        .pr_4()
+        .children(rows)
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.selected_blocks.clear();
+            this.block_selection_anchor = None;
+            cx.global_mut::<EditorDocuments>()
+                .clear_block_selection(&root);
+            cx.notify();
+        }))
+        .key_context("KeineBlockView");
+    vertical_overflow_view("eiyashou-block-scroll", scroll_handle, content)
+}
+
+fn render_assets(root: &Path, index: &AuthoringIndex, scroll_handle: &ScrollHandle) -> AnyElement {
+    let root = root.to_owned();
+    let content = div()
         .flex()
         .flex_col()
         .p_2()
@@ -2305,8 +4967,6 @@ fn render_assets(root: &Path, index: &AuthoringIndex) -> AnyElement {
         .child(section_label("ASSET BROWSER"))
         .child(
             div()
-                .flex_1()
-                .min_h_0()
                 .flex()
                 .flex_col()
                 .gap_1()
@@ -2359,14 +5019,16 @@ fn render_assets(root: &Path, index: &AuthoringIndex) -> AnyElement {
                                 .text_color(rgb(MUTED))
                                 .child(format!("{} refs", asset.reference_count)),
                         )
-                }))
-                .overflow_scrollbar()
-                .id("asset-list"),
-        )
-        .into_any_element()
+                })),
+        );
+    vertical_overflow_view("asset-scroll", scroll_handle, content)
 }
 
-fn render_problems(root: &Path, cx: &mut Context<WorkbenchPanel>) -> AnyElement {
+fn render_problems(
+    root: &Path,
+    scroll_handle: &ScrollHandle,
+    cx: &mut Context<WorkbenchPanel>,
+) -> AnyElement {
     let index = cx.global::<EditorDocuments>().authoring(root);
     let runtime = cx.global::<EditorDocuments>().runtime_diagnostics(root);
     let root = root.to_owned();
@@ -2412,8 +5074,7 @@ fn render_problems(root: &Path, cx: &mut Context<WorkbenchPanel>) -> AnyElement 
             .on_click(move |_, window, cx| navigate_source(&root, &path, line, column, window, cx))
         }
     });
-    div()
-        .size_full()
+    let content = div()
         .flex()
         .flex_col()
         .p_2()
@@ -2421,17 +5082,13 @@ fn render_problems(root: &Path, cx: &mut Context<WorkbenchPanel>) -> AnyElement 
         .child(section_label("PARSE · VALIDATION · RUNTIME"))
         .child(
             div()
-                .flex_1()
-                .min_h_0()
                 .flex()
                 .flex_col()
                 .gap_1()
                 .children(authoring_rows)
-                .children(runtime_rows)
-                .overflow_scrollbar()
-                .id("problem-list"),
-        )
-        .into_any_element()
+                .children(runtime_rows),
+        );
+    vertical_overflow_view("problem-scroll", scroll_handle, content)
 }
 
 fn problem_row(
@@ -2461,6 +5118,7 @@ fn problem_row(
 fn render_performance(
     controller: &PreviewController,
     timeline: &VecDeque<TimelineSample>,
+    scroll_handle: &ScrollHandle,
 ) -> AnyElement {
     let snapshot = controller.snapshot();
     let latest = timeline.back().copied().unwrap_or(TimelineSample {
@@ -2473,8 +5131,7 @@ fn render_performance(
         .map(|(before, after)| after.published.saturating_sub(before.published))
         .collect::<Vec<_>>();
     let peak = deltas.iter().copied().max().unwrap_or(1).max(1);
-    div()
-        .size_full()
+    let content = div()
         .flex()
         .flex_col()
         .p_3()
@@ -2497,7 +5154,7 @@ fn render_performance(
                 .gap(px(2.))
                 .px_1()
                 .rounded(px(8.))
-                .bg(rgb(0x10151b))
+                .bg(rgb(CANVAS))
                 .children(deltas.into_iter().map(|delta| {
                     let height = 4. + (delta as f32 / peak as f32) * 68.;
                     div()
@@ -2512,8 +5169,8 @@ fn render_performance(
                 .text_xs()
                 .text_color(rgb(MUTED))
                 .child("500 ms transport samples · not CPU/GPU frame time"),
-        )
-        .into_any_element()
+        );
+    vertical_overflow_view("performance-scroll", scroll_handle, content)
 }
 
 fn set_authoring_selection(
@@ -2567,6 +5224,136 @@ fn navigate_source(
     }
 }
 
+fn projected_block_at(
+    source: &str,
+    line: usize,
+    column: usize,
+) -> Option<(String, crate::projection::BlockCard)> {
+    let line_start = source
+        .split_inclusive('\n')
+        .take(line)
+        .map(str::len)
+        .sum::<usize>();
+    let offset = (line_start + column).min(source.len());
+    let projection = EiyashouProjection::parse(source);
+    projection.scenes.into_iter().find_map(|scene| {
+        if !scene.source_range.contains(&offset) && offset != scene.source_range.end {
+            return None;
+        }
+        scene
+            .blocks
+            .iter()
+            .filter(|block| block.source_range.start <= offset && block.source_range.end >= offset)
+            .max_by_key(|block| block.depth)
+            .cloned()
+            .map(|block| (scene.name, block))
+    })
+}
+
+fn parenthesized_value(source: &str) -> Option<String> {
+    let start = source.find('(')? + 1;
+    let end = source.rfind(')')?;
+    (end >= start).then(|| source[start..end].trim().trim_matches('"').to_owned())
+}
+
+fn text_voice(source: &str) -> Option<String> {
+    let quote = source.rfind('"')?;
+    source[quote + 1..]
+        .strip_prefix(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn common_value(values: impl IntoIterator<Item = String>) -> String {
+    let mut values = values.into_iter();
+    let Some(first) = values.next() else {
+        return "—".to_owned();
+    };
+    if values.all(|value| value == first) {
+        first
+    } else {
+        "Mixed".to_owned()
+    }
+}
+
+fn multi_block_summary(source: &str, starts: &[usize]) -> Option<AnyElement> {
+    let selected = EiyashouProjection::parse(source)
+        .scenes
+        .into_iter()
+        .flat_map(|scene| {
+            let name = scene.name;
+            scene
+                .blocks
+                .into_iter()
+                .filter(|block| starts.contains(&block.source_range.start))
+                .map(move |block| (name.clone(), block))
+        })
+        .collect::<Vec<_>>();
+    if selected.len() < 2 {
+        return None;
+    }
+    let mut properties = vec![
+        ("Blocks", selected.len().to_string()),
+        (
+            "Type",
+            common_value(
+                selected
+                    .iter()
+                    .map(|(_, block)| block.kind.label().to_owned()),
+            ),
+        ),
+        (
+            "Scene",
+            common_value(selected.iter().map(|(scene, _)| scene.clone())),
+        ),
+    ];
+    let all_text = selected.iter().all(|(_, block)| {
+        matches!(
+            block.kind,
+            BlockKind::Narration | BlockKind::Dialogue { .. }
+        )
+    });
+    if all_text {
+        properties.push((
+            "Speaker",
+            common_value(selected.iter().map(|(_, block)| match &block.kind {
+                BlockKind::Narration => "Narrator".to_owned(),
+                BlockKind::Dialogue { speaker } => speaker.clone(),
+                _ => unreachable!("guarded above"),
+            })),
+        ));
+        properties.push((
+            "Voice",
+            common_value(
+                selected.iter().map(|(_, block)| {
+                    text_voice(&block.summary).unwrap_or_else(|| "None".to_owned())
+                }),
+            ),
+        ));
+    }
+    properties.push((
+        "Stable ID",
+        common_value(
+            selected
+                .iter()
+                .map(|(_, block)| block.stable_id.clone().unwrap_or_else(|| "None".to_owned())),
+        ),
+    ));
+    Some(
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .children(
+                properties
+                    .into_iter()
+                    .map(|(label, value)| property_row(label, value)),
+            )
+            .into_any_element(),
+    )
+}
+
 fn selection_summary(root: &Path, index: &AuthoringIndex, cx: &App) -> AnyElement {
     match cx.global::<EditorDocuments>().selection(root) {
         Some((path, line, column)) => {
@@ -2585,6 +5372,96 @@ fn selection_summary(root: &Path, index: &AuthoringIndex, cx: &App) -> AnyElemen
                     ))
                 })
                 .collect::<Vec<_>>();
+            if let Some((selected_path, starts)) =
+                cx.global::<EditorDocuments>().block_selection(root)
+                && selected_path == path
+                && let Some(source) = cx.global::<EditorDocuments>().source(root, path)
+                && let Some(summary) = multi_block_summary(&source, starts)
+            {
+                return div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(MUTED))
+                            .child(path.display().to_string()),
+                    )
+                    .child(summary)
+                    .children(diagnostics)
+                    .into_any_element();
+            }
+            if path.extension().is_some_and(|value| value == "shou")
+                && let Some(source) = cx.global::<EditorDocuments>().source(root, path)
+                && let Some((scene, block)) = projected_block_at(&source, *line, *column)
+            {
+                let mut properties = vec![
+                    ("Type", block_card_label(&block.kind, &block.summary)),
+                    ("Scene", scene),
+                ];
+                match &block.kind {
+                    BlockKind::Narration | BlockKind::Dialogue { .. } => {}
+                    BlockKind::Choice => {
+                        if let Some(prompt) = parenthesized_value(&block.summary) {
+                            properties.push(("Prompt", prompt));
+                        }
+                    }
+                    BlockKind::ChoiceOption => {
+                        if let Some(option) = first_quoted_text(&block.summary) {
+                            properties.push(("Option", option));
+                        }
+                    }
+                    BlockKind::Conditional | BlockKind::ElseIf => {
+                        if let Some(condition) = parenthesized_value(&block.summary) {
+                            properties.push(("Condition", condition));
+                        }
+                    }
+                    BlockKind::Declaration | BlockKind::Assignment => {
+                        if let Some((_, expression)) = block.summary.split_once('=') {
+                            properties.push(("Value", expression.trim().to_owned()));
+                        }
+                    }
+                    BlockKind::Command => {
+                        if let Some(arguments) = parenthesized_value(&block.summary) {
+                            properties.push(("Parameters", arguments));
+                        }
+                    }
+                    BlockKind::Else
+                    | BlockKind::Loop
+                    | BlockKind::Control
+                    | BlockKind::Unsupported => {}
+                }
+                if !matches!(
+                    &block.kind,
+                    BlockKind::Narration | BlockKind::Dialogue { .. }
+                ) && let Some(stable_id) = &block.stable_id
+                {
+                    properties.push(("Stable ID", stable_id.clone()));
+                }
+                return div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(MUTED))
+                            .child(path.display().to_string()),
+                    )
+                    .child(div().text_xs().text_color(rgb(MUTED)).child(format!(
+                        "Line {}, column {}",
+                        line + 1,
+                        column + 1
+                    )))
+                    .children(
+                        properties
+                            .into_iter()
+                            .map(|(label, value)| property_row(label, value)),
+                    )
+                    .children(diagnostics)
+                    .into_any_element();
+            }
             let authoring = match index.selection(path, *line) {
                 AuthoringSelection::Source => "Source selection".to_owned(),
                 AuthoringSelection::Scene(scene) => format!("Scene · {}", scene.name),
@@ -3023,6 +5900,7 @@ impl TabGroupRenderer for EditorTabGroupSkin {
         self.inner
             .content_frame(group, window, cx)
             .border_0()
+            .pt_0()
             .rounded_b(px(VIEW_RADIUS_PX))
             .overflow_hidden()
             .bg(rgb(PANEL))
@@ -3130,7 +6008,7 @@ impl TabGroupRenderer for EditorTabGroupSkin {
                 );
                 let foreground = transition(
                     (("editor-tab-motion", panel_id.as_u64()), "foreground"),
-                    theme_color(if selected { INK } else { 0x8794a2 }),
+                    theme_color(if selected { INK } else { MUTED }),
                     Transition::new(TAB_MOTION_DURATION),
                     window,
                     cx,
@@ -3215,8 +6093,10 @@ impl TabGroupRenderer for EditorTabGroupSkin {
                                 .justify_center()
                                 .rounded(px(6.))
                                 .cursor_pointer()
-                                .text_color(rgb(0x7f8b98))
-                                .hover(|style| style.bg(rgb(0x3a4651)).text_color(rgb(PRIMARY)))
+                                .text_color(rgb(MUTED))
+                                .hover(|style| {
+                                    style.bg(rgb(SURFACE_HOVER)).text_color(rgb(PRIMARY))
+                                })
                                 .on_click(move |_, window, cx| {
                                     cx.stop_propagation();
                                     close_motion.update(cx, |motion, cx| {
@@ -3939,7 +6819,7 @@ impl WorkbenchWindow {
             .child(
                 div()
                     .id("workspace-status")
-                    .size(px(28.))
+                    .size(px(ACTIVITY_BRAND_SIZE_PX))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -3949,15 +6829,15 @@ impl WorkbenchWindow {
                     } else {
                         rgb(PRIMARY)
                     })
-                    .text_sm()
+                    .text_size(px(17.))
                     .font_weight(gpui_kit::FontWeight::BOLD)
-                    .text_color(rgb(0x111a1e))
+                    .text_color(rgb(CANVAS))
                     .child("K"),
             )
             .child(
                 div()
                     .id("activity-explorer")
-                    .size(px(30.))
+                    .size(px(ACTIVITY_ITEM_SIZE_PX))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -3965,7 +6845,7 @@ impl WorkbenchWindow {
                     .bg(rgb(SURFACE))
                     .child(
                         Icon::new(IconName::FileText)
-                            .small()
+                            .with_size(px(ACTIVITY_ICON_SIZE_PX))
                             .text_color(rgb(PRIMARY)),
                     ),
             )
@@ -4010,7 +6890,7 @@ impl WorkbenchWindow {
                 this.child(
                     div()
                         .id("activity-preview")
-                        .size(px(30.))
+                        .size(px(ACTIVITY_ITEM_SIZE_PX))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -4023,8 +6903,8 @@ impl WorkbenchWindow {
                         }))
                         .child(
                             Icon::new(IconName::Play)
-                                .small()
-                                .text_color(rgb(if preview_open { PRIMARY } else { 0x84919d })),
+                                .with_size(px(ACTIVITY_ICON_SIZE_PX))
+                                .text_color(rgb(if preview_open { PRIMARY } else { MUTED })),
                         ),
                 )
             })
@@ -4032,7 +6912,7 @@ impl WorkbenchWindow {
             .child(
                 div()
                     .id("activity-open-folder")
-                    .size(px(30.))
+                    .size(px(ACTIVITY_ITEM_SIZE_PX))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -4042,8 +6922,8 @@ impl WorkbenchWindow {
                     .on_click(move |_, _, cx| prompt_open_folder(editor.clone(), cx))
                     .child(
                         Icon::new(IconName::FolderOpen)
-                            .small()
-                            .text_color(rgb(0x98a3ae)),
+                            .with_size(px(ACTIVITY_ICON_SIZE_PX))
+                            .text_color(rgb(MUTED)),
                     ),
             )
             .when(self.workspace.is_some(), |this| {
@@ -4051,7 +6931,7 @@ impl WorkbenchWindow {
                     .child(
                         div()
                             .id("activity-migrate-eiyashou")
-                            .size(px(30.))
+                            .size(px(ACTIVITY_ITEM_SIZE_PX))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -4063,14 +6943,14 @@ impl WorkbenchWindow {
                             }))
                             .child(
                                 Icon::new(IconName::Replace)
-                                    .small()
-                                    .text_color(rgb(0x74818e)),
+                                    .with_size(px(ACTIVITY_ICON_SIZE_PX))
+                                    .text_color(rgb(MUTED)),
                             ),
                     )
                     .child(
                         div()
                             .id("activity-reset-layout")
-                            .size(px(30.))
+                            .size(px(ACTIVITY_ITEM_SIZE_PX))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -4082,15 +6962,15 @@ impl WorkbenchWindow {
                             }))
                             .child(
                                 Icon::new(IconName::RotateCw)
-                                    .small()
-                                    .text_color(rgb(0x74818e)),
+                                    .with_size(px(ACTIVITY_ICON_SIZE_PX))
+                                    .text_color(rgb(MUTED)),
                             ),
                     )
             });
 
         div()
             .id("activity-rail")
-            .w(px(42.))
+            .w(px(ACTIVITY_RAIL_WIDTH_PX))
             .h_full()
             .flex_none()
             .p(px(VIEW_INSET_PX))
@@ -4146,7 +7026,7 @@ impl WorkbenchWindow {
                             .text_sm()
                             .text_color(rgb(PRIMARY))
                             .cursor_pointer()
-                            .hover(|style| style.bg(rgb(0x3a4b55)))
+                            .hover(|style| style.bg(rgb(SURFACE_HOVER)))
                             .on_click(move |_, _, cx| prompt_open_folder(editor.clone(), cx))
                             .child(
                                 Icon::new(IconName::FolderOpen)
@@ -4195,7 +7075,7 @@ impl WorkbenchWindow {
                                                 div()
                                                     .flex_1()
                                                     .text_sm()
-                                                    .text_color(rgb(0xb9c5d0))
+                                                    .text_color(rgb(INK))
                                                     .child(
                                                         path.file_name()
                                                             .and_then(|name| name.to_str())
@@ -4263,7 +7143,7 @@ impl Render for WorkbenchWindow {
 fn activity_tool(id: &'static str, icon: IconName, active: bool) -> Stateful<Div> {
     div()
         .id(id)
-        .size(px(30.))
+        .size(px(ACTIVITY_ITEM_SIZE_PX))
         .flex()
         .items_center()
         .justify_center()
@@ -4273,13 +7153,78 @@ fn activity_tool(id: &'static str, icon: IconName, active: bool) -> Stateful<Div
         .hover(|style| style.bg(rgb(SURFACE_HOVER)))
         .child(
             Icon::new(icon)
-                .small()
-                .text_color(rgb(if active { PRIMARY } else { 0x84919d })),
+                .with_size(px(ACTIVITY_ICON_SIZE_PX))
+                .text_color(rgb(if active { PRIMARY } else { MUTED })),
         )
 }
 
 fn activity_divider() -> Div {
-    div().w(px(18.)).h(px(1.)).my(px(1.)).bg(rgb(0x27313b))
+    div().w(px(22.)).h(px(1.)).my(px(1.)).bg(rgb(BORDER))
+}
+
+fn file_action_icon(id: &'static str, icon: AssetIconName) -> Stateful<Div> {
+    div()
+        .id(id)
+        .size(px(22.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(5.))
+        .cursor_pointer()
+        .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+        .child(Icon::new(icon).xsmall().text_color(rgb(MUTED)))
+}
+
+fn file_context_menu_item(
+    id: &'static str,
+    icon: AssetIconName,
+    label: &'static str,
+    danger: bool,
+) -> Stateful<Div> {
+    let color = if danger { 0xdb7780 } else { INK };
+    div()
+        .id(id)
+        .h(px(27.))
+        .w_full()
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap_2()
+        .px_2()
+        .rounded(px(5.))
+        .text_xs()
+        .text_color(rgb(color))
+        .cursor_pointer()
+        .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+        .child(Icon::new(icon).xsmall().text_color(rgb(color)))
+        .child(label)
+}
+
+fn reveal_workspace_path(root: &Path, relative: &Path) {
+    let path = root.join(relative);
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open")
+        .arg("-R")
+        .arg(path)
+        .spawn();
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("explorer")
+        .arg(format!("/select,{}", path.display()))
+        .spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let _ = std::process::Command::new("xdg-open")
+        .arg(path.parent().unwrap_or(root))
+        .spawn();
+}
+
+fn short_error(error: &io::Error) -> String {
+    error
+        .to_string()
+        .lines()
+        .next()
+        .unwrap_or("File operation failed")
+        .to_owned()
 }
 
 fn prompt_open_folder(editor: WeakEntity<EditorApp>, cx: &mut App) {
@@ -4428,6 +7373,21 @@ pub fn run() {
                 KeyBinding::new("ctrl-shift-m", MigrateEiyashou, Some("KeineWorkbench")),
                 KeyBinding::new("cmd-shift-0", ResetLayout, Some("KeineWorkbench")),
                 KeyBinding::new("ctrl-shift-0", ResetLayout, Some("KeineWorkbench")),
+                KeyBinding::new("cmd-c", CopyBlocks, Some("KeineBlockView")),
+                KeyBinding::new("ctrl-c", CopyBlocks, Some("KeineBlockView")),
+                KeyBinding::new("cmd-v", PasteBlocks, Some("KeineBlockView")),
+                KeyBinding::new("ctrl-v", PasteBlocks, Some("KeineBlockView")),
+                KeyBinding::new("enter", BeginTextBlock, Some("KeineBlockView")),
+                KeyBinding::new("tab", ToggleBlockPicker, Some("KeineBlockView")),
+                KeyBinding::new("down", BlockPickerNext, Some("KeineBlockPicker")),
+                KeyBinding::new("up", BlockPickerPrevious, Some("KeineBlockPicker")),
+                KeyBinding::new("tab", AcceptBlockPicker, Some("KeineBlockPicker")),
+                KeyBinding::new("enter", AcceptBlockPicker, Some("KeineBlockPicker")),
+                KeyBinding::new("escape", CloseBlockPicker, Some("KeineBlockPicker")),
+                KeyBinding::new("backspace", DeleteBlocks, Some("KeineBlockView")),
+                KeyBinding::new("delete", DeleteBlocks, Some("KeineBlockView")),
+                KeyBinding::new("alt-up", MoveBlocksUp, Some("KeineBlockView")),
+                KeyBinding::new("alt-down", MoveBlocksDown, Some("KeineBlockView")),
             ]);
             let editor = cx.new(|cx| EditorApp::new(cx.weak_entity(), persistence, instance));
             let weak_editor = editor.downgrade();
@@ -4496,5 +7456,40 @@ mod tests {
             editor_drop_placement(bounds, point(px(90.), px(15.))),
             Some(Placement::Top)
         );
+    }
+
+    #[test]
+    fn picker_preferences_hide_browse_items_without_removing_search_access() {
+        let preferences = BlockPickerPreferences {
+            hidden: vec!["Video".into()],
+            favorites: vec!["Wait".into()],
+            ..BlockPickerPreferences::default()
+        };
+        assert!(!picker_kinds(&preferences, "", None, false).contains(&InsertKind::Video));
+        assert!(picker_kinds(&preferences, "video", None, false).contains(&InsertKind::Video));
+        assert_eq!(
+            picker_kinds(&preferences, "", Some("Favorites"), false),
+            vec![InsertKind::Wait]
+        );
+    }
+
+    #[test]
+    fn picker_item_reorder_is_limited_to_its_category() {
+        let universe = InsertKind::ALL
+            .into_iter()
+            .map(InsertKind::label)
+            .collect::<Vec<_>>();
+        let group = InsertKind::ALL
+            .into_iter()
+            .filter(|kind| kind.category() == "Text")
+            .map(InsertKind::label)
+            .collect::<Vec<_>>();
+        let mut order = Vec::new();
+        move_group_preference(&mut order, "Dialogue", &group, &universe, -1);
+        assert!(
+            preference_rank(&order, "Dialogue", usize::MAX / 2)
+                < preference_rank(&order, "Narration", usize::MAX / 2)
+        );
+        assert!(order.contains(&"Background".to_owned()));
     }
 }

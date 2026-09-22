@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use crate::project_key::ProjectKey;
 
 const STATE_SCHEMA: u32 = 1;
+const BLOCK_PICKER_SCHEMA: u32 = 1;
 const MAX_RECENTS: usize = 12;
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
 
@@ -35,6 +36,34 @@ struct IdentityFile {
     schema: u32,
     project_path: PathBuf,
     workspace_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BlockPickerPreferences {
+    pub favorites: Vec<String>,
+    pub hidden: Vec<String>,
+    pub category_order: Vec<String>,
+    pub item_order: Vec<String>,
+}
+
+impl Default for BlockPickerPreferences {
+    fn default() -> Self {
+        Self {
+            favorites: Vec::new(),
+            hidden: Vec::new(),
+            category_order: ["Text", "Scene", "Media", "Flow", "Data"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            item_order: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct BlockPickerPreferencesFile {
+    schema: u32,
+    preferences: BlockPickerPreferences,
 }
 
 impl AppPersistence {
@@ -71,6 +100,26 @@ impl AppPersistence {
             },
         )?;
         Ok(paths)
+    }
+
+    pub fn load_block_picker_preferences(&self) -> BlockPickerPreferences {
+        read_json::<BlockPickerPreferencesFile>(&self.root.join("block-picker.json"))
+            .filter(|state| state.schema == BLOCK_PICKER_SCHEMA)
+            .map(|state| state.preferences)
+            .unwrap_or_default()
+    }
+
+    pub fn save_block_picker_preferences(
+        &self,
+        preferences: &BlockPickerPreferences,
+    ) -> io::Result<()> {
+        atomic_json(
+            &self.root.join("block-picker.json"),
+            &BlockPickerPreferencesFile {
+                schema: BLOCK_PICKER_SCHEMA,
+                preferences: preferences.clone(),
+            },
+        )
     }
 
     pub fn prepare_workspace(&self, project: &ProjectKey) -> io::Result<PathBuf> {
@@ -294,6 +343,30 @@ mod tests {
         persistence.save_layout(&key, layout()).unwrap();
         persistence.clear_layout(&key).unwrap();
         assert_eq!(fs::read_to_string(source).unwrap(), "unchanged");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn block_picker_preferences_are_global_and_atomic() {
+        let (root, project, persistence, _) = fixture();
+        let preferences = BlockPickerPreferences {
+            favorites: vec!["Dialogue".into()],
+            hidden: vec!["Video".into()],
+            category_order: vec!["Flow".into(), "Text".into()],
+            item_order: vec!["Wait".into(), "Goto".into()],
+        };
+        persistence
+            .save_block_picker_preferences(&preferences)
+            .unwrap();
+        assert_eq!(persistence.load_block_picker_preferences(), preferences);
+        assert!(!persistence.root().starts_with(&project));
+        assert!(fs::read_dir(persistence.root()).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".tmp-")
+        }));
         fs::remove_dir_all(root).unwrap();
     }
 }

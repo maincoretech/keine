@@ -13,7 +13,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use keine_core::Rgba;
 use keine_core::config::{
-    AssetSourceConfig, EiyashouAssetManifest, EiyashouCharacterManifest, GameConfig,
+    AssetSourceConfig, EiyashouAssetEntry, EiyashouAssetManifest, EiyashouCharacterManifest,
+    GameConfig,
 };
 
 use crate::{LoaderRegistry, ResourceKind, StructuredSceneLoader};
@@ -429,20 +430,25 @@ fn install_asset_namespace(
     root: &Path,
     asset_roots: &[PathBuf],
     kind: ResourceKind,
-    values: HashMap<String, String>,
+    values: HashMap<String, EiyashouAssetEntry>,
     target: &mut HashMap<String, String>,
     data: &mut EiyashouProjectData,
 ) -> Result<()> {
     let ids = data.assets.entry(kind).or_default();
-    for (id, configured) in values {
+    let mut values = values.into_iter().collect::<Vec<_>>();
+    values.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut physical_files = HashMap::<PathBuf, String>::new();
+    for (id, entry) in values {
         if id.is_empty() {
             bail!("asset identifiers must not be empty");
         }
+        let configured = entry.into_path();
         let relative = Path::new(&configured);
-        if relative.is_absolute()
-            || relative
+        if relative.as_os_str().is_empty()
+            || relative.is_absolute()
+            || !relative
                 .components()
-                .any(|component| matches!(component, std::path::Component::ParentDir))
+                .all(|component| matches!(component, std::path::Component::Normal(_)))
         {
             bail!("asset `{id}` must stay inside the project: {configured}");
         }
@@ -452,6 +458,11 @@ fn install_asset_namespace(
             .with_context(|| format!("failed to resolve asset `{id}` at {configured}"))?;
         if !resolved.starts_with(root) || !resolved.is_file() {
             bail!("asset `{id}` must resolve to a project file: {configured}");
+        }
+        if let Some(previous) = physical_files.insert(resolved.clone(), id.clone()) {
+            bail!(
+                "{kind:?} assets `{previous}` and `{id}` must not map to the same project file: {configured}"
+            );
         }
         let logical = asset_roots
             .iter()
@@ -635,7 +646,7 @@ mod tests {
         fs::write(root.join("packs/voices/hello.opus"), b"voice").unwrap();
         fs::write(
             root.join("assets.yaml"),
-            "backgrounds:\n  day: assets/background/day.webp\nvoices:\n  hello: packs/voices/hello.opus\n",
+            "backgrounds:\n  day: assets/background/day.webp\nfigures:\n  shared: assets/background/day.webp\nvoices:\n  hello:\n    path: packs/voices/hello.opus\n    tags: [rin, chapter-1]\n",
         )
         .unwrap();
         fs::write(
@@ -659,6 +670,7 @@ mod tests {
         project.prepare_eiyashou(&mut config).unwrap();
 
         assert_eq!(config.assets.backgrounds["day"], "background/day.webp");
+        assert_eq!(config.assets.figures["shared"], "background/day.webp");
         assert_eq!(config.assets.voices["hello"], "hello.opus");
         let prepared = project.eiyashou.as_ref().unwrap();
         assert_eq!(prepared.characters["rin"].name, "Rin");
@@ -680,6 +692,39 @@ mod tests {
                 if dialogue.speaker == "Rin"
                     && dialogue.speaker_color == Some(Rgba::new(186.0 / 255.0, 235.0 / 255.0, 1.0, 1.0))
         ));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_same_type_assets_that_resolve_to_one_physical_file() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("keine-eiyashou-duplicate-{nonce}"));
+        fs::create_dir_all(root.join("assets/shared")).unwrap();
+        fs::create_dir_all(root.join("scripts")).unwrap();
+        fs::write(root.join("assets/shared/image.webp"), b"image").unwrap();
+        fs::write(
+            root.join("assets.yaml"),
+            concat!(
+                "backgrounds:\n",
+                "  first: assets/shared/image.webp\n",
+                "  second:\n",
+                "    path: assets/shared/image.webp\n",
+                "figures:\n",
+                "  shared: assets/shared/image.webp\n",
+            ),
+        )
+        .unwrap();
+        fs::write(root.join("characters.yaml"), "characters: {}\n").unwrap();
+
+        let mut config = GameConfig::default();
+        config.adapter.script = "keine".into();
+        let mut project = load_project(&root, &config.adapter.asset).unwrap();
+        let error = project.prepare_eiyashou(&mut config).unwrap_err();
+
+        assert!(error.to_string().contains("`first` and `second`"));
         let _ = fs::remove_dir_all(root);
     }
 }

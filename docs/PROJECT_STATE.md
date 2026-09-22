@@ -71,6 +71,12 @@
   default build. `cargo migrate <source-project> <target-project>` opens a compatibility source
   read-only, rejects semantics that Eiyashou cannot preserve, stages confined referenced assets,
   emits `.shou` plus native manifests, validates the result, and only then installs a new target.
+- Eiyashou `assets.yaml` keeps legacy string paths and also accepts `{ path, tags? }` entries
+  without migrating untouched source. Asset IDs remain namespaced by resource type. Within one
+  type, two IDs cannot resolve to the same physical project file; explicit sharing across
+  different types remains valid. Loader validation fails closed for empty IDs, incomplete entries,
+  escaping paths, missing files, and same-type duplicates, while the Editor exposes tags and the
+  matching deterministic diagnostics from the same source-backed manifest.
 
 ## Architecture and interfaces
 
@@ -225,8 +231,8 @@ project / package
   in 142–161 ms, showed no frame overwrite, bounded paused publication to the three in-flight
   captures, removed every mapping, and left no authoring child process. The user accepted the final
   live macOS Editor Preview pass on 2026-09-21.
-- Editor Phase 5 keeps Text, Cards, and continuous Dialogue as projections of the same authoritative
-  Eiyashou source document. Card/dialogue selection drives Inspector and the Preview source cursor;
+- Editor Phase 5 keeps Text and Blocks as projections of the same authoritative Eiyashou source
+  document; there is no separate Dialogue view. Block selection drives Inspector and the Preview source cursor;
   the context-aware Insert Palette, confined Asset Browser, bounded Character/Scene managers, and
   navigable Problems view all edit or inspect that same source path. The Performance view reports
   only measured Preview transport counters, not invented CPU/GPU timing. Normal-scale macOS
@@ -236,6 +242,22 @@ project / package
   restrained close transition from either the close affordance or middle click. A real untracked
   LetsGal project sustained embedded Preview output after the visible-panel lifecycle fix; the
   acceptance bundle and every child process were removed afterward.
+- Card Editor Phase 1 continuously renders every Scene in the current `.shou` file as a lightweight
+  collapsible section. Enter creates narration without a placeholder source node; inline Text edits,
+  Inspector-owned Speaker/Voice/Stable ID changes, desktop multi-selection, complete-node clipboard,
+  source-order movement, and drag reorder all edit the same authoritative document. Text/Blocks
+  switching restores the selected source node, unknown syntax stays visible and read-only, and
+  Choice/If/Else if/Else/Loop use indentation instead of nested container cards. The full Block
+  Picker remains searchable and persists favorites, category/item order, and hidden browse entries
+  as global Editor preferences outside project files; hidden commands remain searchable.
+- File and Asset Phase 2 replaces the flat source list with a confined workspace tree. Explorer
+  owns ordinary create, rename, move, copy, delete, internal drag, external drop, and Reveal
+  operations without becoming a content editor. External resources are accepted only when already
+  canonical WebP, Ogg Opus, or H.264 MP4/M4V, are content-validated before publication, derive a
+  deterministic ID from the filename, and update the configured asset manifest transactionally.
+  Mapped moves and renames preserve manifest comments while updating paths; mapped deletion is
+  deferred to the Asset lifecycle phase. Batch drops expose one aggregate progress row and one
+  summary toast, and failed imports leave neither a destination file nor a dangling manifest entry.
 
 ## Active task queue
 
@@ -247,6 +269,9 @@ project / package
 | [T16](tasks/T16-editor-phase4-preview.md) | complete | real embedded Preview and bounded raw frame transport |
 | [T17](tasks/T17-editor-phase5-authoring-ux.md) | complete | source-safe core VN authoring workflow |
 | [T19](tasks/T19-project-ci-release.md) | complete | Phase 6 pinned Project CI release chain |
+| [T20](tasks/T20-asset-manifest-phase0.md) | complete | Asset manifest schema and source-preserving validation |
+| [T21](tasks/T21-card-editor-phase1.md) | user acceptance | Card Editor source-preserving core interaction |
+| [T22](tasks/T22-file-asset-import-phase2.md) | complete | confined workspace file tree and canonical asset auto-registration |
 | [T03](tasks/T03-ui-visual-baseline.md) | user acceptance | UI and cross-platform visual evidence |
 
 ## Canonical references

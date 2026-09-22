@@ -11,6 +11,19 @@ const MAX_DOCUMENT_BYTES: u64 = 1024 * 1024;
 pub struct WorkspaceFile {
     pub relative_path: PathBuf,
     pub size: u64,
+    pub kind: WorkspaceEntryKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkspaceEntryKind {
+    File,
+    Directory,
+}
+
+impl WorkspaceFile {
+    pub const fn is_dir(&self) -> bool {
+        matches!(self.kind, WorkspaceEntryKind::Directory)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -46,11 +59,11 @@ impl WorkspaceSession {
             .to_owned();
         let mut files = Vec::new();
         discover(key.path(), key.path(), &mut files)?;
-        files.sort_by_key(|file| document_rank(&file.relative_path));
-
-        let documents = files
+        let mut documents = files
             .iter()
+            .filter(|file| !file.is_dir())
             .filter(|file| file.size <= MAX_DOCUMENT_BYTES)
+            .filter(|file| is_text_document(&file.relative_path))
             .filter_map(|file| {
                 fs::read_to_string(key.path().join(&file.relative_path))
                     .ok()
@@ -59,8 +72,9 @@ impl WorkspaceSession {
                         contents,
                     })
             })
-            .take(2)
-            .collect();
+            .collect::<Vec<_>>();
+        documents.sort_by_key(|document| document_rank(&document.relative_path));
+        documents.truncate(2);
 
         Ok(Self {
             key,
@@ -107,9 +121,18 @@ fn discover(root: &Path, directory: &Path, files: &mut Vec<WorkspaceFile>) -> io
         let file_type = entry.file_type()?;
         if file_type.is_dir() {
             if should_descend(&name) {
+                let relative_path = path
+                    .strip_prefix(root)
+                    .map_err(io::Error::other)?
+                    .to_owned();
+                files.push(WorkspaceFile {
+                    relative_path,
+                    size: 0,
+                    kind: WorkspaceEntryKind::Directory,
+                });
                 discover(root, &path, files)?;
             }
-        } else if file_type.is_file() && is_text_document(&path) {
+        } else if file_type.is_file() && !name.starts_with('.') {
             let relative_path = path
                 .strip_prefix(root)
                 .map_err(io::Error::other)?
@@ -117,6 +140,7 @@ fn discover(root: &Path, directory: &Path, files: &mut Vec<WorkspaceFile>) -> io
             files.push(WorkspaceFile {
                 relative_path,
                 size: entry.metadata()?.len(),
+                kind: WorkspaceEntryKind::File,
             });
         }
     }
@@ -168,6 +192,7 @@ mod tests {
         fs::write(root.join("scripts/02.shou"), "second").unwrap();
         fs::write(root.join("scripts/01.shou"), "first").unwrap();
         fs::write(root.join("project.json"), "{}").unwrap();
+        fs::write(root.join("cover.webp"), "media").unwrap();
         fs::write(root.join("target/ignored.txt"), "ignored").unwrap();
         root
     }
@@ -192,6 +217,12 @@ mod tests {
                 .iter()
                 .all(|file| !file.relative_path.starts_with("target"))
         );
+        assert!(session.files().iter().any(|file| {
+            file.relative_path == Path::new("scripts") && file.kind == WorkspaceEntryKind::Directory
+        }));
+        assert!(session.files().iter().any(|file| {
+            file.relative_path == Path::new("cover.webp") && file.kind == WorkspaceEntryKind::File
+        }));
         fs::remove_dir_all(root).unwrap();
     }
 }

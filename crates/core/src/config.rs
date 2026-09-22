@@ -228,22 +228,72 @@ pub struct ScriptConfig {
     pub characters: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EiyashouAssetManifest {
     #[serde(default)]
-    pub backgrounds: HashMap<String, String>,
+    pub backgrounds: HashMap<String, EiyashouAssetEntry>,
     #[serde(default)]
-    pub figures: HashMap<String, String>,
+    pub figures: HashMap<String, EiyashouAssetEntry>,
     #[serde(default)]
-    pub voices: HashMap<String, String>,
+    pub voices: HashMap<String, EiyashouAssetEntry>,
     #[serde(default)]
-    pub bgm: HashMap<String, String>,
+    pub bgm: HashMap<String, EiyashouAssetEntry>,
     #[serde(default, rename = "se")]
-    pub effects: HashMap<String, String>,
+    pub effects: HashMap<String, EiyashouAssetEntry>,
     #[serde(default)]
-    pub videos: HashMap<String, String>,
+    pub videos: HashMap<String, EiyashouAssetEntry>,
     #[serde(flatten)]
     unknown: HashMap<String, noyalib::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum EiyashouAssetEntry {
+    Path(String),
+    Metadata(EiyashouAssetMetadata),
+}
+
+impl EiyashouAssetEntry {
+    pub fn path(&self) -> &str {
+        match self {
+            Self::Path(path) => path,
+            Self::Metadata(metadata) => &metadata.path,
+        }
+    }
+
+    pub fn tags(&self) -> &[String] {
+        match self {
+            Self::Path(_) => &[],
+            Self::Metadata(metadata) => &metadata.tags,
+        }
+    }
+
+    pub fn into_path(self) -> String {
+        match self {
+            Self::Path(path) => path,
+            Self::Metadata(metadata) => metadata.path,
+        }
+    }
+}
+
+impl From<String> for EiyashouAssetEntry {
+    fn from(path: String) -> Self {
+        Self::Path(path)
+    }
+}
+
+impl From<&str> for EiyashouAssetEntry {
+    fn from(path: &str) -> Self {
+        Self::Path(path.to_owned())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EiyashouAssetMetadata {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 impl EiyashouAssetManifest {
@@ -1033,6 +1083,49 @@ script:
         assert_eq!(cfg.script.entry, "opening");
         assert_eq!(cfg.script.assets, "manifests/assets.yaml");
         assert_eq!(cfg.script.characters, "manifests/characters.yaml");
+    }
+
+    #[test]
+    fn asset_manifest_accepts_legacy_paths_and_tagged_entries() {
+        let source = concat!(
+            "backgrounds:\n",
+            "  day: assets/background/day.webp\n",
+            "voices:\n",
+            "  hello:\n",
+            "    path: assets/voice/hello.opus\n",
+            "    tags: [chapter-1, rin]\n",
+        );
+        let manifest = EiyashouAssetManifest::from_yaml(source).unwrap();
+
+        assert_eq!(
+            manifest.backgrounds["day"].path(),
+            "assets/background/day.webp"
+        );
+        assert!(manifest.backgrounds["day"].tags().is_empty());
+        assert_eq!(manifest.voices["hello"].path(), "assets/voice/hello.opus");
+        assert_eq!(manifest.voices["hello"].tags(), ["chapter-1", "rin"]);
+
+        let encoded = noyalib::to_string(&manifest).unwrap();
+        let reparsed = EiyashouAssetManifest::from_yaml(&encoded).unwrap();
+        assert_eq!(
+            reparsed.backgrounds["day"].path(),
+            "assets/background/day.webp"
+        );
+        assert!(reparsed.backgrounds["day"].tags().is_empty());
+        assert_eq!(reparsed.voices["hello"].tags(), ["chapter-1", "rin"]);
+    }
+
+    #[test]
+    fn asset_manifest_rejects_partial_or_extended_entries() {
+        for source in [
+            "backgrounds:\n  day:\n    tags: [chapter-1]\n",
+            "backgrounds:\n  day:\n    path: assets/day.webp\n    label: Day\n",
+        ] {
+            assert!(
+                EiyashouAssetManifest::from_yaml(source).is_err(),
+                "{source}"
+            );
+        }
     }
 
     #[test]

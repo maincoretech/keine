@@ -4,7 +4,9 @@ use std::fs;
 use std::ops::Range;
 use std::path::{Component, Path, PathBuf};
 
-use keine_core::config::{EiyashouAssetManifest, EiyashouCharacterManifest, GameConfig};
+use keine_core::config::{
+    EiyashouAssetEntry, EiyashouAssetManifest, EiyashouCharacterManifest, GameConfig,
+};
 use keine_core::{Action, EiyashouTextPart};
 use keine_loader::{
     DiagnosticLevel, NativeTokenKind, ResourceKind, parse_native_document, parse_native_scenes,
@@ -55,6 +57,7 @@ pub struct AssetEntry {
     pub kind: AssetKind,
     pub id: String,
     pub path: PathBuf,
+    pub tags: Vec<String>,
     pub exists: bool,
     pub reference_count: usize,
 }
@@ -379,9 +382,41 @@ pub enum InsertKind {
     Background,
     Figure,
     Choice,
+    Conditional,
+    Loop,
+    Variable,
+    Goto,
+    Call,
+    Wait,
+    Hide,
+    Move,
+    Bgm,
+    Effect,
+    Video,
+    Return,
 }
 
 impl InsertKind {
+    pub const ALL: [Self; 17] = [
+        Self::Narration,
+        Self::Dialogue,
+        Self::Background,
+        Self::Figure,
+        Self::Hide,
+        Self::Move,
+        Self::Bgm,
+        Self::Effect,
+        Self::Video,
+        Self::Choice,
+        Self::Conditional,
+        Self::Loop,
+        Self::Goto,
+        Self::Call,
+        Self::Return,
+        Self::Wait,
+        Self::Variable,
+    ];
+
     pub const fn label(self) -> &'static str {
         match self {
             Self::Narration => "Narration",
@@ -389,6 +424,56 @@ impl InsertKind {
             Self::Background => "Background",
             Self::Figure => "Figure",
             Self::Choice => "Choice",
+            Self::Conditional => "If",
+            Self::Loop => "Loop",
+            Self::Variable => "Variable",
+            Self::Goto => "Goto",
+            Self::Call => "Call",
+            Self::Wait => "Wait",
+            Self::Hide => "Hide",
+            Self::Move => "Move",
+            Self::Bgm => "BGM",
+            Self::Effect => "Sound",
+            Self::Video => "Video",
+            Self::Return => "Return",
+        }
+    }
+
+    pub const fn category(self) -> &'static str {
+        match self {
+            Self::Narration | Self::Dialogue => "Text",
+            Self::Background | Self::Figure | Self::Hide | Self::Move => "Scene",
+            Self::Bgm | Self::Effect | Self::Video => "Media",
+            Self::Choice
+            | Self::Conditional
+            | Self::Loop
+            | Self::Goto
+            | Self::Call
+            | Self::Return
+            | Self::Wait => "Flow",
+            Self::Variable => "Data",
+        }
+    }
+
+    pub const fn search_terms(self) -> &'static str {
+        match self {
+            Self::Narration => "narration text narrator",
+            Self::Dialogue => "dialogue speaker character text",
+            Self::Background => "background scene image",
+            Self::Figure => "figure sprite character show",
+            Self::Choice => "choice branch option",
+            Self::Conditional => "if conditional branch",
+            Self::Loop => "loop repeat",
+            Self::Variable => "variable let data",
+            Self::Goto => "goto scene jump",
+            Self::Call => "call scene",
+            Self::Wait => "wait delay time",
+            Self::Hide => "hide sprite figure",
+            Self::Move => "move sprite figure position",
+            Self::Bgm => "bgm music audio",
+            Self::Effect => "sound effect se audio",
+            Self::Video => "video movie",
+            Self::Return => "return flow",
         }
     }
 }
@@ -520,6 +605,56 @@ pub fn insert_statement(
                 "choice {{\n{statement_indent}  \"Continue\": goto({scene})\n{statement_indent}}}"
             )
         }
+        InsertKind::Conditional => {
+            format!("if (true) {{\n{statement_indent}  \"New narration\"\n{statement_indent}}}")
+        }
+        InsertKind::Loop => "loop { break }".to_owned(),
+        InsertKind::Variable => format!("let {} = 0", unique_variable_name(source)),
+        InsertKind::Goto => format!(
+            "goto({})",
+            first_scene.ok_or(AuthoringEditError::MissingInsertionPoint)?
+        ),
+        InsertKind::Call => format!(
+            "call({})",
+            first_scene.ok_or(AuthoringEditError::MissingInsertionPoint)?
+        ),
+        InsertKind::Wait => "wait(500ms)".to_owned(),
+        InsertKind::Hide => {
+            let figure = first_figure.ok_or(AuthoringEditError::MissingInsertionPoint)?;
+            format!("hide({figure}_slot)")
+        }
+        InsertKind::Move => {
+            let figure = first_figure.ok_or(AuthoringEditError::MissingInsertionPoint)?;
+            format!("move({figure}_slot, center)")
+        }
+        InsertKind::Bgm => format!(
+            "bgm({})",
+            index
+                .assets
+                .iter()
+                .find(|entry| entry.kind == AssetKind::Bgm)
+                .map(|entry| entry.id.as_str())
+                .ok_or(AuthoringEditError::MissingInsertionPoint)?
+        ),
+        InsertKind::Effect => format!(
+            "se({})",
+            index
+                .assets
+                .iter()
+                .find(|entry| entry.kind == AssetKind::Effect)
+                .map(|entry| entry.id.as_str())
+                .ok_or(AuthoringEditError::MissingInsertionPoint)?
+        ),
+        InsertKind::Video => format!(
+            "video({})",
+            index
+                .assets
+                .iter()
+                .find(|entry| entry.kind == AssetKind::Video)
+                .map(|entry| entry.id.as_str())
+                .ok_or(AuthoringEditError::MissingInsertionPoint)?
+        ),
+        InsertKind::Return => "return".to_owned(),
     };
     let mut edited = source.to_owned();
     let mut insertion = line_end;
@@ -611,6 +746,23 @@ pub fn escape_eiyashou_string(value: &str) -> String {
         }
     }
     escaped
+}
+
+fn unique_variable_name(source: &str) -> String {
+    let document = parse_native_document(source);
+    let identifiers = document
+        .tokens
+        .iter()
+        .filter(|token| token.kind == NativeTokenKind::Identifier)
+        .filter_map(|token| source.get(token.range.clone()))
+        .collect::<HashSet<_>>();
+    if !identifiers.contains("value") {
+        return "value".to_owned();
+    }
+    (2..)
+        .map(|suffix| format!("value_{suffix}"))
+        .find(|candidate| !identifiers.contains(candidate.as_str()))
+        .expect("an unbounded numeric suffix always yields a unique identifier")
 }
 
 fn index_source(
@@ -751,15 +903,50 @@ fn push_assets(
     index: &mut AuthoringIndex,
     lookup: &mut HashSet<(AssetKind, String)>,
     kind: AssetKind,
-    values: HashMap<String, String>,
+    values: HashMap<String, EiyashouAssetEntry>,
 ) {
-    for (id, value) in values {
+    let mut values = values.into_iter().collect::<Vec<_>>();
+    values.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut physical_files = HashMap::<PathBuf, String>::new();
+    for (id, entry) in values {
+        let value = entry.path();
+        let tags = entry.tags().to_vec();
         lookup.insert((kind, id.clone()));
-        let relative = confined_relative(&value);
-        let exists = relative
+        let relative = confined_relative(value);
+        let existing = relative
             .as_deref()
-            .is_some_and(|path| confined_existing_file(root, path));
+            .and_then(|path| confined_existing_file(root, path));
+        let exists = existing.is_some();
         let path = relative.unwrap_or_else(|| PathBuf::from(value));
+        if id.is_empty() {
+            index.problems.push(problem(
+                ProblemSeverity::Error,
+                index
+                    .assets_manifest
+                    .clone()
+                    .unwrap_or_else(|| PathBuf::from("assets.yaml")),
+                1,
+                1,
+                format!("{} asset identifiers must not be empty", kind.label()),
+            ));
+        }
+        let identity = existing.unwrap_or_else(|| path.clone());
+        if let Some(previous) = physical_files.insert(identity, id.clone()) {
+            index.problems.push(problem(
+                ProblemSeverity::Error,
+                index
+                    .assets_manifest
+                    .clone()
+                    .unwrap_or_else(|| PathBuf::from("assets.yaml")),
+                1,
+                1,
+                format!(
+                    "{} assets `{previous}` and `{id}` map to the same file: {}",
+                    kind.label(),
+                    path.display()
+                ),
+            ));
+        }
         if !exists {
             index.problems.push(problem(
                 ProblemSeverity::Error,
@@ -780,6 +967,7 @@ fn push_assets(
             kind,
             id,
             path,
+            tags,
             exists,
             reference_count: 0,
         });
@@ -807,14 +995,14 @@ fn confined_relative(value: &str) -> Option<PathBuf> {
     .then(|| path.to_owned())
 }
 
-fn confined_existing_file(root: &Path, relative: &Path) -> bool {
+fn confined_existing_file(root: &Path, relative: &Path) -> Option<PathBuf> {
     let Ok(canonical_root) = root.canonicalize() else {
-        return false;
+        return None;
     };
     let Ok(canonical) = root.join(relative).canonicalize() else {
-        return false;
+        return None;
     };
-    canonical.starts_with(canonical_root) && canonical.is_file()
+    (canonical.starts_with(canonical_root) && canonical.is_file()).then_some(canonical)
 }
 
 fn problem(
@@ -910,7 +1098,7 @@ mod tests {
         .unwrap();
         fs::write(
             root.join("assets.yaml"),
-            "backgrounds:\n  room: assets/room.webp\nfigures:\n  rin: assets/missing.webp\n",
+            "backgrounds:\n  room:\n    path: assets/room.webp\n    tags: [interior, chapter-1]\nfigures:\n  rin: assets/missing.webp\n",
         )
         .unwrap();
         fs::write(root.join("assets/room.webp"), b"image").unwrap();
@@ -933,18 +1121,50 @@ mod tests {
         let files = vec![WorkspaceFile {
             relative_path: PathBuf::from("scripts/main.shou"),
             size: fs::metadata(root.join("scripts/main.shou")).unwrap().len(),
+            kind: crate::workspace::WorkspaceEntryKind::File,
         }];
         let index = AuthoringIndex::load(&root, &files, &BTreeMap::new());
         assert!(index.native);
         assert_eq!(index.scenes[0].name, "start");
         assert_eq!(index.dialogues[0].speaker, "rin");
         assert_eq!(index.assets[0].id, "room");
+        assert_eq!(index.assets[0].tags, ["interior", "chapter-1"]);
         assert_eq!(index.assets[0].reference_count, 1);
         assert!(
             index
                 .problems
                 .iter()
                 .any(|problem| problem.message.contains("missing.webp"))
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn index_reports_same_type_duplicate_files_but_allows_cross_type_sharing() {
+        let root = fixture();
+        fs::write(
+            root.join("assets.yaml"),
+            concat!(
+                "backgrounds:\n",
+                "  first: assets/room.webp\n",
+                "  second: assets/room.webp\n",
+                "figures:\n",
+                "  shared: assets/room.webp\n",
+            ),
+        )
+        .unwrap();
+        let index = AuthoringIndex::load(&root, &[], &BTreeMap::new());
+        let duplicate = index
+            .problems
+            .iter()
+            .filter(|problem| problem.message.contains("map to the same file"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(duplicate.len(), 1);
+        assert!(
+            duplicate[0]
+                .message
+                .contains("Background assets `first` and `second`")
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -958,6 +1178,7 @@ mod tests {
         let files = vec![WorkspaceFile {
             relative_path: path,
             size: source.len() as u64,
+            kind: crate::workspace::WorkspaceEntryKind::File,
         }];
         let index = AuthoringIndex::load(&root, &files, &BTreeMap::new());
         let edited = replace_dialogue_text(source, &index.dialogues[0], "你说 \"${x}\"").unwrap();
@@ -1019,6 +1240,7 @@ mod tests {
             kind: AssetKind::Background,
             id: "room".into(),
             path: "assets/room.webp".into(),
+            tags: Vec::new(),
             exists: true,
             reference_count: 0,
         });
@@ -1026,6 +1248,7 @@ mod tests {
             kind: AssetKind::Figure,
             id: "rin_smile".into(),
             path: "assets/rin.webp".into(),
+            tags: Vec::new(),
             exists: true,
             reference_count: 0,
         });

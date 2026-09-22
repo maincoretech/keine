@@ -82,6 +82,16 @@ impl SourceDocument {
         true
     }
 
+    pub(crate) fn adopt_saved_contents(&mut self, contents: String) -> io::Result<()> {
+        ensure_document_size(&contents)?;
+        self.contents = contents.clone();
+        self.disk_contents = contents;
+        self.revision = self.revision.wrapping_add(1).max(1);
+        self.saved_revision = self.revision;
+        self.recovery_state = RecoveryState::None;
+        remove_if_present(&self.recovery_path)
+    }
+
     pub fn replace_range(
         &mut self,
         range: std::ops::Range<usize>,
@@ -269,6 +279,10 @@ impl DocumentManager {
         self.documents.values()
     }
 
+    pub fn document(&self, relative_path: &Path) -> Option<DocumentHandle> {
+        self.documents.get(relative_path).cloned()
+    }
+
     pub fn source_overrides(&self) -> std::collections::BTreeMap<PathBuf, String> {
         self.documents
             .iter()
@@ -415,7 +429,7 @@ fn read_recovery(path: &Path) -> io::Result<Option<Vec<u8>>> {
     fs::read(path).map(Some)
 }
 
-fn atomic_source(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn atomic_source(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "source path has no parent"))?;
@@ -549,6 +563,28 @@ mod tests {
         drop(document);
         drop(manager);
         assert_eq!(fs::read(path).unwrap(), before);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn manifest_save_preserves_comments_order_and_entry_forms() {
+        let (root, project, mut manager) = fixture();
+        let source = concat!(
+            "# author order stays authoritative\n",
+            "voices:\n",
+            "  hello:\n",
+            "    path: assets/hello.opus\n",
+            "    tags: [rin, chapter-1]\n",
+            "backgrounds:\n",
+            "  room: assets/room.webp\n",
+        );
+        let path = project.join("assets.yaml");
+        fs::write(&path, source).unwrap();
+        let document = manager.open("assets.yaml").unwrap();
+
+        document.borrow_mut().save().unwrap();
+
+        assert_eq!(fs::read_to_string(path).unwrap(), source);
         fs::remove_dir_all(root).unwrap();
     }
 

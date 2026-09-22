@@ -8,6 +8,7 @@ pub mod app_data;
 pub mod authoring;
 pub mod document;
 pub mod engine;
+mod file_ops;
 pub mod frame_transport;
 pub mod instance;
 pub mod migration;
