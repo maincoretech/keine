@@ -87,8 +87,8 @@ assets:
 规则：
 
 - `project.id` 是发行身份，不是显示名：只接受 1–64 字节的小写 ASCII 字母、数字和连字符，
-  首字符必须是小写字母、末字符必须是字母或数字。开发运行可以暂时省略，`cargo assets
-  --pack` 与 `cargo bundle` 必须提供。LetsGal 工程的原生 `project.json.id` 若已满足该合同则
+  首字符必须是小写字母、末字符必须是字母或数字。开发运行可以暂时省略，`cargo pack`
+  与 `cargo bundle` 必须提供。LetsGal 工程的原生 `project.json.id` 若已满足该合同则
   原样使用；否则 adapter 从原值确定性派生 `letsgal-<slug>-<hash>`，不修改源工程。正式项目
   可在 `project.json` 的 `keine.projectId` 显式固定 Kēne 的发行/存档身份；该值必须满足同一
   slug 合同。
@@ -163,8 +163,8 @@ assets:
   这组 FFmpeg 常量；
 - 必须整文件驻留以支持 seek/loop 的兼容音频最多 128 MiB；项目 Opus 继续流式读取；
 - 构建期资源约束优先于运行时处理：过大图片在打包前统一缩放/转 WebP。
-- `cargo assets --pack` 与 `cargo bundle` 只接受 WebP 项目图片（包括 LUT）和 `.opus`
-  独立音频；兼容格式必须先在独立转换步骤生成目标文件，再用 `cargo assets --remap`
+- `cargo pack` 与 `cargo bundle` 只接受 WebP 项目图片（包括 LUT）和 `.opus`
+  独立音频；兼容格式必须先在独立转换步骤生成目标文件，再用 `cargo remap`
   迁移引用。打包器不会隐式转码，也不会把兼容 decoder 带入发行引擎。视频容器、字体和
   引擎内嵌图标不受这条媒体合同影响。
 
@@ -229,6 +229,6 @@ HTTP/TCP bridge，也不写回源工程；动态资源路径保持动态引用�
 1. 原生工程的 `scripts/` 使用 WebGAL `.txt`；LetsGal 结构化章节只由 project adapter 读取；
 2. 字体与固定 UI 资源由引擎内置，当前不增加项目级主题或换肤目录；
 3. 发行视频首选 MP4（H.264 + AAC），兼顾 AVFoundation 与 FFmpeg；
-4. `cargo assets` 只负责打包和事务化引用重映射，不隐式决定 WebP 质量或 Opus 码率；转码参数属于创作工具输入；
+4. `cargo pack` 与 `cargo remap` 分别负责打包和事务化引用重映射，不隐式决定 WebP 质量或 Opus 码率；转码参数属于创作工具输入；
 5. 源工程始终以源码为权威；`cargo bundle` 在 staging 中重新生成
    `.keine/compiled/program.bin`，发行包只从该编译产物启动。

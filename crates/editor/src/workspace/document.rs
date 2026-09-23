@@ -444,7 +444,13 @@ pub(crate) fn atomic_source(path: &Path, bytes: &[u8]) -> io::Result<()> {
         file.write_all(bytes)?;
         file.sync_all()?;
         replace(&temporary, path)?;
-        sync_directory(parent)
+        // The rename is the commit point. A later directory-sync failure is
+        // a durability warning, not a failed write: callers may otherwise
+        // remove an imported file while its new manifest is already live.
+        if let Err(error) = sync_directory(parent) {
+            eprintln!("Kēne Editor: source committed; directory sync failed: {error}");
+        }
+        Ok(())
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
@@ -466,7 +472,10 @@ fn atomic_bytes(path: &Path, bytes: &[u8]) -> io::Result<()> {
         file.write_all(bytes)?;
         file.sync_all()?;
         replace(&temporary, path)?;
-        sync_directory(parent)
+        if let Err(error) = sync_directory(parent) {
+            eprintln!("Kēne Editor: recovery committed; directory sync failed: {error}");
+        }
+        Ok(())
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temporary);

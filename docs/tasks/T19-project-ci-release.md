@@ -25,8 +25,8 @@ and upload an inspectable artifact with provenance.
 - Focused workflow contract checks under `dev/scripts/` when needed.
 
 No editor behavior, runtime semantics, package format, publisher cryptography, DSL grammar, or new
-dependency is authorized. Phase 7 owns additional target platforms, installers, signing,
-notarization, and representative cross-platform release acceptance.
+dependency is authorized. Project P7 owns additional target platforms, installers, and
+representative cross-platform release acceptance. Signing and notarization are deferred.
 
 ## Required behavior
 

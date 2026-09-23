@@ -183,7 +183,6 @@ settings、gallery、profile、read history 和单槽 save 时也执行同一 en
 | backup envelope | 128 MiB | 4,096 个文件 |
 | backup 内单文件 | 72 MiB | — |
 | 单项目 `config.yaml` | 256 KiB | — |
-| 全局 `engine.conf` | 256 KiB | — |
 
 Backup V2 import 直接从已受限的 envelope 借用文件名和 payload，不再为每个文件复制一份完整
 数据。Export 仍会同时持有源文件集合和序列化 buffer，所以 128 MiB 是当前整体编码方案的
@@ -198,7 +197,7 @@ Backup import 和 publisher 的正式目录 rename（以及要求的目录同步
 Commit 之后删除旧副本失败只记录明确 warning，并留待下次操作重试清理；它不会把已经成功
 安装的存档或发行目录报告成整体失败。Commit 之前或正式 rename/同步失败仍返回错误。
 
-项目配置和全局 `engine.conf` 均先经过 bounded read，再解析；引擎配置上限为 256 KiB。
+项目配置先经过 bounded read，再解析；不再读取机器级的 `engine.conf`。
 
 ## 6. 确定性执行保护
 
@@ -213,7 +212,7 @@ Commit 之后删除旧副本失败只记录明确 warning，并留待下次操�
 ## 7. 失败发生在哪一层
 
 - `cargo validate`：配置、mount、脚本与引用层错误；
-- `cargo assets --pack` / `cargo bundle`：非 WebP 项目图片、非 Opus 独立音频、symlink、
+- `cargo pack` / `cargo bundle`：非 WebP 项目图片、非 Opus 独立音频、symlink、
   special file、非 canonical path 和 Hakutaku 格式上限；
 - 打包游戏启动：签名、catalog、segment 与 compiled program envelope 上限；
 - 资源实际加载：WebP、FFmpeg 帧、symlink containment 等按需限制；

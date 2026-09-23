@@ -334,7 +334,7 @@ fn validate_shipping_media(content: &keine_loader::ContentProject) -> Result<()>
         );
     }
     bail!(
-        "release resources must use WebP images and Ogg Opus (.opus) standalone audio; convert the files first, then migrate their references with `cargo assets --remap <project> png=webp jpg=webp jpeg=webp wav=opus mp3=opus ogg=opus flac=opus -y` before packing"
+        "release resources must use WebP images and Ogg Opus (.opus) standalone audio; convert the files first, then migrate their references with `cargo remap <project> png=webp jpg=webp jpeg=webp wav=opus mp3=opus ogg=opus flac=opus -y` before packing"
     )
 }
 

@@ -140,7 +140,6 @@ struct LaunchOptions {
     benchmark: Option<BenchmarkOptions>,
     startup_capture: Option<crate::ui::performance::StartupCapture>,
     hidden_window: bool,
-    video: crate::scene::video::VideoSelection,
     authoring_preview: Option<super::preview::AuthoringPreviewConfig>,
 }
 
@@ -179,38 +178,12 @@ pub fn run_cli() -> std::process::ExitCode {
         }
     };
     let uses_startup_error_page = command.uses_startup_error_page();
-    let loader = LoaderRegistry::default();
-    #[cfg(feature = "configure")]
-    let mut loader = loader;
-    #[cfg(feature = "configure")]
-    let configure_engine = matches!(&command, CliCommand::Configure);
-    #[cfg(feature = "configure")]
-    let result = if configure_engine {
-        super::configure::configure(&loader)
-    } else {
-        super::configure::apply_saved_configuration(&mut loader)
-            .and_then(|video| execute_command(loader, command, video, process_started))
-    };
-    #[cfg(not(feature = "configure"))]
-    let result = execute_command(
-        loader,
-        command,
-        crate::scene::video::VideoSelection::Automatic,
-        process_started,
-    );
+    let result = execute_command(LoaderRegistry::default(), command, process_started);
 
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
-            #[cfg(feature = "configure")]
-            let stage = if configure_engine {
-                "failed to configure engine"
-            } else {
-                "failed to open project"
-            };
-            #[cfg(not(feature = "configure"))]
-            let stage = "failed to open project";
-            report_startup_error(uses_startup_error_page, stage, &error);
+            report_startup_error(uses_startup_error_page, "failed to open project", &error);
             std::process::ExitCode::FAILURE
         }
     }
@@ -223,14 +196,7 @@ pub fn run_with_loader(loader: LoaderRegistry) {
     let uses_startup_error_page = parsed
         .as_ref()
         .is_ok_and(CliCommand::uses_startup_error_page);
-    let result = parsed.and_then(|command| {
-        execute_command(
-            loader,
-            command,
-            crate::scene::video::VideoSelection::Automatic,
-            process_started,
-        )
-    });
+    let result = parsed.and_then(|command| execute_command(loader, command, process_started));
     if let Err(error) = result {
         report_startup_error(uses_startup_error_page, "failed to open project", &error);
     }
@@ -246,20 +212,15 @@ fn report_startup_error(show_page: bool, stage: &str, error: &anyhow::Error) {
 fn execute_command(
     loader: LoaderRegistry,
     command: CliCommand,
-    video: crate::scene::video::VideoSelection,
     process_started: Instant,
 ) -> Result<()> {
     #[cfg(feature = "hardened")]
     super::platform::apply_hardening();
     let (project_path, action) = match command {
         CliCommand::AuthoringHost { endpoint, token } => {
-            return super::authoring::run(&endpoint, &token, loader, video);
+            return super::authoring::run(&endpoint, &token, loader);
         }
-        #[cfg(feature = "configure")]
-        CliCommand::Configure => {
-            anyhow::bail!("engine configuration must run before project setup")
-        }
-        CliCommand::AssetsPack { project, output } => {
+        CliCommand::Pack { project, output } => {
             #[cfg(feature = "publisher")]
             return crate::publisher::pack_project(
                 &resolve_project_path(project),
@@ -269,9 +230,7 @@ fn execute_command(
             #[cfg(not(feature = "publisher"))]
             {
                 let _ = (project, output);
-                anyhow::bail!(
-                    "publisher tools are not compiled; run `cargo assets --pack <project>`"
-                );
+                anyhow::bail!("publisher tools are not compiled; run `cargo pack <project>`");
             }
         }
         CliCommand::Bundle {
@@ -306,7 +265,7 @@ fn execute_command(
             #[cfg(not(any(feature = "publisher", feature = "startup-metrics")))]
             anyhow::bail!("package benchmark support is not compiled");
         }
-        CliCommand::RemapAssets {
+        CliCommand::Remap {
             project,
             rules,
             yes,
@@ -321,7 +280,9 @@ fn execute_command(
             #[cfg(not(feature = "publisher"))]
             {
                 let _ = (project, rules, yes);
-                anyhow::bail!("asset migration tools are not compiled; run `cargo assets --help`");
+                anyhow::bail!(
+                    "resource remapping tools are not compiled; run `cargo remap --help`"
+                );
             }
         }
         CliCommand::Migrate { source, target } => {
@@ -337,7 +298,7 @@ fn execute_command(
                 anyhow::bail!("migration tools are not compiled; run `cargo migrate --help`");
             }
         }
-        CliCommand::Check { project } => (project, ProjectAction::Check),
+        CliCommand::Validate { project } => (project, ProjectAction::Check),
         CliCommand::Run {
             project,
             mode,
@@ -400,7 +361,6 @@ fn execute_command(
             startup_capture: startup_capture.clone(),
             hidden_window: startup_capture.is_some()
                 || std::env::var_os(RUNTIME_BENCHMARK_CHILD_ENV).is_some(),
-            video,
             authoring_preview: None,
         },
     );
@@ -451,9 +411,9 @@ fn run_startup_suite(project_path: &Path, runs: usize) -> Result<String> {
     append_host_environment(&mut report, logical_threads);
     for run in 1..=runs {
         let output = Command::new(&executable)
-            .arg("benchmark-startup")
+            .arg("perf")
             .arg(project_path)
-            .arg("1")
+            .args(["--startup", "--runs", "1"])
             .env(STARTUP_BENCHMARK_CHILD_ENV, "1")
             .output()
             .with_context(|| format!("failed to start benchmark child {run}"))?;
@@ -792,9 +752,15 @@ fn run_benchmark_workload(
         },
     );
     let mut command = Command::new(executable);
-    command.arg("benchmark").arg(project_path).arg("5");
-    if target.is_some() || cameras != BenchmarkCameras::Runtime {
-        command.arg(target.unwrap_or("-")).arg(cameras.id());
+    command
+        .arg("perf")
+        .arg(project_path)
+        .args(["--seconds", "5"]);
+    if let Some(target) = target {
+        command.arg("--timeline").arg(target);
+    }
+    if cameras != BenchmarkCameras::Runtime {
+        command.arg("--camera").arg(cameras.id());
     }
     let output = command
         .env(RUNTIME_BENCHMARK_CHILD_ENV, "1")
@@ -1167,7 +1133,6 @@ pub(crate) fn build_authoring_preview_app(
     project_path: &Path,
     overlay_root: Option<&Path>,
     loader: &LoaderRegistry,
-    video: crate::scene::video::VideoSelection,
     preview: super::preview::AuthoringPreviewConfig,
 ) -> Result<App> {
     let OpenedProject {
@@ -1199,7 +1164,6 @@ pub(crate) fn build_authoring_preview_app(
         LaunchOptions {
             editor_sync: true,
             hidden_window: true,
-            video,
             authoring_preview: Some(preview),
             ..default()
         },
@@ -1271,19 +1235,14 @@ fn build_opened_app(
     app.add_plugins(crate::runtime::audio::OpusAudioPlugin::new(asset_mounts));
     #[cfg(feature = "audio-seekable")]
     app.add_plugins(crate::runtime::audio::SeekableAudioPlugin);
-    app.add_plugins((
-        webp,
-        GamePlugin::new(options.video),
-        CameraEffectsPlugin,
-        BlurPlugin,
-    ))
-    .insert_resource(ProjectRoot(project_root))
-    .insert_resource(PersistenceRoot(persistence_root))
-    .insert_resource(ContentProjectResource(content))
-    .insert_resource(ScriptLanguages(languages))
-    .insert_resource(StoreCodec(store))
-    .insert_resource(GameConfigResource(config))
-    .add_systems(PreStartup, bootstrap_project);
+    app.add_plugins((webp, GamePlugin, CameraEffectsPlugin, BlurPlugin))
+        .insert_resource(ProjectRoot(project_root))
+        .insert_resource(PersistenceRoot(persistence_root))
+        .insert_resource(ContentProjectResource(content))
+        .insert_resource(ScriptLanguages(languages))
+        .insert_resource(StoreCodec(store))
+        .insert_resource(GameConfigResource(config))
+        .add_systems(PreStartup, bootstrap_project);
     if !authoring_preview {
         app.add_systems(PostStartup, set_primary_window_icon);
     }
@@ -2012,8 +1971,9 @@ mod tests {
     #[test]
     #[cfg(feature = "hot-reload")]
     fn parser_keeps_each_commands_project_and_options_together() {
-        let CliCommand::Check { project } = parse_cli(&args(&["check", "project"])).unwrap() else {
-            panic!("expected check command");
+        let CliCommand::Validate { project } = parse_cli(&args(&["validate", "project"])).unwrap()
+        else {
+            panic!("expected validate command");
         };
         assert_eq!(project, Path::new("project"));
 
@@ -2027,23 +1987,6 @@ mod tests {
         };
         assert_eq!(project, Path::new("editor-project"));
         assert!(editor_sync);
-    }
-
-    #[test]
-    #[cfg(feature = "configure")]
-    fn configure_command_accepts_no_arguments() {
-        assert!(matches!(
-            parse_cli(&args(&["configure"])).unwrap(),
-            CliCommand::Configure
-        ));
-        assert!(parse_cli(&args(&["configure", "ignored"])).is_err());
-    }
-
-    #[test]
-    #[cfg(not(feature = "configure"))]
-    fn release_surface_rejects_the_uncompiled_configuration_tui() {
-        let error = parse_cli(&args(&["configure"])).unwrap_err();
-        assert!(error.to_string().contains("not compiled"));
     }
 
     #[test]
@@ -2079,7 +2022,7 @@ mod tests {
     fn only_shipping_runs_use_the_native_startup_error_page() {
         let shipping = parse_cli(&args(&["game.haku"])).unwrap();
         let development = parse_cli(&args(&["dev", "project"])).unwrap();
-        let check = parse_cli(&args(&["check", "project"])).unwrap();
+        let check = parse_cli(&args(&["validate", "project"])).unwrap();
 
         assert!(shipping.uses_startup_error_page());
         assert!(!development.uses_startup_error_page());
@@ -2104,7 +2047,7 @@ mod tests {
         let CliCommand::Run {
             mode: InteractiveMode::Benchmark(options),
             ..
-        } = parse_cli(&args(&["benchmark", "/tmp/project"])).unwrap()
+        } = parse_cli(&args(&["perf", "/tmp/project"])).unwrap()
         else {
             panic!("expected benchmark command");
         };
@@ -2121,13 +2064,22 @@ mod tests {
         let CliCommand::Run {
             mode: InteractiveMode::StartupBenchmark(options),
             ..
-        } = parse_cli(&args(&["benchmark-startup", "/tmp/project"])).unwrap()
+        } = parse_cli(&args(&["perf", "/tmp/project", "--startup"])).unwrap()
         else {
             panic!("expected startup benchmark command");
         };
         assert_eq!(options.runs, 7);
-        assert!(parse_cli(&args(&["benchmark-startup", "/tmp/project", "0"])).is_err());
-        assert!(parse_cli(&args(&["benchmark-startup", "/tmp/project", "51"])).is_err());
+        assert!(parse_cli(&args(&["perf", "/tmp/project", "--startup", "--runs", "0"])).is_err());
+        assert!(
+            parse_cli(&args(&[
+                "perf",
+                "/tmp/project",
+                "--startup",
+                "--runs",
+                "51"
+            ]))
+            .is_err()
+        );
     }
 
     #[test]
@@ -2135,7 +2087,15 @@ mod tests {
         let CliCommand::Run {
             mode: InteractiveMode::Benchmark(options),
             ..
-        } = parse_cli(&args(&["benchmark", "/tmp/project", "7.5", "25"])).unwrap()
+        } = parse_cli(&args(&[
+            "perf",
+            "/tmp/project",
+            "--seconds",
+            "7.5",
+            "--cursor",
+            "25",
+        ]))
+        .unwrap()
         else {
             panic!("expected benchmark command");
         };
@@ -2153,9 +2113,11 @@ mod tests {
             mode: InteractiveMode::Benchmark(options),
             ..
         } = parse_cli(&args(&[
-            "benchmark",
+            "perf",
             "/tmp/project",
+            "--seconds",
             "7.5",
+            "--timeline",
             "10-04-blur-family",
         ]))
         .unwrap()
@@ -2174,10 +2136,13 @@ mod tests {
             mode: InteractiveMode::Benchmark(options),
             ..
         } = parse_cli(&args(&[
-            "benchmark",
+            "perf",
             "/tmp/project",
+            "--seconds",
             "7.5",
+            "--cursor",
             "25",
+            "--camera",
             "scene-ui",
         ]))
         .unwrap()
@@ -2196,10 +2161,11 @@ mod tests {
             mode: InteractiveMode::Benchmark(options),
             ..
         } = parse_cli(&args(&[
-            "benchmark",
+            "perf",
             "/tmp/project",
+            "--seconds",
             "7.5",
-            "-",
+            "--camera",
             "scene-dialog",
         ]))
         .unwrap()
@@ -2215,27 +2181,28 @@ mod tests {
 
     #[test]
     fn benchmark_command_rejects_zero_duration() {
-        assert!(parse_cli(&args(&["benchmark", "/tmp/project", "0"])).is_err());
+        assert!(parse_cli(&args(&["perf", "/tmp/project", "--seconds", "0"])).is_err());
     }
 
     #[test]
-    fn parser_rejects_alias_names_and_ignored_arguments() {
-        assert!(parse_cli(&args(&["validate", "project"])).is_err());
-        assert!(parse_cli(&args(&["perf", "project"])).is_err());
+    fn parser_rejects_removed_commands_and_ignored_arguments() {
+        assert!(parse_cli(&args(&["assets", "--pack", "project"])).is_err());
+        assert!(parse_cli(&args(&["configure", "project"])).is_err());
         assert!(parse_cli(&args(&["remap-assets", "project", "wav=opus"])).is_err());
-        assert!(parse_cli(&args(&["check", "project", "ignored"])).is_err());
+        assert!(parse_cli(&args(&["validate", "project", "ignored"])).is_err());
         assert!(parse_cli(&args(&["dev", "project", "--sync", "--sync"])).is_err());
+        assert!(parse_cli(&args(&["perf", "project", "--startup", "--seconds", "5"])).is_err());
+        assert!(parse_cli(&args(&["perf", "project", "--runs", "2"])).is_err());
     }
 
     #[test]
-    fn assets_remap_accepts_rules_and_explicit_yes() {
-        let CliCommand::RemapAssets {
+    fn remap_accepts_rules_and_explicit_yes() {
+        let CliCommand::Remap {
             project,
             rules,
             yes,
         } = parse_cli(&args(&[
-            "assets",
-            "--remap",
+            "remap",
             "/tmp/project",
             "wav=opus",
             "png=webp",
@@ -2257,19 +2224,9 @@ mod tests {
     }
 
     #[test]
-    fn assets_remap_requires_rules_and_rejects_duplicate_yes() {
-        assert!(parse_cli(&args(&["assets", "--remap", "/tmp/project"])).is_err());
-        assert!(
-            parse_cli(&args(&[
-                "assets",
-                "--remap",
-                "/tmp/project",
-                "wav=opus",
-                "-y",
-                "-y",
-            ]))
-            .is_err()
-        );
+    fn remap_requires_rules_and_rejects_duplicate_yes() {
+        assert!(parse_cli(&args(&["remap", "/tmp/project"])).is_err());
+        assert!(parse_cli(&args(&["remap", "/tmp/project", "wav=opus", "-y", "-y",])).is_err());
     }
 
     #[test]

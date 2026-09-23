@@ -21,7 +21,7 @@ adapter read-only and materializes an equivalent default Eiyashou project.
 
 - `crates/editor/src/preview.rs` and the narrow Preview presentation path in
   `crates/editor/src/app.rs`.
-- `crates/authoring-protocol/src/frame.rs` and `src/runtime/authoring.rs` only when measurements
+- `crates/authoring/src/frame.rs` and `src/runtime/authoring.rs` only when measurements
   prove the frame transport or Engine update loop is responsible.
 - `src/project_migration.rs`, the CLI/bootstrap entry points, and focused loader exports required
   to translate an already-adapted project.

@@ -772,7 +772,7 @@ push/tag game project
 → CI checkout/pin Keine revision
 → install Rust/platform deps in runner
 → cargo bundle <project>
-→ artifact / signing / release
+→ artifact / release
 ```
 
 **当前 `cargo bundle` 内部会从固定 Keine 源码为项目构建匹配的 hardened engine，并处理 Hakutaku publisher key material。这个成本留在 CI 是可接受且当前最小风险的方案。**不要把预编译 Editor/Engine 重新打包成正式发行物，也不要为了 Editor 先重写 publisher。
@@ -1273,7 +1273,6 @@ Editor 可以以后提供“打开 CI 文档/复制模板”的辅助，但不�
 Editor standalone release packaging
 Engine standalone authoring release packaging
 Windows/macOS/Linux installation/discovery
-signing/notarization where required
 DPI/input/IME validation
 multi-monitor/window restore
 crash recovery
@@ -1285,6 +1284,7 @@ full acceptance project
 ### 重要边界
 
 Editor 和 Engine **分别发布**；不要在此 Phase 又改回“Editor 内嵌 Engine”。
+签名与公证暂不纳入当前 P7 验收，待有实际发行要求时单独决定。
 
 ---
 

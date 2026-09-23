@@ -42,20 +42,31 @@ cargo build --release --workspace --bin editor
 
 ## Commands
 
+Most projects need only these commands:
+
 | Command | Purpose |
 |---|---|
 | `cargo validate <project>` | Validate a project without opening a window |
 | `cargo dev <project>` | Run a project with development tools and hot reload |
-| `cargo dev <project> --sync` | Follow an open LetsGal project |
-| `cargo editor [project]` | Open the native Editor, optionally with a project |
-| `cargo build --release --workspace --bin editor` | Build the native editor release binary |
-| `cargo assets --pack <project>` | Build only the encrypted Hakutaku resource package |
-| `cargo assets --remap <project> <old=new>...` | Safely migrate converted asset references |
-| `cargo migrate <source-project> <target-project>` | Convert a compatibility project to native Eiyashou |
+| `cargo editor [project ...]` | Open the native Editor, optionally with project windows |
 | `cargo bundle <project>` | Build a distributable game |
+
+Advanced operations:
+
+| Command | Purpose |
+|---|---|
+| `cargo dev <project> --sync` | Follow an open LetsGal project |
+| `cargo build --release --workspace --bin editor` | Build the native editor release binary |
+| `cargo pack <project>` | Build only the encrypted Hakutaku resource package |
+| `cargo remap <project> <old=new>...` | Safely update converted asset references |
+| `cargo migrate <source-project> <target-project>` | Convert a compatibility project to native Eiyashou |
 | `cargo bundle <project> --benchmark` | Build a separate `-benchmark` performance package |
-| `cargo configure` | Configure built-in content adapters and runtime capabilities |
-| `cargo perf <project>` | Capture a runtime performance sample |
+| `cargo perf <project>` | Capture a runtime performance sample; `--startup` measures launch time |
+
+Installed binaries use the same command names without `cargo` (`keine validate`,
+`keine bundle`, etc.) when built with the corresponding feature. The Editor is
+a separate application. Built-in project formats are detected automatically;
+the old global `engine.conf` adapter/video switches are no longer read.
 
 ## Game projects
 
@@ -94,7 +105,7 @@ Start the release directly: double-click `keine.exe` on Windows, or run
 `./keine` on macOS/Linux. The executable locates the sibling `game.haku`
 without depending on the current working directory.
 
-`cargo assets --pack` writes only `game.haku` and `data/*.taku` under
+`cargo pack` writes only `game.haku` and `data/*.taku` under
 `target/package/`; it never builds or copies an engine. `cargo bundle` reuses
 the same asset-pack pipeline and then builds and assembles the matching
 runtime. The first operation that needs a publisher identity creates
@@ -131,10 +142,10 @@ without adding a runtime fallback:
 
 ```bash
 # Preview the path and size changes, then ask for confirmation.
-cargo assets --remap path/to/project wav=opus png=webp
+cargo remap path/to/project wav=opus png=webp
 
 # Print the same preview and apply it without prompting.
-cargo assets --remap path/to/project wav=opus png=webp -y
+cargo remap path/to/project wav=opus png=webp -y
 ```
 
 Every converted target must already exist beside its source. The preview shows
@@ -144,7 +155,7 @@ change percentage. Apply mode backs up every changed source below
 project for validation. Failed validation restores the originals. The command
 does not convert, rename, delete, or select fallback assets.
 
-Both `cargo assets --pack` and `cargo bundle` enforce the production media
+Both `cargo pack` and `cargo bundle` enforce the production media
 contract: project images (including LUTs) must be WebP and standalone audio
 must be Ogg Opus (`.opus`). Compatibility formats remain available in
 development builds, but never expand the shipping engine feature set.
@@ -203,4 +214,4 @@ gallery without loading a second compressed copy.
 - [Hakutaku packaging](docs/architecture/06-hakutaku-packaging.md)
 - [Project CI formal releases](docs/project-ci-release.md)
 - [LetsGal integration](docs/architecture/08-letsgal-studio.md)
-- [WebGAL compatibility](docs/webgal-compatibility/README.md)
+- [WebGAL compatibility](docs/webgal/README.md)

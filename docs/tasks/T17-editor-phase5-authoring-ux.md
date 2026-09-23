@@ -43,7 +43,7 @@ This task may modify:
 
 - `crates/editor/**` for selection, projections, indexes, source-edit commands, Dock views, and
   focused tests;
-- `crates/authoring-protocol/**` only if a measured existing message cannot carry required
+- `crates/authoring/**` only if a measured existing message cannot carry required
   diagnostics/timeline data;
 - focused Editor fixtures and this task record.
 

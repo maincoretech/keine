@@ -111,7 +111,7 @@
 ## F. 自动回归
 
 ```bash
-cargo letsgal-test
+cargo test --test letsgal_sample_acceptance
 cargo test -p keine-loader adapter::editor::letsgal
 cargo validate projects/test-project
 ```

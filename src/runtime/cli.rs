@@ -71,12 +71,10 @@ pub(super) enum CliCommand {
         endpoint: String,
         token: String,
     },
-    #[cfg(feature = "configure")]
-    Configure,
-    Check {
+    Validate {
         project: PathBuf,
     },
-    AssetsPack {
+    Pack {
         project: PathBuf,
         output: PathBuf,
     },
@@ -93,7 +91,7 @@ pub(super) enum CliCommand {
     PackageBenchmark {
         project: PathBuf,
     },
-    RemapAssets {
+    Remap {
         project: PathBuf,
         rules: Vec<(String, String)>,
         yes: bool,
@@ -122,62 +120,51 @@ impl CliCommand {
 }
 
 struct CommandHelp {
-    binary_name: &'static str,
-    cargo_name: &'static str,
+    name: &'static str,
     args: &'static str,
     summary: &'static str,
 }
 
 const COMMANDS: &[CommandHelp] = &[
-    #[cfg(feature = "configure")]
     CommandHelp {
-        binary_name: "configure",
-        cargo_name: "configure",
-        args: "",
-        summary: "Configure built-in engine capabilities",
-    },
-    CommandHelp {
-        binary_name: "check",
-        cargo_name: "validate",
+        name: "validate",
         args: "<project>",
         summary: "Validate without opening a window",
     },
+    #[cfg(feature = "hot-reload")]
     CommandHelp {
-        binary_name: "assets",
-        cargo_name: "assets",
-        args: "--pack <project> [--output <dir>] | --remap <project> <old=new>... [-y]",
-        summary: "Pack project assets or remap their references",
+        name: "dev",
+        args: "<project> [--sync]",
+        summary: "Run with hot reload",
     },
+    #[cfg(feature = "publisher")]
     CommandHelp {
-        binary_name: "bundle",
-        cargo_name: "bundle",
+        name: "bundle",
         args: "<project> [--output <dir>] [--benchmark]",
         summary: "Build a complete distributable game",
     },
+    #[cfg(feature = "publisher")]
     CommandHelp {
-        binary_name: "migrate",
-        cargo_name: "migrate",
+        name: "migrate",
         args: "<source-project> <target-project>",
         summary: "Convert a compatibility project to native Eiyashou",
     },
-    #[cfg(feature = "hot-reload")]
+    #[cfg(feature = "publisher")]
     CommandHelp {
-        binary_name: "dev",
-        cargo_name: "dev",
-        args: "<project> [--sync]",
-        summary: "Run with hot reload and video",
+        name: "pack",
+        args: "<project> [--output <dir>]",
+        summary: "Build only a Hakutaku resource package",
+    },
+    #[cfg(feature = "publisher")]
+    CommandHelp {
+        name: "remap",
+        args: "<project> <old=new>... [-y]",
+        summary: "Update resource references after conversion",
     },
     CommandHelp {
-        binary_name: "benchmark",
-        cargo_name: "perf",
-        args: "<project> [seconds] [timeline|cursor] [profile]",
-        summary: "Record a performance sample",
-    },
-    CommandHelp {
-        binary_name: "benchmark-startup",
-        cargo_name: "startup-perf",
-        args: "<project> [runs]",
-        summary: "Repeat process-cold startup measurements",
+        name: "perf",
+        args: "<project> [options]",
+        summary: "Measure frames or startup",
     },
 ];
 
@@ -193,7 +180,7 @@ pub(super) fn help_or_version(args: &[OsString]) -> Option<ExitCode> {
         .any(|argument| argument == "-V" || argument == "--version");
     if let Some(name) = first.as_deref()
         && requested_help
-        && COMMANDS.iter().any(|command| command.binary_name == name)
+        && COMMANDS.iter().any(|command| command.name == name)
     {
         print_command_help(name);
         return Some(ExitCode::SUCCESS);
@@ -220,21 +207,13 @@ pub(super) fn parse(args: &[OsString]) -> Result<CliCommand> {
             require_no_extra_args(args, 3, "internal authoring host")?;
             Ok(CliCommand::AuthoringHost { endpoint, token })
         }
-        #[cfg(feature = "configure")]
-        Some("configure") => {
-            require_no_extra_args(args, 1, "keine configure")?;
-            Ok(CliCommand::Configure)
+        Some("validate") => {
+            let project = required_path(args, 1, "keine validate <project>")?;
+            require_no_extra_args(args, 2, "keine validate <project>")?;
+            Ok(CliCommand::Validate { project })
         }
-        #[cfg(not(feature = "configure"))]
-        Some("configure") => {
-            anyhow::bail!("engine configuration TUI is not compiled; run `cargo configure`")
-        }
-        Some("check") => {
-            let project = required_path(args, 1, "keine check <project>")?;
-            require_no_extra_args(args, 2, "keine check <project>")?;
-            Ok(CliCommand::Check { project })
-        }
-        Some("assets") => parse_assets(args),
+        Some("pack") => parse_pack(args),
+        Some("remap") => parse_remap(args),
         Some("bundle") => parse_bundle(args),
         Some("migrate") => {
             const USAGE: &str = "keine migrate <source-project> <target-project>";
@@ -243,50 +222,38 @@ pub(super) fn parse(args: &[OsString]) -> Result<CliCommand> {
             require_no_extra_args(args, 3, USAGE)?;
             Ok(CliCommand::Migrate { source, target })
         }
-        Some("package") => anyhow::bail!(
-            "`keine package` was split by responsibility; use `keine assets --pack <project>` for a resource package or `keine bundle <project>` for a complete game"
-        ),
         #[cfg(feature = "hot-reload")]
         Some("dev") => parse_development(args),
         #[cfg(not(feature = "hot-reload"))]
         Some("dev") => anyhow::bail!("hot reload is not compiled; run `cargo dev <project>`"),
-        Some("benchmark") => parse_benchmark(args),
-        Some("benchmark-startup") => parse_startup_benchmark(args),
+        Some("perf") => parse_perf(args),
         Some("__benchmark-package") => {
             let project = required_path(args, 1, "internal package benchmark")?;
             require_no_extra_args(args, 2, "internal package benchmark")?;
             Ok(CliCommand::PackageBenchmark { project })
         }
-        Some("validate" | "perf" | "startup-perf") => anyhow::bail!(
-            "{command:?} is a Cargo alias, not a keine subcommand; run `cargo {}` or `keine --help`",
-            command.to_string_lossy()
-        ),
         Some(name) if name.starts_with('-') => anyhow::bail!("unknown option {name:?}"),
         _ => {
-            require_no_extra_args(args, 1, "keine <project>")?;
-            Ok(run(PathBuf::from(command), InteractiveMode::Shipping))
+            if args.len() > 1 {
+                anyhow::bail!("unknown command {command:?}");
+            }
+            let project = PathBuf::from(command);
+            if !project.exists()
+                && project.components().count() == 1
+                && project.extension().is_none()
+            {
+                anyhow::bail!("unknown command or missing project {command:?}");
+            }
+            Ok(run(project, InteractiveMode::Shipping))
         }
     }
 }
 
-fn parse_assets(args: &[OsString]) -> Result<CliCommand> {
-    match args.get(1).and_then(|argument| argument.to_str()) {
-        Some("--pack") => parse_asset_pack(args),
-        Some("--remap") => parse_asset_remap(args),
-        Some(argument) => anyhow::bail!(
-            "unknown assets operation {argument:?}; use `keine assets --pack ...` or `keine assets --remap ...`"
-        ),
-        None => anyhow::bail!(
-            "missing assets operation; use `keine assets --pack ...` or `keine assets --remap ...`"
-        ),
-    }
-}
-
-fn parse_asset_pack(args: &[OsString]) -> Result<CliCommand> {
-    const USAGE: &str = "keine assets --pack <project> [--output <dir>]";
-    let project = required_path(args, 2, USAGE)?;
+fn parse_pack(args: &[OsString]) -> Result<CliCommand> {
+    const USAGE: &str = "keine pack <project> [--output <dir>]";
+    let project = required_path(args, 1, USAGE)?;
     let mut output = None;
-    let mut index = 3;
+    let mut index = 2;
     while index < args.len() {
         match args[index].to_str() {
             Some("--output") if output.is_none() => {
@@ -297,10 +264,10 @@ fn parse_asset_pack(args: &[OsString]) -> Result<CliCommand> {
                 index += 2;
             }
             Some(argument) => anyhow::bail!("unexpected argument {argument:?}; usage: {USAGE}"),
-            None => anyhow::bail!("assets argument is not UTF-8; usage: {USAGE}"),
+            None => anyhow::bail!("pack argument is not UTF-8; usage: {USAGE}"),
         }
     }
-    Ok(CliCommand::AssetsPack {
+    Ok(CliCommand::Pack {
         project,
         output: output.unwrap_or_else(|| PathBuf::from(DEFAULT_ASSET_PACKAGE_OUTPUT)),
     })
@@ -352,12 +319,12 @@ fn benchmark_output_path(output: &Path) -> Result<PathBuf> {
     Ok(output.with_file_name(benchmark_name))
 }
 
-fn parse_asset_remap(args: &[OsString]) -> Result<CliCommand> {
-    const USAGE: &str = "keine assets --remap <project> <old=new>... [-y]";
-    let project = required_path(args, 2, USAGE)?;
+fn parse_remap(args: &[OsString]) -> Result<CliCommand> {
+    const USAGE: &str = "keine remap <project> <old=new>... [-y]";
+    let project = required_path(args, 1, USAGE)?;
     let mut rules = Vec::new();
     let mut yes = false;
-    for argument in &args[3..] {
+    for argument in &args[2..] {
         if argument == "-y" {
             if yes {
                 anyhow::bail!("-y may only be specified once");
@@ -376,7 +343,7 @@ fn parse_asset_remap(args: &[OsString]) -> Result<CliCommand> {
     if rules.is_empty() {
         anyhow::bail!("at least one extension rule is required; usage: {USAGE}");
     }
-    Ok(CliCommand::RemapAssets {
+    Ok(CliCommand::Remap {
         project,
         rules,
         yes,
@@ -445,65 +412,92 @@ fn parse_development(args: &[OsString]) -> Result<CliCommand> {
     })
 }
 
-fn parse_benchmark(args: &[OsString]) -> Result<CliCommand> {
-    const USAGE: &str = "keine benchmark <project> [seconds] [timeline|cursor] [profile]";
+fn parse_perf(args: &[OsString]) -> Result<CliCommand> {
+    const USAGE: &str = "keine perf <project> [--seconds N] [--timeline ID | --cursor N] [--camera PROFILE] | --startup [--runs N]";
     let project = required_path(args, 1, USAGE)?;
-    require_no_extra_args(args, 5, USAGE)?;
-    let seconds = match args.get(2) {
-        Some(value) => value
-            .to_string_lossy()
-            .parse::<f32>()
-            .context("benchmark duration must be a number of seconds")?,
-        None => 15.0,
-    };
-    if !seconds.is_finite() || seconds < 1.0 {
-        anyhow::bail!("benchmark duration must be at least one second");
+    let mut seconds = None;
+    let mut target = None;
+    let mut cameras = None;
+    let mut startup = false;
+    let mut runs = None;
+    let mut index = 2;
+    while index < args.len() {
+        let option = args[index]
+            .to_str()
+            .with_context(|| format!("perf option is not UTF-8; usage: {USAGE}"))?;
+        match option {
+            "--startup" if !startup => {
+                startup = true;
+                index += 1;
+                continue;
+            }
+            "--seconds" if seconds.is_none() => {
+                let value = required_utf8(args, index + 1, USAGE)?;
+                let parsed = value.parse::<f32>().context("--seconds must be a number")?;
+                if !parsed.is_finite() || parsed < 1.0 {
+                    anyhow::bail!("--seconds must be at least 1");
+                }
+                seconds = Some(parsed);
+            }
+            "--timeline" if target.is_none() => {
+                target = Some(BenchmarkTarget::Timeline(required_utf8(
+                    args,
+                    index + 1,
+                    USAGE,
+                )?));
+            }
+            "--cursor" if target.is_none() => {
+                target = Some(BenchmarkTarget::Cursor(
+                    required_utf8(args, index + 1, USAGE)?
+                        .parse::<usize>()
+                        .context("--cursor must be an integer")?,
+                ));
+            }
+            "--camera" if cameras.is_none() => {
+                cameras = Some(match required_utf8(args, index + 1, USAGE)?.as_str() {
+                    "runtime" => crate::ui::performance::BenchmarkCameras::Runtime,
+                    "scene-ui" => crate::ui::performance::BenchmarkCameras::SceneUi,
+                    "scene-dialog" => crate::ui::performance::BenchmarkCameras::SceneDialog,
+                    "scene" => crate::ui::performance::BenchmarkCameras::SceneOnly,
+                    _ => {
+                        anyhow::bail!("--camera expects runtime, scene-ui, scene-dialog, or scene")
+                    }
+                });
+            }
+            "--runs" if runs.is_none() => {
+                let parsed = required_utf8(args, index + 1, USAGE)?
+                    .parse::<usize>()
+                    .context("--runs must be an integer")?;
+                if !(1..=50).contains(&parsed) {
+                    anyhow::bail!("--runs must be between 1 and 50");
+                }
+                runs = Some(parsed);
+            }
+            _ => anyhow::bail!("unexpected perf option {option:?}; usage: {USAGE}"),
+        }
+        index += 2;
     }
-    let target = args.get(3).and_then(|value| {
-        let value = value.to_string_lossy();
-        (value != "-").then(|| {
-            value.parse::<usize>().map_or_else(
-                |_| BenchmarkTarget::Timeline(value.into_owned()),
-                BenchmarkTarget::Cursor,
-            )
-        })
-    });
-    let cameras = match args.get(4).and_then(|value| value.to_str()) {
-        None | Some("runtime") => crate::ui::performance::BenchmarkCameras::Runtime,
-        Some("scene-ui") => crate::ui::performance::BenchmarkCameras::SceneUi,
-        Some("scene-dialog") => crate::ui::performance::BenchmarkCameras::SceneDialog,
-        Some("scene") => crate::ui::performance::BenchmarkCameras::SceneOnly,
-        Some(value) => anyhow::bail!(
-            "unknown benchmark camera profile {value:?}; expected runtime, scene-ui, scene-dialog, or scene"
-        ),
-    };
+    if startup {
+        if seconds.is_some() || target.is_some() || cameras.is_some() {
+            anyhow::bail!("--startup cannot be combined with frame sampling options");
+        }
+        return Ok(run(
+            project,
+            InteractiveMode::StartupBenchmark(StartupBenchmarkOptions {
+                runs: runs.unwrap_or(7),
+            }),
+        ));
+    }
+    if runs.is_some() {
+        anyhow::bail!("--runs requires --startup");
+    }
     Ok(run(
         project,
         InteractiveMode::Benchmark(BenchmarkOptions {
-            seconds,
+            seconds: seconds.unwrap_or(15.0),
             target,
-            cameras,
+            cameras: cameras.unwrap_or(crate::ui::performance::BenchmarkCameras::Runtime),
         }),
-    ))
-}
-
-fn parse_startup_benchmark(args: &[OsString]) -> Result<CliCommand> {
-    const USAGE: &str = "keine benchmark-startup <project> [runs]";
-    let project = required_path(args, 1, USAGE)?;
-    require_no_extra_args(args, 3, USAGE)?;
-    let runs = match args.get(2) {
-        Some(value) => value
-            .to_string_lossy()
-            .parse::<usize>()
-            .context("startup benchmark runs must be an integer")?,
-        None => 7,
-    };
-    if !(1..=50).contains(&runs) {
-        anyhow::bail!("startup benchmark runs must be between 1 and 50");
-    }
-    Ok(run(
-        project,
-        InteractiveMode::StartupBenchmark(StartupBenchmarkOptions { runs }),
     ))
 }
 
@@ -562,15 +556,11 @@ fn cargo_invocation() -> bool {
 }
 
 fn command_usage(command: &CommandHelp, cargo: bool) -> String {
-    let (prefix, name) = if cargo {
-        ("cargo", command.cargo_name)
-    } else {
-        ("keine", command.binary_name)
-    };
+    let prefix = if cargo { "cargo" } else { "keine" };
     if command.args.is_empty() {
-        format!("{prefix} {name}")
+        format!("{prefix} {}", command.name)
     } else {
-        format!("{prefix} {name} {}", command.args)
+        format!("{prefix} {} {}", command.name, command.args)
     }
 }
 
@@ -581,7 +571,8 @@ fn print_help() {
     println!("A native visual-novel engine with WebGAL and LetsGal compatibility.");
     println!("\nUsage: {prefix} <command> [args]\n\nCommands:");
     for command in COMMANDS {
-        println!("  {:<60}{}", command_usage(command, cargo), command.summary);
+        println!("  {}", command_usage(command, cargo));
+        println!("      {}", command.summary);
     }
     if !cargo {
         println!(
@@ -597,11 +588,21 @@ fn print_help() {
 fn print_command_help(name: &str) {
     let command = COMMANDS
         .iter()
-        .find(|command| command.binary_name == name)
+        .find(|command| command.name == name)
         .expect("caller matched a known command");
     println!("Kēne {VERSION}");
     println!("\nUsage: {}", command_usage(command, cargo_invocation()));
     println!("\n{}", command.summary);
+    if name == "perf" {
+        println!("\nFrame options:");
+        println!("  --seconds N       Sample duration (default: 15)");
+        println!("  --timeline ID     Authored timeline name");
+        println!("  --cursor N        Numeric cursor instead of a timeline");
+        println!("  --camera PROFILE  runtime, scene-ui, scene-dialog, or scene");
+        println!("\nStartup options:");
+        println!("  --startup         Measure isolated launches instead of frames");
+        println!("  --runs N          Number of launches (default: 7; max: 50)");
+    }
 }
 
 #[cfg(test)]
@@ -642,16 +643,11 @@ mod tests {
     }
 
     #[test]
-    fn assets_pack_has_a_resource_only_default_output() {
-        let command = parse(&[
-            "assets".into(),
-            "--pack".into(),
-            "projects/test-project".into(),
-        ])
-        .unwrap();
+    fn pack_has_a_resource_only_default_output() {
+        let command = parse(&["pack".into(), "projects/test-project".into()]).unwrap();
         assert!(matches!(
             command,
-            CliCommand::AssetsPack { output, .. }
+            CliCommand::Pack { output, .. }
                 if output == Path::new(DEFAULT_ASSET_PACKAGE_OUTPUT)
         ));
     }
@@ -683,17 +679,18 @@ mod tests {
     }
 
     #[test]
-    fn assets_modes_are_explicit_and_mutually_exclusive() {
-        assert!(parse(&["assets".into()]).is_err());
+    fn pack_and_remap_are_separate_commands() {
+        assert!(parse(&["pack".into()]).is_err());
         assert!(
             parse(&[
-                "assets".into(),
-                "--pack".into(),
+                "pack".into(),
                 "projects/test-project".into(),
                 "--remap".into(),
             ])
             .is_err()
         );
+        assert!(parse(&["remap".into(), "projects/test-project".into()]).is_err());
+        assert!(parse(&["configure".into()]).is_err());
     }
 
     #[test]

@@ -47,7 +47,7 @@ stopped preview work sleeps for portable battery use.
 This integration task may modify:
 
 - `crates/editor/**` for Preview state, Dock UI, frame import, input mapping, and focused tests;
-- `crates/authoring-protocol/**` for bounded preview control/metadata messages;
+- `crates/authoring/**` for bounded preview control/metadata messages;
 - `src/runtime/authoring.rs`, the narrow runtime/offscreen composition path, and directly required
   render/scene/UI wiring;
 - workspace manifests/lockfile only for a demonstrated dependency already required by the chosen
@@ -59,7 +59,7 @@ IPC SDK, a theme/plugin abstraction, or new Eiyashou/runtime semantics.
 
 ## Acceptance
 
-- P01–P09 in `docs/KEINE_EDITOR_FINAL_ARCHITECTURE_20260920.md` pass.
+- P01–P09 in `docs/editor/architecture.md` pass.
 - A real tracked fixture shows dialogue, background, sprite, game UI, and a representative
   transition/post-process; audio and supported desktop video are exercised without leaking media
   after Stop/Close.

@@ -3,6 +3,28 @@
 > Integration-owned shared context. Update this file when an integrated change alters capability,
 > an interface, a compatibility promise, or a known limitation. Do not record task chatter here.
 
+## Project-wide roadmap
+
+P0–P7 are the only phase numbers for the Kēne project delivery roadmap. Component work
+(Card Editor, File/Asset, Preview, and so on) uses `TXX` task IDs, never a second P0–P7 sequence.
+An implemented task and its remaining visual acceptance are tracked separately; neither creates
+another project phase.
+
+| Project phase | Outcome | Status |
+|---|---|---|
+| P0 | Architecture and technical spike | complete |
+| P1 | Workspace, windows, Dock, and app data | complete |
+| P2 | Authoring documents and safe writeback | complete |
+| P3 | Engine authoring IPC host | complete |
+| P4 | Embedded Preview | complete |
+| P5 | Core VN authoring UX | complete; T21 visual acceptance pending |
+| P6 | Pinned Project CI release chain | complete; private-project Linux runner accepted |
+| P7 | Cross-platform packaging, installation, input/DPI, recovery, compatibility, and performance hardening | in progress; T24 and T03 evidence pending |
+
+Asset lifecycle (mapped deletion, recovery, and remapping) is an outstanding feature task, not a
+second P6. Media conversion remains deferred. Neither is part of the completed Project CI P6.
+Formal signing and notarization are outside the current P7 scope.
+
 ## Current capability
 
 - Desktop engine and library entry points run native/WebGAL directories, LetsGal Studio projects,
@@ -23,8 +45,12 @@
   MainCore UI, audio, desktop video, and platform persistence roots.
 - WebP is decoded through the bounded native media crate. Ogg Opus has the canonical incremental
   runtime path; PNG/JPEG and WAV/MP3/Vorbis/FLAC remain development compatibility inputs.
-- `cargo assets --pack` creates only Hakutaku resources. `cargo bundle` builds the matching
+- `cargo pack` creates only Hakutaku resources. `cargo bundle` builds the matching
   hardened engine and complete release. Production media gates require WebP and Ogg Opus.
+- The public developer CLI uses matching Cargo and executable verbs: `validate`, `dev`,
+  `bundle`, plus explicit advanced `pack`, `remap`, `migrate`, and `perf` commands. Startup
+  measurement is `perf --startup`; the machine-level adapter/video configuration TUI and its
+  aliases are removed. Project formats remain selected by the loader and project config.
 - Publisher preparation validates and compiles project-owned input before loading or creating an
   identity. Failed release assembly preserves the previous runnable package, and generated
   LetsGal configuration and portrait variants have deterministic ordering.
@@ -108,10 +134,10 @@ project / package
   loss, or Kēne-caused regressions justify maintenance without a new product decision.
 - LetsGal Studio remains a read-only adapter. The checked-in 1.8 fixture and 1.20 acceptance
   project are active compatibility evidence; Studio extensions and bridge injection are excluded.
-  New authoring work and the public development command surface are Eiyashou-first. The legacy
-  `cargo startup-perf`, `cargo letsgal-test`, and `cargo letsgal-perf` aliases are deprecated and
-  scheduled for removal; this marks command-surface cleanup, not removal of the read-only adapter
-  or its required compatibility regression coverage.
+  New authoring work and the public development command surface are Eiyashou-first. The old
+  LetsGal-only Cargo aliases were removed; read-only adapter coverage remains in the workspace
+  tests and loader benchmark. Built-in formats are discovered automatically, without a global
+  adapter-disable configuration.
   LetsGal 1.20 multi-target character removal and typed `stageMask` overlay/clip state are native;
   2.0 basic blueprint scheduling/chapter preprocessing, session variables, layered differential portraits,
   per-frame portrait timing, scene particle layers, mouse scene parallax, mirror-shatter and scoped
@@ -142,7 +168,7 @@ project / package
 - WebGAL `-continue`, advanced animation tables/keyframes/filters, full input validation, complete
   expression parity, Live2D/Spine/GIF, runtime UI styling, external-browser actions, and
   Steam/debug bridge commands remain known compatibility boundaries. They are not scheduled for closure; see
-  `docs/webgal-compatibility/unsupported.md` for migration facts.
+  `docs/webgal/unsupported.md` for migration facts.
 - Automated screenshot/golden coverage is not established across Windows/Linux, 1x DPI,
   ultrawide, and tall windows. Existing semantic tests do not prove pixel equivalence.
 - The full LetsGal commercial sample is intentionally untracked. Local acceptance and loader
@@ -156,8 +182,8 @@ project / package
   anticipation of them.
 - Windows/Linux video remains software-decoded RGBA upload. Hardware decode or zero-copy work
   requires real target hardware, distribution, and device-loss evidence first.
-- Phase 4 native-window Preview acceptance is complete on macOS. Representative cross-platform
-  GPU/GUI, audio/video, DPI, input, and packaging evidence belongs to Phase 7. Native child
+- Project P4 native-window Preview acceptance is complete on macOS. Representative cross-platform
+  GPU/GUI, audio/video, DPI, input, and packaging evidence belongs to P7. Native child
   surfaces, frame compression, and GPU sharing remain unapproved unless end-to-end evidence
   identifies the raw triple buffer as the bottleneck.
 - Eiyashou v1 intentionally does not expose the deferred advanced runtime surface listed in its
@@ -170,7 +196,7 @@ project / package
 
 ## Known status
 
-- No confirmed P0-P3 defect is open on current main.
+- No confirmed severity-P0–P3 defect is open on current main.
 - The main evidence gaps are cross-platform visual acceptance and representative packaged-project
   runs on low-end hardware and slow storage, not missing safety boundaries in the canonical
   WebP/Opus/Hakutaku paths.
@@ -196,11 +222,11 @@ project / package
   dialogs, Backlog, Save/Load, Config, Extra, continuation, system Zoom, and native fullscreen
   showed no reproducible UI defect. Windows requires the user's remote credential; Windows,
   Linux, 1× DPI, and frame-by-frame transition evidence remain explicitly unverified.
-- Editor Phase 0 proved 1920x1080 three-camera windowless composition on Apple M5 Pro / Metal.
+- Project P0 proved 1920x1080 three-camera windowless composition on Apple M5 Pro / Metal.
   The three-frame Bevy Screenshot pipeline completed about 52 captures/s in both dev and release;
   the release 1080p raw slot copy averaged about 0.12 ms. Active preview still targets 60 fps,
   while unchanged and occluded previews must avoid continuous work for portable battery use.
-- Editor Phase 1 opens the tracked test project and the local LetsGal fixture in independent macOS
+- Project P1 opens the tracked test project and the local LetsGal fixture in independent macOS
   windows, restores editor-owned Dock state, and displays two real read-only documents without
   launching the Engine or Preview. Its accepted shell is fully dark with independent borderless
   9 px tonal Dock cards, borderless filled tabs and activity rail, even 4 px view gaps, aligned outer
@@ -218,20 +244,20 @@ project / package
   LetsGal, WebGAL compatibility input, and JSON documents remain read-only.
   The line-number gutter omits the unused folding column, and macOS acceptance covered Unicode
   input, dirty/saved indication, save, recovery, selection, and the unsaved-close prompt.
-- Editor Phase 3 adds a Bevy-free, 256 KiB-bounded, length-prefixed Postcard control protocol and
+- Project P3 adds a Bevy-free, 256 KiB-bounded, length-prefixed Postcard control protocol and
   a hidden Engine authoring-host mode. The Editor directly launches a prebuilt Engine executable,
   validates version/capabilities, opens and validates one project per child, exposes source
   diagnostics and no-frame lifecycle, and performs bounded shutdown. Process tests cover protocol
-  mismatch and two isolated sessions. Phase 4 extends this boundary without moving rendering into
+  mismatch and two isolated sessions. P4 extends this boundary without moving rendering into
   the Editor process.
-- Editor Phase 4 implements the real embedded Preview path without a second Engine OS window. The
+- Project P4 implements the real embedded Preview path without a second Engine OS window. The
   file-backed 1920x1080 RGBA triple buffer reserves three fixed slots (about 23.7 MiB), validates
   project/session/revision metadata, and drops stale frames instead of queueing latency. On Apple
   M5 Pro / Metal, three automated Start/Pause/Resume/Stop cycles produced a visible composited frame
   in 142–161 ms, showed no frame overwrite, bounded paused publication to the three in-flight
   captures, removed every mapping, and left no authoring child process. The user accepted the final
   live macOS Editor Preview pass on 2026-09-21.
-- Editor Phase 5 keeps Text and Blocks as projections of the same authoritative Eiyashou source
+- Project P5 keeps Text and Blocks as projections of the same authoritative Eiyashou source
   document; there is no separate Dialogue view. Block selection drives Inspector and the Preview source cursor;
   the context-aware Insert Palette, confined Asset Browser, bounded Character/Scene managers, and
   navigable Problems view all edit or inspect that same source path. The Performance view reports
@@ -242,22 +268,33 @@ project / package
   restrained close transition from either the close affordance or middle click. A real untracked
   LetsGal project sustained embedded Preview output after the visible-panel lifecycle fix; the
   acceptance bundle and every child process were removed afterward.
-- Card Editor Phase 1 continuously renders every Scene in the current `.shou` file as a lightweight
-  collapsible section. Enter creates narration without a placeholder source node; inline Text edits,
+- T21 Card Editor continuously renders every Scene in the current `.shou` file as a lightweight
+  collapsible section. Enter starts a source-free Text draft, then commits and continues even an
+  empty block; Shift+Enter adds a line break within the block. Inline Text edits,
   Inspector-owned Speaker/Voice/Stable ID changes, desktop multi-selection, complete-node clipboard,
   source-order movement, and drag reorder all edit the same authoritative document. Text/Blocks
   switching restores the selected source node, unknown syntax stays visible and read-only, and
   Choice/If/Else if/Else/Loop use indentation instead of nested container cards. The full Block
   Picker remains searchable and persists favorites, category/item order, and hidden browse entries
-  as global Editor preferences outside project files; hidden commands remain searchable.
-- File and Asset Phase 2 replaces the flat source list with a confined workspace tree. Explorer
+  as global Editor preferences outside project files; hidden commands remain searchable. Blocks
+  now provides compact direct Scene create/rename/delete/reorder controls in the current document,
+  with exact `goto`/`call` target rewriting on rename. Native commands use distinct short rows,
+  and selected non-Text properties edit bounded source ranges in Inspector, including optional
+  named arguments. These changes passed code gates but still need live visual acceptance.
+- T22 File/Asset work replaces the flat source list with a confined workspace tree. Explorer
   owns ordinary create, rename, move, copy, delete, internal drag, external drop, and Reveal
   operations without becoming a content editor. External resources are accepted only when already
   canonical WebP, Ogg Opus, or H.264 MP4/M4V, are content-validated before publication, derive a
   deterministic ID from the filename, and update the configured asset manifest transactionally.
   Mapped moves and renames preserve manifest comments while updating paths; mapped deletion is
-  deferred to the Asset lifecycle phase. Batch drops expose one aggregate progress row and one
+  deferred to an Asset lifecycle task. Batch drops expose one aggregate progress row and one
   summary toast, and failed imports leave neither a destination file nor a dangling manifest entry.
+- T23 File/Asset work adds a shared left-slot Asset Browser with deterministic search,
+  Type/Folder/`.unmapped` scopes, List/Grid, sorting, and multi-selection. Asset Inspector edits
+  ID/Type/Tags only after source and manifest preflight, shows exact references, and rejects
+  incompatible changes without partial writes. Typed Asset drag inserts/replaces Block View
+  source nodes; Voice is limited to Text blocks. Conversion and mapped-asset deletion remain
+  deferred.
 
 ## Active task queue
 
@@ -268,18 +305,21 @@ project / package
 | [T15](tasks/T15-eiyashou-editor-projection.md) | complete | source-first Editor projection and explicit migration |
 | [T16](tasks/T16-editor-phase4-preview.md) | complete | real embedded Preview and bounded raw frame transport |
 | [T17](tasks/T17-editor-phase5-authoring-ux.md) | complete | source-safe core VN authoring workflow |
-| [T19](tasks/T19-project-ci-release.md) | complete | Phase 6 pinned Project CI release chain |
-| [T20](tasks/T20-asset-manifest-phase0.md) | complete | Asset manifest schema and source-preserving validation |
-| [T21](tasks/T21-card-editor-phase1.md) | user acceptance | Card Editor source-preserving core interaction |
-| [T22](tasks/T22-file-asset-import-phase2.md) | complete | confined workspace file tree and canonical asset auto-registration |
+| [T19](tasks/T19-project-ci-release.md) | complete | Project P6 pinned Project CI release chain |
+| [T20](tasks/T20-asset-manifest.md) | complete | Asset manifest schema and source-preserving validation |
+| [T21](tasks/T21-card-editor.md) | user acceptance | Card Editor source-preserving core interaction |
+| [T22](tasks/T22-file-asset-import.md) | complete | confined workspace file tree and canonical asset auto-registration |
+| [T23](tasks/T23-asset-browser-inspector-drag.md) | complete | Asset Browser, Inspector, and typed Block View drag |
+| [T24](tasks/T24-project-release-hardening.md) | in progress | Project P7 standalone authoring release and cross-platform acceptance |
 | [T03](tasks/T03-ui-visual-baseline.md) | user acceptance | UI and cross-platform visual evidence |
 
 ## Canonical references
 
 - Project and module map: `docs/PROJECT.md`
+- Editor architecture, File/Asset decisions, phase evidence, and questions: `docs/editor/`
 - Project/media/package contract: `docs/project-and-assets-spec.md`
 - Resource and persistence limits: `docs/resource-limits.md`
 - Architecture contracts: `docs/architecture/`
-- Compatibility evidence: `docs/webgal-compatibility/`
+- Compatibility evidence: `docs/webgal/`
 - Acceptance procedures: `docs/acceptance/`
 - Repeatable measurements: `docs/performance-baseline.md`

@@ -1,32 +1,16 @@
 [alias]
-configure = "run --features configure -- configure"
 # Native Editor development session. Additional arguments are project paths.
 editor = "run --manifest-path crates/editor/Cargo.toml --"
 # Interactive preview; add `--sync` to follow an open LetsGal project.
 # Machines without FFmpeg development libraries can use
 # `cargo run --features hot-reload -- dev` for the same session without video.
-dev = "run --features configure,hot-reload,video-native,video-ffmpeg -- dev"
-# Repeatable release-mode runtime capture. The optional final argument is the
-# sampling duration in seconds (default: 15, after a 3-second warm-up); a
-# second optional argument selects a stable timeline id (a numeric cursor is
-# retained only as a low-level escape hatch). A final profile
-# (`full`, `scene-ui`, `scene-dialog`, or `scene`) is reserved for measuring
-# per-camera render overhead without changing normal runtime composition.
-perf = "run --release --features video-native,video-ffmpeg -- benchmark"
-# DEPRECATED: transitional alias scheduled for removal after startup measurement
-# moves under the Eiyashou-first `cargo perf startup` command surface.
-# Builds once, then lets the release executable spawn isolated child processes
-# and report startup medians/p95 without including Cargo in the measurements.
-startup-perf = "run --release --features startup-metrics -- benchmark-startup"
-# DEPRECATED: these compatibility-only aliases are scheduled for removal from
-# the public command surface. Their underlying checks remain until LetsGal's
-# read-only compatibility evidence has a replacement in CI.
-letsgal-test = "test --test letsgal_sample_acceptance"
-letsgal-perf = "bench -p keine-loader --bench letsgal_project"
-validate = "run -- check"
-# Publisher-only asset operations. Packing writes Hakutaku content without
-# building an engine; remapping updates project references transactionally.
-assets = "run --release --no-default-features --features publisher --target-dir target/publisher-runner -- assets"
+dev = "run --features hot-reload,video-native,video-ffmpeg -- dev"
+validate = "run -- validate"
+# Advanced measurement: normal frames or `--startup` isolated launches.
+perf = "run --release --features startup-metrics,video-native,video-ffmpeg -- perf"
+# Publisher-only resource package and reference migration.
+pack = "run --release --no-default-features --features publisher --target-dir target/publisher-runner -- pack"
+remap = "run --release --no-default-features --features publisher --target-dir target/publisher-runner -- remap"
 # Keep the bundle runner outside target/release: Windows cannot replace a
 # running keine.exe when the child build produces the hardened game engine.
 bundle = "run --release --no-default-features --features publisher --target-dir target/publisher-runner -- bundle"

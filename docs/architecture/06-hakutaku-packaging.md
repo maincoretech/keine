@@ -4,7 +4,7 @@
 
 ## 命令边界
 
-`cargo assets --pack <project>` 只编译项目内容并生成 Hakutaku 资源包：
+`cargo pack <project>` 只编译项目内容并生成 Hakutaku 资源包：
 
 ```text
 target/package/
@@ -14,7 +14,7 @@ target/package/
 ```
 
 它不生成运行时 key shares、不调用 Cargo 构建引擎，也不复制可执行文件、图标或平台动态库。
-`cargo assets --remap` 只负责事务化迁移项目内的资源引用。`cargo bundle <project>` 才复用
+`cargo remap` 只负责事务化迁移项目内的资源引用。`cargo bundle <project>` 才复用
 资源打包阶段、构建与身份匹配的 hardened 引擎，并组装完整可运行发行目录；benchmark 也只属于
 bundle。
 
@@ -72,7 +72,7 @@ GitHub 手动构建明确分成两种身份模式：
 - `stable`：从仓库 Secret `HAKUTAKU_IDENTITY_BASE64` 恢复同一 identity；只用于正式发行和
   后续更新。缺少 Secret 时在 checkout、工具链和媒体依赖安装之前失败。
 
-正式项目的 identity 在可信开发机首次执行 `cargo assets --pack <project>` 时自动生成。可用
+正式项目的 identity 在可信开发机首次执行 `cargo pack <project>` 时自动生成。可用
 `openssl base64 -A -in <project>/.keine/publisher.hakutaku-key` 转成单行文本并添加到
 **Settings → Secrets and variables → Actions → Repository secrets**。Windows PowerShell 等价命令为
 `[Convert]::ToBase64String([IO.File]::ReadAllBytes('<path>'))`。这些输出都是完整私钥，不能进入

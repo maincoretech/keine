@@ -1,3 +1,10 @@
+pub mod app_data;
+pub mod document;
+pub(crate) mod file_ops;
+pub mod migration;
+pub mod persistence;
+pub mod project_key;
+
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};

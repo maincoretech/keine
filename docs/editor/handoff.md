@@ -1,9 +1,8 @@
 # Kēne Editor 开发交接
 
-> 面向下一位负责 editor 的 Codex。Editor Phase 0–3 已完成；当前实现状态以
-> `docs/PROJECT_STATE.md`、`docs/editor-phase0.md`、`docs/editor-phase1.md`、
-> `docs/editor-phase2.md` 和 `docs/editor-phase3.md` 为准。
-> 本文集中记录跨阶段边界，不授权绕过 `AGENTS.md` 或直接修改主分支。
+> 历史交接快照，写于项目 P3 完成后；其中“下一任务 P4”等表述不再代表当前计划。
+> 全项目只使用 `docs/PROJECT_STATE.md` 的 P0–P7 阶段表，组件工作按 TXX 任务编号。
+> 本文仅保留当时的架构边界，不授权绕过 `AGENTS.md` 或直接修改主分支。
 
 ## 1. 开始前先读
 
@@ -11,7 +10,7 @@
 
 1. `AGENTS.md`：最高优先级的协作、架构、验证和所有权规则。
 2. `docs/PROJECT_STATE.md`：当前能力、已知限制和任务队列。
-3. `docs/editor-phase0.md` 到 `docs/editor-phase3.md`：已经实现和验证的 editor 合同。
+3. `docs/editor/phase0.md` 到 `docs/editor/phase3.md`：已经实现和验证的 editor 合同。
 4. 本文：跨阶段上下文和决策边界。
 5. 本次唯一分配的 `docs/tasks/TXX-*.md`：实际任务范围和文件所有权。
 6. 仅按任务需要查看：
@@ -272,7 +271,7 @@ cargo validate projects/test-project
 
 ```text
 你要继续开发 Kēne editor。先阅读 AGENTS.md、docs/PROJECT_STATE.md、
-docs/editor-phase0.md 到 docs/editor-phase3.md 和 docs/EDITOR_HANDOFF.md，然后只阅读本次
+docs/editor/phase0.md 到 docs/editor/phase3.md 和 docs/editor/handoff.md，然后只阅读本次
 分配的一个 docs/tasks/TXX-*.md。
 先检查 worktree 和相关 diff，不覆盖未提交修改。不要把
 crates/loader/src/adapter/editor 当成 Kēne editor GUI；它是第三方编辑器项目格式的

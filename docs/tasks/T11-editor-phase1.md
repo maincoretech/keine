@@ -41,7 +41,7 @@ authoring sessions, Preview, asset management, production build UI, themes, plug
 
 - `crates/editor/**`
 - `docs/tasks/T11-editor-phase1.md`
-- `docs/editor-phase1.md`
+- `docs/editor/phase1.md`
 - `docs/PROJECT_STATE.md`
 - `Cargo.toml` and `Cargo.lock` only for existing workspace dependencies required by persistence
 

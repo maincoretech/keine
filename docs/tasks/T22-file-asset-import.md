@@ -1,4 +1,4 @@
-# T22 — File and asset import (Phase 2)
+# T22 — File and asset import
 
 ## Goal
 
@@ -10,7 +10,7 @@ second asset editor.
 - Discover ordinary files and folders, with open, create, rename, move, copy, delete, internal
   drag, and Reveal actions.
 - Copy ordinary external files into the selected folder.
-- Accept only canonical WebP, Ogg Opus, and MP4/M4V media in this phase. Validate contents, derive
+- Accept only canonical WebP, Ogg Opus, and MP4/M4V media in this task. Validate contents, derive
   an identifier from the filename, and register the result in the configured asset manifest.
 - Keep manifest paths synchronized when mapped files or directories move.
 - Use one aggregate progress row and one summary toast for a batch.

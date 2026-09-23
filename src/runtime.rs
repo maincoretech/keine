@@ -4,8 +4,6 @@ pub(crate) mod authoring;
 pub(crate) mod bootstrap;
 pub(crate) mod bounded_input;
 mod cli;
-#[cfg(feature = "configure")]
-mod configure;
 pub(crate) mod host;
 #[cfg(any(feature = "publisher", feature = "startup-metrics"))]
 pub(crate) mod package_benchmark;
@@ -77,15 +75,7 @@ impl Plugin for RuntimePlugin {
     }
 }
 
-pub(crate) struct GamePlugin {
-    video: crate::scene::video::VideoSelection,
-}
-
-impl GamePlugin {
-    pub(crate) const fn new(video: crate::scene::video::VideoSelection) -> Self {
-        Self { video }
-    }
-}
+pub(crate) struct GamePlugin;
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
@@ -99,11 +89,6 @@ impl Plugin for GamePlugin {
             )
                 .chain(),
         );
-        app.add_plugins((
-            RuntimePlugin,
-            ScenePlugin::new(self.video),
-            StoragePlugin,
-            GameUiPlugin,
-        ));
+        app.add_plugins((RuntimePlugin, ScenePlugin, StoragePlugin, GameUiPlugin));
     }
 }

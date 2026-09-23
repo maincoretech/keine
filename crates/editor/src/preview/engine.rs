@@ -55,6 +55,20 @@ impl EngineLocator {
                         .join("Resources")
                         .join(engine_file_name()),
                 );
+                // Independent macOS installs can place both app bundles in the
+                // same Applications directory without embedding an Engine in
+                // the Editor bundle.
+                if cfg!(target_os = "macos")
+                    && let Some(app) = directory.parent().and_then(Path::parent)
+                    && app.extension().is_some_and(|extension| extension == "app")
+                    && let Some(install_dir) = app.parent()
+                {
+                    candidates.push(
+                        install_dir
+                            .join("Kēne Engine.app/Contents/MacOS")
+                            .join(engine_file_name()),
+                    );
+                }
             }
         }
         if let Some(path) = find_on_path(engine_file_name()) {
@@ -66,7 +80,11 @@ impl EngineLocator {
             .ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::NotFound,
-                    "Kēne Engine was not found; build it beside the editor or set KEINE_ENGINE",
+                    if cfg!(target_os = "macos") {
+                        "Kēne Engine was not found; place Kēne Engine.app beside Editor or set KEINE_ENGINE"
+                    } else {
+                        "Kēne Engine was not found; place it beside the editor or set KEINE_ENGINE"
+                    },
                 )
             })
     }
@@ -441,6 +459,28 @@ mod tests {
         let engine = root.join(engine_file_name());
         fs::write(&engine, b"engine").unwrap();
         let locator = EngineLocator::with_explicit(root.join("editor"), engine.clone());
+        assert_eq!(locator.locate().unwrap(), engine);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn locator_finds_independently_installed_engine_app() {
+        let root = env::temp_dir().join(format!(
+            "keine-engine-app-locator-{}-{}",
+            std::process::id(),
+            NEXT_TOKEN.fetch_add(1, Ordering::Relaxed)
+        ));
+        let editor = root.join("Kēne Editor.app/Contents/MacOS/editor");
+        let engine = root.join("Kēne Engine.app/Contents/MacOS/keine");
+        fs::create_dir_all(editor.parent().unwrap()).unwrap();
+        fs::create_dir_all(engine.parent().unwrap()).unwrap();
+        fs::write(&engine, b"engine").unwrap();
+
+        let locator = EngineLocator {
+            editor_executable: editor,
+            explicit: None,
+        };
         assert_eq!(locator.locate().unwrap(), engine);
         fs::remove_dir_all(root).unwrap();
     }

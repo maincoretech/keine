@@ -1,4 +1,4 @@
-# T20 — Asset manifest Phase 0
+# T20 — Asset manifest contract
 
 **Execution:** `implementation`
 

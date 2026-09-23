@@ -42,9 +42,6 @@ default = ["audio-all", "ui-sounds"]
 # Developer-only filesystem watchers. Shipping builds do not compile notify or
 # the script/asset hot-reload pipeline.
 hot-reload = ["dep:notify", "keine-loader/hot-reload"]
-# Developer-only terminal configuration UI. Release engines use the feature
-# set selected by the bundler and never link Crossterm.
-configure = ["dep:crossterm"]
 audio-all = ["bundled-opus", "audio-wav", "audio-mp3", "audio-vorbis", "audio-flac"]
 ui-sounds = ["bundled-opus"]
 # Only the `keine bundle` engine build enables this: developer builds stay
@@ -115,7 +112,7 @@ panic = "abort"
 keine-core = { path = "crates/core" }
 keine-loader = { path = "crates/loader" }
 keine-media = { path = "crates/media" }
-keine-authoring = { path = "crates/authoring-protocol" }
+keine-authoring = { path = "crates/authoring" }
 
 log = "0.4"
 anyhow = "1"
@@ -144,7 +141,6 @@ ffmpeg-next = { version = "9.0", default-features = false, features = ["codec", 
 tempfile = "3"
 winit = { version = "0.30.13", default-features = false }
 wgpu = { version = "29.0.4", default-features = false, features = ["metal"] }
-crossterm = "0.29.0"
 fs2 = "0.4"
 gpui-kit = { version = "=0.6.4" }
 image = "0.25.10"
@@ -177,7 +173,6 @@ ffmpeg-next = { workspace = true, optional = true }
 crossbeam-channel = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
 winit = { workspace = true }
-crossterm = { workspace = true, optional = true }
 fs2 = { workspace = true }
 bevy = { workspace = true, features = ["bevy_winit", "bevy_log", "bevy_render", "bevy_sprite", "bevy_ui", "bevy_ui_render", "bevy_audio", "png", "jpeg"] }
 hakutaku-core = { workspace = true, optional = true }

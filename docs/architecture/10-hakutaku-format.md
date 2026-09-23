@@ -654,7 +654,7 @@ target 必须由基准决定，不能因为某个 SSD 型号的宣传参数直�
 
 - 独立 Hakutaku workspace 已冻结 v1 wire spec、严格 parser、只读 core、AEAD/signature
   mutation tests、`Asset::read_at`、流式 cursor 与 full/incremental packer；
-- Kēne 的 `cargo assets --pack` 与 `cargo bundle` 直接生成 v1 快照和 segment，loader 只读取
+- Kēne 的 `cargo pack` 与 `cargo bundle` 直接生成 v1 快照和 segment，loader 只读取
   Hakutaku packaged project；
 - FFmpeg `AVIOContext` 与 AVFoundation resource loader 都直接映射 `ContentFile` 随机读取，
   不生成明文媒体临时文件；

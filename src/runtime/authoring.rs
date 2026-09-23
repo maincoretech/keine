@@ -70,11 +70,10 @@ struct Session {
     pending_snapshot: Option<PendingSnapshot>,
     documents: HashMap<PathBuf, Vec<u8>>,
     overlay: PreviewOverlay,
-    video: crate::scene::video::VideoSelection,
 }
 
 impl Session {
-    fn new(video: crate::scene::video::VideoSelection) -> io::Result<Self> {
+    fn new() -> io::Result<Self> {
         Ok(Self {
             project: None,
             project_path: None,
@@ -85,7 +84,6 @@ impl Session {
             pending_snapshot: None,
             documents: HashMap::new(),
             overlay: PreviewOverlay::create()?,
-            video,
         })
     }
 
@@ -107,7 +105,6 @@ impl Session {
             project_path,
             Some(&self.overlay.root),
             loader,
-            self.video,
             super::preview::AuthoringPreviewConfig {
                 producer,
                 document_revision: self.document_revision,
@@ -139,12 +136,7 @@ impl Session {
     }
 }
 
-pub(crate) fn run(
-    endpoint: &str,
-    token: &str,
-    loader: LoaderRegistry,
-    video: crate::scene::video::VideoSelection,
-) -> Result<()> {
+pub(crate) fn run(endpoint: &str, token: &str, loader: LoaderRegistry) -> Result<()> {
     let endpoint: SocketAddr = endpoint
         .parse()
         .with_context(|| format!("invalid authoring endpoint {endpoint:?}"))?;
@@ -223,7 +215,7 @@ pub(crate) fn run(
     let generation = hello.generation;
     stream.set_read_timeout(None)?;
     let messages = spawn_reader(reader);
-    let mut session = Session::new(video)?;
+    let mut session = Session::new()?;
     let mut last_update = Instant::now();
     loop {
         let timeout = session

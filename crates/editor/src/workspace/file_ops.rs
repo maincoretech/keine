@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use image::{ImageFormat, ImageReader};
 use keine_core::config::{EiyashouAssetEntry, EiyashouAssetManifest, GameConfig};
 
-use crate::authoring::AssetKind;
+use crate::authoring::{AssetEntry, AssetKind, valid_identifier};
 use crate::document::atomic_source;
 
 const MAX_MEDIA_BYTES: u64 = 512 * 1024 * 1024;
@@ -72,7 +72,12 @@ pub fn import_external(root: &Path, target_dir: &Path, source: &Path) -> io::Res
 
         copy_atomic(source, &destination)?;
         if let Err(error) = atomic_source(&manifest_path, new_manifest.as_bytes()) {
-            let _ = fs::remove_file(&destination);
+            if let Err(cleanup) = fs::remove_file(&destination) {
+                return Err(io::Error::other(format!(
+                    "Manifest update failed: {error}; imported file cleanup failed: {cleanup}; file retained at {}",
+                    relative.display()
+                )));
+            }
             return Err(error);
         }
         return Ok(ImportResult {
@@ -118,23 +123,39 @@ pub fn copy_entry(root: &Path, source: &Path, target_dir: &Path) -> io::Result<V
         .file_name()
         .ok_or_else(|| invalid("The source has no name"))?;
     let new_root = checked_relative_or_root(target_dir)?.join(directory_name);
-    if root.join(&new_root).exists() {
+    let destination = confined_destination(root, &new_root)?;
+    // Compare resolved paths: an in-project symlink can alias a child of the
+    // source even when the two relative paths look unrelated.
+    if destination.starts_with(&absolute) {
+        return Err(invalid("A folder cannot be copied into itself"));
+    }
+    if destination.exists() {
         return Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
             format!("{} already exists", new_root.display()),
         ));
     }
-    fs::create_dir(root.join(&new_root))?;
+    fs::create_dir(&destination)?;
     let manifest_backup = manifest_source(root).ok();
     let mut results = Vec::new();
-    let result = copy_directory_contents(root, &absolute, &new_root, &mut results);
-    if result.is_err() {
-        let _ = fs::remove_dir_all(root.join(&new_root));
-        if let Some((relative, source)) = manifest_backup {
-            let _ = atomic_source(&root.join(relative), source.as_bytes());
+    if let Err(error) = copy_directory_contents(root, &absolute, &new_root, &mut results) {
+        if let Some((relative, source)) = manifest_backup
+            && let Err(rollback) = atomic_source(&root.join(relative), source.as_bytes())
+        {
+            return Err(io::Error::other(format!(
+                "Copy failed: {error}; manifest rollback failed: {rollback}; copied files retained at {}",
+                new_root.display()
+            )));
         }
+        if let Err(cleanup) = fs::remove_dir_all(&destination) {
+            return Err(io::Error::other(format!(
+                "Copy failed: {error}; cleanup failed: {cleanup}; copied files retained at {}",
+                new_root.display()
+            )));
+        }
+        return Err(error);
     }
-    result.map(|_| results)
+    Ok(results)
 }
 
 pub fn delete_entry(root: &Path, source: &Path) -> io::Result<()> {
@@ -163,6 +184,9 @@ fn move_or_rename(root: &Path, source: &Path, destination: &Path) -> io::Result<
         return Err(invalid("A folder cannot be moved into itself"));
     }
     let destination_path = confined_destination(root, &destination)?;
+    if source_path.is_dir() && destination_path.starts_with(&source_path) {
+        return Err(invalid("A folder cannot be moved into itself"));
+    }
     if destination_path.exists() {
         return Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
@@ -200,7 +224,12 @@ fn move_or_rename(root: &Path, source: &Path, destination: &Path) -> io::Result<
     if let Some(new_manifest) = &manifest_update
         && let Err(error) = atomic_source(&root.join(&manifest_relative), new_manifest.as_bytes())
     {
-        let _ = fs::rename(&destination_path, &source_path);
+        if let Err(rollback) = fs::rename(&destination_path, &source_path) {
+            return Err(io::Error::other(format!(
+                "Manifest update failed: {error}; move rollback failed: {rollback}; file retained at {}",
+                destination.display()
+            )));
+        }
         return Err(error);
     }
     Ok(ImportResult {
@@ -235,14 +264,19 @@ fn copy_directory_contents(
 }
 
 fn manifest_source(root: &Path) -> io::Result<(PathBuf, String)> {
-    let config = fs::read_to_string(root.join("config.yaml"))?;
+    let config = fs::read_to_string(confined_existing(root, Path::new("config.yaml"))?)?;
     let config = GameConfig::from_yaml(&config)
         .map_err(|error| invalid(format!("Invalid config.yaml: {error}")))?;
     if config.adapter.script != "keine" {
         return Err(invalid("Asset import requires a native Kēne project"));
     }
     let relative = checked_relative(Path::new(&config.script.assets))?;
-    let source = fs::read_to_string(root.join(&relative))?;
+    let resolved = confined_existing(root, &relative)?;
+    let manifest = root.join(&relative);
+    if fs::symlink_metadata(&manifest)?.file_type().is_symlink() {
+        return Err(invalid("Asset manifest cannot be a symbolic link"));
+    }
+    let source = fs::read_to_string(resolved)?;
     Ok((relative, source))
 }
 
@@ -381,6 +415,179 @@ fn insert_manifest_entry(
     validate_manifest(output)
 }
 
+pub fn validate_asset_type(root: &Path, relative: &Path, kind: AssetKind) -> io::Result<()> {
+    let absolute = confined_existing(root, relative)?;
+    validate_resource(&absolute, kind, &extension(relative))
+}
+
+pub fn edit_manifest_asset(
+    source: &str,
+    asset: &AssetEntry,
+    id: &str,
+    kind: AssetKind,
+    tags: &[String],
+) -> io::Result<String> {
+    if !valid_identifier(id) {
+        return Err(invalid("Asset ID is not a script identifier"));
+    }
+    if tags
+        .iter()
+        .any(|tag| tag.trim().is_empty() || tag.contains(['\n', '\r']))
+    {
+        return Err(invalid("Invalid asset tag"));
+    }
+    let manifest = EiyashouAssetManifest::from_yaml(source)
+        .map_err(|error| invalid(format!("Invalid asset manifest: {error}")))?;
+    let current = entries_for_kind(&manifest, asset.kind)
+        .get(&asset.id)
+        .ok_or_else(|| invalid("Asset entry changed; refresh Inspector"))?;
+    if current.path() != slash_path(&asset.path) || current.tags() != asset.tags {
+        return Err(invalid("Asset entry changed; refresh Inspector"));
+    }
+    if entries_for_kind(&manifest, kind).contains_key(id) && (kind != asset.kind || id != asset.id)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "Asset ID already exists",
+        ));
+    }
+    if kind != asset.kind
+        && entries_for_kind(&manifest, kind)
+            .values()
+            .any(|entry| entry.path() == slash_path(&asset.path))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "Asset path already exists in target type",
+        ));
+    }
+    let lines = line_ranges(source);
+    let mut namespace_active = false;
+    let mut start = None;
+    let mut end = source.len();
+    for (line_start, line_end) in &lines {
+        let line = source[*line_start..*line_end].trim_end_matches(['\r', '\n']);
+        let indent = line.len() - line.trim_start().len();
+        if indent == 0 && !line.trim().is_empty() && !line.trim_start().starts_with('#') {
+            if start.is_some() {
+                end = *line_start;
+                break;
+            }
+            namespace_active = line
+                .split_once(':')
+                .is_some_and(|(name, _)| name.trim() == namespace(asset.kind));
+        } else if namespace_active && indent == 2 && !line.trim_start().starts_with('#') {
+            if start.is_some() {
+                end = *line_start;
+                break;
+            }
+            if line
+                .split_once(':')
+                .is_some_and(|(name, _)| parse_yaml_scalar(name.trim()) == Some(asset.id.as_str()))
+            {
+                start = Some(*line_start);
+            }
+        }
+    }
+    let start = start.ok_or_else(|| invalid("Asset entry changed; refresh Inspector"))?;
+    let old = &source[start..end];
+    let mut comments = Vec::new();
+    for line in old.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') {
+            comments.push(line.to_owned());
+        } else if line.starts_with("    ")
+            && !trimmed.is_empty()
+            && !trimmed.starts_with("path:")
+            && !trimmed.starts_with("tags:")
+        {
+            return Err(invalid("Asset entry has unsupported fields"));
+        } else if let (_, comment) = split_yaml_comment(line)
+            && !comment.is_empty()
+        {
+            comments.push(format!("  {comment}"));
+        }
+    }
+    let mut replacement = if tags.is_empty() {
+        format!(
+            "  {id}: '{}'\n",
+            yaml_single_quote(&slash_path(&asset.path))
+        )
+    } else {
+        let tags = tags
+            .iter()
+            .map(|tag| format!("'{}'", yaml_single_quote(tag)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "  {id}:\n    path: '{}'\n    tags: [{tags}]\n",
+            yaml_single_quote(&slash_path(&asset.path))
+        )
+    };
+    for comment in &comments {
+        replacement.push_str(comment);
+        replacement.push('\n');
+    }
+    let mut edited = source.to_owned();
+    let moved_comments = comments
+        .iter()
+        .map(|comment| format!("{comment}\n"))
+        .collect::<String>();
+    edited.replace_range(
+        start..end,
+        if kind == asset.kind {
+            &replacement
+        } else {
+            &moved_comments
+        },
+    );
+    if kind != asset.kind {
+        edited = restore_empty_namespace(edited, namespace(asset.kind));
+        edited = insert_manifest_entry(&edited, kind, id, &asset.path)?;
+        if !tags.is_empty() {
+            let moved = AssetEntry {
+                kind,
+                id: id.to_owned(),
+                path: asset.path.clone(),
+                tags: Vec::new(),
+                exists: asset.exists,
+                reference_count: 0,
+            };
+            edited = edit_manifest_asset(&edited, &moved, id, kind, tags)?;
+        }
+    }
+    validate_manifest(edited)
+}
+
+fn restore_empty_namespace(mut source: String, namespace: &str) -> String {
+    let lines = line_ranges(&source);
+    let Some((start, end)) = lines.iter().copied().find(|(start, end)| {
+        source[*start..*end].trim_end_matches(['\r', '\n']).trim() == format!("{namespace}:")
+    }) else {
+        return source;
+    };
+    let has_entry = lines
+        .iter()
+        .copied()
+        .skip_while(|(line_start, _)| *line_start <= start)
+        .take_while(|(line_start, line_end)| {
+            let line = source[*line_start..*line_end].trim();
+            line.is_empty()
+                || line.starts_with('#')
+                || source[*line_start..*line_end].starts_with(char::is_whitespace)
+        })
+        .any(|(line_start, line_end)| {
+            let line = source[line_start..line_end].trim_end_matches(['\r', '\n']);
+            line.starts_with("  ")
+                && !line.starts_with("    ")
+                && !line.trim_start().starts_with('#')
+        });
+    if !has_entry {
+        source.replace_range(start..end, &format!("{namespace}:\u{20}{{}}\n"));
+    }
+    source
+}
+
 fn rewrite_manifest_paths(source: &str, rewrites: &[(PathBuf, PathBuf)]) -> io::Result<String> {
     let rewrites = rewrites
         .iter()
@@ -490,6 +697,21 @@ fn kind_for_path(path: &Path) -> Option<AssetKind> {
             _ => None,
         }
     })
+}
+
+pub fn unmapped_candidate_kind(path: &Path) -> Option<AssetKind> {
+    let kind = kind_for_path(path)?;
+    let ext = extension(path);
+    match kind {
+        AssetKind::Background | AssetKind::Figure if ext == "webp" => Some(kind),
+        AssetKind::Voice | AssetKind::Bgm | AssetKind::Effect
+            if matches!(ext.as_str(), "ogg" | "opus") =>
+        {
+            Some(kind)
+        }
+        AssetKind::Video if matches!(ext.as_str(), "mp4" | "m4v") => Some(kind),
+        _ => None,
+    }
 }
 
 fn namespace(kind: AssetKind) -> &'static str {
@@ -770,6 +992,53 @@ mod tests {
     }
 
     #[test]
+    fn asset_property_edit_preserves_other_sections_and_rejects_collisions() {
+        let source = "# keep\nbackgrounds:\n  room: assets/room.webp # note\n  second: assets/second.webp\nfigures: {}\n";
+        let asset = AssetEntry {
+            kind: AssetKind::Background,
+            id: "room".into(),
+            path: PathBuf::from("assets/room.webp"),
+            tags: Vec::new(),
+            exists: true,
+            reference_count: 0,
+        };
+        let edited = edit_manifest_asset(
+            source,
+            &asset,
+            "room_new",
+            AssetKind::Background,
+            &["interior".into()],
+        )
+        .unwrap();
+        assert!(edited.contains("# keep"));
+        assert!(edited.contains("# note"));
+        assert!(edited.contains("  second: assets/second.webp"));
+        let manifest = EiyashouAssetManifest::from_yaml(&edited).unwrap();
+        assert!(manifest.backgrounds.contains_key("room_new"));
+        assert_eq!(manifest.backgrounds["room_new"].tags(), &["interior"]);
+        assert!(edit_manifest_asset(source, &asset, "second", AssetKind::Background, &[]).is_err());
+    }
+
+    #[test]
+    fn asset_type_edit_moves_entry_without_dropping_tags() {
+        let source = "backgrounds:\n  room: assets/room.webp\nfigures: {}\n";
+        let asset = AssetEntry {
+            kind: AssetKind::Background,
+            id: "room".into(),
+            path: PathBuf::from("assets/room.webp"),
+            tags: Vec::new(),
+            exists: true,
+            reference_count: 0,
+        };
+        let edited =
+            edit_manifest_asset(source, &asset, "room", AssetKind::Figure, &["hero".into()])
+                .unwrap();
+        let manifest = EiyashouAssetManifest::from_yaml(&edited).unwrap();
+        assert!(!manifest.backgrounds.contains_key("room"));
+        assert_eq!(manifest.figures["room"].tags(), &["hero"]);
+    }
+
+    #[test]
     fn canonical_image_import_registers_once() {
         let root = fixture();
         let source = root.parent().unwrap().join("morning.webp");
@@ -798,6 +1067,124 @@ mod tests {
                 .contains("wrong")
         );
         fs::remove_file(source).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn folder_copy_rejects_its_own_descendant() {
+        let root = fixture();
+        fs::create_dir(root.join("assets/background/nested")).unwrap();
+        let result = copy_entry(
+            &root,
+            Path::new("assets/background"),
+            Path::new("assets/background/nested"),
+        );
+        assert!(result.is_err());
+        assert!(!root.join("assets/background/nested/background").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_folder_copy_restores_manifest_before_removing_files() {
+        let root = fixture();
+        fs::create_dir(root.join("incoming")).unwrap();
+        write_webp(&root.join("incoming/a.webp"));
+        fs::write(root.join("incoming/z.png"), b"invalid image").unwrap();
+        let original_manifest = fs::read_to_string(root.join("assets.yaml")).unwrap();
+
+        assert!(copy_entry(&root, Path::new("incoming"), Path::new("assets/background")).is_err());
+        assert_eq!(
+            fs::read_to_string(root.join("assets.yaml")).unwrap(),
+            original_manifest
+        );
+        assert!(!root.join("assets/background/incoming").exists());
+        assert!(root.join("incoming/a.webp").is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn folder_copy_rejects_an_outside_symlink_target() {
+        use std::os::unix::fs::symlink;
+
+        let root = fixture();
+        let outside = root.with_extension("outside");
+        fs::create_dir(&outside).unwrap();
+        symlink(&outside, root.join("outside-link")).unwrap();
+        let result = copy_entry(&root, Path::new("scripts"), Path::new("outside-link"));
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert!(!outside.join("scripts").exists());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(outside).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn manifest_source_rejects_symlinks_outside_the_project() {
+        use std::os::unix::fs::symlink;
+
+        let root = fixture();
+        let outside = root.with_extension("manifest.yaml");
+        fs::write(&outside, "backgrounds: {}\n").unwrap();
+        fs::remove_file(root.join("assets.yaml")).unwrap();
+        symlink(&outside, root.join("assets.yaml")).unwrap();
+        assert_eq!(
+            manifest_source(&root).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(fs::read_to_string(&outside).unwrap(), "backgrounds: {}\n");
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_file(outside).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn manifest_source_rejects_an_in_project_file_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let root = fixture();
+        fs::rename(root.join("assets.yaml"), root.join("source.yaml")).unwrap();
+        symlink("source.yaml", root.join("assets.yaml")).unwrap();
+        assert_eq!(
+            manifest_source(&root).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn folder_copy_rejects_an_in_project_alias_of_its_descendant() {
+        use std::os::unix::fs::symlink;
+
+        let root = fixture();
+        fs::create_dir(root.join("assets/background/nested")).unwrap();
+        symlink("assets/background/nested", root.join("nested-link")).unwrap();
+        let result = copy_entry(
+            &root,
+            Path::new("assets/background"),
+            Path::new("nested-link"),
+        );
+        assert!(result.is_err());
+        assert!(!root.join("assets/background/nested/background").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn folder_move_rejects_an_in_project_alias_of_its_descendant() {
+        use std::os::unix::fs::symlink;
+
+        let root = fixture();
+        fs::create_dir(root.join("assets/background/nested")).unwrap();
+        symlink("assets/background/nested", root.join("nested-link")).unwrap();
+        let result = move_entry(
+            &root,
+            Path::new("assets/background"),
+            Path::new("nested-link"),
+        );
+        assert!(result.is_err());
+        assert!(root.join("assets/background").is_dir());
         fs::remove_dir_all(root).unwrap();
     }
 

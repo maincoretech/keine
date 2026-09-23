@@ -60,7 +60,7 @@
 建议目录：
 
 ```text
-docs/webgal-compatibility/artifacts/
+docs/webgal/artifacts/
   YYYY-MM-DD/<platform>/<case>/
     metadata.json
     actual.png

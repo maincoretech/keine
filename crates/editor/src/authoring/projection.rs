@@ -74,6 +74,17 @@ pub struct TextBlockMetadata {
     pub stable_id: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceField {
+    pub key: String,
+    pub range: Range<usize>,
+    pub value: String,
+    pub quoted: bool,
+    /// Syntax prepended when this optional argument does not yet exist.
+    pub insertion: Option<String>,
+    pub insertion_suffix: Option<String>,
+}
+
 /// A disposable projection over the authoritative `.shou` source. It owns no
 /// source text and every editable field points at an exact source byte range.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -116,6 +127,142 @@ impl fmt::Display for BlockEditError {
 impl std::error::Error for BlockEditError {}
 
 impl EiyashouProjection {
+    pub fn source_fields(&self, source: &str, start: usize) -> Option<Vec<SourceField>> {
+        let block = self
+            .scenes
+            .iter()
+            .flat_map(|scene| &scene.blocks)
+            .find(|block| block.source_range.start == start)?;
+        let node = source.get(block.source_range.clone())?;
+        match block.kind {
+            BlockKind::Command | BlockKind::Choice | BlockKind::Conditional | BlockKind::ElseIf => {
+                let header = if block.kind == BlockKind::Command {
+                    node
+                } else {
+                    &node[..top_level_position(node, '{').unwrap_or(node.len())]
+                };
+                let Some(open) = header.find('(') else {
+                    if block.kind == BlockKind::Choice {
+                        let insert = block.source_range.start + "choice".len();
+                        return Some(vec![SourceField {
+                            key: "prompt".into(),
+                            range: insert..insert,
+                            value: String::new(),
+                            quoted: true,
+                            insertion: Some("(\"".into()),
+                            insertion_suffix: Some("\")".into()),
+                        }]);
+                    }
+                    return None;
+                };
+                let close = matching_parenthesis(header, open)?;
+                let argument_start = block.source_range.start + open + 1;
+                let arguments = &node[open + 1..close];
+                let mut fields = Vec::new();
+                for (position, span) in split_source_ranges(arguments, ',').into_iter().enumerate()
+                {
+                    let absolute = argument_start + span.start..argument_start + span.end;
+                    let Some(full) = trimmed_source_range(source, absolute) else {
+                        continue;
+                    };
+                    let raw = source.get(full.clone())?;
+                    let (key, range) = if let Some(colon) = top_level_position(raw, ':') {
+                        let name = raw[..colon].trim();
+                        if valid_identifier(name) {
+                            (
+                                name.to_owned(),
+                                trimmed_source_range(source, full.start + colon + 1..full.end)?,
+                            )
+                        } else {
+                            (position.to_string(), full)
+                        }
+                    } else {
+                        (position.to_string(), full)
+                    };
+                    let value = source.get(range.clone())?;
+                    let quoted = value.len() >= 2 && value.starts_with('"') && value.ends_with('"');
+                    let range = if quoted {
+                        range.start + 1..range.end - 1
+                    } else {
+                        range
+                    };
+                    let raw = source.get(range.clone())?;
+                    fields.push(SourceField {
+                        key,
+                        value: if quoted {
+                            decode_source_string(raw).unwrap_or_else(|| raw.to_owned())
+                        } else {
+                            raw.to_owned()
+                        },
+                        range,
+                        quoted,
+                        insertion: None,
+                        insertion_suffix: None,
+                    });
+                }
+                if block.kind == BlockKind::Command {
+                    let command = node[..open].trim();
+                    let optional: &[&str] = match command {
+                        "background" | "hide" => &["transition"],
+                        "sprite" => &["position", "transition", "z"],
+                        "move" => &["duration", "easing"],
+                        "bgm" => &["volume", "fade", "loop"],
+                        "se" => &["volume"],
+                        "video" => &["skippable"],
+                        "pop" => &["into"],
+                        _ => &[],
+                    };
+                    let insertion_point = argument_start + arguments.trim_end().len();
+                    let has_arguments = !arguments.trim().is_empty();
+                    for name in optional {
+                        if fields.iter().any(|field| field.key == *name) {
+                            continue;
+                        }
+                        fields.push(SourceField {
+                            key: (*name).to_owned(),
+                            range: insertion_point..insertion_point,
+                            value: String::new(),
+                            quoted: false,
+                            insertion: Some(format!(
+                                "{}{name}: ",
+                                if has_arguments { ", " } else { "" }
+                            )),
+                            insertion_suffix: None,
+                        });
+                    }
+                }
+                Some(fields)
+            }
+            BlockKind::ChoiceOption => {
+                let range = block.text_range.clone()?;
+                let raw = source.get(range.clone())?;
+                Some(vec![SourceField {
+                    key: "option".into(),
+                    value: decode_source_string(raw).unwrap_or_else(|| raw.to_owned()),
+                    range,
+                    quoted: true,
+                    insertion: None,
+                    insertion_suffix: None,
+                }])
+            }
+            BlockKind::Declaration | BlockKind::Assignment => {
+                let equal = node.find('=')?;
+                let range = trimmed_source_range(
+                    source,
+                    block.source_range.start + equal + 1..block.source_range.end,
+                )?;
+                Some(vec![SourceField {
+                    key: "value".into(),
+                    value: source.get(range.clone())?.to_owned(),
+                    range,
+                    quoted: false,
+                    insertion: None,
+                    insertion_suffix: None,
+                }])
+            }
+            _ => Some(Vec::new()),
+        }
+    }
     pub fn parse(source: &str) -> Self {
         let document = parse_native_document(source);
         let parser = BlockProjectionParser::new(source, &document.tokens);
@@ -760,6 +907,18 @@ impl<'a> BlockProjectionParser<'a> {
             {
                 self.project_dialogue(tokens, head, source_range, depth, stable_id, blocks);
             }
+            _ if tokens
+                .get(head + 1)
+                .is_some_and(|index| self.text(*index) == ".")
+                && tokens.get(head + 2).is_some_and(|index| {
+                    matches!(self.text(*index), "append" | "remove" | "clear" | "insert")
+                })
+                && tokens
+                    .get(head + 3)
+                    .is_some_and(|index| self.text(*index) == "(") =>
+            {
+                blocks.push(self.block(BlockKind::Command, source_range, None, depth, None, false));
+            }
             _ => {
                 let kind = if tokens
                     .get(head + 1..)
@@ -769,6 +928,7 @@ impl<'a> BlockProjectionParser<'a> {
                 } else if tokens
                     .get(head + 1)
                     .is_some_and(|index| self.text(*index) == "(")
+                    && is_native_command(name)
                 {
                     BlockKind::Command
                 } else {
@@ -1072,6 +1232,120 @@ fn inner_string_range(range: &Range<usize>) -> Range<usize> {
     range.start.saturating_add(1)..range.end.saturating_sub(1)
 }
 
+fn decode_source_string(raw: &str) -> Option<String> {
+    let mut output = String::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character == '/' && chars.peek() == Some(&'$') {
+            let mut lookahead = chars.clone();
+            lookahead.next();
+            if lookahead.next() == Some('{') {
+                output.push_str("${");
+                chars.next();
+                chars.next();
+                continue;
+            }
+        }
+        if character != '\\' {
+            output.push(character);
+            continue;
+        }
+        output.push(match chars.next()? {
+            '"' => '"',
+            '\\' => '\\',
+            'n' => '\n',
+            'r' => '\r',
+            't' => '\t',
+            _ => return None,
+        });
+    }
+    Some(output)
+}
+
+fn matching_parenthesis(source: &str, open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut quoted = false;
+    let mut escaped = false;
+    for (offset, character) in source
+        .char_indices()
+        .skip_while(|(offset, _)| *offset < open)
+    {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                quoted = false;
+            }
+            continue;
+        }
+        match character {
+            '"' => quoted = true,
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(offset);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn top_level_position(source: &str, needle: char) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut quoted = false;
+    let mut escaped = false;
+    for (offset, character) in source.char_indices() {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                quoted = false;
+            }
+            continue;
+        }
+        if character == needle && depth == 0 {
+            return Some(offset);
+        }
+        match character {
+            '"' => quoted = true,
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn split_source_ranges(source: &str, separator: char) -> Vec<Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    while start < source.len() {
+        let Some(offset) = top_level_position(&source[start..], separator) else {
+            ranges.push(start..source.len());
+            break;
+        };
+        ranges.push(start..start + offset);
+        start += offset + separator.len_utf8();
+    }
+    ranges
+}
+
+fn trimmed_source_range(source: &str, range: Range<usize>) -> Option<Range<usize>> {
+    let value = source.get(range.clone())?;
+    let prefix = value.len() - value.trim_start().len();
+    let suffix = value.len() - value.trim_end().len();
+    let start = range.start + prefix;
+    let end = range.end.saturating_sub(suffix);
+    (start < end).then_some(start..end)
+}
+
 fn compact_summary(source: &str) -> String {
     const LIMIT: usize = 96;
     let compact = source.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -1212,6 +1486,23 @@ fn matching_delimiter<'a>(
 
 fn is_assignment(value: &str) -> bool {
     matches!(value, "=" | "+=" | "-=" | "*=" | "/=" | "%=")
+}
+
+fn is_native_command(name: &str) -> bool {
+    matches!(
+        name,
+        "goto"
+            | "call"
+            | "wait"
+            | "background"
+            | "sprite"
+            | "hide"
+            | "move"
+            | "bgm"
+            | "se"
+            | "video"
+            | "pop"
+    )
 }
 
 fn valid_identifier(value: &str) -> bool {
@@ -1454,6 +1745,110 @@ mod tests {
             .unwrap();
         assert_eq!(edited, "scene empty {\n  \"first\"\n}\n");
         assert_eq!(edited.get(range), Some("\"first\""));
+    }
+
+    #[test]
+    fn supported_list_mutation_is_a_block_not_unknown_source() {
+        let source = "scene start { let items = [1], items.append(2), items.clear() }";
+        let projection = EiyashouProjection::parse(source);
+        let blocks = &projection.scenes[0].blocks;
+        assert_eq!(blocks[1].kind, BlockKind::Command);
+        assert_eq!(blocks[2].kind, BlockKind::Command);
+        assert!(!blocks[1].read_only);
+    }
+
+    #[test]
+    fn unknown_call_remains_read_only_at_its_source_position() {
+        let source = "scene start { wait(100ms), mystery(1), \"next\" }";
+        let projection = EiyashouProjection::parse(source);
+        let blocks = &projection.scenes[0].blocks;
+        assert_eq!(blocks[0].kind, BlockKind::Command);
+        assert_eq!(blocks[1].kind, BlockKind::Unsupported);
+        assert!(blocks[1].read_only);
+        assert!(blocks[0].source_range.start < blocks[1].source_range.start);
+        assert!(blocks[1].source_range.start < blocks[2].source_range.start);
+    }
+
+    #[test]
+    fn inspector_fields_keep_exact_source_ranges() {
+        let source = "scene start { sprite(rin_slot, rin, position: center, transition: fade(300ms)), if (ready) { \"ok\" } }";
+        let projection = EiyashouProjection::parse(source);
+        let sprite = &projection.scenes[0].blocks[0];
+        let fields = projection
+            .source_fields(source, sprite.source_range.start)
+            .unwrap();
+        assert_eq!(
+            fields[..4]
+                .iter()
+                .map(|field| field.key.as_str())
+                .collect::<Vec<_>>(),
+            ["0", "1", "position", "transition"]
+        );
+        assert_eq!(source.get(fields[3].range.clone()), Some("fade(300ms)"));
+        assert_eq!(fields[4].key, "z");
+        assert_eq!(fields[4].insertion.as_deref(), Some(", z: "));
+        let mut edited = source.to_owned();
+        edited.replace_range(fields[4].range.clone(), ", z: 2");
+        let edited_projection = EiyashouProjection::parse(&edited);
+        assert!(edited_projection.read_only.is_empty());
+        assert_eq!(
+            edited_projection.scenes[0].blocks[0].kind,
+            BlockKind::Command
+        );
+        let conditional = projection.scenes[0]
+            .blocks
+            .iter()
+            .find(|block| block.kind == BlockKind::Conditional)
+            .unwrap();
+        let fields = projection
+            .source_fields(source, conditional.source_range.start)
+            .unwrap();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].value, "ready");
+    }
+
+    #[test]
+    fn choice_prompt_can_be_added_without_rebuilding_child_blocks() {
+        let source = "scene start { choice { \"Go\": goto(start) } }";
+        let projection = EiyashouProjection::parse(source);
+        let choice = &projection.scenes[0].blocks[0];
+        let field = &projection
+            .source_fields(source, choice.source_range.start)
+            .unwrap()[0];
+        assert_eq!(field.key, "prompt");
+        let mut edited = source.to_owned();
+        edited.replace_range(field.range.clone(), "(\"Next?\")");
+        assert_eq!(
+            edited,
+            "scene start { choice(\"Next?\") { \"Go\": goto(start) } }"
+        );
+        assert!(
+            EiyashouProjection::parse(&edited).scenes[0]
+                .blocks
+                .iter()
+                .any(|block| block.kind == BlockKind::ChoiceOption)
+        );
+    }
+
+    #[test]
+    fn inspector_choice_prompt_keeps_braces_inside_quoted_text() {
+        let source = r#"scene start { choice("What {now}?") { "Go": goto(start) } }"#;
+        let projection = EiyashouProjection::parse(source);
+        let choice = &projection.scenes[0].blocks[0];
+        let fields = projection
+            .source_fields(source, choice.source_range.start)
+            .unwrap();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].value, "What {now}?");
+    }
+
+    #[test]
+    fn inspector_text_fields_decode_source_escapes_for_editing() {
+        assert_eq!(decode_source_string(r#"A\n\"B\""#), Some("A\n\"B\"".into()));
+        assert_eq!(
+            decode_source_string("literal /${value}"),
+            Some("literal ${value}".into())
+        );
     }
 
     #[test]

@@ -1,3 +1,6 @@
+pub mod projection;
+pub mod syntax;
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::fs;
@@ -12,7 +15,7 @@ use keine_loader::{
     DiagnosticLevel, NativeTokenKind, ResourceKind, parse_native_document, parse_native_scenes,
 };
 
-use crate::projection::EiyashouProjection;
+use crate::projection::{BlockKind, EiyashouProjection};
 use crate::workspace::WorkspaceFile;
 
 const MAX_INDEXED_SOURCE_BYTES: u64 = 1024 * 1024;
@@ -60,6 +63,122 @@ pub struct AssetEntry {
     pub tags: Vec<String>,
     pub exists: bool,
     pub reference_count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssetReference {
+    pub key: AssetKey,
+    pub path: PathBuf,
+    pub line: usize,
+    pub column: usize,
+    pub range: Option<Range<usize>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnmappedAsset {
+    pub kind: AssetKind,
+    pub path: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AssetKey {
+    pub kind: AssetKind,
+    pub id: String,
+}
+
+impl AssetEntry {
+    pub fn key(&self) -> AssetKey {
+        AssetKey {
+            kind: self.kind,
+            id: self.id.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AssetSort {
+    #[default]
+    Name,
+    Path,
+    References,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct AssetQuery {
+    pub search: String,
+    pub kind: Option<AssetKind>,
+    pub folder: Option<PathBuf>,
+    pub sort: AssetSort,
+}
+
+impl AssetQuery {
+    pub fn results<'a>(&self, assets: &'a [AssetEntry]) -> Vec<&'a AssetEntry> {
+        let search = self.search.trim().to_lowercase();
+        let mut results = assets
+            .iter()
+            .filter(|asset| self.kind.is_none_or(|kind| asset.kind == kind))
+            .filter(|asset| {
+                self.folder
+                    .as_ref()
+                    .is_none_or(|folder| asset.path.starts_with(folder))
+            })
+            .filter(|asset| {
+                search.is_empty()
+                    || asset.id.to_lowercase().contains(&search)
+                    || asset
+                        .path
+                        .to_string_lossy()
+                        .to_lowercase()
+                        .contains(&search)
+                    || asset
+                        .tags
+                        .iter()
+                        .any(|tag| tag.to_lowercase().contains(&search))
+            })
+            .collect::<Vec<_>>();
+        results.sort_by(|left, right| {
+            let primary = match self.sort {
+                AssetSort::Name => left.id.cmp(&right.id),
+                AssetSort::Path => left.path.cmp(&right.path),
+                AssetSort::References => right.reference_count.cmp(&left.reference_count),
+            };
+            primary
+                .then_with(|| left.kind.cmp(&right.kind))
+                .then_with(|| left.id.cmp(&right.id))
+                .then_with(|| left.path.cmp(&right.path))
+        });
+        results
+    }
+
+    pub fn unmapped_results<'a>(&self, assets: &'a [UnmappedAsset]) -> Vec<&'a UnmappedAsset> {
+        let search = self.search.trim().to_lowercase();
+        let mut results = assets
+            .iter()
+            .filter(|asset| self.kind.is_none_or(|kind| asset.kind == kind))
+            .filter(|asset| {
+                self.folder
+                    .as_ref()
+                    .is_none_or(|folder| asset.path.starts_with(folder))
+            })
+            .filter(|asset| {
+                search.is_empty()
+                    || asset
+                        .path
+                        .to_string_lossy()
+                        .to_lowercase()
+                        .contains(&search)
+            })
+            .collect::<Vec<_>>();
+        results.sort_by(|left, right| match self.sort {
+            AssetSort::Name => left
+                .path
+                .file_name()
+                .cmp(&right.path.file_name())
+                .then_with(|| left.path.cmp(&right.path)),
+            AssetSort::Path | AssetSort::References => left.path.cmp(&right.path),
+        });
+        results
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,6 +231,9 @@ pub struct AuthoringIndex {
     pub assets_manifest: Option<PathBuf>,
     pub characters_manifest: Option<PathBuf>,
     pub assets: Vec<AssetEntry>,
+    pub asset_references: Vec<AssetReference>,
+    pub unindexed_sources: Vec<PathBuf>,
+    pub unmapped: Vec<UnmappedAsset>,
     pub characters: Vec<CharacterEntry>,
     pub scenes: Vec<SceneEntry>,
     pub dialogues: Vec<DialogueEntry>,
@@ -241,6 +363,29 @@ impl AuthoringIndex {
             ));
         }
 
+        let mapped = index
+            .assets
+            .iter()
+            .map(|asset| asset.path.as_path())
+            .collect::<HashSet<_>>();
+        index.unmapped = files
+            .iter()
+            .filter(|file| {
+                !file.is_dir() && file.size > 0 && !mapped.contains(file.relative_path.as_path())
+            })
+            .filter_map(|file| {
+                crate::file_ops::unmapped_candidate_kind(&file.relative_path).map(|kind| {
+                    UnmappedAsset {
+                        kind,
+                        path: file.relative_path.clone(),
+                    }
+                })
+            })
+            .collect();
+        index
+            .unmapped
+            .sort_by(|left, right| left.path.cmp(&right.path));
+
         if let Some(path) = characters_path {
             match read_text(root, &path, overrides)
                 .ok_or_else(|| "manifest is missing or is not UTF-8".to_owned())
@@ -294,14 +439,17 @@ impl AuthoringIndex {
 
         let mut referenced = HashMap::<(AssetKind, String), usize>::new();
         for file in files.iter().filter(|file| {
-            file.size <= MAX_INDEXED_SOURCE_BYTES
-                && file
-                    .relative_path
-                    .extension()
-                    .and_then(|value| value.to_str())
-                    == Some("shou")
+            file.relative_path
+                .extension()
+                .and_then(|value| value.to_str())
+                == Some("shou")
         }) {
+            if file.size > MAX_INDEXED_SOURCE_BYTES {
+                index.unindexed_sources.push(file.relative_path.clone());
+                continue;
+            }
             let Some(source) = read_text(root, &file.relative_path, overrides) else {
+                index.unindexed_sources.push(file.relative_path.clone());
                 index.problems.push(problem(
                     ProblemSeverity::Error,
                     file.relative_path.clone(),
@@ -311,6 +459,10 @@ impl AuthoringIndex {
                 ));
                 continue;
             };
+            if source.len() as u64 > MAX_INDEXED_SOURCE_BYTES {
+                index.unindexed_sources.push(file.relative_path.clone());
+                continue;
+            }
             index_source(
                 &file.relative_path,
                 &source,
@@ -318,6 +470,11 @@ impl AuthoringIndex {
                 &mut referenced,
                 &asset_lookup,
             );
+            if index.problems.iter().any(|problem| {
+                problem.path == file.relative_path && problem.severity == ProblemSeverity::Error
+            }) {
+                index.unindexed_sources.push(file.relative_path.clone());
+            }
         }
 
         for asset in &mut index.assets {
@@ -439,6 +596,22 @@ impl InsertKind {
         }
     }
 
+    pub fn for_command(name: &str) -> Option<Self> {
+        Some(match name {
+            "background" => Self::Background,
+            "sprite" => Self::Figure,
+            "hide" => Self::Hide,
+            "move" => Self::Move,
+            "bgm" => Self::Bgm,
+            "se" => Self::Effect,
+            "video" => Self::Video,
+            "goto" => Self::Goto,
+            "call" => Self::Call,
+            "wait" => Self::Wait,
+            _ => return None,
+        })
+    }
+
     pub const fn category(self) -> &'static str {
         match self {
             Self::Narration | Self::Dialogue => "Text",
@@ -536,6 +709,50 @@ pub fn dialogues_for_source(path: &Path, source: &str) -> Vec<DialogueEntry> {
         &mut HashMap::new(),
         &HashSet::new(),
     );
+    // The runtime parser omits empty speech, but the editor must keep those
+    // source-backed blocks editable so Enter can continue a blank sequence.
+    if source.contains("\"\"")
+        && path
+            .extension()
+            .is_some_and(|extension| extension == "shou")
+    {
+        for scene in EiyashouProjection::parse(source).scenes {
+            for block in scene.blocks {
+                let Some(range) = block.text_range.clone() else {
+                    continue;
+                };
+                if range.start != range.end || block.read_only {
+                    continue;
+                }
+                let speaker = match block.kind {
+                    BlockKind::Narration => String::new(),
+                    BlockKind::Dialogue { speaker } => speaker,
+                    _ => continue,
+                };
+                if index
+                    .dialogues
+                    .iter()
+                    .any(|dialogue| dialogue.text_range == range)
+                {
+                    continue;
+                }
+                index.dialogues.push(DialogueEntry {
+                    path: path.to_owned(),
+                    scene: scene.name.clone(),
+                    speaker,
+                    text: String::new(),
+                    editable: true,
+                    line: block.line + 1,
+                    column: block.column + 1,
+                    source_range: block.source_range,
+                    text_range: range,
+                });
+            }
+        }
+        index
+            .dialogues
+            .sort_by_key(|dialogue| dialogue.source_range.start);
+    }
     index.dialogues
 }
 
@@ -688,7 +905,122 @@ pub fn append_scene(source: &str, id: &str) -> Result<String, AuthoringEditError
     } else {
         "\n\n"
     };
-    Ok(format!("{source}{separator}scene {id} {{\n  \"\"\n}}\n"))
+    Ok(format!("{source}{separator}scene {id} {{\n}}\n"))
+}
+
+pub fn rename_scene(source: &str, start: usize, id: &str) -> Result<String, AuthoringEditError> {
+    if !valid_identifier(id) {
+        return Err(AuthoringEditError::InvalidIdentifier);
+    }
+    let document = parse_native_document(source);
+    let scene = document
+        .scenes
+        .iter()
+        .find(|scene| scene.range.start == start)
+        .ok_or(AuthoringEditError::StaleRange)?;
+    if document
+        .scenes
+        .iter()
+        .any(|other| other.range.start != start && other.name == id)
+    {
+        return Err(AuthoringEditError::DuplicateIdentifier);
+    }
+    let mut ranges = scene_references(source, &scene.name);
+    ranges.push(scene.name_range.clone());
+    ranges.sort_by_key(|range| range.start);
+    let mut edited = source.to_owned();
+    for range in ranges.into_iter().rev() {
+        edited.replace_range(range, id);
+    }
+    Ok(edited)
+}
+
+pub fn rename_scene_references(source: &str, old: &str, new: &str) -> String {
+    let mut edited = source.to_owned();
+    for range in scene_references(source, old).into_iter().rev() {
+        edited.replace_range(range, new);
+    }
+    edited
+}
+
+pub fn delete_scene(source: &str, start: usize) -> Result<String, AuthoringEditError> {
+    let scene = parse_native_document(source)
+        .scenes
+        .into_iter()
+        .find(|scene| scene.range.start == start)
+        .ok_or(AuthoringEditError::StaleRange)?;
+    let mut edited = source.to_owned();
+    edited.replace_range(scene.range, "");
+    Ok(edited)
+}
+
+pub fn move_scene(
+    source: &str,
+    start: usize,
+    direction: crate::projection::MoveDirection,
+) -> Result<String, AuthoringEditError> {
+    let document = parse_native_document(source);
+    let index = document
+        .scenes
+        .iter()
+        .position(|scene| scene.range.start == start)
+        .ok_or(AuthoringEditError::StaleRange)?;
+    let neighbor = match direction {
+        crate::projection::MoveDirection::Up => index.checked_sub(1),
+        crate::projection::MoveDirection::Down => {
+            (index + 1 < document.scenes.len()).then_some(index + 1)
+        }
+    }
+    .ok_or(AuthoringEditError::MissingInsertionPoint)?;
+    let (first, second) = if index < neighbor {
+        (&document.scenes[index], &document.scenes[neighbor])
+    } else {
+        (&document.scenes[neighbor], &document.scenes[index])
+    };
+    let before = source
+        .get(first.range.clone())
+        .ok_or(AuthoringEditError::StaleRange)?;
+    let between = source
+        .get(first.range.end..second.range.start)
+        .ok_or(AuthoringEditError::StaleRange)?;
+    let after = source
+        .get(second.range.clone())
+        .ok_or(AuthoringEditError::StaleRange)?;
+    let mut edited = source.to_owned();
+    edited.replace_range(
+        first.range.start..second.range.end,
+        &format!("{after}{between}{before}"),
+    );
+    Ok(edited)
+}
+
+pub fn scene_references(source: &str, name: &str) -> Vec<Range<usize>> {
+    let document = parse_native_document(source);
+    let tokens = document
+        .tokens
+        .iter()
+        .filter(|token| {
+            !matches!(
+                token.kind,
+                NativeTokenKind::Whitespace | NativeTokenKind::Comment
+            )
+        })
+        .collect::<Vec<_>>();
+    tokens
+        .windows(4)
+        .filter_map(|window| {
+            let [command, open, target, close] = window else {
+                return None;
+            };
+            let text = |token: &keine_loader::NativeToken| source.get(token.range.clone());
+            ((text(command) == Some("goto") || text(command) == Some("call"))
+                && text(open) == Some("(")
+                && target.kind == NativeTokenKind::Identifier
+                && text(target) == Some(name)
+                && text(close) == Some(")"))
+            .then(|| target.range.clone())
+        })
+        .collect()
 }
 
 pub fn append_character(
@@ -884,6 +1216,37 @@ fn index_source(
             if resource.is_dynamic() {
                 continue;
             }
+            let matches = document
+                .tokens
+                .iter()
+                .filter(|token| {
+                    matches!(
+                        token.kind,
+                        NativeTokenKind::Identifier | NativeTokenKind::String
+                    )
+                })
+                .filter(|token| line_column(source, token.range.start).0 == resource.span.line)
+                .filter_map(|token| {
+                    let raw = source.get(token.range.clone())?;
+                    (raw == resource.path || raw == format!("\"{}\"", resource.path))
+                        .then_some(token.range.clone())
+                })
+                .collect::<Vec<_>>();
+            let range = (matches.len() == 1).then(|| matches[0].clone());
+            let (line, column) = range
+                .as_ref()
+                .map(|range| line_column(source, range.start))
+                .unwrap_or((resource.span.line, resource.span.column));
+            index.asset_references.push(AssetReference {
+                key: AssetKey {
+                    kind,
+                    id: resource.path.clone(),
+                },
+                path: path.to_owned(),
+                line,
+                column,
+                range,
+            });
             *referenced.entry((kind, resource.path.clone())).or_default() += 1;
             if !asset_lookup.contains(&(kind, resource.path.clone())) {
                 index.problems.push(problem(
@@ -1062,7 +1425,7 @@ fn escape_yaml_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn valid_identifier(value: &str) -> bool {
+pub(crate) fn valid_identifier(value: &str) -> bool {
     let mut characters = value.chars();
     let Some(first) = characters.next() else {
         return false;
@@ -1079,16 +1442,23 @@ fn valid_color(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
+
+    static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
 
     fn fixture() -> PathBuf {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("keine-authoring-index-{nonce}"));
+        let root = std::env::temp_dir().join(format!(
+            "keine-authoring-index-{}-{nonce}-{}",
+            std::process::id(),
+            NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
+        ));
         fs::create_dir_all(root.join("scripts")).unwrap();
         fs::create_dir_all(root.join("assets")).unwrap();
         fs::write(
@@ -1130,6 +1500,13 @@ mod tests {
         assert_eq!(index.assets[0].id, "room");
         assert_eq!(index.assets[0].tags, ["interior", "chapter-1"]);
         assert_eq!(index.assets[0].reference_count, 1);
+        let reference = index
+            .asset_references
+            .iter()
+            .find(|reference| reference.key.id == "room")
+            .unwrap();
+        let source = fs::read_to_string(root.join(&reference.path)).unwrap();
+        assert_eq!(source.get(reference.range.clone().unwrap()), Some("room"));
         assert!(
             index
                 .problems
@@ -1137,6 +1514,45 @@ mod tests {
                 .any(|problem| problem.message.contains("missing.webp"))
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn asset_query_keeps_stable_identity_across_sort_and_filter() {
+        let assets = [
+            AssetEntry {
+                kind: AssetKind::Background,
+                id: "room".into(),
+                path: "assets/background/room.webp".into(),
+                tags: vec!["interior".into()],
+                exists: true,
+                reference_count: 2,
+            },
+            AssetEntry {
+                kind: AssetKind::Figure,
+                id: "rin".into(),
+                path: "assets/figure/rin.webp".into(),
+                tags: vec!["hero".into()],
+                exists: true,
+                reference_count: 1,
+            },
+        ];
+        let mut query = AssetQuery {
+            search: "hero".into(),
+            ..Default::default()
+        };
+        assert_eq!(query.results(&assets)[0].key(), assets[1].key());
+        query.search.clear();
+        query.sort = AssetSort::References;
+        assert_eq!(
+            query
+                .results(&assets)
+                .iter()
+                .map(|asset| asset.key())
+                .collect::<Vec<_>>(),
+            vec![assets[0].key(), assets[1].key()]
+        );
+        query.kind = Some(AssetKind::Figure);
+        assert_eq!(query.results(&assets).len(), 1);
     }
 
     #[test]
@@ -1209,6 +1625,28 @@ mod tests {
     }
 
     #[test]
+    fn empty_text_blocks_remain_editable_after_insertion() {
+        let source = "scene start {\n  \"\",\n  \"\"\n}\n";
+        let dialogues = dialogues_for_source(Path::new("scripts/main.shou"), source);
+        assert_eq!(dialogues.len(), 2);
+        assert!(dialogues.iter().all(|dialogue| dialogue.editable));
+        assert_eq!(dialogues[0].line, 2);
+        assert_eq!(dialogues[1].line, 3);
+        assert_eq!(
+            replace_dialogue_text(source, &dialogues[1], "Next").unwrap(),
+            "scene start {\n  \"\",\n  \"Next\"\n}\n"
+        );
+    }
+
+    #[test]
+    fn block_line_break_round_trips_through_source() {
+        let source = "scene start {\n  \"Line one\\nLine two\"\n}\n";
+        let dialogues = dialogues_for_source(Path::new("scripts/main.shou"), source);
+        assert_eq!(dialogues.len(), 1);
+        assert_eq!(dialogues[0].text, "Line one\nLine two");
+    }
+
+    #[test]
     fn character_and_scene_creation_preserve_surrounding_source() {
         let characters = "characters:\n  rin:\n    name: \"Rin\"\nmetadata: keep\n";
         let edited = append_character(characters, "yui", "Yui", Some("#BAEBFF")).unwrap();
@@ -1218,7 +1656,33 @@ mod tests {
         let script = "// keep\nscene start { \"Hi\" }\n";
         let edited = append_scene(script, "next").unwrap();
         assert!(edited.starts_with(script));
-        assert!(edited.ends_with("scene next {\n  \"\"\n}\n"));
+        assert!(edited.ends_with("scene next {\n}\n"));
+        let projected = EiyashouProjection::parse(&edited);
+        assert_eq!(projected.scenes.len(), 2);
+        assert!(projected.read_only.is_empty());
+    }
+
+    #[test]
+    fn scene_edits_preserve_other_source_and_identify_real_targets() {
+        let source =
+            "// keep\nscene first { goto(second) }\n\n// between\nscene second { \"Hello\" }\n";
+        let parsed = parse_native_document(source);
+        let first = parsed.scenes[0].range.start;
+        let second = parsed.scenes[1].range.start;
+        let renamed = rename_scene(source, second, "ending").unwrap();
+        assert!(renamed.contains("scene ending { \"Hello\" }"));
+        assert!(renamed.contains("goto(ending)"));
+        assert_eq!(scene_references(source, "second").len(), 1);
+        assert!(scene_references("scene x { \"goto(second)\" }", "second").is_empty());
+        let moved = move_scene(source, second, crate::projection::MoveDirection::Up).unwrap();
+        assert!(moved.find("scene second").unwrap() < moved.find("scene first").unwrap());
+        assert!(moved.contains("// between"));
+        let deleted = delete_scene(source, first).unwrap();
+        assert!(!deleted.contains("scene first"));
+        assert!(deleted.contains("scene second"));
+        let self_ref = "scene second { call(second) }";
+        let renamed = rename_scene(self_ref, 0, "longer_ending").unwrap();
+        assert_eq!(renamed, "scene longer_ending { call(longer_ending) }");
     }
 
     #[test]

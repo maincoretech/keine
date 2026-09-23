@@ -41,6 +41,8 @@ caused by Kēne changes.
 
 - `crates/core/`: action schema, state, expression evaluator, deterministic step semantics.
 - `crates/loader/`: adapters, source confinement, compiled program/store envelopes, diagnostics.
+- `crates/authoring/`: Bevy-free Editor–Engine protocol and shared frame transport.
+- `crates/editor/`: native workbench, source-backed authoring, project files, and Preview client.
 - `src/runtime/`: bootstrap, host boundary, input/lifecycle, script-driving coordination.
 - `src/scene/`: asset planning, audio/video, background, sprites, effects.
 - `src/render/` and `src/assets/shaders/`: render-world pipelines and WGSL.

@@ -8,6 +8,8 @@ keine 是 Bevy 0.19 构建的专用视觉小说引擎，可运行原生项目、
 ```text
 keine-core   <- keine-loader <- keine
 纯状态与执行      内容与语言适配        最终引擎、ECS、渲染、UI、存储
+keine -> keine-authoring <- keine-editor
+Engine       共享预览合同       原生工作台
 ```
 
 ```text
@@ -46,7 +48,13 @@ keine/
 │   │       │   └── store.rs       存档状态格式接口与 keine codec
 │   │       ├── loader.rs + loader/ 多来源挂载、场景发现和开发热重载
 │   │       └── lib.rs             通用语言注册表、span、资源与诊断合同
+│   ├── authoring/                 package: keine-authoring，Editor 与 Engine 共用的预览 IPC 合同
 │   └── editor/                    package: keine-editor，独立 GPUI 原生编辑器
+│       ├── src/app.rs + app/      工作台壳；Dock、块编辑、Inspector、文件动作、视图分层
+│       ├── src/authoring.rs + authoring/ 源码编辑、投影与高亮
+│       ├── src/preview.rs + preview/ 预览进程、单实例与帧传输
+│       ├── src/workspace.rs + workspace/ 项目文件、文档与持久化
+│       └── bench/                 可复现的离屏预览基准
 ├── projects/
 │   └── test-project/              唯一端到端测试项目
 ├── .github/workflows/             桌面平台 fmt、Clippy、测试和 release CI
@@ -54,11 +62,14 @@ keine/
 ├── docs/
 │   ├── PROJECT.md                 项目边界和目录规则
 │   ├── PROJECT_STATE.md           多线程共享的当前能力、接口与限制
-│   ├── EDITOR_HANDOFF.md          Kēne editor 的项目交接与决策边界
-│   ├── editor-phase0.md           Editor 架构、进程和预览技术验证
-│   ├── editor-phase1.md           只读工作台、窗口和持久化合同
+│   ├── editor/                   Editor 方案、阶段证据及产品问答
+│   │   ├── architecture.md        Editor 架构约束
+│   │   ├── assets.md              File/Asset 产品方案
+│   │   ├── handoff.md             历史交接快照
+│   │   ├── phase0.md–phase3.md    Editor 阶段技术证据
+│   │   └── questions/             Asset、Inspector、Performance 问答
 │   ├── architecture/              当前架构与平台合同
-│   ├── webgal-compatibility/      当前 WebGAL 语义、格式与视觉证据
+│   ├── webgal/                    当前 WebGAL 语义、格式与视觉证据
 │   ├── acceptance/                Phase 1–7 总清单与 LetsGal 独立验收
 │   ├── tasks/                     当前独立任务、所有权与依赖
 │   ├── performance-baseline.md    可复现的性能测量与设备证据

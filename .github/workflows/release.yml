@@ -43,7 +43,7 @@ jobs:
           Stable publishing requires the HAKUTAKU_IDENTITY_BASE64 repository secret.
 
           Generate the identity once on a trusted development machine:
-            cargo assets --pack <project>
+            cargo pack <project>
 
           The private file is then:
             <project>/.keine/publisher.hakutaku-key

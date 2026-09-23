@@ -24,11 +24,9 @@
 | Android/iOS | 无承诺 | — | — | 延期 |
 
 发行构建只启用目标平台所需的一个后端：macOS 使用 `video-native`，Windows/Linux 使用
-`video-ffmpeg`。开发别名可同时启用两个视频 feature 以及开发专用的 `hot-reload` 和
-`configure`；`cargo configure` 的 Media / Video 默认
-为 `automatic`，macOS 解析为 AVFoundation，其他平台解析为 FFmpeg，不会启动两套播放器；
-也可以显式选择 `disabled`，由缺失后端稳定拒绝视频指令。Cargo feature 表示实现是否编译可用，
-用户配置只在已编译能力之上选择运行策略。
+`video-ffmpeg`。开发别名可同时启用两个视频 feature 与 `hot-reload`；macOS 自动选择
+AVFoundation，其他平台选择 FFmpeg，不会启动两套播放器。未编入视频后端时由缺失后端
+明确拒绝视频指令。旧的机器级视频/adapter 开关已移除，编译 feature 是唯一的能力边界。
 
 Rust 侧使用 `ffmpeg-next 9.0`，因此开发环境可以绑定当前 FFmpeg 9；wrapper 的编译期版本
 检测仍支持 Linux 发行版和 Windows vcpkg 提供的较早 ABI。Windows CI 使用

@@ -14,7 +14,7 @@ Generate one publisher identity on a trusted machine and keep its original priva
 outside the game repository:
 
 ```bash
-cargo assets --pack /path/to/project
+cargo pack /path/to/project
 openssl base64 -A -in /path/to/project/.keine/publisher.hakutaku-key
 ```
 
@@ -74,4 +74,3 @@ The release fails closed when the Kēne reference is mutable, the project path e
 the secret is missing or empty, production media validation fails, the hardened Engine build
 fails, or the executable has unresolved Linux libraries. A failed run does not upload a partial
 release.
-

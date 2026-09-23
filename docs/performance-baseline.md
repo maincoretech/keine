@@ -16,7 +16,7 @@ and confirms that the sample still exercises JPG, PNG, MP3, WAV, and MP4
 compatibility paths:
 
 ```text
-cargo letsgal-test
+cargo test --test letsgal_sample_acceptance
 ```
 
 The same test runs automatically as part of the workspace suite whenever the
@@ -28,14 +28,14 @@ always-present CI contract.
 Loader measurements use Criterion's normal warm-up and sampling protocol:
 
 ```text
-cargo letsgal-perf
+cargo bench -p keine-loader --bench letsgal_project
 ```
 
 The process-start measurement reuses the release-mode hidden surface-backed
 window harness:
 
 ```text
-cargo startup-perf projects/letsgal 7
+cargo perf projects/letsgal --startup --runs 7
 ```
 
 Reference environment: commit `74e9520`, 15-core Apple M5 Pro, 24 GiB unified
@@ -68,8 +68,8 @@ The same sample was copied to the ignored
 `projects/letsgal` untouched. All 95 PNG/JPG images were converted to WebP at
 quality 90 with alpha quality 100. Five BGM tracks, nine voice clips, and two
 sound effects were converted to Opus at 160, 96, and 128 kbit/s respectively.
-`cargo assets --remap` then migrated 180 references in seven source files, and
-`cargo assets --pack` produced the signed Hakutaku package at
+`cargo remap` then migrated 180 references in seven source files, and
+`cargo pack` produced the signed Hakutaku package at
 `target/acceptance/letsgal-package`.
 
 | Production artifact | Size |
@@ -83,7 +83,7 @@ sound effects were converted to Opus at 160, 96, and 128 kbit/s respectively.
 The canonical image/audio set is 82.8% smaller than its compatibility-format
 source. The converted project still validates as 9 scenes / 896 actions / 0
 warnings. A release engine carrying the matching derived runtime keys opened
-the exact output of `assets --pack`; the ordinary development engine correctly
+the exact output of `pack`; the ordinary development engine correctly
 refused it because development builds do not embed release keys.
 
 The canonical source's loader estimates were 137.67 µs for adapter/manifest
@@ -245,7 +245,7 @@ GPU initialization accounts for the high p95. Peak RSS was 209.2 MiB.
 Cold-start work uses a separate process-level harness:
 
 ```text
-cargo startup-perf projects/test-project 7
+cargo perf projects/test-project --startup --runs 7
 ```
 
 Cargo builds the release executable once. That executable then launches seven
@@ -254,7 +254,7 @@ ready, and a subsequent frame has completed the Bevy render schedule, then exits
 the child automatically. `Instant` supplies one monotonic clock for cumulative
 milestones from process entry:
 
-- project: saved engine configuration plus project/config/content opening;
+- project: project/config/content opening;
 - app built: plugin and ECS application construction before `App::run`;
 - first frame: first render completed through `RenderSystems::PostCleanup`;
 - interactive: first completed frame after the title and blocking asset gate are ready;
@@ -463,19 +463,18 @@ it simply avoids silently allocating a 3840x2160 native backing surface.
 cargo perf projects/test-project
 
 # Initial stage, 10-second sample
-cargo perf projects/test-project 10
+cargo perf projects/test-project --seconds 10
 
 # Sustained authored timelines (stable authored ids)
-cargo perf projects/test-project 10 "10-04 blur family"
-cargo perf projects/test-project 10 "10-05 atmosphere effects"
-cargo perf projects/test-project 10 "10-07 all event types"
+cargo perf projects/test-project --seconds 10 --timeline "10-04 blur family"
+cargo perf projects/test-project --seconds 10 --timeline "10-05 atmosphere effects"
+cargo perf projects/test-project --seconds 10 --timeline "10-07 all event types"
 
-# Benchmark-only camera composition A/B. A target is required before the final
-# profile argument; cursor 0 is the explicit initial-stage escape hatch.
-cargo perf projects/test-project 5 0 runtime
-cargo perf projects/test-project 5 0 scene-ui
-cargo perf projects/test-project 5 0 scene-dialog
-cargo perf projects/test-project 5 0 scene
+# Benchmark-only camera composition A/B on the initial stage.
+cargo perf projects/test-project --seconds 5 --camera runtime
+cargo perf projects/test-project --seconds 5 --camera scene-ui
+cargo perf projects/test-project --seconds 5 --camera scene-dialog
+cargo perf projects/test-project --seconds 5 --camera scene
 
 # Project parser/validator
 cargo validate projects/test-project
@@ -1884,3 +1883,13 @@ cycle 3: first frame 155 ms, published 2, overwritten 0
 
 Each pause stayed bounded, each stop removed its mapping and child, and the
 post-test process check found no retained authoring child.
+
+### 2026-09-23 project P7 macOS Preview regression check
+
+On Apple M5 Pro / Metal, after adding sibling-app Engine discovery but without changing the
+frame path, `cargo test --test authoring_preview -- --ignored --nocapture` passed twice. The
+first invocation followed a cold graphics-test build and observed first visible frames at
+1338, 158, and 167 ms. The immediate repeat observed 158, 174, and 151 ms; all six cycles
+published two frames with zero overwrites. This is a functional warm-run check, not a
+packaged-application throughput or CPU baseline. The cold first-cycle outlier is retained
+rather than hidden; P7 still needs representative packaged-build timing and idle/active CPU.

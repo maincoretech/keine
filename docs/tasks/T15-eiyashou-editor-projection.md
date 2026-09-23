@@ -26,7 +26,7 @@ open/save must never migrate or rewrite untouched source.
 
 - `crates/editor/src/` for document classification, Text/Card projection, commands, diagnostics,
   and migration preview/application.
-- `crates/authoring-protocol/` and the narrow Engine authoring host only if the existing typed
+- `crates/authoring/` and the narrow Engine authoring host only if the existing typed
   diagnostics cannot express Eiyashou validation output.
 - Focused editor/authoring tests and Eiyashou/project-state documentation.
 - No publisher, renderer, compatibility-adapter, or package-format changes.

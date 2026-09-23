@@ -37,8 +37,9 @@ separate.
 ## Editor process ownership
 
 `EngineLocator` searches an explicit `KEINE_ENGINE`, a sibling executable, the macOS app Resources
-location, then `PATH`. It never invokes Cargo. `EngineProcess` binds a loopback listener, creates a
-single-use token, launches the prebuilt executable directly, validates the handshake and required
+location, a separately installed sibling `Kēne Engine.app`, then `PATH`. It never invokes Cargo.
+`EngineProcess` binds a loopback listener, creates a single-use token, launches the prebuilt
+executable directly, validates the handshake and required
 capabilities, and opens the project. Read, write, connect, and shutdown operations are bounded.
 
 Each project window owns its own child and protocol generation. Closing or dropping the session

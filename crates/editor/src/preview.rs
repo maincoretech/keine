@@ -1,3 +1,7 @@
+pub mod engine;
+pub mod frame_transport;
+pub mod instance;
+
 use std::collections::BTreeMap;
 use std::io;
 use std::path::PathBuf;

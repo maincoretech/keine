@@ -26,9 +26,10 @@ git clone https://github.com/maincoretech/keine.git
 cd keine
 cargo validate projects/test-project
 cargo dev projects/test-project
+cargo editor projects/test-project
 ```
 
-没有安装 FFmpeg 开发库时，可使用 `cargo run -- dev projects/test-project`。
+没有安装 FFmpeg 开发库时，可使用 `cargo run --features hot-reload -- dev projects/test-project`。
 视觉验收步骤见
 [`projects/test-project/ACCEPTANCE.md`](projects/test-project/ACCEPTANCE.md)。
 
@@ -40,17 +41,28 @@ cargo build --release --workspace --bin editor
 
 ## 常用命令
 
+一般工程只需以下入口：
+
 | 命令 | 用途 |
 |---|---|
 | `cargo validate <工程>` | 不打开窗口校验工程 |
 | `cargo dev <工程>` | 使用开发工具和热重载运行工程 |
+| `cargo editor [工程...]` | 打开原生编辑器，可选多个工程窗口 |
+| `cargo bundle <工程>` | 构建可分发游戏 |
+
+进阶操作：
+
+| 命令 | 用途 |
+|---|---|
 | `cargo dev <工程> --sync` | 跟随已打开的 LetsGal 工程 |
 | `cargo build --release --workspace --bin editor` | 构建原生编辑器的 release 二进制 |
-| `cargo assets --pack <工程>` | 只构建加密 Hakutaku 资源包 |
-| `cargo assets --remap <工程> <旧=新>...` | 安全迁移转换后的资源引用 |
-| `cargo bundle <工程>` | 构建可分发游戏 |
-| `cargo configure` | 配置内置内容适配器与运行能力 |
-| `cargo perf <工程>` | 采集运行时性能样本 |
+| `cargo pack <工程>` | 只构建加密 Hakutaku 资源包 |
+| `cargo remap <工程> <旧=新>...` | 安全更新转换后的资源引用 |
+| `cargo migrate <源工程> <目标工程>` | 将兼容工程迁移为原生工程 |
+| `cargo perf <工程>` | 采集运行时性能样本；`--startup` 测启动耗时 |
+
+安装后的引擎在编入相应功能时使用同名子命令（如 `keine validate`、`keine bundle`）；
+编辑器是独立应用。内置工程格式自动识别，旧的全局 `engine.conf` 适配器/视频开关不再读取。
 
 ## 游戏工程
 
@@ -81,7 +93,7 @@ target/bundle/
 直接启动发行版：Windows 双击 `keine.exe`，macOS/Linux 在终端运行 `./keine`。
 可执行文件会按自身位置寻找同目录的 `game.haku`，不依赖当前工作目录。
 
-`cargo assets --pack` 只在 `target/package/` 下生成 `game.haku` 与
+`cargo pack` 只在 `target/package/` 下生成 `game.haku` 与
 `data/*.taku`，不会构建或复制引擎。`cargo bundle` 复用同一资源打包流程，再构建并
 组装匹配的运行时。首次需要发布身份时会创建 `.keine/publisher.hakutaku-key`；请备份
 它，并且不要随游戏分发。保留上一版输出时，后续打包会复用未变化的内容 segment。
@@ -147,4 +159,4 @@ cargo validate projects/test-project
 - [Hakutaku 打包](docs/architecture/06-hakutaku-packaging.md)
 - [Project CI 正式发行](docs/project-ci-release.md)
 - [LetsGal 集成](docs/architecture/08-letsgal-studio.md)
-- [WebGAL 兼容性](docs/webgal-compatibility/README.md)
+- [WebGAL 兼容性](docs/webgal/README.md)

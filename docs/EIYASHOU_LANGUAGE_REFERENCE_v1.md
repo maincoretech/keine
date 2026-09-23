@@ -2329,14 +2329,14 @@ crates/core/src/runtime/expression.rs
 crates/core/src/runtime/step.rs
 crates/core/src/config.rs
 crates/loader/src/report.rs
-crates/authoring-protocol/src/lib.rs
+crates/authoring/src/lib.rs
 crates/editor/src/document.rs
 crates/editor/src/app.rs
 src/scene/audio.rs
 src/storage/settings.rs
 src/storage/read_history.rs
 docs/project-and-assets-spec.md
-docs/editor-phase2.md
+docs/editor/phase2.md
 docs/PROJECT_STATE.md
 ```
 

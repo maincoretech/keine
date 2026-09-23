@@ -1,3 +1,3 @@
-fn main() {
-    keine_editor::run();
+fn main() -> std::process::ExitCode {
+    keine_editor::run()
 }

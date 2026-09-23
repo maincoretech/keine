@@ -47,13 +47,13 @@ exercise the host.
 This integration task may modify:
 
 - `crates/editor/**`;
-- one focused shared authoring-protocol crate under `crates/` if using a single shared wire schema
+- one focused shared authoring crate under `crates/` if using a single shared wire schema
   is smaller and clearer than duplicated parsers;
 - `src/runtime/authoring.rs`, `src/runtime.rs`, `src/runtime/cli.rs`,
   `src/runtime/bootstrap.rs`, and narrowly required root entry-point wiring;
 - workspace manifests/lockfile only for the concrete shared protocol or already-used libraries;
 - focused editor/authoring fixtures under `projects/` and integration tests;
-- `docs/editor-phase2.md`, `docs/editor-phase3.md`, `docs/PROJECT_STATE.md`, README command help,
+- `docs/editor/phase2.md`, `docs/editor/phase3.md`, `docs/PROJECT_STATE.md`, README command help,
   and this task record.
 
 Do not modify loader adapters to make them writable, change core execution semantics, alter
