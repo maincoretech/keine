@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -47,6 +48,18 @@ fn authoring_child_publishes_a_real_composited_frame_and_stops_cleanly() {
             assert_eq!(frame.bytes.len(), 1920 * 1080 * 4);
             let stats = frames.stats();
             assert!(stats.published >= 1);
+            assert!(
+                child
+                    .set_execution_cursor(0, Path::new("scripts/absent.shou"), 1, 1)
+                    .expect("a non-action cursor is not a Preview failure")
+                    .is_none()
+            );
+            assert!(
+                child
+                    .set_execution_cursor(0, Path::new("scripts/main.shou"), 5, 1)
+                    .expect("a valid source cursor still works after a miss")
+                    .is_some()
+            );
             eprintln!(
                 "preview cycle {}: visible_frame_ms={} published={} overwritten={}",
                 cycle + 1,
@@ -72,4 +85,115 @@ fn authoring_child_publishes_a_real_composited_frame_and_stops_cleanly() {
         );
     }
     child.shutdown().expect("shut down authoring child");
+}
+
+#[test]
+#[ignore = "requires a local graphics adapter; run explicitly for Preview acceptance"]
+fn live_source_patch_publishes_a_new_revision() {
+    let engine = PathBuf::from(env!("CARGO_BIN_EXE_keine"));
+    let project = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("projects/test-project");
+    let generation = 42;
+    let mut child = EngineProcess::launch(&engine, &project, generation).unwrap();
+    let mapping = std::env::temp_dir().join(format!(
+        "keine-preview-patch-{}-{generation}.frames",
+        std::process::id()
+    ));
+    remove_stale_mapping(&mapping).unwrap();
+    let mut frames =
+        SharedFrameConsumer::create(mapping.clone(), 0x4b454e45, generation, 1920, 1080).unwrap();
+    let source_path = Path::new("scripts/main.shou");
+    let source = fs::read(project.join(source_path)).unwrap();
+    child.apply_snapshot(source_path, 1, &source).unwrap();
+    child.start_preview(frames.descriptor().clone(), 1).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let before = loop {
+        if let Some(frame) = frames.read_latest(1).unwrap() {
+            break frame;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "initial Preview frame was not published"
+        );
+        thread::sleep(Duration::from_millis(8));
+    };
+
+    let start = source
+        .windows(7)
+        .position(|bytes| bytes == b"Welcome")
+        .unwrap();
+    let changed_at = Instant::now();
+    child
+        .apply_patch(source_path, 1, 2, start..start + 7, b"Hello")
+        .unwrap();
+    let acknowledged_ms = changed_at.elapsed().as_millis();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let after = loop {
+        if let Some(frame) = frames.read_latest(2).unwrap() {
+            break frame;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "edited Preview frame was not published"
+        );
+        thread::sleep(Duration::from_millis(8));
+    };
+    assert_ne!(
+        before.bytes, after.bytes,
+        "source patch must change the rendered frame"
+    );
+    eprintln!(
+        "preview source patch: acknowledge_ms={acknowledged_ms} visible_frame_ms={} published={} overwritten={}",
+        changed_at.elapsed().as_millis(),
+        frames.stats().published,
+        frames.stats().overwritten,
+    );
+    assert!(
+        child
+            .set_execution_cursor(2, source_path, 5, 1)
+            .unwrap()
+            .is_some(),
+        "selecting another Block must resolve a source position"
+    );
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if let Some(frame) = frames.read_latest(2).unwrap()
+            && frame.bytes != after.bytes
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "selecting another Block did not change Preview pixels"
+        );
+        thread::sleep(Duration::from_millis(8));
+    }
+    // Incomplete authoring edits retain the last good Program while the
+    // protocol revision keeps advancing, so the next correction can recover.
+    let entry = source
+        .windows(7)
+        .position(|bytes| bytes == b"opening")
+        .unwrap();
+    child
+        .apply_patch(source_path, 2, 3, entry..entry + 7, b"unknown")
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while frames.read_latest(3).unwrap().is_none() {
+        assert!(Instant::now() < deadline, "invalid edit stopped Preview");
+        thread::sleep(Duration::from_millis(8));
+    }
+    child
+        .apply_patch(source_path, 3, 4, entry..entry + 7, b"opening")
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while frames.read_latest(4).unwrap().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "corrected edit did not recover Preview"
+        );
+        thread::sleep(Duration::from_millis(8));
+    }
+    child.stop().unwrap();
+    drop(frames);
+    assert!(!mapping.exists());
+    child.shutdown().unwrap();
 }

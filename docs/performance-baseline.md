@@ -5,6 +5,11 @@ Settled runtime captures disable persistence, warm up for three seconds, use
 the 1920x1080 design resolution, and sample raw frame intervals in a release
 build. The process-start protocol below intentionally has no warm-up.
 
+The historical LetsGal timeline benchmark formerly at `projects/test-project`
+now lives at `tests/fixtures/letsgal-timeline`; the current `projects/test-project`
+is the native Editor QA project. Historical capture descriptions retain their
+original project label.
+
 ## 2026-08-21 official LetsGal sample baseline
 
 This local baseline uses the complete `letsgal-template` bundled with LetsGal
@@ -105,7 +110,7 @@ The actual packaged opening composition sustained 60.0 FPS average, 53.7 FPS
 Build a benchmark edition without replacing the normal release:
 
 ```text
-cargo bundle projects/test-project --benchmark
+cargo bundle tests/fixtures/letsgal-timeline --benchmark
 ```
 
 The output directory is always suffixed `-benchmark` (the default is
@@ -245,7 +250,7 @@ GPU initialization accounts for the high p95. Peak RSS was 209.2 MiB.
 Cold-start work uses a separate process-level harness:
 
 ```text
-cargo perf projects/test-project --startup --runs 7
+cargo perf tests/fixtures/letsgal-timeline --startup --runs 7
 ```
 
 Cargo builds the release executable once. That executable then launches seven
@@ -460,24 +465,24 @@ it simply avoids silently allocating a 3840x2160 native backing surface.
 
 ```sh
 # Initial stage, 15-second sample by default
-cargo perf projects/test-project
+cargo perf tests/fixtures/letsgal-timeline
 
 # Initial stage, 10-second sample
-cargo perf projects/test-project --seconds 10
+cargo perf tests/fixtures/letsgal-timeline --seconds 10
 
 # Sustained authored timelines (stable authored ids)
-cargo perf projects/test-project --seconds 10 --timeline "10-04 blur family"
-cargo perf projects/test-project --seconds 10 --timeline "10-05 atmosphere effects"
-cargo perf projects/test-project --seconds 10 --timeline "10-07 all event types"
+cargo perf tests/fixtures/letsgal-timeline --seconds 10 --timeline "10-04 blur family"
+cargo perf tests/fixtures/letsgal-timeline --seconds 10 --timeline "10-05 atmosphere effects"
+cargo perf tests/fixtures/letsgal-timeline --seconds 10 --timeline "10-07 all event types"
 
 # Benchmark-only camera composition A/B on the initial stage.
-cargo perf projects/test-project --seconds 5 --camera runtime
-cargo perf projects/test-project --seconds 5 --camera scene-ui
-cargo perf projects/test-project --seconds 5 --camera scene-dialog
-cargo perf projects/test-project --seconds 5 --camera scene
+cargo perf tests/fixtures/letsgal-timeline --seconds 5 --camera runtime
+cargo perf tests/fixtures/letsgal-timeline --seconds 5 --camera scene-ui
+cargo perf tests/fixtures/letsgal-timeline --seconds 5 --camera scene-dialog
+cargo perf tests/fixtures/letsgal-timeline --seconds 5 --camera scene
 
 # Project parser/validator
-cargo validate projects/test-project
+cargo validate tests/fixtures/letsgal-timeline
 ```
 
 The benchmark prints every available timeline id and its resolved cursor before
@@ -1893,3 +1898,19 @@ first invocation followed a cold graphics-test build and observed first visible 
 published two frames with zero overwrites. This is a functional warm-run check, not a
 packaged-application throughput or CPU baseline. The cold first-cycle outlier is retained
 rather than hidden; P7 still needs representative packaged-build timing and idle/active CPU.
+
+### 2026-09-25 authoring source-edit latency
+
+The real-GPU `cargo test --test authoring_preview -- --ignored --nocapture`
+patch test uses the native `projects/test-project`, edits visible dialogue text,
+and waits for a new 1920x1080 frame with different pixels. It also seeks to a
+different Block and verifies another pixel change. On Apple M5 Pro /
+Metal, the old path rebuilt the entire Bevy App for a source patch: one run
+measured 349 ms from request to acknowledgement and 505 ms to the edited frame.
+Replacing only the Program, scene manifest, and image roles while retaining the
+render App and frame transport measured 0 ms acknowledgement and 93 / 108 / 95 ms
+to the edited frame in subsequent runs. These are individual debug-build
+samples, not throughput percentiles. They exclude the Editor's 100 ms
+source-edit debounce and do not establish 60 fps continuous playback. Invalid
+intermediate source retains the last valid Program so a corrected patch can
+recover without restarting Preview.

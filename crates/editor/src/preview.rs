@@ -25,13 +25,6 @@ const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const RECENT_FRAME_WINDOW: Duration = Duration::from_millis(250);
 static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum PreviewMode {
-    #[default]
-    Edit,
-    Play,
-}
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum PreviewLifecycle {
     #[default]
@@ -45,7 +38,6 @@ pub enum PreviewLifecycle {
 #[derive(Clone, Debug)]
 pub struct PreviewSnapshot {
     pub lifecycle: PreviewLifecycle,
-    pub mode: PreviewMode,
     pub revision: u64,
     pub frame: Option<Arc<OwnedFrame>>,
     pub last_frame_at: Option<Instant>,
@@ -58,7 +50,6 @@ impl Default for PreviewSnapshot {
     fn default() -> Self {
         Self {
             lifecycle: PreviewLifecycle::Off,
-            mode: PreviewMode::Edit,
             revision: 0,
             frame: None,
             last_frame_at: None,
@@ -74,7 +65,6 @@ enum PreviewCommand {
     Stop,
     SetWindowVisible(bool),
     SetPanelVisible(bool),
-    SetMode(PreviewMode),
     Snapshot {
         path: PathBuf,
         contents: Vec<u8>,
@@ -122,7 +112,6 @@ impl PreviewController {
             .expect("preview snapshot lock poisoned");
         PreviewSnapshot {
             lifecycle: snapshot.lifecycle.clone(),
-            mode: snapshot.mode,
             revision: snapshot.revision,
             frame: snapshot.frame.take(),
             last_frame_at: snapshot.last_frame_at,
@@ -148,10 +137,6 @@ impl PreviewController {
 
     pub fn set_panel_visible(&self, visible: bool) {
         let _ = self.commands.send(PreviewCommand::SetPanelVisible(visible));
-    }
-
-    pub fn set_mode(&self, mode: PreviewMode) {
-        let _ = self.commands.send(PreviewCommand::SetMode(mode));
     }
 
     pub fn apply_snapshot(&self, path: PathBuf, contents: Vec<u8>) {
@@ -184,10 +169,11 @@ struct Worker {
     frames: Option<SharedFrameConsumer>,
     sources: BTreeMap<PathBuf, Vec<u8>>,
     revision: u64,
+    cursor: Option<(PathBuf, usize, usize)>,
+    applied_cursor: Option<(PathBuf, usize, u64)>,
     window_visible: bool,
     panel_visible: bool,
     effectively_visible: bool,
-    mode: PreviewMode,
     shared: Arc<Mutex<PreviewSnapshot>>,
 }
 
@@ -203,10 +189,11 @@ fn worker(
         frames: None,
         sources: BTreeMap::new(),
         revision: 0,
+        cursor: None,
+        applied_cursor: None,
         window_visible: true,
         panel_visible: true,
         effectively_visible: true,
-        mode: PreviewMode::Edit,
         shared,
     };
     loop {
@@ -252,11 +239,6 @@ impl Worker {
                 self.panel_visible = visible;
                 self.update_visibility()
             }
-            PreviewCommand::SetMode(mode) => {
-                self.mode = mode;
-                self.mutate(|snapshot| snapshot.mode = mode);
-                Ok(())
-            }
             PreviewCommand::Snapshot { path, contents } => self.apply_snapshot(path, contents),
             PreviewCommand::SetCursor { path, line, column } => self.set_cursor(path, line, column),
             PreviewCommand::Input(input) => self.input(input),
@@ -301,6 +283,7 @@ impl Worker {
         }
         self.engine = Some(engine);
         self.frames = Some(frames);
+        self.applied_cursor = None;
         let lifecycle = if self.effectively_visible {
             PreviewLifecycle::Running
         } else {
@@ -314,6 +297,7 @@ impl Worker {
             snapshot.last_frame_at = Some(Instant::now());
             snapshot.frame_stats = FrameTransportStats::default();
         });
+        self.sync_cursor()?;
         Ok(())
     }
 
@@ -324,6 +308,7 @@ impl Worker {
         }
         self.engine = None;
         self.frames = None;
+        self.applied_cursor = None;
         self.mutate(|snapshot| {
             snapshot.lifecycle = PreviewLifecycle::Off;
             snapshot.frame = None;
@@ -381,28 +366,47 @@ impl Worker {
             snapshot.frame = None;
             snapshot.last_frame_at = Some(Instant::now());
         });
+        self.applied_cursor = None;
+        self.sync_cursor()?;
         Ok(())
     }
 
     fn set_cursor(&mut self, path: PathBuf, line: usize, column: usize) -> io::Result<()> {
-        if self.mode != PreviewMode::Edit {
+        if path.extension().and_then(|extension| extension.to_str()) != Some("shou") {
             return Ok(());
         }
+        self.cursor = Some((path, line, column));
+        self.sync_cursor()
+    }
+
+    fn sync_cursor(&mut self) -> io::Result<()> {
+        let Some((path, line, column)) = self.cursor.as_ref() else {
+            return Ok(());
+        };
         let Some(engine) = self.engine.as_mut() else {
             return Ok(());
         };
-        let position = engine.set_execution_cursor(self.revision, &path, line, column)?;
-        self.mutate(|snapshot| {
-            snapshot.runtime_position = Some(position);
-            snapshot.last_frame_at = Some(Instant::now());
-        });
+        if self
+            .applied_cursor
+            .as_ref()
+            .is_some_and(|(applied_path, applied_line, revision)| {
+                applied_path == path && applied_line == line && *revision == self.revision
+            })
+        {
+            return Ok(());
+        }
+        let position = engine.set_execution_cursor(self.revision, path, *line, *column)?;
+        self.applied_cursor = Some((path.clone(), *line, self.revision));
+        if let Some(position) = position {
+            self.mutate(|snapshot| {
+                snapshot.runtime_position = Some(position);
+                snapshot.last_frame_at = Some(Instant::now());
+            });
+        }
         Ok(())
     }
 
     fn input(&mut self, input: PreviewInput) -> io::Result<()> {
-        if !forwards_runtime_input(self.mode) {
-            return Ok(());
-        }
         let Some(engine) = self.engine.as_mut() else {
             return Ok(());
         };
@@ -442,10 +446,6 @@ impl Worker {
     fn mutate(&self, update: impl FnOnce(&mut PreviewSnapshot)) {
         update(&mut self.shared.lock().expect("preview snapshot lock poisoned"));
     }
-}
-
-const fn forwards_runtime_input(mode: PreviewMode) -> bool {
-    matches!(mode, PreviewMode::Play)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -535,12 +535,6 @@ mod tests {
         let mut rebuilt = previous.as_bytes().to_vec();
         rebuilt.splice(patch.range, patch.replacement);
         assert_eq!(rebuilt, current.as_bytes());
-    }
-
-    #[test]
-    fn only_play_mode_forwards_runtime_input() {
-        assert!(!forwards_runtime_input(PreviewMode::Edit));
-        assert!(forwards_runtime_input(PreviewMode::Play));
     }
 
     #[test]

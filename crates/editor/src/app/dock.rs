@@ -109,7 +109,12 @@ impl EditorTabGroupSkin {
         overlay
     }
 
-    fn singleton_title_bar(&self, group: &TabGroupContext, cx: &mut App) -> Option<AnyElement> {
+    fn singleton_title_bar(
+        &self,
+        group: &TabGroupContext,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<AnyElement> {
         let [panel] = group.panels() else {
             return None;
         };
@@ -128,28 +133,73 @@ impl EditorTabGroupSkin {
         );
         let panel_id = panel.panel_id(cx);
         let close_group = group.clone();
+        let drop_group = group.clone();
 
         let title = PanelHandle::of(panel)
             .and_then(|handle| handle.tab_name(cx))
             .unwrap_or_else(|| panel.panel_name(cx).into());
         let drag_title = title.clone();
+        let drag_width = tab_drag_width(&title, is_closable_tool);
         let drag = group
             .drag_panel(0, cx)
             .map(|panel| EditorPanelDrag { panel });
         let drop_overlays = self.drop_overlays.clone();
         let node = group.node();
+        let drag_motion = self.tab_motion.clone();
+        let hover_motion = self.tab_motion.clone();
+        let drop_motion = self.tab_motion.clone();
+        let drop_overlay = self.drop_overlay(node, cx);
+        let hover_here = {
+            let motion = self.tab_motion.read(cx);
+            motion.hover_active
+                && motion.hover_node == Some(node)
+                && motion.hover_target.is_none()
+                && motion.dragging != Some(panel_id.as_u64())
+        };
+        let ghost_width = transition(
+            (("editor-view-title", node.as_u64()), "drop-space"),
+            if hover_here {
+                px(self.tab_motion.read(cx).drag_width)
+            } else {
+                px(0.)
+            },
+            Transition::new(if cx.has_active_drag() {
+                TAB_MOTION_DURATION
+            } else {
+                Duration::ZERO
+            }),
+            window,
+            cx,
+        );
 
         let title = div()
             .id(("editor-view-title-drag", node.as_u64()))
-            .h_full()
-            .flex_1()
+            .h(px(28.))
+            .w(px(drag_width))
+            .flex_none()
             .flex()
             .items_center()
-            .pr_2()
-            .child(title)
+            .min_w_0()
+            .gap_1()
+            .px_2()
+            .rounded(px(7.))
+            .bg(rgb(SURFACE))
+            .cursor_pointer()
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .child(title),
+            )
             .when_some(drag, |this, drag| {
                 this.on_drag(drag, move |drag, offset, _, cx| {
                     cx.stop_propagation();
+                    drag_motion.update(cx, |motion, cx| {
+                        motion.begin_drag(panel_id, node, drag_width, cx)
+                    });
                     clear_all_drop_overlays(&drop_overlays, cx);
                     drag.panel.set_drag_offset(offset);
                     drag.panel.set_preview_size(size(px(180.), px(30.)));
@@ -157,6 +207,27 @@ impl EditorTabGroupSkin {
                         title: drag_title.clone(),
                     })
                 })
+            })
+            .when(is_closable_tool, |this| {
+                this.child(
+                    div()
+                        .id(("close-tool-view", node.as_u64()))
+                        .size(px(16.))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(6.))
+                        .cursor_pointer()
+                        .text_color(rgb(MUTED))
+                        .hover(|style| style.bg(rgb(SURFACE_HOVER)).text_color(rgb(INK)))
+                        .tooltip(icon_hint("Close view"))
+                        .on_click(move |_, window, cx| {
+                            cx.stop_propagation();
+                            close_group.close(panel_id, window, cx);
+                        })
+                        .child(Icon::new(IconName::Close).xsmall()),
+                )
             });
 
         Some(
@@ -165,32 +236,37 @@ impl EditorTabGroupSkin {
                 .h(px(36.))
                 .flex()
                 .items_center()
-                .px_3()
+                .px_1()
+                .gap_1()
                 .rounded_t(px(VIEW_RADIUS_PX))
                 .bg(rgb(CHROME))
                 .text_sm()
                 .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                 .text_color(rgb(0xb8c2cc))
                 .child(title)
-                .when(is_closable_tool, |this| {
-                    this.child(
-                        div()
-                            .id(("close-tool-view", node.as_u64()))
-                            .size(px(24.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(6.))
-                            .cursor_pointer()
-                            .text_color(rgb(MUTED))
-                            .hover(|style| style.bg(rgb(SURFACE_HOVER)).text_color(rgb(INK)))
-                            .tooltip(icon_hint("Close view"))
-                            .on_click(move |_, window, cx| {
-                                cx.stop_propagation();
-                                close_group.close(panel_id, window, cx);
-                            })
-                            .child(Icon::new(IconName::Close).xsmall()),
-                    )
+                .child(
+                    div()
+                        .w(ghost_width)
+                        .h(px(28.))
+                        .flex_none()
+                        .rounded(px(7.))
+                        .bg(rgb(SURFACE_HOVER)),
+                )
+                .when(group.is_droppable(), |this| {
+                    this.on_drag_move(move |event: &DragMoveEvent<EditorPanelDrag>, _, cx| {
+                        if event.bounds.contains(&event.event.position) {
+                            hover_motion.update(cx, |motion, cx| motion.hover_at(node, None, cx));
+                        } else {
+                            hover_motion.update(cx, |motion, cx| motion.clear_hover(node, cx));
+                        }
+                    })
+                    .on_drop(move |drag: &EditorPanelDrag, window, cx| {
+                        clear_drop_overlay(&drop_overlay, cx);
+                        if drag.panel.source() != node {
+                            drop_group.drop_panel(drag.panel.clone(), Some(1), true, window, cx);
+                        }
+                        settle_tab_drag(drop_motion.clone(), cx);
+                    })
                 })
                 .into_any_element(),
         )
@@ -202,54 +278,108 @@ struct EditorPanelDrag {
     panel: DragPanel,
 }
 
+fn tab_drag_width(title: &str, closable: bool) -> f32 {
+    let text_width: f32 = title
+        .chars()
+        .map(|character| if character.is_ascii() { 7.5 } else { 14. })
+        .sum();
+    (text_width + if closable { 40. } else { 20. }).clamp(72., 240.)
+}
+
+fn tab_target_at_x(slots: &[(u64, f32)], x: f32) -> Option<u64> {
+    let mut left = 4.; // tab-bar padding
+    for (ix, (id, width)) in slots.iter().enumerate() {
+        let center = left + width / 2.;
+        let next_boundary = slots
+            .get(ix + 1)
+            .map(|(_, next_width)| (center + left + width + 4. + next_width / 2.) / 2.)
+            .unwrap_or(left + width);
+        if x < next_boundary {
+            return Some(*id);
+        }
+        left += width + 4.; // tab-bar gap
+    }
+    None
+}
+
 #[derive(Default)]
 struct EditorTabMotion {
     seen: HashSet<u64>,
     opening: HashSet<u64>,
     closing: HashSet<u64>,
     dragging: Option<u64>,
+    drag_width: f32,
+    cleanup_pending: bool,
+    hover_active: bool,
+    hover_node: Option<NodeId>,
     hover_target: Option<u64>,
-    hover_anchor_x: Option<f32>,
 }
 
 impl EditorTabMotion {
-    fn begin_drag(&mut self, panel_id: PanelId, cx: &mut Context<Self>) {
+    fn schedule_drag_cleanup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.cleanup_pending || self.dragging.is_none() {
+            return;
+        }
+        self.cleanup_pending = true;
+        cx.spawn_in(window, async move |motion, cx| {
+            cx.background_executor().timer(Duration::ZERO).await;
+            let _ = motion.update_in(cx, |motion, _, cx| {
+                motion.cleanup_pending = false;
+                if !cx.has_active_drag() {
+                    motion.end_drag(cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn begin_drag(&mut self, panel_id: PanelId, node: NodeId, width: f32, cx: &mut Context<Self>) {
         self.dragging = Some(panel_id.as_u64());
-        self.hover_target = None;
-        self.hover_anchor_x = None;
+        self.drag_width = width;
+        self.hover_active = true;
+        self.hover_node = Some(node);
+        self.hover_target = self.dragging;
         cx.refresh_windows();
     }
 
-    fn hover_at(&mut self, panel_id: Option<PanelId>, x: f32, cx: &mut Context<Self>) {
-        let target = panel_id
-            .map(|id| id.as_u64())
-            .filter(|id| Some(*id) != self.dragging);
-        // A target shifts when its insertion space opens. Keep it selected until
-        // the pointer actually moves, rather than chasing the shifted hitbox.
-        if target != self.hover_target
-            && self
-                .hover_anchor_x
-                .is_some_and(|anchor| (x - anchor).abs() < 36.)
-        {
-            return;
-        }
-        if self.hover_target != target {
+    fn hover_at(&mut self, node: NodeId, target: Option<u64>, cx: &mut Context<Self>) {
+        if !self.hover_active || self.hover_node != Some(node) || self.hover_target != target {
+            self.hover_active = true;
+            self.hover_node = Some(node);
             self.hover_target = target;
-            self.hover_anchor_x = Some(x);
             cx.refresh_windows();
         }
     }
 
-    fn clear_hover(&mut self, cx: &mut Context<Self>) {
-        if self.hover_target.take().is_some() {
-            self.hover_anchor_x = None;
+    fn clear_hover(&mut self, node: NodeId, cx: &mut Context<Self>) {
+        if self.hover_active && self.hover_node == Some(node) {
+            self.hover_active = false;
+            self.hover_node = None;
+            self.hover_target = None;
             cx.refresh_windows();
         }
+    }
+
+    fn drop_index(&self, group: &TabGroupContext, cx: &App) -> usize {
+        if self.hover_node != Some(group.node()) {
+            return group.panels().len();
+        }
+        self.hover_target
+            .and_then(|target| {
+                group
+                    .panels()
+                    .iter()
+                    .position(|panel| panel.panel_id(cx).as_u64() == target)
+            })
+            .unwrap_or(group.panels().len())
     }
 
     fn end_drag(&mut self, cx: &mut Context<Self>) {
-        if self.dragging.take().is_some() || self.hover_target.take().is_some() {
-            self.hover_anchor_x = None;
+        if self.dragging.take().is_some() || self.hover_active {
+            self.drag_width = 0.;
+            self.hover_active = false;
+            self.hover_node = None;
+            self.hover_target = None;
             cx.refresh_windows();
         }
     }
@@ -305,6 +435,10 @@ impl EditorTabMotion {
         })
         .detach();
     }
+}
+
+fn settle_tab_drag(motion: Entity<EditorTabMotion>, cx: &mut App) {
+    motion.update(cx, |motion, cx| motion.end_drag(cx));
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -478,8 +612,11 @@ impl TabGroupRenderer for EditorTabGroupSkin {
             .overflow_hidden()
             .bg(rgb(PANEL))
             .on_drag_move(move |event: &DragMoveEvent<EditorPanelDrag>, _, cx| {
-                hover_motion.update(cx, |motion, cx| motion.clear_hover(cx));
-                let target = event.bounds.contains(&event.event.position).then(|| {
+                let inside = event.bounds.contains(&event.event.position);
+                if inside {
+                    hover_motion.update(cx, |motion, cx| motion.clear_hover(node, cx));
+                }
+                let target = inside.then(|| {
                     let placement = editor_drop_placement(event.bounds, event.event.position);
                     EditorDropTarget {
                         placement,
@@ -490,10 +627,10 @@ impl TabGroupRenderer for EditorTabGroupSkin {
             })
             .on_drop(move |drag: &EditorPanelDrag, window, cx| {
                 cx.stop_propagation();
-                drop_motion.update(cx, |motion, cx| motion.end_drag(cx));
                 let target = dropped_overlay.read(cx).target;
                 clear_drop_overlay(&dropped_overlay, cx);
                 let Some(target) = target else {
+                    settle_tab_drag(drop_motion.clone(), cx);
                     return;
                 };
                 if let Some(placement) = target.placement {
@@ -515,6 +652,7 @@ impl TabGroupRenderer for EditorTabGroupSkin {
                 } else {
                     dropped_group.drop_panel(drag.panel.clone(), None, true, window, cx);
                 }
+                settle_tab_drag(drop_motion.clone(), cx);
             })
     }
 
@@ -524,14 +662,9 @@ impl TabGroupRenderer for EditorTabGroupSkin {
         window: &mut Window,
         cx: &mut App,
     ) -> AnyElement {
-        if !cx.has_active_drag() {
-            let stale_drag = {
-                let motion = self.tab_motion.read(cx);
-                motion.dragging.is_some() || motion.hover_target.is_some()
-            };
-            if stale_drag {
-                self.tab_motion.update(cx, |motion, cx| motion.end_drag(cx));
-            }
+        if !cx.has_active_drag() && self.tab_motion.read(cx).dragging.is_some() {
+            self.tab_motion
+                .update(cx, |motion, cx| motion.schedule_drag_cleanup(window, cx));
         }
         if group
             .panels()
@@ -541,7 +674,7 @@ impl TabGroupRenderer for EditorTabGroupSkin {
             cx.global_mut::<EditorDocuments>()
                 .set_document_node(&self.root, group.node());
         }
-        if let Some(title_bar) = self.singleton_title_bar(group, cx) {
+        if let Some(title_bar) = self.singleton_title_bar(group, window, cx) {
             return title_bar;
         }
 
@@ -554,28 +687,59 @@ impl TabGroupRenderer for EditorTabGroupSkin {
             .iter()
             .enumerate()
             .filter(|(_, panel)| panel.visible(cx))
-            .map(|(ix, panel)| (ix, panel.clone()))
-            .collect::<Vec<_>>();
-        let tabs = visible_panels
-            .into_iter()
             .map(|(ix, panel)| {
-                let panel_id = panel.panel_id(cx);
-                let title = PanelHandle::of(&panel)
+                let title = PanelHandle::of(panel)
                     .and_then(|handle| handle.tab_name(cx))
                     .unwrap_or_else(|| panel.panel_name(cx).into());
+                (ix, panel.clone(), title)
+            })
+            .collect::<Vec<_>>();
+        let slots = visible_panels
+            .iter()
+            .map(|(_, panel, title)| {
+                let closable = group.is_closable() && panel.closable(cx);
+                (panel.panel_id(cx).as_u64(), tab_drag_width(title, closable))
+            })
+            .collect::<Vec<_>>();
+        let (dragging_id, target_id, drag_width, hover_here, hover_active) = {
+            let motion = self.tab_motion.read(cx);
+            (
+                motion.dragging,
+                motion.hover_target,
+                motion.drag_width,
+                motion.hover_active && motion.hover_node == Some(node),
+                motion.hover_active,
+            )
+        };
+        let drag_duration = if cx.has_active_drag() {
+            TAB_MOTION_DURATION
+        } else {
+            Duration::ZERO
+        };
+        let source_ix = dragging_id.and_then(|id| {
+            visible_panels
+                .iter()
+                .find(|(_, panel, _)| panel.panel_id(cx).as_u64() == id)
+                .map(|(ix, _, _)| *ix)
+        });
+        let single_self_hover = visible_panels.len() == 1 && source_ix.is_some() && hover_here;
+        let tabs = visible_panels
+            .into_iter()
+            .map(|(ix, panel, title)| {
+                let panel_id = panel.panel_id(cx);
                 let drag_title = title.clone();
                 let drag = group
                     .drag_panel(ix, cx)
                     .map(|panel| EditorPanelDrag { panel });
                 let closable = group.is_closable() && panel.closable(cx);
+                let slot_width = tab_drag_width(&title, closable);
                 let select_group = group.clone();
                 let close_group = group.clone();
                 let middle_close_group = group.clone();
                 let drop_group = group.clone();
                 let item_drop_group = group.clone();
                 let drag_content_overlays = all_content_overlays.clone();
-                let hover_content_overlay = content_overlay.clone();
-                let drop_content_overlay = content_overlay.clone();
+                let drop_overlay = content_overlay.clone();
 
                 let selected = !group.is_collapsed() && displayed == Some(panel_id);
                 let key = panel_id.as_u64();
@@ -586,8 +750,9 @@ impl TabGroupRenderer for EditorTabGroupSkin {
                     self.tab_motion
                         .update(cx, |motion, cx| motion.register(panel_id, window, cx))
                 };
-                let hovering = self.tab_motion.read(cx).hover_target == Some(key);
-                let dragging = self.tab_motion.read(cx).dragging == Some(key);
+                let hovering = !single_self_hover && hover_here && target_id == Some(key);
+                let dragging = dragging_id == Some(key);
+                let moving_source = dragging && hover_active && !hovering && !single_self_hover;
                 let background = transition(
                     (("editor-tab-motion", panel_id.as_u64()), "background"),
                     theme_color(if selected { SURFACE } else { CHROME }),
@@ -604,53 +769,71 @@ impl TabGroupRenderer for EditorTabGroupSkin {
                 );
                 let opacity = transition(
                     (("editor-tab-motion", panel_id.as_u64()), "opacity"),
-                    if opening || closing {
+                    if opening || closing || dragging {
                         0.
-                    } else if dragging {
-                        0.32
                     } else {
                         1.
                     },
-                    Transition::new(TAB_MOTION_DURATION),
-                    window,
-                    cx,
-                );
-                let max_width = transition(
-                    (("editor-tab-motion", panel_id.as_u64()), "width"),
-                    if opening || closing {
-                        px(0.)
-                    } else if hovering {
-                        px(280.)
+                    Transition::new(if opening || closing {
+                        TAB_MOTION_DURATION
                     } else {
-                        px(240.)
-                    },
-                    Transition::new(TAB_MOTION_DURATION),
+                        Duration::ZERO
+                    }),
                     window,
                     cx,
                 );
-                let leading_space = transition(
-                    (("editor-tab-motion", panel_id.as_u64()), "leading-space"),
-                    if hovering { px(44.) } else { px(8.) },
-                    Transition::new(TAB_MOTION_DURATION),
+                let tab_width = transition(
+                    (("editor-tab-motion", panel_id.as_u64()), "width"),
+                    if opening || closing || moving_source {
+                        px(0.)
+                    } else {
+                        px(slot_width)
+                    },
+                    Transition::new(if opening || closing {
+                        TAB_MOTION_DURATION
+                    } else {
+                        drag_duration
+                    }),
+                    window,
+                    cx,
+                );
+                let before_gap = transition(
+                    (("editor-tab-motion", key), "before-gap"),
+                    if hovering && source_ix.is_none_or(|source| source > ix) {
+                        px(drag_width)
+                    } else {
+                        px(0.)
+                    },
+                    Transition::new(drag_duration),
+                    window,
+                    cx,
+                );
+                let after_gap = transition(
+                    (("editor-tab-motion", key), "after-gap"),
+                    if hovering && source_ix.is_some_and(|source| source < ix) {
+                        px(drag_width)
+                    } else {
+                        px(0.)
+                    },
+                    Transition::new(drag_duration),
                     window,
                     cx,
                 );
                 let close_motion = self.tab_motion.clone();
                 let middle_close_motion = self.tab_motion.clone();
                 let drag_motion = self.tab_motion.clone();
-                let hover_motion = self.tab_motion.clone();
                 let drop_motion = self.tab_motion.clone();
-                div()
+                let tab = div()
                     .id(("editor-tab", panel_id.as_u64()))
                     .h(px(28.))
                     .min_w_0()
-                    .max_w(max_width)
+                    .w(tab_width)
                     .flex_none()
                     .overflow_hidden()
                     .flex()
                     .items_center()
                     .gap_1()
-                    .pl(leading_space)
+                    .pl_2()
                     .pr_2()
                     .rounded(px(7.))
                     .bg(background)
@@ -680,30 +863,15 @@ impl TabGroupRenderer for EditorTabGroupSkin {
                     .when_some(drag, |this, drag| {
                         this.on_drag(drag, move |drag, offset, _, cx| {
                             cx.stop_propagation();
-                            drag_motion.update(cx, |motion, cx| motion.begin_drag(panel_id, cx));
+                            drag_motion.update(cx, |motion, cx| {
+                                motion.begin_drag(panel_id, node, slot_width, cx)
+                            });
                             clear_all_drop_overlays(&drag_content_overlays, cx);
                             drag.panel.set_drag_offset(offset);
                             drag.panel.set_preview_size(size(px(180.), px(30.)));
                             cx.new(|_| TabDragPreview {
                                 title: drag_title.clone(),
                             })
-                        })
-                    })
-                    .when(group.is_droppable(), |this| {
-                        this.on_drag_move(move |event: &DragMoveEvent<EditorPanelDrag>, _, cx| {
-                            clear_drop_overlay(&hover_content_overlay, cx);
-                            let x = f32::from(event.event.position.x);
-                            hover_motion
-                                .update(cx, |motion, cx| motion.hover_at(Some(panel_id), x, cx));
-                        })
-                        .on_drop(move |drag: &EditorPanelDrag, window, cx| {
-                            clear_drop_overlay(&drop_content_overlay, cx);
-                            drop_motion.update(cx, |motion, cx| motion.end_drag(cx));
-                            drop_group.drop_panel(drag.panel.clone(), Some(ix), true, window, cx);
-                        })
-                        .drag_over::<AnyDrag>(|this, _, _, _| this.bg(rgb(SURFACE_HOVER)))
-                        .on_drop(move |item: &AnyDrag, window, cx| {
-                            item_drop_group.drop_item(item.clone(), None, window, cx);
                         })
                     })
                     .when(closable, |this| {
@@ -730,6 +898,55 @@ impl TabGroupRenderer for EditorTabGroupSkin {
                                 })
                                 .child(Icon::new(IconName::Close).xsmall()),
                         )
+                    });
+                div()
+                    .id(("editor-tab-slot", key))
+                    .h(px(28.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .when(dragging && hovering, |this| {
+                        this.rounded(px(7.)).bg(rgb(SURFACE_HOVER))
+                    })
+                    .child(
+                        div()
+                            .w(before_gap)
+                            .h(px(28.))
+                            .flex_none()
+                            .rounded(px(7.))
+                            .bg(rgb(SURFACE_HOVER)),
+                    )
+                    .child(tab)
+                    .child(
+                        div()
+                            .w(after_gap)
+                            .h(px(28.))
+                            .flex_none()
+                            .rounded(px(7.))
+                            .bg(rgb(SURFACE_HOVER)),
+                    )
+                    .when(group.is_droppable(), |this| {
+                        this.on_drop(move |drag: &EditorPanelDrag, window, cx| {
+                            clear_drop_overlay(&drop_overlay, cx);
+                            let drop_ix = if drag.panel.source() == node {
+                                drop_motion.read(cx).drop_index(&drop_group, cx)
+                            } else {
+                                ix
+                            };
+                            if drag.panel.source() != node || drop_group.panels().len() > 1 {
+                                drop_group.drop_panel(
+                                    drag.panel.clone(),
+                                    Some(drop_ix),
+                                    true,
+                                    window,
+                                    cx,
+                                );
+                            }
+                            settle_tab_drag(drop_motion.clone(), cx);
+                        })
+                        .on_drop(move |item: &AnyDrag, window, cx| {
+                            item_drop_group.drop_item(item.clone(), None, window, cx);
+                        })
                     })
                     .into_any_element()
             })
@@ -739,35 +956,60 @@ impl TabGroupRenderer for EditorTabGroupSkin {
             return Empty.into_any_element();
         }
 
-        let drop_group = group.clone();
         let item_drop_group = group.clone();
-        let hover_content_overlay = content_overlay.clone();
-        let drop_content_overlay = content_overlay;
-        let empty_hover_motion = self.tab_motion.clone();
+        let empty_drop_group = group.clone();
         let empty_drop_motion = self.tab_motion.clone();
+        let empty_drop_overlay = content_overlay.clone();
+        let end_gap = transition(
+            (("editor-tab-motion", node.as_u64()), "end-gap"),
+            if hover_here && target_id.is_none() && !single_self_hover {
+                px(drag_width)
+            } else {
+                px(0.)
+            },
+            Transition::new(drag_duration),
+            window,
+            cx,
+        );
         let empty_space = div()
             .id(("editor-tab-empty", node.as_u64()))
             .h_full()
             .flex_1()
             .min_w_8()
+            .flex()
+            .items_center()
+            .child(
+                div()
+                    .w(end_gap)
+                    .h(px(28.))
+                    .flex_none()
+                    .rounded(px(7.))
+                    .bg(rgb(SURFACE_HOVER)),
+            )
             .when(group.is_droppable(), |this| {
-                this.on_drag_move(move |event: &DragMoveEvent<EditorPanelDrag>, _, cx| {
-                    clear_drop_overlay(&hover_content_overlay, cx);
-                    let x = f32::from(event.event.position.x);
-                    empty_hover_motion.update(cx, |motion, cx| motion.hover_at(None, x, cx));
+                this.on_drop(move |drag: &EditorPanelDrag, window, cx| {
+                    clear_drop_overlay(&empty_drop_overlay, cx);
+                    empty_drop_group.drop_panel(
+                        drag.panel.clone(),
+                        Some(empty_drop_group.panels().len()),
+                        true,
+                        window,
+                        cx,
+                    );
+                    settle_tab_drag(empty_drop_motion.clone(), cx);
                 })
-                .on_drop(move |drag: &EditorPanelDrag, window, cx| {
-                    clear_drop_overlay(&drop_content_overlay, cx);
-                    empty_drop_motion.update(cx, |motion, cx| motion.end_drag(cx));
-                    drop_group.drop_panel(drag.panel.clone(), None, true, window, cx);
-                })
-                .drag_over::<AnyDrag>(|this, _, _, cx| this.bg(cx.theme().tokens.drop_target))
                 .on_drop(move |item: &AnyDrag, window, cx| {
                     item_drop_group.drop_item(item.clone(), None, window, cx);
                 })
             });
 
         let scroll = self.tab_scroll(node);
+        let drag_scroll = scroll.clone();
+        let hover_motion = self.tab_motion.clone();
+        let drop_motion = self.tab_motion.clone();
+        let drop_group = group.clone();
+        let hover_overlay = content_overlay.clone();
+        let drop_overlay = content_overlay;
         let bar = div()
             .id(("editor-tab-bar-scroll", node.as_u64()))
             .h(px(36.))
@@ -780,7 +1022,30 @@ impl TabGroupRenderer for EditorTabGroupSkin {
             .overflow_x_scroll()
             .bg(rgb(CHROME))
             .children(tabs)
-            .child(empty_space);
+            .child(empty_space)
+            .when(group.is_droppable(), |this| {
+                this.on_drag_move(move |event: &DragMoveEvent<EditorPanelDrag>, _, cx| {
+                    if !event.bounds.contains(&event.event.position) {
+                        hover_motion.update(cx, |motion, cx| motion.clear_hover(node, cx));
+                        return;
+                    }
+                    clear_drop_overlay(&hover_overlay, cx);
+                    let x = f32::from(
+                        event.event.position.x - event.bounds.origin.x - drag_scroll.offset().x,
+                    );
+                    let target = tab_target_at_x(&slots, x);
+                    hover_motion.update(cx, |motion, cx| motion.hover_at(node, target, cx));
+                })
+                .on_drop(move |drag: &EditorPanelDrag, window, cx| {
+                    cx.stop_propagation();
+                    clear_drop_overlay(&drop_overlay, cx);
+                    if drag.panel.source() != node || drop_group.panels().len() > 1 {
+                        let drop_ix = drop_motion.read(cx).drop_index(&drop_group, cx);
+                        drop_group.drop_panel(drag.panel.clone(), Some(drop_ix), true, window, cx);
+                    }
+                    settle_tab_drag(drop_motion.clone(), cx);
+                })
+            });
         div()
             .id(("editor-tab-bar", node.as_u64()))
             .relative()
@@ -1035,4 +1300,24 @@ pub(super) fn install_default_layout(
             Some(px(520.)),
         );
     dock.update(cx, |dock, cx| dock.set_center(layout, window, cx));
+}
+
+#[cfg(test)]
+mod tab_motion_tests {
+    use super::{tab_drag_width, tab_target_at_x};
+
+    #[test]
+    fn drag_target_follows_stable_tab_centers() {
+        let tabs = [(1, 100.), (2, 100.), (3, 100.)];
+        assert_eq!(tab_target_at_x(&tabs, 90.), Some(1));
+        assert_eq!(tab_target_at_x(&tabs, 110.), Some(2));
+        assert_eq!(tab_target_at_x(&tabs, 215.), Some(3));
+        assert_eq!(tab_target_at_x(&tabs, 330.), None);
+    }
+
+    #[test]
+    fn drag_slot_width_stays_bounded() {
+        assert_eq!(tab_drag_width("A", true), 72.);
+        assert_eq!(tab_drag_width(&"Long document ".repeat(30), true), 240.);
+    }
 }

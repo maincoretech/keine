@@ -1,84 +1,15 @@
-# LetsGal 1.11.0 默认工程分步验收
+# Native Editor acceptance
 
-## 0. 启动
-
-1. 运行 `cargo validate projects/test-project`，应报告工程有效且无错误。
-2. 运行 `cargo dev projects/test-project`，应进入 `Kēne LetsGal 1.11.0 Timeline Lab` 标题页。
-3. 点击 `START`。日景、绫、textbox 与左侧姓名框应同步出现，不得先闪黑、闪 blur 或漏出视口。
-4. 首句字符应按 `dialogue-box.json` 的 30 ms 间隔逐字出现，并在 100 ms 内从下方 8 px
-   柔和上浮；已显示文字、读档恢复和调试重放不得重复闪动。
-
-## 1. 时间轴
-
-1. `10-00`：正常显示日景和角色，姓名框靠左；旁白时姓名框消失。角色高度约占视口 80%，
-   首次 `updateCharacter` 应平滑换成思考表情并移到右侧，再回到中间；skin 属性切至 winter 时
-   换成思考图，再恢复 summer 笑脸图。
-2. `10-01`：镜头、人物、背景层共用一个时钟。三者同时运动，人物同时缩放、旋转、改变透明度
-   与显式尺寸，结尾恢复稳定基态。
-3. `10-02`：景深、畸变、暗角、调色、旧胶片、冲击、体积光与 LUT 强度连续增强再还原，不能
-   阻塞窗口或对白。以 `00:01.300` 为固定峰值验收点：体积光应是柔和、不规则的中性白雾，
-   不能退化成暖色扇形、密集平行划痕或方格；冲击应产生由画面中心向外的径向拖影，胶片划痕
-   只应在部分帧偶发。畸变形成的弯曲画面边界必须平滑淡出，不得出现锯齿或红绿毛边。
-   `00:00.000` 与 `00:02.600` 必须恢复清晰、无残留。
-4. `10-03`：Bloom、色差、像素化、Glitch、CRT 与锐化可分别辨认，中途无卡顿；色差在画面
-   内容中清晰可见，但不得污染画面外缘。
-5. `10-04`：径向、运动、缩放模糊的中心和角度持续移动，不退化为静态条纹。
-6. `10-05`：漏光、镜头光斑、颗粒、热浪、水波与雾具有不同方向、中心、速度和尺度，最后全部
-   归零。
-7. `10-06`：VHS、半色调、抖色、轮廓与眼睑遮罩逐渐增强再完全消失；眼睑从上下闭合。
-8. `10-07`：镜头震动、camera patch、萤火虫、Opus 提示音以及日景到夕景的 scene cue 各
-   触发一次，muted 音频不播放，结束后镜头重置。
-9. `10-08`：玩家确认等待不会按一秒计时自动继续；点击后角色只进行两轮快速呼吸缩放，
-   muted 的大幅横移不能生效。随后跨章节显示一句话并返回原调用点。
-   该跨章节内容位于 `chapterTreeOrder` 的虚拟目录 entry 中，必须按目录展开顺序可达。
-10. `10-09`：完整句子先逐字退格至“我当然”，停住并等待一次新点击；再逐字退格至“我”，
-    最后再次点击将整句话完全退空；三段之间都不会自动步进，
-    再次等待一次新点击。动画期间点击不能被复用，连续动作不能吞掉原文或直接跳过；每段退格
-    完成后，保留前缀的最后一个字不得重新上浮或闪动。
-11. `10-10`：继续后平滑返回标题页，不残留粒子、镜头效果、材质效果或时间轴状态。
-
-## 2. 视口和性能
-
-1. 依次调整为窄窗、宽窗、全屏；内容始终裁切在 16:9 设计视口，粒子和场景层不得溢出。
-2. 动画速度与窗口刷新率无关，拖动窗口不是粒子继续运动的必要条件。
-3. 完整播放过程中不得再出现 `transparent_mesh2d_pipeline`、材质 binding 超限或无效 pipeline。
-4. 退出后不得出现未释放视频、音频、粒子或 `CommandQueue` 连带警告。
-
-## 3. 快捷键
-
-1. 在舞台依次验证 `Ctrl+A/K/B/R/H`：Auto、Skip、Backlog、语音重播和 Textbox 显隐均只
-   触发一次；单独按 `A/K/B/R/H` 不产生全局操作。
-2. 验证 `Ctrl+Q/L` 弹出 Q·SAVE/Q·LOAD 确认；确认、取消与输入弹窗 OK 按钮的 Hover 背景
-   必须从左向右扫入、移出后向左收回，确认或取消时不得推进剧情。
-3. 验证 `Ctrl+S/O` 打开 SAVE/LOAD，`Ctrl+,` 打开 CONFIG；三者之间可直接切换。
-4. 验证 `Ctrl+T` 弹出返回标题确认；`Esc` 依次关闭 Dialog、Backlog、Extra 和全屏菜单。
-5. 按住并松开单独的 `Ctrl`，应只在按住期间持续快进，并能跨越转场与句尾退格等阻塞演出；
-   Ctrl 组合键不能额外推进一句，组合键字母先松开时也不能意外开始快进。
-6. 选择菜单仍可使用方向、数字与确认键操作；这些是控件导航，不触发任何全局动作。
-7. 使用 `cargo dev` 或 `cargo dev --sync` 打开 CONFIG → 关于，应显示构建时间与加载器树；
-   普通项目启动与发行构建不得创建这两组开发信息。
-
-## 4. 自动化边界
-
-`tests/showcase_coverage.rs` 会检查默认工程是否覆盖全部 StageProperty、三类目标、五类事件和
-播放控制。WebGAL adapter 的命令与原生 Action 覆盖由 `tests/fixtures/webgal-showcase/` 独立
-验证；fixture 不构成第二个可运行项目。`fragment-benchmark-journey` 不接入章节调用链，
-仅由 portable benchmark 直接重建，其中日常场景和组合极限场景都不得出现在手工执行的
-`10-00` 至 `10-10` 流程中。
-
-## 5. LetsGal 1.11.0 兼容
-
-1. 默认壳 `dialogue-box.json` 采用 1.9.2 形态：`canvas` + `elements` UI 布局与
-   `dialogueBehavior` 并存。加载与热重载不得报错，且原有 30 ms 打字间隔、100 ms 上浮、
-   smooth-rise 参数不变。
-2. 普通等待光标，以及 1.11.0 独立的自动播放等待指示器（图片、位置、尺寸、动画）都
-   **明确不支持**：适配器应忽略相关 UI JSON 且不报错，但绝不渲染替代指示器。
-3. `engineVersion` 更新为 `1.11.0`，工程仍必须完整通过第 1–4 节全部验收项。
-4. `updateCharacter` 只修改已在场的立绘；移除后再执行同类 block 时不得重新入场。Spine、
-   Live2D 仍明确不支持，不能用静态图伪装为已兼容。
-
-反馈格式：`编号 + 现象 + 是否稳定复现`，例如：
-
-```text
-10-04：运动模糊出现固定横纹；1280×720 和全屏都稳定复现。
-```
+1. Open `scripts/main.shou`. Text and Blocks must show the same source. Drag the two adjacent
+   narration blocks past one another, then use Undo (⌘Z) and Redo (⇧⌘Z).
+2. In Blocks, edit Aya's dialogue, create an empty Text block with Enter, and insert an in-block
+   line break with Shift+Enter. Inspect Choice, If/Else, Loop, and Scene controls.
+3. In Explorer, move `scratch/drag-me.md` into `scratch/destination/`. The target must highlight and
+   receive the file. With Explorer focused, ⌘Z restores the original path and ⇧⌘Z moves it back.
+   Repeat for a new scratch file, rename, copy, and delete; an open file must be closed before a
+   path-changing operation.
+4. In Assets, filter by type, folder, and tags. Select each background, figure, and sound; the
+   Inspector must show the corresponding manifest entry. Change a tag or ID in Inspector, then use
+   ⌘Z and ⇧⌘Z to verify the manifest and any script references change together.
+5. In Characters, inspect Aya and add a temporary second character, then inspect `characters.yaml`.
+6. Run `cargo validate projects/test-project`; the project must have no errors.

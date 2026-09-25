@@ -1,0 +1,12 @@
+title: Kēne Editor Test
+title_background: day
+project:
+  id: keine-editor-test
+  description: Native authoring acceptance project
+adapter:
+  script: keine
+script:
+  version: 1
+  entry: opening
+  assets: assets.yaml
+  characters: characters.yaml

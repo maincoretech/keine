@@ -112,6 +112,101 @@ pub fn rename_entry(root: &Path, source: &Path, name: &str) -> io::Result<Import
     move_or_rename(root, &source, &destination)
 }
 
+/// Relocate to an exact relative path, including manifest path rewrites.
+pub fn relocate_entry(root: &Path, source: &Path, destination: &Path) -> io::Result<ImportResult> {
+    move_or_rename(
+        root,
+        &checked_relative(source)?,
+        &checked_relative(destination)?,
+    )
+}
+
+pub fn asset_manifest_source(root: &Path) -> io::Result<(PathBuf, String)> {
+    manifest_source(root)
+}
+
+pub fn replace_asset_manifest(
+    root: &Path,
+    relative: &Path,
+    expected: &str,
+    replacement: &str,
+) -> io::Result<()> {
+    let (actual_relative, current) = manifest_source(root)?;
+    if actual_relative != relative || current != expected {
+        return Err(invalid("Asset manifest changed; refresh before undoing"));
+    }
+    atomic_source(&root.join(relative), replacement.as_bytes())
+}
+
+pub fn stage_deleted_entry(root: &Path, source: &Path) -> io::Result<PathBuf> {
+    let source = checked_relative(source)?;
+    if mapped_paths(root)?
+        .iter()
+        .any(|mapped| mapped == &source || mapped.starts_with(&source))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Delete mapped assets from Asset",
+        ));
+    }
+    stash_entry(root, &source)
+}
+
+pub fn stash_entry(root: &Path, source: &Path) -> io::Result<PathBuf> {
+    let source = checked_relative(source)?;
+    let source_path = confined_existing(root, &source)?;
+    let stash_dir = root.join(".keine/editor-undo");
+    fs::create_dir_all(&stash_dir)?;
+    let canonical_root = root.canonicalize()?;
+    let canonical_stash = stash_dir.canonicalize()?;
+    if !canonical_stash.starts_with(&canonical_root) {
+        return Err(invalid("Undo storage escapes the workspace"));
+    }
+    let nonce = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+    let stash = PathBuf::from(format!(".keine/editor-undo/{}-{nonce}", std::process::id()));
+    let stash_path = confined_destination(root, &stash)?;
+    if stash_path.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "Undo slot exists",
+        ));
+    }
+    fs::rename(source_path, stash_path)?;
+    Ok(stash)
+}
+
+pub fn restore_stashed_entry(root: &Path, stash: &Path, destination: &Path) -> io::Result<()> {
+    let stash = checked_relative(stash)?;
+    if !stash.starts_with(".keine/editor-undo") {
+        return Err(invalid("Not an editor undo entry"));
+    }
+    let source_path = confined_existing(root, &stash)?;
+    let destination = confined_destination(root, &checked_relative(destination)?)?;
+    if destination.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "Undo target exists",
+        ));
+    }
+    fs::rename(source_path, destination)
+}
+
+pub fn restash_entry(root: &Path, source: &Path, stash: &Path) -> io::Result<()> {
+    let source_path = confined_existing(root, &checked_relative(source)?)?;
+    let stash = checked_relative(stash)?;
+    if !stash.starts_with(".keine/editor-undo") {
+        return Err(invalid("Not an editor undo entry"));
+    }
+    let stash_path = confined_destination(root, &stash)?;
+    if stash_path.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "Undo slot exists",
+        ));
+    }
+    fs::rename(source_path, stash_path)
+}
+
 pub fn copy_entry(root: &Path, source: &Path, target_dir: &Path) -> io::Result<Vec<ImportResult>> {
     let source = checked_relative(source)?;
     let absolute = confined_existing(root, &source)?;
@@ -156,25 +251,6 @@ pub fn copy_entry(root: &Path, source: &Path, target_dir: &Path) -> io::Result<V
         return Err(error);
     }
     Ok(results)
-}
-
-pub fn delete_entry(root: &Path, source: &Path) -> io::Result<()> {
-    let source = checked_relative(source)?;
-    if mapped_paths(root)?
-        .iter()
-        .any(|mapped| mapped == &source || mapped.starts_with(&source))
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "Delete mapped assets from Asset",
-        ));
-    }
-    let absolute = confined_existing(root, &source)?;
-    if absolute.is_dir() {
-        fs::remove_dir_all(absolute)
-    } else {
-        fs::remove_file(absolute)
-    }
 }
 
 fn move_or_rename(root: &Path, source: &Path, destination: &Path) -> io::Result<ImportResult> {
@@ -960,16 +1036,24 @@ fn invalid(message: impl Into<String>) -> io::Error {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
+
+    static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
     fn fixture() -> PathBuf {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("keine-file-ops-{nonce}"));
+        let root = std::env::temp_dir().join(format!(
+            "keine-file-ops-{}-{nonce}-{}",
+            std::process::id(),
+            FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).unwrap();
         fs::create_dir_all(root.join("assets/background")).unwrap();
         fs::create_dir_all(root.join("scripts")).unwrap();
         fs::write(
@@ -1216,7 +1300,8 @@ mod tests {
             "backgrounds:\n  day: assets/background/day.webp\n",
         )
         .unwrap();
-        let error = delete_entry(&root, Path::new("assets/background/day.webp")).unwrap_err();
+        let error =
+            stage_deleted_entry(&root, Path::new("assets/background/day.webp")).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
         assert!(root.join("assets/background/day.webp").is_file());
         fs::remove_dir_all(root).unwrap();
@@ -1240,6 +1325,30 @@ mod tests {
             fs::read_to_string(root.join("assets.yaml"))
                 .unwrap()
                 .contains("assets/background/day.webp")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn deleted_file_can_be_restored_and_redone_without_overwrite() {
+        let root = fixture();
+        fs::write(root.join("notes.md"), "keep me").unwrap();
+        let stash = stage_deleted_entry(&root, Path::new("notes.md")).unwrap();
+        assert!(!root.join("notes.md").exists());
+        assert_eq!(fs::read_to_string(root.join(&stash)).unwrap(), "keep me");
+        fs::write(root.join("notes.md"), "new file").unwrap();
+        assert!(restore_stashed_entry(&root, &stash, Path::new("notes.md")).is_err());
+        assert_eq!(
+            fs::read_to_string(root.join("notes.md")).unwrap(),
+            "new file"
+        );
+        fs::remove_file(root.join("notes.md")).unwrap();
+        restore_stashed_entry(&root, &stash, Path::new("notes.md")).unwrap();
+        restash_entry(&root, Path::new("notes.md"), &stash).unwrap();
+        restore_stashed_entry(&root, &stash, Path::new("notes.md")).unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("notes.md")).unwrap(),
+            "keep me"
         );
         fs::remove_dir_all(root).unwrap();
     }

@@ -60,7 +60,7 @@ impl WorkbenchPanel {
             let key = key.clone();
             self.source_inspector_subscriptions.push(cx.subscribe(
                 input,
-                move |_, input, event: &InputEvent, cx| {
+                move |panel, input, event: &InputEvent, cx| {
                     if !matches!(event, InputEvent::PressEnter { .. }) {
                         return;
                     }
@@ -130,6 +130,7 @@ impl WorkbenchPanel {
                     }
                     let result = cx.update_window(window_handle, |_, window, cx| {
                         apply_workspace_edit(&root, &key.path, edited, window, cx);
+                        panel.focus.focus(window, cx);
                     });
                     cx.global_mut::<EditorDocuments>().set_notice(
                         &root,
@@ -392,6 +393,9 @@ impl WorkbenchPanel {
                             });
                             match applied {
                                 Ok(Ok(())) => {
+                                    let _ = cx.update_window(window_handle, |_, window, cx| {
+                                        panel.focus.focus(window, cx);
+                                    });
                                     cx.global_mut::<EditorDocuments>().set_asset_selection(
                                         &root,
                                         vec![AssetKey {

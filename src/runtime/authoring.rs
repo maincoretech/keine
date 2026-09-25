@@ -118,6 +118,17 @@ impl Session {
         Ok(())
     }
 
+    fn reload_source(&mut self) {
+        if let Some(runtime) = self.runtime.as_mut()
+            && let Err(error) = super::preview::reload_source(runtime, self.document_revision)
+        {
+            // An incomplete edit must not tear down Preview or strand its
+            // document revision. Keep rendering the last valid Program.
+            log::warn!("preview kept the last valid source: {error:#}");
+            super::preview::set_document_revision(runtime, self.document_revision);
+        }
+    }
+
     fn update_runtime(&mut self) {
         if let Some(runtime) = self.runtime.as_mut() {
             runtime.update();
@@ -218,6 +229,12 @@ pub(crate) fn run(endpoint: &str, token: &str, loader: LoaderRegistry) -> Result
     let mut session = Session::new()?;
     let mut last_update = Instant::now();
     loop {
+        // Control messages can arrive continuously while the author edits or
+        // plays. Do not wait for an empty receive queue before rendering.
+        if last_update.elapsed() >= session.next_interval() {
+            session.update_runtime();
+            last_update = Instant::now();
+        }
         let timeout = session
             .next_interval()
             .saturating_sub(last_update.elapsed());
@@ -233,7 +250,15 @@ pub(crate) fn run(endpoint: &str, token: &str, loader: LoaderRegistry) -> Result
                     continue;
                 }
                 let shutdown = matches!(message.command, ClientCommand::Shutdown);
+                let visual_input = matches!(
+                    message.command,
+                    ClientCommand::Input { .. }
+                        | ClientCommand::SetExecutionCursor { .. }
+                        | ClientCommand::CommitDocumentSnapshot { .. }
+                        | ClientCommand::ApplyDocumentPatch { .. }
+                );
                 let response = handle(&loader, &mut session, generation, &message.command);
+                let accepted = response.is_ok();
                 match response {
                     Ok(response) => send(&mut stream, &message, response)?,
                     Err((code, message_text)) => {
@@ -242,6 +267,10 @@ pub(crate) fn run(endpoint: &str, token: &str, loader: LoaderRegistry) -> Result
                 }
                 if shutdown {
                     break;
+                }
+                if visual_input && accepted && session.lifecycle == LifecycleState::Running {
+                    session.update_runtime();
+                    last_update = Instant::now();
                 }
             }
             Ok(Ok(None)) => break,
@@ -325,9 +354,7 @@ fn handle(
             offset,
             bytes,
         } => append_snapshot(session, *revision, *offset, bytes),
-        ClientCommand::CommitDocumentSnapshot { revision } => {
-            commit_snapshot(loader, session, *revision)
-        }
+        ClientCommand::CommitDocumentSnapshot { revision } => commit_snapshot(session, *revision),
         ClientCommand::ApplyDocumentPatch {
             path,
             base_revision,
@@ -336,7 +363,6 @@ fn handle(
             end,
             replacement,
         } => apply_patch(
-            loader,
             session,
             path,
             *base_revision,
@@ -516,7 +542,6 @@ fn append_snapshot(
 }
 
 fn commit_snapshot(
-    loader: &LoaderRegistry,
     session: &mut Session,
     revision: u64,
 ) -> Result<ServerResponse, (ErrorCode, String)> {
@@ -552,9 +577,7 @@ fn commit_snapshot(
         .documents
         .insert(pending.path.clone(), pending.bytes);
     session.document_revision = revision;
-    if session.runtime.is_some() {
-        session.rebuild_runtime(loader).map_err(internal_error)?;
-    }
+    session.reload_source();
     Ok(ServerResponse::SnapshotApplied {
         document_revision: revision,
     })
@@ -562,7 +585,6 @@ fn commit_snapshot(
 
 #[allow(clippy::too_many_arguments)]
 fn apply_patch(
-    loader: &LoaderRegistry,
     session: &mut Session,
     path: &Path,
     base_revision: u64,
@@ -624,9 +646,7 @@ fn apply_patch(
         .write_script(&path, document)
         .map_err(internal_error)?;
     session.document_revision = revision;
-    if session.runtime.is_some() {
-        session.rebuild_runtime(loader).map_err(internal_error)?;
-    }
+    session.reload_source();
     Ok(ServerResponse::SnapshotApplied {
         document_revision: revision,
     })

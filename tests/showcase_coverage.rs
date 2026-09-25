@@ -190,7 +190,7 @@ fn checked_in_showcase_exercises_every_native_effect_family() {
 
 #[test]
 fn letsgal_1_9_showcase_exercises_every_timeline_property_and_event() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("projects/test-project");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/letsgal-timeline");
     let project = keine_loader::LoaderRegistry::default()
         .open_project(&root)
         .expect("the LetsGal showcase should be a valid project")
@@ -358,6 +358,19 @@ fn letsgal_1_9_showcase_exercises_every_timeline_property_and_event() {
             "benchmark stress composition".into(),
         ])
     );
+}
+
+#[test]
+fn native_editor_project_remains_source_backed() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("projects/test-project");
+    let yaml = std::fs::read_to_string(root.join("config.yaml")).unwrap();
+    let mut config = keine_core::config::GameConfig::from_yaml(&yaml).unwrap();
+    let mut project = keine_loader::load_project(&root, &config.adapter.asset).unwrap();
+    project.prepare_eiyashou(&mut config).unwrap();
+    let scenes =
+        keine_loader::load_scenes(&project).expect("the native editor project should compile");
+    assert!(scenes.len() >= 3);
+    assert!(scenes.iter().all(|scene| scene.diagnostics.is_empty()));
 }
 
 fn record(action: &Action, coverage: &mut Coverage) {

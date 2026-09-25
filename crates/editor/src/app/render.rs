@@ -2,6 +2,11 @@ use super::*;
 
 impl Render for WorkbenchPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !cx.has_active_drag() {
+            self.file_drop_target = None;
+            self.block_drop_target = None;
+            self.block_dragging = None;
+        }
         if self.file_commit_requested {
             self.file_commit_requested = false;
             self.commit_file_edit(window, cx);
@@ -55,6 +60,7 @@ impl Render for WorkbenchPanel {
                     .take(800)
                     .cloned()
                     .collect::<Vec<_>>();
+                let hovered_folder = self.file_drop_target.as_ref().map(|(path, _)| path.clone());
                 let external_root_target = PathBuf::new();
                 let internal_root_target = PathBuf::new();
                 let header = div()
@@ -142,6 +148,63 @@ impl Render for WorkbenchPanel {
                 });
                 let context_menu = self.file_context_menu.clone().map(|menu| {
                     let mut items = Vec::new();
+                    let new_parent = menu
+                        .path
+                        .as_ref()
+                        .and_then(|path| {
+                            files
+                                .iter()
+                                .find(|file| &file.relative_path == path)
+                                .map(|file| {
+                                    if file.is_dir() {
+                                        path.clone()
+                                    } else {
+                                        path.parent().unwrap_or_else(|| Path::new("")).to_owned()
+                                    }
+                                })
+                        })
+                        .unwrap_or_else(|| selected_directory.clone());
+                    let new_file_parent = new_parent.clone();
+                    items.push(
+                        file_context_menu_item(
+                            "explorer-new-file",
+                            AssetIconName::File,
+                            "New file",
+                            false,
+                        )
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.close_file_context_menu(window, cx);
+                            this.begin_file_edit(
+                                FileEditMode::NewFile {
+                                    parent: new_file_parent.clone(),
+                                },
+                                "",
+                                window,
+                                cx,
+                            );
+                        }))
+                        .into_any_element(),
+                    );
+                    items.push(
+                        file_context_menu_item(
+                            "explorer-new-folder",
+                            AssetIconName::Folder,
+                            "New folder",
+                            false,
+                        )
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.close_file_context_menu(window, cx);
+                            this.begin_file_edit(
+                                FileEditMode::NewFolder {
+                                    parent: new_parent.clone(),
+                                },
+                                "",
+                                window,
+                                cx,
+                            );
+                        }))
+                        .into_any_element(),
+                    );
                     if let Some(path) = &menu.path {
                         let rename_path = path.clone();
                         let rename_name = path
@@ -215,49 +278,7 @@ impl Render for WorkbenchPanel {
                             .into_any_element(),
                         );
                     } else {
-                        let new_file_parent = selected_directory.clone();
-                        let new_folder_parent = selected_directory.clone();
                         let refresh_root = project_root.clone();
-                        items.push(
-                            file_context_menu_item(
-                                "explorer-new-file",
-                                AssetIconName::File,
-                                "New file",
-                                false,
-                            )
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.close_file_context_menu(window, cx);
-                                this.begin_file_edit(
-                                    FileEditMode::NewFile {
-                                        parent: new_file_parent.clone(),
-                                    },
-                                    "",
-                                    window,
-                                    cx,
-                                );
-                            }))
-                            .into_any_element(),
-                        );
-                        items.push(
-                            file_context_menu_item(
-                                "explorer-new-folder",
-                                AssetIconName::Folder,
-                                "New folder",
-                                false,
-                            )
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.close_file_context_menu(window, cx);
-                                this.begin_file_edit(
-                                    FileEditMode::NewFolder {
-                                        parent: new_folder_parent.clone(),
-                                    },
-                                    "",
-                                    window,
-                                    cx,
-                                );
-                            }))
-                            .into_any_element(),
-                        );
                         if self.file_clipboard.is_some() {
                             items.push(
                                 file_context_menu_item(
@@ -345,11 +366,29 @@ impl Render for WorkbenchPanel {
                             .id("explorer-drop-root")
                             .w_full()
                             .min_h(px(80.))
-                            .drag_over::<ExternalPaths>(|style, _, _, _| {
-                                style.bg(rgb(SURFACE_HOVER))
-                            })
-                            .drag_over::<FileDrag>(|style, _, _, _| style.bg(rgb(SURFACE_HOVER)))
+                            .flex_none()
+                            .on_drag_move(cx.listener(
+                                |this, event: &DragMoveEvent<FileDrag>, _, cx| {
+                                    if this.file_drop_target.as_ref().is_some_and(|(_, bounds)| {
+                                        !bounds.contains(&event.event.position)
+                                    }) {
+                                        this.file_drop_target = None;
+                                        cx.notify();
+                                    }
+                                },
+                            ))
+                            .on_drag_move(cx.listener(
+                                |this, event: &DragMoveEvent<ExternalPaths>, _, cx| {
+                                    if this.file_drop_target.as_ref().is_some_and(|(_, bounds)| {
+                                        !bounds.contains(&event.event.position)
+                                    }) {
+                                        this.file_drop_target = None;
+                                        cx.notify();
+                                    }
+                                },
+                            ))
                             .on_drop(cx.listener(move |this, paths: &ExternalPaths, window, cx| {
+                                this.file_drop_target = None;
                                 this.start_external_import(
                                     paths.paths().to_vec(),
                                     external_root_target.clone(),
@@ -358,6 +397,7 @@ impl Render for WorkbenchPanel {
                                 );
                             }))
                             .on_drop(cx.listener(move |this, drag: &FileDrag, window, cx| {
+                                this.file_drop_target = None;
                                 this.move_file(&drag.relative, &internal_root_target, window, cx);
                             }))
                             .child(
@@ -366,7 +406,9 @@ impl Render for WorkbenchPanel {
                                     .min_w_0()
                                     .flex()
                                     .flex_col()
+                                    .gap_1()
                                     .px_2()
+                                    .id("explorer-files")
                                     .children(visible.into_iter().enumerate().map(
                                         |(index, file)| {
                                             let root = project_root.clone();
@@ -404,9 +446,34 @@ impl Render for WorkbenchPanel {
                                             let collapsed = self.file_collapsed.contains(&relative);
                                             let drop_target = relative.clone();
                                             let external_target = relative.clone();
-                                            div()
+                                            let folder_hovered = is_dir
+                                                && cx.has_active_drag()
+                                                && hovered_folder.as_ref() == Some(&relative);
+                                            let drop_gap = if is_dir {
+                                                transition(
+                                                    (
+                                                        format!("explorer-drop-{}", relative.display()),
+                                                        "height",
+                                                    ),
+                                                    if folder_hovered {
+                                                        px(30.)
+                                                    } else {
+                                                        px(0.)
+                                                    },
+                                                    Transition::new(if cx.has_active_drag() {
+                                                        TAB_MOTION_DURATION
+                                                    } else {
+                                                        Duration::ZERO
+                                                    }),
+                                                    window,
+                                                    cx,
+                                                )
+                                            } else {
+                                                px(0.)
+                                            };
+                                            let row = div()
                                                 .id(("explorer-file", index))
-                                                .h(px(28.))
+                                                .h(px(26.))
                                                 .w_full()
                                                 .flex_none()
                                                 .flex()
@@ -416,7 +483,7 @@ impl Render for WorkbenchPanel {
                                                 .pr_2()
                                                 .rounded(px(8.))
                                                 .whitespace_nowrap()
-                                                .text_xs()
+                                                .text_size(px(11.))
                                                 .text_color(rgb(if row_selected {
                                                     INK
                                                 } else {
@@ -424,6 +491,12 @@ impl Render for WorkbenchPanel {
                                                 }))
                                                 .when(row_selected, |style| {
                                                     style.bg(rgb(SURFACE_HOVER))
+                                                })
+                                                .when(folder_hovered, |style| {
+                                                    style
+                                                        .bg(rgb(PRIMARY_DIM))
+                                                        .border_1()
+                                                        .border_color(rgb(0x405a68))
                                                 })
                                                 .cursor_pointer()
                                                 .hover(|style| style.bg(rgb(SURFACE_HOVER)))
@@ -470,14 +543,51 @@ impl Render for WorkbenchPanel {
                                                     cx.new(|_| drag.clone())
                                                 })
                                                 .when(is_dir, |row| {
-                                                    row.drag_over::<FileDrag>(|style, _, _, _| {
-                                                    style.bg(rgb(PRIMARY_DIM))
-                                                })
-                                                .drag_over::<ExternalPaths>(|style, _, _, _| {
-                                                    style.bg(rgb(PRIMARY_DIM))
-                                                })
+                                                    let hover_target = drop_target.clone();
+                                                    let external_hover_target = external_target.clone();
+                                                    row.on_drag_move(cx.listener(
+                                                        move |this, event: &DragMoveEvent<FileDrag>, _, cx| {
+                                                            if !event.bounds.contains(&event.event.position) {
+                                                                return;
+                                                            }
+                                                            let source = &event.drag(cx).relative;
+                                                            let valid = source != &hover_target
+                                                                && !hover_target.starts_with(source)
+                                                                && source.parent() != Some(hover_target.as_path());
+                                                            if valid {
+                                                                match &mut this.file_drop_target {
+                                                                    Some((path, bounds)) if path == &hover_target => {
+                                                                        *bounds = event.bounds;
+                                                                    }
+                                                                    target => {
+                                                                        *target = Some((hover_target.clone(), event.bounds));
+                                                                        cx.notify();
+                                                                    }
+                                                                }
+                                                            } else if this.file_drop_target.take().is_some() {
+                                                                cx.notify();
+                                                            }
+                                                        },
+                                                    ))
+                                                .on_drag_move(cx.listener(
+                                                    move |this, event: &DragMoveEvent<ExternalPaths>, _, cx| {
+                                                        if event.bounds.contains(&event.event.position) {
+                                                            match &mut this.file_drop_target {
+                                                                Some((path, bounds)) if path == &external_hover_target => {
+                                                                    *bounds = event.bounds;
+                                                                }
+                                                                target => {
+                                                                    *target = Some((external_hover_target.clone(), event.bounds));
+                                                                    cx.notify();
+                                                                }
+                                                            }
+                                                        }
+                                                    },
+                                                ))
                                                 .on_drop(cx.listener(
                                                     move |this, drag: &FileDrag, window, cx| {
+                                                        cx.stop_propagation();
+                                                        this.file_drop_target = None;
                                                         this.move_file(
                                                             &drag.relative,
                                                             &drop_target,
@@ -491,6 +601,8 @@ impl Render for WorkbenchPanel {
                                                           paths: &ExternalPaths,
                                                           window,
                                                           cx| {
+                                                        cx.stop_propagation();
+                                                        this.file_drop_target = None;
                                                         this.start_external_import(
                                                             paths.paths().to_vec(),
                                                             external_target.clone(),
@@ -532,17 +644,51 @@ impl Render for WorkbenchPanel {
                                                     .xsmall()
                                                     .text_color(rgb(PRIMARY)),
                                                 )
-                                                .child(name)
+                                                .child(
+                                                    div()
+                                                        .flex_1()
+                                                        .min_w_0()
+                                                        .overflow_hidden()
+                                                        .whitespace_nowrap()
+                                                        .text_ellipsis()
+                                                        .child(name),
+                                                );
+                                            div()
+                                                .w_full()
+                                                .flex()
+                                                .flex_col()
+                                                .child(row)
+                                                .when(is_dir, |wrapper| {
+                                                    wrapper.child(
+                                                        div()
+                                                            .h(drop_gap)
+                                                            .min_h_0()
+                                                            .flex_none()
+                                                            .overflow_hidden()
+                                                            .pl(px(22. + depth as f32 * 16.))
+                                                            .pr_2()
+                                                            .child(
+                                                                div()
+                                                                    .h(px(26.))
+                                                                    .rounded(px(8.))
+                                                                    .bg(rgb(PRIMARY_DIM)),
+                                                            ),
+                                                    )
+                                                })
                                         },
-                                    ))
-                                    .overflow_x_scrollbar()
-                                    .id("explorer-files"),
+                                    )),
                             ),
                     );
                 div()
                     .relative()
                     .size_full()
                     .min_h_0()
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                            this.open_explorer_menu(event.position, cx);
+                        }),
+                    )
                     .child(vertical_overflow_view(
                         "explorer-vertical-scroll",
                         &self.view_scroll,
@@ -640,6 +786,7 @@ impl Render for WorkbenchPanel {
                             selected_blocks: &self.selected_blocks,
                             draft_text: self.draft_text.as_ref(),
                             drop_target: self.block_drop_target,
+                            dragging: self.block_dragging.as_ref(),
                             scroll_handle: &self.view_scroll,
                             scroll_anchor: &self.block_scroll_anchor,
                             scroll_pending: self.block_scroll_pending,
@@ -750,7 +897,7 @@ impl Render for WorkbenchPanel {
                     PreviewLifecycle::Running | PreviewLifecycle::Paused
                 );
                 let status = match &snapshot.lifecycle {
-                    PreviewLifecycle::Off => "Stopped".to_owned(),
+                    PreviewLifecycle::Off => String::new(),
                     PreviewLifecycle::Starting => "Starting…".to_owned(),
                     PreviewLifecycle::Running => format!(
                         "Live · frame {} · dropped {}",
@@ -762,11 +909,8 @@ impl Render for WorkbenchPanel {
                 let start = controller.clone();
                 let start_root = root.clone();
                 let stop = controller.clone();
-                let edit = controller.clone();
-                let play = controller.clone();
                 let input = controller.clone();
                 let keyboard_input = controller.clone();
-                let mode = snapshot.mode;
                 let bounds = self.preview_bounds.clone();
                 let surface_bounds = self.preview_bounds.clone();
                 let preview_focus = self.focus.clone();
@@ -784,38 +928,26 @@ impl Render for WorkbenchPanel {
                             .gap_1()
                             .px_2()
                             .bg(rgb(CHROME))
-                            .child(preview_control("View", mode == PreviewMode::Edit).on_click(
-                                move |_, _, cx| {
-                                    edit.set_mode(PreviewMode::Edit);
-                                    cx.refresh_windows();
-                                },
-                            ))
-                            .child(
-                                preview_control("Interact", mode == PreviewMode::Play).on_click(
-                                    move |_, _, cx| {
-                                        play.set_mode(PreviewMode::Play);
-                                        cx.refresh_windows();
-                                    },
-                                ),
-                            )
                             .child(div().flex_1())
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(match snapshot.lifecycle {
-                                        PreviewLifecycle::Failed(_) => 0xdb7780,
-                                        PreviewLifecycle::Running => SUCCESS,
-                                        _ => MUTED,
-                                    }))
-                                    .child(status),
-                            )
+                            .when(!status.is_empty(), |this| {
+                                this.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(match snapshot.lifecycle {
+                                            PreviewLifecycle::Failed(_) => 0xdb7780,
+                                            PreviewLifecycle::Running => SUCCESS,
+                                            _ => MUTED,
+                                        }))
+                                        .child(status),
+                                )
+                            })
                             .child(if running {
-                                preview_control("Stop", false).on_click(move |_, _, cx| {
+                                preview_transport_button(true).on_click(move |_, _, cx| {
                                     stop.stop();
                                     cx.refresh_windows();
                                 })
                             } else {
-                                preview_control("Start", true).on_click(move |_, _, cx| {
+                                preview_transport_button(false).on_click(move |_, _, cx| {
                                     for (path, contents) in cx
                                         .global::<EditorDocuments>()
                                         .preview_documents(&start_root)
@@ -840,9 +972,6 @@ impl Render for WorkbenchPanel {
                             .cursor_pointer()
                             .on_mouse_down(MouseButton::Left, move |event, window, cx| {
                                 preview_focus.focus(window, cx);
-                                if mode != PreviewMode::Play {
-                                    return;
-                                }
                                 let bounds =
                                     *bounds.lock().expect("preview surface bounds lock poisoned");
                                 let Some(bounds) = bounds else {
@@ -863,8 +992,7 @@ impl Render for WorkbenchPanel {
                                 }
                             })
                             .on_key_down(move |event, _, cx| {
-                                if mode == PreviewMode::Play
-                                    && !event.keystroke.modifiers.control
+                                if !event.keystroke.modifiers.control
                                     && !event.keystroke.modifiers.alt
                                     && !event.keystroke.modifiers.platform
                                     && matches!(event.keystroke.key.as_str(), "enter" | "space")
@@ -1142,6 +1270,13 @@ impl Render for WorkbenchPanel {
         };
         div()
             .track_focus(&self.focus)
+            .when(self.document_mode == DocumentMode::Block, |this| {
+                this.key_context("KeineBlockView")
+            })
+            .when(
+                matches!(self.content, PanelContent::Explorer { .. }),
+                |this| this.key_context("KeineExplorer"),
+            )
             .on_action(cx.listener(Self::toggle_block_picker))
             .on_action(cx.listener(Self::block_picker_next))
             .on_action(cx.listener(Self::block_picker_previous))
@@ -1153,6 +1288,10 @@ impl Render for WorkbenchPanel {
             .on_action(cx.listener(Self::delete_selected_blocks))
             .on_action(cx.listener(Self::move_selected_blocks_up))
             .on_action(cx.listener(Self::move_selected_blocks_down))
+            .on_action(cx.listener(Self::undo_blocks))
+            .on_action(cx.listener(Self::redo_blocks))
+            .on_action(cx.listener(Self::undo_files))
+            .on_action(cx.listener(Self::redo_files))
             .size_full()
             .text_color(rgb(INK))
             .child(body)

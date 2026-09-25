@@ -2,6 +2,10 @@
 
 已完成阶段的手工验收步骤集中于此；LetsGal Studio 集成仍保留独立清单。
 
+此清单记录旧阶段的历史验收场景，部分菜单和动作已不属于当前测试工程。
+当前原生编辑器验收使用 [`projects/test-project/ACCEPTANCE.md`](../../projects/test-project/ACCEPTANCE.md)；
+保留的 LetsGal 时间轴回归工程使用 [`tests/fixtures/letsgal-timeline/ACCEPTANCE.md`](../../tests/fixtures/letsgal-timeline/ACCEPTANCE.md)。
+
 ## Phase 1 桌面端验收提纲
 
 ### 启动

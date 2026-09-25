@@ -1,0 +1,32 @@
+scene opening {
+  background(day),
+  sprite(aya_slot, aya_smile, position: center),
+  @hello aya: "Welcome to the native editor test project.",
+  "Drag this narration below the next one.",
+  "Drag this narration above the previous one.",
+  "Enter creates another block; Shift+Enter stays in this block.",
+  let ready = true,
+  if (ready) {
+    aya: "The condition is true."
+  } else {
+    "The condition is false."
+  },
+  choice("Choose a scene") {
+    @see_sunset "Sunset": goto(sunset),
+    @skip "Finish": goto(ending)
+  }
+}
+
+scene sunset {
+  background(sunset, transition: fade(300ms)),
+  sprite(aya_slot, aya_thinking, position: right),
+  se(click),
+  aya: "Assets and Inspector can be tested here.",
+  loop { break },
+  goto(ending)
+}
+
+scene ending {
+  hide(aya_slot),
+  "Scene management can be tested in Blocks."
+}

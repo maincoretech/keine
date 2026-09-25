@@ -86,7 +86,8 @@ Formal signing and notarization are outside the current P7 scope.
   prebuilt Engine child per project for handshake, validation, diagnostics, source snapshots and
   patches, source/runtime cursor exchange, lifecycle, runtime input, and real embedded Preview.
   Preview is an explicit singleton view placed above Inspector in the default right-hand stack;
-  Engine Start remains manual. Edit/Play input scopes, edge-triggered visibility pause, and bounded
+  Engine Start remains manual. Source selection and Preview interaction stay synchronized without
+  separate input modes; edge-triggered visibility pause and bounded
   Stop/Close cleanup remain independent of layout. Panel visibility comes
   from Dock activation rather than render-frequency inference, so unchanged UI cannot oscillate
   the child and audio between pause/resume. The Engine owns the normal three-camera
@@ -173,7 +174,8 @@ project / package
   ultrawide, and tall windows. Existing semantic tests do not prove pixel equivalence.
 - The full LetsGal commercial sample is intentionally untracked. Local acceptance and loader
   benchmarks run when `projects/letsgal` or `KEINE_LETSGAL_PROJECT` is available; clean CI relies
-  on tracked fixtures and `projects/test-project`.
+  on tracked fixtures, including `tests/fixtures/letsgal-timeline`, and the native
+  `projects/test-project` editor acceptance project.
 - Complex multi-route blueprint parity remains deferred. Core already owns the native flow,
   condition, choice, assignment, and scene-call primitives; the adapter does not embed a JS VM or
   Studio extension host to chase editor-specific routing behavior.

@@ -113,7 +113,7 @@
 ```bash
 cargo test --test letsgal_sample_acceptance
 cargo test -p keine-loader adapter::editor::letsgal
-cargo validate projects/test-project
+cargo validate tests/fixtures/letsgal-timeline
 ```
 
 失败记录格式：

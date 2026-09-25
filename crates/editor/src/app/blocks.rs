@@ -473,6 +473,8 @@ impl WorkbenchPanel {
             });
         let start = match inserted {
             Some(Ok((edited, range))) => {
+                cx.global_mut::<EditorDocuments>()
+                    .record_source_edit(&root, &relative, &source, &edited);
                 editor.update(cx, |editor, cx| editor.replace_all(edited, window, cx));
                 range.start
             }
@@ -743,20 +745,77 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let PanelContent::Document { root, editor, .. } = &self.content else {
+        let PanelContent::Document {
+            root,
+            relative,
+            document: Some(document),
+            editor,
+            ..
+        } = &self.content
+        else {
             return;
         };
+        cx.global_mut::<EditorDocuments>().record_source_edit(
+            root,
+            relative,
+            document.borrow().contents(),
+            &edited,
+        );
         let root = root.clone();
         let editor = editor.clone();
         editor.update(cx, |editor, cx| editor.replace_all(edited, window, cx));
         self.selected_blocks.clear();
         self.block_selection_anchor = None;
         self.rebuild_visual_editors(window, cx);
+        self.focus.focus(window, cx);
         cx.global_mut::<EditorDocuments>()
             .clear_block_selection(&root);
         cx.global_mut::<EditorDocuments>().set_notice(&root, notice);
         cx.notify();
         cx.refresh_windows();
+    }
+
+    pub(super) fn undo_blocks(
+        &mut self,
+        _: &UndoBlocks,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.document_mode != DocumentMode::Block || !self.focus.is_focused(window) {
+            return;
+        }
+        self.replay_block_source(true, window, cx);
+    }
+
+    pub(super) fn redo_blocks(
+        &mut self,
+        _: &RedoBlocks,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.document_mode != DocumentMode::Block || !self.focus.is_focused(window) {
+            return;
+        }
+        self.replay_block_source(false, window, cx);
+    }
+
+    fn replay_block_source(&mut self, undo: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let PanelContent::Document { root, .. } = &self.content else {
+            return;
+        };
+        let root = root.clone();
+        match replay_source_history(&root, undo, window, cx) {
+            Ok(true) => {
+                self.selected_blocks.clear();
+                self.block_selection_anchor = None;
+                self.rebuild_visual_editors(window, cx);
+                cx.global_mut::<EditorDocuments>()
+                    .clear_block_selection(&root);
+                cx.refresh_windows();
+            }
+            Ok(false) => {}
+            Err(error) => self.set_block_notice(error, cx),
+        }
     }
 
     pub(super) fn begin_scene_edit(
@@ -1097,6 +1156,7 @@ impl WorkbenchPanel {
     ) {
         let PanelContent::Document {
             root,
+            relative,
             document: Some(document),
             editor,
             ..
@@ -1109,6 +1169,8 @@ impl WorkbenchPanel {
         let index = cx.global::<EditorDocuments>().authoring(root);
         match insert_statement(&source, line, kind, &index) {
             Ok(edited) => {
+                cx.global_mut::<EditorDocuments>()
+                    .record_source_edit(root, relative, &source, &edited);
                 editor.update(cx, |editor, cx| editor.replace_all(edited, window, cx));
                 cx.global_mut::<EditorDocuments>().set_notice(
                     root,
@@ -1154,6 +1216,7 @@ impl WorkbenchPanel {
         match result {
             Ok(edited) => {
                 apply_workspace_edit(root, &path, edited, window, cx);
+                self.focus.focus(window, cx);
                 for input in &self.tool_inputs {
                     input.update(cx, |input, cx| input.set_value("", window, cx));
                 }

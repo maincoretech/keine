@@ -1449,6 +1449,29 @@ mod tests {
 
     static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
 
+    #[test]
+    fn checked_in_native_project_populates_editor_views() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../projects/test-project");
+        let workspace = crate::workspace::WorkspaceSession::open(&root).unwrap();
+        let files = workspace.files();
+        assert!(
+            files
+                .iter()
+                .any(|file| file.relative_path == Path::new("scripts/main.shou"))
+        );
+        assert!(
+            files
+                .iter()
+                .any(|file| file.relative_path == Path::new("scratch/destination"))
+        );
+        let index = AuthoringIndex::load(&root, files, &BTreeMap::new());
+        assert!(index.native);
+        assert_eq!(index.scenes.len(), 3);
+        assert!(index.assets.len() >= 5);
+        assert!(!index.characters.is_empty());
+        assert!(index.problems.is_empty(), "{:?}", index.problems);
+    }
+
     fn fixture() -> PathBuf {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)

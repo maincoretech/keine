@@ -1,6 +1,269 @@
 use super::*;
 
+#[derive(Default)]
+pub(super) struct FileHistory {
+    undo: VecDeque<FileEdit>,
+    redo: Vec<FileEdit>,
+}
+
+struct ManifestChange {
+    path: PathBuf,
+    before: String,
+    after: String,
+}
+
+impl ManifestChange {
+    fn between(
+        before: Option<(PathBuf, String)>,
+        after: Option<(PathBuf, String)>,
+    ) -> Option<Self> {
+        match (before, after) {
+            (Some((path, before)), Some((after_path, after)))
+                if path == after_path && before != after =>
+            {
+                Some(Self {
+                    path,
+                    before,
+                    after,
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+enum FileEdit {
+    Relocate {
+        before: PathBuf,
+        after: PathBuf,
+    },
+    Toggle {
+        paths: Vec<(PathBuf, Option<PathBuf>)>,
+        after_present: bool,
+        present: bool,
+        manifest: Option<ManifestChange>,
+    },
+}
+
+impl FileEdit {
+    fn affected_paths(&self) -> Vec<&Path> {
+        match self {
+            Self::Relocate { before, after } => vec![before, after],
+            Self::Toggle { paths, .. } => paths.iter().map(|(path, _)| path.as_path()).collect(),
+        }
+    }
+
+    fn replay(&mut self, root: &Path, undo: bool) -> io::Result<ImportResult> {
+        match self {
+            Self::Relocate { before, after } => {
+                let (source, destination) = if undo {
+                    (after, before)
+                } else {
+                    (before, after)
+                };
+                file_ops::relocate_entry(root, source, destination)
+            }
+            Self::Toggle {
+                paths,
+                after_present,
+                present,
+                manifest,
+            } => {
+                let target_present = if undo {
+                    !*after_present
+                } else {
+                    *after_present
+                };
+                if target_present == *present {
+                    return Err(io::Error::other("File history is out of sequence"));
+                }
+                if let Some(change) = manifest.as_ref() {
+                    let (_, current) = file_ops::asset_manifest_source(root)?;
+                    let expected = if *present {
+                        &change.after
+                    } else {
+                        &change.before
+                    };
+                    if &current != expected {
+                        return Err(io::Error::other(
+                            "Asset manifest changed; refresh before undoing",
+                        ));
+                    }
+                }
+                for (moved, (path, stash)) in paths.iter_mut().enumerate() {
+                    let result = if target_present {
+                        file_ops::restore_stashed_entry(
+                            root,
+                            stash
+                                .as_deref()
+                                .ok_or_else(|| io::Error::other("Undo data missing"))?,
+                            path,
+                        )
+                    } else if let Some(stash) = stash.as_deref() {
+                        file_ops::restash_entry(root, path, stash)
+                    } else {
+                        file_ops::stash_entry(root, path).map(|new_stash| {
+                            *stash = Some(new_stash);
+                        })
+                    };
+                    if let Err(error) = result {
+                        rollback_toggled_paths(root, &paths[..moved], target_present);
+                        return Err(error);
+                    }
+                }
+                let manifest_update = if let Some(change) = manifest.as_ref() {
+                    let (expected, replacement) = if target_present {
+                        (&change.before, &change.after)
+                    } else {
+                        (&change.after, &change.before)
+                    };
+                    if let Err(error) =
+                        file_ops::replace_asset_manifest(root, &change.path, expected, replacement)
+                    {
+                        rollback_toggled_paths(root, paths, target_present);
+                        return Err(error);
+                    }
+                    Some((change.path.clone(), replacement.clone()))
+                } else {
+                    None
+                };
+                *present = target_present;
+                Ok(ImportResult {
+                    destination: paths
+                        .first()
+                        .map_or_else(PathBuf::new, |(path, _)| path.clone()),
+                    manifest_update,
+                    registered: false,
+                })
+            }
+        }
+    }
+}
+
+fn rollback_toggled_paths(root: &Path, paths: &[(PathBuf, Option<PathBuf>)], became_present: bool) {
+    for (path, stash) in paths.iter().rev() {
+        if let Some(stash) = stash {
+            let _ = if became_present {
+                file_ops::restash_entry(root, path, stash)
+            } else {
+                file_ops::restore_stashed_entry(root, stash, path)
+            };
+        }
+    }
+}
+
+impl FileHistory {
+    fn record(&mut self, edit: FileEdit) {
+        self.undo.push_back(edit);
+        if self.undo.len() > 32 {
+            self.undo.pop_front();
+        }
+        self.redo.clear();
+    }
+
+    fn step(&mut self, root: &Path, undo: bool) -> io::Result<Option<ImportResult>> {
+        let Some(mut edit) = (if undo {
+            self.undo.pop_back()
+        } else {
+            self.redo.pop()
+        }) else {
+            return Ok(None);
+        };
+        match edit.replay(root, undo) {
+            Ok(result) => {
+                if undo {
+                    self.redo.push(edit);
+                } else {
+                    self.undo.push_back(edit);
+                }
+                Ok(Some(result))
+            }
+            Err(error) => {
+                if undo {
+                    self.undo.push_back(edit);
+                } else {
+                    self.redo.push(edit);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn next_requires_manifest(&self, undo: bool) -> bool {
+        let edit = if undo {
+            self.undo.back()
+        } else {
+            self.redo.last()
+        };
+        match edit {
+            Some(FileEdit::Relocate { .. }) => true,
+            Some(FileEdit::Toggle { manifest, .. }) => manifest.is_some(),
+            None => false,
+        }
+    }
+
+    fn next_affected_paths(&self, undo: bool) -> Vec<&Path> {
+        (if undo {
+            self.undo.back()
+        } else {
+            self.redo.last()
+        })
+        .map_or_else(Vec::new, FileEdit::affected_paths)
+    }
+}
+
 impl WorkbenchPanel {
+    pub(super) fn undo_files(
+        &mut self,
+        _: &UndoFiles,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.replay_file_history(true, window, cx);
+    }
+
+    pub(super) fn redo_files(
+        &mut self,
+        _: &RedoFiles,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.replay_file_history(false, window, cx);
+    }
+
+    fn replay_file_history(&mut self, undo: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.focus.is_focused(window) {
+            return;
+        }
+        let Some(root) = self.explorer_root() else {
+            return;
+        };
+        if self.file_history.next_requires_manifest(undo)
+            && !self.manifest_mutation_ready(&root, window, cx)
+        {
+            return;
+        }
+        if !self.affected_files_closed(
+            &root,
+            &self.file_history.next_affected_paths(undo),
+            window,
+            cx,
+        ) {
+            return;
+        }
+        match self.file_history.step(&root, undo) {
+            Ok(Some(result)) => {
+                self.accept_file_result(&root, result, window, cx);
+                self.file_selection = None;
+                cx.global_mut::<EditorDocuments>()
+                    .set_notice(&root, if undo { "File undo" } else { "File redo" });
+                cx.notify();
+            }
+            Ok(None) => {}
+            Err(error) => window.push_notification(Notification::error(short_error(&error)), cx),
+        }
+    }
+
     pub(super) fn explorer_root(&self) -> Option<PathBuf> {
         match &self.content {
             PanelContent::Explorer { root, .. } => Some(root.clone()),
@@ -115,26 +378,56 @@ impl WorkbenchPanel {
         let name = self.file_name_input.read(cx).value().trim().to_owned();
         let result = match mode {
             FileEditMode::NewFile { parent } => {
-                file_ops::create_file(&root, &parent, &name).map(|_| None)
+                file_ops::create_file(&root, &parent, &name).map(|path| {
+                    (
+                        None,
+                        FileEdit::Toggle {
+                            paths: vec![(path, None)],
+                            after_present: true,
+                            present: true,
+                            manifest: None,
+                        },
+                    )
+                })
             }
-            FileEditMode::NewFolder { parent } => {
-                file_ops::create_directory(&root, &parent, &name).map(|_| None)
-            }
+            FileEditMode::NewFolder { parent } => file_ops::create_directory(&root, &parent, &name)
+                .map(|path| {
+                    (
+                        None,
+                        FileEdit::Toggle {
+                            paths: vec![(path, None)],
+                            after_present: true,
+                            present: true,
+                            manifest: None,
+                        },
+                    )
+                }),
             FileEditMode::Rename { path } => {
                 if !self.manifest_mutation_ready(&root, window, cx) {
                     return;
                 }
-                file_ops::rename_entry(&root, &path, &name).map(Some)
+                if !self.affected_files_closed(&root, &[&path], window, cx) {
+                    return;
+                }
+                file_ops::rename_entry(&root, &path, &name).map(|result| {
+                    let edit = FileEdit::Relocate {
+                        before: path,
+                        after: result.destination.clone(),
+                    };
+                    (Some(result), edit)
+                })
             }
         };
         match result {
-            Ok(update) => {
+            Ok((update, edit)) => {
                 self.file_edit = None;
+                self.file_history.record(edit);
                 if let Some(update) = update {
                     self.accept_file_result(&root, update, window, cx);
                 } else {
                     self.refresh_explorer(&root, cx);
                 }
+                self.focus.focus(window, cx);
             }
             Err(error) => window.push_notification(Notification::error(short_error(&error)), cx),
         }
@@ -155,6 +448,25 @@ impl WorkbenchPanel {
         } else {
             window.push_notification(Notification::warning("Save assets.yaml first"), cx);
             false
+        }
+    }
+
+    fn affected_files_closed(
+        &self,
+        root: &Path,
+        paths: &[&Path],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let documents = cx.global_mut::<EditorDocuments>();
+        if paths
+            .iter()
+            .any(|path| documents.has_open_documents_under(root, path))
+        {
+            window.push_notification(Notification::warning("Save and close affected files"), cx);
+            false
+        } else {
+            true
         }
     }
 
@@ -209,12 +521,35 @@ impl WorkbenchPanel {
         if !self.manifest_mutation_ready(&root, window, cx) {
             return;
         }
+        if !self.affected_files_closed(&root, &[&source], window, cx) {
+            return;
+        }
         let target = self.selected_directory();
+        let manifest_before = match file_ops::asset_manifest_source(&root) {
+            Ok(source) => source,
+            Err(error) => {
+                window.push_notification(Notification::error(short_error(&error)), cx);
+                return;
+            }
+        };
         match file_ops::copy_entry(&root, &source, &target) {
             Ok(results) => {
+                let copied = target.join(source.file_name().unwrap_or_default());
+                let manifest_after = results
+                    .iter()
+                    .rev()
+                    .find_map(|result| result.manifest_update.clone());
+                self.file_history.record(FileEdit::Toggle {
+                    paths: vec![(copied, None)],
+                    after_present: true,
+                    present: true,
+                    manifest: ManifestChange::between(Some(manifest_before), manifest_after),
+                });
                 for result in results {
                     self.accept_file_result(&root, result, window, cx);
                 }
+                self.refresh_explorer(&root, cx);
+                self.focus.focus(window, cx);
                 window.push_notification(Notification::success("Copied"), cx);
             }
             Err(error) => window.push_notification(Notification::error(short_error(&error)), cx),
@@ -234,8 +569,19 @@ impl WorkbenchPanel {
         if !self.manifest_mutation_ready(&root, window, cx) {
             return;
         }
+        if !self.affected_files_closed(&root, &[source], window, cx) {
+            return;
+        }
         match file_ops::move_entry(&root, source, target) {
-            Ok(result) => self.accept_file_result(&root, result, window, cx),
+            Ok(result) => {
+                self.file_history.record(FileEdit::Relocate {
+                    before: source.to_owned(),
+                    after: result.destination.clone(),
+                });
+                self.file_collapsed.remove(target);
+                self.accept_file_result(&root, result, window, cx);
+                self.focus.focus(window, cx);
+            }
             Err(error) => window.push_notification(Notification::error(short_error(&error)), cx),
         }
     }
@@ -262,10 +608,20 @@ impl WorkbenchPanel {
                 return;
             }
             let _ = this.update_in(cx, |this, window, cx| {
-                match file_ops::delete_entry(&root, &path) {
-                    Ok(()) => {
+                if !this.affected_files_closed(&root, &[&path], window, cx) {
+                    return;
+                }
+                match file_ops::stage_deleted_entry(&root, &path) {
+                    Ok(stash) => {
+                        this.file_history.record(FileEdit::Toggle {
+                            paths: vec![(path, Some(stash))],
+                            after_present: false,
+                            present: false,
+                            manifest: None,
+                        });
                         this.file_selection = None;
                         this.refresh_explorer(&root, cx);
+                        this.focus.focus(window, cx);
                         window.push_notification(Notification::success("Deleted"), cx);
                     }
                     Err(error) => {
@@ -295,11 +651,20 @@ impl WorkbenchPanel {
             total: paths.len(),
         });
         let total = paths.len();
+        let manifest_before = match file_ops::asset_manifest_source(&root) {
+            Ok(source) => source,
+            Err(error) => {
+                self.file_progress = None;
+                window.push_notification(Notification::error(short_error(&error)), cx);
+                return;
+            }
+        };
         let background = cx.background_executor().clone();
         cx.spawn_in(window, async move |this, cx| {
             let mut succeeded = 0;
             let mut failed = 0;
             let mut last_manifest = None;
+            let mut imported = Vec::new();
             for (index, source) in paths.into_iter().enumerate() {
                 let root_for_task = root.clone();
                 let target_for_task = target.clone();
@@ -311,6 +676,7 @@ impl WorkbenchPanel {
                 match result {
                     Ok(result) => {
                         succeeded += 1;
+                        imported.push((result.destination.clone(), None));
                         if result.manifest_update.is_some() {
                             last_manifest = result.manifest_update;
                         }
@@ -327,6 +693,17 @@ impl WorkbenchPanel {
             }
             let _ = this.update_in(cx, |this, window, cx| {
                 this.file_progress = None;
+                if !imported.is_empty() {
+                    this.file_history.record(FileEdit::Toggle {
+                        paths: imported,
+                        after_present: true,
+                        present: true,
+                        manifest: ManifestChange::between(
+                            Some(manifest_before),
+                            last_manifest.clone(),
+                        ),
+                    });
+                }
                 if let Some((relative, source)) = last_manifest {
                     let result = ImportResult {
                         destination: PathBuf::new(),
@@ -353,5 +730,114 @@ impl WorkbenchPanel {
         })
         .detach();
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+    fn fixture() -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "keine-file-history-{}-{nonce}-{}",
+            std::process::id(),
+            FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).unwrap();
+        fs::create_dir_all(root.join("destination")).unwrap();
+        fs::write(
+            root.join("config.yaml"),
+            "adapter:\n  script: keine\nscript:\n  assets: assets.yaml\n  characters: characters.yaml\n",
+        )
+        .unwrap();
+        fs::write(root.join("assets.yaml"), "backgrounds: {}\n").unwrap();
+        fs::write(root.join("characters.yaml"), "characters: {}\n").unwrap();
+        root
+    }
+
+    #[test]
+    fn moved_file_undoes_and_redoes() {
+        let root = fixture();
+        fs::write(root.join("note.md"), "text").unwrap();
+        let moved =
+            file_ops::move_entry(&root, Path::new("note.md"), Path::new("destination")).unwrap();
+        let mut history = FileHistory::default();
+        history.record(FileEdit::Relocate {
+            before: "note.md".into(),
+            after: moved.destination,
+        });
+        history.step(&root, true).unwrap();
+        assert!(root.join("note.md").exists());
+        history.step(&root, false).unwrap();
+        assert!(root.join("destination/note.md").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn created_file_is_stashed_and_restored() {
+        let root = fixture();
+        fs::write(root.join("note.md"), "draft").unwrap();
+        let mut history = FileHistory::default();
+        history.record(FileEdit::Toggle {
+            paths: vec![("note.md".into(), None)],
+            after_present: true,
+            present: true,
+            manifest: None,
+        });
+        history.step(&root, true).unwrap();
+        assert!(!root.join("note.md").exists());
+        history.step(&root, false).unwrap();
+        assert_eq!(fs::read_to_string(root.join("note.md")).unwrap(), "draft");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn imported_file_and_asset_manifest_undo_as_one_step() {
+        let root = fixture();
+        let before = fs::read_to_string(root.join("assets.yaml")).unwrap();
+        let after = "backgrounds:\n  sky: assets/sky.webp\n".to_owned();
+        fs::create_dir(root.join("assets")).unwrap();
+        fs::write(root.join("assets/sky.webp"), "media").unwrap();
+        fs::write(root.join("assets.yaml"), &after).unwrap();
+        let mut history = FileHistory::default();
+        history.record(FileEdit::Toggle {
+            paths: vec![("assets/sky.webp".into(), None)],
+            after_present: true,
+            present: true,
+            manifest: ManifestChange::between(
+                Some(("assets.yaml".into(), before.clone())),
+                Some(("assets.yaml".into(), after.clone())),
+            ),
+        });
+
+        history.step(&root, true).unwrap();
+        assert!(!root.join("assets/sky.webp").exists());
+        assert_eq!(
+            fs::read_to_string(root.join("assets.yaml")).unwrap(),
+            before
+        );
+        history.step(&root, false).unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("assets/sky.webp")).unwrap(),
+            "media"
+        );
+        assert_eq!(fs::read_to_string(root.join("assets.yaml")).unwrap(), after);
+
+        fs::write(
+            root.join("assets.yaml"),
+            "backgrounds: {}\n# external edit\n",
+        )
+        .unwrap();
+        assert!(history.step(&root, true).is_err());
+        assert!(root.join("assets/sky.webp").exists());
+        fs::remove_dir_all(root).unwrap();
     }
 }

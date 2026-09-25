@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::io;
 use std::path::Path;
 
+use anyhow::{Context, Result};
 use bevy::camera::RenderTarget;
 use bevy::input::InputSystems;
 use bevy::math::DVec2;
@@ -12,9 +13,14 @@ use bevy::ui::UiSystems;
 use bevy::window::{PrimaryWindow, WindowResolution};
 use bevy::winit::WinitSettings;
 use keine_authoring::{PreviewInput, SharedFrameProducer};
+use keine_core::Program;
+use keine_loader::{DiagnosticLevel, load_scenes_with};
 
 use super::platform::{InputActions, RuntimeActivity};
-use super::resources::{GameState, LocalAssetManifest};
+use super::resources::{
+    ContentProjectResource, GameConfigResource, GameState, LocalAssetManifest, LocalSceneAssets,
+    ScriptLanguages,
+};
 
 const PREVIEW_WIDTH: u32 = keine_core::DESIGN_WIDTH as u32;
 const PREVIEW_HEIGHT: u32 = keine_core::DESIGN_HEIGHT as u32;
@@ -301,6 +307,69 @@ pub(crate) fn set_document_revision(app: &mut App, revision: u64) {
     if let Some(mut capture) = app.world_mut().get_resource_mut::<CaptureState>() {
         capture.force = true;
     }
+}
+
+/// Replace only the authored Program and its scene metadata. The render app,
+/// GPU target and frame transport remain alive across source edits.
+pub(crate) fn reload_source(app: &mut App, revision: u64) -> Result<()> {
+    let world = app.world_mut();
+    let content = &world.resource::<ContentProjectResource>().0;
+    let languages = &world.resource::<ScriptLanguages>().0;
+    let config = &world.resource::<GameConfigResource>().0;
+    let mut scenes =
+        load_scenes_with(content, languages).context("failed to reload preview source")?;
+    let native = config.adapter.script.eq_ignore_ascii_case("keine");
+    if native {
+        keine_loader::validate_native_entry_flow(&mut scenes, &config.script.entry);
+        anyhow::ensure!(
+            scenes.iter().any(|scene| scene.name == config.script.entry),
+            "preview entry scene is missing"
+        );
+        anyhow::ensure!(
+            !scenes.iter().any(|scene| scene
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.level == DiagnosticLevel::Error)),
+            "preview source has script errors"
+        );
+    }
+    let mut manifest = LocalAssetManifest::default();
+    let mut program_scenes = Vec::with_capacity(scenes.len());
+    for scene in scenes {
+        for diagnostic in &scene.diagnostics {
+            let message = format!(
+                "{}:{}:{}: {}",
+                scene.path.display(),
+                diagnostic.span.line,
+                diagnostic.span.column,
+                diagnostic.message
+            );
+            match diagnostic.level {
+                DiagnosticLevel::Warning => log::warn!("{message}"),
+                DiagnosticLevel::Error => log::error!("{message}"),
+            }
+        }
+        manifest.insert(
+            scene.name.clone(),
+            LocalSceneAssets {
+                source_path: scene.path,
+                resources: scene.resources,
+                sub_scenes: scene.sub_scenes,
+                action_spans: scene.action_spans,
+            },
+        );
+        program_scenes.push((scene.name, scene.actions));
+    }
+    let mut image_roles = crate::scene::images::ImageRoleRegistry::default();
+    image_roles.rebuild(world.resource::<GameConfigResource>(), &manifest);
+    *world.resource_mut::<LocalAssetManifest>() = manifest;
+    *world.resource_mut::<crate::scene::images::ImageRoleRegistry>() = image_roles;
+    super::tick::restart_after_program_reload(
+        &mut world.resource_mut::<GameState>(),
+        Program::from_scenes(program_scenes),
+    );
+    set_document_revision(app, revision);
+    Ok(())
 }
 
 pub(crate) fn queue_input(app: &mut App, event: PreviewInput) {

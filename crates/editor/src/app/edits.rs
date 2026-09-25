@@ -1,5 +1,122 @@
 use super::*;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct SourceChange {
+    path: PathBuf,
+    before: String,
+    after: String,
+}
+
+#[derive(Default)]
+pub(super) struct SourceHistory {
+    undo: VecDeque<Vec<SourceChange>>,
+    redo: Vec<Vec<SourceChange>>,
+}
+
+impl SourceHistory {
+    fn record(&mut self, changes: Vec<SourceChange>) {
+        let changes = changes
+            .into_iter()
+            .filter(|change| change.before != change.after)
+            .collect::<Vec<_>>();
+        if changes.is_empty() {
+            return;
+        }
+        self.undo.push_back(changes);
+        if self.undo.len() > 32 {
+            self.undo.pop_front();
+        }
+        self.redo.clear();
+    }
+
+    fn next(&self, undo: bool) -> Option<&[SourceChange]> {
+        if undo {
+            self.undo.back().map(Vec::as_slice)
+        } else {
+            self.redo.last().map(Vec::as_slice)
+        }
+    }
+
+    fn finish(&mut self, undo: bool) {
+        if undo {
+            if let Some(change) = self.undo.pop_back() {
+                self.redo.push(change);
+            }
+        } else if let Some(change) = self.redo.pop() {
+            self.undo.push_back(change);
+        }
+    }
+}
+
+impl EditorDocuments {
+    pub(super) fn record_source_edit(
+        &mut self,
+        root: &Path,
+        path: &Path,
+        before: &str,
+        after: &str,
+    ) {
+        self.record_source_transaction(
+            root,
+            vec![SourceChange {
+                path: path.to_owned(),
+                before: before.to_owned(),
+                after: after.to_owned(),
+            }],
+        );
+    }
+
+    fn record_source_transaction(&mut self, root: &Path, changes: Vec<SourceChange>) {
+        if let Ok(workspace) = self.ensure_workspace(root) {
+            workspace.source_history.record(changes);
+        }
+    }
+}
+
+pub(super) fn replay_source_history(
+    root: &Path,
+    undo: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> Result<bool, String> {
+    let key = ProjectKey::from_path(root).map_err(|error| error.to_string())?;
+    let Some(changes) = cx
+        .global::<EditorDocuments>()
+        .workspaces
+        .get(key.path())
+        .and_then(|workspace| workspace.source_history.next(undo))
+        .map(<[SourceChange]>::to_vec)
+    else {
+        return Ok(false);
+    };
+    let mut replacements = Vec::with_capacity(changes.len());
+    for change in &changes {
+        let expected = if undo { &change.after } else { &change.before };
+        let replacement = if undo { &change.before } else { &change.after };
+        if cx
+            .global::<EditorDocuments>()
+            .source(root, &change.path)
+            .as_deref()
+            != Some(expected.as_str())
+        {
+            return Err(format!(
+                "{} changed; refresh before undoing",
+                change.path.display()
+            ));
+        }
+        replacements.push((change.path.clone(), replacement.clone()));
+    }
+    apply_prepared_edits_impl(root, &replacements, false, window, cx)?;
+    if let Some(workspace) = cx
+        .global_mut::<EditorDocuments>()
+        .workspaces
+        .get_mut(key.path())
+    {
+        workspace.source_history.finish(undo);
+    }
+    Ok(true)
+}
+
 pub(super) fn insert_assets_at_block(
     source: &str,
     target_start: usize,
@@ -143,10 +260,7 @@ pub(super) fn apply_workspace_edit(
     window: &mut Window,
     cx: &mut App,
 ) {
-    open_workspace_document(root, relative, window, cx);
-    if let Some(editor) = cx.global::<EditorDocuments>().editor_for(root, relative) {
-        let _ = editor.update(cx, |editor, cx| editor.replace_all(edited, window, cx));
-    }
+    let _ = apply_prepared_edits(root, &[(relative.to_owned(), edited)], window, cx);
 }
 
 pub(super) fn prepare_asset_edits(
@@ -238,6 +352,34 @@ pub(super) fn apply_prepared_edits(
     window: &mut Window,
     cx: &mut App,
 ) -> Result<(), String> {
+    apply_prepared_edits_impl(root, edits, true, window, cx)
+}
+
+fn apply_prepared_edits_impl(
+    root: &Path,
+    edits: &[(PathBuf, String)],
+    record: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> Result<(), String> {
+    let changes = if record {
+        edits
+            .iter()
+            .map(|(path, after)| {
+                let before = cx
+                    .global::<EditorDocuments>()
+                    .source(root, path)
+                    .ok_or_else(|| format!("{} unavailable", path.display()))?;
+                Ok(SourceChange {
+                    path: path.clone(),
+                    before,
+                    after: after.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?
+    } else {
+        Vec::new()
+    };
     let mut editors = Vec::with_capacity(edits.len());
     for (path, _) in edits {
         open_workspace_document(root, path, window, cx);
@@ -252,6 +394,10 @@ pub(super) fn apply_prepared_edits(
         editor.update(cx, |editor, cx| {
             editor.replace_all(source.clone(), window, cx)
         });
+    }
+    if record {
+        cx.global_mut::<EditorDocuments>()
+            .record_source_transaction(root, changes);
     }
     Ok(())
 }
@@ -323,5 +469,47 @@ pub(super) fn common_value(values: impl IntoIterator<Item = String>) -> String {
         first
     } else {
         "Mixed".to_owned()
+    }
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+
+    #[test]
+    fn multi_file_source_edit_is_one_undo_step() {
+        let mut history = SourceHistory::default();
+        history.record(vec![
+            SourceChange {
+                path: "assets.yaml".into(),
+                before: "old asset".into(),
+                after: "new asset".into(),
+            },
+            SourceChange {
+                path: "scripts/main.shou".into(),
+                before: "old reference".into(),
+                after: "new reference".into(),
+            },
+        ]);
+        assert_eq!(history.next(true).unwrap().len(), 2);
+        history.finish(true);
+        assert!(history.next(true).is_none());
+        assert_eq!(history.next(false).unwrap().len(), 2);
+        history.finish(false);
+        assert_eq!(history.next(true).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_new_source_edit_discards_redo() {
+        let mut history = SourceHistory::default();
+        let change = |before: &str, after: &str| SourceChange {
+            path: "assets.yaml".into(),
+            before: before.into(),
+            after: after.into(),
+        };
+        history.record(vec![change("a", "b")]);
+        history.finish(true);
+        history.record(vec![change("a", "c")]);
+        assert!(history.next(false).is_none());
     }
 }

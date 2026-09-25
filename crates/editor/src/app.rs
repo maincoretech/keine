@@ -25,9 +25,7 @@ use gpui_kit::component::input::{
 };
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, Root, Sizable as _, Theme, ThemeMode, WindowExt as _,
-};
+use gpui_kit::component::{Icon, IconName, Root, Sizable as _, Theme, ThemeMode, WindowExt as _};
 use gpui_kit::{
     Anchor, Animation, AnimationExt as _, AnyElement, AnyView, App, AppContext as _, Axis, Bounds,
     ClickEvent, ClipboardItem, Context, Div, DragMoveEvent, Element, Empty, Entity, EventEmitter,
@@ -52,7 +50,7 @@ use crate::file_ops::{self, ImportResult};
 use crate::instance::{InstanceReceiver, PrimaryInstance, Startup, acquire_or_forward};
 use crate::migration::MigrationPlan;
 use crate::persistence::{AppPersistence, BlockPickerPreferences};
-use crate::preview::{PreviewController, PreviewLifecycle, PreviewMode, map_preview_point};
+use crate::preview::{PreviewController, PreviewLifecycle, map_preview_point};
 use crate::project_key::ProjectKey;
 use crate::projection::{
     BlockKind, EiyashouProjection, MoveDirection, SourceField, TextBlockMetadata,
@@ -71,6 +69,7 @@ mod view;
 use dock::editor_drop_placement;
 use dock::{ProjectWorkspace, install_default_layout};
 use edits::*;
+use files::FileHistory;
 use view::*;
 
 const CANVAS: u32 = 0x070809;
@@ -95,6 +94,7 @@ gpui_kit::assets::icon_assets!(
         GitBranch,
         GripVertical,
         Image,
+        Images,
         ListFilter,
         MessageSquarePlus,
         MessageSquareText,
@@ -103,6 +103,7 @@ gpui_kit::assets::icon_assets!(
         PersonStanding,
         Repeat2,
         SlidersHorizontal,
+        Square,
         Volume2,
         Workflow,
     ]
@@ -142,6 +143,7 @@ const ACTIVITY_ICON_SIZE_PX: f32 = 18.;
 const EDITOR_GUTTER_TRIM_PX: f32 = 18.;
 const TAB_MOTION_DURATION: Duration = Duration::from_millis(140);
 const PREVIEW_POLL_INTERVAL: Duration = Duration::from_millis(16);
+const PREVIEW_SOURCE_DEBOUNCE: Duration = Duration::from_millis(100);
 const FILE_CONTEXT_MENU_WIDTH_PX: f32 = 144.;
 const SCENE_CONTEXT_MENU_WIDTH_PX: f32 = 154.;
 const ASSET_FILTER_MENU_WIDTH_PX: f32 = 240.;
@@ -177,7 +179,13 @@ actions!(
         AcceptBlockPicker,
         CloseBlockPicker,
         MoveBlocksUp,
-        MoveBlocksDown
+        MoveBlocksDown,
+        UndoBlocks,
+        RedoBlocks,
+        UndoFiles,
+        RedoFiles,
+        UndoSources,
+        RedoSources
     ]
 );
 
@@ -285,6 +293,7 @@ struct WorkspaceDocuments {
     block_selection: Option<(PathBuf, Vec<usize>)>,
     asset_selection: Vec<AssetKey>,
     diagnostics: Vec<keine_authoring::Diagnostic>,
+    source_history: SourceHistory,
     dock: Option<WeakEntity<DockArea>>,
     document_node: Option<NodeId>,
     panels: HashMap<PathBuf, PanelId>,
@@ -333,6 +342,7 @@ impl EditorDocuments {
                     block_selection: None,
                     asset_selection: Vec::new(),
                     diagnostics: Vec::new(),
+                    source_history: SourceHistory::default(),
                     dock: None,
                     document_node: None,
                     panels: HashMap::new(),
@@ -466,6 +476,18 @@ impl EditorDocuments {
             .manager
             .document(path)
             .is_none_or(|document| !document.borrow().is_dirty())
+    }
+
+    fn has_open_documents_under(&mut self, root: &Path, path: &Path) -> bool {
+        self.ensure_workspace(root).is_ok_and(|workspace| {
+            workspace.editors.iter().any(|(relative, editor)| {
+                (relative == path || relative.starts_with(path)) && editor.upgrade().is_some()
+            }) || workspace.manager.documents().any(|document| {
+                let document = document.borrow();
+                (document.relative_path() == path || document.relative_path().starts_with(path))
+                    && document.is_dirty()
+            })
+        })
     }
 
     fn adopt_manifest_update(
@@ -1040,6 +1062,7 @@ struct WorkbenchPanel {
     block_selection_anchor: Option<usize>,
     draft_text: Option<DraftTextBlock>,
     block_drop_target: Option<usize>,
+    block_dragging: Option<HashSet<usize>>,
     block_picker_open: bool,
     block_picker_index: usize,
     block_picker_category: Option<&'static str>,
@@ -1068,7 +1091,9 @@ struct WorkbenchPanel {
     asset_inspector_subscriptions: Vec<Subscription>,
     file_selection: Option<PathBuf>,
     file_collapsed: HashSet<PathBuf>,
+    file_drop_target: Option<(PathBuf, Bounds<Pixels>)>,
     file_clipboard: Option<PathBuf>,
+    file_history: FileHistory,
     file_edit: Option<FileEditMode>,
     file_name_input: Entity<InputState>,
     file_commit_requested: bool,
@@ -1177,7 +1202,8 @@ impl Render for FileDrag {
             .py_1()
             .rounded(px(5.))
             .bg(rgb(SURFACE))
-            .text_xs()
+            .text_size(px(11.))
+            .text_color(rgb(INK))
             .child(
                 self.relative
                     .file_name()
@@ -1293,6 +1319,7 @@ impl WorkbenchPanel {
                 block_selection_anchor: None,
                 draft_text: None,
                 block_drop_target: None,
+                block_dragging: None,
                 block_picker_open: false,
                 block_picker_index: 0,
                 block_picker_category: None,
@@ -1321,7 +1348,9 @@ impl WorkbenchPanel {
                 asset_inspector_subscriptions: Vec::new(),
                 file_selection: None,
                 file_collapsed: HashSet::new(),
+                file_drop_target: None,
                 file_clipboard: None,
+                file_history: FileHistory::default(),
                 file_edit: None,
                 file_name_input: file_name_input.clone(),
                 file_commit_requested: false,
@@ -1442,9 +1471,39 @@ impl WorkbenchPanel {
                                 let epoch = panel.recovery_epoch;
                                 let document = document_for_change.clone();
                                 let root = root.clone();
-                                let relative = relative.clone();
                                 cx.global_mut::<EditorDocuments>()
                                     .set_notice(&root, "Unsaved changes");
+                                if relative
+                                    .extension()
+                                    .and_then(|extension| extension.to_str())
+                                    == Some("shou")
+                                {
+                                    let preview_root = root.clone();
+                                    let preview_relative = relative.clone();
+                                    let preview_document = document.clone();
+                                    cx.spawn(async move |panel, cx| {
+                                        cx.background_executor()
+                                            .timer(PREVIEW_SOURCE_DEBOUNCE)
+                                            .await;
+                                        let _ = panel.update(cx, |panel, cx| {
+                                            if panel.recovery_epoch == epoch
+                                                && let Ok(preview) = cx
+                                                    .global_mut::<EditorDocuments>()
+                                                    .preview(&preview_root)
+                                            {
+                                                preview.apply_snapshot(
+                                                    preview_relative,
+                                                    preview_document
+                                                        .borrow()
+                                                        .contents()
+                                                        .as_bytes()
+                                                        .to_vec(),
+                                                );
+                                            }
+                                        });
+                                    })
+                                    .detach();
+                                }
                                 cx.spawn(async move |panel, cx| {
                                     cx.background_executor()
                                         .timer(Duration::from_millis(350))
@@ -1460,23 +1519,6 @@ impl WorkbenchPanel {
                                                 };
                                             cx.global_mut::<EditorDocuments>()
                                                 .set_notice(&root, notice);
-                                            if relative
-                                                .extension()
-                                                .and_then(|extension| extension.to_str())
-                                                == Some("shou")
-                                                && let Ok(preview) = cx
-                                                    .global_mut::<EditorDocuments>()
-                                                    .preview(&root)
-                                            {
-                                                preview.apply_snapshot(
-                                                    relative.clone(),
-                                                    document
-                                                        .borrow()
-                                                        .contents()
-                                                        .as_bytes()
-                                                        .to_vec(),
-                                                );
-                                            }
                                             cx.refresh_windows();
                                         }
                                     });
@@ -1807,6 +1849,29 @@ fn install_close_guard(window: &mut Window, workbench: WeakEntity<WorkbenchWindo
 }
 
 impl WorkbenchWindow {
+    fn undo_sources(&mut self, _: &UndoSources, window: &mut Window, cx: &mut Context<Self>) {
+        self.replay_sources(true, window, cx);
+    }
+
+    fn redo_sources(&mut self, _: &RedoSources, window: &mut Window, cx: &mut Context<Self>) {
+        self.replay_sources(false, window, cx);
+    }
+
+    fn replay_sources(&mut self, undo: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(root) = self
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.session.root())
+        else {
+            return;
+        };
+        match replay_source_history(root, undo, window, cx) {
+            Ok(true) => cx.refresh_windows(),
+            Ok(false) => {}
+            Err(error) => window.push_notification(Notification::warning(error), cx),
+        }
+    }
+
     fn empty(
         editor: WeakEntity<EditorApp>,
         persistence: AppPersistence,
@@ -2281,13 +2346,17 @@ impl WorkbenchWindow {
                         this.show_tool(ToolKind::Explorer, window, cx)
                     })),
                 )
-                .child(activity_divider())
                 .when(self.workspace.is_some(), |this| {
                     this.child(
-                        activity_tool("activity-assets", IconName::Palette, assets_open, "Assets")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.show_tool(ToolKind::Assets, window, cx)
-                            })),
+                        activity_tool(
+                            "activity-assets",
+                            AssetIconName::Images,
+                            assets_open,
+                            "Assets",
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.show_tool(ToolKind::Assets, window, cx)
+                        })),
                     )
                     .child(
                         activity_tool(
@@ -2565,6 +2634,8 @@ impl Render for WorkbenchWindow {
             .on_action(cx.listener(Self::save_all))
             .on_action(cx.listener(Self::toggle_engine))
             .on_action(cx.listener(Self::migrate_eiyashou))
+            .on_action(cx.listener(Self::undo_sources))
+            .on_action(cx.listener(Self::redo_sources))
             .relative()
             .size_full()
             .flex()
@@ -2605,7 +2676,7 @@ fn icon_hint(label: &'static str) -> impl Fn(&mut Window, &mut App) -> AnyView {
 
 fn activity_tool(
     id: &'static str,
-    icon: IconName,
+    icon: impl gpui_kit::assets::IconNamed,
     active: bool,
     hint: &'static str,
 ) -> Stateful<Div> {
@@ -3021,6 +3092,18 @@ pub fn run() -> ExitCode {
                 KeyBinding::new("delete", DeleteBlocks, Some("KeineBlockView")),
                 KeyBinding::new("alt-up", MoveBlocksUp, Some("KeineBlockView")),
                 KeyBinding::new("alt-down", MoveBlocksDown, Some("KeineBlockView")),
+                KeyBinding::new("cmd-z", UndoBlocks, Some("KeineBlockView")),
+                KeyBinding::new("cmd-shift-z", RedoBlocks, Some("KeineBlockView")),
+                KeyBinding::new("ctrl-z", UndoBlocks, Some("KeineBlockView")),
+                KeyBinding::new("ctrl-y", RedoBlocks, Some("KeineBlockView")),
+                KeyBinding::new("cmd-z", UndoFiles, Some("KeineExplorer")),
+                KeyBinding::new("cmd-shift-z", RedoFiles, Some("KeineExplorer")),
+                KeyBinding::new("ctrl-z", UndoFiles, Some("KeineExplorer")),
+                KeyBinding::new("ctrl-y", RedoFiles, Some("KeineExplorer")),
+                KeyBinding::new("cmd-z", UndoSources, Some("KeineWorkbench")),
+                KeyBinding::new("cmd-shift-z", RedoSources, Some("KeineWorkbench")),
+                KeyBinding::new("ctrl-z", UndoSources, Some("KeineWorkbench")),
+                KeyBinding::new("ctrl-y", RedoSources, Some("KeineWorkbench")),
             ]);
             let editor = cx.new(|cx| EditorApp::new(cx.weak_entity(), persistence, instance));
             cx.set_global(EditorAppOwner {
@@ -3319,6 +3402,19 @@ mod tests {
                     .is_some(),
                 "missing icon for {}",
                 kind.label()
+            );
+        }
+    }
+
+    #[test]
+    fn preview_transport_icons_are_present_in_the_editor_asset_source() {
+        for running in [false, true] {
+            let icon = preview_transport_icon(running);
+            assert!(
+                gpui_kit::AssetSource::load(&EditorAssets, icon.path().as_ref())
+                    .unwrap()
+                    .is_some(),
+                "missing Preview transport icon for running={running}"
             );
         }
     }

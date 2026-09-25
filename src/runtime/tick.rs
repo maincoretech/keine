@@ -1,6 +1,5 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-#[cfg(any(test, feature = "hot-reload"))]
 use keine_core::Program;
 use keine_core::State;
 use keine_core::step;
@@ -834,8 +833,7 @@ fn finish_editor_presentation(preview: &mut State) -> bool {
 /// unlocks so authors can iterate near the current branch. Execution frames,
 /// read positions, backlog, stage, audio and open UI interactions are rebuilt
 /// from the beginning of the selected scene.
-#[cfg(feature = "hot-reload")]
-fn restart_after_program_reload(state: &mut State, program: Program) {
+pub(crate) fn restart_after_program_reload(state: &mut State, program: Program) {
     let next_stage_revision = state.stage_revision.wrapping_add(1);
     let previous_scene = state.current_scene.clone();
     let was_ended = state.ended;

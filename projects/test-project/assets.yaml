@@ -1,0 +1,18 @@
+backgrounds:
+  day:
+    path: assets/backgrounds/calibration_day.webp
+    tags: [scene, daylight]
+  sunset:
+    path: assets/backgrounds/calibration_sunset.webp
+    tags: [scene, evening]
+figures:
+  aya_smile:
+    path: assets/characters/aya_smile.webp
+    tags: [aya, happy]
+  aya_thinking:
+    path: assets/characters/aya_thinking.webp
+    tags: [aya, thoughtful]
+se:
+  click:
+    path: assets/audio/timeline-click.opus
+    tags: [ui, short]

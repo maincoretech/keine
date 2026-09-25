@@ -1,0 +1,69 @@
+# Kēne LetsGal 1.11.0 Feature Lab
+
+此目录保留原 LetsGal 1.11.0 回归工程，覆盖 Kēne 已接入的完整时间轴、
+立绘皮肤、视口相对高度、玩家确认等待、跨章节调用与播放控制。它不依赖 LetsGal Studio、
+扩展、注入或 `dev --sync`。
+
+```bash
+cargo validate tests/fixtures/letsgal-timeline
+cargo dev tests/fixtures/letsgal-timeline
+```
+
+进入标题页后点击 `START`，按画面中的 `10-00` 至 `10-10` 编号逐项验收。详细预期见
+[ACCEPTANCE.md](ACCEPTANCE.md)。
+
+## 覆盖范围
+
+- 79 个已接入 StageProperty；
+- camera、character、sceneLayer 三类目标；
+- camera shake、camera patch、particle、scene、audio 五类时间事件；
+- BGM/SE/VOCAL 时间轴路由、muted、持续时间与淡入淡出；
+- `waitForInput` 的显式玩家确认等待；
+- `chapterFolders` / `chapterTreeOrder` 虚拟目录执行顺序；
+- 默认壳 `dialogueBehavior` 的打字间隔、字符淡入和文字出现效果；
+- 角色皮肤属性、block 锁定皮肤和全局/表情级视口高度；
+- `updateCharacter` 在场换表情、换位缓动及缺席不入场语义；
+- 跨章节 fragment 调用与返回；
+- muted、repeat、playbackRate、blocking；
+- 原生句尾退格、连续退格和删完后等待一次新点击；
+- linear、ease-in、ease-out、ease-in-out 四种插值；
+- 共享时间轴上的变换、传统镜头、光学、模糊、环境、复古与遮罩效果；
+- 1920×1080 设计分辨率和 16:9 视口裁切。
+
+WebGAL 命令覆盖脚本已移至 `tests/fixtures/webgal-showcase/`，仅作为 parser/IR 自动化
+回归输入。编辑器的原生格式测试工程位于 `projects/test-project/`。
+
+## Portable benchmark 场景
+
+同一章节还包含不可从正常剧情到达的 `fragment-benchmark-journey`。它只供 benchmark
+运行时直接重建，复用正式验收资源组成普通背景、单人立绘、姓名框和 textbox，并分别测量
+对白构图、一次立绘移动和常见背景交叉淡入淡出。portable 报告随后逐项运行 `10-01` 至
+`10-08`，覆盖全部 79 个 StageProperty 和五类时间事件，最后运行一个明确标记的组合极限场景。
+日常、全能力覆盖和极限结果分区展示；相机拆分仍只属于开发诊断。组合 `classic camera`
+另有四个不可从剧情到达的归因时间轴，分别隔离纹理采样（景深/模糊/冲击）、godray 数学、
+胶片噪声和颜色/镜头数学。它们只帮助判断下一次 shader 优化应落在哪里，不新增运行时
+开关、画质档位或发行资源。
+
+`bundle --benchmark` 还会在临时 staging 中生成 204.2 MiB、不可压缩且不会被剧情引用的
+Hakutaku I/O 负载；它不写回本工程，也不会进入普通发行包。负载分别覆盖 Hot 小文件、
+Normal 两次访问准入与 CLOCK 常驻命中、Transient 短资源、Streaming 顺序读取、4 KiB
+随机 seek 和四路并发流。顺序、随机与并发使用互不重叠的 Streaming 文件，避免前一项
+主动预热后一项；报告仍只称 `first-touch`，不声称能够绕过操作系统或硬盘缓存。
+
+普通玩家路径保留一次 60 Hz 发行验收；classic、optical、blur、atmosphere、retro、
+timed-event、四个 classic 归因组和组合压力热点各由三个独立进程重复，报告中给出中位数
+与范围。`1% low`
+按最慢 1% 帧的瞬时 FPS 平均值计算，另列 `p99-equivalent`，不再混用两种定义。逐帧
+样本以制表符分隔的附录写入同一个 `keine-benchmark-report.txt`，用于复核尖峰和事件
+时间；不生成第二个报告文件，正常运行也不启用这些采样与 render-pass diagnostics。
+
+在外接盘上测试时，应把完整 benchmark 目录解压或复制到目标盘，安全弹出并重新连接后，
+直接从盘内运行一次可执行文件。正常 WebP/Opus 解码和渲染成本来自上面的真实工程场景，
+确定性负载只测加密包、分块、缓存和存储 I/O，不冒充合法媒体解码。
+这些吞吐量也只表示 warm Hakutaku/cache 路径，不作为机械盘或 SATA SSD 的物理基准。
+
+## 资源
+
+项目只保留时间轴验收实际引用的校准资源：两张 1920×1080 背景、同一角色的两张透明立绘
+与一条 Opus 时间轴提示音。资源逻辑名统一记录于 `assets/.manifest.json`，没有 WebGAL
+示例资源或生成存档。

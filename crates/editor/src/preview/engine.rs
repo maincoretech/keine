@@ -9,7 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use keine_authoring::{
-    Capability, ClientCommand, ClientMessage, FrameTransportDescriptor, LifecycleState,
+    Capability, ClientCommand, ClientMessage, ErrorCode, FrameTransportDescriptor, LifecycleState,
     MAX_DOCUMENT_BYTES, PROTOCOL_VERSION, PreviewInput, SNAPSHOT_CHUNK_BYTES, ServerMessage,
     ServerResponse, ValidationReport, read_message, write_message,
 };
@@ -288,8 +288,8 @@ impl EngineProcess {
         path: &Path,
         line: usize,
         column: usize,
-    ) -> io::Result<(PathBuf, usize, usize)> {
-        match self.request(ClientCommand::SetExecutionCursor {
+    ) -> io::Result<Option<(PathBuf, usize, usize)>> {
+        match self.request_raw(ClientCommand::SetExecutionCursor {
             document_revision,
             path: path.to_owned(),
             line,
@@ -300,7 +300,14 @@ impl EngineProcess {
                 path,
                 line,
                 column,
-            } if accepted == document_revision => Ok((path, line, column)),
+            } if accepted == document_revision => Ok(Some((path, line, column))),
+            ServerResponse::Error {
+                code: ErrorCode::InvalidRequest,
+                ..
+            } => Ok(None),
+            ServerResponse::Error { code, message } => Err(io::Error::other(format!(
+                "Engine authoring error {code:?}: {message}"
+            ))),
             other => Err(unexpected("source location", &other)),
         }
     }
@@ -332,6 +339,15 @@ impl EngineProcess {
     }
 
     fn request(&mut self, command: ClientCommand) -> io::Result<ServerResponse> {
+        match self.request_raw(command)? {
+            ServerResponse::Error { code, message } => Err(io::Error::other(format!(
+                "Engine authoring error {code:?}: {message}"
+            ))),
+            response => Ok(response),
+        }
+    }
+
+    fn request_raw(&mut self, command: ClientCommand) -> io::Result<ServerResponse> {
         let request_id = self.next_request;
         self.next_request = self.next_request.wrapping_add(1).max(1);
         write_message(
@@ -351,12 +367,7 @@ impl EngineProcess {
                 "Engine returned a stale or mismatched authoring response",
             ));
         }
-        match response.response {
-            ServerResponse::Error { code, message } => Err(io::Error::other(format!(
-                "Engine authoring error {code:?}: {message}"
-            ))),
-            response => Ok(response),
-        }
+        Ok(response.response)
     }
 }
 
