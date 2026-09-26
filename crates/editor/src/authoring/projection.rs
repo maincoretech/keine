@@ -415,6 +415,7 @@ impl EiyashouProjection {
         source: &str,
         selected: &HashSet<usize>,
         target_start: usize,
+        after: bool,
     ) -> Result<String, BlockEditError> {
         if selected.contains(&target_start) {
             return Ok(source.to_owned());
@@ -490,7 +491,8 @@ impl EiyashouProjection {
         let insertion = order
             .iter()
             .position(|index| *index == target_index)
-            .ok_or(BlockEditError::NoMoveTarget)?;
+            .ok_or(BlockEditError::NoMoveTarget)?
+            + usize::from(after);
         order.splice(insertion..insertion, selected_order);
         replace_block_texts(source, &siblings, &siblings, &order)
     }
@@ -1649,9 +1651,49 @@ mod tests {
         let selected = HashSet::from([blocks[0].source_range.start]);
         assert_eq!(
             projection
-                .move_blocks_to(source, &selected, blocks[2].source_range.start)
+                .move_blocks_to(source, &selected, blocks[2].source_range.start, false)
                 .unwrap(),
             "scene start {\n  background(day),\n  \"one\",\n  wait(1s),\n  return\n}\n"
+        );
+        assert_eq!(
+            projection
+                .move_blocks_to(source, &selected, blocks[3].source_range.start, true)
+                .unwrap(),
+            "scene start {\n  background(day),\n  wait(1s),\n  return,\n  \"one\"\n}\n"
+        );
+    }
+
+    #[test]
+    fn reordered_text_blocks_keep_their_text_and_new_offsets() {
+        let source = "scene opening {\n  background(day),\n  \"First narration.\",\n  aya: \"A different line.\",\n  \"Second narration wraps\\nonto another line.\"\n}\n";
+        let projection = EiyashouProjection::parse(source);
+        let blocks = &projection.scenes[0].blocks;
+        let selected = HashSet::from([blocks[1].source_range.start]);
+        let edited = projection
+            .move_blocks_to(source, &selected, blocks[3].source_range.start, true)
+            .unwrap();
+        let dialogues = crate::authoring::dialogues_for_source(
+            std::path::Path::new("scripts/main.shou"),
+            &edited,
+        );
+        let texts = dialogues
+            .iter()
+            .filter(|dialogue| dialogue.editable)
+            .map(|dialogue| (dialogue.text_range.start, dialogue.text.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            texts.iter().map(|(_, text)| *text).collect::<Vec<_>>(),
+            [
+                "A different line.",
+                "Second narration wraps\nonto another line.",
+                "First narration.",
+            ]
+        );
+        assert!(texts.windows(2).all(|pair| pair[0].0 < pair[1].0));
+        assert!(
+            dialogues
+                .iter()
+                .all(|dialogue| { edited.get(dialogue.text_range.clone()).is_some() })
         );
     }
 
@@ -1669,7 +1711,7 @@ mod tests {
         );
         assert_eq!(
             projection
-                .move_blocks_to(source, &selected, blocks[4].source_range.start)
+                .move_blocks_to(source, &selected, blocks[4].source_range.start, false)
                 .unwrap(),
             "scene start {\n  \"a\",\n  \"c\",\n  \"b\",\n  \"d\",\n  \"e\"\n}\n"
         );
@@ -1693,7 +1735,7 @@ mod tests {
             Err(BlockEditError::NoMoveTarget)
         );
         assert_eq!(
-            projection.move_blocks_to(source, &selected, blocks[0].source_range.start),
+            projection.move_blocks_to(source, &selected, blocks[0].source_range.start, false),
             Err(BlockEditError::NoMoveTarget)
         );
     }

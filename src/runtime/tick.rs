@@ -118,6 +118,7 @@ pub struct TickContext<'w, 's> {
     input_scope: Res<'w, UiInputScope>,
     loading: Res<'w, AssetLoadingGate>,
     editor_sync: Option<Res<'w, EditorSyncSession>>,
+    authoring_preview: Option<Res<'w, super::preview::AuthoringPreviewSession>>,
     auto_timer: Local<'s, f64>,
     typewriter_clock: Local<'s, TypewriterClock>,
     #[cfg(feature = "hot-reload")]
@@ -130,6 +131,9 @@ pub struct TickContext<'w, 's> {
 /// Advances input, text timing, script hot reload, and transition state.
 pub fn tick(mut context: TickContext) {
     let delta_seconds = context.time.delta_secs_f64();
+    // Legacy Studio sync is a view-only cursor follower. The native authoring
+    // Preview also owns its source position, but must accept direct input.
+    let studio_sync = context.editor_sync.is_some() && context.authoring_preview.is_none();
     #[cfg(feature = "hot-reload")]
     let mut state_changed = reload_scripts_if_changed(&mut context, delta_seconds as f32);
     #[cfg(not(feature = "hot-reload"))]
@@ -152,7 +156,7 @@ pub fn tick(mut context: TickContext) {
         }
         return;
     }
-    if context.editor_sync.is_none() {
+    if !studio_sync {
         update_toggle_shortcuts(
             &context.actions,
             &mut context.toggles,
@@ -160,7 +164,7 @@ pub fn tick(mut context: TickContext) {
         );
     }
     let presentation_was_blocked = context.state.presentation_blocked();
-    if context.editor_sync.is_none() && context.actions.skip_video {
+    if !studio_sync && context.actions.skip_video {
         let before = context.state.videos.len();
         context
             .state
@@ -168,7 +172,7 @@ pub fn tick(mut context: TickContext) {
             .retain(|_, video| !video.spec.skippable || video.spec.looped);
         state_changed |= before != context.state.videos.len();
     }
-    let presentation_advance = context.editor_sync.is_none()
+    let presentation_advance = !studio_sync
         && advance_requested(
             &context.actions,
             &context.buttons,
@@ -192,7 +196,7 @@ pub fn tick(mut context: TickContext) {
         presentation_advance,
     );
     if presentation_was_blocked {
-        if context.editor_sync.is_none() && !context.state.presentation_blocked() {
+        if !studio_sync && !context.state.presentation_blocked() {
             let progress = step_once(
                 context.state.bypass_change_detection(),
                 &mut context.checkpoint,
@@ -229,7 +233,7 @@ pub fn tick(mut context: TickContext) {
         typewriter_speed,
         &mut context.typewriter_clock,
     );
-    if context.editor_sync.is_some() {
+    if studio_sync {
         if context.toggles.auto {
             context.toggles.auto = false;
         }
@@ -681,7 +685,9 @@ fn sync_editor_position(
         preview = new_preview();
         preview.current_scene = scene_name.to_owned();
         preview.ended = false;
-        let _ = seek_editor_state(&mut preview, scene_name, selected_start, target);
+        if !seek_editor_state(&mut preview, scene_name, selected_start, target) {
+            return false;
+        }
     }
     log::info!(
         "editor seek · fragment {} · block {}",
@@ -2582,6 +2588,48 @@ mod tests {
         assert_eq!(state.dialogue.as_ref().unwrap().text, "fresh/2");
         assert_eq!(state.vars["route"], Value::Str("fresh".into()));
         assert_eq!(state.global_vars["ending"], Value::Int(2));
+    }
+
+    #[test]
+    fn editor_seek_rejects_a_block_that_cannot_be_replayed() {
+        let mut state = State::new();
+        state.install_program(Program::from_scenes([
+            (
+                "main".into(),
+                vec![
+                    Action::ChangeScene("end".into()),
+                    Action::Say {
+                        speaker: String::new(),
+                        text: "unreachable".into(),
+                        options: Default::default(),
+                    },
+                ],
+            ),
+            ("end".into(), vec![Action::End]),
+        ]));
+        state.script_entry = Some("main".into());
+        state.current_scene = "main".into();
+        state.ended = false;
+        let manifest = LocalAssetManifest(std::collections::HashMap::from([(
+            "main".into(),
+            LocalSceneAssets {
+                action_spans: vec![
+                    keine_loader::SourceSpan { line: 1, column: 1 },
+                    keine_loader::SourceSpan { line: 2, column: 1 },
+                ],
+                ..default()
+            },
+        )]));
+
+        assert!(!sync_editor_position(
+            &mut state,
+            &manifest,
+            "main",
+            2,
+            keine_loader::ProjectInitialState::default(),
+        ));
+        assert_eq!(state.current_scene, "main");
+        assert_eq!(state.cursor, 0);
     }
 
     #[test]

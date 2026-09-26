@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use keine_authoring::{SharedFrameConsumer, remove_stale_mapping};
+use keine_authoring::{PreviewInput, SharedFrameConsumer, remove_stale_mapping};
 use keine_editor::engine::EngineProcess;
 
 #[test]
@@ -153,6 +153,23 @@ fn live_source_patch_publishes_a_new_revision() {
             .unwrap()
             .is_some(),
         "selecting another Block must resolve a source position"
+    );
+    let selected = child.execution_location(2).unwrap().unwrap();
+    assert_eq!(selected.0, source_path);
+    assert_eq!(selected.1, 5);
+    let mut advanced = false;
+    for _ in 0..4 {
+        child.input(2, PreviewInput::Advance).unwrap();
+        thread::sleep(Duration::from_millis(120));
+        let location = child.execution_location(2).unwrap();
+        if location.is_some_and(|(_, line, _)| line > selected.1) {
+            advanced = true;
+            break;
+        }
+    }
+    assert!(
+        advanced,
+        "Preview input must move the reported Block position"
     );
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {

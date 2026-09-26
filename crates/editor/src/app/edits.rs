@@ -248,9 +248,63 @@ pub(super) fn set_authoring_selection(
     cx.global_mut::<EditorDocuments>()
         .set_selection(root, relative.clone(), line, column);
     if let Ok(preview) = cx.global_mut::<EditorDocuments>().preview(root) {
-        preview.set_cursor(relative, line + 1, column + 1);
+        preview.seek_cursor(relative, line + 1, column + 1);
     }
     cx.refresh_windows();
+}
+
+pub(super) fn follow_preview_position(
+    root: &Path,
+    relative: &Path,
+    line: usize,
+    column: usize,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    if !relative.starts_with("scripts")
+        || relative.extension().and_then(|value| value.to_str()) != Some("shou")
+    {
+        return false;
+    }
+    let Some(source) = cx.global::<EditorDocuments>().source(root, relative) else {
+        return false;
+    };
+    let line = line.saturating_sub(1);
+    let column = column.saturating_sub(1);
+    let block = projected_block_at(&source, line, column);
+    let current_path = cx
+        .global::<EditorDocuments>()
+        .selection(root)
+        .map(|(path, _, _)| path.clone());
+    if current_path.as_deref() != Some(relative) {
+        open_workspace_document(root, relative, window, cx);
+    }
+    let documents = cx.global_mut::<EditorDocuments>();
+    documents.set_selection(root, relative.to_owned(), line, column);
+    if let Some((_, block)) = &block {
+        documents.set_block_selection(root, relative.to_owned(), vec![block.source_range.start]);
+    } else {
+        documents.clear_block_selection(root);
+    }
+    if let Some(panel) = documents.panel_entity_for(root, relative) {
+        let _ = panel.update(cx, |panel, cx| {
+            let selected = block.as_ref().map(|(_, block)| block.source_range.start);
+            if panel.selected_blocks.len() != usize::from(selected.is_some())
+                || selected.is_some_and(|start| !panel.selected_blocks.contains(&start))
+            {
+                panel.selected_blocks.clear();
+                panel.block_selection_anchor = selected;
+                if let Some((scene, block)) = &block {
+                    panel.selected_blocks.insert(block.source_range.start);
+                    panel.collapsed_scenes.remove(scene);
+                    panel.block_scroll_pending = true;
+                }
+                cx.notify();
+            }
+        });
+    }
+    cx.refresh_windows();
+    true
 }
 
 pub(super) fn apply_workspace_edit(
@@ -458,6 +512,26 @@ pub(super) fn text_voice(source: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
+}
+
+#[cfg(test)]
+mod preview_follow_tests {
+    use super::*;
+
+    #[test]
+    fn native_preview_action_lines_resolve_to_visible_blocks() {
+        let source = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../projects/test-project/scripts/main.shou"
+        ))
+        .unwrap();
+        for line in [4, 5, 6, 10, 14, 15, 16, 21, 24, 31] {
+            assert!(
+                projected_block_at(&source, line - 1, 2).is_some(),
+                "Preview source line {line} should select a Block"
+            );
+        }
+    }
 }
 
 pub(super) fn common_value(values: impl IntoIterator<Item = String>) -> String {

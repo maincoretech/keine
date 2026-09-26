@@ -473,6 +473,16 @@ fn handle(
                 column: *column,
             })
         }
+        ClientCommand::GetExecutionLocation { document_revision } => {
+            require_revision(session, *document_revision)?;
+            let Some(runtime) = session.runtime.as_ref() else {
+                return Err((ErrorCode::InvalidRequest, "preview is not running".into()));
+            };
+            Ok(ServerResponse::ExecutionLocation {
+                document_revision: *document_revision,
+                location: super::preview::source_location(runtime),
+            })
+        }
         ClientCommand::Ping => Ok(ServerResponse::Pong),
         ClientCommand::Shutdown => Ok(ServerResponse::Bye),
     }

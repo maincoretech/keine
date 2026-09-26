@@ -12,7 +12,7 @@ pub use frame::{
     PixelFormat, SharedFrameConsumer, SharedFrameProducer, remove_stale_mapping,
 };
 
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 pub const MAX_MESSAGE_BYTES: usize = 256 * 1024;
 pub const MAX_DOCUMENT_BYTES: usize = 1024 * 1024;
 pub const SNAPSHOT_CHUNK_BYTES: usize = 128 * 1024;
@@ -74,6 +74,9 @@ pub enum ClientCommand {
         line: usize,
         column: usize,
     },
+    GetExecutionLocation {
+        document_revision: u64,
+    },
     Ping,
     Shutdown,
 }
@@ -121,6 +124,10 @@ pub enum ServerResponse {
         path: PathBuf,
         line: usize,
         column: usize,
+    },
+    ExecutionLocation {
+        document_revision: u64,
+        location: Option<(PathBuf, usize, usize)>,
     },
     Pong,
     Bye,

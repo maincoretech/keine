@@ -86,8 +86,10 @@ Formal signing and notarization are outside the current P7 scope.
   prebuilt Engine child per project for handshake, validation, diagnostics, source snapshots and
   patches, source/runtime cursor exchange, lifecycle, runtime input, and real embedded Preview.
   Preview is an explicit singleton view placed above Inspector in the default right-hand stack;
-  Engine Start remains manual. Source selection and Preview interaction stay synchronized without
-  separate input modes; edge-triggered visibility pause and bounded
+  Engine Start remains manual. Authoring protocol v4 reports the Engine's executed source location
+  while visible: Block selection seeks the Engine, direct Preview input advances it, and the
+  corresponding Block/scene/file follows without a separate input mode. The older LetsGal Studio
+  sync session remains view-only. Edge-triggered visibility pause and bounded
   Stop/Close cleanup remain independent of layout. Panel visibility comes
   from Dock activation rather than render-frequency inference, so unchanged UI cannot oscillate
   the child and audio between pause/resume. The Engine owns the normal three-camera
@@ -270,6 +272,8 @@ project / package
   restrained close transition from either the close affordance or middle click. A real untracked
   LetsGal project sustained embedded Preview output after the visible-panel lifecycle fix; the
   acceptance bundle and every child process were removed afterward.
+  Text tabs share one highlighter and palette for `.shou`, YAML, Markdown, JSON, and TOML;
+  `.shou` keeps the authoritative native token source, while plain text remains uncolored.
 - T21 Card Editor continuously renders every Scene in the current `.shou` file as a lightweight
   collapsible section. Enter starts a source-free Text draft, then commits and continues even an
   empty block; Shift+Enter adds a line break within the block. Inline Text edits,

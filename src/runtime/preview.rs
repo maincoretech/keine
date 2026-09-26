@@ -34,6 +34,9 @@ pub(crate) struct AuthoringPreviewConfig {
     pub(crate) document_revision: u64,
 }
 
+#[derive(Resource, Default)]
+pub(crate) struct AuthoringPreviewSession;
+
 #[derive(Resource)]
 struct PreviewFramePublisher(SharedFrameProducer);
 
@@ -90,6 +93,7 @@ impl Plugin for AuthoringPreviewPlugin {
             .expect("authoring preview plugin may only be built once");
         app.insert_resource(PreviewFramePublisher(config.producer))
             .insert_resource(PreviewDocumentRevision(config.document_revision))
+            .init_resource::<AuthoringPreviewSession>()
             .init_resource::<PreviewInputQueue>()
             .init_resource::<PreviewDirectInputQueue>()
             .init_resource::<PreviewPointerState>()
@@ -411,6 +415,25 @@ pub(crate) fn seek_source(app: &mut App, path: &Path, line: usize) -> bool {
     changed
 }
 
+pub(crate) fn source_location(app: &App) -> Option<(std::path::PathBuf, usize, usize)> {
+    let world = app.world();
+    let state = world.get_resource::<GameState>()?;
+    let scene = world
+        .get_resource::<LocalAssetManifest>()?
+        .get(&state.current_scene)?;
+    let index = state
+        .cursor
+        .saturating_sub(1)
+        .min(scene.action_spans.len().checked_sub(1)?);
+    let span = scene.action_spans.get(index)?;
+    let path = if scene.source_path.starts_with("scripts") {
+        scene.source_path.clone()
+    } else {
+        Path::new("scripts").join(&scene.source_path)
+    };
+    Some((path, span.line, span.column))
+}
+
 pub(crate) fn wants_continuous_updates(app: &App) -> bool {
     app.world()
         .get_resource::<RuntimeActivity>()
@@ -420,4 +443,62 @@ pub(crate) fn wants_continuous_updates(app: &App) -> bool {
                 RuntimeActivity::Active | RuntimeActivity::Loading
             )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    use keine_core::State;
+    use keine_loader::SourceSpan;
+
+    use super::*;
+
+    #[test]
+    fn source_location_follows_the_executed_action_in_its_script() {
+        let mut app = App::new();
+        let mut state = State::new();
+        state.current_scene = "opening".into();
+        state.cursor = 2;
+        app.insert_resource(GameState(state));
+        app.insert_resource(LocalAssetManifest(HashMap::from([(
+            "opening".into(),
+            LocalSceneAssets {
+                source_path: PathBuf::from("main.shou"),
+                action_spans: vec![
+                    SourceSpan { line: 2, column: 3 },
+                    SourceSpan { line: 4, column: 5 },
+                ],
+                ..default()
+            },
+        )])));
+
+        assert_eq!(
+            source_location(&app),
+            Some((PathBuf::from("scripts/main.shou"), 4, 5))
+        );
+        app.world_mut().resource_mut::<GameState>().cursor = 0;
+        assert_eq!(
+            source_location(&app),
+            Some((PathBuf::from("scripts/main.shou"), 2, 3))
+        );
+        app.world_mut().resource_mut::<LocalAssetManifest>().insert(
+            "ending".into(),
+            LocalSceneAssets {
+                source_path: PathBuf::from("scripts/chapter/ending.shou"),
+                action_spans: vec![SourceSpan { line: 9, column: 2 }],
+                ..default()
+            },
+        );
+        {
+            let mut state = app.world_mut().resource_mut::<GameState>();
+            state.current_scene = "ending".into();
+            state.cursor = 1;
+        }
+        assert_eq!(
+            source_location(&app),
+            Some((PathBuf::from("scripts/chapter/ending.shou"), 9, 2))
+        );
+    }
 }

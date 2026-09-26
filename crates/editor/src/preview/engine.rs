@@ -312,6 +312,19 @@ impl EngineProcess {
         }
     }
 
+    pub fn execution_location(
+        &mut self,
+        document_revision: u64,
+    ) -> io::Result<Option<(PathBuf, usize, usize)>> {
+        match self.request(ClientCommand::GetExecutionLocation { document_revision })? {
+            ServerResponse::ExecutionLocation {
+                document_revision: accepted,
+                location,
+            } if accepted == document_revision => Ok(location),
+            other => Err(unexpected("execution location", &other)),
+        }
+    }
+
     pub fn shutdown(&mut self) -> io::Result<()> {
         if self.closed {
             return Ok(());

@@ -1,6 +1,37 @@
 use super::*;
 
 impl WorkbenchPanel {
+    pub(super) fn schedule_visual_editors_rebuild(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let panel = cx.weak_entity();
+        let window_handle = window.window_handle();
+        // EditorState emits Change after replace_all returns. Rebuild only after
+        // its subscriber has copied the new source into SourceDocument.
+        cx.defer(move |cx| {
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+                let _ = panel.update(cx, |panel, cx| {
+                    panel.rebuild_visual_editors(window, cx);
+                    cx.notify();
+                });
+            });
+        });
+    }
+
+    pub(super) fn hover_block_drop(&mut self, candidate: BlockDropTarget, cx: &mut Context<Self>) {
+        let target = self
+            .block_dragging
+            .as_ref()
+            .filter(|selected| !selected.contains(&candidate.row))
+            .map(|_| candidate);
+        if self.block_drop_target != target {
+            self.block_drop_target = target;
+            cx.notify();
+        }
+    }
+
     pub(super) fn rebuild_visual_editors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.block_text_editors.clear();
         self.visual_subscriptions.clear();
@@ -8,7 +39,7 @@ impl WorkbenchPanel {
         let PanelContent::Document {
             root,
             relative,
-            document: Some(document),
+            document: Some(_),
             editor,
         } = &self.content
         else {
@@ -19,9 +50,13 @@ impl WorkbenchPanel {
         }
 
         let window_handle = window.window_handle();
-        let dialogues = dialogues_for_source(relative, document.borrow().contents());
+        // The source editor already contains replace_all's new value here, while
+        // SourceDocument may not receive its Change event until later. Build
+        // row states from the same revision that the Blocks projection will
+        // render after the event, so moved text cannot bind to old offsets.
+        let source = editor.read(cx).value().to_string();
+        let dialogues = dialogues_for_source(relative, &source);
         for dialogue in dialogues.into_iter().filter(|dialogue| dialogue.editable) {
-            let line = dialogue.line;
             let state = cx.new(|cx| {
                 TextareaState::new(window, cx)
                     .default_value(dialogue.text)
@@ -29,7 +64,6 @@ impl WorkbenchPanel {
                     .auto_grow(1, 6)
                     .submit_on_enter(true)
             });
-            let document = document.clone();
             let source_editor = editor.clone();
             let root = root.clone();
             let relative = relative.clone();
@@ -50,11 +84,28 @@ impl WorkbenchPanel {
                 if !matches!(event, InputEvent::Change) {
                     return;
                 }
+                // A drag or structural edit replaces every row state. Ignore
+                // events queued by a retired state, and resolve live rows by
+                // their updated source offset rather than their original line.
+                let Some(text_start) = panel
+                    .block_text_editors
+                    .iter()
+                    .find(|editor| editor.state.entity_id() == state_for_change.entity_id())
+                    .map(|editor| editor.text_start)
+                else {
+                    return;
+                };
                 let value = state_for_change.read(cx).value().to_string();
-                let source = document.borrow().contents().to_owned();
+                let source = source_editor.read(cx).value().to_string();
                 let current = dialogues_for_source(&relative, &source)
                     .into_iter()
-                    .find(|dialogue| dialogue.line == line);
+                    .find(|dialogue| dialogue.text_range.start == text_start);
+                if current
+                    .as_ref()
+                    .is_some_and(|dialogue| dialogue.text == value)
+                {
+                    return;
+                }
                 let result = current
                     .as_ref()
                     .ok_or_else(|| "dialogue no longer exists".to_owned())
@@ -156,7 +207,7 @@ impl WorkbenchPanel {
         };
         self.block_picker_open = false;
         self.insert_from_palette(kind, window, cx);
-        self.rebuild_visual_editors(window, cx);
+        self.schedule_visual_editors_rebuild(window, cx);
         self.focus.focus(window, cx);
         cx.notify();
     }
@@ -686,6 +737,7 @@ impl WorkbenchPanel {
         &mut self,
         drag: &BlockDrag,
         target_start: usize,
+        after: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -703,6 +755,7 @@ impl WorkbenchPanel {
             &source,
             &drag.selected,
             target_start,
+            after,
         ) {
             Ok(edited) if edited != source => {
                 self.apply_block_source(edited, "Blocks moved", window, cx)
@@ -766,7 +819,7 @@ impl WorkbenchPanel {
         editor.update(cx, |editor, cx| editor.replace_all(edited, window, cx));
         self.selected_blocks.clear();
         self.block_selection_anchor = None;
-        self.rebuild_visual_editors(window, cx);
+        self.schedule_visual_editors_rebuild(window, cx);
         self.focus.focus(window, cx);
         cx.global_mut::<EditorDocuments>()
             .clear_block_selection(&root);
@@ -808,7 +861,7 @@ impl WorkbenchPanel {
             Ok(true) => {
                 self.selected_blocks.clear();
                 self.block_selection_anchor = None;
-                self.rebuild_visual_editors(window, cx);
+                self.schedule_visual_editors_rebuild(window, cx);
                 cx.global_mut::<EditorDocuments>()
                     .clear_block_selection(&root);
                 cx.refresh_windows();
@@ -932,7 +985,7 @@ impl WorkbenchPanel {
                     self.collapsed_scenes.insert(name.clone());
                 }
                 self.scene_edit = None;
-                self.rebuild_visual_editors(window, cx);
+                self.schedule_visual_editors_rebuild(window, cx);
                 self.set_block_notice(format!("Scene {name} updated"), cx);
             }
             Err(error) => self.set_block_notice(format!("Scene edit blocked: {error}"), cx),

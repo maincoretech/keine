@@ -55,7 +55,7 @@ use crate::project_key::ProjectKey;
 use crate::projection::{
     BlockKind, EiyashouProjection, MoveDirection, SourceField, TextBlockMetadata,
 };
-use crate::syntax::eiyashou_highlighter_factory;
+use crate::syntax::editor_highlighter_factory;
 use crate::workspace::{WorkspaceEntryKind, WorkspaceFile, WorkspaceSession};
 
 mod blocks;
@@ -297,6 +297,7 @@ struct WorkspaceDocuments {
     dock: Option<WeakEntity<DockArea>>,
     document_node: Option<NodeId>,
     panels: HashMap<PathBuf, PanelId>,
+    panel_entities: HashMap<PathBuf, WeakEntity<WorkbenchPanel>>,
     editors: HashMap<PathBuf, WeakEntity<EditorState>>,
     preview: Arc<PreviewController>,
     preview_panel: Option<PanelId>,
@@ -346,6 +347,7 @@ impl EditorDocuments {
                     dock: None,
                     document_node: None,
                     panels: HashMap::new(),
+                    panel_entities: HashMap::new(),
                     editors: HashMap::new(),
                     preview: PreviewController::new(key),
                     preview_panel: None,
@@ -583,10 +585,26 @@ impl EditorDocuments {
         }
     }
 
-    fn register_panel(&mut self, root: &Path, relative: PathBuf, panel: PanelId) {
+    fn register_panel(
+        &mut self,
+        root: &Path,
+        relative: PathBuf,
+        panel: PanelId,
+        entity: WeakEntity<WorkbenchPanel>,
+    ) {
         if let Ok(workspace) = self.ensure_workspace(root) {
-            workspace.panels.insert(relative, panel);
+            workspace.panels.insert(relative.clone(), panel);
+            workspace.panel_entities.insert(relative, entity);
         }
+    }
+
+    fn panel_entity_for(&self, root: &Path, relative: &Path) -> Option<WeakEntity<WorkbenchPanel>> {
+        let key = ProjectKey::from_path(root).ok()?;
+        self.workspaces
+            .get(key.path())?
+            .panel_entities
+            .get(relative)
+            .cloned()
     }
 
     fn register_editor(&mut self, root: &Path, relative: PathBuf, editor: WeakEntity<EditorState>) {
@@ -609,6 +627,7 @@ impl EditorDocuments {
             && workspace.panels.get(relative) == Some(&panel)
         {
             workspace.panels.remove(relative);
+            workspace.panel_entities.remove(relative);
             workspace.editors.remove(relative);
         }
     }
@@ -948,9 +967,7 @@ impl PanelContent {
                         .default_value(contents)
                         .language(language)
                         .folding(false);
-                    if language == "eiyashou" {
-                        editor.set_highlighter_factory(eiyashou_highlighter_factory(), cx);
-                    }
+                    editor.set_highlighter_factory(editor_highlighter_factory(), cx);
                     editor
                 });
                 Ok(Self::Document {
@@ -1061,7 +1078,7 @@ struct WorkbenchPanel {
     selected_blocks: HashSet<usize>,
     block_selection_anchor: Option<usize>,
     draft_text: Option<DraftTextBlock>,
-    block_drop_target: Option<usize>,
+    block_drop_target: Option<BlockDropTarget>,
     block_dragging: Option<HashSet<usize>>,
     block_picker_open: bool,
     block_picker_index: usize,
@@ -1077,6 +1094,7 @@ struct WorkbenchPanel {
     preview_image: Option<Arc<RenderImage>>,
     preview_frame_id: u64,
     preview_lifecycle: PreviewLifecycle,
+    preview_runtime_position: Option<(PathBuf, usize, usize)>,
     preview_bounds: Arc<Mutex<Option<Bounds<Pixels>>>>,
     _subscriptions: Vec<Subscription>,
     visual_subscriptions: Vec<Subscription>,
@@ -1235,6 +1253,61 @@ struct BlockDrag {
     selected: HashSet<usize>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BlockDropTarget {
+    row: usize,
+    after: bool,
+}
+
+struct BlockDragPreview {
+    label: String,
+    summary: String,
+    icon: AssetIconName,
+    count: usize,
+    width: f32,
+    height: f32,
+}
+
+impl Render for BlockDragPreview {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .w(px(self.width))
+            .h(px(self.height))
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_2()
+            .rounded(px(7.))
+            .bg(rgb(SURFACE_HOVER))
+            .text_sm()
+            .text_color(rgb(INK))
+            .child(Icon::new(AssetIconName::GripVertical).xsmall())
+            .child(Icon::new(self.icon).xsmall())
+            .child(
+                div()
+                    .w(px(64.))
+                    .flex_none()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .text_xs()
+                    .text_color(rgb(PRIMARY))
+                    .child(self.label.clone()),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .whitespace_normal()
+                    .child(if self.count == 1 {
+                        self.summary.clone()
+                    } else {
+                        format!("{} blocks", self.count)
+                    }),
+            )
+    }
+}
+
 #[derive(Clone)]
 struct AssetDrag {
     root: PathBuf,
@@ -1334,6 +1407,7 @@ impl WorkbenchPanel {
                 preview_image: None,
                 preview_frame_id: 0,
                 preview_lifecycle: PreviewLifecycle::Off,
+                preview_runtime_position: None,
                 preview_bounds: Arc::new(Mutex::new(None)),
                 _subscriptions: Vec::new(),
                 visual_subscriptions: Vec::new(),
@@ -1471,8 +1545,18 @@ impl WorkbenchPanel {
                                 let epoch = panel.recovery_epoch;
                                 let document = document_for_change.clone();
                                 let root = root.clone();
-                                cx.global_mut::<EditorDocuments>()
-                                    .set_notice(&root, "Unsaved changes");
+                                let clean = !document.borrow().is_dirty();
+                                let recovery_cleanup = clean
+                                    .then(|| document.borrow_mut().persist_recovery())
+                                    .transpose();
+                                let any_dirty =
+                                    cx.global::<EditorDocuments>().has_dirty_documents(&root);
+                                let notice = match recovery_cleanup {
+                                    Ok(_) if !any_dirty => "Ready".to_owned(),
+                                    Ok(_) => "Unsaved changes".to_owned(),
+                                    Err(error) => format!("Recovery draft cleanup failed: {error}"),
+                                };
+                                cx.global_mut::<EditorDocuments>().set_notice(&root, notice);
                                 if relative
                                     .extension()
                                     .and_then(|extension| extension.to_str())
@@ -1510,13 +1594,19 @@ impl WorkbenchPanel {
                                         .await;
                                     let _ = panel.update(cx, |panel, cx| {
                                         if panel.recovery_epoch == epoch {
-                                            let notice =
-                                                match document.borrow_mut().persist_recovery() {
-                                                    Ok(()) => "Recovery draft saved".to_owned(),
-                                                    Err(error) => {
-                                                        format!("Recovery draft failed: {error}")
-                                                    }
-                                                };
+                                            let clean = !document.borrow().is_dirty();
+                                            let recovery = document.borrow_mut().persist_recovery();
+                                            let any_dirty = cx
+                                                .global::<EditorDocuments>()
+                                                .has_dirty_documents(&root);
+                                            let notice = match recovery {
+                                                Ok(()) if !any_dirty => "Ready".to_owned(),
+                                                Ok(()) if clean => "Unsaved changes".to_owned(),
+                                                Ok(()) => "Recovery draft saved".to_owned(),
+                                                Err(error) => {
+                                                    format!("Recovery draft failed: {error}")
+                                                }
+                                            };
                                             cx.global_mut::<EditorDocuments>()
                                                 .set_notice(&root, notice);
                                             cx.refresh_windows();
@@ -1559,8 +1649,8 @@ impl WorkbenchPanel {
                         };
                         cx.background_executor().timer(interval).await;
                         if panel
-                            .update(cx, |panel, cx| {
-                                if panel.refresh_preview(&root, &controller, cx) {
+                            .update_in(cx, |panel, window, cx| {
+                                if panel.refresh_preview(&root, &controller, window, cx) {
                                     cx.notify();
                                 }
                             })
@@ -1617,7 +1707,12 @@ impl WorkbenchPanel {
                 _ => None,
             };
             let documents = cx.global_mut::<EditorDocuments>();
-            documents.register_panel(&root, relative.clone(), PanelId::from(panel.entity_id()));
+            documents.register_panel(
+                &root,
+                relative.clone(),
+                PanelId::from(panel.entity_id()),
+                panel.downgrade(),
+            );
             if let Some(editor) = editor {
                 documents.register_editor(&root, relative, editor);
             }
@@ -1640,6 +1735,7 @@ impl WorkbenchPanel {
         &mut self,
         root: &Path,
         controller: &PreviewController,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         let snapshot = controller.take_snapshot();
@@ -1647,20 +1743,28 @@ impl WorkbenchPanel {
         cx.global_mut::<EditorDocuments>()
             .set_diagnostics(root, snapshot.diagnostics.clone());
         self.preview_lifecycle = snapshot.lifecycle;
+        let position_changed = self.preview_runtime_position != snapshot.runtime_position;
+        self.preview_runtime_position = snapshot.runtime_position.clone();
+        let followed = position_changed
+            && snapshot
+                .runtime_position
+                .is_some_and(|(path, line, column)| {
+                    follow_preview_position(root, &path, line, column, window, cx)
+                });
         let Some(frame) = snapshot.frame else {
-            return lifecycle_changed;
+            return lifecycle_changed || followed;
         };
         if frame.metadata.frame_id == self.preview_frame_id {
-            return lifecycle_changed;
+            return lifecycle_changed || followed;
         }
         let frame = Arc::try_unwrap(frame).unwrap_or_else(|frame| (*frame).clone());
         let metadata = frame.metadata;
         let Some(bytes) = take_tightly_packed_bgra(frame) else {
-            return lifecycle_changed;
+            return lifecycle_changed || followed;
         };
         let Some(buffer) = image::RgbaImage::from_raw(metadata.width, metadata.height, bytes)
         else {
-            return lifecycle_changed;
+            return lifecycle_changed || followed;
         };
         self.preview_frame_id = metadata.frame_id;
         self.preview_image = Some(Arc::new(RenderImage::new([image::Frame::new(buffer)])));
@@ -1769,6 +1873,8 @@ fn language_for_path(path: &Path) -> &'static str {
         Some("shou") => "eiyashou",
         Some("json") => "json",
         Some("yaml" | "yml") => "yaml",
+        Some("md") => "markdown",
+        Some("toml") => "toml",
         _ => "plaintext",
     }
 }
@@ -3147,6 +3253,21 @@ mod tests {
             parse_startup_args(&["--".into(), "-project".into()]).unwrap(),
             StartupArgs::Launch(vec!["-project".into()])
         );
+    }
+
+    #[test]
+    fn document_extensions_select_the_shared_highlighter_language() {
+        for (path, language) in [
+            ("scripts/main.shou", "eiyashou"),
+            ("config.yaml", "yaml"),
+            ("assets.yml", "yaml"),
+            ("README.md", "markdown"),
+            ("settings.toml", "toml"),
+            ("project.json", "json"),
+            ("notes.txt", "plaintext"),
+        ] {
+            assert_eq!(language_for_path(Path::new(path)), language);
+        }
     }
 
     #[test]

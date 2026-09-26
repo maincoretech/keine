@@ -1,5 +1,8 @@
 use super::*;
 
+const EXPLORER_ROW_HEIGHT: f32 = 24.;
+const EXPLORER_ROW_GAP: f32 = 1.;
+
 impl Render for WorkbenchPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !cx.has_active_drag() {
@@ -406,7 +409,7 @@ impl Render for WorkbenchPanel {
                                     .min_w_0()
                                     .flex()
                                     .flex_col()
-                                    .gap_1()
+                                    .gap(px(EXPLORER_ROW_GAP))
                                     .px_2()
                                     .id("explorer-files")
                                     .children(visible.into_iter().enumerate().map(
@@ -456,7 +459,7 @@ impl Render for WorkbenchPanel {
                                                         "height",
                                                     ),
                                                     if folder_hovered {
-                                                        px(30.)
+                                                        px(EXPLORER_ROW_HEIGHT + EXPLORER_ROW_GAP)
                                                     } else {
                                                         px(0.)
                                                     },
@@ -473,7 +476,7 @@ impl Render for WorkbenchPanel {
                                             };
                                             let row = div()
                                                 .id(("explorer-file", index))
-                                                .h(px(26.))
+                                                .h(px(EXPLORER_ROW_HEIGHT))
                                                 .w_full()
                                                 .flex_none()
                                                 .flex()
@@ -669,7 +672,7 @@ impl Render for WorkbenchPanel {
                                                             .pr_2()
                                                             .child(
                                                                 div()
-                                                                    .h(px(26.))
+                                                                    .h(px(EXPLORER_ROW_HEIGHT))
                                                                     .rounded(px(8.))
                                                                     .bg(rgb(PRIMARY_DIM)),
                                                             ),

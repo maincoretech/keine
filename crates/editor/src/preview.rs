@@ -22,6 +22,7 @@ const PREVIEW_WIDTH: u32 = 1920;
 const PREVIEW_HEIGHT: u32 = 1080;
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
 const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const POSITION_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const RECENT_FRAME_WINDOW: Duration = Duration::from_millis(250);
 static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 
@@ -73,6 +74,7 @@ enum PreviewCommand {
         path: PathBuf,
         line: usize,
         column: usize,
+        force: bool,
     },
     Input(PreviewInput),
     Shutdown,
@@ -146,9 +148,20 @@ impl PreviewController {
     }
 
     pub fn set_cursor(&self, path: PathBuf, line: usize, column: usize) {
-        let _ = self
-            .commands
-            .send(PreviewCommand::SetCursor { path, line, column });
+        self.send_cursor(path, line, column, false);
+    }
+
+    pub fn seek_cursor(&self, path: PathBuf, line: usize, column: usize) {
+        self.send_cursor(path, line, column, true);
+    }
+
+    fn send_cursor(&self, path: PathBuf, line: usize, column: usize, force: bool) {
+        let _ = self.commands.send(PreviewCommand::SetCursor {
+            path,
+            line,
+            column,
+            force,
+        });
     }
 
     pub fn input(&self, input: PreviewInput) {
@@ -171,6 +184,7 @@ struct Worker {
     revision: u64,
     cursor: Option<(PathBuf, usize, usize)>,
     applied_cursor: Option<(PathBuf, usize, u64)>,
+    last_position_poll: Option<Instant>,
     window_visible: bool,
     panel_visible: bool,
     effectively_visible: bool,
@@ -191,6 +205,7 @@ fn worker(
         revision: 0,
         cursor: None,
         applied_cursor: None,
+        last_position_poll: None,
         window_visible: true,
         panel_visible: true,
         effectively_visible: true,
@@ -240,7 +255,12 @@ impl Worker {
                 self.update_visibility()
             }
             PreviewCommand::Snapshot { path, contents } => self.apply_snapshot(path, contents),
-            PreviewCommand::SetCursor { path, line, column } => self.set_cursor(path, line, column),
+            PreviewCommand::SetCursor {
+                path,
+                line,
+                column,
+                force,
+            } => self.set_cursor(path, line, column, force),
             PreviewCommand::Input(input) => self.input(input),
             PreviewCommand::Shutdown => unreachable!(),
         };
@@ -284,6 +304,7 @@ impl Worker {
         self.engine = Some(engine);
         self.frames = Some(frames);
         self.applied_cursor = None;
+        self.last_position_poll = None;
         let lifecycle = if self.effectively_visible {
             PreviewLifecycle::Running
         } else {
@@ -296,6 +317,7 @@ impl Worker {
             snapshot.frame = None;
             snapshot.last_frame_at = Some(Instant::now());
             snapshot.frame_stats = FrameTransportStats::default();
+            snapshot.runtime_position = None;
         });
         self.sync_cursor()?;
         Ok(())
@@ -309,6 +331,7 @@ impl Worker {
         self.engine = None;
         self.frames = None;
         self.applied_cursor = None;
+        self.last_position_poll = None;
         self.mutate(|snapshot| {
             snapshot.lifecycle = PreviewLifecycle::Off;
             snapshot.frame = None;
@@ -324,6 +347,9 @@ impl Worker {
             return Ok(());
         }
         self.effectively_visible = visible;
+        if visible {
+            self.last_position_poll = None;
+        }
         let Some(engine) = self.engine.as_mut() else {
             return Ok(());
         };
@@ -367,15 +393,26 @@ impl Worker {
             snapshot.last_frame_at = Some(Instant::now());
         });
         self.applied_cursor = None;
+        self.last_position_poll = None;
         self.sync_cursor()?;
         Ok(())
     }
 
-    fn set_cursor(&mut self, path: PathBuf, line: usize, column: usize) -> io::Result<()> {
+    fn set_cursor(
+        &mut self,
+        path: PathBuf,
+        line: usize,
+        column: usize,
+        force: bool,
+    ) -> io::Result<()> {
         if path.extension().and_then(|extension| extension.to_str()) != Some("shou") {
             return Ok(());
         }
         self.cursor = Some((path, line, column));
+        if force {
+            self.applied_cursor = None;
+        }
+        self.last_position_poll = None;
         self.sync_cursor()
     }
 
@@ -411,11 +448,16 @@ impl Worker {
             return Ok(());
         };
         engine.input(self.revision, input)?;
+        self.last_position_poll = None;
         self.mutate(|snapshot| snapshot.last_frame_at = Some(Instant::now()));
         Ok(())
     }
 
     fn poll_frame(&mut self) {
+        if let Err(error) = self.poll_position() {
+            self.fail(error);
+            return;
+        }
         let Some(frames) = self.frames.as_mut() else {
             return;
         };
@@ -433,13 +475,46 @@ impl Worker {
         }
     }
 
+    fn poll_position(&mut self) -> io::Result<()> {
+        if !self.effectively_visible
+            || self
+                .last_position_poll
+                .is_some_and(|last| last.elapsed() < POSITION_POLL_INTERVAL)
+        {
+            return Ok(());
+        }
+        let Some(engine) = self.engine.as_mut() else {
+            return Ok(());
+        };
+        let position = engine.execution_location(self.revision)?;
+        self.last_position_poll = Some(Instant::now());
+        if self.applied_cursor.as_ref().is_some_and(|(path, line, _)| {
+            position
+                .as_ref()
+                .is_none_or(|(current_path, current_line, _)| {
+                    current_path != path || current_line != line
+                })
+        }) {
+            self.applied_cursor = None;
+        }
+        self.mutate(|snapshot| {
+            if snapshot.runtime_position != position {
+                snapshot.runtime_position = position;
+                snapshot.last_frame_at = Some(Instant::now());
+            }
+        });
+        Ok(())
+    }
+
     fn fail(&mut self, error: io::Error) {
         self.engine = None;
         self.frames = None;
+        self.last_position_poll = None;
         self.mutate(|snapshot| {
             snapshot.lifecycle = PreviewLifecycle::Failed(error.to_string());
             snapshot.frame = None;
             snapshot.last_frame_at = None;
+            snapshot.runtime_position = None;
         });
     }
 

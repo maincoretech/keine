@@ -39,7 +39,6 @@ pub struct SourceDocument {
     contents: String,
     disk_contents: String,
     revision: u64,
-    saved_revision: u64,
     recovery_state: RecoveryState,
     selection: SourceSelection,
 }
@@ -57,8 +56,8 @@ impl SourceDocument {
         self.revision
     }
 
-    pub const fn is_dirty(&self) -> bool {
-        self.revision != self.saved_revision
+    pub fn is_dirty(&self) -> bool {
+        self.contents != self.disk_contents
     }
 
     pub const fn recovery_state(&self) -> RecoveryState {
@@ -87,7 +86,6 @@ impl SourceDocument {
         self.contents = contents.clone();
         self.disk_contents = contents;
         self.revision = self.revision.wrapping_add(1).max(1);
-        self.saved_revision = self.revision;
         self.recovery_state = RecoveryState::None;
         remove_if_present(&self.recovery_path)
     }
@@ -149,7 +147,6 @@ impl SourceDocument {
         ensure_document_size(&self.contents)?;
         atomic_source(&self.absolute_path, self.contents.as_bytes())?;
         self.disk_contents.clone_from(&self.contents);
-        self.saved_revision = self.revision;
         self.recovery_state = RecoveryState::None;
         remove_if_present(&self.recovery_path)?;
         Ok(())
@@ -237,11 +234,6 @@ impl DocumentManager {
         let recovery_path = self.recovery_path(&relative_path);
         let (contents, revision, recovery_state) =
             load_recovery(&recovery_path, &relative_path, &disk_contents);
-        let saved_revision = if recovery_state == RecoveryState::Restored {
-            0
-        } else {
-            revision
-        };
         let document = Rc::new(RefCell::new(SourceDocument {
             relative_path: relative_path.clone(),
             absolute_path: canonical,
@@ -249,7 +241,6 @@ impl DocumentManager {
             contents,
             disk_contents,
             revision,
-            saved_revision,
             recovery_state,
             selection: SourceSelection { line: 0, column: 0 },
         }));
@@ -572,6 +563,22 @@ mod tests {
         drop(document);
         drop(manager);
         assert_eq!(fs::read(path).unwrap(), before);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn restoring_saved_contents_clears_dirty_and_recovery() {
+        let (root, _, mut manager) = fixture();
+        let document = manager.open("scripts/main.shou").unwrap();
+        let original = document.borrow().contents().to_owned();
+        document.borrow_mut().replace_contents("changed".into());
+        assert!(document.borrow().is_dirty());
+        document.borrow_mut().persist_recovery().unwrap();
+        assert!(document.borrow().recovery_path.exists());
+        document.borrow_mut().replace_contents(original);
+        assert!(!document.borrow().is_dirty());
+        document.borrow_mut().persist_recovery().unwrap();
+        assert!(!document.borrow().recovery_path.exists());
         fs::remove_dir_all(root).unwrap();
     }
 

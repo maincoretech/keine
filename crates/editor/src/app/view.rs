@@ -9,12 +9,14 @@ pub(super) fn preview_transport_icon(running: bool) -> AssetIconName {
 }
 
 pub(super) fn preview_transport_button(running: bool) -> Stateful<Div> {
+    let icon = preview_transport_icon(running);
     div()
         .id(if running {
             "preview-stop"
         } else {
             "preview-start"
         })
+        .group("preview-transport")
         .size(px(28.))
         .flex()
         .items_center()
@@ -29,9 +31,32 @@ pub(super) fn preview_transport_button(running: bool) -> Stateful<Div> {
             "Start preview"
         }))
         .child(
-            Icon::new(preview_transport_icon(running))
-                .xsmall()
-                .text_color(rgb(PRIMARY)),
+            div()
+                .relative()
+                .size(px(12.))
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .when(!running, |this| {
+                            this.group_hover("preview-transport", |style| style.invisible())
+                        })
+                        .child(Icon::new(icon).xsmall().text_color(rgb(if running {
+                            0xdb7780
+                        } else {
+                            INK
+                        }))),
+                )
+                .when(!running, |this| {
+                    this.child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .invisible()
+                            .group_hover("preview-transport", |style| style.visible())
+                            .child(Icon::new(icon).xsmall().text_color(rgb(PRIMARY))),
+                    )
+                }),
         )
 }
 
@@ -896,7 +921,7 @@ pub(super) struct BlockProjectionView<'a> {
     pub(super) collapsed_scenes: &'a HashSet<String>,
     pub(super) selected_blocks: &'a HashSet<usize>,
     pub(super) draft_text: Option<&'a DraftTextBlock>,
-    pub(super) drop_target: Option<usize>,
+    pub(super) drop_target: Option<BlockDropTarget>,
     pub(super) dragging: Option<&'a HashSet<usize>>,
     pub(super) scroll_handle: &'a ScrollHandle,
     pub(super) scroll_anchor: &'a ScrollAnchor,
@@ -915,29 +940,32 @@ fn block_row_height(
         block.kind,
         BlockKind::Narration | BlockKind::Dialogue { .. }
     ) {
-        let text_rows = block
-            .text_range
-            .as_ref()
-            .and_then(|range| {
-                editors
-                    .iter()
-                    .find(|editor| editor.text_start == range.start)
-                    .map(|editor| &editor.state)
-                    .or_else(|| {
-                        draft_text
-                            .filter(|draft| {
-                                draft
-                                    .text_range
-                                    .as_ref()
-                                    .is_some_and(|draft_range| draft_range.start == range.start)
-                            })
-                            .map(|draft| &draft.state)
-                    })
-            })
-            .map_or(1, |state| {
-                state.read(cx).value().lines().count().clamp(1, 6)
-            });
-        38. + (text_rows.saturating_sub(1) as f32 * 20.)
+        let text_state = block.text_range.as_ref().and_then(|range| {
+            editors
+                .iter()
+                .find(|editor| editor.text_start == range.start)
+                .map(|editor| &editor.state)
+                .or_else(|| {
+                    draft_text
+                        .filter(|draft| {
+                            draft
+                                .text_range
+                                .as_ref()
+                                .is_some_and(|draft_range| draft_range.start == range.start)
+                        })
+                        .map(|draft| &draft.state)
+                })
+        });
+        let text_rows = text_state.map_or(1, |state| {
+            state.read(cx).value().lines().count().clamp(1, 6)
+        });
+        let measured = text_state
+            .and_then(|state| state.read(cx).text_bounds())
+            .map(|bounds| f32::from(bounds.size.height))
+            .filter(|height| *height > 0.);
+        measured.map_or(38. + (text_rows.saturating_sub(1) as f32 * 20.), |height| {
+            (height + 8.).max(38.)
+        })
     } else if matches!(
         block.kind,
         BlockKind::Choice
@@ -951,6 +979,34 @@ fn block_row_height(
     } else {
         32.
     }
+}
+
+fn dragged_block_height(
+    projection: &EiyashouProjection,
+    selected: &HashSet<usize>,
+    editors: &[BlockTextEditor],
+    draft_text: Option<&DraftTextBlock>,
+    cx: &App,
+) -> f32 {
+    let ranges = projection
+        .scenes
+        .iter()
+        .flat_map(|scene| &scene.blocks)
+        .filter(|block| selected.contains(&block.source_range.start))
+        .map(|block| block.source_range.clone())
+        .collect::<Vec<_>>();
+    let heights = projection
+        .scenes
+        .iter()
+        .flat_map(|scene| &scene.blocks)
+        .filter(|block| {
+            ranges
+                .iter()
+                .any(|range| range.contains(&block.source_range.start))
+        })
+        .map(|block| block_row_height(block, editors, draft_text, cx))
+        .collect::<Vec<_>>();
+    heights.iter().sum::<f32>() + 4. * heights.len().saturating_sub(1) as f32
 }
 
 pub(super) fn draft_text_row(draft: &DraftTextBlock, indent: f32, id: usize) -> AnyElement {
@@ -988,11 +1044,38 @@ pub(super) fn draft_text_row(draft: &DraftTextBlock, indent: f32, id: usize) -> 
                         Textarea::new(&draft.state)
                             .appearance(false)
                             .bordered(false)
-                            .size_full()
+                            .w_full()
                             .text_sm()
                             .text_color(rgb(INK)),
                     ),
                 ),
+        )
+        .into_any_element()
+}
+
+fn block_drop_slot(
+    height: Pixels,
+    dragged_height: f32,
+    indent: f32,
+    target: BlockDropTarget,
+    cx: &mut Context<WorkbenchPanel>,
+) -> AnyElement {
+    div()
+        .h(height)
+        .min_h_0()
+        .flex_none()
+        .overflow_hidden()
+        .pl(px(indent))
+        .pr_2()
+        .on_mouse_move(cx.listener(move |this, _, _, cx| {
+            this.hover_block_drop(target, cx);
+            cx.stop_propagation();
+        }))
+        .child(
+            div()
+                .h(px(dragged_height))
+                .rounded(px(7.))
+                .bg(rgb(SURFACE_HOVER)),
         )
         .into_any_element()
 }
@@ -1021,25 +1104,7 @@ pub(super) fn render_block_projection(
     let source = document.borrow().contents().to_owned();
     let projection = EiyashouProjection::parse(&source);
     let dragged_height = dragging.map_or(32., |selected| {
-        let ranges = projection
-            .scenes
-            .iter()
-            .flat_map(|scene| &scene.blocks)
-            .filter(|block| selected.contains(&block.source_range.start))
-            .map(|block| block.source_range.clone())
-            .collect::<Vec<_>>();
-        let heights = projection
-            .scenes
-            .iter()
-            .flat_map(|scene| &scene.blocks)
-            .filter(|block| {
-                ranges
-                    .iter()
-                    .any(|range| range.contains(&block.source_range.start))
-            })
-            .map(|block| block_row_height(block, editors, draft_text, cx))
-            .collect::<Vec<_>>();
-        heights.iter().sum::<f32>() + 4. * heights.len().saturating_sub(1) as f32
+        dragged_block_height(&projection, selected, editors, draft_text, cx)
     });
     let block_order = Arc::new(
         projection
@@ -1237,6 +1302,11 @@ pub(super) fn render_block_projection(
                 HashSet::from([row_id])
             };
             let drag_panel = cx.entity().downgrade();
+            let drag_label = label.clone();
+            let drag_summary = source_summary.clone();
+            let drag_count = drag_selection.len();
+            let row_height = block_row_height(&block, editors, draft_text, cx);
+            let block_indent = 8. + block.depth as f32 * 18.;
             let movable = !matches!(&block.kind, BlockKind::ElseIf | BlockKind::Else);
             let grip = if movable {
                 div()
@@ -1251,12 +1321,41 @@ pub(super) fn render_block_projection(
                             selected: drag_selection.clone(),
                         },
                         move |_, _, _, cx| {
-                            let _ = drag_panel.update(cx, |panel, cx| {
-                                panel.block_dragging = Some(drag_selection.clone());
-                                panel.block_drop_target = None;
-                                cx.notify();
-                            });
-                            cx.new(|_| Empty)
+                            let (width, height) = drag_panel
+                                .update(cx, |panel, cx| {
+                                    panel.block_dragging = Some(drag_selection.clone());
+                                    panel.block_drop_target = None;
+                                    cx.notify();
+                                    let width = (f32::from(panel.view_scroll.bounds().size.width)
+                                        - 24.
+                                        - block_indent)
+                                        .max(72.);
+                                    let height = match &panel.content {
+                                        PanelContent::Document {
+                                            document: Some(document),
+                                            ..
+                                        } => dragged_block_height(
+                                            &EiyashouProjection::parse(
+                                                document.borrow().contents(),
+                                            ),
+                                            &drag_selection,
+                                            &panel.block_text_editors,
+                                            panel.draft_text.as_ref(),
+                                            cx,
+                                        ),
+                                        _ => row_height,
+                                    };
+                                    (width, height)
+                                })
+                                .unwrap_or((300., row_height));
+                            cx.new(|_| BlockDragPreview {
+                                label: drag_label.clone(),
+                                summary: drag_summary.clone(),
+                                icon,
+                                count: drag_count,
+                                width,
+                                height,
+                            })
                         },
                     )
                     .child(
@@ -1268,8 +1367,15 @@ pub(super) fn render_block_projection(
             } else {
                 div().size(px(18.)).into_any_element()
             };
-            let row_height = block_row_height(&block, editors, draft_text, cx);
-            let show_drop_gap = drop_target == Some(row_id)
+            let before_target = BlockDropTarget {
+                row: row_id,
+                after: false,
+            };
+            let after_target = BlockDropTarget {
+                row: row_id,
+                after: true,
+            };
+            let show_drop_gap = drop_target.is_some_and(|target| target.row == row_id)
                 && cx.has_active_drag()
                 && dragging.is_none_or(|selected| !selected.contains(&row_id));
             let drop_gap_height = transition(
@@ -1288,7 +1394,6 @@ pub(super) fn render_block_projection(
                 cx,
             );
             scene_body_height += row_height + 4. + f32::from(drop_gap_height);
-            let block_indent = 8. + block.depth as f32 * 18.;
             let mut row = div()
                 .id(("block-row", scene_index * 10_000 + block_index))
                 .relative()
@@ -1300,6 +1405,13 @@ pub(super) fn render_block_projection(
                 .min_h(px(row_height))
                 .px_2()
                 .rounded(px(7.))
+                .opacity(
+                    if dragging.is_some_and(|selected| selected.contains(&row_id)) {
+                        0.35
+                    } else {
+                        1.
+                    },
+                )
                 .bg(rgb(if selected {
                     SURFACE
                 } else if is_structure {
@@ -1343,32 +1455,6 @@ pub(super) fn render_block_projection(
                     set_authoring_selection(&root, relative.clone(), line, column, cx);
                     cx.notify();
                 }))
-                .on_mouse_move(cx.listener(move |this, _, _, cx| {
-                    if cx.has_active_drag() {
-                        let target = this
-                            .block_dragging
-                            .as_ref()
-                            .is_none_or(|selected| !selected.contains(&row_id))
-                            .then_some(row_id);
-                        if this.block_drop_target == target {
-                            return;
-                        }
-                        this.block_drop_target = target;
-                        cx.notify();
-                    }
-                }))
-                .on_drop(cx.listener(move |this, drag: &BlockDrag, window, cx| {
-                    cx.stop_propagation();
-                    this.block_drop_target = None;
-                    this.block_dragging = None;
-                    this.drop_blocks(drag, row_id, window, cx);
-                }))
-                .on_drop(cx.listener(move |this, drag: &AssetDrag, window, cx| {
-                    cx.stop_propagation();
-                    this.block_drop_target = None;
-                    this.block_dragging = None;
-                    this.drop_assets(drag, row_id, window, cx);
-                }))
                 .child(grip)
                 .child(Icon::new(icon).xsmall().text_color(rgb(if block.read_only {
                     0xd2aa62
@@ -1392,7 +1478,7 @@ pub(super) fn render_block_projection(
                         Textarea::new(state)
                             .appearance(false)
                             .bordered(false)
-                            .size_full()
+                            .w_full()
                             .text_sm()
                             .text_color(rgb(INK)),
                     ),
@@ -1437,30 +1523,72 @@ pub(super) fn render_block_projection(
                         .child(Icon::new(IconName::FileText).xsmall()),
                 );
             }
-            scene_rows.push(
-                div()
-                    .w_full()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .child(
+            if dragging.is_some() {
+                row =
+                    row.child(
                         div()
-                            .h(drop_gap_height)
-                            .min_h_0()
-                            .flex_none()
-                            .overflow_hidden()
-                            .pl(px(block_indent))
-                            .pr_2()
-                            .child(
-                                div()
-                                    .h(px(dragged_height))
-                                    .rounded(px(7.))
-                                    .bg(rgb(SURFACE_HOVER)),
-                            ),
-                    )
-                    .child(div().pl(px(block_indent)).child(row))
-                    .into_any_element(),
-            );
+                            .absolute()
+                            .inset_0()
+                            .flex()
+                            .flex_col()
+                            .child(div().flex_1().on_mouse_move(cx.listener(
+                                move |this, _, _, cx| {
+                                    this.hover_block_drop(before_target, cx);
+                                    cx.stop_propagation();
+                                },
+                            )))
+                            .child(div().flex_1().on_mouse_move(cx.listener(
+                                move |this, _, _, cx| {
+                                    this.hover_block_drop(after_target, cx);
+                                    cx.stop_propagation();
+                                },
+                            ))),
+                    );
+            }
+            let row_wrapper = div()
+                .w_full()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .on_drop(cx.listener(move |this, drag: &BlockDrag, window, cx| {
+                    cx.stop_propagation();
+                    let after = this
+                        .block_drop_target
+                        .is_some_and(|target| target.row == row_id && target.after);
+                    this.block_drop_target = None;
+                    this.block_dragging = None;
+                    this.drop_blocks(drag, row_id, after, window, cx);
+                }))
+                .on_drop(cx.listener(move |this, drag: &AssetDrag, window, cx| {
+                    cx.stop_propagation();
+                    this.block_drop_target = None;
+                    this.block_dragging = None;
+                    this.drop_assets(drag, row_id, window, cx);
+                }))
+                .child(block_drop_slot(
+                    if drop_target == Some(before_target) {
+                        drop_gap_height
+                    } else {
+                        px(0.)
+                    },
+                    dragged_height,
+                    block_indent,
+                    before_target,
+                    cx,
+                ))
+                .child(div().pl(px(block_indent)).child(row))
+                .child(block_drop_slot(
+                    if drop_target == Some(after_target) {
+                        drop_gap_height
+                    } else {
+                        px(0.)
+                    },
+                    dragged_height,
+                    block_indent,
+                    after_target,
+                    cx,
+                ));
+            scene_rows.push(row_wrapper.into_any_element());
             if let Some(draft) = draft_text.filter(|draft| {
                 matches!(draft.target, DraftInsertionTarget::After(start) if start == row_id)
                     && draft.text_range.is_none()
@@ -1491,7 +1619,9 @@ pub(super) fn render_block_projection(
                 .child(
                     div()
                         .w_full()
-                        .h(px(scene_body_height * collapse_progress))
+                        .when(collapsed || collapse_progress < 1., |this| {
+                            this.h(px(scene_body_height * collapse_progress))
+                        })
                         .opacity(collapse_progress)
                         .overflow_hidden()
                         .child(

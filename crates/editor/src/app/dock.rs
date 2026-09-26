@@ -202,9 +202,11 @@ impl EditorTabGroupSkin {
                     });
                     clear_all_drop_overlays(&drop_overlays, cx);
                     drag.panel.set_drag_offset(offset);
-                    drag.panel.set_preview_size(size(px(180.), px(30.)));
+                    drag.panel.set_preview_size(size(px(drag_width), px(28.)));
                     cx.new(|_| TabDragPreview {
                         title: drag_title.clone(),
+                        width: drag_width,
+                        closable: is_closable_tool,
                     })
                 })
             })
@@ -560,21 +562,43 @@ fn tab_overflow_fade(scroll: ScrollHandle, left: bool) -> AnyElement {
 
 struct TabDragPreview {
     title: SharedString,
+    width: f32,
+    closable: bool,
 }
 
 impl Render for TabDragPreview {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
-            .h(px(30.))
-            .max_w(px(180.))
+            .h(px(28.))
+            .w(px(self.width))
             .flex()
             .items_center()
-            .px_3()
+            .gap_1()
+            .px_2()
             .rounded(px(7.))
             .bg(rgb(SURFACE))
-            .text_xs()
+            .text_sm()
             .text_color(rgb(INK))
-            .child(self.title.clone())
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(self.title.clone()),
+            )
+            .when(self.closable, |this| {
+                this.child(
+                    div()
+                        .size(px(16.))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(Icon::new(IconName::Close).xsmall()),
+                )
+            })
     }
 }
 
@@ -868,9 +892,11 @@ impl TabGroupRenderer for EditorTabGroupSkin {
                             });
                             clear_all_drop_overlays(&drag_content_overlays, cx);
                             drag.panel.set_drag_offset(offset);
-                            drag.panel.set_preview_size(size(px(180.), px(30.)));
+                            drag.panel.set_preview_size(size(px(slot_width), px(28.)));
                             cx.new(|_| TabDragPreview {
                                 title: drag_title.clone(),
+                                width: slot_width,
+                                closable,
                             })
                         })
                     })
