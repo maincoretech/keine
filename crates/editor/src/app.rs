@@ -2412,36 +2412,36 @@ impl WorkbenchWindow {
                 )
             })
             .unwrap_or_default();
-        let rail =
-            div()
-                .id("activity-rail-content")
-                .size_full()
-                .flex()
-                .flex_col()
-                .items_center()
-                .py_1()
-                .gap_1()
-                .bg(rgb(CHROME))
-                .rounded(px(VIEW_RADIUS_PX))
-                .child(
-                    div()
-                        .id("workspace-status")
-                        .size(px(ACTIVITY_BRAND_SIZE_PX))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(7.))
-                        .bg(if has_unsaved_changes {
-                            rgb(0xdb7780)
-                        } else {
-                            rgb(PRIMARY)
-                        })
-                        .text_size(px(17.))
-                        .font_weight(gpui_kit::FontWeight::BOLD)
-                        .text_color(rgb(CANVAS))
-                        .child("K"),
-                )
-                .child(
+        let rail = div()
+            .id("activity-rail-content")
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .py_1()
+            .gap_1()
+            .bg(rgb(CHROME))
+            .rounded(px(VIEW_RADIUS_PX))
+            .child(
+                div()
+                    .id("workspace-status")
+                    .size(px(ACTIVITY_BRAND_SIZE_PX))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(7.))
+                    .bg(if has_unsaved_changes {
+                        rgb(0xdb7780)
+                    } else {
+                        rgb(PRIMARY)
+                    })
+                    .text_size(px(17.))
+                    .font_weight(gpui_kit::FontWeight::BOLD)
+                    .text_color(rgb(CANVAS))
+                    .child("K"),
+            )
+            .when(self.workspace.is_some(), |this| {
+                this.child(
                     activity_tool(
                         "activity-explorer",
                         IconName::FileText,
@@ -2452,140 +2452,141 @@ impl WorkbenchWindow {
                         this.show_tool(ToolKind::Explorer, window, cx)
                     })),
                 )
-                .when(self.workspace.is_some(), |this| {
-                    this.child(
-                        activity_tool(
-                            "activity-assets",
-                            AssetIconName::Images,
-                            assets_open,
-                            "Assets",
-                        )
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.show_tool(ToolKind::Assets, window, cx)
-                        })),
+            })
+            .when(self.workspace.is_some(), |this| {
+                this.child(
+                    activity_tool(
+                        "activity-assets",
+                        AssetIconName::Images,
+                        assets_open,
+                        "Assets",
                     )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.show_tool(ToolKind::Assets, window, cx)
+                    })),
+                )
+                .child(
+                    activity_tool(
+                        "activity-characters",
+                        IconName::User,
+                        characters_open,
+                        "Characters",
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.show_tool(ToolKind::Characters, window, cx)
+                    })),
+                )
+                .child(activity_divider())
+                .child(
+                    activity_tool(
+                        "activity-problems",
+                        IconName::TriangleAlert,
+                        problems_open,
+                        "Problems",
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.show_tool(ToolKind::Problems, window, cx)
+                    })),
+                )
+                .child(
+                    activity_tool(
+                        "activity-performance",
+                        IconName::Cpu,
+                        performance_open,
+                        "Performance",
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.show_tool(ToolKind::Performance, window, cx)
+                    })),
+                )
+            })
+            .when(self.workspace.is_some(), |this| {
+                this.child(
+                    div()
+                        .id("activity-preview")
+                        .size(px(ACTIVITY_ITEM_SIZE_PX))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(7.))
+                        .when(preview_open, |style| style.bg(rgb(SURFACE)))
+                        .cursor_pointer()
+                        .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                        .tooltip(icon_hint("Preview"))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.toggle_engine(&ToggleEngine, window, cx)
+                        }))
+                        .child(
+                            Icon::new(IconName::Play)
+                                .with_size(px(ACTIVITY_ICON_SIZE_PX))
+                                .text_color(rgb(if preview_open { PRIMARY } else { MUTED })),
+                        ),
+                )
+            })
+            .child(div().flex_1())
+            .when(self.workspace.is_some(), |this| {
+                this.child(
+                    div()
+                        .id("activity-open-folder")
+                        .size(px(ACTIVITY_ITEM_SIZE_PX))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(7.))
+                        .cursor_pointer()
+                        .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                        .tooltip(icon_hint("Open folder"))
+                        .on_click(move |_, _, cx| prompt_open_folder(editor.clone(), cx))
+                        .child(
+                            Icon::new(IconName::FolderOpen)
+                                .with_size(px(ACTIVITY_ICON_SIZE_PX))
+                                .text_color(rgb(MUTED)),
+                        ),
+                )
+            })
+            .when(self.workspace.is_some(), |this| {
+                this.child(activity_divider())
                     .child(
-                        activity_tool(
-                            "activity-characters",
-                            IconName::User,
-                            characters_open,
-                            "Characters",
-                        )
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.show_tool(ToolKind::Characters, window, cx)
-                        })),
-                    )
-                    .child(activity_divider())
-                    .child(
-                        activity_tool(
-                            "activity-problems",
-                            IconName::TriangleAlert,
-                            problems_open,
-                            "Problems",
-                        )
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.show_tool(ToolKind::Problems, window, cx)
-                        })),
-                    )
-                    .child(
-                        activity_tool(
-                            "activity-performance",
-                            IconName::Cpu,
-                            performance_open,
-                            "Performance",
-                        )
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.show_tool(ToolKind::Performance, window, cx)
-                        })),
-                    )
-                })
-                .when(self.workspace.is_some(), |this| {
-                    this.child(
                         div()
-                            .id("activity-preview")
+                            .id("activity-migrate-eiyashou")
                             .size(px(ACTIVITY_ITEM_SIZE_PX))
                             .flex()
                             .items_center()
                             .justify_center()
                             .rounded(px(7.))
-                            .when(preview_open, |style| style.bg(rgb(SURFACE)))
                             .cursor_pointer()
                             .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-                            .tooltip(icon_hint("Preview"))
+                            .tooltip(icon_hint("Migrate project"))
                             .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_engine(&ToggleEngine, window, cx)
+                                this.migrate_eiyashou(&MigrateEiyashou, window, cx)
                             }))
                             .child(
-                                Icon::new(IconName::Play)
-                                    .with_size(px(ACTIVITY_ICON_SIZE_PX))
-                                    .text_color(rgb(if preview_open { PRIMARY } else { MUTED })),
-                            ),
-                    )
-                })
-                .child(div().flex_1())
-                .when(self.workspace.is_some(), |this| {
-                    this.child(
-                        div()
-                            .id("activity-open-folder")
-                            .size(px(ACTIVITY_ITEM_SIZE_PX))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(7.))
-                            .cursor_pointer()
-                            .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-                            .tooltip(icon_hint("Open folder"))
-                            .on_click(move |_, _, cx| prompt_open_folder(editor.clone(), cx))
-                            .child(
-                                Icon::new(IconName::FolderOpen)
+                                Icon::new(IconName::Replace)
                                     .with_size(px(ACTIVITY_ICON_SIZE_PX))
                                     .text_color(rgb(MUTED)),
                             ),
                     )
-                })
-                .when(self.workspace.is_some(), |this| {
-                    this.child(activity_divider())
-                        .child(
-                            div()
-                                .id("activity-migrate-eiyashou")
-                                .size(px(ACTIVITY_ITEM_SIZE_PX))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(7.))
-                                .cursor_pointer()
-                                .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-                                .tooltip(icon_hint("Migrate project"))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.migrate_eiyashou(&MigrateEiyashou, window, cx)
-                                }))
-                                .child(
-                                    Icon::new(IconName::Replace)
-                                        .with_size(px(ACTIVITY_ICON_SIZE_PX))
-                                        .text_color(rgb(MUTED)),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .id("activity-reset-layout")
-                                .size(px(ACTIVITY_ITEM_SIZE_PX))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(7.))
-                                .cursor_pointer()
-                                .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-                                .tooltip(icon_hint("Reset layout"))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.reset_layout(&ResetLayout, window, cx)
-                                }))
-                                .child(
-                                    Icon::new(IconName::RotateCw)
-                                        .with_size(px(ACTIVITY_ICON_SIZE_PX))
-                                        .text_color(rgb(MUTED)),
-                                ),
-                        )
-                });
+                    .child(
+                        div()
+                            .id("activity-reset-layout")
+                            .size(px(ACTIVITY_ITEM_SIZE_PX))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(7.))
+                            .cursor_pointer()
+                            .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                            .tooltip(icon_hint("Reset layout"))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.reset_layout(&ResetLayout, window, cx)
+                            }))
+                            .child(
+                                Icon::new(IconName::RotateCw)
+                                    .with_size(px(ACTIVITY_ICON_SIZE_PX))
+                                    .text_color(rgb(MUTED)),
+                            ),
+                    )
+            });
 
         div()
             .id("activity-rail")
@@ -2683,7 +2684,14 @@ impl WorkbenchWindow {
                                             .cursor_pointer()
                                             .hover(|style| style.bg(rgb(SURFACE_HOVER)))
                                             .on_click(move |_, _, cx| {
-                                                open_paths(&editor, vec![open_path.clone()], cx)
+                                                let editor = editor.clone();
+                                                let path = open_path.clone();
+                                                cx.spawn(async move |cx| {
+                                                    cx.update(|cx| {
+                                                        open_paths(&editor, vec![path], cx)
+                                                    });
+                                                })
+                                                .detach();
                                             })
                                             .child(
                                                 Icon::new(IconName::Folder)

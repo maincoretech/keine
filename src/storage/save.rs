@@ -11,8 +11,10 @@ use bevy::prelude::*;
 use keine_core::{PersistenceSafety, State};
 use keine_loader::{SavedState, StoreAdapter, StoreStatus};
 
+use crate::runtime::preview::AuthoringPreviewSession;
 use crate::runtime::resources::{
     EditorSyncSession, GameState, PersistenceDisabled, PersistenceRoot, StoreCodec,
+    writable_runtime_session,
 };
 
 pub const QUICK_SAVE_SLOT: u32 = 0;
@@ -258,11 +260,16 @@ pub(crate) struct QuickSaveExitContext<'w> {
     checkpoint: Res<'w, ContinuationCheckpoint>,
     previews: Res<'w, SavePreviewCoordinator>,
     editor_sync: Option<Res<'w, EditorSyncSession>>,
+    authoring_preview: Option<Res<'w, AuthoringPreviewSession>>,
     persistence_disabled: Option<Res<'w, PersistenceDisabled>>,
 }
 
 pub(crate) fn quick_save_on_exit(mut exits: MessageReader<AppExit>, context: QuickSaveExitContext) {
-    if context.editor_sync.is_some() || context.persistence_disabled.is_some() {
+    if !writable_runtime_session(
+        context.editor_sync.is_some(),
+        context.authoring_preview.is_some(),
+        context.persistence_disabled.is_some(),
+    ) {
         return;
     }
     if exits.read().next().is_none() || context.state.ended {
@@ -817,5 +824,25 @@ mod tests {
         );
         assert!(!root.join("saves").exists());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn authoring_preview_slot_round_trip_does_not_touch_project_saves() {
+        let project_root = temp_root("authoring-preview-isolation");
+        let preview_root = project_root.join("overlay/preview-data");
+        let state = sample_state();
+
+        save_game(&KeineStore, &state, 3, &preview_root).unwrap();
+        assert_eq!(
+            load_game(&KeineStore, 3, &preview_root).unwrap().snapshot(),
+            &state
+        );
+        assert_eq!(
+            inspect_slot(&KeineStore, 3, &project_root),
+            SlotStatus::Empty
+        );
+        assert!(!project_root.join("saves").exists());
+
+        let _ = fs::remove_dir_all(project_root);
     }
 }

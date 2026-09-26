@@ -103,7 +103,7 @@ impl Session {
         let paused = self.lifecycle == LifecycleState::Paused;
         let mut runtime = build_authoring_preview_app(
             project_path,
-            Some(&self.overlay.root),
+            &self.overlay.root,
             loader,
             super::preview::AuthoringPreviewConfig {
                 producer,

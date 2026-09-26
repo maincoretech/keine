@@ -1914,3 +1914,41 @@ samples, not throughput percentiles. They exclude the Editor's 100 ms
 source-edit debounce and do not establish 60 fps continuous playback. Invalid
 intermediate source retains the last valid Program so a corrected patch can
 recover without restarting Preview.
+
+### 2026-09-26 project P7 packaged Engine check
+
+On Apple M5 Pro / Metal, the independently packaged 0.10.1 Engine executable was
+verified by SHA-256 against its prebuilt source and temporarily substituted for
+the Engine path used by the already-built release integration-test executable.
+The original test build artifact was restored afterward; no production code or
+test-only environment protocol was added. Directly running the ignored real-GPU
+tests against those exact packaged Engine bytes produced:
+
+```text
+authoring_child_publishes_a_real_composited_frame_and_stops_cleanly:
+  visible first frame: 165 / 162 / 160 ms
+  published: 2 / 2 / 2; overwritten: 0 / 0 / 0
+live_source_patch_publishes_a_new_revision:
+  patch acknowledgement: 0 ms; edited visible frame: 86 ms
+  published: 2; overwritten: 0
+```
+
+The same packaged Editor and Engine also displayed the test project's real
+background, figure, and dialogue in the native UI. After killing the Engine
+child, the Editor reported failure and a subsequent Start recovered Live.
+Three one-second `top` samples of that packaged Engine after the frame settled
+reported 0.0%, 0.8%, and 1.5% CPU. This is a warm-start functional/latency
+sample on a non-isolated machine, not a cold-start percentile or sustained
+active-frame throughput measurement. It does not support a performance-improvement
+claim relative to the older debug-build baseline above.
+
+After enabling isolated save/load in native Preview, the rebuilt 0.10.1
+package's Engine again passed the same real-GPU tests: first visible frames
+179 / 170 / 170 ms, two publications and zero overwrites per cycle; source
+patch acknowledgement 0 ms and edited visible frame 86 ms. Its installed
+bundle executable and the tested release binary had identical SHA-256 bytes.
+In a separately rebuilt packaged GUI, Preview's Image-target controls were
+exercised directly: Q.Save wrote the isolated slot 0, advancing the dialogue
+and Q.Load restored it, and the normal Save screen wrote slot 1. That verifies
+the control path and temporary storage isolation, but is not an additional
+latency or sustained-throughput measurement.

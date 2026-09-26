@@ -146,6 +146,7 @@ struct LaunchOptions {
 #[derive(SystemParam)]
 struct BootstrapMode<'w> {
     editor_sync: Option<Res<'w, EditorSyncSession>>,
+    authoring_preview: Option<Res<'w, super::preview::AuthoringPreviewSession>>,
     benchmark: Option<Res<'w, crate::ui::performance::RuntimeCaptureConfig>>,
     #[cfg(feature = "hot-reload")]
     hot_reload: Option<Res<'w, HotReloadSession>>,
@@ -1131,7 +1132,7 @@ pub fn build_app_with_loader(
 
 pub(crate) fn build_authoring_preview_app(
     project_path: &Path,
-    overlay_root: Option<&Path>,
+    overlay_root: &Path,
     loader: &LoaderRegistry,
     preview: super::preview::AuthoringPreviewConfig,
 ) -> Result<App> {
@@ -1139,21 +1140,20 @@ pub(crate) fn build_authoring_preview_app(
         root: project_root,
         config,
         mut content,
-        packaged,
+        packaged: _,
     } = open_project(project_path, loader)?;
-    if let Some(overlay_root) = overlay_root {
-        let mut overlay = SourceMount::project("authoring-preview", overlay_root.to_owned());
-        overlay.asset = None;
-        content.sources.push(overlay);
-    }
+    let mut overlay = SourceMount::project("authoring-preview", overlay_root.to_owned());
+    overlay.asset = None;
+    content.sources.push(overlay);
     let languages = loader
         .languages(&config.adapter.script)
         .context("failed to select script adapter")?;
     let store = loader
         .store(&config.adapter.store)
         .context("failed to select store adapter")?;
-    let persistence_root =
-        crate::storage::persistence_root(&project_root, &config.project, packaged)?;
+    // Authoring saves/settings are isolated from both editable source and
+    // shipping per-user data; the overlay owner removes them on clean exit.
+    let persistence_root = overlay_root.join("preview-data");
     Ok(build_opened_app(
         project_root,
         persistence_root,
@@ -1250,7 +1250,6 @@ fn build_opened_app(
         app.init_resource::<EditorSyncSession>();
     }
     if let Some(preview) = options.authoring_preview {
-        app.init_resource::<PersistenceDisabled>();
         app.add_plugins(super::preview::AuthoringPreviewPlugin::new(preview));
     }
     if options.development {
@@ -1548,7 +1547,7 @@ fn bootstrap_project(
         }
         Err(error) => log::error!("failed to load project variable defaults: {error:#}"),
     }
-    if mode.editor_sync.is_none() {
+    if mode.editor_sync.is_none() || mode.authoring_preview.is_some() {
         state
             .global_vars
             .extend(crate::storage::profile::load(&persistence_root));
@@ -1810,6 +1809,50 @@ mod tests {
             .expect("system clock should be after the Unix epoch")
             .as_nanos();
         std::env::temp_dir().join(format!("keine-{name}-{}-{nonce}", std::process::id()))
+    }
+
+    #[test]
+    #[ignore = "constructs the real offscreen Preview renderer; run on a local GPU"]
+    fn authoring_preview_uses_an_isolated_persistence_root() {
+        let overlay = unique_temp_path("preview-data-root");
+        std::fs::create_dir_all(&overlay).unwrap();
+        let frames = keine_authoring::SharedFrameConsumer::create(
+            overlay.join("frames"),
+            1,
+            1,
+            keine_core::DESIGN_WIDTH as u32,
+            keine_core::DESIGN_HEIGHT as u32,
+        )
+        .unwrap();
+        let producer =
+            keine_authoring::SharedFrameProducer::open(frames.descriptor().clone()).unwrap();
+        let project = Path::new(env!("CARGO_MANIFEST_DIR")).join("projects/test-project");
+        let app = build_authoring_preview_app(
+            &project,
+            &overlay,
+            &LoaderRegistry::default(),
+            super::super::preview::AuthoringPreviewConfig {
+                producer,
+                document_revision: 0,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            app.world().resource::<PersistenceRoot>().0,
+            overlay.join("preview-data")
+        );
+        assert!(app.world().contains_resource::<EditorSyncSession>());
+        assert!(
+            app.world()
+                .contains_resource::<super::super::preview::AuthoringPreviewSession>()
+        );
+        assert!(!app.world().contains_resource::<PersistenceDisabled>());
+        assert!(!project.join("preview-data").exists());
+
+        drop(app);
+        drop(frames);
+        std::fs::remove_dir_all(overlay).unwrap();
     }
 
     #[test]

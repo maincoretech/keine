@@ -9,7 +9,10 @@ use bevy::math::DVec2;
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
-use bevy::ui::UiSystems;
+use bevy::ui::{
+    ComputedUiTargetCamera, FocusPolicy, Interaction, Node, RelativeCursorPosition,
+    UiGlobalTransform, UiStack, UiSystems, clip_check_recursive,
+};
 use bevy::window::{PrimaryWindow, WindowResolution};
 use bevy::winit::WinitSettings;
 use keine_authoring::{PreviewInput, SharedFrameProducer};
@@ -113,6 +116,7 @@ impl Plugin for AuthoringPreviewPlugin {
                     .after(InputSystems)
                     .before(UiSystems::Focus),
             )
+            .add_systems(PreUpdate, focus_offscreen_ui.after(UiSystems::Focus))
             .add_systems(
                 PreUpdate,
                 apply_input
@@ -247,6 +251,89 @@ fn inject_preview_input(
                 pointer.pressed_last_frame = true;
             }
             event => direct.0.push(event),
+        }
+    }
+}
+
+type OffscreenUiNode<'a> = (
+    &'a ComputedNode,
+    &'a UiGlobalTransform,
+    &'a ComputedUiTargetCamera,
+    Option<&'a InheritedVisibility>,
+    Option<&'a FocusPolicy>,
+    Option<&'a mut Interaction>,
+    Option<&'a mut RelativeCursorPosition>,
+);
+
+/// Bevy's built-in UI focus deliberately skips cameras whose target is an Image.
+/// The embedded Preview renders to one, so mirror its hit-testing for that
+/// target before the normal UI button handlers run. The pointer is already in
+/// the single 1920x1080 design space when it reaches this process.
+fn focus_offscreen_ui(
+    stack: Res<UiStack>,
+    cameras: Query<&RenderTarget, With<Camera>>,
+    window: Single<&Window, With<PrimaryWindow>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    clipping: Query<(&ComputedNode, &UiGlobalTransform, &Node)>,
+    parents: Query<&ChildOf, Without<bevy::ui::OverrideClip>>,
+    mut nodes: Query<OffscreenUiNode>,
+) {
+    let cursor = window.physical_cursor_position();
+    for range in stack.partition.iter().rev() {
+        let Some(root) = stack.uinodes.get(range.start) else {
+            continue;
+        };
+        let Ok((_, _, target, _, _, _, _)) = nodes.get(*root) else {
+            continue;
+        };
+        let Some(camera) = target.get() else {
+            continue;
+        };
+        if !matches!(cameras.get(camera), Ok(RenderTarget::Image(_))) {
+            continue;
+        }
+
+        let mut blocked = false;
+        for &entity in stack.uinodes[range.clone()].iter().rev() {
+            let Ok((computed, transform, _, visibility, policy, interaction, relative)) =
+                nodes.get_mut(entity)
+            else {
+                continue;
+            };
+            let visible = visibility.is_some_and(|visibility| visibility.get());
+            let hit = !blocked
+                && visible
+                && cursor.is_some_and(|point| {
+                    computed.contains_point(*transform, point)
+                        && clip_check_recursive(point, entity, &clipping, &parents)
+                });
+            if let Some(mut relative) = relative {
+                let next = RelativeCursorPosition {
+                    cursor_over: hit,
+                    normalized: cursor
+                        .and_then(|point| computed.normalize_point(*transform, point)),
+                };
+                if *relative != next {
+                    *relative = next;
+                }
+            }
+            if let Some(mut interaction) = interaction {
+                let next = if hit && mouse.just_pressed(MouseButton::Left) {
+                    Interaction::Pressed
+                } else if hit && mouse.pressed(MouseButton::Left) {
+                    *interaction
+                } else if hit {
+                    Interaction::Hovered
+                } else {
+                    Interaction::None
+                };
+                if *interaction != next {
+                    *interaction = next;
+                }
+            }
+            if hit && !matches!(policy, Some(FocusPolicy::Pass)) {
+                blocked = true;
+            }
         }
     }
 }

@@ -260,6 +260,8 @@ pub(crate) struct QuickSaveContext<'w, 's> {
     gallery_snapshot: ResMut<'w, crate::storage::gallery::GallerySnapshot>,
     preview_coordinator: Res<'w, crate::storage::save::SavePreviewCoordinator>,
     editor_sync: Option<Res<'w, crate::runtime::resources::EditorSyncSession>>,
+    authoring_preview: Option<Res<'w, crate::runtime::preview::AuthoringPreviewSession>>,
+    persistence_disabled: Option<Res<'w, crate::runtime::resources::PersistenceDisabled>>,
 }
 
 #[derive(SystemParam)]
@@ -520,13 +522,15 @@ pub fn handle_dialog_click(
     commands.remove_resource::<DialogRequest>();
 
     if left_clicked {
-        if context.editor_sync.is_some()
-            && !matches!(
-                req.action,
-                DialogAction::Noop | DialogAction::SystemMessage | DialogAction::ExitGame
-            )
-        {
-            log::debug!("ignored persistent UI action during Studio synchronization");
+        if !crate::runtime::resources::writable_runtime_session(
+            context.editor_sync.is_some(),
+            context.authoring_preview.is_some(),
+            context.persistence_disabled.is_some(),
+        ) && !matches!(
+            req.action,
+            DialogAction::Noop | DialogAction::SystemMessage | DialogAction::ExitGame
+        ) {
+            log::debug!("ignored persistent UI action in a read-only runtime session");
             return;
         }
         match &req.action {

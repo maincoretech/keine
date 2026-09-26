@@ -127,28 +127,12 @@ impl EngineProcess {
             next_request: 1,
             closed: false,
         };
-        match process.request(ClientCommand::Hello {
+        let hello = process.request(ClientCommand::Hello {
             protocol_version: PROTOCOL_VERSION,
             token,
             editor_version: env!("CARGO_PKG_VERSION").into(),
-        })? {
-            ServerResponse::Hello {
-                protocol_version,
-                capabilities,
-                ..
-            } if protocol_version == PROTOCOL_VERSION
-                && [
-                    Capability::Validate,
-                    Capability::RawFramePreview,
-                    Capability::SourceSnapshots,
-                    Capability::RuntimeInput,
-                    Capability::SourceCursor,
-                    Capability::Lifecycle,
-                ]
-                .iter()
-                .all(|required| capabilities.contains(required)) => {}
-            other => return Err(unexpected("compatible hello", &other)),
-        }
+        })?;
+        require_compatible_hello(hello)?;
         match process.request(ClientCommand::OpenProject {
             path: project.to_owned(),
         })? {
@@ -305,6 +289,13 @@ impl EngineProcess {
                 code: ErrorCode::InvalidRequest,
                 ..
             } => Ok(None),
+            ServerResponse::Error {
+                code: ErrorCode::ProtocolMismatch,
+                message,
+            } => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{message}. Update Kēne Editor and Engine together"),
+            )),
             ServerResponse::Error { code, message } => Err(io::Error::other(format!(
                 "Engine authoring error {code:?}: {message}"
             ))),
@@ -470,11 +461,70 @@ fn unexpected(expected: &str, actual: &ServerResponse) -> io::Error {
     )
 }
 
+fn require_compatible_hello(response: ServerResponse) -> io::Result<()> {
+    let ServerResponse::Hello {
+        protocol_version,
+        capabilities,
+        ..
+    } = response
+    else {
+        return Err(unexpected("compatible hello", &response));
+    };
+    if protocol_version != PROTOCOL_VERSION {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "Engine authoring protocol {protocol_version} is incompatible with Editor protocol {PROTOCOL_VERSION}. Update both apps together"
+            ),
+        ));
+    }
+    let missing: Vec<_> = [
+        Capability::Validate,
+        Capability::RawFramePreview,
+        Capability::SourceSnapshots,
+        Capability::RuntimeInput,
+        Capability::SourceCursor,
+        Capability::Lifecycle,
+    ]
+    .into_iter()
+    .filter(|required| !capabilities.contains(required))
+    .collect();
+    if !missing.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "Engine is missing required authoring capabilities {missing:?}. Update both apps together"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
 
     use super::*;
+
+    #[test]
+    fn handshake_rejects_mismatched_version_and_missing_capability() {
+        let hello = |protocol_version, capabilities| ServerResponse::Hello {
+            protocol_version,
+            engine_version: "test".into(),
+            build_id: "test".into(),
+            project_formats: vec!["native".into()],
+            capabilities,
+        };
+        let mismatch = require_compatible_hello(hello(PROTOCOL_VERSION + 1, vec![]))
+            .unwrap_err()
+            .to_string();
+        assert!(mismatch.contains("Update both apps together"));
+        let missing = require_compatible_hello(hello(PROTOCOL_VERSION, vec![]))
+            .unwrap_err()
+            .to_string();
+        assert!(missing.contains("RawFramePreview"));
+        assert!(missing.contains("Update both apps together"));
+    }
 
     #[test]
     fn locator_prefers_an_explicit_existing_engine() {

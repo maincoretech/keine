@@ -1,7 +1,10 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
-use crate::runtime::resources::{AssetLoadingGate, EditorSyncSession, GameState};
+use crate::runtime::preview::AuthoringPreviewSession;
+use crate::runtime::resources::{
+    AssetLoadingGate, EditorSyncSession, GameState, PersistenceDisabled, writable_runtime_session,
+};
 use crate::ui::backlog::BacklogUiState;
 use crate::ui::dialog::DialogRequest;
 use crate::ui::extra::ExtraUi;
@@ -93,10 +96,18 @@ pub(crate) fn dialog_allowed(scope: Res<UiInputScope>) -> bool {
     *scope == UiInputScope::Dialog
 }
 
-/// Studio owns the preview cursor and its source project. Native preview UI
-/// may still be inspected, but actions that mutate saves/settings stay inert.
-pub(crate) fn writable_session(editor_sync: Option<Res<EditorSyncSession>>) -> bool {
-    editor_sync.is_none()
+/// Studio sync stays read-only. Native authoring Preview writes only to the
+/// Engine child's isolated preview-data root.
+pub(crate) fn writable_session(
+    editor_sync: Option<Res<EditorSyncSession>>,
+    authoring_preview: Option<Res<AuthoringPreviewSession>>,
+    persistence_disabled: Option<Res<PersistenceDisabled>>,
+) -> bool {
+    writable_runtime_session(
+        editor_sync.is_some(),
+        authoring_preview.is_some(),
+        persistence_disabled.is_some(),
+    )
 }
 
 #[cfg(test)]
@@ -114,5 +125,13 @@ mod tests {
         assert!(UiInputScope::Backlog.allows_backlog());
         assert!(!UiInputScope::Menu.allows_backlog());
         assert!(!UiInputScope::Dialog.allows_backlog());
+    }
+
+    #[test]
+    fn only_isolated_authoring_preview_can_write_during_editor_sync() {
+        assert!(writable_runtime_session(false, false, false));
+        assert!(!writable_runtime_session(true, false, false));
+        assert!(writable_runtime_session(true, true, false));
+        assert!(!writable_runtime_session(true, true, true));
     }
 }

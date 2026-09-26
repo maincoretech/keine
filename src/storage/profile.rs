@@ -7,8 +7,9 @@ use bevy::prelude::*;
 use keine_core::Value;
 use serde::{Deserialize, Serialize};
 
+use crate::runtime::preview::AuthoringPreviewSession;
 use crate::runtime::resources::{
-    EditorSyncSession, GameState, PersistenceDisabled, PersistenceRoot,
+    EditorSyncSession, GameState, PersistenceDisabled, PersistenceRoot, writable_runtime_session,
 };
 
 const VERSION: u32 = 1;
@@ -64,9 +65,14 @@ pub(crate) fn persist(
     project_root: Res<PersistenceRoot>,
     mut writer: ResMut<ProfileWriter>,
     editor_sync: Option<Res<EditorSyncSession>>,
+    authoring_preview: Option<Res<AuthoringPreviewSession>>,
     persistence_disabled: Option<Res<PersistenceDisabled>>,
 ) {
-    if editor_sync.is_some() || persistence_disabled.is_some() {
+    if !writable_runtime_session(
+        editor_sync.is_some(),
+        authoring_preview.is_some(),
+        persistence_disabled.is_some(),
+    ) {
         return;
     }
     if writer.dirty_seconds == 0.0 && !state.is_changed() {
@@ -91,9 +97,14 @@ pub(crate) fn flush_on_exit(
     project_root: Res<PersistenceRoot>,
     mut writer: ResMut<ProfileWriter>,
     editor_sync: Option<Res<EditorSyncSession>>,
+    authoring_preview: Option<Res<AuthoringPreviewSession>>,
     persistence_disabled: Option<Res<PersistenceDisabled>>,
 ) {
-    if editor_sync.is_some() || persistence_disabled.is_some() {
+    if !writable_runtime_session(
+        editor_sync.is_some(),
+        authoring_preview.is_some(),
+        persistence_disabled.is_some(),
+    ) {
         return;
     }
     if exits.read().next().is_some() && writer.saved != state.global_vars {

@@ -61,10 +61,21 @@ pub struct StoreCodec(pub Arc<dyn StoreAdapter>);
 #[derive(Resource)]
 pub struct ScriptWatcherResource(pub Mutex<ScriptWatcher>);
 
-/// Marks a read-only native-editor preview that follows the adapter's
-/// persisted selected-block position instead of entering keine's title screen.
+/// Marks an editor-driven runtime that follows the selected source position
+/// instead of entering Kēne's title screen. Studio sync remains read-only;
+/// native authoring Preview may write only to its isolated preview data root.
 #[derive(Resource, Default)]
 pub struct EditorSyncSession;
+
+/// One policy for runtime UI and storage writes. An editor-controlled session
+/// is writable only when it is the isolated native authoring Preview.
+pub(crate) fn writable_runtime_session(
+    editor_sync: bool,
+    authoring_preview: bool,
+    persistence_disabled: bool,
+) -> bool {
+    !persistence_disabled && (!editor_sync || authoring_preview)
+}
 
 /// Enables source and asset watching for interactive development sessions.
 /// Shipping runtimes and deterministic benchmarks deliberately omit it.

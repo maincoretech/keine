@@ -38,6 +38,18 @@ fn one_crashed_engine_does_not_break_another_project_session() {
 }
 
 #[test]
+fn crashed_engine_can_reopen_the_same_project() {
+    let mut first = EngineProcess::launch(&engine(), &project(), 301).unwrap();
+    first.kill_for_test().unwrap();
+    drop(first);
+
+    let mut restarted = EngineProcess::launch(&engine(), &project(), 302).unwrap();
+    restarted.ping().unwrap();
+    assert_eq!(restarted.validate().unwrap().errors, 0);
+    restarted.shutdown().unwrap();
+}
+
+#[test]
 fn stopping_one_project_session_does_not_break_another() {
     let mut first = EngineProcess::launch(&engine(), &project(), 201).unwrap();
     let mut second = EngineProcess::launch(&engine(), &project(), 202).unwrap();

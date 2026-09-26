@@ -89,7 +89,9 @@ Formal signing and notarization are outside the current P7 scope.
   Engine Start remains manual. Authoring protocol v4 reports the Engine's executed source location
   while visible: Block selection seeks the Engine, direct Preview input advances it, and the
   corresponding Block/scene/file follows without a separate input mode. The older LetsGal Studio
-  sync session remains view-only. Edge-triggered visibility pause and bounded
+  sync session remains view-only. Native authoring Preview permits runtime save/load and settings
+  only in a child-owned temporary data root, never in source-project or shipping save data; that
+  test data is discarded on a clean Engine child exit. Edge-triggered visibility pause and bounded
   Stop/Close cleanup remain independent of layout. Panel visibility comes
   from Dock activation rather than render-frequency inference, so unchanged UI cannot oscillate
   the child and audio between pause/resume. The Engine owns the normal three-camera
