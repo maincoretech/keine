@@ -874,7 +874,7 @@ fn checked_relative(path: &Path) -> io::Result<PathBuf> {
     Ok(path.to_owned())
 }
 
-fn confined_existing(root: &Path, relative: &Path) -> io::Result<PathBuf> {
+pub(crate) fn confined_existing(root: &Path, relative: &Path) -> io::Result<PathBuf> {
     let root = root.canonicalize()?;
     let candidate = root.join(relative).canonicalize()?;
     if !candidate.starts_with(&root) {

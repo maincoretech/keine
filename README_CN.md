@@ -21,6 +21,10 @@ cargo editor projects/test-project
 `cargo editor` 打开空工作台；后面可接一个或多个工程路径，分别打开工程窗口。
 编辑器可浏览并修改原生 Eiyashou 工程：`config.yaml`、配置指定的清单以及
 `scripts/**/*.shou` 可写；兼容工程和其他文档在编辑器中只读。
+新 demo 完成前，本机 `projects/test-project` 指向由 `projects/letsgal`
+迁移得到的 `projects/letsgal-native`。商业示例内容不纳入仓库；新检出可迁移
+自己的来源工程，或将命令中的路径换成其他工程。临时示例已是可编辑的原生
+`.shou` 工程。
 
 Preview 需要预先构建且协议匹配的 Engine。源码检出后，首次在 Preview 中点击启动前
 先构建一次：
@@ -38,12 +42,11 @@ cargo editor projects/test-project
 **`cargo dev editor` 不是编辑器命令。** `cargo dev <工程>` 启动游戏工程；
 创作界面请用 `cargo editor <工程>`。
 
-## 运行与发行游戏
+## 运行示例
 
 ```bash
 cargo validate projects/test-project
 cargo dev projects/test-project
-cargo bundle projects/test-project
 ```
 
 `cargo dev` 启用热重载及原生、FFmpeg 视频功能，因此需要相应的开发库。
@@ -53,7 +56,8 @@ cargo bundle projects/test-project
 cargo run --features hot-reload -- dev projects/test-project
 ```
 
-示例工程的[验收清单](projects/test-project/ACCEPTANCE.md)用于手动检查编辑器和运行时。
+正式发行前需要将工程媒体转换为 WebP、Ogg Opus 等规范格式，再使用
+`cargo bundle <工程>`。本地 LetsGal 示例只用于临时开发展示。
 `cargo bundle` 默认在 `target/bundle/` 生成完整的桌面发行目录：
 
 ```text
@@ -86,6 +90,7 @@ Ogg Opus；开发时可读取的其他格式不会自动进入发行构建。首
 | `cargo perf <工程> [选项]` | 测量运行帧或启动耗时（`--startup`） |
 
 `cargo migrate` 不改写源工程；不能保留原语义时会拒绝转换。
+高级引擎动作通过 `.shou` 内的 typed RON 表达，简洁的原生写法仍可用于手写脚本。
 `cargo remap` 只更新引用，不转换媒体文件。
 `cargo bundle <工程> --benchmark` 生成独立的性能测试包。
 各命令的选项可用 `cargo <命令> --help` 查看。
@@ -131,7 +136,7 @@ cargo fmt --all --check
 cargo check --workspace
 cargo clippy --workspace --all-targets
 cargo test --workspace
-cargo validate projects/test-project
+cargo validate tests/fixtures/native-smoke
 ```
 
 `crates/core/` 负责不依赖 Bevy 的模型与执行；`crates/loader/` 负责工程和格式适配；

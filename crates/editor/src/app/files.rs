@@ -292,6 +292,25 @@ impl WorkbenchPanel {
         }
     }
 
+    pub(super) fn show_in_folder(
+        &mut self,
+        relative: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(root) = self.explorer_root() else {
+            return;
+        };
+        let result = file_ops::confined_existing(&root, relative)
+            .and_then(|path| open_in_file_manager(&path));
+        if let Err(error) = result {
+            window.push_notification(
+                Notification::error(format!("Could not show in folder: {}", short_error(&error))),
+                cx,
+            );
+        }
+    }
+
     pub(super) fn begin_file_edit(
         &mut self,
         mode: FileEditMode,
@@ -730,6 +749,53 @@ impl WorkbenchPanel {
         })
         .detach();
         cx.notify();
+    }
+}
+
+fn open_in_file_manager(path: &Path) -> io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut command = std::process::Command::new("open");
+        if !path.is_dir() {
+            command.arg("-R");
+        }
+        command.arg(path).spawn().map(|_| ())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let mut command = std::process::Command::new("explorer");
+        if path.is_dir() {
+            command.arg(path);
+        } else {
+            let mut selection = std::ffi::OsString::from("/select,");
+            selection.push(path.as_os_str());
+            command.arg(selection);
+        }
+        command.spawn().map(|_| ())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let directory = if path.is_dir() {
+            path
+        } else {
+            path.parent()
+                .ok_or_else(|| io::Error::other("File has no parent folder"))?
+        };
+        std::process::Command::new("xdg-open")
+            .arg(directory)
+            .spawn()
+            .map(|_| ())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        let _ = path;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "No system file manager is available on this platform",
+        ))
     }
 }
 

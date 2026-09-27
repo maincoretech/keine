@@ -244,7 +244,7 @@ cargo test --workspace
 改动项目、loader、adapter、compiler 或 publisher 时另跑：
 
 ```text
-cargo validate projects/test-project
+cargo validate tests/fixtures/native-smoke
 ```
 
 还要执行任务文件声明的 feature checks 和 benchmarks。Editor UI 的验收至少应覆盖：

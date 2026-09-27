@@ -16,7 +16,9 @@
 2. **当前 Engine 能力目录**：从审计基线代码中读取的真实 runtime/core 能力，例如 Transition、Easing、Position、媒体格式。
 3. **实现对齐项**：当前代码如何承载语言合同，以及哪些能力明确在 v1 范围外。
 
-Eiyashou 是作者源语言。它编译到 runtime-neutral `Action` / `Program`，但 **`Action` / `Program` 不是作者文档模型，也绝不能反向覆盖 `.shou` 源文件**。
+Eiyashou 是作者源语言。简洁的 v1 语句编译到 runtime-neutral `Action` / `Program`。
+高级 `engine` 语句显式书写 typed `Action`，用于完整保留现有引擎动作；迁移器只生成新工程，
+绝不反向覆盖来源 `.shou` 文件。
 
 ---
 
@@ -77,6 +79,10 @@ script:
 ```
 
 `entry` 指定入口 scene。
+
+`script.initial_state` 可选，分别用 `variables`、`session_variables`、
+`shared_variables` 保存首条动作执行前的变量值。`cargo migrate` 用它保留来源工程的
+普通、会话和共享初始值；没有配置时三者均为空。
 
 manifest 路径相对于项目根。默认值分别为 `assets.yaml` 与 `characters.yaml`，因此常规项目
 可以省略这两个字段；脚本不重复声明角色。
@@ -162,7 +168,7 @@ background(school)
 
 ## 2.2 标准 namespace
 
-v1 标准 authoring namespace：
+当前标准资源 namespace（其中后三项由高级 typed Action 使用）：
 
 ```text
 backgrounds
@@ -171,9 +177,30 @@ voices
 bgm
 se
 videos
+particles
+mini_avatars
+luts
 ```
 
-当前 Engine 还具有粒子、LUT 等更广泛的资源能力；它们不属于这份基础 Eiyashou v1 的固定作者语法，可由后续 Engine/DSL 协作者扩展。
+`particles`、`mini_avatars`、`luts` 服务于下述高级 typed Action；基础 v1 简写保持不变。
+
+### 高级 typed Action
+
+当基础简写无法表达完整引擎参数时，可使用 `engine`，其对象恰好包含一个
+`action`（Serde JSON Action）或 `ron`（RON 编码的 typed Action）字段：
+
+```eiyashou
+scene start {
+  engine {"action":"WaitForAdvance"},
+  engine {"ron":"WaitForAdvance"}
+}
+```
+
+RON 形式能区分嵌套可选值的“未修改”和“显式清除”，迁移器因此用它保留完整
+typed Action 参数。`cargo migrate` 会重新加载目标工程，逐条比较动作与来源，
+并核对普通、会话和共享初始变量。引擎新增可序列化 Action 时不需要另加一套
+DSL 简写；`engine` 直接使用该 Action 的 typed 字段。资源仍需在对应 namespace
+声明，路径仍须满足项目 confinement 规则。
 
 未知 namespace：
 
@@ -2275,7 +2302,9 @@ none
 - implicit source migration；
 - import system。
 
-Engine 已经存在但未进入基础 DSL 的高级 runtime Action（camera/post-process/particle/stage timeline 等），由后续 Engine-side DSL collaborator 按真实需求扩展；不要为了“暴露全部 core enum”污染基础作者语法。
+上述条目描述基础 v1 简写的边界。Engine 已经拥有的 camera、post-process、particle、
+stage timeline 等 Action 可通过高级 `engine` 语句逐字段表达；不存在的脚本执行器、
+Studio 扩展宿主或专用 DSL 不会因此自动出现。
 
 ---
 
@@ -2316,7 +2345,7 @@ Engine 已经存在但未进入基础 DSL 的高级 runtime Action（camera/post
 - Editor/Card View 是 source projection，不是第二正文。
 - migration 永远显式。
 - compatibility adapter 不成为 Eiyashou 的语法模板。
-- v1 保持小而严格；高级镜头、滤镜、粒子、timeline、富文本等由后续 Engine-side collaborator 基于真实产品需求扩展。
+- v1 简写保持小而严格；现有高级引擎动作由 `engine` 语句承载，新的简写仍以实际作者需求决定。
 
 ---
 

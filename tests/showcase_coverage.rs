@@ -361,15 +361,15 @@ fn letsgal_1_9_showcase_exercises_every_timeline_property_and_event() {
 }
 
 #[test]
-fn native_editor_project_remains_source_backed() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("projects/test-project");
+fn native_smoke_fixture_remains_source_backed() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native-smoke");
     let yaml = std::fs::read_to_string(root.join("config.yaml")).unwrap();
     let mut config = keine_core::config::GameConfig::from_yaml(&yaml).unwrap();
     let mut project = keine_loader::load_project(&root, &config.adapter.asset).unwrap();
     project.prepare_eiyashou(&mut config).unwrap();
     let scenes =
-        keine_loader::load_scenes(&project).expect("the native editor project should compile");
-    assert!(scenes.len() >= 3);
+        keine_loader::load_scenes(&project).expect("the native smoke fixture should compile");
+    assert_eq!(scenes.len(), 1);
     assert!(scenes.iter().all(|scene| scene.diagnostics.is_empty()));
 }
 

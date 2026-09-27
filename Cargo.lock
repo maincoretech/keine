@@ -5353,6 +5353,7 @@ dependencies = [
  "postcard",
  "rfd",
  "rodio",
+ "ron",
  "serde",
  "serde_json",
  "symphonia 0.6.0",
@@ -5414,6 +5415,7 @@ dependencies = [
  "log",
  "notify 8.2.0",
  "postcard",
+ "ron",
  "serde",
  "serde_json",
 ]

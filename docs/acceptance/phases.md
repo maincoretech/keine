@@ -2,8 +2,9 @@
 
 已完成阶段的手工验收步骤集中于此；LetsGal Studio 集成仍保留独立清单。
 
-此清单记录旧阶段的历史验收场景，部分菜单和动作已不属于当前测试工程。
-当前原生编辑器验收使用 [`projects/test-project/ACCEPTANCE.md`](../../projects/test-project/ACCEPTANCE.md)；
+此清单记录旧阶段的历史验收场景，原生版 `projects/test-project` 已删除；同路径现为
+未跟踪的 LetsGal 临时示例，下文原生工程的操作预期不再适用。当前最小原生格式自动验证
+使用 `tests/fixtures/native-smoke`。
 保留的 LetsGal 时间轴回归工程使用 [`tests/fixtures/letsgal-timeline/ACCEPTANCE.md`](../../tests/fixtures/letsgal-timeline/ACCEPTANCE.md)。
 
 ## Phase 1 桌面端验收提纲
@@ -216,8 +217,7 @@ FALLEN_LEAVES。粒子应具有柔边、速度/尺寸/漂移差异；切换时�
    上一曲/播放/下一曲/停止均可用，重启引擎后解锁内容仍存在。
 4. 进入 **07 · 音频与流式视频**：三个 `calibration_*.opus` 从 `content/shared/audio`
    播放，`calibration_pan.mp4` 从主资源根增量解码，控制台没有 asset-not-found、Opus
-   或 FFmpeg 错误。完整的逐项预期见
-   [`projects/test-project/ACCEPTANCE.md`](../../projects/test-project/ACCEPTANCE.md)。
+   或 FFmpeg 错误。原逐项预期随旧示例一同移除。
 
 ### Hakutaku
 
@@ -227,7 +227,7 @@ target/phase7-release/keine
 ```
 
 `<project>` 可以是带 `config.yaml` 的原生工程或 LetsGal（`project.json`）工程；
-LetsGal 的配置在打包时物化为 `config.yaml`，`projects/test-project` 可直接打包。
+LetsGal 的配置在打包时物化为 `config.yaml`；旧原生示例曾可直接打包。
 
 5. `target/phase7-release` 包含引擎、`game.haku` 与 `data/*.taku`，且不包含启动脚本；快照内含
    `.keine/compiled/program.bin`，且不包含

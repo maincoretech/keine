@@ -1358,7 +1358,7 @@ fn confined_relative(value: &str) -> Option<PathBuf> {
     .then(|| path.to_owned())
 }
 
-fn confined_existing_file(root: &Path, relative: &Path) -> Option<PathBuf> {
+pub(crate) fn confined_existing_file(root: &Path, relative: &Path) -> Option<PathBuf> {
     let Ok(canonical_root) = root.canonicalize() else {
         return None;
     };
@@ -1450,8 +1450,8 @@ mod tests {
     static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
 
     #[test]
-    fn checked_in_native_project_populates_editor_views() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../projects/test-project");
+    fn checked_in_native_fixture_populates_editor_views() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/native-smoke");
         let workspace = crate::workspace::WorkspaceSession::open(&root).unwrap();
         let files = workspace.files();
         assert!(
@@ -1459,16 +1459,10 @@ mod tests {
                 .iter()
                 .any(|file| file.relative_path == Path::new("scripts/main.shou"))
         );
-        assert!(
-            files
-                .iter()
-                .any(|file| file.relative_path == Path::new("scratch/destination"))
-        );
         let index = AuthoringIndex::load(&root, files, &BTreeMap::new());
         assert!(index.native);
-        assert_eq!(index.scenes.len(), 3);
-        assert!(index.assets.len() >= 5);
-        assert!(!index.characters.is_empty());
+        assert_eq!(index.scenes.len(), 1);
+        assert!(index.assets.is_empty());
         assert!(index.problems.is_empty(), "{:?}", index.problems);
     }
 

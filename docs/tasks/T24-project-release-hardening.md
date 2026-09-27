@@ -31,7 +31,7 @@ versioning layer.
   transitions on available real targets; record unavailable targets explicitly.
 - Compare a repeatable packaged-build Preview startup, idle, and active-frame measurement with
   the existing baseline before claiming a performance change.
-- Run the complete workspace gate and `cargo validate projects/test-project` after integration.
+- Run the complete workspace gate and `cargo validate tests/fixtures/native-smoke` after integration.
 
 ## Current evidence
 
@@ -41,7 +41,7 @@ versioning layer.
   Resources, on `PATH`, or via `KEINE_ENGINE`. A focused test covers sibling-app discovery.
 - The macOS 0.10.1 release Editor and Engine built with locked dependencies. A fresh two-bundle
   package passed plist, version, and binary-hash checks. The packaged Editor opened the native
-  `projects/test-project`, and the independently packaged Engine rendered a real scene in Preview.
+  former native `projects/test-project`, and the independently packaged Engine rendered a real scene in Preview.
   Selecting a Block updated the frame and execution selection. Terminating only the Engine child
   produced an explicit failure; Start relaunched it and returned to Live. A process test also
   reopens the same project after a child crash. These checks do not prove installation from a
@@ -62,8 +62,8 @@ versioning layer.
 - A fresh packaged Editor GUI showed only the K brand on the empty workbench; Explorer appears
   after opening a project. A Recent click originally failed to open a project while opening ran
   synchronously during the row's click update; deferring it to the next app update repaired the
-  path. A rebuilt packaged Editor opened `test-project` from its Recent row and showed Explorer.
-- Format, workspace check, Clippy with `-D warnings`, all workspace tests, and test-project
+  path. A rebuilt packaged Editor opened the former `test-project` from its Recent row and showed Explorer.
+- Format, workspace check, Clippy with `-D warnings`, all workspace tests, and former test-project
   validation passed. The loopback-dependent process tests required unsandboxed local IPC.
 - The existing real-GPU Preview integration test passed twice. The cold first run observed
   1338/158/167 ms to first visible frame; the immediate repeat observed 158/174/151 ms, with

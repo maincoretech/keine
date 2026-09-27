@@ -23,6 +23,11 @@ cargo editor projects/test-project
 windows. The editor can browse and edit native Eiyashou projects. In those
 projects, `config.yaml`, configured manifests, and `scripts/**/*.shou` are
 writable; compatibility projects and other documents are read-only.
+Until the new demo is ready, the local `projects/test-project` path points to
+`projects/letsgal-native`, migrated from the LetsGal Studio source at
+`projects/letsgal`. The commercial example content is not tracked; in a fresh
+checkout, migrate your own source or substitute another project path. The
+temporary example is a native `.shou` project and is editable in the Editor.
 
 Preview needs a compatible, prebuilt Engine executable. For a source checkout,
 build it once before pressing Start in Preview:
@@ -41,12 +46,11 @@ handshake. The standalone macOS packaging instructions are in
 **`cargo dev editor` is not an editor command.** `cargo dev <project>` runs a
 game project. Use `cargo editor <project>` for the authoring UI.
 
-## Run and release a game
+## Run the example
 
 ```bash
 cargo validate projects/test-project
 cargo dev projects/test-project
-cargo bundle projects/test-project
 ```
 
 `cargo dev` enables hot reload and both native and FFmpeg video features, so
@@ -57,8 +61,9 @@ without its video features:
 cargo run --features hot-reload -- dev projects/test-project
 ```
 
-The sample project's [acceptance checklist](projects/test-project/ACCEPTANCE.md)
-is for hands-on editor and runtime checks. `cargo bundle` writes a complete
+For a formal release, convert project media to canonical WebP and Ogg Opus
+before running `cargo bundle <project>`. The local LetsGal project is a
+temporary development example. `cargo bundle` writes a complete
 desktop release to `target/bundle/` by default:
 
 ```text
@@ -93,7 +98,9 @@ These `cargo` commands are repository aliases from `.cargo/config.toml`:
 | `cargo perf <project> [options]` | Measure runtime frames or startup (`--startup`) |
 
 `cargo migrate` reads its source without rewriting it and refuses a conversion
-that cannot preserve the source semantics. `cargo remap` changes references,
+that cannot preserve the source semantics. Advanced engine actions use typed
+RON inside `.shou`, while the concise native statements remain available for
+hand-written scripts. `cargo remap` changes references,
 not media files. `cargo bundle <project> --benchmark` builds a separate
 benchmark package. Run `cargo <command> --help` for command-specific options.
 
@@ -142,7 +149,7 @@ cargo fmt --all --check
 cargo check --workspace
 cargo clippy --workspace --all-targets
 cargo test --workspace
-cargo validate projects/test-project
+cargo validate tests/fixtures/native-smoke
 ```
 
 `crates/core/` owns the Bevy-free model and execution; `crates/loader/` owns

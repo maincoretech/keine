@@ -520,14 +520,10 @@ mod preview_follow_tests {
 
     #[test]
     fn native_preview_action_lines_resolve_to_visible_blocks() {
-        let source = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../projects/test-project/scripts/main.shou"
-        ))
-        .unwrap();
-        for line in [4, 5, 6, 10, 14, 15, 16, 21, 24, 31] {
+        let source = "scene start {\n  \"One\",\n  \"Two\"\n}\n";
+        for line in [2, 3] {
             assert!(
-                projected_block_at(&source, line - 1, 2).is_some(),
+                projected_block_at(source, line - 1, 2).is_some(),
                 "Preview source line {line} should select a Block"
             );
         }

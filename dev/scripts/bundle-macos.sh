@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-project="${1:-projects/test-project}"
+if [[ $# -lt 1 || -z "$1" ]]; then
+    echo "usage: $0 <project> [app-name] [bundle-identifier]" >&2
+    exit 2
+fi
+project="$1"
 name="${2:-Kēne}"
 bundle_identifier="${3:-}"
 root="$(cd "$(dirname "$0")/../.." && pwd)"

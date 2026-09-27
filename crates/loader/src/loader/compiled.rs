@@ -98,11 +98,9 @@ pub(crate) fn with_compiled_program(
         CompiledProgramSceneLoader::from_program_bin(bytes, expected_schema)
             .with_context(|| format!("failed to load {COMPILED_PROGRAM_PATH}"))?,
     );
-    Ok(ContentProject::with_structured_scenes(
-        project.root,
-        project.sources,
-        loader,
-    ))
+    let mut project = project;
+    project.scene_loader = Some(loader);
+    Ok(project)
 }
 
 #[cfg(test)]
@@ -111,8 +109,8 @@ mod tests {
     use std::fs;
 
     use crate::compiled::{IR_SCHEMA_VERSION, ProgramMetadataV1, encode};
-    use keine_core::config::AssetSourceConfig;
-    use keine_core::{Action, Program};
+    use keine_core::config::{AssetSourceConfig, GameConfig};
+    use keine_core::{Action, Program, Value};
 
     fn compiled_bytes(action_count: usize) -> Vec<u8> {
         let scenes = vec![crate::CompiledSceneV1 {
@@ -185,10 +183,22 @@ mod tests {
     fn packaged_project_uses_compiled_scenes() {
         let root =
             std::env::temp_dir().join(format!("keine-compiled-loader-{}", std::process::id()));
-        let project = project(&root);
+        let mut project = project(&root);
+        let mut config = GameConfig::default();
+        config.adapter.script = "keine".into();
+        config
+            .script
+            .initial_state
+            .variables
+            .insert("affinity".into(), Value::Int(3));
+        project.set_native_initial_state(&config);
         let attached =
             with_compiled_program(project, &compiled_bytes(1), IR_SCHEMA_VERSION).unwrap();
         assert_eq!(attached.scene_loader().unwrap().name(), "compiled");
+        assert_eq!(
+            attached.initial_state().unwrap().variables["affinity"],
+            Value::Int(3)
+        );
         let _ = fs::remove_dir_all(&root);
     }
 }

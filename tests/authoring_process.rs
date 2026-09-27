@@ -15,7 +15,7 @@ fn engine() -> PathBuf {
 }
 
 fn project() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("projects/test-project")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native-smoke")
 }
 
 #[test]

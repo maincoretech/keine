@@ -31,7 +31,7 @@ cargo dev tests/fixtures/letsgal-timeline
 - 1920×1080 设计分辨率和 16:9 视口裁切。
 
 WebGAL 命令覆盖脚本已移至 `tests/fixtures/webgal-showcase/`，仅作为 parser/IR 自动化
-回归输入。编辑器的原生格式测试工程位于 `projects/test-project/`。
+回归输入。编辑器的原生格式最小测试工程位于 `tests/fixtures/native-smoke/`。
 
 ## Portable benchmark 场景
 

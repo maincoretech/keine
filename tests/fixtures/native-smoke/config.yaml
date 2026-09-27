@@ -1,0 +1,8 @@
+title: Native Smoke
+project:
+  id: keine-native-smoke
+adapter:
+  script: keine
+script:
+  version: 1
+  entry: start

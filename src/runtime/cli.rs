@@ -613,7 +613,7 @@ mod tests {
     fn benchmark_bundle_uses_a_separate_suffixed_directory() {
         let command = parse(&[
             "bundle".into(),
-            "projects/test-project".into(),
+            "example-project".into(),
             "--output".into(),
             "target/colleague".into(),
             "--benchmark".into(),
@@ -631,7 +631,7 @@ mod tests {
 
     #[test]
     fn normal_bundle_keeps_its_original_directory() {
-        let command = parse(&["bundle".into(), "projects/test-project".into()]).unwrap();
+        let command = parse(&["bundle".into(), "example-project".into()]).unwrap();
         assert!(matches!(
             command,
             CliCommand::Bundle {
@@ -644,7 +644,7 @@ mod tests {
 
     #[test]
     fn pack_has_a_resource_only_default_output() {
-        let command = parse(&["pack".into(), "projects/test-project".into()]).unwrap();
+        let command = parse(&["pack".into(), "example-project".into()]).unwrap();
         assert!(matches!(
             command,
             CliCommand::Pack { output, .. }
@@ -681,15 +681,8 @@ mod tests {
     #[test]
     fn pack_and_remap_are_separate_commands() {
         assert!(parse(&["pack".into()]).is_err());
-        assert!(
-            parse(&[
-                "pack".into(),
-                "projects/test-project".into(),
-                "--remap".into(),
-            ])
-            .is_err()
-        );
-        assert!(parse(&["remap".into(), "projects/test-project".into()]).is_err());
+        assert!(parse(&["pack".into(), "example-project".into(), "--remap".into(),]).is_err());
+        assert!(parse(&["remap".into(), "example-project".into()]).is_err());
         assert!(parse(&["configure".into()]).is_err());
     }
 

@@ -49,7 +49,10 @@ caused by Kēne changes.
 - `src/ui/`: fixed MainCore UI, overlays, screens, stage controls, shared UI mechanisms.
 - `src/storage/`: persistence roots, saves, backups, profiles, history, gallery, settings.
 - `src/compiler.rs`, `src/publisher.rs`, `src/resource_migration.rs`: publisher-only tooling.
-- `projects/test-project/`: shared end-to-end acceptance project; integration-owned.
+- `tests/fixtures/native-smoke/`: tracked native project for deterministic tests; integration-owned.
+- `projects/letsgal/`: ignored local LetsGal Studio source for compatibility tests.
+- `projects/letsgal-native/`: ignored local `.shou` conversion of that source.
+- `projects/test-project`: local link to the converted temporary example.
 
 ## Code and evidence quality
 
@@ -77,7 +80,7 @@ cargo clippy --workspace --all-targets
 cargo test --workspace
 ```
 
-Run `cargo validate projects/test-project` for project, loader, adapter, compiler, or publishing
+Run `cargo validate tests/fixtures/native-smoke` for project, loader, adapter, compiler, or publishing
 changes. Run the task-specific feature checks and benchmarks declared in `docs/tasks/` when the
 affected code is not exercised by the default workspace suite.
 
@@ -90,7 +93,7 @@ affected code is not exercised by the default workspace suite.
    report the proposed interface change to the orchestrator; do not edit around the boundary.
 4. `AGENTS.md`, `docs/PROJECT_STATE.md`, `docs/tasks/`, `Cargo.toml`, `Cargo.lock`, `.cargo/`,
    `src/lib.rs`, `src/runtime.rs`, `src/runtime/bootstrap.rs`, `README*`,
-   `docs/performance-baseline.md`, and `projects/test-project/` are integration-owned unless a
+   `docs/performance-baseline.md`, and `tests/fixtures/native-smoke/` are integration-owned unless a
    task explicitly grants ownership.
 5. Workers do not merge or push `main`. Commit a focused worker result only when requested, then
    report its commit, files, validation, risks, and interface effects.

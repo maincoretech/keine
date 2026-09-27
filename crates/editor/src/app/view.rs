@@ -1729,6 +1729,117 @@ pub(super) fn render_block_projection(
     vertical_overflow_view("eiyashou-block-scroll", scroll_handle, content)
 }
 
+pub(super) fn render_asset_preview(
+    selection: Option<AssetPreviewSelection>,
+    selected_count: usize,
+) -> AnyElement {
+    let Some(asset) = selection else {
+        return div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .p_4()
+            .text_sm()
+            .text_color(rgb(MUTED))
+            .child(if selected_count > 1 {
+                format!("{selected_count} assets selected")
+            } else {
+                "Select an asset to preview".to_owned()
+            })
+            .into_any_element();
+    };
+    let image = matches!(asset.kind, AssetKind::Background | AssetKind::Figure);
+    let supported_image = asset
+        .path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            gpui_kit::Img::extensions()
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(ext))
+        });
+    let display = if image && supported_image {
+        if let Some(file) = asset.file {
+            img(file)
+                .size_full()
+                .with_fallback(|| {
+                    div()
+                        .size_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_sm()
+                        .text_color(rgb(MUTED))
+                        .child("Could not decode image")
+                        .into_any_element()
+                })
+                .into_any_element()
+        } else {
+            preview_placeholder("Image is missing or outside the project")
+        }
+    } else if image {
+        preview_placeholder("This image format cannot be previewed")
+    } else {
+        preview_placeholder(match asset.kind {
+            AssetKind::Voice | AssetKind::Bgm | AssetKind::Effect => "Audio asset",
+            AssetKind::Video => "Video asset",
+            AssetKind::Background | AssetKind::Figure => unreachable!(),
+        })
+    };
+    div()
+        .size_full()
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_3()
+        .child(
+            div()
+                .flex_none()
+                .text_sm()
+                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                .text_color(rgb(INK))
+                .overflow_hidden()
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .child(asset.label),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .rounded(px(8.))
+                .bg(rgb(CANVAS))
+                .overflow_hidden()
+                .child(display),
+        )
+        .child(
+            div()
+                .flex_none()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .overflow_hidden()
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .child(format!("{} · {}", asset.kind.label(), asset.path.display())),
+        )
+        .into_any_element()
+}
+
+fn preview_placeholder(message: &'static str) -> AnyElement {
+    div()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_sm()
+        .text_color(rgb(MUTED))
+        .child(message)
+        .into_any_element()
+}
+
 pub(super) fn render_assets(
     root: &Path,
     index: &AuthoringIndex,
@@ -1907,6 +2018,13 @@ pub(super) fn render_assets(
         .into_iter()
         .enumerate()
         .map(|(row, asset)| {
+            let asset = asset.clone();
+            let display_name = asset
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| asset.path.display().to_string());
+            let preview_root = root.clone();
             div()
                 .id(("unmapped-row", row))
                 .w_full()
@@ -1917,6 +2035,13 @@ pub(super) fn render_assets(
                 .p_2()
                 .rounded(px(7.))
                 .bg(rgb(PANEL))
+                .cursor_pointer()
+                .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                .on_click(move |_, _, cx| {
+                    cx.global_mut::<EditorDocuments>()
+                        .set_unmapped_asset_preview(&preview_root, &asset);
+                    cx.refresh_windows();
+                })
                 .child(
                     Icon::new(AssetIconName::File)
                         .xsmall()
@@ -1931,13 +2056,7 @@ pub(super) fn render_assets(
                         .text_ellipsis()
                         .text_sm()
                         .text_color(rgb(INK))
-                        .child(
-                            asset
-                                .path
-                                .file_name()
-                                .map(|name| name.to_string_lossy().into_owned())
-                                .unwrap_or_else(|| asset.path.display().to_string()),
-                        ),
+                        .child(display_name),
                 )
         });
     div()

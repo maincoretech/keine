@@ -32,18 +32,19 @@ use gpui_kit::{
     ExternalPaths, FocusHandle, Focusable, Global, Hsla, InteractiveElement, IntoElement,
     KeyBinding, MouseButton, MouseDownEvent, ParentElement, PathPromptOptions, Pixels, Point,
     PromptButton, PromptLevel, Render, ScrollAnchor, ScrollHandle, SharedString, Stateful, Styled,
-    Subscription, WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, actions, anchored,
-    canvas, deferred, div, ease_out_quint, fill, hsla, linear_color_stop, linear_gradient,
-    prelude::*, px, radians, rgb, size,
+    StyledImage as _, Subscription, WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions,
+    actions, anchored, canvas, deferred, div, ease_out_quint, fill, hsla, img, linear_color_stop,
+    linear_gradient, prelude::*, px, radians, rgb, size,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::app_data::APP_ID;
 use crate::authoring::{
     AssetKey, AssetKind, AssetQuery, AssetSort, AuthoringIndex, AuthoringSelection, InsertKind,
-    ProblemSeverity, append_character, append_scene, delete_scene, dialogues_for_source,
-    escape_eiyashou_string, insert_statement, move_scene, rename_scene, rename_scene_references,
-    replace_dialogue_text, scene_references, valid_identifier,
+    ProblemSeverity, UnmappedAsset, append_character, append_scene, confined_existing_file,
+    delete_scene, dialogues_for_source, escape_eiyashou_string, insert_statement, move_scene,
+    rename_scene, rename_scene_references, replace_dialogue_text, scene_references,
+    valid_identifier,
 };
 use crate::document::{DocumentHandle, DocumentManager, SaveError, is_eiyashou_authoring_document};
 use crate::file_ops::{self, ImportResult};
@@ -153,6 +154,7 @@ const DOCUMENT_PANEL: &str = "keine.editor.document";
 const INSPECTOR_PANEL: &str = "keine.editor.inspector";
 const OUTPUT_PANEL: &str = "keine.editor.output";
 const ASSETS_PANEL: &str = "keine.editor.assets";
+const ASSET_PREVIEW_PANEL: &str = "keine.editor.asset_preview";
 const CHARACTERS_PANEL: &str = "keine.editor.characters";
 const SCENES_PANEL: &str = "keine.editor.scenes";
 const PROBLEMS_PANEL: &str = "keine.editor.problems";
@@ -290,6 +292,7 @@ struct WorkspaceDocuments {
     selection: Option<(PathBuf, usize, usize)>,
     block_selection: Option<(PathBuf, Vec<usize>)>,
     asset_selection: Vec<AssetKey>,
+    asset_preview: Option<AssetPreviewSelection>,
     diagnostics: Vec<keine_authoring::Diagnostic>,
     source_history: SourceHistory,
     dock: Option<WeakEntity<DockArea>>,
@@ -299,6 +302,56 @@ struct WorkspaceDocuments {
     editors: HashMap<PathBuf, WeakEntity<EditorState>>,
     preview: Arc<PreviewController>,
     tools: HashMap<&'static str, PanelId>,
+}
+
+#[derive(Clone)]
+struct AssetPreviewSelection {
+    kind: AssetKind,
+    label: String,
+    path: PathBuf,
+    file: Option<PathBuf>,
+}
+
+fn asset_preview_selection(
+    root: &Path,
+    kind: AssetKind,
+    label: String,
+    path: PathBuf,
+) -> AssetPreviewSelection {
+    let file = confined_existing_file(root, &path);
+    AssetPreviewSelection {
+        kind,
+        label,
+        path,
+        file,
+    }
+}
+
+fn refresh_asset_preview(root: &Path, workspace: &mut WorkspaceDocuments) {
+    if let [key] = workspace.asset_selection.as_slice() {
+        workspace.asset_preview = workspace
+            .authoring
+            .assets
+            .iter()
+            .find(|asset| asset.key() == *key)
+            .map(|asset| {
+                asset_preview_selection(root, asset.kind, asset.id.clone(), asset.path.clone())
+            });
+    } else if workspace.asset_selection.is_empty() {
+        let previous = workspace.asset_preview.take();
+        workspace.asset_preview = previous.and_then(|previous| {
+            workspace
+                .authoring
+                .unmapped
+                .iter()
+                .find(|asset| asset.kind == previous.kind && asset.path == previous.path)
+                .map(|asset| {
+                    asset_preview_selection(root, asset.kind, previous.label, asset.path.clone())
+                })
+        });
+    } else {
+        workspace.asset_preview = None;
+    }
 }
 
 struct EditorDocuments {
@@ -339,6 +392,7 @@ impl EditorDocuments {
                     selection: None,
                     block_selection: None,
                     asset_selection: Vec::new(),
+                    asset_preview: None,
                     diagnostics: Vec::new(),
                     source_history: SourceHistory::default(),
                     dock: None,
@@ -400,6 +454,7 @@ impl EditorDocuments {
         if let Ok(workspace) = self.ensure_workspace(root) {
             workspace.block_selection = (!starts.is_empty()).then_some((relative, starts));
             workspace.asset_selection.clear();
+            workspace.asset_preview = None;
         }
     }
 
@@ -419,13 +474,49 @@ impl EditorDocuments {
 
     fn set_asset_selection(&mut self, root: &Path, selection: Vec<AssetKey>) {
         if let Ok(workspace) = self.ensure_workspace(root) {
+            workspace.asset_preview = selection
+                .first()
+                .filter(|_| selection.len() == 1)
+                .and_then(|key| {
+                    workspace
+                        .authoring
+                        .assets
+                        .iter()
+                        .find(|asset| asset.key() == *key)
+                })
+                .map(|asset| {
+                    asset_preview_selection(root, asset.kind, asset.id.clone(), asset.path.clone())
+                });
             workspace.asset_selection = selection;
         }
+    }
+
+    fn set_unmapped_asset_preview(&mut self, root: &Path, asset: &UnmappedAsset) {
+        if let Ok(workspace) = self.ensure_workspace(root) {
+            workspace.asset_selection.clear();
+            workspace.asset_preview = Some(asset_preview_selection(
+                root,
+                asset.kind,
+                asset
+                    .path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                asset.path.clone(),
+            ));
+        }
+    }
+
+    fn asset_preview(&self, root: &Path) -> Option<AssetPreviewSelection> {
+        let key = ProjectKey::from_path(root).ok()?;
+        self.workspaces.get(key.path())?.asset_preview.clone()
     }
 
     fn clear_asset_selection(&mut self, root: &Path) {
         if let Ok(workspace) = self.ensure_workspace(root) {
             workspace.asset_selection.clear();
+            workspace.asset_preview = None;
         }
     }
 
@@ -451,6 +542,7 @@ impl EditorDocuments {
         if let Ok(workspace) = self.ensure_workspace(root) {
             let overrides = workspace.manager.source_overrides();
             workspace.authoring = AuthoringIndex::load(root, &workspace.files, &overrides);
+            refresh_asset_preview(root, workspace);
         }
     }
 
@@ -460,6 +552,7 @@ impl EditorDocuments {
         workspace.files.clone_from(&files);
         let overrides = workspace.manager.source_overrides();
         workspace.authoring = AuthoringIndex::load(root, &workspace.files, &overrides);
+        refresh_asset_preview(root, workspace);
         Ok(files)
     }
 
@@ -842,6 +935,7 @@ enum PanelPayload {
     Inspector { root: PathBuf },
     Output { root: PathBuf },
     Assets { root: PathBuf },
+    AssetPreview { root: PathBuf },
     Characters { root: PathBuf },
     Scenes { root: PathBuf },
     Problems { root: PathBuf },
@@ -900,6 +994,9 @@ enum PanelContent {
         file_count: usize,
     },
     Assets {
+        root: PathBuf,
+    },
+    AssetPreview {
         root: PathBuf,
     },
     Characters {
@@ -980,6 +1077,7 @@ impl PanelContent {
                     })
                 }),
             PanelPayload::Assets { root } => Ok(Self::Assets { root }),
+            PanelPayload::AssetPreview { root } => Ok(Self::AssetPreview { root }),
             PanelPayload::Characters { root } => Ok(Self::Characters { root }),
             PanelPayload::Scenes { root } => Ok(Self::Scenes { root }),
             PanelPayload::Problems { root } => Ok(Self::Problems { root }),
@@ -1000,6 +1098,7 @@ impl PanelContent {
             Self::Inspector { root, .. } => PanelPayload::Inspector { root: root.clone() },
             Self::Output { root, .. } => PanelPayload::Output { root: root.clone() },
             Self::Assets { root } => PanelPayload::Assets { root: root.clone() },
+            Self::AssetPreview { root } => PanelPayload::AssetPreview { root: root.clone() },
             Self::Characters { root } => PanelPayload::Characters { root: root.clone() },
             Self::Scenes { root } => PanelPayload::Scenes { root: root.clone() },
             Self::Problems { root } => PanelPayload::Problems { root: root.clone() },
@@ -1014,6 +1113,7 @@ impl PanelContent {
             Self::Inspector { .. } => INSPECTOR_PANEL,
             Self::Output { .. } => OUTPUT_PANEL,
             Self::Assets { .. } => ASSETS_PANEL,
+            Self::AssetPreview { .. } => ASSET_PREVIEW_PANEL,
             Self::Characters { .. } => CHARACTERS_PANEL,
             Self::Scenes { .. } => SCENES_PANEL,
             Self::Problems { .. } => PROBLEMS_PANEL,
@@ -1033,6 +1133,7 @@ impl PanelContent {
             Self::Inspector { .. } => "Inspector".into(),
             Self::Output { .. } => "Output".into(),
             Self::Assets { .. } => "Assets".into(),
+            Self::AssetPreview { .. } => "Asset Preview".into(),
             Self::Characters { .. } => "Characters".into(),
             Self::Scenes { .. } => "Scenes".into(),
             Self::Problems { .. } => "Problems".into(),
@@ -1326,6 +1427,7 @@ impl WorkbenchPanel {
             PanelContent::Explorer { root, .. } => Some((root.clone(), EXPLORER_PANEL)),
             PanelContent::Inspector { root, .. } => Some((root.clone(), INSPECTOR_PANEL)),
             PanelContent::Assets { root } => Some((root.clone(), ASSETS_PANEL)),
+            PanelContent::AssetPreview { root } => Some((root.clone(), ASSET_PREVIEW_PANEL)),
             PanelContent::Characters { root } => Some((root.clone(), CHARACTERS_PANEL)),
             PanelContent::Scenes { root } => Some((root.clone(), SCENES_PANEL)),
             PanelContent::Problems { root } => Some((root.clone(), PROBLEMS_PANEL)),
@@ -1653,6 +1755,9 @@ impl BasePanel for WorkbenchPanel {
                 cx.global_mut::<EditorDocuments>()
                     .set_tool_panel(root, ASSETS_PANEL, None)
             }
+            PanelContent::AssetPreview { root } => cx
+                .global_mut::<EditorDocuments>()
+                .set_tool_panel(root, ASSET_PREVIEW_PANEL, None),
             PanelContent::Characters { root } => {
                 cx.global_mut::<EditorDocuments>()
                     .set_tool_panel(root, CHARACTERS_PANEL, None)
@@ -1708,6 +1813,7 @@ fn register_workbench_panels(cx: &mut App) {
         INSPECTOR_PANEL,
         OUTPUT_PANEL,
         ASSETS_PANEL,
+        ASSET_PREVIEW_PANEL,
         CHARACTERS_PANEL,
         SCENES_PANEL,
         PROBLEMS_PANEL,
@@ -2830,23 +2936,6 @@ fn render_scene_context_menu(
     )
     .priority(100)
     .into_any_element()
-}
-
-fn reveal_workspace_path(root: &Path, relative: &Path) {
-    let path = root.join(relative);
-    #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("open")
-        .arg("-R")
-        .arg(path)
-        .spawn();
-    #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("explorer")
-        .arg(format!("/select,{}", path.display()))
-        .spawn();
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let _ = std::process::Command::new("xdg-open")
-        .arg(path.parent().unwrap_or(root))
-        .spawn();
 }
 
 fn short_error(error: &io::Error) -> String {

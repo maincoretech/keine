@@ -17,6 +17,15 @@ use keine_core::{
 
 use crate::{Diagnostic, DiagnosticLevel, ParseReport, ParsedScene, ScriptLanguage, SourceSpan};
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EngineActionSource {
+    #[serde(default)]
+    action: Option<Action>,
+    #[serde(default)]
+    ron: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NativeTokenKind {
     Identifier,
@@ -1136,6 +1145,10 @@ impl<'a> Parser<'a> {
             "loop" => return self.parse_loop(report),
             "let" => return self.parse_let(report),
             "break" => return self.parse_break(report),
+            "engine" => {
+                self.reject_annotation(explicit_id, report);
+                return self.parse_engine_action(report).into_iter().collect();
+            }
             "return" => {
                 self.reject_annotation(explicit_id, report);
                 return vec![Action::ReturnScene];
@@ -1162,6 +1175,65 @@ impl<'a> Parser<'a> {
             .push(self.error("expected assignment, list mutation, dialogue, or command"));
         self.skip_statement_shape();
         Vec::new()
+    }
+
+    fn parse_engine_action(&mut self, report: &mut ParseReport) -> Option<Action> {
+        let start = self.offset();
+        if !self.eat("{") {
+            report
+                .diagnostics
+                .push(self.error("engine requires a JSON action object"));
+            self.skip_statement_shape();
+            return None;
+        }
+        let mut depth = 1usize;
+        while !self.eof() {
+            match self.peek_text() {
+                Some("{") => depth += 1,
+                Some("}") => depth -= 1,
+                _ => {}
+            }
+            self.advance();
+            if depth == 0 {
+                let json = &self.source[start..self.previous_end()];
+                return match serde_json::from_str::<EngineActionSource>(json) {
+                    Ok(source) => match (source.action, source.ron) {
+                        (Some(action), None) => Some(action),
+                        (None, Some(ron)) => match ron::from_str(&ron) {
+                            Ok(action) => Some(action),
+                            Err(error) => {
+                                report.diagnostics.push(error_at(
+                                    self.source,
+                                    start,
+                                    format!("invalid typed engine action: {error}"),
+                                ));
+                                None
+                            }
+                        },
+                        _ => {
+                            report.diagnostics.push(error_at(
+                                self.source,
+                                start,
+                                "engine requires exactly one of action or ron",
+                            ));
+                            None
+                        }
+                    },
+                    Err(error) => {
+                        report.diagnostics.push(error_at(
+                            self.source,
+                            start,
+                            format!("invalid engine action: {error}"),
+                        ));
+                        None
+                    }
+                };
+            }
+        }
+        report
+            .diagnostics
+            .push(error_at(self.source, start, "unterminated engine action"));
+        None
     }
 
     fn parse_narration(
@@ -2921,6 +2993,60 @@ fn error_at(source: &str, offset: usize, message: impl Into<String>) -> Diagnost
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn engine_action_preserves_typed_parameters_and_resource_references() {
+        let action = Action::ShowParticles {
+            id: "snow".into(),
+            effect: keine_core::ParticleEffect {
+                texture: Some("particles/snow.png".into()),
+                ..keine_core::ParticleEffect::preset("LIGHT_SNOW")
+            },
+        };
+        let source = format!(
+            "scene start {{ engine {{\"action\":{}}} }}",
+            serde_json::to_string(&action).unwrap()
+        );
+        let scenes = parse_native_scenes(&source);
+        assert_eq!(scenes[0].report.actions, [action]);
+        assert_eq!(scenes[0].report.resources.len(), 1);
+        assert_eq!(scenes[0].report.resources[0].path, "particles/snow.png");
+        assert!(errors(&scenes[0]).is_empty());
+    }
+
+    #[test]
+    fn engine_action_accepts_unit_variants_and_rejects_unknown_fields() {
+        let scenes = parse_native_scenes("scene start { engine {\"action\":\"WaitForAdvance\"} }");
+        assert_eq!(scenes[0].report.actions, [Action::WaitForAdvance]);
+        assert!(errors(&scenes[0]).is_empty());
+
+        let scenes = parse_native_scenes(
+            "scene start { engine {\"action\":\"WaitForAdvance\",\"extra\":1} }",
+        );
+        assert!(errors(&scenes[0])[0].contains("unknown field"));
+    }
+
+    #[test]
+    fn engine_ron_preserves_nested_optional_clear() {
+        let action = Action::SetPostProcess {
+            targets: keine_core::CameraTargets::default(),
+            effect: Box::new(keine_core::PostProcessPatch {
+                focal_distance: Some(None),
+                lut_preset: Some(None),
+                ..Default::default()
+            }),
+            duration: 0.0,
+            easing: keine_core::Easing::Linear,
+            blocking: false,
+        };
+        let source = format!(
+            "scene start {{ engine {{\"ron\":{}}} }}",
+            serde_json::to_string(&ron::to_string(&action).unwrap()).unwrap()
+        );
+        let scenes = parse_native_scenes(&source);
+        assert_eq!(scenes[0].report.actions, [action]);
+        assert!(errors(&scenes[0]).is_empty());
+    }
 
     fn errors(scene: &ParsedScene) -> Vec<&str> {
         scene

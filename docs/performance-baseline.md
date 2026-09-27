@@ -6,9 +6,11 @@ the 1920x1080 design resolution, and sample raw frame intervals in a release
 build. The process-start protocol below intentionally has no warm-up.
 
 The historical LetsGal timeline benchmark formerly at `projects/test-project`
-now lives at `tests/fixtures/letsgal-timeline`; the current `projects/test-project`
-is the native Editor QA project. Historical capture descriptions retain their
-original project label.
+now lives at `tests/fixtures/letsgal-timeline`. The later native Editor QA project
+at that path has also been removed; deterministic native smoke checks now use
+`tests/fixtures/native-smoke`. That path now holds an ignored copy of the LetsGal
+sample for temporary manual use. Historical capture descriptions retain their
+original project labels.
 
 ## 2026-08-21 official LetsGal sample baseline
 
@@ -27,8 +29,8 @@ cargo test --test letsgal_sample_acceptance
 The same test runs automatically as part of the workspace suite whenever the
 local sample is present. CI and clean clones without the commercial sample
 print an explicit skip; setting `KEINE_LETSGAL_PROJECT` makes a missing or
-invalid configured path fail instead. The tracked `test-project` remains the
-always-present CI contract.
+invalid configured path fail instead. The tracked `native-smoke` fixture remains
+the always-present CI contract.
 
 Loader measurements use Criterion's normal warm-up and sampling protocol:
 

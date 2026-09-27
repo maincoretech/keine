@@ -8,7 +8,8 @@ second asset editor.
 ## Scope
 
 - Discover ordinary files and folders, with open, create, rename, move, copy, delete, internal
-  drag, and Reveal actions.
+  drag, and Show in Folder actions. The menu label is platform neutral; files are located in
+  their parent folder, while folders open directly in the system file manager.
 - Copy ordinary external files into the selected folder.
 - Accept only canonical WebP, Ogg Opus, and MP4/M4V media in this task. Validate contents, derive
   an identifier from the filename, and register the result in the configured asset manifest.

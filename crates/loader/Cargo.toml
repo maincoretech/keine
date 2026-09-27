@@ -14,6 +14,7 @@ anyhow = { workspace = true }
 log = { workspace = true }
 notify = { workspace = true, optional = true }
 serde_json = { workspace = true }
+ron = { workspace = true }
 serde = { workspace = true }
 crc32fast = { workspace = true }
 postcard = { workspace = true }

@@ -1217,8 +1217,23 @@ impl ProjectWorkspace {
             dock.update(cx, |dock, cx| dock.load(state, window, cx))
                 .is_ok()
         });
-        if !load_succeeded {
+        let added_preview = if !load_succeeded {
             install_default_layout(&dock, &session, window, cx);
+            false
+        } else if cx
+            .global::<EditorDocuments>()
+            .tool_panel(session.root(), ASSET_PREVIEW_PANEL)
+            .is_none()
+        {
+            install_asset_preview(&dock, session.root(), window, cx)
+        } else {
+            false
+        };
+        if added_preview {
+            let state = dock.read(cx).dump(cx);
+            if let Err(error) = persistence.save_layout(session.key(), state) {
+                eprintln!("Kēne Editor could not persist asset preview layout: {error}");
+            }
         }
 
         let project = session.key().clone();
@@ -1276,6 +1291,14 @@ pub(super) fn install_default_layout(
         cx,
     )
     .expect("workspace inspector must be constructible");
+    let asset_preview = WorkbenchPanel::from_payload(
+        PanelPayload::AssetPreview {
+            root: session.root().to_owned(),
+        },
+        window,
+        cx,
+    )
+    .expect("asset preview must be constructible");
     let output = WorkbenchPanel::from_payload(
         PanelPayload::Output {
             root: session.root().to_owned(),
@@ -1301,10 +1324,75 @@ pub(super) fn install_default_layout(
             None,
         )
         .child(
-            DockLayout::tabs().panel_view(panel_handle(inspector), cx),
+            DockLayout::v_split()
+                .child(
+                    DockLayout::tabs().panel_view(panel_handle(asset_preview), cx),
+                    Some(px(280.)),
+                )
+                .child(
+                    DockLayout::tabs().panel_view(panel_handle(inspector), cx),
+                    None,
+                ),
             Some(px(340.)),
         );
     dock.update(cx, |dock, cx| dock.set_center(layout, window, cx));
+}
+
+fn install_asset_preview(
+    dock: &Entity<DockArea>,
+    root: &Path,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    let Ok(panel) = WorkbenchPanel::from_payload(
+        PanelPayload::AssetPreview {
+            root: root.to_owned(),
+        },
+        window,
+        cx,
+    ) else {
+        return false;
+    };
+    let panel_id = PanelId::from(panel.entity_id());
+    let inspector = cx
+        .global::<EditorDocuments>()
+        .tool_panel(root, INSPECTOR_PANEL);
+    dock.update(cx, |dock, cx| {
+        let inspector_node = inspector.and_then(|inspector| {
+            [
+                DockPlacement::Center,
+                DockPlacement::Left,
+                DockPlacement::Right,
+                DockPlacement::Bottom,
+            ]
+            .into_iter()
+            .find_map(|placement| dock.layout(placement)?.find_panel_node(inspector))
+        });
+        dock.add_panel_view(
+            panel_handle(panel),
+            if inspector_node.is_some() {
+                DockPlacement::Center
+            } else {
+                DockPlacement::Right
+            },
+            Some(px(340.)),
+            window,
+            cx,
+        );
+        if let Some(node) = inspector_node {
+            dock.move_panel(
+                panel_id,
+                InsertTarget::Split {
+                    node,
+                    placement: Placement::Top,
+                    size: Some(px(280.)),
+                },
+                window,
+                cx,
+            );
+        }
+    });
+    true
 }
 
 #[cfg(test)]

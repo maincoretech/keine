@@ -77,3 +77,11 @@ source through the existing Block View projection.
 - Focused tests cover deterministic query/selection, exact reference ranges, source-preserving
   manifest edits, all-or-nothing rename preflight, Voice target rejection, and bounded Block
   insertion. Cross-platform/alternate-DPI visual acceptance remains tracked by T03, not T23.
+
+## Later Asset Preview view
+
+The user subsequently requested a selection-driven resource preview above Inspector. The
+Editor resolves one selected asset against the project root at selection time, then displays
+supported images through GPUI's image loader. Mapped and `.unmapped` rows both drive this view;
+multiple selection shows a count. Audio and video show type and path without playback controls.
+The earlier thumbnail deferral still applies to Asset Browser rows and cells.

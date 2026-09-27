@@ -1818,7 +1818,7 @@ mod tests {
     fn authoring_preview_uses_an_isolated_persistence_root() {
         let overlay = unique_temp_path("preview-data-root");
         std::fs::create_dir_all(&overlay).unwrap();
-        let project = Path::new(env!("CARGO_MANIFEST_DIR")).join("projects/test-project");
+        let project = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native-smoke");
         let app = build_authoring_preview_app(
             &project,
             &overlay,

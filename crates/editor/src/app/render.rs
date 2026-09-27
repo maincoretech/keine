@@ -216,8 +216,7 @@ impl Render for WorkbenchPanel {
                             .unwrap_or_default()
                             .to_owned();
                         let copy_path = path.clone();
-                        let reveal_root = project_root.clone();
-                        let reveal_path = path.clone();
+                        let show_path = path.clone();
                         let delete_path = path.clone();
                         items.push(
                             file_context_menu_item(
@@ -255,14 +254,14 @@ impl Render for WorkbenchPanel {
                         );
                         items.push(
                             file_context_menu_item(
-                                "file-context-reveal",
+                                "file-context-show-in-folder",
                                 AssetIconName::ExternalLink,
-                                "Reveal",
+                                "Show in Folder",
                                 false,
                             )
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                reveal_workspace_path(&reveal_root, &reveal_path);
                                 this.close_file_context_menu(window, cx);
+                                this.show_in_folder(&show_path, window, cx);
                             }))
                             .into_any_element(),
                         );
@@ -1021,6 +1020,13 @@ impl Render for WorkbenchPanel {
                 let root = root.clone();
                 let index = cx.global::<EditorDocuments>().authoring(&root);
                 render_assets(&root, &index, self, cx)
+            }
+            PanelContent::AssetPreview { root } => {
+                let documents = cx.global::<EditorDocuments>();
+                render_asset_preview(
+                    documents.asset_preview(root),
+                    documents.asset_selection(root).len(),
+                )
             }
             PanelContent::Characters { root } => {
                 let index = cx.global::<EditorDocuments>().authoring(root);
