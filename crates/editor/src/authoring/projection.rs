@@ -37,6 +37,7 @@ pub enum BlockKind {
     Declaration,
     Assignment,
     Command,
+    EngineAction { action: String },
     Control,
     Unsupported,
 }
@@ -55,6 +56,7 @@ impl BlockKind {
             Self::Declaration => "Let",
             Self::Assignment => "Set",
             Self::Command => "Command",
+            Self::EngineAction { .. } => "Engine",
             Self::Control => "Flow",
             Self::Unsupported => "Source",
         }
@@ -903,6 +905,13 @@ impl<'a> BlockProjectionParser<'a> {
             "break" | "return" => {
                 blocks.push(self.block(BlockKind::Control, source_range, None, depth, None, false))
             }
+            "engine" => {
+                let source = self.source.get(source_range.clone()).unwrap_or("");
+                let kind = engine_action_name(source)
+                    .map(|action| BlockKind::EngineAction { action })
+                    .unwrap_or(BlockKind::Unsupported);
+                blocks.push(self.block(kind, source_range, None, depth, None, true));
+            }
             _ if tokens
                 .get(head + 1)
                 .is_some_and(|index| self.text(*index) == ":") =>
@@ -1359,6 +1368,43 @@ fn compact_summary(source: &str) -> String {
     summary
 }
 
+fn engine_action_name(source: &str) -> Option<String> {
+    let payload = source.strip_prefix("engine")?.trim();
+    let payload = payload.get(..=payload.rfind('}')?)?;
+    let payload: serde_json::Value = serde_json::from_str(payload).ok()?;
+    if let Some(ron) = payload.get("ron").and_then(serde_json::Value::as_str) {
+        let outer = ron_identifier(ron)?;
+        if outer == "Flow" {
+            let nested = ron.strip_prefix("Flow(action:").and_then(ron_identifier);
+            return Some(nested.map_or_else(|| outer.to_owned(), |name| format!("Flow › {name}")));
+        }
+        return Some(outer.to_owned());
+    }
+    let action = payload.get("action")?;
+    if let Some(name) = action.as_str() {
+        return valid_identifier(name).then(|| name.to_owned());
+    }
+    let (name, fields) = action.as_object()?.iter().next()?;
+    if !valid_identifier(name) {
+        return None;
+    }
+    if name == "Flow" {
+        let nested = fields.get("action")?.as_object()?.keys().next()?;
+        return Some(format!("Flow › {nested}"));
+    }
+    Some(name.to_owned())
+}
+
+fn ron_identifier(source: &str) -> Option<&str> {
+    let end = source
+        .char_indices()
+        .take_while(|(_, character)| character.is_ascii_alphanumeric() || *character == '_')
+        .last()
+        .map(|(index, character)| index + character.len_utf8())?;
+    let name = source.get(..end)?;
+    valid_identifier(name).then_some(name)
+}
+
 fn split_top_level<'a>(
     tokens: &'a [usize],
     text: impl Fn(usize) -> &'a str + Copy,
@@ -1605,6 +1651,38 @@ mod tests {
         assert!(blocks[1].read_only);
         assert_eq!(blocks[2].kind, BlockKind::Narration);
         assert!(blocks[1].source_range.start < blocks[2].source_range.start);
+    }
+
+    #[test]
+    fn projects_typed_engine_actions_as_selectable_read_only_blocks() {
+        let source = r#"scene start {
+  engine {"ron":"Flow(action:HideBg(transition:Crossfade(0.5)),when:None,next:true)"},
+  engine {"action":"WaitForAdvance"},
+  "after"
+}"#;
+        let blocks = &EiyashouProjection::parse(source).scenes[0].blocks;
+        assert_eq!(
+            blocks.iter().map(|block| &block.kind).collect::<Vec<_>>(),
+            [
+                &BlockKind::EngineAction {
+                    action: "Flow › HideBg".into(),
+                },
+                &BlockKind::EngineAction {
+                    action: "WaitForAdvance".into(),
+                },
+                &BlockKind::Narration,
+            ]
+        );
+        assert!(blocks[0].read_only && blocks[1].read_only);
+        assert_eq!(
+            source
+                .get(blocks[0].source_range.clone())
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+        assert!(blocks[0].source_range.start < blocks[1].source_range.start);
     }
 
     #[test]
