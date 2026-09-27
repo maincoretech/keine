@@ -332,7 +332,8 @@ pub(super) fn insert_kind_icon(kind: InsertKind) -> AssetIconName {
         InsertKind::Goto | InsertKind::Call | InsertKind::Return => AssetIconName::Workflow,
         InsertKind::Wait => AssetIconName::Clock,
         InsertKind::Hide => AssetIconName::EyeOff,
-        InsertKind::Move => AssetIconName::Move,
+        InsertKind::Move | InsertKind::CameraMove | InsertKind::CameraShake => AssetIconName::Move,
+        InsertKind::SpriteFocusRule | InsertKind::SpriteFocus => AssetIconName::PersonStanding,
         InsertKind::Bgm => AssetIconName::Music,
         InsertKind::Effect => AssetIconName::Volume2,
         InsertKind::Video => AssetIconName::Film,
@@ -758,6 +759,8 @@ pub(super) fn source_field_label(key: &SourceInspectorKey, field: &SourceField) 
             ("sprite", 1) => "Asset".into(),
             ("move", 1) => "Position".into(),
             ("goto" | "call", 0) => "Scene".into(),
+            ("camera.move" | "camera.shake", 0) => "Target".into(),
+            ("sprite.focus", 0) => "Speaker".into(),
             ("wait", 0) => "Duration".into(),
             ("pop", 0) => "List".into(),
             ("pop", 1) => "Index".into(),
@@ -826,6 +829,10 @@ pub(super) fn block_card_summary(kind: &BlockKind, source: &str, line: usize) ->
                 "sprite" => values.get(1).copied().unwrap_or_default(),
                 "move" => values.get(1).copied().unwrap_or_default(),
                 "pop" => values.first().copied().unwrap_or_default(),
+                "camera.move" | "camera.shake" | "sprite.focus" => {
+                    values.first().copied().unwrap_or_default()
+                }
+                "sprite.focus.configure" => "Portrait styles",
                 method if method.contains('.') => method.split('.').next().unwrap_or_default(),
                 _ => values.first().copied().unwrap_or_default(),
             }

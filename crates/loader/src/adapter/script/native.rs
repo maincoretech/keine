@@ -9,10 +9,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
 
 use keine_core::{
-    Action, BlendMode, ChoiceTarget, Easing, EiyashouAssignOp, EiyashouBinaryOp, EiyashouChoice,
-    EiyashouDialogue, EiyashouExpr, EiyashouListOperation, EiyashouPlace, EiyashouScalarType,
-    EiyashouText, EiyashouTextPart, EiyashouType, EiyashouUnaryOp, Position, SayOptions,
-    SpriteLayout, SpriteTransform, Transition, Value, VideoMode, VideoSpec,
+    Action, BlendMode, CameraShakeAxis, CameraShakeFalloff, CameraShakeSpec, CameraTargets,
+    ChoiceTarget, Easing, EiyashouAssignOp, EiyashouBinaryOp, EiyashouChoice, EiyashouDialogue,
+    EiyashouExpr, EiyashouListOperation, EiyashouPlace, EiyashouScalarType, EiyashouText,
+    EiyashouTextPart, EiyashouType, EiyashouUnaryOp, PortraitStyle, Position, SayOptions,
+    SpriteLayout, SpriteTransform, TransformPatch, Transition, Value, VideoMode, VideoSpec,
 };
 
 use crate::{Diagnostic, DiagnosticLevel, ParseReport, ParsedScene, ScriptLanguage, SourceSpan};
@@ -1146,6 +1147,39 @@ impl<'a> Parser<'a> {
             return self.parse_dialogue(name, explicit_id, report);
         }
         self.reject_annotation(explicit_id, report);
+        let dotted_method = self
+            .significant
+            .get(self.cursor + 1)
+            .map(|index| self.text(*index));
+        if self.peek_text() == Some(".")
+            && matches!(
+                (name.as_str(), dotted_method),
+                ("camera", Some("move" | "shake")) | ("sprite", Some("focus"))
+            )
+        {
+            self.advance();
+            let Some(method) = self.take_identifier() else {
+                report
+                    .diagnostics
+                    .push(self.error("expected command after `.`"));
+                return Vec::new();
+            };
+            let method = if name == "sprite" && method == "focus" && self.eat(".") {
+                let Some(child) = self.take_identifier() else {
+                    report
+                        .diagnostics
+                        .push(self.error("expected command after `.`"));
+                    return Vec::new();
+                };
+                format!("{method}.{child}")
+            } else {
+                method
+            };
+            return self
+                .parse_command(format!("{name}.{method}"), report)
+                .into_iter()
+                .collect();
+        }
         if self.peek_text() == Some(".")
             || matches!(
                 self.peek_text(),
@@ -1801,6 +1835,54 @@ impl<'a> Parser<'a> {
             "hide" => {
                 self.validate_signature(&name, &args, 1, &["transition"], report);
             }
+            "camera.move" => {
+                self.validate_signature(
+                    &name,
+                    &args,
+                    1,
+                    &[
+                        "x", "y", "alpha", "scale_x", "scale_y", "rotation", "blur", "width",
+                        "height", "duration", "easing", "blocking",
+                    ],
+                    report,
+                );
+            }
+            "camera.shake" => {
+                self.validate_signature(
+                    &name,
+                    &args,
+                    1,
+                    &[
+                        "amplitude",
+                        "frequency",
+                        "duration",
+                        "axis",
+                        "falloff",
+                        "blocking",
+                    ],
+                    report,
+                );
+            }
+            "sprite.focus" => {
+                self.validate_signature(&name, &args, 1, &[], report);
+            }
+            "sprite.focus.configure" => {
+                self.validate_signature(
+                    &name,
+                    &args,
+                    0,
+                    &[
+                        "enabled",
+                        "characters",
+                        "speaking",
+                        "others",
+                        "narration",
+                        "duration",
+                        "easing",
+                    ],
+                    report,
+                );
+            }
             "move" => {
                 self.validate_signature(&name, &args, 2, &["duration", "easing"], report);
             }
@@ -1913,11 +1995,15 @@ impl<'a> Parser<'a> {
                 }
             }
             "hide" => {
-                let target = first.and_then(|arg| self.argument_text(arg));
+                let target = first.and_then(|arg| self.argument_sprite_target(arg));
                 let transition = self.named_transition(&args, report);
                 match target.as_deref() {
                     Some("*") => Some(Action::HideSprites {
                         prefix: String::new(),
+                        transition,
+                    }),
+                    Some(prefix) if prefix.ends_with('*') => Some(Action::HideSprites {
+                        prefix: prefix[..prefix.len() - 1].into(),
                         transition,
                     }),
                     Some(id) => Some(Action::HideSprite {
@@ -1932,6 +2018,20 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
+            "camera.move" => self.camera_move(&args, report),
+            "camera.shake" => self.camera_shake(&args, report),
+            "sprite.focus" => match first.and_then(|arg| self.argument_identifier(arg)) {
+                Some(speaker) => Some(Action::FocusPortrait {
+                    speaker_id: (speaker != "none").then_some(speaker),
+                }),
+                None => {
+                    report
+                        .diagnostics
+                        .push(self.error("sprite.focus(...) requires a speaker ID or `none`"));
+                    None
+                }
+            },
+            "sprite.focus.configure" => self.configure_sprite_focus(&args, report),
             "move" => {
                 let id = first.and_then(|argument| self.argument_identifier(argument));
                 let position = args
@@ -2184,8 +2284,20 @@ impl<'a> Parser<'a> {
             .then(|| self.text(argument.token_indices[0]).to_owned())
     }
 
-    fn argument_text(&self, argument: &Argument) -> Option<String> {
-        (argument.token_indices.len() == 1).then(|| self.text(argument.token_indices[0]).to_owned())
+    fn argument_sprite_target(&self, argument: &Argument) -> Option<String> {
+        match argument.token_indices.as_slice() {
+            [index] if self.text(*index) == "*" => Some("*".into()),
+            [index] if self.tokens[*index].kind == NativeTokenKind::Identifier => {
+                Some(self.text(*index).into())
+            }
+            [prefix, star]
+                if self.tokens[*prefix].kind == NativeTokenKind::Identifier
+                    && self.text(*star) == "*" =>
+            {
+                Some(format!("{}*", self.text(*prefix)))
+            }
+            _ => None,
+        }
     }
 
     fn argument_number(&self, argument: &Argument) -> Option<f64> {
@@ -2260,6 +2372,307 @@ impl<'a> Parser<'a> {
                 None
             }
         }
+    }
+
+    fn camera_targets(&self, args: &[Argument], report: &mut ParseReport) -> Option<CameraTargets> {
+        match args
+            .first()
+            .and_then(|arg| self.argument_identifier(arg))
+            .as_deref()
+        {
+            Some("scene") => Some(CameraTargets::SCENE),
+            Some("characters") => Some(CameraTargets::CHARACTERS),
+            Some("all") => Some(CameraTargets::ALL),
+            Some("none") => Some(CameraTargets::NONE),
+            _ => {
+                report.diagnostics.push(
+                    self.error("camera target must be `scene`, `characters`, `all`, or `none`"),
+                );
+                None
+            }
+        }
+    }
+
+    fn checked_number(
+        &self,
+        args: &[Argument],
+        name: &str,
+        report: &mut ParseReport,
+    ) -> Option<Option<f32>> {
+        let Some(argument) = self.named_arg(args, name) else {
+            return Some(None);
+        };
+        match self.argument_number(argument) {
+            Some(value)
+                if value.is_finite() && value >= f32::MIN as f64 && value <= f32::MAX as f64 =>
+            {
+                Some(Some(value as f32))
+            }
+            _ => {
+                report.diagnostics.push(self.error(format!(
+                    "`{name}` requires a finite number within the engine's range"
+                )));
+                None
+            }
+        }
+    }
+
+    fn checked_bool(
+        &self,
+        args: &[Argument],
+        name: &str,
+        default: bool,
+        report: &mut ParseReport,
+    ) -> Option<bool> {
+        let Some(argument) = self.named_arg(args, name) else {
+            return Some(default);
+        };
+        match self.argument_bool(argument) {
+            Some(value) => Some(value),
+            None => {
+                report
+                    .diagnostics
+                    .push(self.error(format!("`{name}` requires `true` or `false`")));
+                None
+            }
+        }
+    }
+
+    fn camera_move(&self, args: &[Argument], report: &mut ParseReport) -> Option<Action> {
+        let targets = self.camera_targets(args, report)?;
+        let mut transform = TransformPatch::default();
+        let mut any = false;
+        for name in [
+            "x", "y", "alpha", "scale_x", "scale_y", "rotation", "blur", "width", "height",
+        ] {
+            let Some(value) = self.checked_number(args, name, report)? else {
+                continue;
+            };
+            any = true;
+            match name {
+                "x" => transform.set_offset_x(value),
+                "y" => transform.set_offset_y(value),
+                "alpha" => transform.set_alpha(value),
+                "scale_x" => transform.set_scale_x(value),
+                "scale_y" => transform.set_scale_y(value),
+                "rotation" => transform.set_rotation(value),
+                "blur" => transform.set_blur(value),
+                "width" => transform.set_width(value),
+                "height" => transform.set_height(value),
+                _ => unreachable!(),
+            }
+        }
+        if !any {
+            report
+                .diagnostics
+                .push(self.error("camera.move(...) requires at least one transform field"));
+            return None;
+        }
+        Some(Action::SetCameraTransform {
+            targets,
+            transform,
+            duration: self.named_duration_checked(args, "duration", report)?,
+            easing: self.named_easing(args, "easing", report)?,
+            blocking: self.checked_bool(args, "blocking", true, report)?,
+        })
+    }
+
+    fn configure_sprite_focus(
+        &self,
+        args: &[Argument],
+        report: &mut ParseReport,
+    ) -> Option<Action> {
+        let Some(characters) = self.named_arg(args, "characters") else {
+            report
+                .diagnostics
+                .push(self.error("sprite.focus.configure(...) requires `characters`"));
+            return None;
+        };
+        let character_ids = self.portrait_character_ids(characters, report)?;
+        let mut style = |name| {
+            let Some(argument) = self.named_arg(args, name) else {
+                report.diagnostics.push(self.error(format!(
+                    "sprite.focus.configure(...) requires `{name}: style(...)`"
+                )));
+                return None;
+            };
+            self.portrait_style(argument, report)
+        };
+        let speaking = style("speaking")?;
+        let others = style("others")?;
+        let narration = style("narration")?;
+        Some(Action::ConfigurePortraits {
+            enabled: self.checked_bool(args, "enabled", true, report)?,
+            character_ids,
+            speaking,
+            others,
+            narration,
+            duration: self.named_duration_checked(args, "duration", report)?,
+            easing: self.named_easing(args, "easing", report)?,
+        })
+    }
+
+    fn portrait_character_ids(
+        &self,
+        argument: &Argument,
+        report: &mut ParseReport,
+    ) -> Option<Vec<String>> {
+        let tokens = &argument.token_indices;
+        if tokens.len() < 2 || self.text(tokens[0]) != "[" || self.text(*tokens.last()?) != "]" {
+            report
+                .diagnostics
+                .push(self.error("`characters` requires a list of sprite or character IDs"));
+            return None;
+        }
+        let mut ids = Vec::new();
+        let mut cursor = 1;
+        while cursor < tokens.len() - 1 {
+            if self.tokens[tokens[cursor]].kind != NativeTokenKind::Identifier {
+                report
+                    .diagnostics
+                    .push(self.error("`characters` contains an invalid ID"));
+                return None;
+            }
+            ids.push(self.text(tokens[cursor]).to_owned());
+            cursor += 1;
+            if cursor < tokens.len() - 1 {
+                if self.text(tokens[cursor]) != "," || cursor + 1 == tokens.len() - 1 {
+                    report
+                        .diagnostics
+                        .push(self.error("`characters` requires comma-separated IDs"));
+                    return None;
+                }
+                cursor += 1;
+            }
+        }
+        Some(ids)
+    }
+
+    fn portrait_style(
+        &self,
+        argument: &Argument,
+        report: &mut ParseReport,
+    ) -> Option<PortraitStyle> {
+        let tokens = &argument.token_indices;
+        if tokens.len() < 3
+            || self.text(tokens[0]) != "style"
+            || self.text(tokens[1]) != "("
+            || self.text(*tokens.last()?) != ")"
+        {
+            report
+                .diagnostics
+                .push(self.error("portrait style requires `style(...)`"));
+            return None;
+        }
+        let mut style = PortraitStyle::default();
+        let mut seen = HashSet::new();
+        let mut cursor = 2;
+        while cursor < tokens.len() - 1 {
+            if cursor + 2 >= tokens.len() - 1 || self.text(tokens[cursor + 1]) != ":" {
+                report
+                    .diagnostics
+                    .push(self.error("portrait style requires named fields"));
+                return None;
+            }
+            let name = self.text(tokens[cursor]);
+            let value = self.text(tokens[cursor + 2]).parse::<f32>().ok();
+            let Some(value) = value.filter(|value| value.is_finite()) else {
+                report
+                    .diagnostics
+                    .push(self.error("portrait style requires finite numbers"));
+                return None;
+            };
+            if !seen.insert(name) {
+                report
+                    .diagnostics
+                    .push(self.error(format!("duplicate portrait style field `{name}`")));
+                return None;
+            }
+            match name {
+                "scale" => style.scale = value,
+                "brightness" => style.brightness = value,
+                "saturation" => style.saturation = value,
+                "contrast" => style.contrast = value,
+                "blur" => style.blur = value,
+                "alpha" => style.alpha = value,
+                _ => {
+                    report
+                        .diagnostics
+                        .push(self.error(format!("unknown portrait style field `{name}`")));
+                    return None;
+                }
+            }
+            cursor += 3;
+            if cursor < tokens.len() - 1 {
+                if self.text(tokens[cursor]) != "," || cursor + 1 == tokens.len() - 1 {
+                    report
+                        .diagnostics
+                        .push(self.error("portrait style requires comma-separated fields"));
+                    return None;
+                }
+                cursor += 1;
+            }
+        }
+        Some(style)
+    }
+
+    fn camera_shake(&self, args: &[Argument], report: &mut ParseReport) -> Option<Action> {
+        let targets = self.camera_targets(args, report)?;
+        let amplitude = self.checked_number(args, "amplitude", report)?;
+        let frequency = self.checked_number(args, "frequency", report)?;
+        let (Some(amplitude), Some(frequency)) = (amplitude, frequency) else {
+            report
+                .diagnostics
+                .push(self.error("camera.shake(...) requires `amplitude` and `frequency`"));
+            return None;
+        };
+        if amplitude < 0.0 || frequency < 0.0 {
+            report
+                .diagnostics
+                .push(self.error("camera.shake amplitude and frequency must be non-negative"));
+            return None;
+        }
+        let duration = self
+            .named_arg(args, "duration")
+            .and_then(|argument| self.argument_duration(argument));
+        let Some(duration) = duration else {
+            report.diagnostics.push(
+                self.error("camera.shake(...) requires a non-negative `duration` in `ms` or `s`"),
+            );
+            return None;
+        };
+        let axis = match self.named_identifier(args, "axis").as_deref() {
+            None | Some("both") => CameraShakeAxis::Both,
+            Some("x") => CameraShakeAxis::X,
+            Some("y") => CameraShakeAxis::Y,
+            _ => {
+                report
+                    .diagnostics
+                    .push(self.error("camera.shake axis must be `x`, `y`, or `both`"));
+                return None;
+            }
+        };
+        let falloff = match self.named_identifier(args, "falloff").as_deref() {
+            None | Some("linear") => CameraShakeFalloff::Linear,
+            Some("exponential") => CameraShakeFalloff::Exponential,
+            _ => {
+                report
+                    .diagnostics
+                    .push(self.error("camera.shake falloff must be `linear` or `exponential`"));
+                return None;
+            }
+        };
+        Some(Action::ShakeCamera {
+            targets,
+            shake: CameraShakeSpec {
+                amplitude,
+                frequency,
+                duration,
+                axis,
+                falloff,
+            },
+            blocking: self.checked_bool(args, "blocking", true, report)?,
+        })
     }
 
     fn named_easing(
@@ -3032,6 +3445,75 @@ scene ending { "Done" }
                 easing: Easing::EaseOut,
                 blocking: true,
             } if id == "hero" && position == Position::center(0.0) && (duration - 0.3).abs() < f32::EPSILON
+        ));
+    }
+
+    #[test]
+    fn lowers_prefix_hide_and_dotted_camera_commands() {
+        let scenes = parse_native_scenes(
+            "scene a { hide(hero_*), camera.move(scene, x: 20, y: 0, duration: 300ms), camera.shake(all, amplitude: 8, frequency: 12, duration: 300ms), sprite.focus.configure(characters: [hero_], speaking: style(scale: 1.1), others: style(brightness: 0.7), narration: style(), duration: 300ms), sprite.focus(none) }",
+        );
+        assert!(
+            errors(&scenes[0]).is_empty(),
+            "{:?}",
+            scenes[0].report.diagnostics
+        );
+        assert!(matches!(
+            &scenes[0].report.actions[0],
+            Action::HideSprites { prefix, .. } if prefix == "hero_"
+        ));
+        assert!(matches!(
+            &scenes[0].report.actions[1],
+            Action::SetCameraTransform { targets, duration, .. }
+                if *targets == CameraTargets::SCENE && (*duration - 0.3).abs() < f32::EPSILON
+        ));
+        assert!(matches!(
+            &scenes[0].report.actions[2],
+            Action::ShakeCamera { targets, shake, .. }
+                if *targets == CameraTargets::ALL && (shake.amplitude - 8.0).abs() < f32::EPSILON
+        ));
+        assert!(matches!(
+            &scenes[0].report.actions[3],
+            Action::ConfigurePortraits { character_ids, speaking, others, .. }
+                if character_ids == &["hero_"] && (speaking.scale - 1.1).abs() < f32::EPSILON && (others.brightness - 0.7).abs() < f32::EPSILON
+        ));
+        assert!(matches!(
+            &scenes[0].report.actions[4],
+            Action::FocusPortrait { speaker_id: None }
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_prefix_and_camera_arguments() {
+        let scenes = parse_native_scenes(
+            "scene a { hide(hero_*tail), camera.move(scene, duration: 300ms), camera.shake(scene, amplitude: -1, frequency: 12, duration: 300ms) }",
+        );
+        assert!(!errors(&scenes[0]).is_empty());
+        assert!(!scenes[0].report.actions.iter().any(|action| matches!(
+            action,
+            Action::HideSprites { .. }
+                | Action::SetCameraTransform { .. }
+                | Action::ShakeCamera { .. }
+        )));
+    }
+
+    #[test]
+    fn dotted_camera_namespace_preserves_existing_list_methods() {
+        let scenes = parse_native_scenes(
+            "scene a { let camera = [1], let sprite = [2], camera.append(3), sprite.clear() }",
+        );
+        assert!(
+            errors(&scenes[0]).is_empty(),
+            "{:?}",
+            scenes[0].report.diagnostics
+        );
+        assert!(matches!(
+            scenes[0].report.actions[2],
+            Action::EiyashouList { .. }
+        ));
+        assert!(matches!(
+            scenes[0].report.actions[3],
+            Action::EiyashouList { .. }
         ));
     }
 

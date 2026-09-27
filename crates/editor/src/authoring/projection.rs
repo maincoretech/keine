@@ -210,6 +210,19 @@ impl EiyashouProjection {
                         "se" => &["volume"],
                         "video" => &["skippable"],
                         "pop" => &["into"],
+                        "camera.move" => &[
+                            "x", "y", "alpha", "scale_x", "scale_y", "rotation", "blur", "width",
+                            "height", "duration", "easing", "blocking",
+                        ],
+                        "camera.shake" => &[
+                            "amplitude",
+                            "frequency",
+                            "duration",
+                            "axis",
+                            "falloff",
+                            "blocking",
+                        ],
+                        "sprite.focus.configure" => &["enabled", "duration", "easing"],
                         _ => &[],
                     };
                     let insertion_point = argument_start + arguments.trim_end().len();
@@ -908,6 +921,33 @@ impl<'a> BlockProjectionParser<'a> {
                 .is_some_and(|index| self.text(*index) == ":") =>
             {
                 self.project_dialogue(tokens, head, source_range, depth, stable_id, blocks);
+            }
+            _ if name == "sprite"
+                && [".", "focus", ".", "configure", "("]
+                    .iter()
+                    .enumerate()
+                    .all(|(offset, expected)| {
+                        tokens
+                            .get(head + 1 + offset)
+                            .is_some_and(|index| self.text(*index) == *expected)
+                    }) =>
+            {
+                blocks.push(self.block(BlockKind::Command, source_range, None, depth, None, false));
+            }
+            _ if tokens
+                .get(head + 1)
+                .is_some_and(|index| self.text(*index) == ".")
+                && tokens.get(head + 2).is_some_and(|index| {
+                    matches!(
+                        (name, self.text(*index)),
+                        ("camera", "move" | "shake") | ("sprite", "focus")
+                    )
+                })
+                && tokens
+                    .get(head + 3)
+                    .is_some_and(|index| self.text(*index) == "(") =>
+            {
+                blocks.push(self.block(BlockKind::Command, source_range, None, depth, None, false));
             }
             _ if tokens
                 .get(head + 1)
@@ -1775,6 +1815,25 @@ mod tests {
         );
         assert!(blocks[1].summary.ends_with("rin_01"));
         assert_eq!(blocks[2].kind, BlockKind::Command);
+    }
+
+    #[test]
+    fn dotted_camera_and_sprite_focus_are_editable_blocks() {
+        let source = "scene a { camera.move(scene, x: 20), camera.shake(all, amplitude: 8, frequency: 12, duration: 300ms), sprite.focus.configure(characters: [hero], speaking: style(), others: style(), narration: style()), sprite.focus(hero), hide(hero_*) }";
+        let projection = EiyashouProjection::parse(source);
+        let blocks = &projection.scenes[0].blocks;
+        assert_eq!(blocks.len(), 5);
+        assert!(
+            blocks
+                .iter()
+                .all(|block| block.kind == BlockKind::Command && !block.read_only)
+        );
+        let rule = &blocks[2];
+        let fields = projection
+            .source_fields(source, rule.source_range.start)
+            .unwrap();
+        assert!(fields.iter().any(|field| field.key == "characters"));
+        assert!(fields.iter().any(|field| field.key == "speaking"));
     }
 
     #[test]

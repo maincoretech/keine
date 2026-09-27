@@ -547,6 +547,10 @@ pub enum InsertKind {
     Wait,
     Hide,
     Move,
+    CameraMove,
+    CameraShake,
+    SpriteFocusRule,
+    SpriteFocus,
     Bgm,
     Effect,
     Video,
@@ -554,13 +558,17 @@ pub enum InsertKind {
 }
 
 impl InsertKind {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 21] = [
         Self::Narration,
         Self::Dialogue,
         Self::Background,
         Self::Figure,
         Self::Hide,
         Self::Move,
+        Self::CameraMove,
+        Self::CameraShake,
+        Self::SpriteFocusRule,
+        Self::SpriteFocus,
         Self::Bgm,
         Self::Effect,
         Self::Video,
@@ -589,6 +597,10 @@ impl InsertKind {
             Self::Wait => "Wait",
             Self::Hide => "Hide",
             Self::Move => "Move",
+            Self::CameraMove => "Camera move",
+            Self::CameraShake => "Camera shake",
+            Self::SpriteFocusRule => "Focus rule",
+            Self::SpriteFocus => "Focus speaker",
             Self::Bgm => "BGM",
             Self::Effect => "Sound",
             Self::Video => "Video",
@@ -608,6 +620,10 @@ impl InsertKind {
             "goto" => Self::Goto,
             "call" => Self::Call,
             "wait" => Self::Wait,
+            "camera.move" => Self::CameraMove,
+            "camera.shake" => Self::CameraShake,
+            "sprite.focus.configure" => Self::SpriteFocusRule,
+            "sprite.focus" => Self::SpriteFocus,
             _ => return None,
         })
     }
@@ -615,7 +631,14 @@ impl InsertKind {
     pub const fn category(self) -> &'static str {
         match self {
             Self::Narration | Self::Dialogue => "Text",
-            Self::Background | Self::Figure | Self::Hide | Self::Move => "Scene",
+            Self::Background
+            | Self::Figure
+            | Self::Hide
+            | Self::Move
+            | Self::CameraMove
+            | Self::CameraShake
+            | Self::SpriteFocusRule
+            | Self::SpriteFocus => "Scene",
             Self::Bgm | Self::Effect | Self::Video => "Media",
             Self::Choice
             | Self::Conditional
@@ -643,6 +666,10 @@ impl InsertKind {
             Self::Wait => "wait delay time",
             Self::Hide => "hide sprite figure",
             Self::Move => "move sprite figure position",
+            Self::CameraMove => "camera move scene characters transform",
+            Self::CameraShake => "camera shake scene characters",
+            Self::SpriteFocusRule => "sprite focus configure portrait characters",
+            Self::SpriteFocus => "sprite focus speaker portrait",
             Self::Bgm => "bgm music audio",
             Self::Effect => "sound effect se audio",
             Self::Video => "video movie",
@@ -844,6 +871,17 @@ pub fn insert_statement(
             let figure = first_figure.ok_or(AuthoringEditError::MissingInsertionPoint)?;
             format!("move({figure}_slot, center)")
         }
+        InsertKind::CameraMove => "camera.move(scene, x: 0, y: 0, duration: 300ms)".to_owned(),
+        InsertKind::CameraShake => {
+            "camera.shake(scene, amplitude: 8, frequency: 12, duration: 300ms)".to_owned()
+        }
+        InsertKind::SpriteFocusRule => {
+            let figure = first_figure.ok_or(AuthoringEditError::MissingInsertionPoint)?;
+            format!(
+                "sprite.focus.configure(characters: [{figure}_slot], speaking: style(), others: style(brightness: 0.7), narration: style(), duration: 300ms)"
+            )
+        }
+        InsertKind::SpriteFocus => "sprite.focus(none)".to_owned(),
         InsertKind::Bgm => format!(
             "bgm({})",
             index
