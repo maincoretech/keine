@@ -24,10 +24,9 @@ windows. The editor can browse and edit native Eiyashou projects. In those
 projects, `config.yaml`, configured manifests, and `scripts/**/*.shou` are
 writable; compatibility projects and other documents are read-only.
 Until the new demo is ready, the local `projects/test-project` path points to
-`projects/letsgal-native`, migrated from the LetsGal Studio source at
-`projects/letsgal`. The commercial example content is not tracked; in a fresh
-checkout, migrate your own source or substitute another project path. The
-temporary example is a native `.shou` project and is editable in the Editor.
+the LetsGal Studio source at `projects/letsgal`. The commercial example content
+is not tracked; in a fresh checkout, supply another project path. This
+compatibility project is read-only in the Editor.
 
 Preview needs a compatible, prebuilt Engine executable. For a source checkout,
 build it once before pressing Start in Preview:
@@ -98,9 +97,7 @@ These `cargo` commands are repository aliases from `.cargo/config.toml`:
 | `cargo perf <project> [options]` | Measure runtime frames or startup (`--startup`) |
 
 `cargo migrate` reads its source without rewriting it and refuses a conversion
-that cannot preserve the source semantics. Advanced engine actions use typed
-RON inside `.shou`, while the concise native statements remain available for
-hand-written scripts. `cargo remap` changes references,
+that cannot preserve the source semantics. `cargo remap` changes references,
 not media files. `cargo bundle <project> --benchmark` builds a separate
 benchmark package. Run `cargo <command> --help` for command-specific options.
 

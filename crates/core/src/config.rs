@@ -6,7 +6,6 @@ use std::path::Path;
 use std::{collections::HashMap, error::Error, fmt, fs};
 
 use crate::DESIGN_HEIGHT;
-use crate::Value;
 
 const MAX_FONT_SIZE: f32 = DESIGN_HEIGHT;
 const MAX_SPRITE_HEIGHT: f32 = DESIGN_HEIGHT * 4.0;
@@ -217,7 +216,7 @@ pub struct AdapterConfig {
 /// Keeping these fields in `GameConfig` gives configuration one deserializer
 /// and one validation boundary. They are interpreted only when
 /// `adapter.script` selects the native `keine` language.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScriptConfig {
     #[serde(default = "default_native_script_version")]
     pub version: u32,
@@ -227,19 +226,6 @@ pub struct ScriptConfig {
     pub assets: String,
     #[serde(default = "default_characters_manifest")]
     pub characters: String,
-    /// Startup values for native projects, preserved before the first action.
-    #[serde(default)]
-    pub initial_state: ScriptInitialState,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct ScriptInitialState {
-    #[serde(default)]
-    pub variables: HashMap<String, Value>,
-    #[serde(default)]
-    pub session_variables: HashMap<String, Value>,
-    #[serde(default)]
-    pub shared_variables: HashMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -256,12 +242,6 @@ pub struct EiyashouAssetManifest {
     pub effects: HashMap<String, EiyashouAssetEntry>,
     #[serde(default)]
     pub videos: HashMap<String, EiyashouAssetEntry>,
-    #[serde(default)]
-    pub particles: HashMap<String, EiyashouAssetEntry>,
-    #[serde(default)]
-    pub mini_avatars: HashMap<String, EiyashouAssetEntry>,
-    #[serde(default)]
-    pub luts: HashMap<String, EiyashouAssetEntry>,
     #[serde(flatten)]
     unknown: HashMap<String, noyalib::Value>,
 }
@@ -382,7 +362,6 @@ impl Default for ScriptConfig {
             entry: default_script_entry(),
             assets: default_assets_manifest(),
             characters: default_characters_manifest(),
-            initial_state: ScriptInitialState::default(),
         }
     }
 }

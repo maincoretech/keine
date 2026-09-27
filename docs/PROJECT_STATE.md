@@ -97,9 +97,8 @@ Formal signing and notarization are outside the current P7 scope.
   separate interactive windows; on Wayland the compositor may deny programmatic window raising.
   The editor remains excluded from the root Engine's default build.
   `cargo migrate <source-project> <target-project>` opens a compatibility source
-  read-only, stages confined referenced assets, emits `.shou` plus native manifests, validates
-  typed Action and initial-variable equality, and only then installs a new target. Compact v1
-  syntax remains available; advanced Action variants use typed RON in `engine` statements.
+  read-only, rejects semantics that Eiyashou cannot preserve, stages confined referenced assets,
+  emits `.shou` plus native manifests, validates the result, and only then installs a new target.
 - Eiyashou `assets.yaml` keeps legacy string paths and also accepts `{ path, tags? }` entries
   without migrating untouched source. Asset IDs remain namespaced by resource type. Within one
   type, two IDs cannot resolve to the same physical project file; explicit sharing across
@@ -178,8 +177,8 @@ project / package
   benchmarks run when `projects/letsgal` or `KEINE_LETSGAL_PROJECT` is available; clean CI relies
   on tracked fixtures, including `tests/fixtures/letsgal-timeline` and
   `tests/fixtures/native-smoke`. The previous native `projects/test-project` example was removed;
-  that path now points to the ignored native `.shou` conversion of `projects/letsgal` until a
-  new demo is ready. The local conversion validates with 9 scenes, 1020 actions, and no warnings.
+  that path now points to the ignored original `projects/letsgal` compatibility source until a
+  new demo is ready. The previous local `.shou` conversion is preserved but is no longer active.
 - Complex multi-route blueprint parity remains deferred. Core already owns the native flow,
   condition, choice, assignment, and scene-call primitives; the adapter does not embed a JS VM or
   Studio extension host to chase editor-specific routing behavior.
@@ -192,11 +191,13 @@ project / package
   transport has since been removed in favor of a native Engine companion window. Representative
   cross-platform GPU/GUI, audio/video, DPI, input, and packaging evidence belongs to P7. Native
   child surfaces, frame compression, and GPU sharing are not part of the current design.
-- Eiyashou's concise v1 syntax still omits many advanced runtime actions. The typed `engine`
-  statement can express every serializable Kēne Action, including particle, mask, timeline,
-  camera, and post-process parameters. It does not implement arbitrary external code or missing
-  Studio extension hosts. Migration fails closed if a source action, resource, or initial value
-  cannot be reproduced.
+- Eiyashou v1 intentionally does not expose the deferred advanced runtime surface listed in its
+  language reference: camera/post-process/particle timelines, arbitrary code execution, runtime UI
+  skinning, import systems, dynamic Live2D/Spine/GIF authoring, SE loop/pan, or non-blocking video.
+  These are out of v1 rather than incomplete v1 behavior.
+- Compatibility projects that use editor-specific particles, masks, timelines, conditional legacy
+  expressions, or other semantics outside Eiyashou v1 are deliberately rejected by `cargo migrate`
+  instead of receiving a partial conversion. They require an agreed Eiyashou mapping.
 
 ## Known status
 

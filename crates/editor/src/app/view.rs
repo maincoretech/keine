@@ -737,7 +737,6 @@ pub(super) fn block_card_label(kind: &BlockKind, source: &str) -> String {
                 .map(|kind| kind.label().to_owned())
                 .unwrap_or_else(|| title_case(name.rsplit('.').next().unwrap_or(name)))
         }
-        BlockKind::EngineAction { .. } => "Engine".into(),
         BlockKind::Control => title_case(source.trim()),
         _ => kind.label().to_owned(),
     }
@@ -788,7 +787,6 @@ pub(super) fn block_card_icon(kind: &BlockKind, source: &str) -> AssetIconName {
                 .map(insert_kind_icon)
                 .unwrap_or(AssetIconName::Braces)
         }
-        BlockKind::EngineAction { .. } => AssetIconName::Braces,
         BlockKind::Control => AssetIconName::Workflow,
         BlockKind::Unsupported => AssetIconName::TriangleAlert,
     }
@@ -833,7 +831,6 @@ pub(super) fn block_card_summary(kind: &BlockKind, source: &str, line: usize) ->
             }
             .to_owned()
         }
-        BlockKind::EngineAction { action } => format!("{action} · L{}", line + 1),
         BlockKind::Unsupported => format!("Unsupported syntax · L{}", line + 1),
     }
 }

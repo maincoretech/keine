@@ -86,8 +86,7 @@ impl ProjectAdapter for HakutakuProjectAdapter {
         let bin = archive
             .read(path)
             .context("failed to read packaged program")?;
-        let mut content = load_hakutaku_project_from_archive(archive, &config.adapter.asset)?;
-        content.set_native_initial_state(&config);
+        let content = load_hakutaku_project_from_archive(archive, &config.adapter.asset)?;
         let content = with_compiled_program(content, &bin, IR_SCHEMA_VERSION)?;
         let root = project_root
             .canonicalize()

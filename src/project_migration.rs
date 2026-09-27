@@ -1,18 +1,14 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use keine_core::config::{
-    AssetMap, AssetSourceConfig, GameConfig, ScriptConfig, ScriptInitialState,
-};
+use keine_core::config::{AssetMap, AssetSourceConfig, GameConfig, ScriptConfig};
 use keine_core::{
     Action, Anchor, BlendMode, ChoiceTarget, Easing, Position, SpriteLayout, SpriteTransform,
     Transition, VideoMode,
 };
-use keine_loader::{
-    ContentProject, DiagnosticLevel, LoadedScene, LoaderRegistry, ProjectInitialState, ResourceKind,
-};
+use keine_loader::{ContentProject, DiagnosticLevel, LoadedScene, LoaderRegistry, ResourceKind};
 use serde::Serialize;
 
 use crate::runtime::bootstrap::{open_project, validate_project};
@@ -32,9 +28,6 @@ struct AssetManifest {
     #[serde(rename = "se")]
     effects: BTreeMap<String, String>,
     videos: BTreeMap<String, String>,
-    particles: BTreeMap<String, String>,
-    mini_avatars: BTreeMap<String, String>,
-    luts: BTreeMap<String, String>,
 }
 
 #[derive(Serialize)]
@@ -86,7 +79,6 @@ pub(crate) fn run(source: &Path, target: &Path, loader: &LoaderRegistry) -> Resu
     if scenes.is_empty() {
         bail!("source project contains no scenes");
     }
-    let initial_state = opened.content.initial_state()?;
 
     let parent = target
         .parent()
@@ -98,38 +90,12 @@ pub(crate) fn run(source: &Path, target: &Path, loader: &LoaderRegistry) -> Resu
             parent.display()
         );
     }
-    let mut staging = tempfile::Builder::new()
+    let staging = tempfile::Builder::new()
         .prefix(".keine-migrate-")
         .tempdir_in(parent)
         .context("failed to create migration staging directory")?;
-    let ordinary =
-        build_model(&opened.config, &opened.content, &scenes, staging.path()).and_then(|model| {
-            write_project(
-                staging.path(),
-                opened.config.clone(),
-                &scenes,
-                &initial_state,
-                &model,
-                loader,
-            )
-        });
-    if ordinary.is_err() {
-        // The compact v1 spelling covers common actions. Advanced typed actions
-        // preserve the full engine IR when one of those spellings would lose data.
-        drop(staging);
-        staging = tempfile::Builder::new()
-            .prefix(".keine-migrate-")
-            .tempdir_in(parent)
-            .context("failed to create migration staging directory")?;
-        write_typed_project(
-            staging.path(),
-            &opened.config,
-            &opened.content,
-            &scenes,
-            &initial_state,
-            loader,
-        )?;
-    }
+    let model = build_model(&opened.config, &opened.content, &scenes, staging.path())?;
+    write_project(staging.path(), opened.config, &scenes, &model, loader)?;
 
     let staged_path = staging.keep();
     if let Err(error) = fs::rename(&staged_path, &target) {
@@ -301,7 +267,6 @@ fn write_project(
     stage: &Path,
     mut config: GameConfig,
     scenes: &[LoadedScene],
-    initial_state: &ProjectInitialState,
     model: &MigrationModel,
     loader: &LoaderRegistry,
 ) -> Result<()> {
@@ -330,7 +295,6 @@ fn write_project(
             .unwrap_or_else(|| model.scene_ids[&scenes[0].name].clone()),
         assets: "assets.yaml".into(),
         characters: "characters.yaml".into(),
-        initial_state: native_initial_state(initial_state),
     };
     let title = AssetKey {
         kind: ResourceKind::Background,
@@ -341,11 +305,6 @@ fn write_project(
     }
     fs::write(stage.join("config.yaml"), noyalib::to_string(&config)?)?;
 
-    validate_migrated_project(stage, loader)?;
-    Ok(())
-}
-
-fn validate_migrated_project(stage: &Path, loader: &LoaderRegistry) -> Result<()> {
     let migrated = open_project(stage, loader).context("failed to reopen migrated project")?;
     let languages = loader.languages(&migrated.config.adapter.script)?;
     let report = validate_project(&migrated.config, &migrated.content, &languages)?;
@@ -368,201 +327,6 @@ fn validate_migrated_project(stage: &Path, loader: &LoaderRegistry) -> Result<()
         bail!("migrated project failed validation:\n{details}");
     }
     Ok(())
-}
-
-fn write_typed_project(
-    stage: &Path,
-    source_config: &GameConfig,
-    content: &ContentProject,
-    scenes: &[LoadedScene],
-    initial_state: &ProjectInitialState,
-    loader: &LoaderRegistry,
-) -> Result<()> {
-    let scene_ids = scenes
-        .iter()
-        .enumerate()
-        .map(|(index, scene)| (scene.name.clone(), format!("scene_{:04}", index + 1)))
-        .collect::<HashMap<_, _>>();
-    let mut source = String::new();
-    let mut expected = HashMap::new();
-    for scene in scenes {
-        let name = &scene_ids[&scene.name];
-        source.push_str(&format!("scene {name} {{\n"));
-        let mut actions = scene.actions.clone();
-        for action in &mut actions {
-            remap_action_scenes(action, &scene_ids)?;
-            source.push_str("  engine {\"ron\":");
-            source.push_str(&serde_json::to_string(&ron::to_string(action)?)?);
-            source.push_str("},\n");
-        }
-        if !actions.is_empty() {
-            source.truncate(source.len() - 2);
-            source.push('\n');
-        }
-        source.push_str("}\n\n");
-        expected.insert(name.clone(), actions);
-    }
-
-    let assets = copy_typed_assets(stage, source_config, content, scenes)?;
-    fs::create_dir_all(stage.join("scripts"))?;
-    fs::write(stage.join("scripts/main.shou"), source)?;
-    fs::write(stage.join("assets.yaml"), noyalib::to_string(&assets)?)?;
-    fs::write(
-        stage.join("characters.yaml"),
-        noyalib::to_string(&CharacterManifest {
-            characters: BTreeMap::new(),
-        })?,
-    )?;
-
-    let mut config = source_config.clone();
-    config.adapter.asset = vec![AssetSourceConfig::default()];
-    config.adapter.script = "keine".into();
-    config.script = ScriptConfig {
-        version: 1,
-        entry: scene_ids
-            .get(&source_config.script.entry)
-            .cloned()
-            .unwrap_or_else(|| scene_ids[&scenes[0].name].clone()),
-        assets: "assets.yaml".into(),
-        characters: "characters.yaml".into(),
-        initial_state: native_initial_state(initial_state),
-    };
-    fs::write(stage.join("config.yaml"), noyalib::to_string(&config)?)?;
-    validate_migrated_project(stage, loader)?;
-
-    let migrated = open_project(stage, loader)?;
-    if migrated.content.initial_state()? != *initial_state {
-        bail!("migrated project changed initial variables");
-    }
-    let languages = loader.languages(&migrated.config.adapter.script)?;
-    let actual = keine_loader::load_scenes_with(&migrated.content, &languages)?;
-    for scene in actual {
-        let name = scene.name;
-        let expected_actions = expected
-            .remove(&name)
-            .with_context(|| format!("unexpected migrated scene {name:?}"))?;
-        if scene.actions != expected_actions {
-            let first = scene
-                .actions
-                .iter()
-                .zip(&expected_actions)
-                .position(|(actual, expected)| actual != expected);
-            bail!(
-                "migrated scene {name:?} changed typed engine actions at {first:?} ({} actual, {} expected): {:?} -> {:?}",
-                scene.actions.len(),
-                expected_actions.len(),
-                first.and_then(|index| expected_actions.get(index)),
-                first.and_then(|index| scene.actions.get(index)),
-            );
-        }
-    }
-    if !expected.is_empty() {
-        bail!("migrated project is missing typed engine scenes");
-    }
-    Ok(())
-}
-
-fn native_initial_state(initial: &ProjectInitialState) -> ScriptInitialState {
-    ScriptInitialState {
-        variables: initial.variables.clone(),
-        session_variables: initial.session_variables.clone(),
-        shared_variables: initial.shared_variables.clone(),
-    }
-}
-
-fn remap_action_scenes(action: &mut Action, scene_ids: &HashMap<String, String>) -> Result<()> {
-    match action {
-        Action::ChangeScene(scene) | Action::CallScene(scene) => {
-            *scene = scene_ids
-                .get(scene)
-                .cloned()
-                .with_context(|| format!("unknown scene {scene:?}"))?;
-        }
-        Action::Menu { choices, .. } => {
-            for choice in choices {
-                remap_choice_scene(&mut choice.target, scene_ids)?;
-            }
-        }
-        Action::EiyashouMenu { choices, .. } => {
-            for choice in choices {
-                remap_choice_scene(&mut choice.target, scene_ids)?;
-            }
-        }
-        Action::Flow { action, .. } => remap_action_scenes(action, scene_ids)?,
-        _ => {}
-    }
-    Ok(())
-}
-
-fn remap_choice_scene(
-    target: &mut ChoiceTarget,
-    scene_ids: &HashMap<String, String>,
-) -> Result<()> {
-    if let ChoiceTarget::ChangeScene(scene) | ChoiceTarget::CallScene(scene) = target {
-        *scene = scene_ids
-            .get(scene)
-            .cloned()
-            .with_context(|| format!("unknown scene {scene:?}"))?;
-    }
-    Ok(())
-}
-
-fn copy_typed_assets(
-    stage: &Path,
-    config: &GameConfig,
-    content: &ContentProject,
-    scenes: &[LoadedScene],
-) -> Result<AssetManifest> {
-    let mut paths = BTreeSet::new();
-    let mut manifest = AssetManifest::default();
-    for scene in scenes {
-        for resource in &scene.resources {
-            if resource.is_dynamic() {
-                bail!(
-                    "dynamic resource reference cannot be migrated losslessly: {}",
-                    resource.path
-                );
-            }
-            let logical = resource.resolved_path(config);
-            manifest_namespace_mut(&mut manifest, resource.kind)?
-                .insert(resource.path.clone(), format!("assets/{logical}"));
-            paths.insert(logical);
-        }
-    }
-    for aliases in [
-        &config.assets.backgrounds,
-        &config.assets.figures,
-        &config.assets.voices,
-        &config.assets.bgm,
-        &config.assets.effects,
-        &config.assets.videos,
-        &config.assets.luts,
-    ] {
-        paths.extend(aliases.values().cloned());
-    }
-    if !config.title_background.is_empty() {
-        let title = config.bg_path(&config.title_background);
-        if content.contains_asset(Path::new(&title)) {
-            paths.insert(title);
-        }
-    }
-    for logical in paths {
-        let path = Path::new(&logical);
-        if path.as_os_str().is_empty()
-            || !path
-                .components()
-                .all(|component| matches!(component, std::path::Component::Normal(_)))
-        {
-            bail!("asset path is not project-relative: {logical}");
-        }
-        let bytes = content
-            .read_asset(path)
-            .with_context(|| format!("failed to read source asset {logical}"))?;
-        let destination = stage.join("assets").join(path);
-        fs::create_dir_all(destination.parent().expect("asset path has parent"))?;
-        fs::write(&destination, bytes)?;
-    }
-    Ok(manifest)
 }
 
 fn render_scenes(scenes: &[LoadedScene], model: &MigrationModel) -> Result<String> {
@@ -879,7 +643,7 @@ fn resolve_resource(config: &GameConfig, kind: ResourceKind, name: &str) -> Resu
         ResourceKind::Effect => config.effect_path(name),
         ResourceKind::Video => config.video_path(name),
         ResourceKind::Particle | ResourceKind::MiniAvatar | ResourceKind::Lut => {
-            bail!("{kind:?} resources require typed migration")
+            bail!("{kind:?} resources require manual migration")
         }
     })
 }
@@ -923,9 +687,9 @@ fn manifest_namespace_mut(
         ResourceKind::Bgm => &mut manifest.bgm,
         ResourceKind::Effect => &mut manifest.effects,
         ResourceKind::Video => &mut manifest.videos,
-        ResourceKind::Particle => &mut manifest.particles,
-        ResourceKind::MiniAvatar => &mut manifest.mini_avatars,
-        ResourceKind::Lut => &mut manifest.luts,
+        ResourceKind::Particle | ResourceKind::MiniAvatar | ResourceKind::Lut => {
+            bail!("{kind:?} resources require manual migration")
+        }
     })
 }
 
@@ -969,20 +733,6 @@ mod tests {
         let native = fs::read_to_string(target.join("scripts/main.shou")).unwrap();
         assert!(native.contains("speaker_0001: \"Hello\""));
         assert!(!native.contains("Alice:Hello;"));
-    }
-
-    #[test]
-    fn migrates_complex_letsgal_fixture_with_typed_actions() {
-        let root = tempfile::tempdir().unwrap();
-        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/letsgal-timeline");
-        let target = root.path().join("native");
-
-        run(&source, &target, &LoaderRegistry::default()).unwrap();
-
-        let native = fs::read_to_string(target.join("scripts/main.shou")).unwrap();
-        assert!(native.contains("StageAnimation"));
-        assert!(native.contains("engine {\"ron\":"));
-        assert!(!target.join("project.json").exists());
     }
 
     #[test]

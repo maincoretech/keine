@@ -3,7 +3,7 @@
 已完成阶段的手工验收步骤集中于此；LetsGal Studio 集成仍保留独立清单。
 
 此清单记录旧阶段的历史验收场景，原生版 `projects/test-project` 已删除；同路径现为
-未跟踪的 LetsGal 临时示例，下文原生工程的操作预期不再适用。当前最小原生格式自动验证
+未跟踪的原始 LetsGal 兼容工程，下文原生工程的操作预期不再适用。当前最小原生格式自动验证
 使用 `tests/fixtures/native-smoke`。
 保留的 LetsGal 时间轴回归工程使用 [`tests/fixtures/letsgal-timeline/ACCEPTANCE.md`](../../tests/fixtures/letsgal-timeline/ACCEPTANCE.md)。
 

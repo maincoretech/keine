@@ -51,8 +51,8 @@ caused by Kēne changes.
 - `src/compiler.rs`, `src/publisher.rs`, `src/resource_migration.rs`: publisher-only tooling.
 - `tests/fixtures/native-smoke/`: tracked native project for deterministic tests; integration-owned.
 - `projects/letsgal/`: ignored local LetsGal Studio source for compatibility tests.
-- `projects/letsgal-native/`: ignored local `.shou` conversion of that source.
-- `projects/test-project`: local link to the converted temporary example.
+- `projects/letsgal-native/`: ignored, preserved local conversion; not the active example.
+- `projects/test-project`: local link to the original LetsGal Studio source.
 
 ## Code and evidence quality
 

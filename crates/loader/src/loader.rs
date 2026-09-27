@@ -101,7 +101,6 @@ pub struct ContentProject {
     pub sources: Vec<SourceMount>,
     scene_loader: Option<Arc<dyn StructuredSceneLoader>>,
     pub(crate) eiyashou: Option<EiyashouProjectData>,
-    native_initial_state: Option<crate::ProjectInitialState>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -142,7 +141,6 @@ impl ContentProject {
             sources,
             scene_loader: Some(loader),
             eiyashou: None,
-            native_initial_state: None,
         }
     }
 
@@ -169,9 +167,6 @@ impl ContentProject {
     }
 
     pub fn initial_state(&self) -> Result<crate::ProjectInitialState> {
-        if let Some(initial) = &self.native_initial_state {
-            return Ok(initial.clone());
-        }
         self.scene_loader
             .as_ref()
             .map_or(Ok(crate::ProjectInitialState::default()), |loader| {
@@ -195,10 +190,8 @@ impl ContentProject {
     pub fn prepare_eiyashou(&mut self, config: &mut GameConfig) -> Result<()> {
         if !config.adapter.script.eq_ignore_ascii_case("keine") {
             self.eiyashou = None;
-            self.native_initial_state = None;
             return Ok(());
         }
-        self.set_native_initial_state(config);
         let assets_path = confined_manifest_path(&self.root, &config.script.assets)?;
         let characters_path = confined_manifest_path(&self.root, &config.script.characters)?;
         let assets_yaml = fs::read_to_string(&assets_path)
@@ -295,42 +288,8 @@ impl ContentProject {
             &mut config.assets.videos,
             &mut data,
         )?;
-        install_asset_namespace(
-            &self.root,
-            &asset_roots,
-            ResourceKind::Particle,
-            assets.particles,
-            &mut HashMap::new(),
-            &mut data,
-        )?;
-        install_asset_namespace(
-            &self.root,
-            &asset_roots,
-            ResourceKind::MiniAvatar,
-            assets.mini_avatars,
-            &mut config.assets.figures,
-            &mut data,
-        )?;
-        install_asset_namespace(
-            &self.root,
-            &asset_roots,
-            ResourceKind::Lut,
-            assets.luts,
-            &mut config.assets.luts,
-            &mut data,
-        )?;
         self.eiyashou = Some(data);
         Ok(())
-    }
-
-    pub(crate) fn set_native_initial_state(&mut self, config: &GameConfig) {
-        if config.adapter.script.eq_ignore_ascii_case("keine") {
-            self.native_initial_state = Some(crate::ProjectInitialState {
-                variables: config.script.initial_state.variables.clone(),
-                session_variables: config.script.initial_state.session_variables.clone(),
-                shared_variables: config.script.initial_state.shared_variables.clone(),
-            });
-        }
     }
 
     pub fn contains_asset(&self, path: &Path) -> bool {
@@ -403,7 +362,6 @@ pub fn load_project_with(
         sources: mounted,
         scene_loader: None,
         eiyashou: None,
-        native_initial_state: None,
     })
 }
 
@@ -446,7 +404,6 @@ pub fn load_hakutaku_project_from_archive(
         sources: mounted,
         scene_loader: None,
         eiyashou: None,
-        native_initial_state: None,
     })
 }
 

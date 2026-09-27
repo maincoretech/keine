@@ -1035,7 +1035,6 @@ mod tests {
             sources: vec![crate::SourceMount::project("project", root.to_owned())],
             scene_loader: None,
             eiyashou: None,
-            native_initial_state: None,
         }
     }
 
@@ -1474,7 +1473,6 @@ scene read_after_init { "${name}" }
             ],
             scene_loader: None,
             eiyashou: None,
-            native_initial_state: None,
         };
 
         let scenes = load_scenes(&project).unwrap();
