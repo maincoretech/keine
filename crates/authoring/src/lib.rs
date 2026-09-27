@@ -5,14 +5,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-mod frame;
-
-pub use frame::{
-    FRAME_SLOT_COUNT, FrameMetadata, FrameTransportDescriptor, FrameTransportStats, OwnedFrame,
-    PixelFormat, SharedFrameConsumer, SharedFrameProducer, remove_stale_mapping,
-};
-
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 6;
 pub const MAX_MESSAGE_BYTES: usize = 256 * 1024;
 pub const MAX_DOCUMENT_BYTES: usize = 1024 * 1024;
 pub const SNAPSHOT_CHUNK_BYTES: usize = 128 * 1024;
@@ -58,39 +51,25 @@ pub enum ClientCommand {
         replacement: Vec<u8>,
     },
     StartPreview {
-        transport: FrameTransportDescriptor,
         document_revision: u64,
     },
-    Pause,
-    Resume,
+    ShowPreview,
     Stop,
-    Input {
-        document_revision: u64,
-        event: PreviewInput,
-    },
     SetExecutionCursor {
         document_revision: u64,
         path: PathBuf,
         line: usize,
         column: usize,
     },
-    GetExecutionLocation {
-        document_revision: u64,
-    },
     Ping,
     Shutdown,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
-pub enum PreviewInput {
-    Advance,
-    PointerPressed { x: f32, y: f32 },
-    Choice { index: usize },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ServerMessage {
     pub generation: u64,
+    /// Zero is reserved for unsolicited latest-position notifications.
+    /// Request/response exchanges use nonzero IDs.
     pub request_id: u64,
     pub response: ServerResponse,
 }
@@ -114,9 +93,6 @@ pub enum ServerResponse {
         state: LifecycleState,
     },
     SnapshotApplied {
-        document_revision: u64,
-    },
-    InputAccepted {
         document_revision: u64,
     },
     SourceLocation {
@@ -144,9 +120,8 @@ pub enum Capability {
     LetsGalProject,
     WebGalProject,
     Validate,
-    RawFramePreview,
+    NativePreviewWindow,
     SourceSnapshots,
-    RuntimeInput,
     SourceCursor,
     Lifecycle,
 }
@@ -156,7 +131,6 @@ pub enum Capability {
 pub enum LifecycleState {
     Ready,
     Running,
-    Paused,
     Stopped,
 }
 

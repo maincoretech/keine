@@ -923,6 +923,7 @@ pub(super) struct BlockProjectionView<'a> {
     pub(super) draft_text: Option<&'a DraftTextBlock>,
     pub(super) drop_target: Option<BlockDropTarget>,
     pub(super) dragging: Option<&'a HashSet<usize>>,
+    pub(super) settle_source: Option<&'a str>,
     pub(super) scroll_handle: &'a ScrollHandle,
     pub(super) scroll_anchor: &'a ScrollAnchor,
     pub(super) scroll_pending: bool,
@@ -1095,13 +1096,18 @@ pub(super) fn render_block_projection(
         draft_text,
         drop_target,
         dragging,
+        settle_source,
         scroll_handle,
         scroll_anchor,
         scroll_pending,
         scene_edit,
         scene_name_input,
     } = view;
-    let source = document.borrow().contents().to_owned();
+    // Hold the drag-time projection until source and row states settle in the
+    // same paint; otherwise release briefly flashes the previous row order.
+    let source = settle_source
+        .map(str::to_owned)
+        .unwrap_or_else(|| document.borrow().contents().to_owned());
     let projection = EiyashouProjection::parse(&source);
     let dragged_height = dragging.map_or(32., |selected| {
         dragged_block_height(&projection, selected, editors, draft_text, cx)
@@ -1144,9 +1150,7 @@ pub(super) fn render_block_projection(
             window,
             cx,
         );
-        let scene_line = document
-            .borrow()
-            .contents()
+        let scene_line = source
             .get(..scene.name_range.start)
             .map(|prefix| prefix.bytes().filter(|byte| *byte == b'\n').count())
             .unwrap_or_default();
@@ -1376,7 +1380,7 @@ pub(super) fn render_block_projection(
                 after: true,
             };
             let show_drop_gap = drop_target.is_some_and(|target| target.row == row_id)
-                && cx.has_active_drag()
+                && (cx.has_active_drag() || settle_source.is_some())
                 && dragging.is_none_or(|selected| !selected.contains(&row_id));
             let drop_gap_height = transition(
                 (format!("block-drop-gap-{row_id}"), "height"),
@@ -1523,7 +1527,7 @@ pub(super) fn render_block_projection(
                         .child(Icon::new(IconName::FileText).xsmall()),
                 );
             }
-            if dragging.is_some() {
+            if dragging.is_some() && cx.has_active_drag() {
                 row =
                     row.child(
                         div()
@@ -1555,8 +1559,6 @@ pub(super) fn render_block_projection(
                     let after = this
                         .block_drop_target
                         .is_some_and(|target| target.row == row_id && target.after);
-                    this.block_drop_target = None;
-                    this.block_dragging = None;
                     this.drop_blocks(drag, row_id, after, window, cx);
                 }))
                 .on_drop(cx.listener(move |this, drag: &AssetDrag, window, cx| {
@@ -2357,58 +2359,28 @@ pub(super) fn problem_row(
 
 pub(super) fn render_performance(
     controller: &PreviewController,
-    timeline: &VecDeque<TimelineSample>,
     scroll_handle: &ScrollHandle,
 ) -> AnyElement {
     let snapshot = controller.snapshot();
-    let latest = timeline.back().copied().unwrap_or(TimelineSample {
-        published: snapshot.frame_stats.published,
-        overwritten: snapshot.frame_stats.overwritten,
-    });
-    let deltas = timeline
-        .iter()
-        .zip(timeline.iter().skip(1))
-        .map(|(before, after)| after.published.saturating_sub(before.published))
-        .collect::<Vec<_>>();
-    let peak = deltas.iter().copied().max().unwrap_or(1).max(1);
+    let state = match snapshot.lifecycle {
+        PreviewLifecycle::Off => "Stopped",
+        PreviewLifecycle::Starting => "Starting",
+        PreviewLifecycle::Running => "Running",
+        PreviewLifecycle::Failed(_) => "Failed",
+    };
     let content = div()
         .flex()
         .flex_col()
         .p_3()
         .gap_3()
-        .child(section_label("PREVIEW TRANSPORT"))
-        .child(property_row(
-            "Published frames",
-            latest.published.to_string(),
-        ))
-        .child(property_row(
-            "Overwritten frames",
-            latest.overwritten.to_string(),
-        ))
-        .child(property_row("Samples", timeline.len().to_string()))
-        .child(
-            div()
-                .h(px(84.))
-                .flex()
-                .items_end()
-                .gap(px(2.))
-                .px_1()
-                .rounded(px(8.))
-                .bg(rgb(CANVAS))
-                .children(deltas.into_iter().map(|delta| {
-                    let height = 4. + (delta as f32 / peak as f32) * 68.;
-                    div()
-                        .w(px(5.))
-                        .h(px(height))
-                        .rounded(px(2.))
-                        .bg(rgb(PRIMARY))
-                })),
-        )
+        .child(section_label("ENGINE PREVIEW"))
+        .child(property_row("Window", state.to_owned()))
+        .child(property_row("Pixel transfer", "None".to_owned()))
         .child(
             div()
                 .text_xs()
                 .text_color(rgb(MUTED))
-                .child("500 ms transport samples · not CPU/GPU frame time"),
+                .child("The Engine window renders and handles input directly."),
         );
     vertical_overflow_view("performance-scroll", scroll_handle, content)
 }

@@ -4,16 +4,17 @@ use std::io::{self, BufReader};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
-use bevy::prelude::App;
+use bevy::prelude::{App, Resource, World};
+use bevy::winit::{EventLoopProxyWrapper, WinitUserEvent};
 use keine_authoring::{
-    Capability, ClientCommand, ClientMessage, ErrorCode, FrameTransportDescriptor, LifecycleState,
-    MAX_DOCUMENT_BYTES, PROTOCOL_VERSION, ServerMessage, ServerResponse, SharedFrameProducer,
-    read_message, write_message,
+    Capability, ClientCommand, ClientMessage, ErrorCode, LifecycleState, MAX_DOCUMENT_BYTES,
+    PROTOCOL_VERSION, ServerMessage, ServerResponse, read_message, write_message,
 };
 use keine_loader::LoaderRegistry;
 
@@ -21,9 +22,8 @@ use super::bootstrap::{
     OpenedProject, build_authoring_preview_app, open_project, validate_project,
 };
 
-const ACTIVE_FRAME_INTERVAL: Duration = Duration::from_micros(16_667);
-const IDLE_INTERVAL: Duration = Duration::from_millis(250);
 static OVERLAY_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+type PublishedPosition = (u64, Option<(PathBuf, usize, usize)>);
 
 struct PendingSnapshot {
     path: PathBuf,
@@ -64,8 +64,6 @@ struct Session {
     project: Option<OpenedProject>,
     project_path: Option<PathBuf>,
     lifecycle: LifecycleState,
-    runtime: Option<App>,
-    transport: Option<FrameTransportDescriptor>,
     document_revision: u64,
     pending_snapshot: Option<PendingSnapshot>,
     documents: HashMap<PathBuf, Vec<u8>>,
@@ -78,8 +76,6 @@ impl Session {
             project: None,
             project_path: None,
             lifecycle: LifecycleState::Stopped,
-            runtime: None,
-            transport: None,
             document_revision: 0,
             pending_snapshot: None,
             documents: HashMap::new(),
@@ -88,63 +84,105 @@ impl Session {
     }
 
     fn stop(&mut self) {
-        self.runtime = None;
-        self.transport = None;
         self.lifecycle = LifecycleState::Stopped;
     }
 
-    fn rebuild_runtime(&mut self, loader: &LoaderRegistry) -> Result<()> {
+    fn build_runtime(&self, loader: &LoaderRegistry) -> Result<App> {
         let project_path = self.project_path.as_deref().context("no project is open")?;
-        let transport = self
-            .transport
-            .clone()
-            .context("preview transport is not configured")?;
-        let producer = SharedFrameProducer::open(transport)?;
-        let paused = self.lifecycle == LifecycleState::Paused;
-        let mut runtime = build_authoring_preview_app(
+        build_authoring_preview_app(
             project_path,
             &self.overlay.root,
             loader,
             super::preview::AuthoringPreviewConfig {
-                producer,
                 document_revision: self.document_revision,
             },
-        )?;
-        runtime.finish();
-        runtime.cleanup();
-        super::preview::set_paused(&mut runtime, paused);
-        runtime.update();
-        self.runtime = Some(runtime);
-        Ok(())
+        )
     }
+}
 
-    fn reload_source(&mut self) {
-        if let Some(runtime) = self.runtime.as_mut()
-            && let Err(error) = super::preview::reload_source(runtime, self.document_revision)
-        {
-            // An incomplete edit must not tear down Preview or strand its
-            // document revision. Keep rendering the last valid Program.
-            log::warn!("preview kept the last valid source: {error:#}");
-            super::preview::set_document_revision(runtime, self.document_revision);
-        }
-    }
+#[derive(Resource)]
+struct LiveHost {
+    session: Session,
+    messages: Mutex<Receiver<io::Result<Option<ClientMessage>>>>,
+    writer: TcpStream,
+    generation: u64,
+    published_position: Option<PublishedPosition>,
+}
 
-    fn update_runtime(&mut self) {
-        if let Some(runtime) = self.runtime.as_mut() {
-            runtime.update();
-        }
-    }
-
-    fn next_interval(&self) -> Duration {
-        match (&self.runtime, self.lifecycle) {
-            (Some(runtime), LifecycleState::Running)
-                if super::preview::wants_continuous_updates(runtime) =>
-            {
-                ACTIVE_FRAME_INTERVAL
+fn handle_live_messages(world: &mut World) {
+    let Some(mut host) = world.remove_resource::<LiveHost>() else {
+        return;
+    };
+    loop {
+        let message = host
+            .messages
+            .lock()
+            .expect("authoring receiver poisoned")
+            .try_recv();
+        let (message, shutdown) = match message {
+            Ok(Ok(Some(message))) => {
+                let shutdown = matches!(
+                    message.command,
+                    ClientCommand::Stop | ClientCommand::Shutdown
+                );
+                (message, shutdown)
             }
-            _ => IDLE_INTERVAL,
+            Ok(Ok(None)) | Ok(Err(_)) | Err(TryRecvError::Disconnected) => {
+                world.write_message(bevy::app::AppExit::Success);
+                break;
+            }
+            Err(TryRecvError::Empty) => break,
+        };
+        let result = if message.generation != host.generation {
+            Err((
+                ErrorCode::InvalidRequest,
+                "stale authoring session generation".into(),
+            ))
+        } else {
+            handle(
+                &LoaderRegistry::default(),
+                &mut host.session,
+                Some(world),
+                &message.command,
+            )
+        };
+        let sent = match result {
+            Ok(response) => send(&mut host.writer, &message, response),
+            Err((code, text)) => send_error(&mut host.writer, &message, code, &text),
+        };
+        if sent.is_err() || shutdown {
+            world.write_message(bevy::app::AppExit::Success);
+            break;
         }
     }
+    world.insert_resource(host);
+}
+
+/// Push only a changed execution location. Idle previews send nothing, so
+/// cursor synchronization does not wake the native renderer or poll the GPU.
+fn publish_live_position(world: &mut World) {
+    let Some(mut host) = world.remove_resource::<LiveHost>() else {
+        return;
+    };
+    let current = (
+        host.session.document_revision,
+        super::preview::source_location(world),
+    );
+    if host.published_position.as_ref() != Some(&current) {
+        let message = ServerMessage {
+            generation: host.generation,
+            request_id: 0,
+            response: ServerResponse::ExecutionLocation {
+                document_revision: current.0,
+                location: current.1.clone(),
+            },
+        };
+        if write_message(&mut host.writer, &message).is_err() {
+            world.write_message(bevy::app::AppExit::Success);
+        }
+        host.published_position = Some(current);
+    }
+    world.insert_resource(host);
 }
 
 pub(crate) fn run(endpoint: &str, token: &str, loader: LoaderRegistry) -> Result<()> {
@@ -214,9 +252,8 @@ pub(crate) fn run(endpoint: &str, token: &str, loader: LoaderRegistry) -> Result
                 Capability::LetsGalProject,
                 Capability::WebGalProject,
                 Capability::Validate,
-                Capability::RawFramePreview,
+                Capability::NativePreviewWindow,
                 Capability::SourceSnapshots,
-                Capability::RuntimeInput,
                 Capability::SourceCursor,
                 Capability::Lifecycle,
             ],
@@ -225,20 +262,11 @@ pub(crate) fn run(endpoint: &str, token: &str, loader: LoaderRegistry) -> Result
 
     let generation = hello.generation;
     stream.set_read_timeout(None)?;
-    let messages = spawn_reader(reader);
+    let wake = Arc::new(Mutex::new(None));
+    let messages = spawn_reader(reader, wake.clone());
     let mut session = Session::new()?;
-    let mut last_update = Instant::now();
     loop {
-        // Control messages can arrive continuously while the author edits or
-        // plays. Do not wait for an empty receive queue before rendering.
-        if last_update.elapsed() >= session.next_interval() {
-            session.update_runtime();
-            last_update = Instant::now();
-        }
-        let timeout = session
-            .next_interval()
-            .saturating_sub(last_update.elapsed());
-        match messages.recv_timeout(timeout) {
+        match messages.recv() {
             Ok(Ok(Some(message))) => {
                 if message.generation != generation {
                     send_error(
@@ -249,16 +277,58 @@ pub(crate) fn run(endpoint: &str, token: &str, loader: LoaderRegistry) -> Result
                     )?;
                     continue;
                 }
+                if let ClientCommand::StartPreview { document_revision } = &message.command {
+                    if session.project.is_none() {
+                        send_error(
+                            &mut stream,
+                            &message,
+                            ErrorCode::ProjectNotOpen,
+                            "no project is open",
+                        )?;
+                        continue;
+                    }
+                    session.document_revision = *document_revision;
+                    let mut runtime = match session.build_runtime(&loader) {
+                        Ok(runtime) => runtime,
+                        Err(error) => {
+                            send_error(
+                                &mut stream,
+                                &message,
+                                ErrorCode::Internal,
+                                &error.to_string(),
+                            )?;
+                            continue;
+                        }
+                    };
+                    session.lifecycle = LifecycleState::Running;
+                    runtime.insert_resource(LiveHost {
+                        session,
+                        messages: Mutex::new(messages),
+                        writer: stream.try_clone()?,
+                        generation,
+                        published_position: None,
+                    });
+                    runtime.add_systems(bevy::prelude::First, handle_live_messages);
+                    runtime.add_systems(bevy::prelude::Last, publish_live_position);
+                    *wake.lock().expect("authoring wake lock poisoned") = Some(
+                        std::ops::Deref::deref(runtime.world().resource::<EventLoopProxyWrapper>())
+                            .clone(),
+                    );
+                    send(
+                        &mut stream,
+                        &message,
+                        ServerResponse::Lifecycle {
+                            state: LifecycleState::Running,
+                        },
+                    )?;
+                    // Bevy/winit owns the native event loop on this process's
+                    // main thread. Socket reads continue on the existing IO
+                    // thread; commands are applied inside the ECS update.
+                    runtime.run();
+                    return Ok(());
+                }
                 let shutdown = matches!(message.command, ClientCommand::Shutdown);
-                let visual_input = matches!(
-                    message.command,
-                    ClientCommand::Input { .. }
-                        | ClientCommand::SetExecutionCursor { .. }
-                        | ClientCommand::CommitDocumentSnapshot { .. }
-                        | ClientCommand::ApplyDocumentPatch { .. }
-                );
-                let response = handle(&loader, &mut session, generation, &message.command);
-                let accepted = response.is_ok();
+                let response = handle(&loader, &mut session, None, &message.command);
                 match response {
                     Ok(response) => send(&mut stream, &message, response)?,
                     Err((code, message_text)) => {
@@ -268,31 +338,32 @@ pub(crate) fn run(endpoint: &str, token: &str, loader: LoaderRegistry) -> Result
                 if shutdown {
                     break;
                 }
-                if visual_input && accepted && session.lifecycle == LifecycleState::Running {
-                    session.update_runtime();
-                    last_update = Instant::now();
-                }
             }
             Ok(Ok(None)) => break,
             Ok(Err(error)) => return Err(error.into()),
-            Err(RecvTimeoutError::Timeout) => {
-                session.update_runtime();
-                last_update = Instant::now();
-            }
-            Err(RecvTimeoutError::Disconnected) => break,
+            Err(_) => break,
         }
     }
     session.stop();
     Ok(())
 }
 
-fn spawn_reader(mut reader: BufReader<TcpStream>) -> Receiver<io::Result<Option<ClientMessage>>> {
+fn spawn_reader(
+    mut reader: BufReader<TcpStream>,
+    wake: Arc<Mutex<Option<winit::event_loop::EventLoopProxy<WinitUserEvent>>>>,
+) -> Receiver<io::Result<Option<ClientMessage>>> {
     let (sender, receiver) = mpsc::sync_channel(8);
     thread::spawn(move || {
         loop {
             let message = read_message::<ClientMessage>(&mut reader);
             let finished = !matches!(message, Ok(Some(_)));
-            if sender.send(message).is_err() || finished {
+            if sender.send(message).is_err() {
+                break;
+            }
+            if let Some(proxy) = wake.lock().expect("authoring wake lock poisoned").as_ref() {
+                let _ = proxy.send_event(WinitUserEvent::WakeUp);
+            }
+            if finished {
                 break;
             }
         }
@@ -303,7 +374,7 @@ fn spawn_reader(mut reader: BufReader<TcpStream>) -> Receiver<io::Result<Option<
 fn handle(
     loader: &LoaderRegistry,
     session: &mut Session,
-    generation: u64,
+    mut runtime: Option<&mut World>,
     command: &ClientCommand,
 ) -> Result<ServerResponse, (ErrorCode, String)> {
     match command {
@@ -354,7 +425,9 @@ fn handle(
             offset,
             bytes,
         } => append_snapshot(session, *revision, *offset, bytes),
-        ClientCommand::CommitDocumentSnapshot { revision } => commit_snapshot(session, *revision),
+        ClientCommand::CommitDocumentSnapshot { revision } => {
+            commit_snapshot(session, runtime.as_deref_mut(), *revision)
+        }
         ClientCommand::ApplyDocumentPatch {
             path,
             base_revision,
@@ -364,6 +437,7 @@ fn handle(
             replacement,
         } => apply_patch(
             session,
+            runtime.as_deref_mut(),
             path,
             *base_revision,
             *revision,
@@ -371,58 +445,23 @@ fn handle(
             *end,
             replacement,
         ),
-        ClientCommand::StartPreview {
-            transport,
-            document_revision,
-        } => {
-            if session.project.is_none() {
-                return Err((ErrorCode::ProjectNotOpen, "no project is open".into()));
-            }
-            if transport.session_generation != generation
-                || transport.max_width != keine_core::DESIGN_WIDTH as u32
-                || transport.max_height != keine_core::DESIGN_HEIGHT as u32
-            {
-                return Err((
-                    ErrorCode::InvalidRequest,
-                    "preview transport identity or dimensions are invalid".into(),
-                ));
-            }
-            session.stop();
-            session.transport = Some(transport.clone());
-            session.document_revision = *document_revision;
-            session.lifecycle = LifecycleState::Running;
-            session.rebuild_runtime(loader).map_err(internal_error)?;
-            Ok(ServerResponse::Lifecycle {
-                state: session.lifecycle,
-            })
-        }
-        ClientCommand::Pause => {
-            if session.lifecycle != LifecycleState::Running || session.runtime.is_none() {
-                return Err((
-                    ErrorCode::InvalidRequest,
-                    "pause requires a running preview".into(),
-                ));
-            }
-            session.lifecycle = LifecycleState::Paused;
-            if let Some(runtime) = session.runtime.as_mut() {
-                super::preview::set_paused(runtime, true);
-                runtime.update();
-            }
-            Ok(ServerResponse::Lifecycle {
-                state: session.lifecycle,
-            })
-        }
-        ClientCommand::Resume => {
-            if session.lifecycle != LifecycleState::Paused || session.runtime.is_none() {
-                return Err((
-                    ErrorCode::InvalidRequest,
-                    "resume requires a paused preview".into(),
-                ));
-            }
-            session.lifecycle = LifecycleState::Running;
-            if let Some(runtime) = session.runtime.as_mut() {
-                super::preview::set_paused(runtime, false);
-                runtime.update();
+        ClientCommand::StartPreview { .. } => Err((
+            ErrorCode::InvalidRequest,
+            "preview is already running".into(),
+        )),
+        ClientCommand::ShowPreview => {
+            let Some(runtime) = runtime else {
+                return Err((ErrorCode::InvalidRequest, "preview is not running".into()));
+            };
+            // Bevy/winit owns activation on each desktop platform. Wayland
+            // may deny programmatic focus; the native window remains usable.
+            let mut windows = runtime.query_filtered::<
+                &mut bevy::window::Window,
+                bevy::prelude::With<bevy::window::PrimaryWindow>,
+            >();
+            for mut window in windows.iter_mut(runtime) {
+                window.focused = true;
+                window.visible = true;
             }
             Ok(ServerResponse::Lifecycle {
                 state: session.lifecycle,
@@ -434,22 +473,6 @@ fn handle(
                 state: session.lifecycle,
             })
         }
-        ClientCommand::Input {
-            document_revision,
-            event,
-        } => {
-            require_revision(session, *document_revision)?;
-            let Some(runtime) = session.runtime.as_mut() else {
-                return Err((ErrorCode::InvalidRequest, "preview is not running".into()));
-            };
-            if session.lifecycle != LifecycleState::Running {
-                return Err((ErrorCode::InvalidRequest, "preview is paused".into()));
-            }
-            super::preview::queue_input(runtime, *event);
-            Ok(ServerResponse::InputAccepted {
-                document_revision: *document_revision,
-            })
-        }
         ClientCommand::SetExecutionCursor {
             document_revision,
             path,
@@ -457,7 +480,7 @@ fn handle(
             column,
         } => {
             require_revision(session, *document_revision)?;
-            let Some(runtime) = session.runtime.as_mut() else {
+            let Some(runtime) = runtime else {
                 return Err((ErrorCode::InvalidRequest, "preview is not running".into()));
             };
             if !super::preview::seek_source(runtime, path, *line) {
@@ -471,16 +494,6 @@ fn handle(
                 path: path.clone(),
                 line: *line,
                 column: *column,
-            })
-        }
-        ClientCommand::GetExecutionLocation { document_revision } => {
-            require_revision(session, *document_revision)?;
-            let Some(runtime) = session.runtime.as_ref() else {
-                return Err((ErrorCode::InvalidRequest, "preview is not running".into()));
-            };
-            Ok(ServerResponse::ExecutionLocation {
-                document_revision: *document_revision,
-                location: super::preview::source_location(runtime),
             })
         }
         ClientCommand::Ping => Ok(ServerResponse::Pong),
@@ -553,6 +566,7 @@ fn append_snapshot(
 
 fn commit_snapshot(
     session: &mut Session,
+    runtime: Option<&mut World>,
     revision: u64,
 ) -> Result<ServerResponse, (ErrorCode, String)> {
     let pending = session.pending_snapshot.take().ok_or_else(|| {
@@ -587,7 +601,7 @@ fn commit_snapshot(
         .documents
         .insert(pending.path.clone(), pending.bytes);
     session.document_revision = revision;
-    session.reload_source();
+    reload_live_source(runtime, revision);
     Ok(ServerResponse::SnapshotApplied {
         document_revision: revision,
     })
@@ -596,6 +610,7 @@ fn commit_snapshot(
 #[allow(clippy::too_many_arguments)]
 fn apply_patch(
     session: &mut Session,
+    runtime: Option<&mut World>,
     path: &Path,
     base_revision: u64,
     revision: u64,
@@ -656,10 +671,21 @@ fn apply_patch(
         .write_script(&path, document)
         .map_err(internal_error)?;
     session.document_revision = revision;
-    session.reload_source();
+    reload_live_source(runtime, revision);
     Ok(ServerResponse::SnapshotApplied {
         document_revision: revision,
     })
+}
+
+fn reload_live_source(runtime: Option<&mut World>, revision: u64) {
+    let Some(world) = runtime else {
+        return;
+    };
+    if let Err(error) = super::preview::reload_source(world, revision) {
+        // Invalid in-progress text must leave the last valid Program live.
+        log::warn!("preview kept the last valid source: {error:#}");
+        super::preview::set_document_revision(world, revision);
+    }
 }
 
 fn confined_script_path(path: &Path) -> Option<PathBuf> {

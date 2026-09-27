@@ -1,5 +1,9 @@
 # T16 — Editor Phase 4 embedded runtime preview
 
+> Historical acceptance record. The current product direction uses a separate native Engine
+> window with source/cursor IPC rather than embedded pixel transport. See
+> `docs/PROJECT_STATE.md`; the implementation and commands below no longer describe current code.
+
 ## Status
 
 Complete in the integration thread. Automated acceptance passed and the user accepted the live

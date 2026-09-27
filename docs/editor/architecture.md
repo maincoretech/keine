@@ -1,5 +1,8 @@
 # Keine Editor 最终架构与分阶段实施交接
 
+> 历史设计记录：文中内嵌 Preview 与 frame transport 方案已被独立原生 Engine 窗口取代。
+> 当前实现和限制以 `docs/PROJECT_STATE.md` 为准。
+
 - 文档日期：20260920
 - 文档版本：2.1 Final
 - 适用仓库：`maincoretech/keine`

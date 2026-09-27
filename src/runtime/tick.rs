@@ -647,6 +647,12 @@ fn sync_editor_position(
         log::warn!("editor selected unknown fragment {scene_name:?}");
         return false;
     };
+    // A scene header names a fragment but is not itself an action. Replaying
+    // zero actions would clear the visible stage when that header is selected.
+    let source_step = scene
+        .action_spans
+        .first()
+        .map_or(source_step, |first| source_step.max(first.line));
     let selected_start = scene
         .action_spans
         .iter()
@@ -2588,6 +2594,46 @@ mod tests {
         assert_eq!(state.dialogue.as_ref().unwrap().text, "fresh/2");
         assert_eq!(state.vars["route"], Value::Str("fresh".into()));
         assert_eq!(state.global_vars["ending"], Value::Int(2));
+    }
+
+    #[test]
+    fn editor_scene_header_previews_its_first_action() {
+        let mut state = State::new();
+        state.install_program(Program::from_scenes([(
+            "opening".into(),
+            vec![
+                Action::ShowBg {
+                    image: "day.webp".into(),
+                    transition: Transition::Instant,
+                    transform: SpriteTransform::default(),
+                },
+                Action::Say {
+                    speaker: String::new(),
+                    text: "Welcome".into(),
+                    options: Default::default(),
+                },
+            ],
+        )]));
+        let manifest = LocalAssetManifest(std::collections::HashMap::from([(
+            "opening".into(),
+            LocalSceneAssets {
+                action_spans: vec![
+                    keine_loader::SourceSpan { line: 2, column: 1 },
+                    keine_loader::SourceSpan { line: 3, column: 1 },
+                ],
+                ..default()
+            },
+        )]));
+
+        assert!(sync_editor_position(
+            &mut state,
+            &manifest,
+            "opening",
+            1,
+            keine_loader::ProjectInitialState::default(),
+        ));
+        assert_eq!(state.bg.as_deref(), Some("day.webp"));
+        assert_eq!(state.cursor, 1);
     }
 
     #[test]

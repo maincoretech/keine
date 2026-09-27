@@ -124,12 +124,7 @@ impl EditorTabGroupSkin {
         }
         let is_closable_tool = matches!(
             panel_name,
-            PREVIEW_PANEL
-                | ASSETS_PANEL
-                | CHARACTERS_PANEL
-                | SCENES_PANEL
-                | PROBLEMS_PANEL
-                | PERFORMANCE_PANEL
+            ASSETS_PANEL | CHARACTERS_PANEL | SCENES_PANEL | PROBLEMS_PANEL | PERFORMANCE_PANEL
         );
         let panel_id = panel.panel_id(cx);
         let close_group = group.clone();
@@ -1281,14 +1276,6 @@ pub(super) fn install_default_layout(
         cx,
     )
     .expect("workspace inspector must be constructible");
-    let preview = WorkbenchPanel::from_payload(
-        PanelPayload::Preview {
-            root: session.root().to_owned(),
-        },
-        window,
-        cx,
-    )
-    .expect("workspace preview must be constructible");
     let output = WorkbenchPanel::from_payload(
         PanelPayload::Output {
             root: session.root().to_owned(),
@@ -1314,16 +1301,8 @@ pub(super) fn install_default_layout(
             None,
         )
         .child(
-            DockLayout::v_split()
-                .child(
-                    DockLayout::tabs().panel_view(panel_handle(preview), cx),
-                    None,
-                )
-                .child(
-                    DockLayout::tabs().panel_view(panel_handle(inspector), cx),
-                    None,
-                ),
-            Some(px(520.)),
+            DockLayout::tabs().panel_view(panel_handle(inspector), cx),
+            Some(px(340.)),
         );
     dock.update(cx, |dock, cx| dock.set_center(layout, window, cx));
 }

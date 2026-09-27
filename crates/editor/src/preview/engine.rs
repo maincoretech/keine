@@ -5,19 +5,21 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use keine_authoring::{
-    Capability, ClientCommand, ClientMessage, ErrorCode, FrameTransportDescriptor, LifecycleState,
-    MAX_DOCUMENT_BYTES, PROTOCOL_VERSION, PreviewInput, SNAPSHOT_CHUNK_BYTES, ServerMessage,
-    ServerResponse, ValidationReport, read_message, write_message,
+    Capability, ClientCommand, ClientMessage, ErrorCode, LifecycleState, MAX_DOCUMENT_BYTES,
+    PROTOCOL_VERSION, SNAPSHOT_CHUNK_BYTES, ServerMessage, ServerResponse, ValidationReport,
+    read_message, write_message,
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 const EXIT_TIMEOUT: Duration = Duration::from_millis(600);
 static NEXT_TOKEN: AtomicU64 = AtomicU64::new(1);
+type PublishedPosition = (u64, Option<(PathBuf, usize, usize)>);
 
 #[derive(Clone, Debug)]
 pub struct EngineLocator {
@@ -93,7 +95,8 @@ impl EngineLocator {
 pub struct EngineProcess {
     child: Child,
     writer: TcpStream,
-    reader: BufReader<TcpStream>,
+    responses: mpsc::Receiver<io::Result<ServerMessage>>,
+    published_position: Arc<Mutex<Option<PublishedPosition>>>,
     generation: u64,
     next_request: u64,
     closed: bool,
@@ -116,13 +119,14 @@ impl EngineProcess {
 
         let stream = accept_child(&listener, &mut child)?;
         stream.set_nodelay(true)?;
-        stream.set_read_timeout(Some(IO_TIMEOUT))?;
         stream.set_write_timeout(Some(IO_TIMEOUT))?;
         let reader = BufReader::new(stream.try_clone()?);
+        let (responses, published_position) = spawn_response_reader(reader, generation);
         let mut process = Self {
             child,
             writer: stream,
-            reader,
+            responses,
+            published_position,
             generation,
             next_request: 1,
             closed: false,
@@ -197,15 +201,12 @@ impl EngineProcess {
         }
     }
 
-    pub fn start_preview(
-        &mut self,
-        transport: FrameTransportDescriptor,
-        document_revision: u64,
-    ) -> io::Result<LifecycleState> {
-        self.lifecycle(ClientCommand::StartPreview {
-            transport,
-            document_revision,
-        })
+    pub fn start_preview(&mut self, document_revision: u64) -> io::Result<LifecycleState> {
+        self.lifecycle(ClientCommand::StartPreview { document_revision })
+    }
+
+    pub fn show_preview(&mut self) -> io::Result<LifecycleState> {
+        self.lifecycle(ClientCommand::ShowPreview)
     }
 
     pub fn apply_patch(
@@ -242,28 +243,11 @@ impl EngineProcess {
         }
     }
 
-    pub fn pause(&mut self) -> io::Result<LifecycleState> {
-        self.lifecycle(ClientCommand::Pause)
-    }
-
-    pub fn resume(&mut self) -> io::Result<LifecycleState> {
-        self.lifecycle(ClientCommand::Resume)
-    }
-
     pub fn stop(&mut self) -> io::Result<LifecycleState> {
-        self.lifecycle(ClientCommand::Stop)
-    }
-
-    pub fn input(&mut self, document_revision: u64, event: PreviewInput) -> io::Result<()> {
-        match self.request(ClientCommand::Input {
-            document_revision,
-            event,
-        })? {
-            ServerResponse::InputAccepted {
-                document_revision: accepted,
-            } if accepted == document_revision => Ok(()),
-            other => Err(unexpected("input acknowledgement", &other)),
-        }
+        let state = self.lifecycle(ClientCommand::Stop)?;
+        self.closed = true;
+        wait_or_kill(&mut self.child)?;
+        Ok(state)
     }
 
     pub fn set_execution_cursor(
@@ -303,17 +287,24 @@ impl EngineProcess {
         }
     }
 
-    pub fn execution_location(
+    /// Receive only an Engine-published change. This never sends a request or
+    /// wakes an otherwise idle native render loop.
+    pub fn take_published_position(
         &mut self,
-        document_revision: u64,
-    ) -> io::Result<Option<(PathBuf, usize, usize)>> {
-        match self.request(ClientCommand::GetExecutionLocation { document_revision })? {
-            ServerResponse::ExecutionLocation {
-                document_revision: accepted,
-                location,
-            } if accepted == document_revision => Ok(location),
-            other => Err(unexpected("execution location", &other)),
+        revision: u64,
+    ) -> io::Result<Option<Option<(PathBuf, usize, usize)>>> {
+        if let Some(status) = self.child.try_wait()? {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                format!("Engine preview exited: {status}"),
+            ));
         }
+        Ok(self
+            .published_position
+            .lock()
+            .expect("preview position lock poisoned")
+            .take()
+            .and_then(|(received, position)| (received == revision).then_some(position)))
     }
 
     pub fn shutdown(&mut self) -> io::Result<()> {
@@ -362,9 +353,18 @@ impl EngineProcess {
                 command,
             },
         )?;
-        let response: ServerMessage = read_message(&mut self.reader)?.ok_or_else(|| {
-            io::Error::new(io::ErrorKind::UnexpectedEof, "Engine authoring host exited")
-        })?;
+        let response = self
+            .responses
+            .recv_timeout(IO_TIMEOUT)
+            .map_err(|error| match error {
+                mpsc::RecvTimeoutError::Timeout => io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "Engine authoring response timed out",
+                ),
+                mpsc::RecvTimeoutError::Disconnected => {
+                    io::Error::new(io::ErrorKind::UnexpectedEof, "Engine authoring host exited")
+                }
+            })??;
         if response.generation != self.generation || response.request_id != request_id {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -373,6 +373,64 @@ impl EngineProcess {
         }
         Ok(response.response)
     }
+}
+
+fn spawn_response_reader(
+    mut reader: BufReader<TcpStream>,
+    generation: u64,
+) -> (
+    mpsc::Receiver<io::Result<ServerMessage>>,
+    Arc<Mutex<Option<PublishedPosition>>>,
+) {
+    let (sender, responses) = mpsc::channel();
+    let published_position = Arc::new(Mutex::new(None));
+    let latest = published_position.clone();
+    thread::Builder::new()
+        .name("keine-preview-replies".into())
+        .spawn(move || {
+            loop {
+                match read_message::<ServerMessage>(&mut reader) {
+                    Ok(Some(ServerMessage {
+                        generation: event_generation,
+                        request_id: 0,
+                        response:
+                            ServerResponse::ExecutionLocation {
+                                document_revision,
+                                location,
+                            },
+                        ..
+                    })) => {
+                        if event_generation != generation {
+                            let _ = sender.send(Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "Engine published a stale preview session",
+                            )));
+                            break;
+                        }
+                        *latest.lock().expect("preview position lock poisoned") =
+                            Some((document_revision, location));
+                    }
+                    Ok(Some(response)) => {
+                        if sender.send(Ok(response)).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(None) => {
+                        let _ = sender.send(Err(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "Engine authoring host exited",
+                        )));
+                        break;
+                    }
+                    Err(error) => {
+                        let _ = sender.send(Err(error));
+                        break;
+                    }
+                }
+            }
+        })
+        .expect("preview reply reader must be spawnable");
+    (responses, published_position)
 }
 
 impl Drop for EngineProcess {
@@ -480,9 +538,8 @@ fn require_compatible_hello(response: ServerResponse) -> io::Result<()> {
     }
     let missing: Vec<_> = [
         Capability::Validate,
-        Capability::RawFramePreview,
+        Capability::NativePreviewWindow,
         Capability::SourceSnapshots,
-        Capability::RuntimeInput,
         Capability::SourceCursor,
         Capability::Lifecycle,
     ]
@@ -503,8 +560,52 @@ fn require_compatible_hello(response: ServerResponse) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::net::TcpListener;
 
     use super::*;
+
+    #[test]
+    fn position_event_is_latest_wins_and_does_not_consume_a_reply() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let mut writer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (reader, _) = listener.accept().unwrap();
+        let (responses, latest) = spawn_response_reader(BufReader::new(reader), 7);
+        for line in [3, 5] {
+            write_message(
+                &mut writer,
+                &ServerMessage {
+                    generation: 7,
+                    request_id: 0,
+                    response: ServerResponse::ExecutionLocation {
+                        document_revision: 2,
+                        location: Some((PathBuf::from("scripts/main.shou"), line, 1)),
+                    },
+                },
+            )
+            .unwrap();
+        }
+        write_message(
+            &mut writer,
+            &ServerMessage {
+                generation: 7,
+                request_id: 1,
+                response: ServerResponse::Pong,
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            responses
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap()
+                .unwrap()
+                .response,
+            ServerResponse::Pong
+        ));
+        assert_eq!(
+            *latest.lock().unwrap(),
+            Some((2, Some((PathBuf::from("scripts/main.shou"), 5, 1))))
+        );
+    }
 
     #[test]
     fn handshake_rejects_mismatched_version_and_missing_capability() {
@@ -522,7 +623,7 @@ mod tests {
         let missing = require_compatible_hello(hello(PROTOCOL_VERSION, vec![]))
             .unwrap_err()
             .to_string();
-        assert!(missing.contains("RawFramePreview"));
+        assert!(missing.contains("NativePreviewWindow"));
         assert!(missing.contains("Update both apps together"));
     }
 

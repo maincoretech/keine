@@ -9,7 +9,7 @@ pub mod preview;
 pub mod workspace;
 
 pub use authoring::{projection, syntax};
-pub use preview::{engine, frame_transport, instance};
+pub use preview::{engine, instance};
 pub(crate) use workspace::file_ops;
 pub use workspace::{app_data, document, migration, persistence, project_key};
 

@@ -16,7 +16,7 @@ another project phase.
 | P1 | Workspace, windows, Dock, and app data | complete |
 | P2 | Authoring documents and safe writeback | complete |
 | P3 | Engine authoring IPC host | complete |
-| P4 | Embedded Preview | complete |
+| P4 | Engine Preview | complete; native companion-window transport supersedes embedded pixels |
 | P5 | Core VN authoring UX | complete; T21 visual acceptance pending |
 | P6 | Pinned Project CI release chain | complete; private-project Linux runner accepted |
 | P7 | Cross-platform packaging, installation, input/DPI, recovery, compatibility, and performance hardening | in progress; T24 and T03 evidence pending |
@@ -84,22 +84,19 @@ Formal signing and notarization are outside the current P7 scope.
   explicit preview-before-apply command only renames already-valid legacy Eiyashou `.txt` sources;
   it never translates compatibility input. The bounded binary authoring protocol launches one
   prebuilt Engine child per project for handshake, validation, diagnostics, source snapshots and
-  patches, source/runtime cursor exchange, lifecycle, runtime input, and real embedded Preview.
-  Preview is an explicit singleton view placed above Inspector in the default right-hand stack;
-  Engine Start remains manual. Authoring protocol v4 reports the Engine's executed source location
-  while visible: Block selection seeks the Engine, direct Preview input advances it, and the
-  corresponding Block/scene/file follows without a separate input mode. The older LetsGal Studio
-  sync session remains view-only. Native authoring Preview permits runtime save/load and settings
-  only in a child-owned temporary data root, never in source-project or shipping save data; that
-  test data is discarded on a clean Engine child exit. Edge-triggered visibility pause and bounded
-  Stop/Close cleanup remain independent of layout. Panel visibility comes
-  from Dock activation rather than render-frequency inference, so unchanged UI cannot oscillate
-  the child and audio between pause/resume. The Engine owns the normal three-camera
-  composition in a hidden 1920x1080 target and publishes raw frames through a project/session/
-  revision-checked latest-frame-wins shared-memory triple buffer. Production frames are BGRA,
-  only one GPU readback may be in flight, and the Editor transfers and uploads each newest complete
-  frame once without a per-pixel channel swap. The editor remains excluded from the root Engine's
-  default build. `cargo migrate <source-project> <target-project>` opens a compatibility source
+  patches, source/runtime cursor exchange, and lifecycle. Preview now opens the normal native
+  Engine in a companion OS window from the Editor's icon-only top-right control; Start and Stop
+  remain explicit, and the running control can raise the Engine window. Authoring protocol v6
+  reports the Engine's executed source location: Block selection seeks the Engine, direct Engine
+  input advances it, and the corresponding Block/scene/file follows without an input mode.
+  The older LetsGal Studio sync session remains view-only. Native authoring Preview permits
+  runtime save/load and settings only in a child-owned temporary data root, never in source-project
+  or shipping save data; that test data is discarded on a clean Engine child exit. The Engine owns
+  native input, the usual three-camera composition, and the existing reactive lifecycle. No pixel
+  readback, shared-memory frame transfer, or GPUI upload runs in the Editor. Editor and Engine are
+  separate interactive windows; on Wayland the compositor may deny programmatic window raising.
+  The editor remains excluded from the root Engine's default build.
+  `cargo migrate <source-project> <target-project>` opens a compatibility source
   read-only, rejects semantics that Eiyashou cannot preserve, stages confined referenced assets,
   emits `.shou` plus native manifests, validates the result, and only then installs a new target.
 - Eiyashou `assets.yaml` keeps legacy string paths and also accepts `{ path, tags? }` entries
@@ -188,10 +185,10 @@ project / package
   anticipation of them.
 - Windows/Linux video remains software-decoded RGBA upload. Hardware decode or zero-copy work
   requires real target hardware, distribution, and device-loss evidence first.
-- Project P4 native-window Preview acceptance is complete on macOS. Representative cross-platform
-  GPU/GUI, audio/video, DPI, input, and packaging evidence belongs to P7. Native child
-  surfaces, frame compression, and GPU sharing remain unapproved unless end-to-end evidence
-  identifies the raw triple buffer as the bottleneck.
+- Project P4's earlier embedded Preview acceptance was completed on macOS, but its pixel
+  transport has since been removed in favor of a native Engine companion window. Representative
+  cross-platform GPU/GUI, audio/video, DPI, input, and packaging evidence belongs to P7. Native
+  child surfaces, frame compression, and GPU sharing are not part of the current design.
 - Eiyashou v1 intentionally does not expose the deferred advanced runtime surface listed in its
   language reference: camera/post-process/particle timelines, arbitrary code execution, runtime UI
   skinning, import systems, dynamic Live2D/Spine/GIF authoring, SE loop/pan, or non-blocking video.
@@ -256,24 +253,22 @@ project / package
   diagnostics and no-frame lifecycle, and performs bounded shutdown. Process tests cover protocol
   mismatch and two isolated sessions. P4 extends this boundary without moving rendering into
   the Editor process.
-- Project P4 implements the real embedded Preview path without a second Engine OS window. The
-  file-backed 1920x1080 RGBA triple buffer reserves three fixed slots (about 23.7 MiB), validates
-  project/session/revision metadata, and drops stale frames instead of queueing latency. On Apple
-  M5 Pro / Metal, three automated Start/Pause/Resume/Stop cycles produced a visible composited frame
-  in 142–161 ms, showed no frame overwrite, bounded paused publication to the three in-flight
-  captures, removed every mapping, and left no authoring child process. The user accepted the final
-  live macOS Editor Preview pass on 2026-09-21.
+- Project P4 originally implemented embedded Preview with a 1920x1080 RGBA triple buffer;
+  its 2026-09-21 macOS acceptance and measured 142–161 ms first-frame samples remain historical
+  evidence, not a description of today's transport. The current native companion window uses
+  the Engine's ordinary compositor and input and retains only bounded source/cursor control IPC.
 - Project P5 keeps Text and Blocks as projections of the same authoritative Eiyashou source
   document; there is no separate Dialogue view. Block selection drives Inspector and the Preview source cursor;
   the context-aware Insert Palette, confined Asset Browser, bounded Character/Scene managers, and
   navigable Problems view all edit or inspect that same source path. The Performance view reports
-  only measured Preview transport counters, not invented CPU/GPU timing. Normal-scale macOS
+  native Preview lifecycle and explicitly notes that the Editor transfers no pixels, without
+  inventing CPU/GPU timing. Normal-scale macOS
   Computer Use acceptance covered the five-row continuous-dialogue fixture and every new tool view,
   then closed the test application. `.shou` Text mode now highlights the authoritative native token
   stream, keeps a compact black line-number gutter with source-text spacing, and supports the same
   restrained close transition from either the close affordance or middle click. A real untracked
-  LetsGal project sustained embedded Preview output after the visible-panel lifecycle fix; the
-  acceptance bundle and every child process were removed afterward.
+  LetsGal project sustained embedded Preview output before the native-window redesign; the
+  historical acceptance bundle and every child process were removed afterward.
   Text tabs share one highlighter and palette for `.shou`, YAML, Markdown, JSON, and TOML;
   `.shou` keeps the authoritative native token source, while plain text remains uncolored.
 - T21 Card Editor continuously renders every Scene in the current `.shou` file as a lightweight
@@ -311,7 +306,7 @@ project / package
 | [T13](tasks/T13-native-dsl-adapter.md) | complete | Eiyashou adapter and typed core boundary |
 | [T14](tasks/T14-release-source-exclusion.md) | complete | compiled-only Hakutaku release content |
 | [T15](tasks/T15-eiyashou-editor-projection.md) | complete | source-first Editor projection and explicit migration |
-| [T16](tasks/T16-editor-phase4-preview.md) | complete | real embedded Preview and bounded raw frame transport |
+| [T16](tasks/T16-editor-phase4-preview.md) | complete; transport superseded | historical embedded implementation; current Preview uses native Engine window |
 | [T17](tasks/T17-editor-phase5-authoring-ux.md) | complete | source-safe core VN authoring workflow |
 | [T19](tasks/T19-project-ci-release.md) | complete | Project P6 pinned Project CI release chain |
 | [T20](tasks/T20-asset-manifest.md) | complete | Asset manifest schema and source-preserving validation |

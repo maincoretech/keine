@@ -11,10 +11,6 @@ publish = false
 name = "editor"
 path = "src/main.rs"
 
-[[example]]
-name = "phase0_offscreen"
-path = "bench/phase0_offscreen.rs"
-
 [dependencies]
 fs2 = { workspace = true }
 gpui-kit = { workspace = true }

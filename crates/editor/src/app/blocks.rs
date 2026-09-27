@@ -14,6 +14,17 @@ impl WorkbenchPanel {
             let _ = cx.update_window(window_handle, |_, window, cx| {
                 let _ = panel.update(cx, |panel, cx| {
                     panel.rebuild_visual_editors(window, cx);
+                    if panel.block_settle_source.take().is_some() {
+                        panel.block_drop_target = None;
+                        panel.block_dragging = None;
+                        panel.selected_blocks.clear();
+                        panel.block_selection_anchor = None;
+                        if let PanelContent::Document { root, .. } = &panel.content {
+                            let root = root.clone();
+                            cx.global_mut::<EditorDocuments>()
+                                .clear_block_selection(&root);
+                        }
+                    }
                     cx.notify();
                 });
             });
@@ -69,6 +80,9 @@ impl WorkbenchPanel {
             let relative = relative.clone();
             let state_for_change = state.clone();
             let subscription = cx.subscribe(&state, move |panel, _, event: &InputEvent, cx| {
+                if panel.block_settle_source.is_some() {
+                    return;
+                }
                 if matches!(event, InputEvent::PressEnter { shift: false, .. }) {
                     let panel = cx.weak_entity();
                     let state = state_for_change.clone();
@@ -393,6 +407,9 @@ impl WorkbenchPanel {
         let root = root.clone();
         let window_handle = window.window_handle();
         let subscription = cx.subscribe(&state, move |panel, _, event: &InputEvent, cx| {
+            if panel.block_settle_source.is_some() {
+                return;
+            }
             if matches!(event, InputEvent::PressEnter { shift: false, .. }) {
                 let panel = cx.weak_entity();
                 let state = state_for_change.clone();
@@ -758,10 +775,24 @@ impl WorkbenchPanel {
             after,
         ) {
             Ok(edited) if edited != source => {
+                self.block_drop_target = Some(BlockDropTarget {
+                    row: target_start,
+                    after,
+                });
+                self.block_dragging = Some(drag.selected.clone());
+                self.block_settle_source = Some(source);
                 self.apply_block_source(edited, "Blocks moved", window, cx)
             }
-            Ok(_) => {}
-            Err(error) => self.set_block_notice(format!("Move blocked: {error}"), cx),
+            Ok(_) => {
+                self.block_drop_target = None;
+                self.block_dragging = None;
+                cx.notify();
+            }
+            Err(error) => {
+                self.block_drop_target = None;
+                self.block_dragging = None;
+                self.set_block_notice(format!("Move blocked: {error}"), cx);
+            }
         }
     }
 
@@ -817,12 +848,14 @@ impl WorkbenchPanel {
         let root = root.clone();
         let editor = editor.clone();
         editor.update(cx, |editor, cx| editor.replace_all(edited, window, cx));
-        self.selected_blocks.clear();
-        self.block_selection_anchor = None;
+        if self.block_settle_source.is_none() {
+            self.selected_blocks.clear();
+            self.block_selection_anchor = None;
+            cx.global_mut::<EditorDocuments>()
+                .clear_block_selection(&root);
+        }
         self.schedule_visual_editors_rebuild(window, cx);
         self.focus.focus(window, cx);
-        cx.global_mut::<EditorDocuments>()
-            .clear_block_selection(&root);
         cx.global_mut::<EditorDocuments>().set_notice(&root, notice);
         cx.notify();
         cx.refresh_windows();

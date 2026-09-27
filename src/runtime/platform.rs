@@ -268,6 +268,7 @@ pub(crate) struct LifecycleContext<'w, 's> {
     benchmark: Option<Res<'w, crate::ui::performance::RuntimeCaptureConfig>>,
     startup_capture: Option<Res<'w, crate::ui::performance::StartupCapture>>,
     editor_sync: Option<Res<'w, EditorSyncSession>>,
+    authoring_preview: Option<Res<'w, super::preview::AuthoringPreviewSession>>,
 }
 
 pub(crate) fn update_lifecycle(
@@ -279,7 +280,16 @@ pub(crate) fn update_lifecycle(
 ) {
     let focused = context.windows.single().is_ok_and(|window| window.focused);
     let studio_sync = context.editor_sync.is_some();
-    let pause_for_background = should_pause_for_background(focused, studio_sync);
+    let companion_preview = context.authoring_preview.is_some();
+    let preview_settling = context
+        .authoring_preview
+        .as_ref()
+        .and_then(|preview| preview.settle_until)
+        .is_some_and(|until| Instant::now() < until);
+    // A companion Preview keeps playing while the user edits in the other
+    // window; winit still sleeps on unchanged frames in both focus states.
+    let pause_for_background =
+        should_pause_for_background(focused, studio_sync || companion_preview);
     let auto_hide = context
         .auto_hide
         .lifecycle(context.real_time.elapsed_secs(), &context.toggles);
@@ -289,7 +299,7 @@ pub(crate) fn update_lifecycle(
             .next_toggle_in(context.real_time.elapsed_secs()),
     );
     let benchmark_active = context.benchmark.is_some() || context.startup_capture.is_some();
-    let next = if benchmark_active || (studio_sync && !focused) {
+    let next = if benchmark_active || (studio_sync && !focused && !companion_preview) {
         // A benchmark must keep measuring the render loop even when the
         // current visual-novel frame itself is static. Studio synchronization
         // likewise remains fully live while the user works in another window.
@@ -298,7 +308,8 @@ pub(crate) fn update_lifecycle(
         RuntimeActivity::Background
     } else if context.loading.blocked {
         RuntimeActivity::Loading
-    } else if core_is_animating(&context.state, &mut dialogue_length)
+    } else if preview_settling
+        || core_is_animating(&context.state, &mut dialogue_length)
         || context.ui.0
         || context.audio.0
         || context.toggles.auto
@@ -324,6 +335,8 @@ pub(crate) fn update_lifecycle(
     }
     let unfocused_mode = if let Some(mode) = benchmark_mode {
         mode
+    } else if companion_preview {
+        focused_mode
     } else if studio_sync {
         // Only Studio synchronization needs an unfocused live render loop.
         // Ordinary `dev` hot reload is event-driven and follows release focus

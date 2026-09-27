@@ -1788,6 +1788,10 @@ before making further mask-rendering performance claims.
 
 ### 2026-09-20 editor offscreen preview Phase 0
 
+Historical embedded-pixel baseline. The `phase0_offscreen` example and its
+readback/transfer path were removed when Preview became a native Engine window;
+the commands below document the old measurement and are no longer runnable.
+
 The `keine-editor` Phase 0 example renders the scene, normal UI, and dialog
 cameras into one 1920x1080 `Rgba8UnormSrgb` image without `WinitPlugin` or a
 primary window. Pixel checks prove all three ordered layers contribute. The
@@ -1796,8 +1800,9 @@ per authoring-preview frame, and permits at most three requests in flight. The
 release command builds the Editor example, not the root `keine` Engine binary.
 
 ```text
-cargo run -p keine-editor --example phase0_offscreen
-cargo run --release -p keine-editor --example phase0_offscreen
+# Historical commands, removed with the embedded transport:
+# cargo run -p keine-editor --example phase0_offscreen
+# cargo run --release -p keine-editor --example phase0_offscreen
 ```
 
 | Profile | Warm samples | Median request latency | P95 | Completed throughput |
@@ -1952,3 +1957,68 @@ exercised directly: Q.Save wrote the isolated slot 0, advancing the dialogue
 and Q.Load restored it, and the normal Save screen wrote slot 1. That verifies
 the control path and temporary storage isolation, but is not an additional
 latency or sustained-throughput measurement.
+
+### 2026-09-26 Preview seek settlement regression
+
+The native Editor was observed publishing a uniform gray 1920x1080 frame even
+while its transport counter advanced with zero overwrites. A direct release
+Engine regression using the same authored test-project script reproduced the
+gray stage when seeking the scene-header line: the header resolved to zero
+executed actions. Independent Block seeks also exposed a scheduling bottleneck:
+after a seek requested background or figure assets, the Engine waited for
+multiple 250 ms idle ticks before the asynchronous asset work reached a
+visible frame. The seek RPC itself acknowledged in less than 1 ms in both
+runs. The Editor's hidden source caret could also overwrite an explicit Block
+selection, so the Block view no longer sends its stale caret to Preview.
+
+On Apple M5 Pro / Metal, the same ignored GPU regression was run with its
+Engine path temporarily pointed at the local release binary, using
+`cargo test --test authoring_preview authored_snapshot_retains_the_stage_after_seek -- --ignored --nocapture`.
+The test's normal `CARGO_BIN_EXE_keine` path was restored afterward. These are
+single warm runs, not percentiles or a continuous-frame throughput benchmark:
+
+| Release Engine | Header line 1 | Background line 2 | Figure lines 7/8 | Text lines 3–6 | Advance |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Before settlement ticks | 777 ms | 775 ms | 781 / 782 ms | 70–80 ms | 104 ms |
+| After settlement ticks | 75 ms | 79 ms | 72 / 76 ms | 70–77 ms | 90 ms |
+
+The change gives accepted visual input one bounded idle interval of active
+updates so loading can progress promptly, then returns to the existing
+activity-driven schedule. It does not change the 1920x1080 target, shared
+transport, or the known GPU readback ceiling. The Editor also now imports a
+published frame before making its optional source-location RPC and updates
+workspace diagnostics only when they change, avoiding per-frame path
+canonicalization on the UI thread. In the native window, the still-running
+release Editor retained its unsaved recovery draft while only the sibling
+Engine child was replaced: after Start and a Block click, Computer Use observed
+the test project's blue-sky background instead of a persistent gray stage.
+That window still ran the old Editor binary, so it does not visually accept the
+new hidden-caret/diagnostic hot path. Sustained active-frame-rate acceptance
+also remains separate from this latency result.
+
+On 2026-09-27 the rebuilt release Editor and Engine were exercised together
+in the native `projects/test-project` window. Start displayed the day stage;
+Block selection, direct Preview advancement, a conditional dialogue seek, and
+the sunset scene change all retained the corresponding rendered background and
+character. Seeking the opening scene header retained the day background after
+12 seconds instead of reverting to gray. One activation-time input initially
+failed with `preview is paused`; the client now discards input while its window
+is effectively hidden, and the rebuilt Editor accepted the subsequent first
+click and scene-header seek without failing. This is visual behavior evidence,
+not a frame-time distribution or a claim of sustained smoothness.
+
+### 2026-09-27 native companion-window Preview replacement
+
+The historical frame-readback measurements above describe the removed embedded
+path. The current Editor exchanges source revisions and change-only execution
+locations with a separate native Engine window; it no longer requests GPU
+screenshots, maintains a shared pixel buffer, or uploads Preview images in GPUI.
+This is an architectural work reduction, not an FPS or power measurement.
+
+The final main binaries built, the full workspace suite passed, and the native
+test project validated with three scenes, 32 actions, and no warnings. A
+packaged visual/CPU comparison against the standalone Engine was attempted,
+but the Mac locked before the UI could be observed; the test process was then
+stopped. No native active-FPS or idle-CPU parity claim is recorded until a
+repeatable unlocked-window capture is available. Prior embedded throughput
+figures must not be compared directly to the Engine's native presentation rate.

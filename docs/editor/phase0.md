@@ -1,5 +1,8 @@
 # Editor Phase 0 technical record
 
+> Historical spike: its offscreen frame transport was removed. Current Preview opens a native
+> Engine companion window; use `docs/PROJECT_STATE.md` for the live architecture.
+
 Status: **complete** on 2026-09-20. This record describes the Phase 0 code and experiments
 integrated directly on `main`; it is not a claim that the editor or preview path is ready to ship.
 
@@ -139,7 +142,9 @@ preview later misses its target because of the copy itself.
 
 ### Performance and power evidence
 
-The repeatable `phase0_offscreen` example ran on Apple M5 Pro / Metal at 1920x1080. It keeps at
+The former `phase0_offscreen` example ran on Apple M5 Pro / Metal at 1920x1080. It was removed
+when Preview switched to a native Engine companion window; the following numbers are historical,
+not a runnable current benchmark. It kept at
 most three readbacks in flight and submits at most one per authoring-preview frame. Submitting several Bevy
 `Screenshot` requests in the same frame was observed to leave requests without callbacks, so the
 generic screenshot API is evidence for feasibility and a baseline, not the production ring-buffer
@@ -186,8 +191,9 @@ No editor JSON, Dock state, package internals, or GPUI types cross this boundary
 ```text
 cargo check -p keine-editor
 cargo test -p keine-editor
-cargo run -p keine-editor --example phase0_offscreen
-cargo run --release -p keine-editor --example phase0_offscreen
+# Historical commands only; the example was removed after the native-window redesign.
+# cargo run -p keine-editor --example phase0_offscreen
+# cargo run --release -p keine-editor --example phase0_offscreen
 cargo metadata --no-deps --format-version 1
 cargo tree -p keine -e normal
 cargo fmt --all --check

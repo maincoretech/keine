@@ -4,6 +4,10 @@
 
 In progress. Do not mark P7 complete until the platform evidence below exists.
 
+The current authoring Preview uses a separate native Engine window. Older evidence below that
+mentions embedded frames or shared transport is historical; repeat packaged GUI, idle-CPU, and
+active-FPS acceptance for this replacement remains open.
+
 ## Boundary
 
 Publish the prebuilt Editor and authoring Engine as independent desktop applications without

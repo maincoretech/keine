@@ -5,7 +5,7 @@ const EXPLORER_ROW_GAP: f32 = 1.;
 
 impl Render for WorkbenchPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !cx.has_active_drag() {
+        if !cx.has_active_drag() && self.block_settle_source.is_none() {
             self.file_drop_target = None;
             self.block_drop_target = None;
             self.block_dragging = None;
@@ -790,6 +790,7 @@ impl Render for WorkbenchPanel {
                             draft_text: self.draft_text.as_ref(),
                             drop_target: self.block_drop_target,
                             dragging: self.block_dragging.as_ref(),
+                            settle_source: self.block_settle_source.as_deref(),
                             scroll_handle: &self.view_scroll,
                             scroll_anchor: &self.block_scroll_anchor,
                             scroll_pending: self.block_scroll_pending,
@@ -890,144 +891,6 @@ impl Render for WorkbenchPanel {
                             .child(body)
                             .when_some(picker, |this, picker| this.child(picker))
                             .when_some(scene_menu, |this, menu| this.child(menu)),
-                    )
-                    .into_any_element()
-            }
-            PanelContent::Preview { root, controller } => {
-                let snapshot = controller.snapshot();
-                let running = matches!(
-                    snapshot.lifecycle,
-                    PreviewLifecycle::Running | PreviewLifecycle::Paused
-                );
-                let status = match &snapshot.lifecycle {
-                    PreviewLifecycle::Off => String::new(),
-                    PreviewLifecycle::Starting => "Starting…".to_owned(),
-                    PreviewLifecycle::Running => format!(
-                        "Live · frame {} · dropped {}",
-                        snapshot.frame_stats.published, snapshot.frame_stats.overwritten
-                    ),
-                    PreviewLifecycle::Paused => "Paused while hidden".to_owned(),
-                    PreviewLifecycle::Failed(error) => format!("Failed · {error}"),
-                };
-                let start = controller.clone();
-                let start_root = root.clone();
-                let stop = controller.clone();
-                let input = controller.clone();
-                let keyboard_input = controller.clone();
-                let bounds = self.preview_bounds.clone();
-                let surface_bounds = self.preview_bounds.clone();
-                let preview_focus = self.focus.clone();
-                div()
-                    .size_full()
-                    .flex()
-                    .flex_col()
-                    .bg(rgb(CANVAS))
-                    .child(
-                        div()
-                            .h(px(38.))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .px_2()
-                            .bg(rgb(CHROME))
-                            .child(div().flex_1())
-                            .when(!status.is_empty(), |this| {
-                                this.child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(rgb(match snapshot.lifecycle {
-                                            PreviewLifecycle::Failed(_) => 0xdb7780,
-                                            PreviewLifecycle::Running => SUCCESS,
-                                            _ => MUTED,
-                                        }))
-                                        .child(status),
-                                )
-                            })
-                            .child(if running {
-                                preview_transport_button(true).on_click(move |_, _, cx| {
-                                    stop.stop();
-                                    cx.refresh_windows();
-                                })
-                            } else {
-                                preview_transport_button(false).on_click(move |_, _, cx| {
-                                    for (path, contents) in cx
-                                        .global::<EditorDocuments>()
-                                        .preview_documents(&start_root)
-                                    {
-                                        start.apply_snapshot(path, contents);
-                                    }
-                                    start.start();
-                                    cx.refresh_windows();
-                                })
-                            }),
-                    )
-                    .child(
-                        div()
-                            .id("preview-surface")
-                            .relative()
-                            .flex_1()
-                            .min_h_0()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .bg(rgb(0x050607))
-                            .cursor_pointer()
-                            .on_mouse_down(MouseButton::Left, move |event, window, cx| {
-                                preview_focus.focus(window, cx);
-                                let bounds =
-                                    *bounds.lock().expect("preview surface bounds lock poisoned");
-                                let Some(bounds) = bounds else {
-                                    return;
-                                };
-                                let local_x = f32::from(event.position.x - bounds.origin.x);
-                                let local_y = f32::from(event.position.y - bounds.origin.y);
-                                if let Some((x, y)) = map_preview_point(
-                                    f32::from(bounds.size.width),
-                                    f32::from(bounds.size.height),
-                                    local_x,
-                                    local_y,
-                                ) {
-                                    input.input(keine_authoring::PreviewInput::PointerPressed {
-                                        x,
-                                        y,
-                                    });
-                                }
-                            })
-                            .on_key_down(move |event, _, cx| {
-                                if !event.keystroke.modifiers.control
-                                    && !event.keystroke.modifiers.alt
-                                    && !event.keystroke.modifiers.platform
-                                    && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                                {
-                                    keyboard_input.input(keine_authoring::PreviewInput::Advance);
-                                    cx.stop_propagation();
-                                }
-                            })
-                            .when_some(self.preview_image.clone(), |this, image| {
-                                this.child(img(image).size_full().object_fit(ObjectFit::Contain))
-                            })
-                            .when(self.preview_image.is_none(), |this| {
-                                this.child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(rgb(MUTED))
-                                        .child("Start Preview to render the current project"),
-                                )
-                            })
-                            .child(
-                                canvas(
-                                    move |surface, _, _| {
-                                        *surface_bounds
-                                            .lock()
-                                            .expect("preview surface bounds lock poisoned") =
-                                            Some(surface);
-                                    },
-                                    |_, _, _, _| {},
-                                )
-                                .absolute()
-                                .inset_0(),
-                            ),
                     )
                     .into_any_element()
             }
@@ -1245,7 +1108,7 @@ impl Render for WorkbenchPanel {
             }
             PanelContent::Problems { root } => render_problems(root, &self.view_scroll, cx),
             PanelContent::Performance { controller, .. } => {
-                render_performance(controller, &self.timeline, &self.view_scroll)
+                render_performance(controller, &self.view_scroll)
             }
             PanelContent::Output { root, file_count } => {
                 let content = div()

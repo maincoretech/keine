@@ -18,7 +18,7 @@ use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 use bevy::prelude::*;
 use bevy::render::diagnostic::RenderDiagnosticsPlugin;
 use bevy::window::{PrimaryWindow, WindowResolution};
-use bevy::winit::{WINIT_WINDOWS, WinitPlugin};
+use bevy::winit::WINIT_WINDOWS;
 use keine_core::config::GameConfig;
 use keine_core::{Action, DESIGN_HEIGHT, DESIGN_WIDTH, Program, State};
 #[cfg(feature = "hot-reload")]
@@ -1163,7 +1163,7 @@ pub(crate) fn build_authoring_preview_app(
         store,
         LaunchOptions {
             editor_sync: true,
-            hidden_window: true,
+            hidden_window: false,
             authoring_preview: Some(preview),
             ..default()
         },
@@ -1198,9 +1198,17 @@ fn build_opened_app(
     initial_resolution.set_scale_factor_override(Some(1.0));
     let authoring_preview = options.authoring_preview.is_some();
     let window_plugin = WindowPlugin {
-        primary_window: (!authoring_preview).then(|| Window {
-            title: config.title.clone(),
-            resolution: initial_resolution,
+        primary_window: Some(Window {
+            title: if authoring_preview {
+                format!("{} — Kēne Preview", config.title)
+            } else {
+                config.title.clone()
+            },
+            resolution: if authoring_preview {
+                WindowResolution::new(1280, 720)
+            } else {
+                initial_resolution
+            },
             // Startup reports keep the real winit window and wgpu
             // surface but hide them from the desktop/taskbar. A truly
             // headless render target would omit the startup costs this
@@ -1226,11 +1234,7 @@ fn build_opened_app(
         .set(super::platform::log_plugin(
             options.benchmark.is_some() || options.startup_capture.is_some(),
         ));
-    if authoring_preview {
-        app.add_plugins(plugins.disable::<WinitPlugin>());
-    } else {
-        app.add_plugins(plugins);
-    }
+    app.add_plugins(plugins);
     #[cfg(feature = "audio-opus")]
     app.add_plugins(crate::runtime::audio::OpusAudioPlugin::new(asset_mounts));
     #[cfg(feature = "audio-seekable")]
@@ -1243,9 +1247,7 @@ fn build_opened_app(
         .insert_resource(StoreCodec(store))
         .insert_resource(GameConfigResource(config))
         .add_systems(PreStartup, bootstrap_project);
-    if !authoring_preview {
-        app.add_systems(PostStartup, set_primary_window_icon);
-    }
+    app.add_systems(PostStartup, set_primary_window_icon);
     if options.editor_sync {
         app.init_resource::<EditorSyncSession>();
     }
@@ -1812,27 +1814,16 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "constructs the real offscreen Preview renderer; run on a local GPU"]
+    #[ignore = "constructs the real native Preview renderer; run on a local GPU"]
     fn authoring_preview_uses_an_isolated_persistence_root() {
         let overlay = unique_temp_path("preview-data-root");
         std::fs::create_dir_all(&overlay).unwrap();
-        let frames = keine_authoring::SharedFrameConsumer::create(
-            overlay.join("frames"),
-            1,
-            1,
-            keine_core::DESIGN_WIDTH as u32,
-            keine_core::DESIGN_HEIGHT as u32,
-        )
-        .unwrap();
-        let producer =
-            keine_authoring::SharedFrameProducer::open(frames.descriptor().clone()).unwrap();
         let project = Path::new(env!("CARGO_MANIFEST_DIR")).join("projects/test-project");
         let app = build_authoring_preview_app(
             &project,
             &overlay,
             &LoaderRegistry::default(),
             super::super::preview::AuthoringPreviewConfig {
-                producer,
                 document_revision: 0,
             },
         )
@@ -1851,7 +1842,6 @@ mod tests {
         assert!(!project.join("preview-data").exists());
 
         drop(app);
-        drop(frames);
         std::fs::remove_dir_all(overlay).unwrap();
     }
 

@@ -7,7 +7,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use gpui_kit::assets::IconName as AssetIconName;
@@ -30,11 +30,11 @@ use gpui_kit::{
     Anchor, Animation, AnimationExt as _, AnyElement, AnyView, App, AppContext as _, Axis, Bounds,
     ClickEvent, ClipboardItem, Context, Div, DragMoveEvent, Element, Empty, Entity, EventEmitter,
     ExternalPaths, FocusHandle, Focusable, Global, Hsla, InteractiveElement, IntoElement,
-    KeyBinding, MouseButton, MouseDownEvent, ObjectFit, ParentElement, PathPromptOptions, Pixels,
-    Point, PromptButton, PromptLevel, Render, RenderImage, ScrollAnchor, ScrollHandle,
-    SharedString, Stateful, Styled, Subscription, WeakEntity, Window, WindowBounds, WindowHandle,
-    WindowOptions, actions, anchored, canvas, deferred, div, ease_out_quint, fill, hsla, img,
-    linear_color_stop, linear_gradient, prelude::*, px, radians, rgb, size,
+    KeyBinding, MouseButton, MouseDownEvent, ParentElement, PathPromptOptions, Pixels, Point,
+    PromptButton, PromptLevel, Render, ScrollAnchor, ScrollHandle, SharedString, Stateful, Styled,
+    Subscription, WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, actions, anchored,
+    canvas, deferred, div, ease_out_quint, fill, hsla, linear_color_stop, linear_gradient,
+    prelude::*, px, radians, rgb, size,
 };
 use serde::{Deserialize, Serialize};
 
@@ -50,7 +50,7 @@ use crate::file_ops::{self, ImportResult};
 use crate::instance::{InstanceReceiver, PrimaryInstance, Startup, acquire_or_forward};
 use crate::migration::MigrationPlan;
 use crate::persistence::{AppPersistence, BlockPickerPreferences};
-use crate::preview::{PreviewController, PreviewLifecycle, map_preview_point};
+use crate::preview::{PreviewController, PreviewLifecycle};
 use crate::project_key::ProjectKey;
 use crate::projection::{
     BlockKind, EiyashouProjection, MoveDirection, SourceField, TextBlockMetadata,
@@ -83,7 +83,7 @@ const MUTED: u32 = 0x92979e;
 const PRIMARY: u32 = 0xbaebff;
 const PRIMARY_DIM: u32 = 0x243138;
 const SUCCESS: u32 = 0x69c38d;
-const LAYOUT_SCHEMA: usize = 1;
+const LAYOUT_SCHEMA: usize = 2;
 
 gpui_kit::assets::icon_assets!(
     EditorExtraIcons,
@@ -142,7 +142,6 @@ const ACTIVITY_ICON_SIZE_PX: f32 = 18.;
 // distinct dark gap before source text.
 const EDITOR_GUTTER_TRIM_PX: f32 = 18.;
 const TAB_MOTION_DURATION: Duration = Duration::from_millis(140);
-const PREVIEW_POLL_INTERVAL: Duration = Duration::from_millis(16);
 const PREVIEW_SOURCE_DEBOUNCE: Duration = Duration::from_millis(100);
 const FILE_CONTEXT_MENU_WIDTH_PX: f32 = 144.;
 const SCENE_CONTEXT_MENU_WIDTH_PX: f32 = 154.;
@@ -153,7 +152,6 @@ const EXPLORER_PANEL: &str = "keine.editor.explorer";
 const DOCUMENT_PANEL: &str = "keine.editor.document";
 const INSPECTOR_PANEL: &str = "keine.editor.inspector";
 const OUTPUT_PANEL: &str = "keine.editor.output";
-const PREVIEW_PANEL: &str = "keine.editor.preview";
 const ASSETS_PANEL: &str = "keine.editor.assets";
 const CHARACTERS_PANEL: &str = "keine.editor.characters";
 const SCENES_PANEL: &str = "keine.editor.scenes";
@@ -300,7 +298,6 @@ struct WorkspaceDocuments {
     panel_entities: HashMap<PathBuf, WeakEntity<WorkbenchPanel>>,
     editors: HashMap<PathBuf, WeakEntity<EditorState>>,
     preview: Arc<PreviewController>,
-    preview_panel: Option<PanelId>,
     tools: HashMap<&'static str, PanelId>,
 }
 
@@ -350,7 +347,6 @@ impl EditorDocuments {
                     panel_entities: HashMap::new(),
                     editors: HashMap::new(),
                     preview: PreviewController::new(key),
-                    preview_panel: None,
                     tools: HashMap::new(),
                 },
             );
@@ -709,17 +705,6 @@ impl EditorDocuments {
             .collect()
     }
 
-    fn preview_panel(&self, root: &Path) -> Option<PanelId> {
-        let key = ProjectKey::from_path(root).ok()?;
-        self.workspaces.get(key.path())?.preview_panel
-    }
-
-    fn set_preview_panel(&mut self, root: &Path, panel: Option<PanelId>) {
-        if let Ok(workspace) = self.ensure_workspace(root) {
-            workspace.preview_panel = panel;
-        }
-    }
-
     fn tool_panel(&self, root: &Path, name: &'static str) -> Option<PanelId> {
         let key = ProjectKey::from_path(root).ok()?;
         self.workspaces.get(key.path())?.tools.get(name).copied()
@@ -856,7 +841,6 @@ enum PanelPayload {
     Document { root: PathBuf, relative: PathBuf },
     Inspector { root: PathBuf },
     Output { root: PathBuf },
-    Preview { root: PathBuf },
     Assets { root: PathBuf },
     Characters { root: PathBuf },
     Scenes { root: PathBuf },
@@ -914,10 +898,6 @@ enum PanelContent {
     Output {
         root: PathBuf,
         file_count: usize,
-    },
-    Preview {
-        root: PathBuf,
-        controller: Arc<PreviewController>,
     },
     Assets {
         root: PathBuf,
@@ -999,11 +979,6 @@ impl PanelContent {
                         file_count: 0,
                     })
                 }),
-            PanelPayload::Preview { root } => {
-                let controller = cx.global_mut::<EditorDocuments>().preview(&root)?;
-                controller.set_panel_visible(true);
-                Ok(Self::Preview { root, controller })
-            }
             PanelPayload::Assets { root } => Ok(Self::Assets { root }),
             PanelPayload::Characters { root } => Ok(Self::Characters { root }),
             PanelPayload::Scenes { root } => Ok(Self::Scenes { root }),
@@ -1024,7 +999,6 @@ impl PanelContent {
             },
             Self::Inspector { root, .. } => PanelPayload::Inspector { root: root.clone() },
             Self::Output { root, .. } => PanelPayload::Output { root: root.clone() },
-            Self::Preview { root, .. } => PanelPayload::Preview { root: root.clone() },
             Self::Assets { root } => PanelPayload::Assets { root: root.clone() },
             Self::Characters { root } => PanelPayload::Characters { root: root.clone() },
             Self::Scenes { root } => PanelPayload::Scenes { root: root.clone() },
@@ -1039,7 +1013,6 @@ impl PanelContent {
             Self::Document { .. } => DOCUMENT_PANEL,
             Self::Inspector { .. } => INSPECTOR_PANEL,
             Self::Output { .. } => OUTPUT_PANEL,
-            Self::Preview { .. } => PREVIEW_PANEL,
             Self::Assets { .. } => ASSETS_PANEL,
             Self::Characters { .. } => CHARACTERS_PANEL,
             Self::Scenes { .. } => SCENES_PANEL,
@@ -1059,7 +1032,6 @@ impl PanelContent {
                 .into(),
             Self::Inspector { .. } => "Inspector".into(),
             Self::Output { .. } => "Output".into(),
-            Self::Preview { .. } => "Preview".into(),
             Self::Assets { .. } => "Assets".into(),
             Self::Characters { .. } => "Characters".into(),
             Self::Scenes { .. } => "Scenes".into(),
@@ -1073,6 +1045,7 @@ struct WorkbenchPanel {
     content: PanelContent,
     focus: FocusHandle,
     document_mode: DocumentMode,
+    last_text_cursor: Option<(usize, usize)>,
     block_text_editors: Vec<BlockTextEditor>,
     collapsed_scenes: HashSet<String>,
     selected_blocks: HashSet<usize>,
@@ -1080,6 +1053,7 @@ struct WorkbenchPanel {
     draft_text: Option<DraftTextBlock>,
     block_drop_target: Option<BlockDropTarget>,
     block_dragging: Option<HashSet<usize>>,
+    block_settle_source: Option<String>,
     block_picker_open: bool,
     block_picker_index: usize,
     block_picker_category: Option<&'static str>,
@@ -1089,13 +1063,7 @@ struct WorkbenchPanel {
     block_scroll_anchor: ScrollAnchor,
     block_scroll_pending: bool,
     tool_inputs: Vec<Entity<InputState>>,
-    timeline: VecDeque<TimelineSample>,
     recovery_epoch: u64,
-    preview_image: Option<Arc<RenderImage>>,
-    preview_frame_id: u64,
-    preview_lifecycle: PreviewLifecycle,
-    preview_runtime_position: Option<(PathBuf, usize, usize)>,
-    preview_bounds: Arc<Mutex<Option<Bounds<Pixels>>>>,
     _subscriptions: Vec<Subscription>,
     visual_subscriptions: Vec<Subscription>,
     inspector_key: Option<InspectorEditKey>,
@@ -1343,12 +1311,6 @@ enum DraftInsertionTarget {
     SceneEnd(usize),
 }
 
-#[derive(Clone, Copy)]
-struct TimelineSample {
-    published: u64,
-    overwritten: u64,
-}
-
 impl WorkbenchPanel {
     fn from_payload(
         payload: PanelPayload,
@@ -1358,10 +1320,6 @@ impl WorkbenchPanel {
         let content = PanelContent::from_payload(payload, window, cx)?;
         let registration = match &content {
             PanelContent::Document { root, relative, .. } => Some((root.clone(), relative.clone())),
-            _ => None,
-        };
-        let preview_registration = match &content {
-            PanelContent::Preview { root, .. } => Some(root.clone()),
             _ => None,
         };
         let tool_registration = match &content {
@@ -1386,6 +1344,7 @@ impl WorkbenchPanel {
                 content,
                 focus: cx.focus_handle(),
                 document_mode: DocumentMode::Text,
+                last_text_cursor: None,
                 block_text_editors: Vec::new(),
                 collapsed_scenes: HashSet::new(),
                 selected_blocks: HashSet::new(),
@@ -1393,6 +1352,7 @@ impl WorkbenchPanel {
                 draft_text: None,
                 block_drop_target: None,
                 block_dragging: None,
+                block_settle_source: None,
                 block_picker_open: false,
                 block_picker_index: 0,
                 block_picker_category: None,
@@ -1402,13 +1362,7 @@ impl WorkbenchPanel {
                 block_scroll_anchor,
                 block_scroll_pending: false,
                 tool_inputs: Vec::new(),
-                timeline: VecDeque::with_capacity(60),
                 recovery_epoch: 0,
-                preview_image: None,
-                preview_frame_id: 0,
-                preview_lifecycle: PreviewLifecycle::Off,
-                preview_runtime_position: None,
-                preview_bounds: Arc::new(Mutex::new(None)),
                 _subscriptions: Vec::new(),
                 visual_subscriptions: Vec::new(),
                 inspector_key: None,
@@ -1495,13 +1449,23 @@ impl WorkbenchPanel {
                 let relative_for_selection = relative.clone();
                 panel
                     ._subscriptions
-                    .push(cx.observe(editor, move |_, _, cx| {
+                    .push(cx.observe(editor, move |panel, _, cx| {
+                        // Blocks mode owns the source selection; the hidden
+                        // text editor's stale caret must not seek Preview.
+                        if panel.document_mode == DocumentMode::Block {
+                            return;
+                        }
                         let position = editor_for_selection.read(cx).cursor_position();
+                        let cursor = (position.line as usize, position.character as usize);
+                        if panel.last_text_cursor == Some(cursor) {
+                            return;
+                        }
+                        panel.last_text_cursor = Some(cursor);
                         cx.global_mut::<EditorDocuments>().set_selection(
                             &root_for_selection,
                             relative_for_selection.clone(),
-                            position.line as usize,
-                            position.character as usize,
+                            cursor.0,
+                            cursor.1,
                         );
                         cx.global_mut::<EditorDocuments>()
                             .clear_block_selection(&root_for_selection);
@@ -1511,8 +1475,8 @@ impl WorkbenchPanel {
                         {
                             preview.set_cursor(
                                 relative_for_selection.clone(),
-                                position.line as usize + 1,
-                                position.character as usize + 1,
+                                cursor.0 + 1,
+                                cursor.1 + 1,
                             );
                         }
                         cx.refresh_windows();
@@ -1630,75 +1594,6 @@ impl WorkbenchPanel {
                 }
             }
             panel.rebuild_visual_editors(window, cx);
-            if let PanelContent::Preview { root, controller } = &panel.content {
-                let root = root.clone();
-                let controller = controller.clone();
-                cx.spawn(async move |panel, cx| {
-                    loop {
-                        let snapshot = controller.snapshot();
-                        let interval = if matches!(
-                            snapshot.lifecycle,
-                            PreviewLifecycle::Starting | PreviewLifecycle::Running
-                        ) && snapshot
-                            .last_frame_at
-                            .is_some_and(|instant| instant.elapsed() < Duration::from_millis(250))
-                        {
-                            PREVIEW_POLL_INTERVAL
-                        } else {
-                            Duration::from_millis(250)
-                        };
-                        cx.background_executor().timer(interval).await;
-                        if panel
-                            .update_in(cx, |panel, window, cx| {
-                                if panel.refresh_preview(&root, &controller, window, cx) {
-                                    cx.notify();
-                                }
-                            })
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                })
-                .detach();
-            }
-            if let PanelContent::Performance { controller, .. } = &panel.content {
-                let controller = controller.clone();
-                cx.spawn(async move |panel, cx| {
-                    loop {
-                        let interval = match controller.snapshot().lifecycle {
-                            PreviewLifecycle::Running | PreviewLifecycle::Starting => {
-                                Duration::from_millis(500)
-                            }
-                            _ => Duration::from_secs(2),
-                        };
-                        cx.background_executor().timer(interval).await;
-                        if panel
-                            .update(cx, |panel, cx| {
-                                let stats = controller.snapshot().frame_stats;
-                                let sample = TimelineSample {
-                                    published: stats.published,
-                                    overwritten: stats.overwritten,
-                                };
-                                if panel.timeline.back().is_none_or(|last| {
-                                    last.published != sample.published
-                                        || last.overwritten != sample.overwritten
-                                }) {
-                                    if panel.timeline.len() == 60 {
-                                        panel.timeline.pop_front();
-                                    }
-                                    panel.timeline.push_back(sample);
-                                    cx.notify();
-                                }
-                            })
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                })
-                .detach();
-            }
             panel
         });
         if let Some((root, relative)) = registration {
@@ -1717,10 +1612,6 @@ impl WorkbenchPanel {
                 documents.register_editor(&root, relative, editor);
             }
         }
-        if let Some(root) = preview_registration {
-            cx.global_mut::<EditorDocuments>()
-                .set_preview_panel(&root, Some(PanelId::from(panel.entity_id())));
-        }
         if let Some((root, name)) = tool_registration {
             cx.global_mut::<EditorDocuments>().set_tool_panel(
                 &root,
@@ -1729,46 +1620,6 @@ impl WorkbenchPanel {
             );
         }
         Ok(panel)
-    }
-
-    fn refresh_preview(
-        &mut self,
-        root: &Path,
-        controller: &PreviewController,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let snapshot = controller.take_snapshot();
-        let lifecycle_changed = self.preview_lifecycle != snapshot.lifecycle;
-        cx.global_mut::<EditorDocuments>()
-            .set_diagnostics(root, snapshot.diagnostics.clone());
-        self.preview_lifecycle = snapshot.lifecycle;
-        let position_changed = self.preview_runtime_position != snapshot.runtime_position;
-        self.preview_runtime_position = snapshot.runtime_position.clone();
-        let followed = position_changed
-            && snapshot
-                .runtime_position
-                .is_some_and(|(path, line, column)| {
-                    follow_preview_position(root, &path, line, column, window, cx)
-                });
-        let Some(frame) = snapshot.frame else {
-            return lifecycle_changed || followed;
-        };
-        if frame.metadata.frame_id == self.preview_frame_id {
-            return lifecycle_changed || followed;
-        }
-        let frame = Arc::try_unwrap(frame).unwrap_or_else(|frame| (*frame).clone());
-        let metadata = frame.metadata;
-        let Some(bytes) = take_tightly_packed_bgra(frame) else {
-            return lifecycle_changed || followed;
-        };
-        let Some(buffer) = image::RgbaImage::from_raw(metadata.width, metadata.height, bytes)
-        else {
-            return lifecycle_changed || followed;
-        };
-        self.preview_frame_id = metadata.frame_id;
-        self.preview_image = Some(Arc::new(RenderImage::new([image::Frame::new(buffer)])));
-        true
     }
 }
 
@@ -1787,12 +1638,6 @@ impl BasePanel for WorkbenchPanel {
         }
     }
 
-    fn set_active(&mut self, active: bool, _: &mut Window, _: &mut Context<Self>) {
-        if let PanelContent::Preview { controller, .. } = &self.content {
-            controller.set_panel_visible(active);
-        }
-    }
-
     fn on_removed(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         match &self.content {
             PanelContent::Document { root, relative, .. } => {
@@ -1800,12 +1645,6 @@ impl BasePanel for WorkbenchPanel {
                 let documents = cx.global_mut::<EditorDocuments>();
                 documents.unregister_panel(root, relative, panel);
                 documents.clear_document_node(root);
-            }
-            PanelContent::Preview { root, controller } => {
-                controller.stop();
-                controller.set_panel_visible(false);
-                cx.global_mut::<EditorDocuments>()
-                    .set_preview_panel(root, None);
             }
             PanelContent::Inspector { root, .. } => cx
                 .global_mut::<EditorDocuments>()
@@ -1851,23 +1690,6 @@ impl Focusable for WorkbenchPanel {
     }
 }
 
-fn take_tightly_packed_bgra(frame: keine_authoring::OwnedFrame) -> Option<Vec<u8>> {
-    let row_bytes = usize::try_from(frame.metadata.width).ok()?.checked_mul(4)?;
-    let stride = usize::try_from(frame.metadata.stride).ok()?;
-    let height = usize::try_from(frame.metadata.height).ok()?;
-    if stride < row_bytes || frame.bytes.len() != stride.checked_mul(height)? {
-        return None;
-    }
-    if stride == row_bytes {
-        return Some(frame.bytes);
-    }
-    let mut packed = Vec::with_capacity(row_bytes.checked_mul(height)?);
-    for row in frame.bytes.chunks_exact(stride) {
-        packed.extend_from_slice(&row[..row_bytes]);
-    }
-    Some(packed)
-}
-
 fn language_for_path(path: &Path) -> &'static str {
     match path.extension().and_then(|extension| extension.to_str()) {
         Some("shou") => "eiyashou",
@@ -1885,7 +1707,6 @@ fn register_workbench_panels(cx: &mut App) {
         DOCUMENT_PANEL,
         INSPECTOR_PANEL,
         OUTPUT_PANEL,
-        PREVIEW_PANEL,
         ASSETS_PANEL,
         CHARACTERS_PANEL,
         SCENES_PANEL,
@@ -1934,8 +1755,9 @@ struct WorkbenchWindow {
     recents: Vec<PathBuf>,
     allow_close: bool,
     close_prompt_open: bool,
+    preview_lifecycle: PreviewLifecycle,
+    preview_position: Option<(PathBuf, usize, usize)>,
     focus: FocusHandle,
-    _window_subscriptions: Vec<Subscription>,
 }
 
 fn install_close_guard(window: &mut Window, workbench: WeakEntity<WorkbenchWindow>, cx: &App) {
@@ -1955,6 +1777,52 @@ fn install_close_guard(window: &mut Window, workbench: WeakEntity<WorkbenchWindo
 }
 
 impl WorkbenchWindow {
+    fn watch_preview(window: &mut Window, cx: &mut Context<Self>) {
+        cx.spawn_in(window, async move |this, cx| {
+            let mut interval = Duration::from_millis(250);
+            loop {
+                cx.background_executor().timer(interval).await;
+                let Ok(running) = this.update_in(cx, |this, window, cx| {
+                    let Some(root) = this
+                        .workspace
+                        .as_ref()
+                        .map(|workspace| workspace.session.root().to_owned())
+                    else {
+                        return false;
+                    };
+                    let Ok(controller) = cx.global_mut::<EditorDocuments>().preview(&root) else {
+                        return false;
+                    };
+                    let snapshot = controller.snapshot();
+                    if this.preview_lifecycle != snapshot.lifecycle {
+                        this.preview_lifecycle = snapshot.lifecycle;
+                        cx.notify();
+                    }
+                    if this.preview_position != snapshot.runtime_position {
+                        this.preview_position = snapshot.runtime_position.clone();
+                        if let Some((path, line, column)) = snapshot.runtime_position {
+                            follow_preview_position(&root, &path, line, column, window, cx);
+                        }
+                    }
+                    cx.global_mut::<EditorDocuments>()
+                        .set_diagnostics(&root, snapshot.diagnostics);
+                    matches!(
+                        this.preview_lifecycle,
+                        PreviewLifecycle::Running | PreviewLifecycle::Starting
+                    )
+                }) else {
+                    break;
+                };
+                interval = if running {
+                    Duration::from_millis(50)
+                } else {
+                    Duration::from_millis(250)
+                };
+            }
+        })
+        .detach();
+    }
+
     fn undo_sources(&mut self, _: &UndoSources, window: &mut Window, cx: &mut Context<Self>) {
         self.replay_sources(true, window, cx);
     }
@@ -1986,9 +1854,7 @@ impl WorkbenchWindow {
         cx: &mut Context<Self>,
     ) -> Self {
         install_close_guard(window, cx.weak_entity(), cx);
-        let activation = cx.observe_window_activation(window, |this, window, cx| {
-            this.set_preview_visible(window.is_window_active(), cx);
-        });
+        Self::watch_preview(window, cx);
         Self {
             editor,
             persistence,
@@ -1996,8 +1862,9 @@ impl WorkbenchWindow {
             recents,
             allow_close: false,
             close_prompt_open: false,
+            preview_lifecycle: PreviewLifecycle::Off,
+            preview_position: None,
             focus: cx.focus_handle(),
-            _window_subscriptions: vec![activation],
         }
     }
 
@@ -2009,9 +1876,7 @@ impl WorkbenchWindow {
         cx: &mut Context<Self>,
     ) -> Self {
         install_close_guard(window, cx.weak_entity(), cx);
-        let activation = cx.observe_window_activation(window, |this, window, cx| {
-            this.set_preview_visible(window.is_window_active(), cx);
-        });
+        Self::watch_preview(window, cx);
         let workspace = ProjectWorkspace::new(session, &persistence, window, cx);
         Self {
             editor,
@@ -2020,8 +1885,9 @@ impl WorkbenchWindow {
             recents: Vec::new(),
             allow_close: false,
             close_prompt_open: false,
+            preview_lifecycle: PreviewLifecycle::Off,
+            preview_position: None,
             focus: cx.focus_handle(),
-            _window_subscriptions: vec![activation],
         }
     }
 
@@ -2038,6 +1904,8 @@ impl WorkbenchWindow {
             window,
             cx,
         ));
+        self.preview_lifecycle = PreviewLifecycle::Off;
+        self.preview_position = None;
         self.recents.clear();
         cx.notify();
     }
@@ -2052,25 +1920,6 @@ impl WorkbenchWindow {
         };
         if let Ok(preview) = cx.global_mut::<EditorDocuments>().preview(&root) {
             preview.stop();
-            preview.set_panel_visible(false);
-        }
-    }
-
-    fn set_preview_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
-        let Some(root) = self
-            .workspace
-            .as_ref()
-            .map(|workspace| workspace.session.root().to_owned())
-        else {
-            return;
-        };
-        if cx
-            .global::<EditorDocuments>()
-            .preview_panel(&root)
-            .is_some()
-            && let Ok(preview) = cx.global_mut::<EditorDocuments>().preview(&root)
-        {
-            preview.set_window_visible(visible);
         }
     }
 
@@ -2118,47 +1967,45 @@ impl WorkbenchWindow {
         cx.refresh_windows();
     }
 
-    fn toggle_engine(&mut self, _: &ToggleEngine, window: &mut Window, cx: &mut Context<Self>) {
+    fn toggle_engine(&mut self, _: &ToggleEngine, _: &mut Window, cx: &mut Context<Self>) {
         let Some(workspace) = self.workspace.as_ref() else {
             return;
         };
         let root = workspace.session.root().to_owned();
-        if let Some(panel) = cx.global::<EditorDocuments>().preview_panel(&root) {
-            workspace
-                .dock
-                .update(cx, |dock, cx| dock.select_panel(panel, window, cx));
-            if let Ok(preview) = cx.global_mut::<EditorDocuments>().preview(&root) {
-                preview.set_panel_visible(true);
-            }
-            return;
-        }
-        let panel = match WorkbenchPanel::from_payload(
-            PanelPayload::Preview { root: root.clone() },
-            window,
-            cx,
-        ) {
-            Ok(panel) => panel,
+        let controller = match cx.global_mut::<EditorDocuments>().preview(&root) {
+            Ok(controller) => controller,
             Err(error) => {
                 cx.global_mut::<EditorDocuments>()
-                    .set_notice(&root, format!("Could not show Preview: {error}"));
+                    .set_notice(&root, format!("Could not start Preview: {error}"));
                 cx.refresh_windows();
                 return;
             }
         };
-        let panel_id = PanelId::from(panel.entity_id());
-        workspace.dock.update(cx, |dock, cx| {
-            dock.add_panel_view(
-                panel_handle(panel),
-                DockPlacement::Right,
-                Some(px(520.)),
-                window,
-                cx,
-            );
-            dock.select_panel(panel_id, window, cx);
-        });
-        cx.global_mut::<EditorDocuments>()
-            .set_notice(&root, "Preview shown · press Start when ready");
+        if matches!(
+            controller.snapshot().lifecycle,
+            PreviewLifecycle::Running | PreviewLifecycle::Starting
+        ) {
+            controller.stop();
+        } else {
+            for (path, contents) in cx.global::<EditorDocuments>().preview_documents(&root) {
+                controller.apply_snapshot(path, contents);
+            }
+            controller.start();
+            self.preview_lifecycle = PreviewLifecycle::Starting;
+        }
         cx.refresh_windows();
+    }
+
+    fn show_engine(&mut self, cx: &mut Context<Self>) {
+        let Some(workspace) = self.workspace.as_ref() else {
+            return;
+        };
+        if let Ok(controller) = cx
+            .global_mut::<EditorDocuments>()
+            .preview(workspace.session.root())
+        {
+            controller.show();
+        }
     }
 
     fn show_tool(&mut self, kind: ToolKind, window: &mut Window, cx: &mut Context<Self>) {
@@ -2192,7 +2039,10 @@ impl WorkbenchWindow {
         } else {
             cx.global::<EditorDocuments>()
                 .tool_panel(&root, INSPECTOR_PANEL)
-                .or_else(|| cx.global::<EditorDocuments>().preview_panel(&root))
+                .or_else(|| {
+                    cx.global::<EditorDocuments>()
+                        .tool_panel(&root, PROBLEMS_PANEL)
+                })
         };
         workspace.dock.update(cx, |dock, cx| {
             let tab_node = tab_anchor.and_then(|anchor| {
@@ -2389,14 +2239,7 @@ impl WorkbenchWindow {
             cx.global::<EditorDocuments>()
                 .has_dirty_documents(workspace.session.root())
         });
-        let (
-            explorer_open,
-            assets_open,
-            characters_open,
-            problems_open,
-            performance_open,
-            preview_open,
-        ) = self
+        let (explorer_open, assets_open, characters_open, problems_open, performance_open) = self
             .workspace
             .as_ref()
             .map(|workspace| {
@@ -2408,7 +2251,6 @@ impl WorkbenchWindow {
                     documents.tool_panel(root, CHARACTERS_PANEL).is_some(),
                     documents.tool_panel(root, PROBLEMS_PANEL).is_some(),
                     documents.tool_panel(root, PERFORMANCE_PANEL).is_some(),
-                    documents.preview_panel(root).is_some(),
                 )
             })
             .unwrap_or_default();
@@ -2498,29 +2340,6 @@ impl WorkbenchWindow {
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.show_tool(ToolKind::Performance, window, cx)
                     })),
-                )
-            })
-            .when(self.workspace.is_some(), |this| {
-                this.child(
-                    div()
-                        .id("activity-preview")
-                        .size(px(ACTIVITY_ITEM_SIZE_PX))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(7.))
-                        .when(preview_open, |style| style.bg(rgb(SURFACE)))
-                        .cursor_pointer()
-                        .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-                        .tooltip(icon_hint("Preview"))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.toggle_engine(&ToggleEngine, window, cx)
-                        }))
-                        .child(
-                            Icon::new(IconName::Play)
-                                .with_size(px(ACTIVITY_ICON_SIZE_PX))
-                                .text_color(rgb(if preview_open { PRIMARY } else { MUTED })),
-                        ),
                 )
             })
             .child(div().flex_1())
@@ -2766,6 +2585,49 @@ impl Render for WorkbenchWindow {
                     .child(main),
             )
             .child(div().id("overlay-host").absolute().inset_0())
+            .when(self.workspace.is_some(), |this| {
+                let running = matches!(
+                    self.preview_lifecycle,
+                    PreviewLifecycle::Running | PreviewLifecycle::Starting
+                );
+                this.child(
+                    div()
+                        .id("preview-window-control")
+                        .absolute()
+                        .top(px(6.))
+                        .right(px(4.))
+                        .p(px(3.))
+                        .rounded(px(10.))
+                        .bg(rgb(CHROME))
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .when(running, |this| {
+                            this.child(
+                                div()
+                                    .id("preview-show")
+                                    .size(px(28.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(8.))
+                                    .bg(rgb(SURFACE))
+                                    .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                                    .cursor_pointer()
+                                    .tooltip(icon_hint("Show engine window"))
+                                    .child(
+                                        Icon::new(AssetIconName::ExternalLink)
+                                            .xsmall()
+                                            .text_color(rgb(INK)),
+                                    )
+                                    .on_click(cx.listener(|this, _, _, cx| this.show_engine(cx))),
+                            )
+                        })
+                        .child(preview_transport_button(running).on_click(cx.listener(
+                            |this, _, window, cx| this.toggle_engine(&ToggleEngine, window, cx),
+                        ))),
+                )
+            })
     }
 }
 

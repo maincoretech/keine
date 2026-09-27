@@ -5369,7 +5369,6 @@ dependencies = [
 name = "keine-authoring"
 version = "0.10.1"
 dependencies = [
- "memmap2",
  "postcard",
  "serde",
 ]
