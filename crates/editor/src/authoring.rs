@@ -241,6 +241,60 @@ pub struct AuthoringIndex {
 }
 
 impl AuthoringIndex {
+    /// Replace only changed script contributions; config/manifests invalidate
+    /// the project namespace and use a full load instead.
+    pub fn with_sources(&self, sources: &BTreeMap<PathBuf, String>) -> Self {
+        let mut index = self.clone();
+        let lookup = index
+            .assets
+            .iter()
+            .map(|asset| (asset.kind, asset.id.clone()))
+            .collect::<HashSet<_>>();
+        for (path, source) in sources {
+            index.scenes.retain(|scene| &scene.path != path);
+            index.dialogues.retain(|dialogue| &dialogue.path != path);
+            index
+                .asset_references
+                .retain(|reference| &reference.path != path);
+            index.problems.retain(|problem| &problem.path != path);
+            index.unindexed_sources.retain(|entry| entry != path);
+            index_source(path, source, &mut index, &mut HashMap::new(), &lookup);
+            if index
+                .problems
+                .iter()
+                .any(|problem| &problem.path == path && problem.severity == ProblemSeverity::Error)
+            {
+                index.unindexed_sources.push(path.clone());
+            }
+        }
+        let mut counts = HashMap::<AssetKey, usize>::new();
+        for reference in &index.asset_references {
+            *counts.entry(reference.key.clone()).or_default() += 1;
+        }
+        for asset in &mut index.assets {
+            asset.reference_count = counts.get(&asset.key()).copied().unwrap_or(0);
+        }
+        index.scenes.sort_by(|a, b| {
+            a.path
+                .cmp(&b.path)
+                .then_with(|| a.source_range.start.cmp(&b.source_range.start))
+        });
+        index.dialogues.sort_by(|a, b| {
+            a.path
+                .cmp(&b.path)
+                .then_with(|| a.source_range.start.cmp(&b.source_range.start))
+        });
+        index.problems.sort_by(|a, b| {
+            a.path
+                .cmp(&b.path)
+                .then(a.line.cmp(&b.line))
+                .then(a.column.cmp(&b.column))
+                .then(a.message.cmp(&b.message))
+        });
+        index.problems.dedup();
+        index
+    }
+
     pub fn load(
         root: &Path,
         files: &[WorkspaceFile],
@@ -1490,8 +1544,13 @@ fn index_source(
     asset_lookup: &HashSet<(AssetKind, String)>,
 ) {
     let document = parse_native_document(source);
+    let lines = keine_loader::SourceLineIndex::new(source);
+    let line_column = |offset| {
+        let span = lines.span(source, offset);
+        (span.line, span.column)
+    };
     for scene in &document.scenes {
-        let (line, _) = line_column(source, scene.name_range.start);
+        let (line, _) = line_column(scene.name_range.start);
         index.scenes.push(SceneEntry {
             path: path.to_owned(),
             name: scene.name.clone(),
@@ -1518,7 +1577,7 @@ fn index_source(
         .iter()
         .filter(|token| token.kind == NativeTokenKind::String)
         .map(|token| {
-            let (line, column) = line_column(source, token.range.start);
+            let (line, column) = line_column(token.range.start);
             (token.range.clone(), line, column)
         })
         .collect::<Vec<_>>();
@@ -1538,6 +1597,7 @@ fn index_source(
                 && let Some((string_index, (range, line, column))) = strings
                     .iter()
                     .enumerate()
+                    .skip(strings.partition_point(|(_, line, _)| *line < span.line))
                     .find(|(token_index, (_, token_line, _))| {
                         *token_line == span.line && !used_strings.contains(token_index)
                     })
@@ -1545,6 +1605,7 @@ fn index_source(
                         strings
                             .iter()
                             .enumerate()
+                            .skip(strings.partition_point(|(_, line, _)| *line < span.line))
                             .find(|(token_index, (range, token_line, _))| {
                                 scene_range.contains(&range.start)
                                     && *token_line >= span.line
@@ -1601,16 +1662,18 @@ fn index_source(
             if resource.is_dynamic() {
                 continue;
             }
-            let matches = document
+            let first = document
                 .tokens
+                .partition_point(|token| line_column(token.range.start).0 < resource.span.line);
+            let matches = document.tokens[first..]
                 .iter()
+                .take_while(|token| line_column(token.range.start).0 == resource.span.line)
                 .filter(|token| {
                     matches!(
                         token.kind,
                         NativeTokenKind::Identifier | NativeTokenKind::String
                     )
                 })
-                .filter(|token| line_column(source, token.range.start).0 == resource.span.line)
                 .filter_map(|token| {
                     let raw = source.get(token.range.clone())?;
                     (raw == resource.path || raw == format!("\"{}\"", resource.path))
@@ -1620,7 +1683,7 @@ fn index_source(
             let range = (matches.len() == 1).then(|| matches[0].clone());
             let (line, column) = range
                 .as_ref()
-                .map(|range| line_column(source, range.start))
+                .map(|range| line_column(range.start))
                 .unwrap_or((resource.span.line, resource.span.column));
             index.asset_references.push(AssetReference {
                 key: AssetKey {
@@ -1769,16 +1832,6 @@ fn problem(
     }
 }
 
-fn line_column(source: &str, offset: usize) -> (usize, usize) {
-    let prefix = source.get(..offset).unwrap_or(source);
-    let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
-    let column = prefix
-        .rsplit_once('\n')
-        .map_or(prefix.chars().count(), |(_, tail)| tail.chars().count())
-        + 1;
-    (line, column)
-}
-
 fn line_start_offset(source: &str, line: usize) -> Option<usize> {
     if line == 0 {
         return Some(0);
@@ -1849,6 +1902,25 @@ mod tests {
         assert_eq!(index.scenes.len(), 1);
         assert!(index.assets.is_empty());
         assert!(index.problems.is_empty(), "{:?}", index.problems);
+    }
+
+    #[test]
+    fn incremental_script_index_matches_a_fresh_load() {
+        let root = fixture();
+        let session = crate::workspace::WorkspaceSession::open(&root).unwrap();
+        let original = AuthoringIndex::load(&root, session.files(), &BTreeMap::new());
+        let changes = BTreeMap::from([(
+            PathBuf::from("scripts/main.shou"),
+            "scene opening { bg(room), \"changed\", wait(1s) }".into(),
+        )]);
+        let next = original.with_sources(&changes);
+        let fresh = AuthoringIndex::load(&root, session.files(), &changes);
+        assert_eq!(next.scenes, fresh.scenes);
+        assert_eq!(next.dialogues, fresh.dialogues);
+        assert_eq!(next.assets, fresh.assets);
+        assert_eq!(next.asset_references, fresh.asset_references);
+        assert_eq!(next.problems, fresh.problems);
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn fixture() -> PathBuf {

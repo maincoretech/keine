@@ -1321,12 +1321,15 @@ pub(super) struct BlockProjectionView<'a> {
     pub(super) scroll_pending: bool,
     pub(super) scene_edit: Option<&'a SceneEditMode>,
     pub(super) scene_name_input: &'a Entity<InputState>,
+    pub(super) visible: &'a HashSet<usize>,
+    pub(super) heights: &'a HashMap<usize, f32>,
 }
 
-fn block_row_height(
+pub(super) fn block_row_height(
     block: &crate::projection::BlockCard,
     editors: &[BlockTextEditor],
     draft_text: Option<&DraftTextBlock>,
+    heights: &HashMap<usize, f32>,
     cx: &App,
 ) -> f32 {
     if matches!(
@@ -1349,7 +1352,12 @@ fn block_row_height(
                         .map(|draft| &draft.state)
                 })
         });
-        let text_rows = text_state.map_or(1, |state| {
+        if text_state.is_none()
+            && let Some(height) = heights.get(&block.source_range.start)
+        {
+            return *height;
+        }
+        let text_rows = text_state.map_or(block.text_rows, |state| {
             state.read(cx).value().lines().count().clamp(1, 6)
         });
         let measured = text_state
@@ -1385,6 +1393,7 @@ fn dragged_block_height(
     selected: &HashSet<usize>,
     editors: &[BlockTextEditor],
     draft_text: Option<&DraftTextBlock>,
+    heights: &HashMap<usize, f32>,
     cx: &App,
 ) -> f32 {
     let ranges = projection
@@ -1403,7 +1412,7 @@ fn dragged_block_height(
                 .iter()
                 .any(|range| range.contains(&block.source_range.start))
         })
-        .map(|block| block_row_height(block, editors, draft_text, cx))
+        .map(|block| block_row_height(block, editors, draft_text, heights, cx))
         .collect::<Vec<_>>();
     heights.iter().sum::<f32>() + 4. * heights.len().saturating_sub(1) as f32
 }
@@ -1501,13 +1510,18 @@ pub(super) fn render_block_projection(
         scroll_pending,
         scene_edit,
         scene_name_input,
+        visible,
+        heights,
     } = view;
     // Hold the drag-time projection until source and row states settle in the
     // same paint; otherwise release briefly flashes the previous row order.
     let source = settle_source
         .map(str::to_owned)
         .unwrap_or_else(|| document.borrow().contents().to_owned());
-    let projection = EiyashouProjection::parse(&source);
+    let projection = cx
+        .global::<EditorDocuments>()
+        .projection(root, relative, &source);
+    let source_lines = keine_loader::SourceLineIndex::new(&source);
     let line_number_width = projection
         .scenes
         .iter()
@@ -1524,6 +1538,7 @@ pub(super) fn render_block_projection(
         .iter()
         .flat_map(|scene| &scene.blocks)
         .filter(|block| matches!(block.kind, BlockKind::Command))
+        .filter(|block| visible.contains(&block.source_range.start))
         .map(|block| {
             (
                 block.source_range.start,
@@ -1537,7 +1552,7 @@ pub(super) fn render_block_projection(
         })
         .collect::<std::collections::HashMap<_, _>>();
     let dragged_height = dragging.map_or(32., |selected| {
-        dragged_block_height(&projection, selected, editors, draft_text, cx)
+        dragged_block_height(&projection, selected, editors, draft_text, heights, cx)
     });
     let block_order = Arc::new(
         projection
@@ -1553,12 +1568,13 @@ pub(super) fn render_block_projection(
         .map(|(_, line, column)| (*line, *column));
     let selected_line = selected_position.map(|(line, _)| line);
     let selected_start = selected_position.and_then(|(line, column)| {
-        projected_block_at(&source, line, column).map(|(_, block)| block.source_range.start)
+        block_at_position(&projection, &source, line, column)
+            .map(|(_, block)| block.source_range.start)
     });
     let root = root.to_owned();
     let relative = relative.to_owned();
     let mut rows = Vec::new();
-    for (scene_index, scene) in projection.scenes.into_iter().enumerate() {
+    for (scene_index, scene) in projection.scenes.iter().enumerate() {
         let collapsed = collapsed_scenes.contains(&scene.name);
         let scene_name = scene.name.clone();
         let context_name = scene.name.clone();
@@ -1577,10 +1593,7 @@ pub(super) fn render_block_projection(
             window,
             cx,
         );
-        let scene_line = source
-            .get(..scene.name_range.start)
-            .map(|prefix| prefix.bytes().filter(|byte| *byte == b'\n').count())
-            .unwrap_or_default();
+        let scene_line = source_lines.span(&source, scene.name_range.start).line - 1;
         let header = div()
             .id(("scene-section", scene_index))
             .w_full()
@@ -1650,7 +1663,7 @@ pub(super) fn render_block_projection(
                     .text_sm()
                     .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                     .text_color(rgb(INK))
-                    .child(scene.name)
+                    .child(scene.name.clone())
                     .into_any_element()
             })
             .child(
@@ -1685,7 +1698,24 @@ pub(super) fn render_block_projection(
             .into_any_element();
         let mut scene_rows = Vec::new();
         let mut scene_body_height = 0.;
-        for (block_index, block) in scene.blocks.into_iter().enumerate() {
+        let mut hidden_height = 0.;
+        for (block_index, block) in scene.blocks.iter().enumerate() {
+            if !visible.contains(&block.source_range.start) {
+                let height = block_row_height(block, editors, draft_text, heights, cx) + 4.;
+                scene_body_height += height;
+                hidden_height += height;
+                continue;
+            }
+            if hidden_height > 0. {
+                scene_rows.push(
+                    div()
+                        .h(px((hidden_height - 4.).max(0.)))
+                        .flex_none()
+                        .into_any_element(),
+                );
+                hidden_height = 0.;
+            }
+            let block = block.clone();
             let row_id = block.source_range.start;
             let line = block.line;
             let column = block.column;
@@ -1736,7 +1766,7 @@ pub(super) fn render_block_projection(
             let drag_label = label.clone();
             let drag_summary = source_summary.clone();
             let drag_count = drag_selection.len();
-            let row_height = block_row_height(&block, editors, draft_text, cx);
+            let row_height = block_row_height(&block, editors, draft_text, heights, cx);
             let block_indent = block.depth as f32 * 18.;
             let movable = !matches!(&block.kind, BlockKind::ElseIf | BlockKind::Else);
             let text_block = matches!(
@@ -1771,12 +1801,11 @@ pub(super) fn render_block_projection(
                                             document: Some(document),
                                             ..
                                         } => dragged_block_height(
-                                            &EiyashouProjection::parse(
-                                                document.borrow().contents(),
-                                            ),
+                                            &document.borrow().projection(),
                                             &drag_selection,
                                             &panel.block_text_editors,
                                             panel.draft_text.as_ref(),
+                                            &panel.block_heights,
                                             cx,
                                         ),
                                         _ => row_height,
@@ -2173,6 +2202,14 @@ pub(super) fn render_block_projection(
                 scene_rows.push(draft_text_row(draft, block_indent, row_id));
             }
         }
+        if hidden_height > 0. {
+            scene_rows.push(
+                div()
+                    .h(px((hidden_height - 4.).max(0.)))
+                    .flex_none()
+                    .into_any_element(),
+            );
+        }
         if let Some(draft) = draft_text.filter(|draft| {
             matches!(
                 draft.target,
@@ -2258,7 +2295,8 @@ pub(super) fn render_block_projection(
     rows.extend(
         projection
             .read_only
-            .into_iter()
+            .iter()
+            .cloned()
             .enumerate()
             .map(|(index, card)| {
                 div()
@@ -2990,7 +3028,7 @@ pub(super) fn render_problems(
     let index = cx.global::<EditorDocuments>().authoring(root);
     let runtime = cx.global::<EditorDocuments>().runtime_diagnostics(root);
     let root = root.to_owned();
-    let authoring_rows = index.problems.into_iter().enumerate().map({
+    let authoring_rows = index.problems.iter().cloned().enumerate().map({
         let root = root.clone();
         move |(row, problem)| {
             let root = root.clone();

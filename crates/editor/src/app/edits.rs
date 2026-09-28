@@ -14,6 +14,23 @@ pub(super) struct SourceHistory {
 }
 
 impl SourceHistory {
+    pub(super) fn forget(&mut self, path: &Path) {
+        for edit in self.undo.iter_mut().chain(&mut self.redo) {
+            edit.retain(|change| change.path != path);
+        }
+        self.undo.retain(|edit| !edit.is_empty());
+        self.redo.retain(|edit| !edit.is_empty());
+    }
+    const BYTE_BUDGET: usize = 16 * 1024 * 1024;
+
+    fn bytes(&self) -> usize {
+        self.undo
+            .iter()
+            .chain(&self.redo)
+            .flatten()
+            .map(|change| change.before.len().saturating_add(change.after.len()))
+            .sum()
+    }
     fn record(&mut self, changes: Vec<SourceChange>) {
         let changes = changes
             .into_iter()
@@ -23,10 +40,10 @@ impl SourceHistory {
             return;
         }
         self.undo.push_back(changes);
-        if self.undo.len() > 32 {
+        self.redo.clear();
+        while self.undo.len() > 32 || self.bytes() > Self::BYTE_BUDGET {
             self.undo.pop_front();
         }
-        self.redo.clear();
     }
 
     fn next(&self, undo: bool) -> Option<&[SourceChange]> {
@@ -67,7 +84,7 @@ impl EditorDocuments {
     }
 
     fn record_source_transaction(&mut self, root: &Path, changes: Vec<SourceChange>) {
-        if let Ok(workspace) = self.ensure_workspace(root) {
+        if let Ok(workspace) = self.workspace_mut(root) {
             workspace.source_history.record(changes);
         }
     }
@@ -489,14 +506,17 @@ pub(super) fn projected_block_at(
     line: usize,
     column: usize,
 ) -> Option<(String, crate::projection::BlockCard)> {
-    let line_start = source
-        .split_inclusive('\n')
-        .take(line)
-        .map(str::len)
-        .sum::<usize>();
-    let offset = (line_start + column).min(source.len());
-    let projection = EiyashouProjection::parse(source);
-    projection.scenes.into_iter().find_map(|scene| {
+    block_at_position(&EiyashouProjection::parse(source), source, line, column)
+}
+
+pub(super) fn block_at_position(
+    projection: &EiyashouProjection,
+    source: &str,
+    line: usize,
+    column: usize,
+) -> Option<(String, crate::projection::BlockCard)> {
+    let offset = keine_loader::SourceLineIndex::new(source).offset(source, line, column);
+    projection.scenes.iter().find_map(|scene| {
         if !scene.source_range.contains(&offset) && offset != scene.source_range.end {
             return None;
         }
@@ -506,7 +526,7 @@ pub(super) fn projected_block_at(
             .filter(|block| block.source_range.start <= offset && block.source_range.end >= offset)
             .max_by_key(|block| block.depth)
             .cloned()
-            .map(|block| (scene.name, block))
+            .map(|block| (scene.name.clone(), block))
     })
 }
 
@@ -522,6 +542,18 @@ pub(super) fn text_voice(source: &str) -> Option<String> {
 #[cfg(test)]
 mod preview_follow_tests {
     use super::*;
+
+    #[test]
+    fn source_cursor_after_chinese_selects_the_following_command() {
+        let source = "scene start {\n  \"中文中文中文中文中文\", wait(500ms)\n}\n";
+        let wait = source.find("wait").unwrap();
+        let start = source[..wait].rfind('\n').unwrap() + 1;
+        let column = source[start..wait].chars().count();
+        assert_eq!(
+            projected_block_at(source, 1, column).unwrap().1.kind,
+            BlockKind::Command
+        );
+    }
 
     #[test]
     fn native_preview_action_lines_resolve_to_visible_blocks() {
@@ -550,6 +582,24 @@ pub(super) fn common_value(values: impl IntoIterator<Item = String>) -> String {
 #[cfg(test)]
 mod history_tests {
     use super::*;
+
+    #[test]
+    fn source_history_enforces_a_byte_budget_across_undo_and_redo() {
+        let mut history = SourceHistory::default();
+        for i in 0..20 {
+            history.record(vec![SourceChange {
+                path: "scripts/main.shou".into(),
+                before: "a".repeat(1024 * 1024),
+                after: format!("{i}{}", "b".repeat(1024 * 1024 - 2)),
+            }]);
+            assert!(history.bytes() <= SourceHistory::BYTE_BUDGET);
+        }
+        assert!(history.undo.len() < 20);
+        history.finish(true);
+        assert!(history.next(false).is_some());
+        history.forget(Path::new("scripts/main.shou"));
+        assert_eq!(history.bytes(), 0);
+    }
 
     #[test]
     fn multi_file_source_edit_is_one_undo_step() {

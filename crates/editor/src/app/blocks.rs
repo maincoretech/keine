@@ -1,6 +1,98 @@
 use super::*;
 
 impl WorkbenchPanel {
+    pub(super) fn reload_document(
+        &mut self,
+        _: &ReloadDocument,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let PanelContent::Document {
+            root,
+            relative,
+            document: Some(document),
+            ..
+        } = &self.content
+        else {
+            return;
+        };
+        let root = root.clone();
+        let relative = relative.clone();
+        if document.borrow().is_dirty() {
+            let receiver = window.prompt(
+                PromptLevel::Warning,
+                "Reload from disk?",
+                Some("Unsaved changes in this document will be discarded."),
+                &[
+                    PromptButton::Other("Reload".into()),
+                    PromptButton::Cancel("Cancel".into()),
+                ],
+                cx,
+            );
+            cx.spawn_in(window, async move |this, cx| {
+                if receiver.await.ok() == Some(0) {
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        this.apply_reload(&root, &relative, window, cx)
+                    });
+                }
+            })
+            .detach();
+        } else {
+            self.apply_reload(&root, &relative, window, cx);
+        }
+    }
+
+    fn apply_reload(
+        &mut self,
+        root: &Path,
+        path: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let result = cx
+            .global_mut::<EditorDocuments>()
+            .workspaces
+            .get_mut(root)
+            .ok_or_else(|| io::Error::other("Project is closed"))
+            .and_then(|workspace| workspace.manager.reload(path));
+        match result {
+            Ok(document) => {
+                let source = document.borrow().contents().to_owned();
+                if let PanelContent::Document { editor, .. } = &self.content {
+                    editor.update(cx, |editor, cx| {
+                        editor.replace_all(source.clone(), window, cx)
+                    });
+                }
+                self.selected_blocks.clear();
+                self.block_selection_anchor = None;
+                self.rebuild_visual_editors(window, cx);
+                if path.extension().is_some_and(|ext| ext == "shou")
+                    && let PanelContent::Document { editor, .. } = &self.content
+                {
+                    self.syntax_check = Some(completion::schedule_syntax_check(
+                        editor.clone(),
+                        self.syntax_marks.clone(),
+                        window,
+                        cx,
+                    ));
+                }
+                if let Some(workspace) = cx.global_mut::<EditorDocuments>().workspaces.get_mut(root)
+                {
+                    workspace.source_history.forget(path);
+                    workspace.block_selection = None;
+                    if path.extension().is_some_and(|ext| ext == "shou") {
+                        workspace
+                            .preview
+                            .apply_snapshot(path.to_owned(), source.into_bytes());
+                    }
+                }
+                schedule_authoring_refresh(root, Some(path), cx);
+                cx.refresh_windows();
+            }
+            Err(error) => window.push_notification(Notification::error(short_error(&error)), cx),
+        }
+    }
+
     pub(super) fn switch_document_mode(
         &mut self,
         mode: DocumentMode,
@@ -368,14 +460,89 @@ impl WorkbenchPanel {
         }
     }
 
+    pub(super) fn update_block_viewport(&mut self, window: &Window, cx: &App) {
+        let PanelContent::Document {
+            root,
+            relative,
+            document: Some(document),
+            ..
+        } = &self.content
+        else {
+            return;
+        };
+        let document = document.borrow();
+        let projection = document.projection();
+        if self.block_height_revision != document.revision() {
+            self.block_heights.clear();
+            self.block_height_revision = document.revision();
+        }
+        let top = (-f32::from(self.view_scroll.offset().y) - 400.).max(0.);
+        let bottom = top + f32::from(window.viewport_size().height) + 800.;
+        let mut offset = 40.;
+        let mut visible = HashSet::new();
+        if let Some((_, line, column)) = cx
+            .global::<EditorDocuments>()
+            .selection(root)
+            .filter(|(path, _, _)| path == relative)
+            && let Some((_, block)) =
+                block_at_position(&projection, document.contents(), *line, *column)
+        {
+            visible.insert(block.source_range.start);
+        }
+        for scene in &projection.scenes {
+            offset += 36.;
+            if self.collapsed_scenes.contains(&scene.name) {
+                continue;
+            }
+            for block in &scene.blocks {
+                let height = view::block_row_height(
+                    block,
+                    &self.block_text_editors,
+                    self.draft_text.as_ref(),
+                    &self.block_heights,
+                    cx,
+                );
+                if block.text_range.as_ref().is_some_and(|range| {
+                    self.block_text_editors
+                        .iter()
+                        .any(|editor| editor.text_start == range.start)
+                }) {
+                    self.block_heights.insert(block.source_range.start, height);
+                }
+                let focused = block.text_range.as_ref().is_some_and(|range| {
+                    self.block_text_editors.iter().any(|editor| {
+                        editor.text_start == range.start
+                            && editor.state.read(cx).focus_handle(cx).is_focused(window)
+                    })
+                });
+                if offset + height >= top && offset <= bottom
+                    || self.selected_blocks.contains(&block.source_range.start)
+                    || focused
+                {
+                    visible.insert(block.source_range.start);
+                }
+                offset += height + 4.;
+            }
+        }
+        self.block_visible = visible;
+    }
+
     pub(super) fn rebuild_visual_editors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.block_text_editors.clear();
         self.visual_subscriptions.clear();
         self.draft_text = None;
+        self.update_block_viewport(window, cx);
+        self.sync_visual_editors(window, cx);
+    }
+
+    pub(super) fn sync_visual_editors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.document_mode != DocumentMode::Block {
+            return;
+        }
         let PanelContent::Document {
             root,
             relative,
-            document: Some(_),
+            document: Some(document),
             editor,
         } = &self.content
         else {
@@ -391,11 +558,36 @@ impl WorkbenchPanel {
         // row states from the same revision that the Blocks projection will
         // render after the event, so moved text cannot bind to old offsets.
         let source = editor.read(cx).value().to_string();
-        let dialogues = dialogues_for_source(relative, &source);
-        for dialogue in dialogues.into_iter().filter(|dialogue| dialogue.editable) {
+        let dialogues = if document.borrow().contents() == source {
+            document.borrow().dialogues()
+        } else {
+            Rc::new(dialogues_for_source(relative, &source))
+        };
+        let projection = document.borrow().projection();
+        let visible_text = projection
+            .scenes
+            .iter()
+            .flat_map(|scene| &scene.blocks)
+            .filter(|block| self.block_visible.contains(&block.source_range.start))
+            .filter_map(|block| block.text_range.as_ref().map(|range| range.start))
+            .collect::<HashSet<_>>();
+        self.block_text_editors.retain(|editor| {
+            visible_text.contains(&editor.text_start)
+                || editor.state.read(cx).focus_handle(cx).is_focused(window)
+        });
+        for dialogue in dialogues.iter().filter(|dialogue| {
+            dialogue.editable && visible_text.contains(&dialogue.text_range.start)
+        }) {
+            if self
+                .block_text_editors
+                .iter()
+                .any(|editor| editor.text_start == dialogue.text_range.start)
+            {
+                continue;
+            }
             let state = cx.new(|cx| {
                 TextareaState::new(window, cx)
-                    .default_value(dialogue.text)
+                    .default_value(dialogue.text.clone())
                     .placeholder("Text")
                     .auto_grow(1, 6)
                     .submit_on_enter(true)
@@ -483,10 +675,10 @@ impl WorkbenchPanel {
                 }
                 cx.refresh_windows();
             });
-            self.visual_subscriptions.push(subscription);
             self.block_text_editors.push(BlockTextEditor {
                 text_start: dialogue.text_range.start,
                 state,
+                _subscription: subscription,
             });
         }
     }
@@ -1343,6 +1535,10 @@ impl WorkbenchPanel {
             cx.notify();
             return;
         }
+        if !cx.global::<EditorDocuments>().authoring_is_current(&root) {
+            self.set_block_notice("Script index is updating; try again shortly".into(), cx);
+            return;
+        }
         let index = cx.global::<EditorDocuments>().authoring(&root);
         let same_scene = |scene: &crate::authoring::SceneEntry| {
             matches!(&mode, SceneEditMode::Rename { start, .. }
@@ -1702,7 +1898,7 @@ impl WorkbenchPanel {
         let name = self.tool_inputs[1].read(cx).value().to_string();
         let color = self.tool_inputs[2].read(cx).value().to_string();
         let index = cx.global::<EditorDocuments>().authoring(root);
-        let Some(path) = index.characters_manifest else {
+        let Some(path) = index.characters_manifest.clone() else {
             cx.global_mut::<EditorDocuments>()
                 .set_notice(root, "Character manifest is unavailable");
             return;

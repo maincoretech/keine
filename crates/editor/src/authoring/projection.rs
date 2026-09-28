@@ -2,7 +2,7 @@ use std::ops::Range;
 use std::{collections::HashSet, fmt};
 
 use keine_loader::{
-    Diagnostic, NativeToken, NativeTokenKind, is_native_dotted_command,
+    Diagnostic, NativeToken, NativeTokenKind, SourceLineIndex, is_native_dotted_command,
     is_native_structured_command, native_expanded_fields, parse_native_document,
 };
 
@@ -23,6 +23,8 @@ pub struct BlockCard {
     pub disabled: bool,
     pub lifetime_owner: Option<usize>,
     pub text_range: Option<Range<usize>>,
+    /// Explicit text lines used before an offscreen input has been measured.
+    pub text_rows: usize,
     pub line: usize,
     pub column: usize,
     pub depth: usize,
@@ -1447,6 +1449,7 @@ fn deletion_range(source: &str, range: Range<usize>) -> Range<usize> {
 
 struct BlockProjectionParser<'a> {
     source: &'a str,
+    lines: SourceLineIndex,
     tokens: Vec<&'a NativeToken>,
 }
 
@@ -1454,6 +1457,7 @@ impl<'a> BlockProjectionParser<'a> {
     fn new(source: &'a str, tokens: &'a [NativeToken]) -> Self {
         Self {
             source,
+            lines: SourceLineIndex::new(source),
             tokens: tokens
                 .iter()
                 .filter(|token| {
@@ -1913,13 +1917,9 @@ impl<'a> BlockProjectionParser<'a> {
         stable_id: Option<String>,
         read_only: bool,
     ) -> BlockCard {
-        let line = self.source[..source_range.start.min(self.source.len())]
-            .bytes()
-            .filter(|byte| *byte == b'\n')
-            .count();
-        let column = self.source[..source_range.start.min(self.source.len())]
-            .rsplit_once('\n')
-            .map_or(source_range.start, |(_, tail)| tail.chars().count());
+        let span = self.lines.span(self.source, source_range.start);
+        let line = span.line - 1;
+        let column = span.column - 1;
         BlockCard {
             summary: compact_summary(self.source.get(source_range.clone()).unwrap_or("")),
             kind,
@@ -1927,6 +1927,11 @@ impl<'a> BlockProjectionParser<'a> {
             source_range,
             disabled: false,
             lifetime_owner: None,
+            text_rows: text_range
+                .as_ref()
+                .and_then(|range| self.source.get(range.clone()))
+                .and_then(decode_source_string)
+                .map_or(1, |text| text.lines().count().clamp(1, 6)),
             text_range,
             line,
             column,

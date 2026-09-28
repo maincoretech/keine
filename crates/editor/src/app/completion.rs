@@ -99,12 +99,10 @@ fn syntax_diagnostics(source: &str) -> Vec<gpui_kit::base::input::Diagnostic> {
                 .column
                 .saturating_sub(1)
                 .min(text.chars().count().saturating_sub(1));
-            let start = text
-                .chars()
-                .take(column)
-                .map(char::len_utf16)
-                .sum::<usize>();
-            let width = text.chars().nth(column).map_or(1, char::len_utf16);
+            // The pinned GPUI RopeExt uses Unicode scalar columns, even though
+            // its API carries lsp_types::Position. Do not convert to UTF-16.
+            let start = column;
+            let width = 1;
             Diagnostic::new(
                 Position::new(line as u32, start as u32)
                     ..Position::new(line as u32, (start + width) as u32),
@@ -209,8 +207,8 @@ fn suggestion(
     if source.get(offset..)?.chars().next().is_some_and(word_char) {
         return None;
     }
-    let document = parse_native_document(prefix);
-    if document.tokens.last().is_some_and(|token| {
+    let lexical = keine_loader::native_tokens(prefix);
+    if lexical.last().is_some_and(|token| {
         token.range.end == offset
             && match token.kind {
                 NativeTokenKind::Comment => true,
@@ -222,8 +220,7 @@ fn suggestion(
     }) {
         return None;
     }
-    let tokens = document
-        .tokens
+    let tokens = lexical
         .iter()
         .filter(|token| {
             !matches!(

@@ -204,7 +204,8 @@ actions!(
         UndoFiles,
         RedoFiles,
         UndoSources,
-        RedoSources
+        RedoSources,
+        ReloadDocument
     ]
 );
 
@@ -306,7 +307,11 @@ impl<W: Copy> WindowRegistry<W> {
 struct WorkspaceDocuments {
     manager: DocumentManager,
     files: Vec<WorkspaceFile>,
-    authoring: AuthoringIndex,
+    authoring: Arc<AuthoringIndex>,
+    index_epoch: u64,
+    pending_index: BTreeMap<PathBuf, String>,
+    index_task: Option<gpui_kit::Task<()>>,
+    force_index_reload: bool,
     notice: String,
     selection: Option<(PathBuf, usize, usize)>,
     block_selection: Option<(PathBuf, Vec<usize>)>,
@@ -321,6 +326,76 @@ struct WorkspaceDocuments {
     editors: HashMap<PathBuf, WeakEntity<EditorState>>,
     preview: Arc<PreviewController>,
     tools: HashMap<&'static str, PanelId>,
+    file_operation_active: bool,
+}
+
+fn schedule_authoring_refresh(root: &Path, path: Option<&Path>, cx: &mut App) {
+    let root = root.to_owned();
+    let Some(workspace) = cx.global_mut::<EditorDocuments>().workspaces.get_mut(&root) else {
+        return;
+    };
+    if let Some(path) = path {
+        let Some(document) = workspace.manager.document(path) else {
+            return;
+        };
+        workspace
+            .pending_index
+            .insert(path.to_owned(), document.borrow().contents().to_owned());
+    } else {
+        workspace.force_index_reload = true;
+    }
+    workspace.index_epoch = workspace.index_epoch.wrapping_add(1);
+    let epoch = workspace.index_epoch;
+    workspace.index_task.take();
+    let task_root = root.clone();
+    let background = cx.background_executor().clone();
+    let task = cx.spawn(async move |cx| {
+        background.timer(Duration::from_millis(60)).await;
+        let Some(input) = cx.update(|cx| {
+            let workspace = cx.global::<EditorDocuments>().workspaces.get(&task_root)?;
+            let pending = workspace.pending_index.clone();
+            let full = workspace.force_index_reload
+                || pending
+                    .keys()
+                    .any(|path| path.extension().is_none_or(|ext| ext != "shou"));
+            Some((
+                workspace.authoring.clone(),
+                workspace.files.clone(),
+                pending,
+                full.then(|| workspace.manager.source_overrides()),
+            ))
+        }) else {
+            return;
+        };
+        let calculation_root = task_root.clone();
+        let index = background
+            .spawn(async move {
+                let (previous, files, pending, full) = input;
+                if let Some(overrides) = full {
+                    AuthoringIndex::load(&calculation_root, &files, &overrides)
+                } else {
+                    previous.with_sources(&pending)
+                }
+            })
+            .await;
+        cx.update(|cx| {
+            if let Some(workspace) = cx
+                .global_mut::<EditorDocuments>()
+                .workspaces
+                .get_mut(&task_root)
+                && workspace.index_epoch == epoch
+            {
+                workspace.authoring = Arc::new(index);
+                workspace.pending_index.clear();
+                workspace.force_index_reload = false;
+                refresh_asset_preview(&task_root, workspace);
+                cx.refresh_windows();
+            }
+        });
+    });
+    if let Some(workspace) = cx.global_mut::<EditorDocuments>().workspaces.get_mut(&root) {
+        workspace.index_task = Some(task);
+    }
 }
 
 #[derive(Clone)]
@@ -406,22 +481,34 @@ impl EditorDocuments {
         }
     }
 
-    fn ensure_workspace(&mut self, root: &Path) -> io::Result<&mut WorkspaceDocuments> {
+    fn workspace_mut(&mut self, root: &Path) -> io::Result<&mut WorkspaceDocuments> {
+        self.workspaces
+            .get_mut(root)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Project is closed"))
+    }
+
+    fn ensure_workspace_with_files(
+        &mut self,
+        root: &Path,
+        discovered: &[WorkspaceFile],
+    ) -> io::Result<&mut WorkspaceDocuments> {
         let key = ProjectKey::from_path(root)?;
         let canonical = key.path().to_owned();
         if !self.workspaces.contains_key(&canonical) {
             let manager =
                 DocumentManager::new(canonical.clone(), self.persistence.recovery_dir(&key))?;
-            let files = WorkspaceSession::open(&canonical)
-                .map(|session| session.files().to_vec())
-                .unwrap_or_default();
+            let files = discovered.to_vec();
             let authoring = AuthoringIndex::load(&canonical, &files, &BTreeMap::new());
             self.workspaces.insert(
                 canonical.clone(),
                 WorkspaceDocuments {
                     manager,
                     files,
-                    authoring,
+                    authoring: Arc::new(authoring),
+                    index_epoch: 0,
+                    pending_index: BTreeMap::new(),
+                    index_task: None,
+                    force_index_reload: false,
                     notice: "Ready".into(),
                     selection: None,
                     block_selection: None,
@@ -436,6 +523,7 @@ impl EditorDocuments {
                     editors: HashMap::new(),
                     preview: PreviewController::new(key),
                     tools: HashMap::new(),
+                    file_operation_active: false,
                 },
             );
         }
@@ -446,7 +534,7 @@ impl EditorDocuments {
     }
 
     fn open(&mut self, root: &Path, relative: &Path) -> io::Result<DocumentHandle> {
-        self.ensure_workspace(root)?.manager.open(relative)
+        self.workspace_mut(root)?.manager.open(relative)
     }
 
     fn has_dirty_documents(&self, root: &Path) -> bool {
@@ -457,14 +545,18 @@ impl EditorDocuments {
     }
 
     fn save_all(&mut self, root: &Path) -> Result<usize, SaveError> {
-        self.ensure_workspace(root)
-            .map_err(SaveError::from)?
-            .manager
-            .save_all()
+        let workspace = self.workspace_mut(root).map_err(SaveError::from)?;
+        if workspace.file_operation_active {
+            return Err(io::Error::other(
+                "A file operation is still running; save when it finishes",
+            )
+            .into());
+        }
+        workspace.manager.save_all()
     }
 
     fn set_notice(&mut self, root: &Path, notice: impl Into<String>) {
-        if let Ok(workspace) = self.ensure_workspace(root) {
+        if let Ok(workspace) = self.workspace_mut(root) {
             workspace.notice = notice.into();
         }
     }
@@ -477,7 +569,7 @@ impl EditorDocuments {
     }
 
     fn set_selection(&mut self, root: &Path, relative: PathBuf, line: usize, column: usize) {
-        if let Ok(workspace) = self.ensure_workspace(root) {
+        if let Ok(workspace) = self.workspace_mut(root) {
             workspace.selection = Some((relative, line, column));
         }
     }
@@ -485,7 +577,7 @@ impl EditorDocuments {
     fn set_block_selection(&mut self, root: &Path, relative: PathBuf, mut starts: Vec<usize>) {
         starts.sort_unstable();
         starts.dedup();
-        if let Ok(workspace) = self.ensure_workspace(root) {
+        if let Ok(workspace) = self.workspace_mut(root) {
             workspace.block_selection = (!starts.is_empty()).then_some((relative, starts));
             workspace.asset_selection.clear();
             workspace.asset_preview = None;
@@ -494,7 +586,7 @@ impl EditorDocuments {
     }
 
     fn clear_block_selection(&mut self, root: &Path) {
-        if let Ok(workspace) = self.ensure_workspace(root) {
+        if let Ok(workspace) = self.workspace_mut(root) {
             workspace.block_selection = None;
         }
     }
@@ -508,7 +600,7 @@ impl EditorDocuments {
     }
 
     fn set_asset_selection(&mut self, root: &Path, selection: Vec<AssetKey>) {
-        if let Ok(workspace) = self.ensure_workspace(root) {
+        if let Ok(workspace) = self.workspace_mut(root) {
             workspace.asset_preview = selection
                 .first()
                 .filter(|_| selection.len() == 1)
@@ -528,13 +620,13 @@ impl EditorDocuments {
     }
 
     fn preview_asset(&mut self, root: &Path, kind: AssetKind, label: String, path: PathBuf) {
-        if let Ok(workspace) = self.ensure_workspace(root) {
+        if let Ok(workspace) = self.workspace_mut(root) {
             workspace.asset_preview = Some(asset_preview_selection(root, kind, label, path));
         }
     }
 
     fn set_unmapped_asset_preview(&mut self, root: &Path, asset: &UnmappedAsset) {
-        if let Ok(workspace) = self.ensure_workspace(root) {
+        if let Ok(workspace) = self.workspace_mut(root) {
             workspace.preview.stop_audition();
             workspace.asset_selection.clear();
             workspace.asset_preview = Some(asset_preview_selection(
@@ -557,7 +649,7 @@ impl EditorDocuments {
     }
 
     fn clear_asset_selection(&mut self, root: &Path) {
-        if let Ok(workspace) = self.ensure_workspace(root) {
+        if let Ok(workspace) = self.workspace_mut(root) {
             workspace.asset_selection.clear();
             workspace.asset_preview = None;
         }
@@ -581,26 +673,8 @@ impl EditorDocuments {
             .save_block_picker_preferences(&self.block_picker_preferences)
     }
 
-    fn refresh_authoring(&mut self, root: &Path) {
-        if let Ok(workspace) = self.ensure_workspace(root) {
-            let overrides = workspace.manager.source_overrides();
-            workspace.authoring = AuthoringIndex::load(root, &workspace.files, &overrides);
-            refresh_asset_preview(root, workspace);
-        }
-    }
-
-    fn refresh_files(&mut self, root: &Path) -> io::Result<Vec<WorkspaceFile>> {
-        let files = WorkspaceSession::open(root)?.files().to_vec();
-        let workspace = self.ensure_workspace(root)?;
-        workspace.files.clone_from(&files);
-        let overrides = workspace.manager.source_overrides();
-        workspace.authoring = AuthoringIndex::load(root, &workspace.files, &overrides);
-        refresh_asset_preview(root, workspace);
-        Ok(files)
-    }
-
     fn asset_manifest_is_clean(&mut self, root: &Path) -> bool {
-        let Ok(workspace) = self.ensure_workspace(root) else {
+        let Ok(workspace) = self.workspace_mut(root) else {
             return false;
         };
         let Some(path) = workspace.authoring.assets_manifest.as_ref() else {
@@ -613,7 +687,7 @@ impl EditorDocuments {
     }
 
     fn has_open_documents_under(&mut self, root: &Path, path: &Path) -> bool {
-        self.ensure_workspace(root).is_ok_and(|workspace| {
+        self.workspace_mut(root).is_ok_and(|workspace| {
             workspace.editors.iter().any(|(relative, editor)| {
                 (relative == path || relative.starts_with(path)) && editor.upgrade().is_some()
             }) || workspace.manager.documents().any(|document| {
@@ -630,14 +704,19 @@ impl EditorDocuments {
         relative: &Path,
         source: String,
     ) -> io::Result<Option<WeakEntity<EditorState>>> {
-        let workspace = self.ensure_workspace(root)?;
+        let workspace = self.workspace_mut(root)?;
         if let Some(document) = workspace.manager.document(relative) {
+            if document.borrow().is_dirty() {
+                return Err(io::Error::other(
+                    "Asset manifest changed while files were imported; your draft is preserved. Reload or reconcile before saving.",
+                ));
+            }
             document.borrow_mut().adopt_saved_contents(source)?;
         }
         Ok(workspace.editors.get(relative).cloned())
     }
 
-    fn authoring(&self, root: &Path) -> AuthoringIndex {
+    fn authoring(&self, root: &Path) -> Arc<AuthoringIndex> {
         ProjectKey::from_path(root)
             .ok()
             .and_then(|key| self.workspaces.get(key.path()))
@@ -648,6 +727,12 @@ impl EditorDocuments {
     fn authoring_ref(&self, root: &Path) -> Option<&AuthoringIndex> {
         let key = ProjectKey::from_path(root).ok()?;
         Some(&self.workspaces.get(key.path())?.authoring)
+    }
+
+    fn authoring_is_current(&self, root: &Path) -> bool {
+        self.workspaces.get(root).is_some_and(|workspace| {
+            workspace.pending_index.is_empty() && !workspace.force_index_reload
+        })
     }
 
     fn explicit_source_ids(&self, root: &Path) -> HashSet<String> {
@@ -688,9 +773,21 @@ impl EditorDocuments {
         let workspace = self.workspaces.get(key.path())?;
         workspace
             .manager
-            .source_overrides()
-            .remove(relative)
+            .document(relative)
+            .map(|document| document.borrow().contents().to_owned())
             .or_else(|| fs::read_to_string(root.join(relative)).ok())
+    }
+
+    fn projection(&self, root: &Path, relative: &Path, source: &str) -> Rc<EiyashouProjection> {
+        if let Some(document) = self
+            .workspaces
+            .get(root)
+            .and_then(|workspace| workspace.manager.document(relative))
+            && document.borrow().contents() == source
+        {
+            return document.borrow().projection();
+        }
+        Rc::new(EiyashouProjection::parse(source))
     }
 
     fn selection(&self, root: &Path) -> Option<&(PathBuf, usize, usize)> {
@@ -699,25 +796,25 @@ impl EditorDocuments {
     }
 
     fn set_diagnostics(&mut self, root: &Path, diagnostics: Vec<keine_authoring::Diagnostic>) {
-        if let Ok(workspace) = self.ensure_workspace(root) {
+        if let Ok(workspace) = self.workspace_mut(root) {
             workspace.diagnostics = diagnostics;
         }
     }
 
     fn set_dock(&mut self, root: &Path, dock: WeakEntity<DockArea>) {
-        if let Ok(workspace) = self.ensure_workspace(root) {
+        if let Ok(workspace) = self.workspace_mut(root) {
             workspace.dock = Some(dock);
         }
     }
 
     fn set_document_node(&mut self, root: &Path, node: NodeId) {
-        if let Ok(workspace) = self.ensure_workspace(root) {
+        if let Ok(workspace) = self.workspace_mut(root) {
             workspace.document_node = Some(node);
         }
     }
 
     fn clear_document_node(&mut self, root: &Path) {
-        if let Ok(workspace) = self.ensure_workspace(root) {
+        if let Some(workspace) = self.workspaces.get_mut(root) {
             workspace.document_node = None;
         }
     }
@@ -729,7 +826,7 @@ impl EditorDocuments {
         panel: PanelId,
         entity: WeakEntity<WorkbenchPanel>,
     ) {
-        if let Ok(workspace) = self.ensure_workspace(root) {
+        if let Ok(workspace) = self.workspace_mut(root) {
             workspace.panels.insert(relative.clone(), panel);
             workspace.panel_entities.insert(relative, entity);
         }
@@ -745,7 +842,7 @@ impl EditorDocuments {
     }
 
     fn register_editor(&mut self, root: &Path, relative: PathBuf, editor: WeakEntity<EditorState>) {
-        if let Ok(workspace) = self.ensure_workspace(root) {
+        if let Ok(workspace) = self.workspace_mut(root) {
             workspace.editors.insert(relative, editor);
         }
     }
@@ -760,12 +857,13 @@ impl EditorDocuments {
     }
 
     fn unregister_panel(&mut self, root: &Path, relative: &Path, panel: PanelId) {
-        if let Ok(workspace) = self.ensure_workspace(root)
+        if let Some(workspace) = self.workspaces.get_mut(root)
             && workspace.panels.get(relative) == Some(&panel)
         {
             workspace.panels.remove(relative);
             workspace.panel_entities.remove(relative);
             workspace.editors.remove(relative);
+            workspace.manager.release_clean(relative);
         }
     }
 
@@ -816,7 +914,10 @@ impl EditorDocuments {
     }
 
     fn preview(&mut self, root: &Path) -> io::Result<Arc<PreviewController>> {
-        Ok(self.ensure_workspace(root)?.preview.clone())
+        self.workspaces
+            .get(root)
+            .map(|workspace| workspace.preview.clone())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "project session is closed"))
     }
 
     fn preview_documents(&self, root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
@@ -852,7 +953,7 @@ impl EditorDocuments {
     }
 
     fn set_tool_panel(&mut self, root: &Path, name: &'static str, panel: Option<PanelId>) {
-        if let Ok(workspace) = self.ensure_workspace(root) {
+        if let Ok(workspace) = self.workspace_mut(root) {
             if let Some(panel) = panel {
                 workspace.tools.insert(name, panel);
             } else {
@@ -954,6 +1055,8 @@ impl EditorApp {
 
         self.persistence.prepare_workspace(&project)?;
         let _ = self.persistence.record_recent(&project)?;
+        cx.global_mut::<EditorDocuments>()
+            .ensure_workspace_with_files(session.root(), session.files())?;
         let persistence = self.persistence.clone();
         let editor = self.this.clone();
         let handle = if let Some(empty) = self.empty_window.take() {
@@ -965,11 +1068,12 @@ impl EditorApp {
                         .downcast::<WorkbenchWindow>()
                         .expect("Kēne Editor root must contain the workbench")
                         .update(cx, |workbench, cx| {
-                            workbench.open_session(session_for_window, window, cx);
-                        });
+                            workbench.open_session(session_for_window, window, cx)
+                        })?;
                     window.activate_window();
+                    Ok::<(), io::Error>(())
                 })
-                .map_err(io::Error::other)?;
+                .map_err(io::Error::other)??;
             empty
         } else {
             let index = self.windows.windows.len();
@@ -1085,17 +1189,14 @@ enum PanelContent {
 impl PanelContent {
     fn from_payload(payload: PanelPayload, window: &mut Window, cx: &mut App) -> io::Result<Self> {
         match payload {
-            PanelPayload::Explorer { root } => WorkspaceSession::open(&root)
-                .map(|session| Self::Explorer {
-                    root: root.clone(),
-                    files: session.files().to_vec(),
-                })
-                .or_else(|_| {
-                    Ok(Self::Explorer {
-                        root,
-                        files: Vec::new(),
-                    })
-                }),
+            PanelPayload::Explorer { root } => {
+                let files = cx
+                    .global_mut::<EditorDocuments>()
+                    .workspace_mut(&root)?
+                    .files
+                    .clone();
+                Ok(Self::Explorer { root, files })
+            }
             PanelPayload::Document { root, relative } => {
                 let document = if is_eiyashou_authoring_document(&root, &relative) {
                     Some(cx.global_mut::<EditorDocuments>().open(&root, &relative)?)
@@ -1135,28 +1236,26 @@ impl PanelContent {
                     editor,
                 })
             }
-            PanelPayload::Inspector { root } => WorkspaceSession::open(&root)
-                .map(|session| Self::Inspector {
-                    root: root.clone(),
-                    file_count: session.files().len(),
-                })
-                .or_else(|_| {
-                    Ok(Self::Inspector {
-                        root,
-                        file_count: 0,
-                    })
-                }),
-            PanelPayload::Output { root } => WorkspaceSession::open(&root)
-                .map(|session| Self::Output {
-                    root: root.clone(),
-                    file_count: session.files().len(),
-                })
-                .or_else(|_| {
-                    Ok(Self::Output {
-                        root,
-                        file_count: 0,
-                    })
-                }),
+            PanelPayload::Inspector { root } => {
+                let file_count = cx
+                    .global_mut::<EditorDocuments>()
+                    .workspace_mut(&root)?
+                    .files
+                    .len();
+                Ok(Self::Inspector { root, file_count })
+            }
+            PanelPayload::Output { root } if root.as_os_str().is_empty() => Ok(Self::Output {
+                root,
+                file_count: 0,
+            }),
+            PanelPayload::Output { root } => {
+                let file_count = cx
+                    .global_mut::<EditorDocuments>()
+                    .workspace_mut(&root)?
+                    .files
+                    .len();
+                Ok(Self::Output { root, file_count })
+            }
             PanelPayload::Assets { root } => Ok(Self::Assets { root }),
             PanelPayload::AssetPreview { root } => Ok(Self::AssetPreview { root }),
             PanelPayload::Characters { root } => Ok(Self::Characters { root }),
@@ -1258,6 +1357,9 @@ struct WorkbenchPanel {
     inspector_selects: Vec<Entity<SelectState<Vec<SourceOption>>>>,
     inspector_subscriptions: Vec<Subscription>,
     inline_block_controls: HashMap<usize, InlineBlockControl>,
+    block_visible: HashSet<usize>,
+    block_heights: HashMap<usize, f32>,
+    block_height_revision: u64,
     resource_picker: Option<ResourcePicker>,
     source_inspector_key: Option<SourceInspectorKey>,
     source_inspector_inputs: Vec<Entity<InputState>>,
@@ -1308,6 +1410,7 @@ enum DocumentMode {
 struct BlockTextEditor {
     text_start: usize,
     state: Entity<TextareaState>,
+    _subscription: Subscription,
 }
 
 #[derive(Clone, Debug)]
@@ -1606,6 +1709,9 @@ impl WorkbenchPanel {
                 inspector_selects: Vec::new(),
                 inspector_subscriptions: Vec::new(),
                 inline_block_controls: HashMap::new(),
+                block_visible: HashSet::new(),
+                block_heights: HashMap::new(),
+                block_height_revision: 0,
                 resource_picker: None,
                 source_inspector_key: None,
                 source_inspector_inputs: Vec::new(),
@@ -1717,7 +1823,14 @@ impl WorkbenchPanel {
                         let disabled = cx
                             .global::<EditorDocuments>()
                             .source(&root_for_selection, &relative_for_selection)
-                            .and_then(|source| projected_block_at(&source, cursor.0, cursor.1))
+                            .and_then(|source| {
+                                let projection = cx.global::<EditorDocuments>().projection(
+                                    &root_for_selection,
+                                    &relative_for_selection,
+                                    &source,
+                                );
+                                block_at_position(&projection, &source, cursor.0, cursor.1)
+                            })
                             .is_some_and(|(_, block)| block.disabled);
                         if !disabled
                             && let Ok(preview) = cx
@@ -1756,8 +1869,28 @@ impl WorkbenchPanel {
                             let editor = editor.read(cx);
                             let contents = editor.value().to_string();
                             let position = editor.cursor_position();
-                            let changed =
+                            let result =
                                 document_for_change.borrow_mut().replace_contents(contents);
+                            let changed = match result {
+                                Ok(changed) => changed,
+                                Err(error) => {
+                                    let previous =
+                                        document_for_change.borrow().contents().to_owned();
+                                    let message = error.to_string();
+                                    cx.defer(move |cx| {
+                                        let _ = cx.update_window(syntax_window, |_, window, cx| {
+                                            editor_entity.update(cx, |editor, cx| {
+                                                editor.replace_all(previous, window, cx)
+                                            });
+                                            window.push_notification(
+                                                Notification::warning(message),
+                                                cx,
+                                            );
+                                        });
+                                    });
+                                    return;
+                                }
+                            };
                             document_for_change
                                 .borrow_mut()
                                 .set_selection(position.line as usize, position.character as usize);
@@ -1788,22 +1921,29 @@ impl WorkbenchPanel {
                                         });
                                     });
                                 }
-                                cx.global_mut::<EditorDocuments>().refresh_authoring(&root);
+                                schedule_authoring_refresh(&root, Some(&relative), cx);
                                 panel.recovery_epoch = panel.recovery_epoch.wrapping_add(1);
                                 let epoch = panel.recovery_epoch;
                                 let document = document_for_change.clone();
                                 let root = root.clone();
-                                let clean = !document.borrow().is_dirty();
-                                let recovery_cleanup = clean
-                                    .then(|| document.borrow_mut().persist_recovery())
-                                    .transpose();
+                                if !document.borrow().is_dirty() {
+                                    let cleanup = document.borrow().recovery_write();
+                                    cx.background_executor()
+                                        .spawn(async move {
+                                            if let Ok(write) = cleanup {
+                                                let _ = write.execute();
+                                            }
+                                        })
+                                        .detach();
+                                }
                                 let any_dirty =
                                     cx.global::<EditorDocuments>().has_dirty_documents(&root);
-                                let notice = match recovery_cleanup {
-                                    Ok(_) if !any_dirty => "Ready".to_owned(),
-                                    Ok(_) => "Unsaved changes".to_owned(),
-                                    Err(error) => format!("Recovery draft cleanup failed: {error}"),
-                                };
+                                let notice = if !any_dirty {
+                                    "Ready"
+                                } else {
+                                    "Unsaved changes"
+                                }
+                                .to_owned();
                                 cx.global_mut::<EditorDocuments>().set_notice(&root, notice);
                                 if relative
                                     .extension()
@@ -1843,21 +1983,44 @@ impl WorkbenchPanel {
                                     let _ = panel.update(cx, |panel, cx| {
                                         if panel.recovery_epoch == epoch {
                                             let clean = !document.borrow().is_dirty();
-                                            let recovery = document.borrow_mut().persist_recovery();
-                                            let any_dirty = cx
-                                                .global::<EditorDocuments>()
-                                                .has_dirty_documents(&root);
-                                            let notice = match recovery {
-                                                Ok(()) if !any_dirty => "Ready".to_owned(),
-                                                Ok(()) if clean => "Unsaved changes".to_owned(),
-                                                Ok(()) => "Recovery draft saved".to_owned(),
-                                                Err(error) => {
-                                                    format!("Recovery draft failed: {error}")
-                                                }
-                                            };
-                                            cx.global_mut::<EditorDocuments>()
-                                                .set_notice(&root, notice);
-                                            cx.refresh_windows();
+                                            let recovery = document.borrow().recovery_write();
+                                            let revision = document.borrow().revision();
+                                            let write_root = root.clone();
+                                            let background = cx.background_executor().clone();
+                                            cx.spawn(async move |panel, cx| {
+                                                let recovery = match recovery {
+                                                    Ok(write) => {
+                                                        background
+                                                            .spawn(async move { write.execute() })
+                                                            .await
+                                                    }
+                                                    Err(error) => Err(error),
+                                                };
+                                                let _ = panel.update(cx, |panel, cx| {
+                                                    if panel.recovery_epoch != epoch
+                                                        || document.borrow().revision() != revision
+                                                    {
+                                                        return;
+                                                    }
+                                                    let any_dirty = cx
+                                                        .global::<EditorDocuments>()
+                                                        .has_dirty_documents(&write_root);
+                                                    let notice = match recovery {
+                                                        Ok(()) if !any_dirty => "Ready".to_owned(),
+                                                        Ok(()) if clean => {
+                                                            "Unsaved changes".to_owned()
+                                                        }
+                                                        Ok(()) => "Recovery draft saved".to_owned(),
+                                                        Err(error) => format!(
+                                                            "Recovery draft failed: {error}"
+                                                        ),
+                                                    };
+                                                    cx.global_mut::<EditorDocuments>()
+                                                        .set_notice(&write_root, notice);
+                                                    cx.refresh_windows();
+                                                });
+                                            })
+                                            .detach();
                                         }
                                     });
                                 })
@@ -1893,7 +2056,24 @@ impl WorkbenchPanel {
                 panel.downgrade(),
             );
             if let Some(editor) = editor {
-                documents.register_editor(&root, relative, editor);
+                documents.register_editor(&root, relative.clone(), editor);
+            }
+            let reopened = match &panel.read(cx).content {
+                PanelContent::Document {
+                    document: Some(document),
+                    ..
+                } => Some(document.borrow().contents().as_bytes().to_vec()),
+                _ => None,
+            };
+            if let Some(source) = reopened {
+                if relative.extension().is_some_and(|ext| ext == "shou")
+                    && let Ok(preview) = cx.global_mut::<EditorDocuments>().preview(&root)
+                {
+                    preview.apply_snapshot(relative.clone(), source);
+                }
+                // Opening a clean file may adopt a newer disk revision without
+                // an InputEvent::Change. Update every derived consumer as well.
+                schedule_authoring_refresh(&root, Some(&relative), cx);
             }
         }
         if let Some((root, name)) = tool_registration {
@@ -2062,6 +2242,13 @@ fn install_close_guard(window: &mut Window, workbench: WeakEntity<WorkbenchWindo
     window.on_window_should_close(cx, move |window, cx| {
         workbench
             .update(cx, |workbench, cx| {
+                if workbench.file_operation_active(cx) {
+                    window.push_notification(
+                        Notification::warning("A file operation is still running"),
+                        cx,
+                    );
+                    return false;
+                }
                 if workbench.allow_close || !workbench.has_unsaved_documents(cx) {
                     let bounds = if window.is_fullscreen() {
                         WindowBounds::Fullscreen(workbench.last_windowed_bounds)
@@ -2081,6 +2268,7 @@ fn install_close_guard(window: &mut Window, workbench: WeakEntity<WorkbenchWindo
                         eprintln!("Kēne Editor could not save window bounds: {error}");
                     }
                     workbench.stop_preview(cx);
+                    workbench.release_project(cx);
                     true
                 } else {
                     workbench.confirm_close(window, cx);
@@ -2092,6 +2280,53 @@ fn install_close_guard(window: &mut Window, workbench: WeakEntity<WorkbenchWindo
 }
 
 impl WorkbenchWindow {
+    fn file_operation_active(&self, cx: &App) -> bool {
+        self.workspace
+            .as_ref()
+            .and_then(|workspace| {
+                cx.global::<EditorDocuments>()
+                    .workspaces
+                    .get(workspace.session.root())
+            })
+            .is_some_and(|workspace| workspace.file_operation_active)
+    }
+    fn release_project(&mut self, cx: &mut App) {
+        if let Some(workspace) = self.workspace.take() {
+            workspace.persist_final_layout(&self.persistence, cx);
+            if let Some(documents) = cx
+                .global::<EditorDocuments>()
+                .workspaces
+                .get(workspace.session.root())
+            {
+                for document in documents.manager.documents() {
+                    if let Err(error) = document.borrow_mut().persist_recovery() {
+                        eprintln!("Kēne Editor could not flush recovery on close: {error}");
+                    }
+                    if let Err(error) = document.borrow().retire_recovery() {
+                        eprintln!("Kēne Editor could not retire recovery jobs: {error}");
+                    }
+                }
+            }
+            cx.global_mut::<EditorDocuments>()
+                .workspaces
+                .remove(workspace.session.root());
+        }
+    }
+
+    fn finish_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.file_operation_active(cx) {
+            self.close_prompt_open = false;
+            window.push_notification(
+                Notification::warning("A file operation is still running"),
+                cx,
+            );
+            return;
+        }
+        self.stop_preview(cx);
+        self.allow_close = true;
+        self.release_project(cx);
+        window.remove_window();
+    }
     fn watch_preview(window: &mut Window, cx: &mut Context<Self>) {
         cx.spawn_in(window, async move |this, cx| {
             let mut interval = Duration::from_millis(250);
@@ -2183,6 +2418,7 @@ impl WorkbenchWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        cx.on_release(|this, cx| this.release_project(cx)).detach();
         install_close_guard(window, cx.weak_entity(), cx);
         Self::watch_preview(window, cx);
         let bounds_subscription = Self::watch_window_bounds(window, cx);
@@ -2211,6 +2447,7 @@ impl WorkbenchWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        cx.on_release(|this, cx| this.release_project(cx)).detach();
         install_close_guard(window, cx.weak_entity(), cx);
         Self::watch_preview(window, cx);
         let bounds_subscription = Self::watch_window_bounds(window, cx);
@@ -2260,8 +2497,13 @@ impl WorkbenchWindow {
         session: WorkspaceSession,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> io::Result<()> {
         self.stop_preview(cx);
+        // A migration replaces the session's inventory and source ownership together.
+        // Late panel callbacks may read an existing session, but cannot create one.
+        self.release_project(cx);
+        cx.global_mut::<EditorDocuments>()
+            .ensure_workspace_with_files(session.root(), session.files())?;
         self.workspace = Some(ProjectWorkspace::new(
             session,
             &self.persistence,
@@ -2272,6 +2514,7 @@ impl WorkbenchWindow {
         self.preview_position = None;
         self.recents.clear();
         cx.notify();
+        Ok(())
     }
 
     fn stop_preview(&mut self, cx: &mut Context<Self>) {
@@ -2351,8 +2594,8 @@ impl WorkbenchWindow {
         ) {
             controller.stop();
         } else {
-            for (path, contents) in cx.global::<EditorDocuments>().preview_documents(&root) {
-                controller.apply_snapshot(path, contents);
+            if !controller.apply_sources(cx.global::<EditorDocuments>().preview_documents(&root)) {
+                return;
             }
             controller.start();
             self.preview_lifecycle = PreviewLifecycle::Starting;
@@ -2513,13 +2756,18 @@ impl WorkbenchWindow {
                 }
                 match plan.apply() {
                     Ok(count) => match WorkspaceSession::open(&root) {
-                        Ok(session) => {
-                            this.open_session(session, window, cx);
-                            cx.global_mut::<EditorDocuments>().set_notice(
+                        Ok(session) => match this.open_session(session, window, cx) {
+                            Ok(()) => cx.global_mut::<EditorDocuments>().set_notice(
                                 &root,
                                 format!("Migrated {count} source file(s) to .shou"),
-                            );
-                        }
+                            ),
+                            Err(error) => window.push_notification(
+                                Notification::error(format!(
+                                    "Migration applied, but workspace refresh failed: {error}"
+                                )),
+                                cx,
+                            ),
+                        },
                         Err(error) => cx.global_mut::<EditorDocuments>().set_notice(
                             &root,
                             format!("Migration applied, but workspace refresh failed: {error}"),
@@ -2561,36 +2809,115 @@ impl WorkbenchWindow {
         );
         cx.spawn_in(window, async move |this, cx| {
             let answer = receiver.await.ok();
+            if answer == Some(1) {
+                // Complete the latest recovery write before releasing the
+                // document/panel that owns the debounce. Editing during I/O
+                // invalidates this attempt and prepares a new snapshot.
+                loop {
+                    let input = this
+                        .update_in(cx, |this, _, cx| {
+                            let root = this
+                                .workspace
+                                .as_ref()
+                                .map(|workspace| workspace.session.root())?;
+                            let workspace = cx.global::<EditorDocuments>().workspaces.get(root)?;
+                            let versions = workspace
+                                .manager
+                                .documents()
+                                .map(|document| {
+                                    let document = document.borrow();
+                                    (document.relative_path().to_owned(), document.revision())
+                                })
+                                .collect::<BTreeMap<_, _>>();
+                            let writes = workspace
+                                .manager
+                                .documents()
+                                .map(|document| document.borrow().recovery_write())
+                                .collect::<io::Result<Vec<_>>>();
+                            Some((root.to_owned(), versions, writes))
+                        })
+                        .ok()
+                        .flatten();
+                    let Some((root, versions, writes)) = input else {
+                        let _ =
+                            this.update_in(cx, |this, window, cx| this.finish_close(window, cx));
+                        return;
+                    };
+                    let result = match writes {
+                        Ok(writes) => {
+                            cx.background_executor()
+                                .spawn(async move {
+                                    for write in writes {
+                                        write.execute()?;
+                                    }
+                                    Ok::<_, io::Error>(())
+                                })
+                                .await
+                        }
+                        Err(error) => Err(error),
+                    };
+                    let finished = this
+                        .update_in(cx, |this, window, cx| {
+                            if let Err(error) = result {
+                                this.close_prompt_open = false;
+                                window.push_notification(
+                                    Notification::error(format!(
+                                        "Could not preserve recovery draft: {error}"
+                                    )),
+                                    cx,
+                                );
+                                return true;
+                            }
+                            let unchanged = cx
+                                .global::<EditorDocuments>()
+                                .workspaces
+                                .get(&root)
+                                .is_some_and(|workspace| {
+                                    workspace
+                                        .manager
+                                        .documents()
+                                        .map(|document| {
+                                            let document = document.borrow();
+                                            (
+                                                document.relative_path().to_owned(),
+                                                document.revision(),
+                                            )
+                                        })
+                                        .collect::<BTreeMap<_, _>>()
+                                        == versions
+                                });
+                            if unchanged {
+                                this.finish_close(window, cx);
+                            }
+                            unchanged
+                        })
+                        .unwrap_or(true);
+                    if finished {
+                        return;
+                    }
+                }
+            }
             let _ = this.update_in(cx, |this, window, cx| {
                 this.close_prompt_open = false;
-                match answer {
-                    Some(0) => {
-                        let Some(root) = this
-                            .workspace
-                            .as_ref()
-                            .map(|workspace| workspace.session.root().to_owned())
-                        else {
-                            this.allow_close = true;
-                            window.remove_window();
-                            return;
-                        };
-                        match cx.global_mut::<EditorDocuments>().save_all(&root) {
-                            Ok(_) => {
-                                this.allow_close = true;
-                                window.remove_window();
-                            }
-                            Err(error) => {
-                                cx.global_mut::<EditorDocuments>()
-                                    .set_notice(&root, format!("Save blocked: {error}"));
-                                cx.refresh_windows();
-                            }
+                if answer == Some(0) {
+                    let Some(root) = this
+                        .workspace
+                        .as_ref()
+                        .map(|workspace| workspace.session.root().to_owned())
+                    else {
+                        this.finish_close(window, cx);
+                        return;
+                    };
+                    match cx.global_mut::<EditorDocuments>().save_all(&root) {
+                        Ok(_) => {
+                            this.finish_close(window, cx);
+                        }
+                        Err(error) => {
+                            cx.global_mut::<EditorDocuments>()
+                                .set_notice(&root, format!("Save blocked: {error}"));
+                            cx.refresh_windows();
                         }
                     }
-                    Some(1) => {
-                        this.allow_close = true;
-                        window.remove_window();
-                    }
-                    _ => {}
                 }
             });
         })
@@ -3617,6 +3944,8 @@ pub fn run() -> ExitCode {
                 KeyBinding::new("cmd-s", Save, Some("KeineWorkbench")),
                 KeyBinding::new("ctrl-s", Save, Some("KeineWorkbench")),
                 KeyBinding::new("cmd-shift-s", SaveAll, Some("KeineWorkbench")),
+                KeyBinding::new("cmd-alt-r", ReloadDocument, Some("KeineWorkbench")),
+                KeyBinding::new("ctrl-alt-r", ReloadDocument, Some("KeineWorkbench")),
                 KeyBinding::new("ctrl-shift-s", SaveAll, Some("KeineWorkbench")),
                 KeyBinding::new("cmd-shift-r", ToggleEngine, Some("KeineWorkbench")),
                 KeyBinding::new("ctrl-shift-r", ToggleEngine, Some("KeineWorkbench")),
@@ -3682,6 +4011,40 @@ pub fn run() -> ExitCode {
 mod tests {
     use super::*;
     use gpui_kit::point;
+
+    #[test]
+    fn late_project_notifications_do_not_recreate_a_released_session() {
+        let temporary = std::env::temp_dir().join(format!(
+            "keine-editor-closed-session-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let project = temporary.join("project");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(
+            project.join("config.yaml"),
+            include_str!("../../../tests/fixtures/native-smoke/config.yaml"),
+        )
+        .unwrap();
+        let session = WorkspaceSession::open(&project).unwrap();
+        let mut documents = EditorDocuments::new(AppPersistence::new(temporary.join("app-data")));
+        documents
+            .ensure_workspace_with_files(session.root(), session.files())
+            .unwrap();
+        assert_eq!(documents.workspaces.len(), 1);
+        documents.workspaces.remove(session.root());
+
+        documents.set_notice(session.root(), "Late worker result");
+        documents.set_selection(session.root(), "scripts/main.shou".into(), 0, 0);
+        documents.set_diagnostics(session.root(), Vec::new());
+        documents.record_source_edit(session.root(), Path::new("scripts/main.shou"), "a", "b");
+        assert!(documents.preview(session.root()).is_err());
+        assert!(documents.workspaces.is_empty());
+        fs::remove_dir_all(temporary).unwrap();
+    }
 
     #[test]
     fn editor_cli_handles_help_and_rejects_unknown_options_before_opening_a_window() {

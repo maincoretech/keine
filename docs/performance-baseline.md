@@ -1,6 +1,6 @@
 # Performance baseline
 
-This file records repeatable engine measurements, not visual acceptance results.
+This file records repeatable engine and Editor measurements, not visual acceptance results.
 Settled runtime captures disable persistence, warm up for three seconds, use
 the 1920x1080 design resolution, and sample raw frame intervals in a release
 build. The process-start protocol below intentionally has no warm-up.
@@ -11,6 +11,125 @@ at that path has also been removed; deterministic native smoke checks now use
 `tests/fixtures/native-smoke`. That path now holds an ignored copy of the LetsGal
 sample for temporary manual use. Historical capture descriptions retain their
 original project labels.
+
+## 2026-09-29 Editor 0.11.1 hardening
+
+Baseline: immutable Release probes linked against `main` at `51574d4` / 0.11.0.
+After: the current 0.11.1 source in the same main checkout. No worktree was created.
+The diagnostic-string probe separately compares an intermediate 0.11.1 build before
+its error-span fix with the final build (including diagnostic deduplication).
+This is an intermediate 0.11.1 comparison, not the 0.11.0 baseline.
+
+Environment: macOS arm64, Rust 1.97.1 (`8bab26f4f`), warm local filesystem cache.
+Probes use `-O -C panic=abort -C lto=thin`, the Release Editor/Loader libraries,
+and `black_box`; measured time includes constructing and dropping each result.
+Ordinary operations use one warm-up and 11 samples, incremental index operations
+31 samples, and real LetsGal discovery 7 samples. The string-error probe checks the
+expected diagnostic count before its 11 samples. The reported sample p95 is the
+order statistic from that small sample, not a long-running service percentile.
+Final measurements run after both Release builds finish.
+
+```text
+Source and raw evidence · target/authoring/editor-audit-20260929/
+├── EDITOR_REVIEW.md · original 11 findings and baseline commands
+├── import-race-results.log · original manifest loss: 10 / 10 trials
+└── 0111/
+    ├── final-commands.txt / final-gate-{0..7}.log · current integrated gates
+    ├── api-and-perf-probe.rs / import-race-probe.rs / invalid-source-probe.rs
+    ├── compile-final-probes.py / final-probe-compile-commands.txt
+    ├── final-probe-hashes.txt / final-source-hashes.txt · binary and source identity
+    ├── api-and-perf-{before,after}-paired.log · first paired repetition
+    ├── api-and-perf-{before,after}-confirm.log · confirmation repetition
+    ├── extra-{before,after}-paired.log · native parsing and position/policy probes
+    ├── api-and-perf-final.log / extra-final.log / import-race-final.log
+    ├── *-final-paired.log / final-paired-run-commands.txt · final side-by-side repetition
+    ├── invalid-before.log / invalid-final-paired.log · string-error span and dedup paths
+    ├── before-diagnostic-merge/ · retained intermediate logs before the dedup fix
+    └── package-verified.log / macos-final/ · current signed Editor/Engine pair
+```
+
+```sh
+cargo fmt --all --check
+cargo check --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo validate tests/fixtures/native-smoke
+cargo check --features hot-reload,video-native,video-ffmpeg,publisher
+cargo build --release --locked -p keine-editor --bin editor
+cargo build --release --locked -p keine --bin keine --no-default-features --features audio-all,ui-sounds,video-native
+python3 target/authoring/editor-audit-20260929/0111/compile-final-probes.py
+/private/tmp/keine-editor-api-and-perf-final
+/private/tmp/keine-editor-api-and-perf-final --extra
+/private/tmp/keine-invalid-source-final
+/private/tmp/keine-editor-import-race-final
+bash dev/scripts/package-authoring-macos.sh target/release/editor target/release/keine target/authoring/editor-audit-20260929/0111/macos-final
+python3 target/authoring/editor-audit-20260929/0111/verify-package.py
+```
+
+The probes use synthetic camera commands and in-memory script overrides (50 dialogue
+lines per file). The real local LetsGal inventory contains 165 entries and opens two
+initial documents. The import test uses two 16 MiB header-only Ogg samples in each
+of 10 trials; it measures copy/manifest consistency, not playable-media behavior.
+These probes reuse the existing local QA project for reads and disposable temporary
+fixtures for mutations; no additional tracked test project or GUI protocol was added.
+
+### Final measurements
+
+The final paired run below uses `api-and-perf-before-final-paired.log`,
+`api-and-perf-final-paired.log`, `extra-before-final-paired.log` and
+`extra-final-paired.log`. Values are sample medians in milliseconds.
+
+| Operation | Scale | 0.11.0 ms | 0.11.1 ms |
+|---|---|---:|---:|
+| Full AuthoringIndex | 1 file / 50 lines | 0.110 | 0.220 |
+| Full AuthoringIndex | 10 files / 500 lines | 0.816 | 1.188 |
+| Full AuthoringIndex | 100 files / 5,000 lines | 7.825 | 7.142 |
+| Full AuthoringIndex | 500 files / 25,000 lines | 40.521 | 35.754 |
+| Block projection | 1,000 commands / 46,904 bytes | 6.614 | 0.727 |
+| Block projection | 5,000 commands / 238,904 bytes | 156.142 | 3.759 |
+| Native document parser | 5,000 commands | 87.422 | 2.476 |
+| WorkspaceSession | Real LetsGal / 165 entries | 1.032 | 0.702 |
+
+A one-script incremental update in the 500-file index measured **2.341 ms**
+(sample p95 **2.477 ms**, n=31), runs in the background, and replaces the typing
+path's former full-index scan. This is a different operation from a full rebuild.
+
+Small full-index samples in the final run are slower than baseline. Earlier
+repetitions varied from 0.096–0.220 ms for one file and 0.724–1.201 ms for ten files;
+those lower samples do not replace the final table. The large-source parsing
+improvement is consistent across repetitions (5,000-command projection baseline
+148–156 ms, current approximately 3.6–3.9 ms). A full manifest/config index refresh
+still has real work and uses the background worker.
+
+| Error-path comparison | Before span/merge fixes, ms | Final 0.11.1 ms |
+|---|---:|---:|
+| 5,000 invalid strings / 55,014 bytes | 25.728 | 3.148 |
+
+The error-path sample p95 changed from 26.070 to 3.910 ms. Shared source indexes
+cover escape/interpolation diagnostics, and hashing full diagnostic identity
+removes repeated vector membership scans while keeping report order.
+
+```text
+Correctness probes
+├── Concurrent imports · lost registration 10/10 → 0/10; both entries preserved
+├── External-edit clean reopen · stale=true → false; subsequent save succeeds
+├── Configured manifest policy · old PermissionDenied → current file opens
+├── Chinese-prefix Block selection · byte 30 / Narration → byte 50 / Command
+└── >1 MiB source replacement · accepted/unrecoverable → rejected before mutation
+```
+
+Revision-cached projection lookup is below this probe's 0.001 ms display resolution;
+the tight accessor loop is optimizer-friendly and is not a UI frame measurement.
+Viewport culling still scans lightweight metadata and uses height estimates until
+wrapped rows are measured. No scrolling FPS, whole-frame latency, GPU, RSS, slow-disk
+or long-running memory result is claimed. Live 0.11.1 acceptance remains pending
+as recorded in `docs/PROJECT_STATE.md`.
+
+Both freshly built app bundles report 0.11.1 and pass strict signature verification.
+The package verifier compares Mach-O bytes before the signature after normalizing
+only code-signature size and `__LINKEDIT` size metadata; executable code and data
+match the corresponding Release binaries. Hashes and commands are in
+`package-verified.log`, `final-package.log` and `final-package-commands.txt`.
 
 ## 2026-08-21 official LetsGal sample baseline
 

@@ -101,8 +101,8 @@ pub(super) fn run_source_block(root: &Path, path: &Path, start: usize, cx: &mut 
     let Ok(preview) = cx.global_mut::<EditorDocuments>().preview(root) else {
         return;
     };
-    for (path, contents) in documents {
-        preview.apply_snapshot(path, contents);
+    if !preview.apply_sources(documents) {
+        return;
     }
     if !matches!(
         preview.snapshot().lifecycle,
@@ -651,7 +651,9 @@ pub(super) fn source_options(
     } else if key.command == "track" && field.key == "0" {
         let mut targets = vec![("camera".to_owned(), "Camera".to_owned())];
         if let Some(source) = cx.global::<EditorDocuments>().source(root, &key.path) {
-            let projection = EiyashouProjection::parse(&source);
+            let projection = cx
+                .global::<EditorDocuments>()
+                .projection(root, &key.path, &source);
             for block in projection
                 .scenes
                 .iter()

@@ -7,7 +7,7 @@ use gpui_kit::base::input::{
     InputHighlighterFactory, Rope,
 };
 use gpui_kit::{Context, FontWeight, HighlightStyle, Hsla, SharedString, Window, rgb};
-use keine_loader::{NativeTokenKind, parse_native_document};
+use keine_loader::{NativeTokenKind, native_tokens};
 
 /// Editing context is cached independently per editor. It is consulted on edits,
 /// never reparsed while painting. Only Shou's double quote is an automatic quote.
@@ -259,7 +259,7 @@ fn syntax_spans(source: &str, language: SyntaxLanguage) -> Vec<SyntaxSpan> {
 }
 
 fn eiyashou_spans(source: &str) -> Vec<SyntaxSpan> {
-    let tokens = parse_native_document(source).tokens;
+    let tokens = native_tokens(source);
     let significant = tokens
         .iter()
         .enumerate()

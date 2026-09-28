@@ -2,10 +2,11 @@ pub mod engine;
 pub mod instance;
 
 use std::collections::BTreeMap;
+use std::collections::VecDeque;
 use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -67,16 +68,154 @@ enum PreviewCommand {
         force: bool,
     },
     Shutdown,
+    Fail(String),
+}
+
+const PREVIEW_PENDING_BYTES: usize = 16 * 1024 * 1024;
+
+#[derive(Default)]
+struct PendingCommands {
+    control: VecDeque<PreviewCommand>,
+    sources: BTreeMap<PathBuf, Vec<u8>>,
+    cursor: Option<PreviewCommand>,
+    bytes: usize,
+    failed: bool,
+}
+
+impl PendingCommands {
+    fn fail_budget(&mut self) {
+        self.sources.clear();
+        self.bytes = 0;
+        self.cursor = None;
+        self.control.clear();
+        self.failed = true;
+        self.control.push_front(PreviewCommand::Fail(
+            "Preview source updates exceed the 16 MiB pending budget".into(),
+        ));
+    }
+    fn push(&mut self, command: PreviewCommand) {
+        match command {
+            PreviewCommand::Snapshot { path, contents } => {
+                if self.failed {
+                    return;
+                }
+                let previous = self.sources.get(&path).map_or(0, Vec::len);
+                let bytes = self.bytes - previous + contents.len();
+                if bytes > PREVIEW_PENDING_BYTES {
+                    self.fail_budget();
+                } else {
+                    self.sources.insert(path, contents);
+                    self.bytes = bytes;
+                }
+            }
+            command @ PreviewCommand::SetCursor { .. } => {
+                if !self.failed {
+                    self.cursor = Some(command);
+                }
+            }
+            command @ (PreviewCommand::Shutdown
+            | PreviewCommand::Stop
+            | PreviewCommand::Fail(_)) => {
+                self.control.clear();
+                self.cursor = None;
+                self.control.push_front(command);
+            }
+            command => {
+                if self.failed && matches!(command, PreviewCommand::Start) {
+                    return;
+                }
+                // Lifecycle, visibility and audition each need at most one
+                // pending intent. Stop/Shutdown always precede source work.
+                self.control.retain(|old| {
+                    !matches!(
+                        (old, &command),
+                        (PreviewCommand::Start, PreviewCommand::Start)
+                            | (PreviewCommand::Show, PreviewCommand::Show)
+                            | (
+                                PreviewCommand::ToggleAudition(_) | PreviewCommand::StopAudition,
+                                PreviewCommand::ToggleAudition(_) | PreviewCommand::StopAudition
+                            )
+                    )
+                });
+                self.control.push_back(command);
+            }
+        }
+    }
+
+    fn pop(&mut self) -> Option<PreviewCommand> {
+        if self
+            .control
+            .front()
+            .is_some_and(|command| !matches!(command, PreviewCommand::Start))
+        {
+            return self.control.pop_front();
+        }
+        if let Some((path, contents)) = self.sources.pop_first() {
+            self.bytes -= contents.len();
+            return Some(PreviewCommand::Snapshot { path, contents });
+        }
+        self.control.pop_front().or_else(|| self.cursor.take())
+    }
+}
+
+#[derive(Default)]
+struct CommandMailbox {
+    pending: Mutex<PendingCommands>,
+    ready: Condvar,
+}
+
+impl CommandMailbox {
+    fn send(&self, command: PreviewCommand) {
+        if let Ok(mut pending) = self.pending.lock() {
+            pending.push(command);
+            self.ready.notify_one();
+        }
+    }
+
+    fn receive(&self, timeout: Duration) -> Option<PreviewCommand> {
+        let mut pending = self.pending.lock().ok()?;
+        if let Some(command) = pending.pop() {
+            return Some(command);
+        }
+        let (mut pending, _) = self.ready.wait_timeout(pending, timeout).ok()?;
+        pending.pop()
+    }
 }
 
 pub struct PreviewController {
-    commands: mpsc::Sender<PreviewCommand>,
+    commands: Arc<CommandMailbox>,
     snapshot: Arc<Mutex<PreviewSnapshot>>,
 }
 
 impl PreviewController {
+    pub fn apply_sources(&self, sources: Vec<(PathBuf, Vec<u8>)>) -> bool {
+        let Ok(mut pending) = self.commands.pending.lock() else {
+            return false;
+        };
+        let total = sources
+            .iter()
+            .map(|(_, contents)| contents.len())
+            .sum::<usize>();
+        pending.sources.clear();
+        pending.bytes = 0;
+        pending.failed = false;
+        if total > PREVIEW_PENDING_BYTES {
+            pending.fail_budget();
+            self.commands.ready.notify_one();
+            return false;
+        }
+        pending
+            .control
+            .retain(|command| !matches!(command, PreviewCommand::Fail(_)));
+        for (path, contents) in sources {
+            pending.push(PreviewCommand::Snapshot { path, contents });
+        }
+        self.commands.ready.notify_one();
+        true
+    }
     pub fn new(project: ProjectKey) -> Arc<Self> {
-        let (commands, receiver) = mpsc::channel();
+        let commands = Arc::new(CommandMailbox::default());
+        let receiver = commands.clone();
         let snapshot = Arc::new(Mutex::new(PreviewSnapshot::default()));
         let shared = snapshot.clone();
         thread::Builder::new()
@@ -94,28 +233,27 @@ impl PreviewController {
     }
 
     pub fn start(&self) {
-        let _ = self.commands.send(PreviewCommand::Start);
+        self.commands.send(PreviewCommand::Start);
     }
 
     pub fn stop(&self) {
-        let _ = self.commands.send(PreviewCommand::Stop);
+        self.commands.send(PreviewCommand::Stop);
     }
 
     pub fn show(&self) {
-        let _ = self.commands.send(PreviewCommand::Show);
+        self.commands.send(PreviewCommand::Show);
     }
 
     pub fn toggle_audition(&self, path: PathBuf) {
-        let _ = self.commands.send(PreviewCommand::ToggleAudition(path));
+        self.commands.send(PreviewCommand::ToggleAudition(path));
     }
 
     pub fn stop_audition(&self) {
-        let _ = self.commands.send(PreviewCommand::StopAudition);
+        self.commands.send(PreviewCommand::StopAudition);
     }
 
     pub fn apply_snapshot(&self, path: PathBuf, contents: Vec<u8>) {
-        let _ = self
-            .commands
+        self.commands
             .send(PreviewCommand::Snapshot { path, contents });
     }
 
@@ -128,7 +266,7 @@ impl PreviewController {
     }
 
     fn send_cursor(&self, path: PathBuf, line: usize, column: usize, force: bool) {
-        let _ = self.commands.send(PreviewCommand::SetCursor {
+        self.commands.send(PreviewCommand::SetCursor {
             path,
             line,
             column,
@@ -139,7 +277,7 @@ impl PreviewController {
 
 impl Drop for PreviewController {
     fn drop(&mut self) {
-        let _ = self.commands.send(PreviewCommand::Shutdown);
+        self.commands.send(PreviewCommand::Shutdown);
     }
 }
 
@@ -157,11 +295,7 @@ struct Worker {
     shared: Arc<Mutex<PreviewSnapshot>>,
 }
 
-fn worker(
-    project: ProjectKey,
-    receiver: mpsc::Receiver<PreviewCommand>,
-    shared: Arc<Mutex<PreviewSnapshot>>,
-) {
+fn worker(project: ProjectKey, receiver: Arc<CommandMailbox>, shared: Arc<Mutex<PreviewSnapshot>>) {
     let mut worker = Worker {
         project,
         generation: NEXT_GENERATION.fetch_add(1, Ordering::Relaxed),
@@ -176,13 +310,13 @@ fn worker(
         shared,
     };
     loop {
-        match receiver.recv_timeout(worker.poll_interval()) {
-            Ok(PreviewCommand::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+        match receiver.receive(worker.poll_interval()) {
+            Some(PreviewCommand::Shutdown) => {
                 worker.stop();
                 break;
             }
-            Ok(command) => worker.handle(command),
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Some(command) => worker.handle(command),
+            None => {}
         }
         worker.poll_audition();
         if let Err(error) = worker.poll_position() {
@@ -230,6 +364,7 @@ impl Worker {
                 force,
             } => self.set_cursor(path, line, column, force),
             PreviewCommand::Shutdown => unreachable!(),
+            PreviewCommand::Fail(message) => Err(io::Error::other(message)),
         };
         if let Err(error) = result {
             self.fail(error);
@@ -506,6 +641,44 @@ fn source_patch(previous: &[u8], current: &[u8]) -> Option<SourcePatch> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn latest_source_and_cursor_are_coalesced_and_stop_precedes_backlog() {
+        let mut pending = PendingCommands::default();
+        for value in 0..100u8 {
+            pending.push(PreviewCommand::Snapshot {
+                path: "scripts/main.shou".into(),
+                contents: vec![value; 1024],
+            });
+            pending.push(PreviewCommand::SetCursor {
+                path: "scripts/main.shou".into(),
+                line: value as usize + 1,
+                column: 1,
+                force: false,
+            });
+        }
+        assert_eq!(pending.bytes, 1024);
+        pending.push(PreviewCommand::Stop);
+        assert!(matches!(pending.pop(), Some(PreviewCommand::Stop)));
+        assert!(
+            matches!(pending.pop(), Some(PreviewCommand::Snapshot { contents, .. }) if contents[0] == 99)
+        );
+        assert!(pending.pop().is_none());
+    }
+
+    #[test]
+    fn preview_budget_fails_explicitly_and_shutdown_preempts_it() {
+        let mut pending = PendingCommands::default();
+        pending.push(PreviewCommand::Snapshot {
+            path: "scripts/main.shou".into(),
+            contents: vec![0; PREVIEW_PENDING_BYTES + 1],
+        });
+        assert_eq!(pending.bytes, 0);
+        assert!(matches!(pending.pop(), Some(PreviewCommand::Fail(_))));
+        pending.push(PreviewCommand::Start);
+        pending.push(PreviewCommand::Shutdown);
+        assert!(matches!(pending.pop(), Some(PreviewCommand::Shutdown)));
+    }
 
     #[test]
     fn source_patch_keeps_utf8_boundaries_and_only_replaces_the_changed_span() {

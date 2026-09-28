@@ -460,6 +460,18 @@ impl WorkbenchPanel {
         cx: &mut Context<Self>,
     ) -> bool {
         if cx
+            .global::<EditorDocuments>()
+            .workspaces
+            .get(root)
+            .is_some_and(|workspace| workspace.file_operation_active)
+        {
+            window.push_notification(
+                Notification::warning("A file operation is still running"),
+                cx,
+            );
+            return false;
+        }
+        if cx
             .global_mut::<EditorDocuments>()
             .asset_manifest_is_clean(root)
         {
@@ -517,17 +529,36 @@ impl WorkbenchPanel {
     }
 
     pub(super) fn refresh_explorer(&mut self, root: &Path, cx: &mut Context<Self>) {
-        match cx.global_mut::<EditorDocuments>().refresh_files(root) {
-            Ok(refreshed) => {
-                if let PanelContent::Explorer { files, .. } = &mut self.content {
-                    *files = refreshed;
+        let root = root.to_owned();
+        let scan_root = root.clone();
+        let background = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            let result = background
+                .spawn(async move {
+                    WorkspaceSession::open(scan_root).map(|session| session.files().to_vec())
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(refreshed) => {
+                        if let Some(workspace) =
+                            cx.global_mut::<EditorDocuments>().workspaces.get_mut(&root)
+                        {
+                            workspace.files.clone_from(&refreshed);
+                        }
+                        if let PanelContent::Explorer { files, .. } = &mut this.content {
+                            *files = refreshed;
+                        }
+                        schedule_authoring_refresh(&root, None, cx);
+                    }
+                    Err(error) => cx
+                        .global_mut::<EditorDocuments>()
+                        .set_notice(&root, format!("File refresh failed: {error}")),
                 }
-            }
-            Err(error) => cx
-                .global_mut::<EditorDocuments>()
-                .set_notice(root, format!("File refresh failed: {error}")),
-        }
-        cx.refresh_windows();
+                cx.refresh_windows();
+            });
+        })
+        .detach();
     }
 
     pub(super) fn paste_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -544,35 +575,65 @@ impl WorkbenchPanel {
             return;
         }
         let target = self.selected_directory();
-        let manifest_before = match file_ops::asset_manifest_source(&root) {
-            Ok(source) => source,
-            Err(error) => {
-                window.push_notification(Notification::error(short_error(&error)), cx);
-                return;
-            }
-        };
-        match file_ops::copy_entry(&root, &source, &target) {
-            Ok(results) => {
-                let copied = target.join(source.file_name().unwrap_or_default());
-                let manifest_after = results
-                    .iter()
-                    .rev()
-                    .find_map(|result| result.manifest_update.clone());
-                self.file_history.record(FileEdit::Toggle {
-                    paths: vec![(copied, None)],
-                    after_present: true,
-                    present: true,
-                    manifest: ManifestChange::between(Some(manifest_before), manifest_after),
-                });
-                for result in results {
-                    self.accept_file_result(&root, result, window, cx);
-                }
-                self.refresh_explorer(&root, cx);
-                self.focus.focus(window, cx);
-                window.push_notification(Notification::success("Copied"), cx);
-            }
-            Err(error) => window.push_notification(Notification::error(short_error(&error)), cx),
+        if let Some(workspace) = cx.global_mut::<EditorDocuments>().workspaces.get_mut(&root) {
+            workspace.file_operation_active = true;
         }
+        self.file_progress = Some(FileProgress {
+            completed: 0,
+            total: 1,
+        });
+        let background = cx.background_executor().clone();
+        let copy_root = root.clone();
+        let copy_source = source.clone();
+        let copy_target = target.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = background
+                .spawn(async move {
+                    let manifest = file_ops::asset_manifest_source(&copy_root)?;
+                    let results = file_ops::copy_entry(&copy_root, &copy_source, &copy_target)?;
+                    Ok::<_, io::Error>((manifest, results))
+                })
+                .await;
+            let _ = cx.update(|_, cx| {
+                if let Some(workspace) =
+                    cx.global_mut::<EditorDocuments>().workspaces.get_mut(&root)
+                {
+                    workspace.file_operation_active = false;
+                }
+            });
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.file_progress = None;
+                match result {
+                    Ok((manifest_before, results)) => {
+                        let copied = target.join(source.file_name().unwrap_or_default());
+                        let manifest_after = results
+                            .iter()
+                            .rev()
+                            .find_map(|result| result.manifest_update.clone());
+                        this.file_history.record(FileEdit::Toggle {
+                            paths: vec![(copied, None)],
+                            after_present: true,
+                            present: true,
+                            manifest: ManifestChange::between(
+                                Some(manifest_before),
+                                manifest_after,
+                            ),
+                        });
+                        for result in results {
+                            this.accept_file_result(&root, result, window, cx);
+                        }
+                        this.refresh_explorer(&root, cx);
+                        this.focus.focus(window, cx);
+                        window.push_notification(Notification::success("Copied"), cx);
+                    }
+                    Err(error) => {
+                        window.push_notification(Notification::error(short_error(&error)), cx)
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub(super) fn move_file(
@@ -679,6 +740,9 @@ impl WorkbenchPanel {
             }
         };
         let background = cx.background_executor().clone();
+        if let Ok(workspace) = cx.global_mut::<EditorDocuments>().workspace_mut(&root) {
+            workspace.file_operation_active = true;
+        }
         cx.spawn_in(window, async move |this, cx| {
             let mut succeeded = 0;
             let mut failed = 0;
@@ -710,7 +774,19 @@ impl WorkbenchPanel {
                     cx.notify();
                 });
             }
+            let _ = cx.update(|_, cx| {
+                if let Some(workspace) =
+                    cx.global_mut::<EditorDocuments>().workspaces.get_mut(&root)
+                {
+                    workspace.file_operation_active = false;
+                }
+            });
             let _ = this.update_in(cx, |this, window, cx| {
+                if let Some(workspace) =
+                    cx.global_mut::<EditorDocuments>().workspaces.get_mut(&root)
+                {
+                    workspace.file_operation_active = false;
+                }
                 this.file_progress = None;
                 if !imported.is_empty() {
                     this.file_history.record(FileEdit::Toggle {

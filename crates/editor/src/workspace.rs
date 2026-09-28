@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 
 use crate::project_key::ProjectKey;
 
-const MAX_DISCOVERED_FILES: usize = 2_000;
 const MAX_DOCUMENT_BYTES: u64 = 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -66,11 +65,16 @@ impl WorkspaceSession {
             .to_owned();
         let mut files = Vec::new();
         discover(key.path(), key.path(), &mut files)?;
-        let mut documents = files
+        let mut initial = files
             .iter()
             .filter(|file| !file.is_dir())
             .filter(|file| file.size <= MAX_DOCUMENT_BYTES)
             .filter(|file| is_text_document(&file.relative_path))
+            .collect::<Vec<_>>();
+        initial.sort_by_key(|file| document_rank(&file.relative_path));
+        let documents = initial
+            .into_iter()
+            .take(2)
             .filter_map(|file| {
                 fs::read_to_string(key.path().join(&file.relative_path))
                     .ok()
@@ -80,8 +84,6 @@ impl WorkspaceSession {
                     })
             })
             .collect::<Vec<_>>();
-        documents.sort_by_key(|document| document_rank(&document.relative_path));
-        documents.truncate(2);
 
         Ok(Self {
             key,
@@ -113,15 +115,9 @@ impl WorkspaceSession {
 }
 
 fn discover(root: &Path, directory: &Path, files: &mut Vec<WorkspaceFile>) -> io::Result<()> {
-    if files.len() >= MAX_DISCOVERED_FILES {
-        return Ok(());
-    }
     let mut entries = fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
-        if files.len() >= MAX_DISCOVERED_FILES {
-            break;
-        }
         let path = entry.path();
         let file_name = entry.file_name();
         let name = file_name.to_string_lossy();
@@ -202,6 +198,38 @@ mod tests {
         fs::write(root.join("cover.webp"), "media").unwrap();
         fs::write(root.join("target/ignored.txt"), "ignored").unwrap();
         root
+    }
+
+    #[test]
+    fn discovery_does_not_truncate_large_projects() {
+        let root = fixture();
+        for number in 0..2100 {
+            fs::write(
+                root.join(format!("scripts/extra-{number:04}.shou")),
+                "scene empty {}",
+            )
+            .unwrap();
+        }
+        let session = WorkspaceSession::open(&root).unwrap();
+        assert!(
+            session
+                .files()
+                .iter()
+                .any(|file| file.relative_path == Path::new("scripts/extra-2099.shou"))
+        );
+        assert_eq!(
+            session
+                .files()
+                .iter()
+                .filter(|file| file
+                    .relative_path
+                    .extension()
+                    .is_some_and(|ext| ext == "shou"))
+                .count(),
+            2102
+        );
+        assert_eq!(session.documents().len(), 2);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

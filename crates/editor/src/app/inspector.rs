@@ -103,10 +103,15 @@ impl WorkbenchPanel {
             self.inline_block_controls.clear();
             return;
         };
-        let projection = EiyashouProjection::parse(&source);
+        let projection = cx
+            .global::<EditorDocuments>()
+            .projection(root, path, &source);
         let mut previous = std::mem::take(&mut self.inline_block_controls);
         let window_handle = window.window_handle();
         for block in projection.scenes.iter().flat_map(|scene| &scene.blocks) {
+            if !self.block_visible.contains(&block.source_range.start) {
+                continue;
+            }
             if block.read_only || block.kind != BlockKind::Command {
                 continue;
             }
@@ -409,7 +414,9 @@ impl WorkbenchPanel {
                 return None;
             }
             let source = cx.global::<EditorDocuments>().source(root, &path)?;
-            let projection = EiyashouProjection::parse(&source);
+            let projection = cx
+                .global::<EditorDocuments>()
+                .projection(root, &path, &source);
             let block = projection
                 .scenes
                 .iter()
@@ -844,7 +851,10 @@ impl WorkbenchPanel {
             .or_else(|| {
                 let (path, line, column) = cx.global::<EditorDocuments>().selection(root)?.clone();
                 let source = cx.global::<EditorDocuments>().source(root, &path)?;
-                projected_block_at(&source, line, column)
+                let projection = cx
+                    .global::<EditorDocuments>()
+                    .projection(root, &path, &source);
+                block_at_position(&projection, &source, line, column)
                     .map(|(_, block)| (path, block.source_range.start))
             });
         self.refresh_source_inspector(root, selected.clone(), window, cx);
@@ -853,7 +863,9 @@ impl WorkbenchPanel {
                 return None;
             }
             let source = cx.global::<EditorDocuments>().source(root, &path)?;
-            let projection = EiyashouProjection::parse(&source);
+            let projection = cx
+                .global::<EditorDocuments>()
+                .projection(root, &path, &source);
             let metadata = projection.text_block_metadata(&source, block_start)?;
             let lifetime = projection.text_lifetime(&source, block_start)?;
             Some(InspectorEditKey {
@@ -1265,15 +1277,19 @@ impl WorkbenchPanel {
                     let Some(asset) = index.assets.iter().find(|asset| asset.key() == key) else {
                         return;
                     };
-                    let result = prepare_asset_edits(
-                        &root,
-                        &index,
-                        asset,
-                        values[0].trim(),
-                        kind,
-                        &tags,
-                        |path| cx.global::<EditorDocuments>().source(&root, path),
-                    );
+                    let result = if !cx.global::<EditorDocuments>().authoring_is_current(&root) {
+                        Err("Script index is updating; try again shortly".to_owned())
+                    } else {
+                        prepare_asset_edits(
+                            &root,
+                            &index,
+                            asset,
+                            values[0].trim(),
+                            kind,
+                            &tags,
+                            |path| cx.global::<EditorDocuments>().source(&root, path),
+                        )
+                    };
                     match result {
                         Ok(edits) => {
                             let applied = cx.update_window(window_handle, |_, window, cx| {

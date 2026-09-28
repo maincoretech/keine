@@ -4,6 +4,31 @@ pub(super) struct ProjectWorkspace {
     pub(super) session: WorkspaceSession,
     pub(super) dock: Entity<DockArea>,
     _layout_subscription: Subscription,
+    _layout_task: Rc<RefCell<Option<gpui_kit::Task<()>>>>,
+    layout_epoch: Arc<std::sync::atomic::AtomicU64>,
+    layout_writer: Arc<std::sync::Mutex<()>>,
+}
+
+impl ProjectWorkspace {
+    pub(super) fn persist_final_layout(&self, persistence: &AppPersistence, cx: &App) {
+        let state = self.dock.read(cx).dump(cx);
+        let project = self.session.key().clone();
+        let persistence = persistence.clone();
+        let epoch = self
+            .layout_epoch
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+            + 1;
+        // A close flush is serialized with background layout writes. It must
+        // finish before the last window lets the application exit.
+        let Ok(_guard) = self.layout_writer.lock() else {
+            return;
+        };
+        if self.layout_epoch.load(std::sync::atomic::Ordering::Acquire) == epoch
+            && let Err(error) = persistence.save_layout(&project, state)
+        {
+            eprintln!("Kēne Editor could not persist final layout: {error}");
+        }
+    }
 }
 
 /// Keep gpui-component's dock behavior and visuals, changing only the tab bar
@@ -116,12 +141,31 @@ impl EditorTabGroupSkin {
             .downcast::<WorkbenchPanel>()
             .ok()?;
         let state = panel.read(cx);
-        if !matches!(&state.content, PanelContent::Document { relative, document: Some(_), .. }
-            if relative.extension().is_some_and(|extension| extension == "shou"))
-        {
+        if !matches!(
+            &state.content,
+            PanelContent::Document {
+                document: Some(_),
+                ..
+            }
+        ) {
             return None;
         }
         let mode = state.document_mode;
+        let shou = matches!(&state.content, PanelContent::Document { relative, .. } if relative.extension().is_some_and(|extension| extension == "shou"));
+        let reload_panel = panel.clone();
+        let reload = file_action_icon(
+            "document-reload",
+            AssetIconName::RotateCw,
+            "Reload from disk (⌥⌘R)",
+        )
+        .on_click(move |_, window, cx| {
+            reload_panel.update(cx, |panel, cx| {
+                panel.reload_document(&ReloadDocument, window, cx)
+            });
+        });
+        if !shou {
+            return Some(div().pr_2().child(reload));
+        }
         let scene_panel = panel.clone();
         let text_panel = panel.clone();
         Some(
@@ -131,6 +175,7 @@ impl EditorTabGroupSkin {
                 .items_center()
                 .gap_1()
                 .pr_2()
+                .child(reload)
                 .when(mode == DocumentMode::Block, |controls| {
                     controls.child(
                         file_action_icon("scene-new", AssetIconName::Plus, "Add scene").on_click(
@@ -1306,18 +1351,45 @@ impl ProjectWorkspace {
 
         let project = session.key().clone();
         let persistence = persistence.clone();
+        let layout_task = Rc::new(RefCell::new(None));
+        let task_slot = layout_task.clone();
+        let layout_epoch = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let clock = layout_epoch.clone();
+        let layout_writer = Arc::new(std::sync::Mutex::new(()));
+        let writer = layout_writer.clone();
         let layout_subscription = cx.subscribe(&dock, move |_, dock, event: &DockEvent, cx| {
             if matches!(event, DockEvent::LayoutChanged) {
                 let state = dock.read(cx).dump(cx);
-                if let Err(error) = persistence.save_layout(&project, state) {
-                    eprintln!("Kēne Editor could not persist layout: {error}");
-                }
+                let epoch = clock.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
+                let clock = clock.clone();
+                let writer = writer.clone();
+                let project = project.clone();
+                let persistence = persistence.clone();
+                let background = cx.background_executor().clone();
+                *task_slot.borrow_mut() = Some(cx.spawn(async move |_, _| {
+                    background.timer(Duration::from_millis(250)).await;
+                    background
+                        .spawn(async move {
+                            let Ok(_guard) = writer.lock() else {
+                                return;
+                            };
+                            if clock.load(std::sync::atomic::Ordering::Acquire) == epoch
+                                && let Err(error) = persistence.save_layout(&project, state)
+                            {
+                                eprintln!("Kēne Editor could not persist layout: {error}");
+                            }
+                        })
+                        .await;
+                }));
             }
         });
         Self {
             session,
             dock,
             _layout_subscription: layout_subscription,
+            _layout_task: layout_task,
+            layout_epoch,
+            layout_writer,
         }
     }
 }

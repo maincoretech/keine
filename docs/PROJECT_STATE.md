@@ -19,7 +19,7 @@ another project phase.
 | P4 | Engine Preview | complete; native companion-window transport supersedes embedded pixels |
 | P5 | Core VN authoring UX | complete; T21 visual acceptance pending |
 | P6 | Pinned Project CI release chain | complete; private-project Linux runner accepted |
-| P7 | Cross-platform packaging, installation, input/DPI, recovery, compatibility, and performance hardening | macOS 0.11.0 delivery ready; current installed GUI, source/Inspector/runtime sync, workspace gates and scoped metrics checked; user input/display/Preview-FPS acceptance pending, Windows/Linux deferred |
+| P7 | Cross-platform packaging, installation, input/DPI, recovery, compatibility, and performance hardening | macOS 0.11.0 delivery ready; 0.11.1 Editor P1/P2 hardening implemented, current workspace gates passed; new GUI regression acceptance pending; user input/display/Preview-FPS acceptance pending, Windows/Linux deferred |
 
 Asset lifecycle (mapped deletion, recovery, and remapping) is an outstanding feature task, not a
 second P6. Media conversion remains deferred. Neither is part of the completed Project CI P6.
@@ -412,3 +412,54 @@ actual native Preview idle CPU was sampled separately. Actual Preview active FPS
 1×/multiple-display/ultrawide/tall-window acceptance and broader visual/audio checks remain with the
 user. Windows/Linux are deferred. This is macOS delivery readiness, not full cross-platform P7
 acceptance. T24 contains the tree of evidence, remaining checks and local artifact locations.
+
+
+### Editor 0.11.1 review hardening (2026-09-29)
+
+Implementation and verification used the sole main checkout, starting at `51574d4`;
+no worktree was created. All four P1 and seven P2 Editor review findings have corresponding
+implementation changes; the tree and lifecycle invariants are in
+[Editor 0.11.1 hardening](editor/0111-hardening.md).
+
+```text
+Current verification
+├── Workspace version and all six workspace lockfile entries: 0.11.1
+├── cargo fmt --all --check: passed
+├── cargo check --workspace: passed
+├── cargo clippy --workspace --all-targets -- -D warnings: passed
+├── cargo test --workspace: 672 passed, zero failed, one existing ignored test
+├── cargo validate tests/fixtures/native-smoke: valid, zero warnings
+├── Feature check: hot-reload,video-native,video-ffmpeg,publisher passed
+├── Final Release Editor and Engine: passed
+├── Fresh macOS pair: version 0.11.1, strict signatures and executable content verified
+├── Regression coverage in existing suites
+│   ├── Concurrent imports preserve both manifest entries; dirty drafts survive adoption
+│   ├── Clean reopen/config-policy reload and explicit dirty reload
+│   ├── Stale recovery writers, saved epochs, retirement and late callbacks after close
+│   ├── Unicode source spans/Block selection, string-error spans, diagnostic order/deduplication and projection caching
+│   ├── Complete discovery beyond 2,000 entries and incremental index equivalence
+│   └── Preview coalescing/Stop priority/budget failure and source-history byte budget
+└── Runtime acceptance pending
+    ├── New viewport culling: long/wrapped dialogue, scrollbar and drag/drop
+    ├── Reload controls and both dirty close confirmation paths with live Engine
+    └── Previous display/IME/audio/Preview-FPS and Windows/Linux checks remain deferred
+```
+
+The previous 0.11.0 QA window visibly reported Ready and matched its 520-byte disk
+source before closing. Automatic approval review then rejected closing the remaining
+LetsGal workbench because it could not establish that all window state was saved.
+Permission to close that old window and switch versions was requested; until it is
+provided, no new 0.11.1 GUI acceptance is claimed. No source mutation was made during
+these UI checks. Compilation, function probes and regression tests do not substitute
+for that running-app verification.
+
+The current app pair is available at
+`target/authoring/editor-audit-20260929/0111/macos-final/`; both packaged command-line
+version checks report 0.11.1. Final gates, source/library/binary hashes and normalized
+Mach-O content checks are in the adjacent evidence directory. Final paired Release
+measurement: 5,000-command projection 156.142 → 3.759 ms; native parser
+87.422 → 2.476 ms; one changed script in a 500-file index 2.341 ms. Error-path
+indexing and diagnostic merging were measured separately against an intermediate
+build: 5,000 invalid strings 25.728 → 3.148 ms. Small full-index regressions/variation
+and the limits of these function timings are recorded in `docs/performance-baseline.md`.
+The author approved committing and pushing this increment after the review handoff.

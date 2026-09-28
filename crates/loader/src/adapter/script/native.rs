@@ -55,6 +55,68 @@ pub struct NativeDocument {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+/// Converts UTF-8 byte offsets and zero-based Unicode scalar positions.
+/// Newline and multibyte prefix indexes keep repeated span lookup logarithmic,
+/// including files with many statements on a single line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceLineIndex {
+    starts: Vec<usize>,
+    wide: Vec<(usize, usize)>,
+}
+
+impl SourceLineIndex {
+    pub fn new(source: &str) -> Self {
+        let mut index = Self {
+            starts: vec![0],
+            wide: Vec::new(),
+        };
+        let mut extra = 0;
+        for (offset, character) in source.char_indices() {
+            if character == '\n' {
+                index.starts.push(offset + 1);
+            }
+            if character.len_utf8() > 1 {
+                extra += character.len_utf8() - 1;
+                index.wide.push((offset + character.len_utf8(), extra));
+            }
+        }
+        index
+    }
+
+    fn extra_bytes(&self, offset: usize) -> usize {
+        self.wide
+            .partition_point(|(end, _)| *end <= offset)
+            .checked_sub(1)
+            .map_or(0, |i| self.wide[i].1)
+    }
+
+    pub fn span(&self, source: &str, offset: usize) -> SourceSpan {
+        let offset = source.floor_char_boundary(offset.min(source.len()));
+        let row = self
+            .starts
+            .partition_point(|start| *start <= offset)
+            .saturating_sub(1);
+        let start = self.starts.get(row).copied().unwrap_or(0);
+        SourceSpan {
+            line: row + 1,
+            column: offset - start - (self.extra_bytes(offset) - self.extra_bytes(start)) + 1,
+        }
+    }
+
+    pub fn offset(&self, source: &str, row: usize, column: usize) -> usize {
+        let Some(&start) = self.starts.get(row) else {
+            return source.len();
+        };
+        let end = self.starts.get(row + 1).copied().unwrap_or(source.len());
+        let line = &source[start..end];
+        start
+            + line
+                .char_indices()
+                .nth(column)
+                .map_or(line.len(), |(offset, _)| offset)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NativeLanguage;
 
@@ -97,6 +159,11 @@ pub fn parse_native_document(source: &str) -> NativeDocument {
     compile_native(source, false).0
 }
 
+/// Lossless lexical inventory for highlighting/completion without action lowering.
+pub fn native_tokens(source: &str) -> Vec<NativeToken> {
+    lex(source).0
+}
+
 pub fn parse_native_scenes(source: &str) -> Vec<ParsedScene> {
     compile_native(source, true).1
 }
@@ -127,14 +194,18 @@ fn compile_native(source: &str, validate_semantics: bool) -> (NativeDocument, Ve
     }
     let scene_syntax = std::mem::take(&mut parser.scene_syntax);
     let mut diagnostics = std::mem::take(&mut parser.document_diagnostics);
-    for diagnostic in scenes
-        .iter()
-        .flat_map(|scene| scene.report.diagnostics.iter())
-    {
-        if !diagnostics.contains(diagnostic) {
-            diagnostics.push(diagnostic.clone());
-        }
-    }
+    // Keep lexical/document diagnostics first and scene traversal order intact.
+    // Thousands of syntax errors must not turn deduplication into a prefix scan.
+    let additional = {
+        let mut seen = diagnostics.iter().collect::<HashSet<_>>();
+        scenes
+            .iter()
+            .flat_map(|scene| scene.report.diagnostics.iter())
+            .filter(|diagnostic| seen.insert(*diagnostic))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    diagnostics.extend(additional);
     drop(parser);
     let document = NativeDocument {
         tokens,
@@ -861,6 +932,10 @@ fn collect_expression_reads(expression: &EiyashouExpr, reads: &mut HashSet<Strin
 }
 
 fn lex(source: &str) -> (Vec<NativeToken>, Vec<Diagnostic>) {
+    let lines = SourceLineIndex::new(source);
+    let error_at = |source: &str, offset: usize, message: String| {
+        indexed_error_at(source, &lines, offset, message)
+    };
     let bytes = source.as_bytes();
     let mut tokens = Vec::new();
     let mut diagnostics = Vec::new();
@@ -899,7 +974,7 @@ fn lex(source: &str) -> (Vec<NativeToken>, Vec<Diagnostic>) {
                 }
             }
             if depth != 0 {
-                diagnostics.push(error_at(source, start, "unterminated block comment"));
+                diagnostics.push(error_at(source, start, "unterminated block comment".into()));
             }
             push_token(&mut tokens, NativeTokenKind::Comment, start, cursor);
             continue;
@@ -925,7 +1000,11 @@ fn lex(source: &str) -> (Vec<NativeToken>, Vec<Diagnostic>) {
                 }
             }
             if !closed {
-                diagnostics.push(error_at(source, start, "unterminated string literal"));
+                diagnostics.push(error_at(
+                    source,
+                    start,
+                    "unterminated string literal".into(),
+                ));
             }
             push_token(&mut tokens, NativeTokenKind::String, start, cursor);
             continue;
@@ -1006,6 +1085,7 @@ fn push_token(tokens: &mut Vec<NativeToken>, kind: NativeTokenKind, start: usize
 
 struct Parser<'a> {
     source: &'a str,
+    lines: SourceLineIndex,
     tokens: &'a [NativeToken],
     significant: Vec<usize>,
     cursor: usize,
@@ -1032,6 +1112,7 @@ impl<'a> Parser<'a> {
             .collect();
         Self {
             source,
+            lines: SourceLineIndex::new(source),
             tokens,
             significant,
             cursor: 0,
@@ -1120,7 +1201,7 @@ impl<'a> Parser<'a> {
         loop {
             let start = self.offset();
             let actions = self.parse_statement(report);
-            let span = span_at(self.source, start);
+            let span = self.lines.span(self.source, start);
             for action in actions {
                 report.push(action, span);
             }
@@ -1130,7 +1211,7 @@ impl<'a> Parser<'a> {
             if self.eof() {
                 report
                     .diagnostics
-                    .push(error_at(self.source, start, "unterminated scene block"));
+                    .push(self.error_at(start, "unterminated scene block"));
                 break;
             }
             if !self.eat(",") {
@@ -1523,6 +1604,7 @@ impl<'a> Parser<'a> {
         let offset = self.tokens[index].range.start;
         Some(parse_eiyashou_text(
             self.source,
+            &self.lines,
             raw,
             offset,
             &mut report.diagnostics,
@@ -1545,9 +1627,7 @@ impl<'a> Parser<'a> {
                 let offset = indices
                     .get(parser.cursor.min(indices.len().saturating_sub(1)))
                     .map_or(self.offset(), |index| self.tokens[*index].range.start);
-                report
-                    .diagnostics
-                    .push(error_at(self.source, offset, message));
+                report.diagnostics.push(self.error_at(offset, message));
                 None
             }
         }
@@ -3208,15 +3288,15 @@ impl<'a> Parser<'a> {
     }
 
     fn span(&self) -> SourceSpan {
-        span_at(self.source, self.offset())
+        self.lines.span(self.source, self.offset())
     }
 
     fn error(&self, message: impl Into<String>) -> Diagnostic {
-        Diagnostic {
-            level: DiagnosticLevel::Error,
-            span: self.span(),
-            message: message.into(),
-        }
+        self.error_at(self.offset(), message)
+    }
+
+    fn error_at(&self, offset: usize, message: impl Into<String>) -> Diagnostic {
+        indexed_error_at(self.source, &self.lines, offset, message)
     }
 }
 
@@ -3509,6 +3589,7 @@ struct Argument {
 
 fn parse_eiyashou_text(
     source: &str,
+    lines: &SourceLineIndex,
     raw: &str,
     source_offset: usize,
     diagnostics: &mut Vec<Diagnostic>,
@@ -3533,8 +3614,9 @@ fn parse_eiyashou_text(
             }
             let expression_start = cursor + 2;
             let Some(expression_end) = interpolation_end(content, expression_start) else {
-                diagnostics.push(error_at(
+                diagnostics.push(indexed_error_at(
                     source,
+                    lines,
                     source_offset + 1 + cursor,
                     "unterminated `${...}` interpolation",
                 ));
@@ -3544,8 +3626,9 @@ fn parse_eiyashou_text(
             let expression_source = &content[expression_start..expression_end];
             let (tokens, lex_diagnostics) = lex(expression_source);
             if !lex_diagnostics.is_empty() {
-                diagnostics.push(error_at(
+                diagnostics.push(indexed_error_at(
                     source,
+                    lines,
                     source_offset + 1 + expression_start,
                     "invalid interpolation expression",
                 ));
@@ -3564,8 +3647,9 @@ fn parse_eiyashou_text(
                 let mut parser = ExpressionParser::new(expression_source, &tokens, &indices);
                 match parser.parse() {
                     Ok(expression) => parts.push(EiyashouTextPart::Expression(expression)),
-                    Err(message) => diagnostics.push(error_at(
+                    Err(message) => diagnostics.push(indexed_error_at(
                         source,
+                        lines,
                         source_offset + 1 + expression_start,
                         format!("invalid interpolation: {message}"),
                     )),
@@ -3579,8 +3663,9 @@ fn parse_eiyashou_text(
             let escape_offset = cursor;
             cursor += 1;
             if cursor >= content.len() {
-                diagnostics.push(error_at(
+                diagnostics.push(indexed_error_at(
                     source,
+                    lines,
                     source_offset + 1 + escape_offset,
                     "unterminated string escape",
                 ));
@@ -3593,8 +3678,9 @@ fn parse_eiyashou_text(
                 'n' => literal.push('\n'),
                 'r' => literal.push('\r'),
                 't' => literal.push('\t'),
-                other => diagnostics.push(error_at(
+                other => diagnostics.push(indexed_error_at(
                     source,
+                    lines,
                     source_offset + 1 + escape_offset,
                     format!("unknown string escape `\\{other}`"),
                 )),
@@ -3690,28 +3776,75 @@ fn parse_transition_text(raw: &str) -> Option<(&str, f32)> {
     Some((name, seconds))
 }
 
-fn span_at(source: &str, offset: usize) -> SourceSpan {
-    let prefix = &source[..offset.min(source.len())];
-    let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
-    let column = prefix
-        .rsplit_once('\n')
-        .map_or(prefix.chars().count() + 1, |(_, tail)| {
-            tail.chars().count() + 1
-        });
-    SourceSpan { line, column }
+fn indexed_error_at(
+    source: &str,
+    lines: &SourceLineIndex,
+    offset: usize,
+    message: impl Into<String>,
+) -> Diagnostic {
+    Diagnostic {
+        level: DiagnosticLevel::Error,
+        span: lines.span(source, offset),
+        message: message.into(),
+    }
 }
 
 fn error_at(source: &str, offset: usize, message: impl Into<String>) -> Diagnostic {
-    Diagnostic {
-        level: DiagnosticLevel::Error,
-        span: span_at(source, offset),
-        message: message.into(),
-    }
+    indexed_error_at(source, &SourceLineIndex::new(source), offset, message)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merged_diagnostics_preserve_order_and_distinct_errors_at_the_same_position() {
+        let source = "scene start { ? }\nscene next { \"bad\\q\" }";
+        let (document, scenes) = compile_native(source, false);
+        let mut expected = Vec::new();
+        for diagnostic in lex(source).1.into_iter().chain(
+            scenes
+                .iter()
+                .flat_map(|scene| scene.report.diagnostics.iter().cloned()),
+        ) {
+            if !expected.contains(&diagnostic) {
+                expected.push(diagnostic);
+            }
+        }
+        assert_eq!(document.diagnostics, expected);
+        assert_eq!(document.diagnostics.len(), 3);
+        assert_eq!(document.diagnostics[0].span, document.diagnostics[1].span);
+        assert_ne!(
+            document.diagnostics[0].message,
+            document.diagnostics[1].message
+        );
+    }
+
+    #[test]
+    fn string_error_positions_share_the_unicode_source_index() {
+        let source = "scene start {\n  \"中文😀\",\n  \"bad\\q\"\n}\n";
+        let document = parse_native_document(source);
+        let error = document
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.message.contains("unknown string escape"))
+            .unwrap();
+        assert_eq!(
+            error.span,
+            SourceLineIndex::new(source).span(source, source.find("\\q").unwrap())
+        );
+    }
+
+    #[test]
+    fn source_positions_use_scalar_columns_and_utf8_byte_offsets() {
+        let source = "中文😀\n  wait(1s)";
+        let lines = SourceLineIndex::new(source);
+        assert_eq!(lines.span(source, 6), SourceSpan { line: 1, column: 3 });
+        assert_eq!(lines.span(source, 13), SourceSpan { line: 2, column: 3 });
+        assert_eq!(lines.offset(source, 0, 2), 6);
+        assert_eq!(lines.offset(source, 1, 2), 13);
+        assert_eq!(lines.offset(source, 999, 0), source.len());
+    }
 
     fn errors(scene: &ParsedScene) -> Vec<&str> {
         scene

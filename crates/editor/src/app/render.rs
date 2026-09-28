@@ -27,6 +27,8 @@ impl Render for WorkbenchPanel {
         {
             let root = root.clone();
             let relative = relative.clone();
+            self.update_block_viewport(window, cx);
+            self.sync_visual_editors(window, cx);
             self.refresh_inline_block_controls(&root, &relative, window, cx);
         }
         if self.resource_picker.as_ref().is_some_and(|picker| {
@@ -74,9 +76,16 @@ impl Render for WorkbenchPanel {
                         }
                         true
                     })
-                    .take(800)
                     .cloned()
                     .collect::<Vec<_>>();
+                let stride = EXPLORER_ROW_HEIGHT + EXPLORER_ROW_GAP;
+                let first_row =
+                    (((-f32::from(self.view_scroll.offset().y) - 100.).max(0.) / stride) as usize)
+                        .min(visible.len());
+                let row_count =
+                    ((f32::from(window.viewport_size().height) + 200.) / stride).ceil() as usize;
+                let end_row = (first_row + row_count).min(visible.len());
+                let bottom_rows = visible.len() - end_row;
                 let hovered_folder = self.file_drop_target.as_ref().map(|(path, _)| path.clone());
                 let external_root_target = PathBuf::new();
                 let internal_root_target = PathBuf::new();
@@ -425,7 +434,8 @@ impl Render for WorkbenchPanel {
                                     .gap(px(EXPLORER_ROW_GAP))
                                     .px_2()
                                     .id("explorer-files")
-                                    .children(visible.into_iter().enumerate().map(
+                                    .when(first_row > 0, |list| list.child(div().h(px(first_row as f32 * stride - EXPLORER_ROW_GAP)).flex_none()))
+                                    .children(visible.into_iter().enumerate().skip(first_row).take(row_count).map(
                                         |(index, file)| {
                                             let root = project_root.clone();
                                             let relative = file.relative_path.clone();
@@ -692,7 +702,8 @@ impl Render for WorkbenchPanel {
                                                     )
                                                 })
                                         },
-                                    )),
+                                    ))
+                                    .when(bottom_rows > 0, |list| list.child(div().h(px(bottom_rows as f32 * stride - EXPLORER_ROW_GAP)).flex_none())),
                             ),
                     );
                 div()
@@ -741,6 +752,8 @@ impl Render for WorkbenchPanel {
                             scroll_pending: self.block_scroll_pending,
                             scene_edit: self.scene_edit.as_ref(),
                             scene_name_input: &self.scene_name_input,
+                            visible: &self.block_visible,
+                            heights: &self.block_heights,
                         },
                         window,
                         cx,
@@ -1060,40 +1073,38 @@ impl Render for WorkbenchPanel {
             PanelContent::Characters { root } => {
                 let index = cx.global::<EditorDocuments>().authoring(root);
                 let inputs = self.tool_inputs.clone();
-                let content = div()
-                    .flex()
-                    .flex_col()
-                    .p_2()
-                    .gap_2()
-                    .child(section_label("CHARACTER MANIFEST"))
-                    .when(inputs.len() == 3, |this| {
-                        this.child(tool_input(&inputs[0]))
-                            .child(tool_input(&inputs[1]))
-                            .child(tool_input(&inputs[2]))
-                            .child(tool_action("Add character").on_click(
-                                cx.listener(|this, _, window, cx| this.add_character(window, cx)),
-                            ))
-                    })
-                    .child(
-                        div().flex().flex_col().gap_1().children(
-                            index
-                                .characters
-                                .into_iter()
-                                .enumerate()
-                                .map(|(row, character)| {
-                                    div()
-                                        .id(("character-row", row))
-                                        .p_2()
-                                        .rounded(px(7.))
-                                        .bg(rgb(PANEL))
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .text_color(rgb(INK))
-                                                .child(character.name),
-                                        )
-                                        .child(div().text_xs().text_color(rgb(MUTED)).child(
-                                            format!(
+                let content =
+                    div()
+                        .flex()
+                        .flex_col()
+                        .p_2()
+                        .gap_2()
+                        .child(section_label("CHARACTER MANIFEST"))
+                        .when(inputs.len() == 3, |this| {
+                            this.child(tool_input(&inputs[0]))
+                                .child(tool_input(&inputs[1]))
+                                .child(tool_input(&inputs[2]))
+                                .child(tool_action("Add character").on_click(cx.listener(
+                                    |this, _, window, cx| this.add_character(window, cx),
+                                )))
+                        })
+                        .child(
+                            div().flex().flex_col().gap_1().children(
+                                index.characters.iter().cloned().enumerate().map(
+                                    |(row, character)| {
+                                        div()
+                                            .id(("character-row", row))
+                                            .p_2()
+                                            .rounded(px(7.))
+                                            .bg(rgb(PANEL))
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(rgb(INK))
+                                                    .child(character.name),
+                                            )
+                                            .child(div().text_xs().text_color(rgb(MUTED)).child(
+                                                format!(
                                                     "{}{}",
                                                     character.id,
                                                     character
@@ -1101,10 +1112,11 @@ impl Render for WorkbenchPanel {
                                                         .map(|color| format!(" · {color}"))
                                                         .unwrap_or_default()
                                                 ),
-                                        ))
-                                }),
-                        ),
-                    );
+                                            ))
+                                    },
+                                ),
+                            ),
+                        );
                 vertical_overflow_view("character-scroll", &self.view_scroll, content)
             }
             PanelContent::Scenes { root } => {
@@ -1116,29 +1128,36 @@ impl Render for WorkbenchPanel {
                     .p_2()
                     .gap_2()
                     .child(section_label("SCENE DECLARATIONS"))
-                    .child(div().flex().flex_col().gap_1().children(
-                        index.scenes.into_iter().enumerate().map(|(row, scene)| {
-                            let root = root_for_rows.clone();
-                            let path = scene.path.clone();
-                            let line = scene.line;
-                            div()
-                                .id(("scene-row", row))
-                                .p_2()
-                                .rounded(px(7.))
-                                .bg(rgb(PANEL))
-                                .cursor_pointer()
-                                .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-                                .on_click(move |_, window, cx| {
-                                    navigate_source(&root, &path, line, 1, window, cx)
-                                })
-                                .child(div().text_sm().text_color(rgb(INK)).child(scene.name))
-                                .child(div().text_xs().text_color(rgb(MUTED)).child(format!(
-                                    "{}:{}",
-                                    scene.path.display(),
-                                    scene.line
-                                )))
-                        }),
-                    ));
+                    .child(
+                        div().flex().flex_col().gap_1().children(
+                            index
+                                .scenes
+                                .iter()
+                                .cloned()
+                                .enumerate()
+                                .map(|(row, scene)| {
+                                    let root = root_for_rows.clone();
+                                    let path = scene.path.clone();
+                                    let line = scene.line;
+                                    div()
+                                        .id(("scene-row", row))
+                                        .p_2()
+                                        .rounded(px(7.))
+                                        .bg(rgb(PANEL))
+                                        .cursor_pointer()
+                                        .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                                        .on_click(move |_, window, cx| {
+                                            navigate_source(&root, &path, line, 1, window, cx)
+                                        })
+                                        .child(
+                                            div().text_sm().text_color(rgb(INK)).child(scene.name),
+                                        )
+                                        .child(div().text_xs().text_color(rgb(MUTED)).child(
+                                            format!("{}:{}", scene.path.display(), scene.line),
+                                        ))
+                                }),
+                        ),
+                    );
                 vertical_overflow_view("scene-scroll", &self.view_scroll, content)
             }
             PanelContent::Problems { root } => render_problems(root, &self.view_scroll, cx),
@@ -1207,6 +1226,7 @@ impl Render for WorkbenchPanel {
             .on_action(cx.listener(Self::redo_blocks))
             .on_action(cx.listener(Self::undo_files))
             .on_action(cx.listener(Self::redo_files))
+            .on_action(cx.listener(Self::reload_document))
             .size_full()
             .text_color(rgb(INK))
             .child(body)

@@ -3,6 +3,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, Read};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use image::{ImageFormat, ImageReader};
 use keine_core::config::{EiyashouAssetEntry, EiyashouAssetManifest, GameConfig};
@@ -14,6 +15,24 @@ const MAX_MEDIA_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 const PROBE_BYTES: usize = 1024 * 1024;
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
+
+// One manifest writer per physical project. Weak entries do not retain closed
+// projects; the disk baseline check also catches changes from other programs.
+fn manifest_writer(root: &Path) -> io::Result<Arc<Mutex<()>>> {
+    static WRITERS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> = OnceLock::new();
+    let key = root.canonicalize()?;
+    let mut writers = WRITERS
+        .get_or_init(Mutex::default)
+        .lock()
+        .map_err(|_| io::Error::other("manifest writer lock poisoned"))?;
+    writers.retain(|_, writer| writer.strong_count() > 0);
+    let writer = writers
+        .get(&key)
+        .and_then(Weak::upgrade)
+        .unwrap_or_else(|| Arc::new(Mutex::new(())));
+    writers.insert(key, Arc::downgrade(&writer));
+    Ok(writer)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ImportResult {
@@ -40,6 +59,10 @@ pub fn create_directory(root: &Path, parent: &Path, name: &str) -> io::Result<Pa
 }
 
 pub fn import_external(root: &Path, target_dir: &Path, source: &Path) -> io::Result<ImportResult> {
+    let writer = manifest_writer(root)?;
+    let _transaction = writer
+        .lock()
+        .map_err(|_| io::Error::other("manifest writer lock poisoned"))?;
     let metadata = fs::symlink_metadata(source)?;
     if !metadata.file_type().is_file() {
         return Err(invalid("Only files can be imported here"));
@@ -71,7 +94,15 @@ pub fn import_external(root: &Path, target_dir: &Path, source: &Path) -> io::Res
         let manifest_path = root.join(&manifest_relative);
 
         copy_atomic(source, &destination)?;
-        if let Err(error) = atomic_source(&manifest_path, new_manifest.as_bytes()) {
+        let commit = (|| {
+            if fs::read_to_string(&manifest_path)? != old_manifest {
+                return Err(io::Error::other(
+                    "Asset manifest changed during import; import was cancelled",
+                ));
+            }
+            atomic_source(&manifest_path, new_manifest.as_bytes())
+        })();
+        if let Err(error) = commit {
             if let Err(cleanup) = fs::remove_file(&destination) {
                 return Err(io::Error::other(format!(
                     "Manifest update failed: {error}; imported file cleanup failed: {cleanup}; file retained at {}",
@@ -1134,6 +1165,33 @@ mod tests {
         assert!(manifest.contains("morning: 'assets/background/morning.webp'"));
         assert!(manifest.contains("# keep"));
         fs::remove_file(source).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn concurrent_imports_keep_both_manifest_entries() {
+        let root = fixture();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let handles = ["first.webp", "second.webp"].map(|name| {
+            let source = root.join(name);
+            write_webp(&source);
+            let root = root.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                import_external(&root, Path::new("assets/background"), &source).unwrap()
+            })
+        });
+        for handle in handles {
+            assert!(handle.join().unwrap().registered);
+        }
+        let manifest = EiyashouAssetManifest::from_yaml(
+            &fs::read_to_string(root.join("assets.yaml")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest.backgrounds.len(), 2);
+        assert!(manifest.backgrounds.contains_key("first"));
+        assert!(manifest.backgrounds.contains_key("second"));
         fs::remove_dir_all(root).unwrap();
     }
 
