@@ -25,6 +25,15 @@ fn editor_and_engine_complete_the_control_handshake() {
     let report = process.validate().unwrap();
     assert_eq!(report.errors, 0, "{:#?}", report.diagnostics);
     assert!(report.scenes > 0);
+    // Audition stays in the Ready host: no game window or Program execution is
+    // needed, and the logical content boundary rejects arbitrary host paths.
+    assert_eq!(process.audition_state().unwrap(), None);
+    assert_eq!(process.audition_audio(None).unwrap(), None);
+    for path in ["/etc/passwd", "../outside.opus"] {
+        assert!(process.audition_audio(Some(path.into())).is_err());
+        assert_eq!(process.audition_state().unwrap(), None);
+        process.ping().unwrap();
+    }
     process.shutdown().unwrap();
 }
 
@@ -40,8 +49,21 @@ fn one_crashed_engine_does_not_break_another_project_session() {
 #[test]
 fn crashed_engine_can_reopen_the_same_project() {
     let mut first = EngineProcess::launch(&engine(), &project(), 301).unwrap();
+    let preview_data = first.preview_data_root();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(preview_data.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
+    std::fs::create_dir_all(&preview_data).unwrap();
+    std::fs::write(preview_data.join("crash-marker"), b"test").unwrap();
     first.kill_for_test().unwrap();
     drop(first);
+    assert!(!preview_data.exists(), "crashed Preview data was retained");
 
     let mut restarted = EngineProcess::launch(&engine(), &project(), 302).unwrap();
     restarted.ping().unwrap();

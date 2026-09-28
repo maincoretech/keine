@@ -8,7 +8,8 @@ use crate::ScriptLanguage;
 pub(crate) use native::eiyashou_semantic_diagnostics;
 pub use native::{
     NativeDocument, NativeLanguage, NativeSceneSyntax, NativeToken, NativeTokenKind,
-    parse_native_document, parse_native_scenes,
+    is_native_dotted_command, is_native_structured_command, native_expanded_fields,
+    native_stage_property_names, parse_native_document, parse_native_scenes,
 };
 pub use webgal::{WebGalLanguage, parse_webgal, parse_webgal_report};
 

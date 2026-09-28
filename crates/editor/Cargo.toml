@@ -12,6 +12,8 @@ name = "editor"
 path = "src/main.rs"
 
 [dependencies]
+anyhow = { workspace = true }
+lsp-types = { version = "=0.97.0", features = ["proposed"] }
 fs2 = { workspace = true }
 gpui-kit = { workspace = true }
 image = { workspace = true }

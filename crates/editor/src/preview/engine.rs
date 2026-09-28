@@ -1,5 +1,6 @@
 use std::env;
 use std::ffi::OsString;
+use std::fs;
 use std::io::{self, BufReader};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -12,7 +13,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use keine_authoring::{
     Capability, ClientCommand, ClientMessage, ErrorCode, LifecycleState, MAX_DOCUMENT_BYTES,
     PROTOCOL_VERSION, SNAPSHOT_CHUNK_BYTES, ServerMessage, ServerResponse, ValidationReport,
-    read_message, write_message,
+    preview_overlay_path, read_message, write_message,
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -94,6 +95,7 @@ impl EngineLocator {
 
 pub struct EngineProcess {
     child: Child,
+    overlay_root: PathBuf,
     writer: TcpStream,
     responses: mpsc::Receiver<io::Result<ServerMessage>>,
     published_position: Arc<Mutex<Option<PublishedPosition>>>,
@@ -108,6 +110,7 @@ impl EngineProcess {
         listener.set_nonblocking(true)?;
         let endpoint = listener.local_addr()?;
         let token = launch_token();
+        let overlay_root = preview_overlay_path(&token);
         let mut child = Command::new(engine)
             .arg("__authoring-host")
             .arg(endpoint.to_string())
@@ -124,6 +127,7 @@ impl EngineProcess {
         let (responses, published_position) = spawn_response_reader(reader, generation);
         let mut process = Self {
             child,
+            overlay_root,
             writer: stream,
             responses,
             published_position,
@@ -131,7 +135,7 @@ impl EngineProcess {
             next_request: 1,
             closed: false,
         };
-        let hello = process.request(ClientCommand::Hello {
+        let hello = process.request_raw(ClientCommand::Hello {
             protocol_version: PROTOCOL_VERSION,
             token,
             editor_version: env!("CARGO_PKG_VERSION").into(),
@@ -203,6 +207,20 @@ impl EngineProcess {
 
     pub fn start_preview(&mut self, document_revision: u64) -> io::Result<LifecycleState> {
         self.lifecycle(ClientCommand::StartPreview { document_revision })
+    }
+
+    pub fn audition_audio(&mut self, path: Option<PathBuf>) -> io::Result<Option<PathBuf>> {
+        match self.request(ClientCommand::AuditionAudio { path })? {
+            ServerResponse::AudioAudition { path } => Ok(path),
+            other => Err(unexpected("audio audition", &other)),
+        }
+    }
+
+    pub fn audition_state(&mut self) -> io::Result<Option<PathBuf>> {
+        match self.request(ClientCommand::AuditionState)? {
+            ServerResponse::AudioAudition { path } => Ok(path),
+            other => Err(unexpected("audio audition", &other)),
+        }
     }
 
     pub fn show_preview(&mut self) -> io::Result<LifecycleState> {
@@ -326,6 +344,10 @@ impl EngineProcess {
         self.child.wait().map(|_| ())
     }
 
+    pub fn preview_data_root(&self) -> PathBuf {
+        self.overlay_root.join("preview-data")
+    }
+
     fn lifecycle(&mut self, command: ClientCommand) -> io::Result<LifecycleState> {
         match self.request(command)? {
             ServerResponse::Lifecycle { state } => Ok(state),
@@ -442,6 +464,9 @@ impl Drop for EngineProcess {
             let _ = self.child.kill();
             let _ = self.child.wait();
         }
+        // The Engine removes this on clean exit. Reap the child first so a
+        // crashed preview cannot leave save slots or snapshots in temp storage.
+        let _ = fs::remove_dir_all(&self.overlay_root);
     }
 }
 
@@ -520,6 +545,16 @@ fn unexpected(expected: &str, actual: &ServerResponse) -> io::Error {
 }
 
 fn require_compatible_hello(response: ServerResponse) -> io::Result<()> {
+    if let ServerResponse::Error {
+        code: ErrorCode::ProtocolMismatch,
+        message,
+    } = response
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{message}. Update both apps together"),
+        ));
+    }
     let ServerResponse::Hello {
         protocol_version,
         capabilities,
@@ -620,6 +655,13 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(mismatch.contains("Update both apps together"));
+        let rejected = require_compatible_hello(ServerResponse::Error {
+            code: ErrorCode::ProtocolMismatch,
+            message: "editor protocol is incompatible".into(),
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(rejected.contains("Update both apps together"));
         let missing = require_compatible_hello(hello(PROTOCOL_VERSION, vec![]))
             .unwrap_err()
             .to_string();

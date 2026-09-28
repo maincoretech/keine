@@ -5,6 +5,8 @@
 //! exactly by today's typed core IR; accepted syntax is never routed through
 //! the permissive WebGAL expression evaluator.
 
+mod v11;
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
 
@@ -97,6 +99,23 @@ pub fn parse_native_document(source: &str) -> NativeDocument {
 
 pub fn parse_native_scenes(source: &str) -> Vec<ParsedScene> {
     compile_native(source, true).1
+}
+
+/// Shared command inventory for the native parser and source-backed Block view.
+pub fn is_native_dotted_command(name: &str) -> bool {
+    v11::is_dotted_command(name)
+}
+
+/// Structured native calls own an editable child-row block in the source view.
+pub fn is_native_structured_command(name: &str) -> bool {
+    v11::is_structured_command(name)
+}
+
+pub use v11::native_stage_property_names;
+
+/// Large named command field inventories shared with the source-backed Inspector.
+pub fn native_expanded_fields(name: &str) -> Option<&'static [&'static str]> {
+    v11::expanded_fields(name)
 }
 
 fn compile_native(source: &str, validate_semantics: bool) -> (NativeDocument, Vec<ParsedScene>) {
@@ -609,6 +628,12 @@ fn validate_action_types(
         Action::EiyashouJumpIf { condition, .. } => {
             require_type(&infer_expression_type(condition, variables)?, &Scalar(Bool))
         }
+        Action::EiyashouSelectSpriteImageByCondition { variants, .. } => {
+            for (condition, _) in variants {
+                require_type(&infer_expression_type(condition, variables)?, &Scalar(Bool))?;
+            }
+            Ok(())
+        }
         _ => Ok(()),
     }
 }
@@ -793,6 +818,11 @@ fn collect_action_reads(action: &Action, reads: &mut HashSet<String>) {
             }
         }
         Action::EiyashouJumpIf { condition, .. } => collect_expression_reads(condition, reads),
+        Action::EiyashouSelectSpriteImageByCondition { variants, .. } => {
+            for (condition, _) in variants {
+                collect_expression_reads(condition, reads);
+            }
+        }
         _ => {}
     }
 }
@@ -1147,38 +1177,30 @@ impl<'a> Parser<'a> {
             return self.parse_dialogue(name, explicit_id, report);
         }
         self.reject_annotation(explicit_id, report);
-        let dotted_method = self
+        let mut dotted = name.clone();
+        let mut dotted_end = self.cursor;
+        while self
             .significant
-            .get(self.cursor + 1)
-            .map(|index| self.text(*index));
-        if self.peek_text() == Some(".")
-            && matches!(
-                (name.as_str(), dotted_method),
-                ("camera", Some("move" | "shake")) | ("sprite", Some("focus"))
-            )
+            .get(dotted_end)
+            .is_some_and(|index| self.text(*index) == ".")
+            && self
+                .significant
+                .get(dotted_end + 1)
+                .is_some_and(|index| self.tokens[*index].kind == NativeTokenKind::Identifier)
         {
-            self.advance();
-            let Some(method) = self.take_identifier() else {
-                report
-                    .diagnostics
-                    .push(self.error("expected command after `.`"));
-                return Vec::new();
-            };
-            let method = if name == "sprite" && method == "focus" && self.eat(".") {
-                let Some(child) = self.take_identifier() else {
-                    report
-                        .diagnostics
-                        .push(self.error("expected command after `.`"));
-                    return Vec::new();
-                };
-                format!("{method}.{child}")
-            } else {
-                method
-            };
-            return self
-                .parse_command(format!("{name}.{method}"), report)
-                .into_iter()
-                .collect();
+            dotted.push('.');
+            dotted.push_str(self.text(self.significant[dotted_end + 1]));
+            dotted_end += 2;
+        }
+        if dotted_end > self.cursor
+            && self
+                .significant
+                .get(dotted_end)
+                .is_some_and(|index| self.text(*index) == "(")
+            && is_native_dotted_command(&dotted)
+        {
+            self.cursor = dotted_end;
+            return self.parse_command(dotted, report).into_iter().collect();
         }
         if self.peek_text() == Some(".")
             || matches!(
@@ -1822,15 +1844,72 @@ impl<'a> Parser<'a> {
 
     fn parse_command(&mut self, name: String, report: &mut ParseReport) -> Option<Action> {
         let args = self.take_call_args(report);
+        if v11::is_extension_command(&name) {
+            return self.parse_v11_command(&name, &args, report);
+        }
         match name.as_str() {
             "goto" | "call" | "wait" => {
                 self.validate_signature(&name, &args, 1, &[], report);
             }
             "background" => {
-                self.validate_signature(&name, &args, 1, &["transition"], report);
+                self.validate_signature(
+                    &name,
+                    &args,
+                    1,
+                    &[
+                        "transition",
+                        "transform_x",
+                        "transform_y",
+                        "transform_alpha",
+                        "transform_scale_x",
+                        "transform_scale_y",
+                        "transform_rotation",
+                        "transform_blur",
+                        "transform_width",
+                        "transform_height",
+                    ],
+                    report,
+                );
             }
             "sprite" => {
-                self.validate_signature(&name, &args, 2, &["position", "transition", "z"], report);
+                self.validate_signature(
+                    &name,
+                    &args,
+                    2,
+                    &[
+                        "position",
+                        "anchor_offset",
+                        "y",
+                        "transition",
+                        "z",
+                        "blend",
+                        "layout",
+                        "layout_height",
+                        "layout_fit",
+                        "layout_x",
+                        "layout_y",
+                        "layout_anchor_x",
+                        "layout_anchor_y",
+                        "layout_width",
+                        "layout_canvas_width",
+                        "layout_canvas_height",
+                        "layout_rect_x",
+                        "layout_rect_y",
+                        "layout_rect_width",
+                        "layout_rect_height",
+                        "layout_height_ratio",
+                        "transform_x",
+                        "transform_y",
+                        "transform_alpha",
+                        "transform_scale_x",
+                        "transform_scale_y",
+                        "transform_rotation",
+                        "transform_blur",
+                        "transform_width",
+                        "transform_height",
+                    ],
+                    report,
+                );
             }
             "hide" => {
                 self.validate_signature(&name, &args, 1, &["transition"], report);
@@ -1842,7 +1921,7 @@ impl<'a> Parser<'a> {
                     1,
                     &[
                         "x", "y", "alpha", "scale_x", "scale_y", "rotation", "blur", "width",
-                        "height", "duration", "easing", "blocking",
+                        "height", "duration", "easing", "blocking", "tween",
                     ],
                     report,
                 );
@@ -1855,6 +1934,8 @@ impl<'a> Parser<'a> {
                     &[
                         "amplitude",
                         "frequency",
+                        "amplitude_randomness",
+                        "frequency_randomness",
                         "duration",
                         "axis",
                         "falloff",
@@ -1884,7 +1965,13 @@ impl<'a> Parser<'a> {
                 );
             }
             "move" => {
-                self.validate_signature(&name, &args, 2, &["duration", "easing"], report);
+                self.validate_signature(
+                    &name,
+                    &args,
+                    2,
+                    &["anchor_offset", "y", "duration", "easing", "blocking"],
+                    report,
+                );
             }
             "bgm" => {
                 self.validate_signature(&name, &args, 1, &["volume", "fade", "loop"], report);
@@ -1943,11 +2030,24 @@ impl<'a> Parser<'a> {
                 let image = first.and_then(|arg| self.argument_identifier(arg));
                 let transition = self.named_transition(&args, report);
                 match image.as_deref() {
-                    Some("none") => Some(Action::HideBg { transition }),
+                    Some("none") => {
+                        if args
+                            .iter()
+                            .filter_map(|arg| arg.name.as_deref())
+                            .any(|name| name.starts_with("transform_"))
+                        {
+                            report.diagnostics.push(
+                                self.error("background(none) cannot carry an initial transform"),
+                            );
+                            None
+                        } else {
+                            Some(Action::HideBg { transition })
+                        }
+                    }
                     Some(image) => Some(Action::ShowBg {
                         image: image.into(),
                         transition,
-                        transform: SpriteTransform::default(),
+                        transform: self.v11_full_transform(&args, report)?,
                     }),
                     None => {
                         report.diagnostics.push(
@@ -1960,31 +2060,36 @@ impl<'a> Parser<'a> {
             "sprite" => {
                 let slot = first.and_then(|arg| self.argument_identifier(arg));
                 let image = args.get(1).and_then(|arg| self.argument_identifier(arg));
-                let position = self
-                    .named_identifier(&args, "position")
-                    .unwrap_or_else(|| "center".into());
-                let position = match position.as_str() {
-                    "left" => Position::left(0.0),
-                    "center" => Position::center(0.0),
-                    "right" => Position::right(0.0),
+                let position = self.v11_position(&args, "position", report)?;
+                let z = self.checked_number(&args, "z", report)?.unwrap_or(0.0);
+                if z.fract() != 0.0 || z < i32::MIN as f32 || z > i32::MAX as f32 {
+                    report
+                        .diagnostics
+                        .push(self.error("`z` requires a 32-bit integer"));
+                    return None;
+                }
+                let blend = match self.named_identifier(&args, "blend").as_deref() {
+                    None | Some("alpha") => BlendMode::Alpha,
+                    Some("add") => BlendMode::Add,
+                    Some("multiply") => BlendMode::Multiply,
+                    Some("screen") => BlendMode::Screen,
                     _ => {
-                        report.diagnostics.push(
-                            self.error("sprite position must be `left`, `center`, or `right`"),
-                        );
-                        Position::center(0.0)
+                        report
+                            .diagnostics
+                            .push(self.error("unknown sprite blend mode"));
+                        return None;
                     }
                 };
-                let z_index = self.named_number(&args, "z").unwrap_or(0.0) as i32;
                 match (slot, image) {
                     (Some(id), Some(image)) => Some(Action::ShowSprite {
                         id,
                         image,
                         position,
-                        layout: SpriteLayout::Natural,
+                        layout: self.v11_sprite_layout(&args, report)?,
                         transition: self.named_transition(&args, report),
-                        transform: SpriteTransform::default(),
-                        z_index,
-                        blend: BlendMode::Alpha,
+                        transform: self.v11_full_transform(&args, report)?,
+                        z_index: z as i32,
+                        blend,
                     }),
                     _ => {
                         report
@@ -2037,10 +2142,23 @@ impl<'a> Parser<'a> {
                 let position = args
                     .get(1)
                     .and_then(|argument| self.argument_identifier(argument));
+                let anchor_offset = self
+                    .checked_number(&args, "anchor_offset", report)?
+                    .unwrap_or(0.0);
+                let y = self.checked_number(&args, "y", report)?.unwrap_or(0.0);
                 let position = match position.as_deref() {
-                    Some("left") => Some(Position::left(0.0)),
-                    Some("center") => Some(Position::center(0.0)),
-                    Some("right") => Some(Position::right(0.0)),
+                    Some("left") => Some(Position {
+                        x: keine_core::Anchor::Left(anchor_offset),
+                        y,
+                    }),
+                    Some("center") => Some(Position {
+                        x: keine_core::Anchor::Center(anchor_offset),
+                        y,
+                    }),
+                    Some("right") => Some(Position {
+                        x: keine_core::Anchor::Right(anchor_offset),
+                        y,
+                    }),
                     Some(_) => {
                         report
                             .diagnostics
@@ -2057,7 +2175,7 @@ impl<'a> Parser<'a> {
                         position,
                         duration,
                         easing,
-                        blocking: true,
+                        blocking: self.checked_bool(&args, "blocking", true, report)?,
                     }),
                     _ => {
                         report.diagnostics.push(
@@ -2182,7 +2300,7 @@ impl<'a> Parser<'a> {
                 }
             }
             let mut token_indices = self.significant[start..self.cursor].to_vec();
-            let name = if token_indices.len() >= 3
+            let name = if token_indices.len() >= 2
                 && self.text(token_indices[0]) != "*"
                 && self.text(token_indices[1]) == ":"
             {
@@ -2301,9 +2419,18 @@ impl<'a> Parser<'a> {
     }
 
     fn argument_number(&self, argument: &Argument) -> Option<f64> {
-        (argument.token_indices.len() == 1)
-            .then(|| self.text(argument.token_indices[0]).parse().ok())
-            .flatten()
+        match argument.token_indices.as_slice() {
+            [number] => self.text(*number).parse().ok(),
+            [sign, number] if matches!(self.text(*sign), "+" | "-") => {
+                let value = self.text(*number).parse::<f64>().ok()?;
+                Some(if self.text(*sign) == "-" {
+                    -value
+                } else {
+                    value
+                })
+            }
+            _ => None,
+        }
     }
 
     fn argument_bool(&self, argument: &Argument) -> Option<bool> {
@@ -2372,6 +2499,233 @@ impl<'a> Parser<'a> {
                 None
             }
         }
+    }
+
+    fn v11_position(
+        &self,
+        args: &[Argument],
+        name: &str,
+        report: &mut ParseReport,
+    ) -> Option<Position> {
+        let anchor = match self.named_arg(args, name) {
+            Some(arg) => match self.argument_identifier(arg) {
+                Some(value) => value,
+                None => {
+                    report
+                        .diagnostics
+                        .push(self.error("position requires an anchor identifier"));
+                    return None;
+                }
+            },
+            None => "center".to_owned(),
+        };
+        let offset = self
+            .checked_number(args, "anchor_offset", report)?
+            .unwrap_or(0.0);
+        let y = self.checked_number(args, "y", report)?.unwrap_or(0.0);
+        let x = match anchor.as_str() {
+            "left" => keine_core::Anchor::Left(offset),
+            "center" => keine_core::Anchor::Center(offset),
+            "right" => keine_core::Anchor::Right(offset),
+            _ => {
+                report
+                    .diagnostics
+                    .push(self.error("position must be `left`, `center`, or `right`"));
+                return None;
+            }
+        };
+        Some(Position { x, y })
+    }
+
+    fn v11_full_transform(
+        &self,
+        args: &[Argument],
+        report: &mut ParseReport,
+    ) -> Option<SpriteTransform> {
+        let mut transform = SpriteTransform::default();
+        for (name, slot) in [
+            ("transform_x", &mut transform.offset_x),
+            ("transform_y", &mut transform.offset_y),
+            ("transform_alpha", &mut transform.alpha),
+            ("transform_scale_x", &mut transform.scale_x),
+            ("transform_scale_y", &mut transform.scale_y),
+            ("transform_rotation", &mut transform.rotation),
+            ("transform_blur", &mut transform.blur),
+            ("transform_width", &mut transform.width),
+            ("transform_height", &mut transform.height),
+        ] {
+            if let Some(value) = self.checked_number(args, name, report)? {
+                *slot = value;
+            }
+        }
+        Some(transform)
+    }
+
+    fn v11_sprite_layout(
+        &self,
+        args: &[Argument],
+        report: &mut ParseReport,
+    ) -> Option<SpriteLayout> {
+        let mode = match self.named_arg(args, "layout") {
+            Some(arg) => match self.argument_identifier(arg) {
+                Some(value) => value,
+                None => {
+                    report
+                        .diagnostics
+                        .push(self.error("layout requires a mode identifier"));
+                    return None;
+                }
+            },
+            None => "natural".to_owned(),
+        };
+        let allowed: &[&str] = match mode.as_str() {
+            "natural" => &[],
+            "viewport_height" => &["layout_height"],
+            "scene" => &[
+                "layout_fit",
+                "layout_x",
+                "layout_y",
+                "layout_anchor_x",
+                "layout_anchor_y",
+                "layout_width",
+                "layout_height",
+            ],
+            "composite" => &[
+                "layout_canvas_width",
+                "layout_canvas_height",
+                "layout_rect_x",
+                "layout_rect_y",
+                "layout_rect_width",
+                "layout_rect_height",
+                "layout_height_ratio",
+            ],
+            _ => {
+                report.diagnostics.push(self.error("unknown sprite layout"));
+                return None;
+            }
+        };
+        for arg in args {
+            if let Some(field) = arg.name.as_deref()
+                && field.starts_with("layout_")
+                && !allowed.contains(&field)
+            {
+                report
+                    .diagnostics
+                    .push(self.error(format!("`{field}` is not valid for `{mode}` layout")));
+                return None;
+            }
+        }
+        let layout = match mode.as_str() {
+            "natural" => SpriteLayout::Natural,
+            "viewport_height" => {
+                let Some(height) = self.checked_number(args, "layout_height", report)? else {
+                    report
+                        .diagnostics
+                        .push(self.error("viewport_height layout requires `layout_height`"));
+                    return None;
+                };
+                if height <= 0.0 {
+                    report
+                        .diagnostics
+                        .push(self.error("layout_height must be positive"));
+                    return None;
+                }
+                SpriteLayout::ViewportHeight(height)
+            }
+            "scene" => {
+                let fit = match self.named_identifier(args, "layout_fit").as_deref() {
+                    None | Some("by_height") => keine_core::SceneFit::ByHeight,
+                    Some("by_width") => keine_core::SceneFit::ByWidth,
+                    Some("cover") => keine_core::SceneFit::Cover,
+                    Some("contain") => keine_core::SceneFit::Contain,
+                    Some("stretch") => keine_core::SceneFit::Stretch,
+                    Some("center") => keine_core::SceneFit::Center,
+                    _ => {
+                        report
+                            .diagnostics
+                            .push(self.error("unknown scene layout fit"));
+                        return None;
+                    }
+                };
+                let width = self.checked_number(args, "layout_width", report)?;
+                let height = self.checked_number(args, "layout_height", report)?;
+                if width.is_some() != height.is_some() {
+                    report
+                        .diagnostics
+                        .push(self.error("scene layout size requires both width and height"));
+                    return None;
+                }
+                SpriteLayout::Scene(keine_core::SceneLayerLayout {
+                    fit,
+                    position: [
+                        self.checked_number(args, "layout_x", report)?
+                            .unwrap_or(0.0),
+                        self.checked_number(args, "layout_y", report)?
+                            .unwrap_or(0.0),
+                    ],
+                    anchor: [
+                        self.checked_number(args, "layout_anchor_x", report)?
+                            .unwrap_or(0.5),
+                        self.checked_number(args, "layout_anchor_y", report)?
+                            .unwrap_or(0.5),
+                    ],
+                    size: width.zip(height).map(|(w, h)| [w, h]),
+                })
+            }
+            "composite" => {
+                let Some(canvas_width) =
+                    self.checked_number(args, "layout_canvas_width", report)?
+                else {
+                    report
+                        .diagnostics
+                        .push(self.error("composite layout requires canvas width"));
+                    return None;
+                };
+                let Some(canvas_height) =
+                    self.checked_number(args, "layout_canvas_height", report)?
+                else {
+                    report
+                        .diagnostics
+                        .push(self.error("composite layout requires canvas height"));
+                    return None;
+                };
+                let rect_fields = [
+                    "layout_rect_x",
+                    "layout_rect_y",
+                    "layout_rect_width",
+                    "layout_rect_height",
+                ];
+                let mut rect_values = Vec::new();
+                for field in rect_fields {
+                    rect_values.push(self.checked_number(args, field, report)?);
+                }
+                let rect = if rect_values.iter().all(Option::is_none) {
+                    None
+                } else if rect_values.iter().all(Option::is_some) {
+                    Some([
+                        rect_values[0]?,
+                        rect_values[1]?,
+                        rect_values[2]?,
+                        rect_values[3]?,
+                    ])
+                } else {
+                    report
+                        .diagnostics
+                        .push(self.error("composite rect requires all four fields"));
+                    return None;
+                };
+                SpriteLayout::Composite {
+                    canvas: [canvas_width, canvas_height],
+                    rect,
+                    height_ratio: self.checked_number(args, "layout_height_ratio", report)?,
+                }
+            }
+            _ => {
+                report.diagnostics.push(self.error("unknown sprite layout"));
+                return None;
+            }
+        };
+        Some(layout)
     }
 
     fn camera_targets(&self, args: &[Argument], report: &mut ParseReport) -> Option<CameraTargets> {
@@ -2468,13 +2822,17 @@ impl<'a> Parser<'a> {
                 .push(self.error("camera.move(...) requires at least one transform field"));
             return None;
         }
-        Some(Action::SetCameraTransform {
-            targets,
-            transform,
-            duration: self.named_duration_checked(args, "duration", report)?,
-            easing: self.named_easing(args, "easing", report)?,
-            blocking: self.checked_bool(args, "blocking", true, report)?,
-        })
+        self.camera_tween(
+            args,
+            Action::SetCameraTransform {
+                targets,
+                transform,
+                duration: self.named_duration_checked(args, "duration", report)?,
+                easing: self.named_easing(args, "easing", report)?,
+                blocking: self.checked_bool(args, "blocking", true, report)?,
+            },
+            report,
+        )
     }
 
     fn configure_sprite_focus(
@@ -2662,7 +3020,8 @@ impl<'a> Parser<'a> {
                 return None;
             }
         };
-        Some(Action::ShakeCamera {
+        let randomness = self.camera_randomness(args, report)?;
+        let action = Action::ShakeCamera {
             targets,
             shake: CameraShakeSpec {
                 amplitude,
@@ -2672,7 +3031,24 @@ impl<'a> Parser<'a> {
                 falloff,
             },
             blocking: self.checked_bool(args, "blocking", true, report)?,
-        })
+        };
+        if randomness.is_zero() {
+            Some(action)
+        } else if let Action::ShakeCamera {
+            targets,
+            shake,
+            blocking,
+        } = action
+        {
+            Some(Action::ShakeCameraRandomized {
+                targets,
+                shake,
+                randomness,
+                blocking,
+            })
+        } else {
+            None
+        }
     }
 
     fn named_easing(
@@ -3319,7 +3695,9 @@ fn span_at(source: &str, offset: usize) -> SourceSpan {
     let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
     let column = prefix
         .rsplit_once('\n')
-        .map_or(prefix.len() + 1, |(_, tail)| tail.chars().count() + 1);
+        .map_or(prefix.chars().count() + 1, |(_, tail)| {
+            tail.chars().count() + 1
+        });
     SourceSpan { line, column }
 }
 
@@ -3498,6 +3876,45 @@ scene ending { "Done" }
     }
 
     #[test]
+    fn camera_tween_and_randomness_are_typed_and_validate_domains() {
+        let scenes = parse_native_scenes(
+            "scene a { camera.move(scene, x: 120, scale_x: 1.5, tween: [x], duration: 1s), camera.effect(scene, blur_amount: 4, tween: [], duration: 1s), camera.effect.v2(scene, mirror_shatter_intensity: 0, mirror_shatter_center_x: 0.5, mirror_shatter_center_y: 0.5, mirror_shatter_spread: 1, mirror_shatter_seed: 0, speed_lines_intensity: 0, speed_lines_radial: true, speed_lines_density: 0.8, speed_lines_angle: 0, speed_lines_speed: 0, speed_lines_center_x: 0.5, speed_lines_center_y: 0.5, speed_lines_region_ellipse: false, speed_lines_region_x: 0.5, speed_lines_region_y: 0.5, speed_lines_region_width: 1, speed_lines_region_height: 1, speed_lines_region_feather: 0.05, tween: [speed_lines_density], duration: 1s), camera.shake(all, amplitude: 8, frequency: 12, amplitude_randomness: 0.3, frequency_randomness: 0.2, duration: 300ms), stage.animate(a, duration: 1s) { event.camera.shake(time: 0ms, amplitude: 8, frequency: 12, amplitude_randomness: 0.3, duration: 300ms) } }",
+        );
+        assert!(
+            errors(&scenes[0]).is_empty(),
+            "{:?}",
+            scenes[0].report.diagnostics
+        );
+        let actions = &scenes[0].report.actions;
+        assert!(
+            matches!(&actions[0], Action::SetCameraTween { spec } if spec.fields == [keine_core::CameraTweenField::X])
+        );
+        assert!(matches!(&actions[1], Action::SetCameraTween { spec } if spec.fields.is_empty()));
+        assert!(
+            matches!(&actions[2], Action::SetCameraTween { spec } if spec.fields == [keine_core::CameraTweenField::SpeedLinesDensity])
+        );
+        assert!(
+            matches!(&actions[3], Action::ShakeCameraRandomized { randomness, .. } if randomness.amplitude == 0.3 && randomness.frequency == 0.2)
+        );
+        assert!(
+            matches!(&actions[4], Action::StageAnimation { animation } if matches!(animation.events[0].kind, keine_core::StageEventKind::CameraShakeRandomized { .. }))
+        );
+        for command in [
+            "camera.move(scene, x: 1, tween: [unknown])",
+            "camera.move(scene, x: 1, tween: [x,x])",
+            "camera.move(scene, x: 1, tween: [x,])",
+            "camera.move(scene, x: 1, tween: [blur_amount])",
+            "camera.effect(scene, blur_amount: 1, tween: [color_tone])",
+            "camera.shake(all, amplitude: 8, frequency: 12, amplitude_randomness: 1.1, duration: 1s)",
+            "camera.shake(all, amplitude: 8, frequency: 12, frequency_randomness: -0.1, duration: 1s)",
+        ] {
+            let invalid = parse_native_scenes(&format!("scene a {{ {command} }}"));
+            assert!(!errors(&invalid[0]).is_empty(), "accepted {command}");
+            assert!(invalid[0].report.actions.is_empty());
+        }
+    }
+
+    #[test]
     fn dotted_camera_namespace_preserves_existing_list_methods() {
         let scenes = parse_native_scenes(
             "scene a { let camera = [1], let sprite = [2], camera.append(3), sprite.clear() }",
@@ -3515,6 +3932,261 @@ scene ending { "Done" }
             scenes[0].report.actions[3],
             Action::EiyashouList { .. }
         ));
+    }
+
+    #[test]
+    fn lowers_v11_shell_text_media_and_ui_commands() {
+        let scenes = parse_native_scenes(
+            r#"scene a {
+  avatar.show(face), avatar.hide(),
+  vocal.play(voice, volume: 0.5), vocal.stop(),
+  screen.film(true), text.box(visible: true, auto: false),
+  wait.advance(), playback.auto(false),
+  ui.show(save), ui.hide(save), particle.layers.clear(),
+  text.presentation(paragraph), text.retract(source: "Hello", keep: "He"),
+  text.float.hide(), text.float.configure(infinite: true),
+  text.style(cinematic), scene.parallax.stop(),
+  particle.hide(*, duration: 300ms), video.stop(*, fade: 300ms),
+  gallery.unlock(cg, image, name: "Artwork"),
+  input.simple(player, title: "Name", button: "OK"),
+  camera.bind(hero, distance: 1.5), camera.unbind(hero, distance: 1.5),
+  story.end()
+}"#,
+        );
+        assert!(
+            errors(&scenes[0]).is_empty(),
+            "{:?}",
+            scenes[0].report.diagnostics
+        );
+        let actions = &scenes[0].report.actions;
+        assert_eq!(actions.len(), 24);
+        assert!(matches!(actions[0], Action::MiniAvatar { .. }));
+        assert!(matches!(actions[4], Action::FilmMode { enabled: true }));
+        assert!(matches!(actions[12], Action::RetractDialogue { .. }));
+        assert!(matches!(
+            actions[21],
+            Action::SetCameraBinding { bound: true, .. }
+        ));
+        assert!(matches!(actions[23], Action::End));
+    }
+
+    #[test]
+    fn rejects_invalid_v11_arguments_without_lowering() {
+        let scenes = parse_native_scenes(
+            "scene a { avatar.show(), vocal.play(voice, volume: 2), screen.film(maybe), ui.show(unknown) }",
+        );
+        assert!(!errors(&scenes[0]).is_empty());
+        assert!(scenes[0].report.actions.is_empty());
+    }
+
+    #[test]
+    fn lowers_v11_visual_and_media_commands_without_changing_v1() {
+        let scenes = parse_native_scenes(
+            "scene a { sprite.offset(hero, x: -24, duration: 300ms), sprite.transform(hero, alpha: 0.5), background.transform(scale_x: 1.1), sprite.filter(hero, brightness: 0.7), sprite.animate(hero, shake, duration: 300ms), sprite.transition(hero, enter: enter, duration: 300ms), se.loop(rain, rain_sound, volume: 0.5), se.stop(rain), video.play(cutscene, movie, loop: true, muted: true, alpha: 0.8, skippable: false, wait: false, mode: mixed), background(room), sprite(hero, face) }",
+        );
+        assert!(
+            errors(&scenes[0]).is_empty(),
+            "{:?}",
+            scenes[0].report.diagnostics
+        );
+        let actions = &scenes[0].report.actions;
+        assert_eq!(actions.len(), 11);
+        assert!(
+            matches!(&actions[0], Action::SetTransform { id, transform, duration, .. } if id == "hero" && transform.apply_to(SpriteTransform::default()).offset_x == -24.0 && (*duration - 0.3).abs() < f32::EPSILON)
+        );
+        assert!(matches!(&actions[2], Action::SetTransform { id, .. } if id == "background"));
+        assert!(matches!(&actions[3], Action::SetFilter { target, .. } if target == "hero"));
+        assert!(
+            matches!(&actions[6], Action::Effect { id: Some(id), file: Some(file), .. } if id == "rain" && file == "rain_sound")
+        );
+        assert!(
+            matches!(&actions[7], Action::Effect { id: Some(id), file: None, .. } if id == "rain")
+        );
+        assert!(
+            matches!(&actions[8], Action::PlayVideo { video } if video.looped && video.muted && video.mode == VideoMode::Mixed)
+        );
+        assert!(matches!(&actions[9], Action::ShowBg { .. }));
+        assert!(matches!(&actions[10], Action::ShowSprite { .. }));
+    }
+
+    #[test]
+    fn lowers_v11_shell_commands_with_typed_values() {
+        let scenes = parse_native_scenes(
+            r#"scene a { screen.curtain.show(color: rgba(0, 0.2, 0.4, 1), duration: 300ms), screen.curtain.hide(color: rgba(1, 1, 1, 0), duration: 300ms), text.float("Hello", x: 120, y: 240, color: rgba(1, 1, 1, 1), hold: 1s), scene.parallax(amplitude_percent: 5, scale: 1.1), particle.show(snow, snow, count: 120, wind: -4, fade_in: 200ms), ui.message(confirm, title: "Question", message: "Continue?", confirm_text: "Yes", cancel_text: "No", result: answer) }"#,
+        );
+        assert!(
+            errors(&scenes[0]).is_empty(),
+            "{:?}",
+            scenes[0].report.diagnostics
+        );
+        let actions = &scenes[0].report.actions;
+        assert_eq!(actions.len(), 6);
+        assert!(
+            matches!(actions[0], Action::Curtain { visible: true, color, .. } if color[2] == 0.4)
+        );
+        assert!(matches!(actions[1], Action::Curtain { visible: false, .. }));
+        assert!(
+            matches!(&actions[2], Action::FloatingText { text, position, .. } if text == "Hello" && position[0] == 120.0)
+        );
+        assert!(
+            matches!(&actions[3], Action::ConfigureSceneMouseParallax { parallax: Some(parallax) } if parallax.amplitude_percent == 5.0)
+        );
+        assert!(
+            matches!(&actions[4], Action::ShowParticles { effect, .. } if effect.count == 120 && effect.wind == Some(-4.0))
+        );
+        assert!(
+            matches!(&actions[5], Action::SystemMessage { spec } if spec.result_variable.as_deref() == Some("answer"))
+        );
+    }
+
+    #[test]
+    fn lowers_v11_structured_rows_in_source_order() {
+        let scenes = parse_native_scenes(
+            r#"scene a {
+  text.intro(hold: true) { page("First"), page("Second") },
+  sprite.sequence(hero, fps: 12, loop: true) { frame(hero_a), frame(hero_b) },
+  sprite.sequence.timed(hero, loop: false) { frame(hero_a, duration: 120ms), frame(hero_b, duration: 200ms) },
+  sprite.select(hero, mood, default: hero_a) { case("happy", hero_b) },
+  sprite.keyframes(hero, repeat: 2, blocking: true) { frame(x: -20, duration: 300ms), frame(x: 20, duration: 300ms) },
+  assets.loading(mode: manual, lookahead: 5, blocking: true) { resource(room, kind: background), resource(hero_a, kind: figure) }
+}"#,
+        );
+        assert!(
+            errors(&scenes[0]).is_empty(),
+            "{:?}",
+            scenes[0].report.diagnostics
+        );
+        let actions = &scenes[0].report.actions;
+        assert_eq!(actions.len(), 6);
+        assert!(
+            matches!(&actions[0], Action::Intro { pages, hold: true } if pages == &["First", "Second"])
+        );
+        assert!(
+            matches!(&actions[1], Action::ConfigureSpriteSequence { frames, fps, looped: true, .. } if frames == &["hero_a", "hero_b"] && *fps == 12.0)
+        );
+        assert!(
+            matches!(&actions[2], Action::ConfigureTimedSpriteSequence { frame_durations, .. } if frame_durations == &[0.12, 0.2])
+        );
+        assert!(
+            matches!(&actions[3], Action::SelectSpriteImage { variants, .. } if variants == &[("happy".into(), "hero_b".into())])
+        );
+        assert!(
+            matches!(&actions[4], Action::AnimateKeyframes { frames, repeat: 2, .. } if frames.len() == 2)
+        );
+        assert!(
+            matches!(&actions[5], Action::ConfigureLoading { strategy } if strategy.resources.len() == 2)
+        );
+    }
+
+    #[test]
+    fn lowers_rich_input_and_paragraph_style_without_legacy_wrappers() {
+        let scenes = parse_native_scenes(
+            r#"scene a { input.request(age, type: number, title: "Age", description: "Years", placeholder: "18", confirm_text: "OK", required_text: "Required", required: true, min_length: 0, max_length: 3, min_value: 0, max_value: 120, step: 1, true_text: "Yes", false_text: "No"), text.paragraph.style("custom-style", typewriter_speed: 0.03, reveal_duration: 300ms, reveal_effect: smooth_rise, reveal_distance: 12, reveal_scale: 1.1, reveal_rotation: 0, reveal_blur: 0) }"#,
+        );
+        assert!(
+            errors(&scenes[0]).is_empty(),
+            "{:?}",
+            scenes[0].report.diagnostics
+        );
+        let actions = &scenes[0].report.actions;
+        assert!(
+            matches!(&actions[0], Action::RequestInput { spec } if spec.max_value == Some(120.0) && spec.max_length == 3)
+        );
+        assert!(
+            matches!(&actions[1], Action::SetParagraphStyle { typewriter_speed: Some(speed), text_reveal: Some(reveal), .. } if *speed == 0.03 && reveal.duration == 0.3)
+        );
+    }
+
+    #[test]
+    fn sprite_and_background_initial_state_survive_transition_lowering() {
+        let scenes = parse_native_scenes(
+            "scene a { background(room, transition: fade(300ms), transform_alpha: 0.4), sprite(hero, face, position: right, anchor_offset: 12, y: -20, layout: scene, layout_fit: cover, layout_x: 40, layout_y: 10, layout_anchor_x: 0.5, layout_anchor_y: 1, layout_width: 700, layout_height: 900, blend: add, transform_scale_x: 1.2, transition: fade(300ms)), sprite.update(hero, face_alt, position: center, layout: viewport_height, layout_height: 0.8, scale: 1.1, blocking: false) }",
+        );
+        assert!(
+            errors(&scenes[0]).is_empty(),
+            "{:?}",
+            scenes[0].report.diagnostics
+        );
+        let actions = &scenes[0].report.actions;
+        assert!(matches!(&actions[0], Action::ShowBg { transform, .. } if transform.alpha == 0.4));
+        assert!(
+            matches!(&actions[1], Action::ShowSprite { position, layout: SpriteLayout::Scene(_), transform, blend: BlendMode::Add, .. } if matches!(position.x, keine_core::Anchor::Right(12.0)) && position.y == -20.0 && transform.scale_x == 1.2)
+        );
+        assert!(
+            matches!(&actions[2], Action::UpdateSprite { layout: SpriteLayout::ViewportHeight(height), blocking: false, .. } if *height == 0.8)
+        );
+    }
+
+    #[test]
+    fn camera_effect_patch_preserves_sparse_and_clear_values() {
+        let scenes = parse_native_scenes(
+            "scene a { camera.effect(scene, bloom_intensity: 0.4, focal_distance: none, lut_preset: \"warm\", godray_parallel: true, duration: 300ms) }",
+        );
+        assert!(
+            errors(&scenes[0]).is_empty(),
+            "{:?}",
+            scenes[0].report.diagnostics
+        );
+        assert!(
+            matches!(&scenes[0].report.actions[0], Action::SetPostProcess { effect, targets, .. } if *targets == CameraTargets::SCENE && effect.bloom_intensity == Some(0.4) && effect.focal_distance == Some(None) && effect.lut_preset == Some(Some("warm".into())))
+        );
+    }
+
+    #[test]
+    fn stage_mask_show_and_hide_preserve_typed_fields() {
+        let scenes = parse_native_scenes(
+            "scene a { stage.mask.show(iris, mode: clip, plane: topmost, scope: selected, targets: [hero], shape: ellipse, center_x: 50, center_y: 45, opacity: 0.7, color: rgba(1, 0, 0, 0.8), duration: 300ms), stage.mask.hide(iris, duration: 200ms, blocking: false) }",
+        );
+        assert!(
+            errors(&scenes[0]).is_empty(),
+            "{:?}",
+            scenes[0].report.diagnostics
+        );
+        assert!(
+            matches!(&scenes[0].report.actions[0], Action::StageMask { mask: Some(mask), .. } if mask.targets == ["hero"] && mask.opacity == 0.7 && mask.color[0] == 1.0)
+        );
+        assert!(matches!(
+            &scenes[0].report.actions[1],
+            Action::StageMask {
+                mask: None,
+                blocking: false,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn conditional_sprite_selection_uses_strict_eiyashou_expression() {
+        let scenes = parse_native_scenes(
+            r#"scene a { let mood = "happy", sprite.select.when(hero, default: neutral) { case(mood == "happy", smile), case(mood == "sad", frown) } }"#,
+        );
+        assert!(
+            errors(&scenes[0]).is_empty(),
+            "{:?}",
+            scenes[0].report.diagnostics
+        );
+        assert!(
+            matches!(&scenes[0].report.actions[1], Action::EiyashouSelectSpriteImageByCondition { variants, .. } if variants.len() == 2)
+        );
+        let invalid = parse_native_scenes(
+            "scene a { sprite.select.when(hero, default: neutral) { case(1, smile) } }",
+        );
+        assert!(!errors(&invalid[0]).is_empty());
+    }
+
+    #[test]
+    fn stage_timeline_lowers_tracks_and_all_event_kinds() {
+        let scenes = parse_native_scenes(
+            "scene a { stage.animate(opening, duration: 2s, repeat: 1, playback_rate: 1, blocking: false) { track(camera, x) { key(time: 0ms, value: 0), key(time: 1s, value: 20) }, track(character(hero), alpha, image: face) { key(time: 0ms, value: 1) }, event.camera.shake(time: 500ms, amplitude: 8, frequency: 12, duration: 300ms), event.camera.patch(time: 500ms, targets: scene, bloom_intensity: 0.4), event.particle(snow, snow, time: 400ms, duration: 1s), event.scene(next, time: 1s, fit: cover) { layer(fg, room, distance: 1, x: 0, y: 0) }, event.audio(theme, bgm, music, time: 100ms, volume: 0.8, loop: true) } }",
+        );
+        assert!(
+            errors(&scenes[0]).is_empty(),
+            "{:?}",
+            scenes[0].report.diagnostics
+        );
+        assert!(
+            matches!(&scenes[0].report.actions[0], Action::StageAnimation { animation } if animation.tracks.len() == 2 && animation.events.len() == 5 && animation.repeat == 1 && !animation.blocking && matches!(&animation.events[3].kind, keine_core::StageEventKind::Scene(scene) if scene.layers.len() == 1))
+        );
     }
 
     #[test]

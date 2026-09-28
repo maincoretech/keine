@@ -1,7 +1,10 @@
 use std::ops::Range;
 use std::{collections::HashSet, fmt};
 
-use keine_loader::{Diagnostic, NativeToken, NativeTokenKind, parse_native_document};
+use keine_loader::{
+    Diagnostic, NativeToken, NativeTokenKind, is_native_dotted_command,
+    is_native_structured_command, native_expanded_fields, parse_native_document,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SceneSection {
@@ -15,6 +18,10 @@ pub struct SceneSection {
 pub struct BlockCard {
     pub kind: BlockKind,
     pub source_range: Range<usize>,
+    /// Original statement, before any associated Text cleanup commands.
+    pub statement_range: Range<usize>,
+    pub disabled: bool,
+    pub lifetime_owner: Option<usize>,
     pub text_range: Option<Range<usize>>,
     pub line: usize,
     pub column: usize,
@@ -107,6 +114,7 @@ pub enum BlockEditError {
     NoMoveTarget,
     InvalidIdentifier,
     NotEditableText,
+    InvalidDisabledBlock,
 }
 
 impl fmt::Display for BlockEditError {
@@ -120,6 +128,9 @@ impl fmt::Display for BlockEditError {
             Self::NoMoveTarget => formatter.write_str("selected blocks cannot move further"),
             Self::InvalidIdentifier => formatter.write_str("identifier is invalid"),
             Self::NotEditableText => formatter.write_str("block is not editable text"),
+            Self::InvalidDisabledBlock => {
+                formatter.write_str("block comment delimiters prevent lossless disabling")
+            }
         }
     }
 }
@@ -133,7 +144,18 @@ impl EiyashouProjection {
             .iter()
             .flat_map(|scene| &scene.blocks)
             .find(|block| block.source_range.start == start)?;
-        let node = source.get(block.source_range.clone())?;
+        self.source_fields_for_block(source, block)
+    }
+
+    pub fn source_fields_for_block(
+        &self,
+        source: &str,
+        block: &BlockCard,
+    ) -> Option<Vec<SourceField>> {
+        if block.disabled {
+            return None;
+        }
+        let node = source.get(block.statement_range.clone())?;
         match block.kind {
             BlockKind::Command | BlockKind::Choice | BlockKind::Conditional | BlockKind::ElseIf => {
                 let header = if block.kind == BlockKind::Command {
@@ -202,37 +224,31 @@ impl EiyashouProjection {
                 }
                 if block.kind == BlockKind::Command {
                     let command = node[..open].trim();
-                    let optional: &[&str] = match command {
-                        "background" | "hide" => &["transition"],
-                        "sprite" => &["position", "transition", "z"],
-                        "move" => &["duration", "easing"],
-                        "bgm" => &["volume", "fade", "loop"],
-                        "se" => &["volume"],
-                        "video" => &["skippable"],
-                        "pop" => &["into"],
-                        "camera.move" => &[
-                            "x", "y", "alpha", "scale_x", "scale_y", "rotation", "blur", "width",
-                            "height", "duration", "easing", "blocking",
-                        ],
-                        "camera.shake" => &[
-                            "amplitude",
-                            "frequency",
-                            "duration",
-                            "axis",
-                            "falloff",
-                            "blocking",
-                        ],
-                        "sprite.focus.configure" => &["enabled", "duration", "easing"],
-                        _ => &[],
-                    };
+                    if command == "sprite.focus.configure" {
+                        fields = fields
+                            .into_iter()
+                            .flat_map(|field| {
+                                if matches!(field.key.as_str(), "speaking" | "others" | "narration")
+                                {
+                                    portrait_style_fields(source, &field)
+                                        .unwrap_or_else(|| vec![field])
+                                } else {
+                                    vec![field]
+                                }
+                            })
+                            .collect();
+                    }
+                    let optional = command_argument_names(command);
                     let insertion_point = argument_start + arguments.trim_end().len();
                     let has_arguments = !arguments.trim().is_empty();
                     for name in optional {
-                        if fields.iter().any(|field| field.key == *name) {
+                        if fields.iter().any(|field| {
+                            field.key == name || field.key.starts_with(&format!("{name}."))
+                        }) {
                             continue;
                         }
                         fields.push(SourceField {
-                            key: (*name).to_owned(),
+                            key: name.to_owned(),
                             range: insertion_point..insertion_point,
                             value: String::new(),
                             quoted: false,
@@ -283,7 +299,9 @@ impl EiyashouProjection {
             .scenes
             .into_iter()
             .map(|scene| {
-                let blocks = parser.scene_blocks(scene.range.clone());
+                let mut blocks = parser.scene_blocks(scene.range.clone());
+                project_disabled_comments(source, &document.tokens, &scene.range, &mut blocks);
+                associate_text_lifetime(source, &mut blocks);
                 SceneSection {
                     name: scene.name,
                     name_range: scene.name_range,
@@ -298,6 +316,182 @@ impl EiyashouProjection {
             .map(read_only_diagnostic)
             .collect();
         Self { scenes, read_only }
+    }
+
+    /// Toggle a whole source node. The wrapper is a normal nested block comment;
+    /// the runtime grammar and enabled text remain unchanged.
+    pub fn toggle_disabled(&self, source: &str, start: usize) -> Result<String, BlockEditError> {
+        let block = self
+            .scenes
+            .iter()
+            .flat_map(|scene| &scene.blocks)
+            .find(|block| block.source_range.start == start)
+            .ok_or(BlockEditError::MissingSelection)?;
+        if matches!(
+            block.kind,
+            BlockKind::Narration | BlockKind::Dialogue { .. } | BlockKind::Else | BlockKind::ElseIf
+        ) {
+            return Err(BlockEditError::NotEditableText);
+        }
+        let node = source
+            .get(block.source_range.clone())
+            .ok_or(BlockEditError::StaleRange)?;
+        let replacement = if block.disabled {
+            disabled_body(node)
+                .ok_or(BlockEditError::StaleRange)?
+                .to_owned()
+        } else {
+            let wrapped = format!("/* disabled\n{node}\n*/");
+            // A comment delimiter inside a string may terminate the wrapper.
+            // Require one complete lexer token, rather than escaping authored text.
+            let prefix = "scene __disabled {} ";
+            let inventory = parse_native_document(&format!("{prefix}{wrapped}"));
+            if !inventory.tokens.iter().any(|token| {
+                token.kind == NativeTokenKind::Comment
+                    && token.range == (prefix.len()..prefix.len() + wrapped.len())
+            }) || !inventory.diagnostics.is_empty()
+            {
+                return Err(BlockEditError::InvalidDisabledBlock);
+            }
+            wrapped
+        };
+        let mut edited = source.to_owned();
+        edited.replace_range(block.source_range.clone(), &replacement);
+        if block.disabled {
+            let inventory = parse_native_document(source);
+            let before = inventory.tokens.iter().rfind(|token| {
+                token.range.end <= block.source_range.start
+                    && !matches!(
+                        token.kind,
+                        NativeTokenKind::Whitespace | NativeTokenKind::Comment
+                    )
+            });
+            let after = inventory.tokens.iter().find(|token| {
+                token.range.start >= block.source_range.end
+                    && !matches!(
+                        token.kind,
+                        NativeTokenKind::Whitespace | NativeTokenKind::Comment
+                    )
+            });
+            let left = before
+                .and_then(|token| source.get(token.range.clone()))
+                .is_some_and(|text| !matches!(text, "{" | ","));
+            let right = after
+                .and_then(|token| source.get(token.range.clone()))
+                .is_some_and(|text| !matches!(text, "}" | ","));
+            if right {
+                edited.insert(block.source_range.start + replacement.len(), ',');
+            }
+            if left {
+                edited.insert(block.source_range.start, ',');
+            }
+        }
+        let edited = remove_empty_statement_separators(&edited);
+        if Self::parse(&edited).read_only.len() > self.read_only.len() {
+            return Err(BlockEditError::StaleRange);
+        }
+        Ok(edited)
+    }
+
+    pub fn text_lifetime(&self, source: &str, start: usize) -> Option<TextLifetime> {
+        let block = self
+            .scenes
+            .iter()
+            .flat_map(|scene| &scene.blocks)
+            .find(|block| {
+                block.source_range.start == start && block.text_range.is_some() && !block.read_only
+            })?;
+        let mut lifetime = TextLifetime::default();
+        for command in self
+            .scenes
+            .iter()
+            .flat_map(|scene| &scene.blocks)
+            .filter(|command| command.lifetime_owner == Some(block.source_range.start))
+        {
+            match command.summary.split('(').next().map(str::trim) {
+                Some("text.box") => lifetime.text_box = Some(command.statement_range.clone()),
+                Some("hide") => {
+                    lifetime.hide = Some(command.statement_range.clone());
+                    let fields = self.source_fields_for_block(source, command)?;
+                    lifetime.target = fields.iter().find(|field| field.key == "0")?.value.clone();
+                    lifetime.transition = fields
+                        .iter()
+                        .find(|field| field.key == "transition" && field.insertion.is_none())
+                        .map(|field| field.value.clone())
+                        .unwrap_or_default();
+                }
+                _ => {}
+            }
+        }
+        Some(lifetime)
+    }
+
+    pub fn replace_text_lifetime(
+        &self,
+        source: &str,
+        start: usize,
+        keep_dialogue: bool,
+        target: &str,
+        transition: &str,
+    ) -> Result<String, BlockEditError> {
+        let block = self
+            .scenes
+            .iter()
+            .flat_map(|scene| &scene.blocks)
+            .find(|block| {
+                block.source_range.start == start && block.text_range.is_some() && !block.read_only
+            })
+            .ok_or(BlockEditError::NotEditableText)?;
+        let lifetime = self
+            .text_lifetime(source, start)
+            .ok_or(BlockEditError::NotEditableText)?;
+        let mut edits = Vec::new();
+        if let Some(range) = lifetime.text_box {
+            if keep_dialogue {
+                edits.push((range, String::new()));
+            }
+        } else if !keep_dialogue {
+            edits.push((
+                block.source_range.end..block.source_range.end,
+                ", text.box(visible: false, auto: true)".into(),
+            ));
+        }
+        let hide = if target.trim().is_empty() {
+            None
+        } else {
+            Some(format!(
+                "hide({}{})",
+                target.trim(),
+                if transition.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(", transition: {}", transition.trim())
+                }
+            ))
+        };
+        match (lifetime.hide, hide) {
+            (Some(range), Some(hide))
+                if lifetime.target != target.trim() || lifetime.transition != transition.trim() =>
+            {
+                edits.push((range, hide))
+            }
+            (Some(range), None) => edits.push((range, String::new())),
+            (None, Some(hide)) => edits.push((
+                block.source_range.end..block.source_range.end,
+                format!(", {hide}"),
+            )),
+            _ => {}
+        }
+        edits.sort_by_key(|(range, _)| (range.start, range.end));
+        let mut edited = source.to_owned();
+        for (range, replacement) in edits.into_iter().rev() {
+            edited.replace_range(range, &replacement);
+        }
+        let edited = remove_empty_statement_separators(&edited);
+        if Self::parse(&edited).read_only.len() > self.read_only.len() {
+            return Err(BlockEditError::StaleRange);
+        }
+        Ok(edited)
     }
 
     pub fn copy_blocks(
@@ -318,6 +512,134 @@ impl EiyashouProjection {
             .map(|blocks| blocks.join(",\n"))
     }
 
+    /// Applies a group of named argument changes in one bounded source edit.
+    /// None removes the argument; absent arguments are only inserted explicitly.
+    pub fn replace_block_fields(
+        &self,
+        source: &str,
+        start: usize,
+        updates: &[(String, Option<String>)],
+    ) -> Result<String, BlockEditError> {
+        let block = self
+            .scenes
+            .iter()
+            .flat_map(|scene| &scene.blocks)
+            .find(|block| block.source_range.start == start && !block.read_only)
+            .ok_or(BlockEditError::MissingSelection)?;
+        let fields = self
+            .source_fields_for_block(source, block)
+            .ok_or(BlockEditError::StaleRange)?;
+        let node = source
+            .get(block.source_range.clone())
+            .ok_or(BlockEditError::StaleRange)?;
+        let open = node.find('(').ok_or(BlockEditError::StaleRange)?;
+        let close = matching_parenthesis(node, open).ok_or(BlockEditError::StaleRange)?;
+        let body_start = start + open + 1;
+        let body = &node[open + 1..close];
+        let mut kept = Vec::new();
+        for span in split_source_ranges(body, ',') {
+            let absolute = body_start + span.start..body_start + span.end;
+            let update = updates.iter().find_map(|(name, value)| {
+                fields
+                    .iter()
+                    .find(|field| {
+                        &field.key == name
+                            && field.insertion.is_none()
+                            && field.range.start >= absolute.start
+                            && field.range.end <= absolute.end
+                    })
+                    .map(|field| (field, value))
+            });
+            let mut argument = body[span.clone()].to_owned();
+            if let Some((field, value)) = update {
+                let Some(value) = value else {
+                    continue;
+                };
+                // This API takes source expressions. Quoted values are deliberately
+                // not reconstructed: callers must use the individual string editor.
+                if field.quoted {
+                    return Err(BlockEditError::StaleRange);
+                }
+                argument.replace_range(
+                    field.range.start - absolute.start..field.range.end - absolute.start,
+                    value,
+                );
+            }
+            if !argument.trim().is_empty() {
+                kept.push(argument);
+            }
+        }
+        for (name, value) in updates {
+            let field = fields
+                .iter()
+                .find(|field| &field.key == name)
+                .ok_or(BlockEditError::StaleRange)?;
+            if name.contains('.') || name.chars().all(|character| character.is_ascii_digit()) {
+                return Err(BlockEditError::StaleRange);
+            }
+            if field.insertion.is_some()
+                && let Some(value) = value
+            {
+                kept.push(format!(" {name}: {value}"));
+            }
+        }
+        let mut edited = source.to_owned();
+        edited.replace_range(body_start..start + close, &kept.join(","));
+        Ok(edited)
+    }
+
+    /// Duplicates keep statement bytes but receive new implicit source IDs.
+    /// Explicit IDs belong to the original text/choice; copying them would make
+    /// the entire project invalid when the duplicate is saved.
+    pub fn duplicate_blocks(
+        &self,
+        source: &str,
+        selected: &HashSet<usize>,
+    ) -> Result<(String, Range<usize>), BlockEditError> {
+        let after = self
+            .selected_ranges(selected)?
+            .last()
+            .ok_or(BlockEditError::MissingSelection)?
+            .start;
+        let mut fragment = self.copy_blocks(source, selected)?;
+        const PREFIX: &str = "scene __duplicate { ";
+        let wrapped = format!("{PREFIX}{fragment} }}");
+        let parsed = Self::parse(&wrapped);
+        let mut annotations = parsed
+            .scenes
+            .iter()
+            .flat_map(|scene| &scene.blocks)
+            .filter_map(|block| {
+                block
+                    .stable_id
+                    .as_ref()
+                    .map(|id| (block.source_range.start, id))
+            })
+            .map(|(start, id)| {
+                let start = start
+                    .checked_sub(PREFIX.len())
+                    .ok_or(BlockEditError::StaleRange)?;
+                let mut end = start + 1 + id.len();
+                if fragment.get(start..end) != Some(format!("@{id}").as_str()) {
+                    return Err(BlockEditError::StaleRange);
+                }
+                while fragment
+                    .as_bytes()
+                    .get(end)
+                    .is_some_and(|byte| *byte == b' ' || *byte == b'\t')
+                {
+                    end += 1;
+                }
+                Ok(start..end)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        annotations.sort_by_key(|range| range.start);
+        for range in annotations.into_iter().rev() {
+            fragment.replace_range(range, "");
+        }
+        self.insert_block_after(source, after, &fragment)
+    }
+
     pub fn delete_blocks(
         &self,
         source: &str,
@@ -326,13 +648,49 @@ impl EiyashouProjection {
         let ranges = self.selected_ranges(selected)?;
         let mut edited = source.to_owned();
         for range in ranges.into_iter().rev() {
-            let range = deletion_range(source, range);
+            let disabled = self
+                .scenes
+                .iter()
+                .flat_map(|scene| &scene.blocks)
+                .any(|block| block.disabled && block.source_range == range);
+            let range = if disabled {
+                range
+            } else {
+                deletion_range(source, range)
+            };
             if edited.get(range.clone()).is_none() {
                 return Err(BlockEditError::StaleRange);
             }
             edited.replace_range(range, "");
         }
-        Ok(edited)
+        Ok(if source.contains("/* disabled\n") {
+            remove_empty_statement_separators(&edited)
+        } else {
+            edited
+        })
+    }
+
+    /// Resolve the live text range, including nested speech, before deleting the
+    /// owning node and its associated Text Ending. Stale/nonempty rows fail closed.
+    pub fn delete_empty_text(&self, source: &str, text_start: usize) -> Option<String> {
+        let block = self
+            .scenes
+            .iter()
+            .flat_map(|scene| &scene.blocks)
+            .find(|block| {
+                !block.read_only
+                    && !block.disabled
+                    && matches!(
+                        block.kind,
+                        BlockKind::Narration | BlockKind::Dialogue { .. }
+                    )
+                    && block
+                        .text_range
+                        .as_ref()
+                        .is_some_and(|range| range.start == text_start && range.is_empty())
+            })?;
+        self.delete_blocks(source, &HashSet::from([block.source_range.start]))
+            .ok()
     }
 
     pub fn move_blocks(
@@ -510,6 +868,41 @@ impl EiyashouProjection {
         replace_block_texts(source, &siblings, &siblings, &order)
     }
 
+    pub fn insert_block_before(
+        &self,
+        source: &str,
+        before_start: usize,
+        statement: &str,
+    ) -> Result<(String, Range<usize>), BlockEditError> {
+        let block = self
+            .scenes
+            .iter()
+            .flat_map(|scene| &scene.blocks)
+            .find(|block| block.source_range.start == before_start)
+            .ok_or(BlockEditError::MissingSelection)?;
+        if matches!(block.kind, BlockKind::ElseIf | BlockKind::Else) {
+            return Err(BlockEditError::NoMoveTarget);
+        }
+        if source.contains("/* disabled\n") || statement.contains("/* disabled\n") {
+            return insert_with_comments(source, block.source_range.start, statement);
+        }
+        let start = block.source_range.start;
+        let line_start = source[..start].rfind('\n').map_or(0, |index| index + 1);
+        let prefix = &source[line_start..start];
+        let (insertion, text, offset) = if prefix
+            .chars()
+            .all(|character| matches!(character, ' ' | '\t'))
+        {
+            (line_start, format!("{prefix}{statement},\n"), prefix.len())
+        } else {
+            (start, format!("{statement}, "), 0)
+        };
+        let mut edited = source.to_owned();
+        edited.insert_str(insertion, &text);
+        let start = insertion + offset;
+        Ok((edited, start..start + statement.len()))
+    }
+
     pub fn insert_block_after(
         &self,
         source: &str,
@@ -522,6 +915,9 @@ impl EiyashouProjection {
             .flat_map(|scene| scene.blocks.iter())
             .find(|block| block.source_range.start == after_start)
             .ok_or(BlockEditError::MissingSelection)?;
+        if source.contains("/* disabled\n") || statement.contains("/* disabled\n") {
+            return insert_with_comments(source, block.source_range.end, statement);
+        }
         let bytes = source.as_bytes();
         let line_start = source[..block.source_range.start]
             .rfind('\n')
@@ -608,7 +1004,7 @@ impl EiyashouProjection {
             .find(|block| block.source_range.start == block_start)?;
         let text_range = block.text_range.as_ref()?;
         let suffix = source
-            .get(text_range.end.saturating_add(1)..block.source_range.end)
+            .get(text_range.end.saturating_add(1)..block.statement_range.end)
             .unwrap_or("")
             .trim();
         let voice = suffix
@@ -680,7 +1076,7 @@ impl EiyashouProjection {
         if edited.get(block.source_range.clone()).is_none() {
             return Err(BlockEditError::StaleRange);
         }
-        edited.replace_range(block.source_range.clone(), &replacement);
+        edited.replace_range(block.statement_range.clone(), &replacement);
         Ok(edited)
     }
 
@@ -713,6 +1109,212 @@ impl EiyashouProjection {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TextLifetime {
+    pub text_box: Option<Range<usize>>,
+    pub hide: Option<Range<usize>>,
+    pub target: String,
+    pub transition: String,
+}
+
+fn disabled_body(comment: &str) -> Option<&str> {
+    let body = comment.strip_prefix("/* disabled")?;
+    let body = body
+        .strip_prefix("\r\n")
+        .or_else(|| body.strip_prefix('\n'))?;
+    Some(body.strip_suffix("*/")?.trim())
+}
+
+fn project_disabled_comments(
+    source: &str,
+    tokens: &[NativeToken],
+    scene: &Range<usize>,
+    blocks: &mut Vec<BlockCard>,
+) {
+    for token in tokens.iter().filter(|token| {
+        token.kind == NativeTokenKind::Comment
+            && token.range.start > scene.start
+            && token.range.end < scene.end
+    }) {
+        let Some(body) = source.get(token.range.clone()).and_then(disabled_body) else {
+            continue;
+        };
+        let wrapper = format!("scene __disabled {{ {body} }}");
+        let inventory = parse_native_document(&wrapper);
+        let parser = BlockProjectionParser::new(&wrapper, &inventory.tokens);
+        let Some(inner_scene) = inventory.scenes.first() else {
+            continue;
+        };
+        let Some(mut block) = parser
+            .scene_blocks(inner_scene.range.clone())
+            .into_iter()
+            .next()
+        else {
+            continue;
+        };
+        let depth = blocks
+            .iter()
+            .filter(|parent| {
+                parent.source_range.start < token.range.start
+                    && parent.source_range.end > token.range.end
+            })
+            .map(|parent| parent.depth + 1)
+            .max()
+            .unwrap_or(0);
+        block.source_range = token.range.clone();
+        block.statement_range = token.range.clone();
+        block.text_range = None;
+        block.stable_id = None;
+        block.disabled = true;
+        block.read_only = true;
+        block.depth = depth;
+        block.line = source[..token.range.start]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count();
+        block.column = source[..token.range.start]
+            .rsplit_once('\n')
+            .map_or(token.range.start, |(_, tail)| tail.chars().count());
+        blocks.push(block);
+    }
+    blocks.sort_by_key(|block| block.source_range.start);
+}
+
+fn associate_text_lifetime(source: &str, blocks: &mut [BlockCard]) {
+    for index in 0..blocks.len() {
+        if blocks[index].disabled
+            || !matches!(
+                blocks[index].kind,
+                BlockKind::Narration | BlockKind::Dialogue { .. }
+            )
+        {
+            continue;
+        }
+        let mut seen_box = false;
+        let mut seen_hide = false;
+        for next in index + 1..blocks.len() {
+            if blocks[next].disabled || blocks[next].depth != blocks[index].depth {
+                break;
+            }
+            let node = source
+                .get(blocks[next].statement_range.clone())
+                .unwrap_or("");
+            let command = node.split('(').next().unwrap_or("").trim();
+            let recognized = match command {
+                "text.box" if !seen_box => {
+                    let projection = EiyashouProjection::default();
+                    let fields = projection
+                        .source_fields_for_block(source, &blocks[next])
+                        .unwrap_or_default();
+                    let matches = fields
+                        .iter()
+                        .any(|field| field.key == "visible" && field.value == "false")
+                        && fields
+                            .iter()
+                            .any(|field| field.key == "auto" && field.value == "true");
+                    if matches {
+                        seen_box = true;
+                    }
+                    matches
+                }
+                "hide" if !seen_hide => {
+                    seen_hide = true;
+                    true
+                }
+                _ => false,
+            };
+            if !recognized {
+                break;
+            }
+            blocks[next].lifetime_owner = Some(blocks[index].source_range.start);
+            blocks[next].depth += 1;
+            blocks[index].source_range.end = blocks[next].source_range.end;
+        }
+    }
+}
+
+fn remove_empty_statement_separators(source: &str) -> String {
+    let inventory = parse_native_document(source);
+    let tokens = inventory
+        .tokens
+        .iter()
+        .filter(|token| {
+            !matches!(
+                token.kind,
+                NativeTokenKind::Whitespace | NativeTokenKind::Comment
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut edited = source.to_owned();
+    for (index, token) in tokens.iter().enumerate().rev() {
+        if source.get(token.range.clone()) != Some(",") {
+            continue;
+        }
+        let previous = index
+            .checked_sub(1)
+            .and_then(|index| tokens.get(index))
+            .and_then(|token| source.get(token.range.clone()));
+        let next = tokens
+            .get(index + 1)
+            .and_then(|token| source.get(token.range.clone()));
+        if matches!(previous, Some("{" | ",")) || next == Some("}") {
+            edited.replace_range(token.range.clone(), "");
+        }
+    }
+    edited
+}
+
+fn insert_with_comments(
+    source: &str,
+    at: usize,
+    statement: &str,
+) -> Result<(String, Range<usize>), BlockEditError> {
+    let prefix = "scene __fragment { ";
+    let wrapped = remove_empty_statement_separators(&format!("{prefix}{statement} }}"));
+    let statement = &wrapped[prefix.len()..wrapped.len() - 2];
+    let inventory = parse_native_document(source);
+    let fragment = parse_native_document(&format!("{prefix}{statement} }}"));
+    let active = fragment.tokens.iter().any(|token| {
+        token.range.start >= prefix.len()
+            && token.range.end <= prefix.len() + statement.len()
+            && !matches!(
+                token.kind,
+                NativeTokenKind::Whitespace | NativeTokenKind::Comment
+            )
+    });
+    let before = inventory.tokens.iter().rfind(|token| {
+        token.range.end <= at
+            && !matches!(
+                token.kind,
+                NativeTokenKind::Whitespace | NativeTokenKind::Comment
+            )
+    });
+    let after = inventory.tokens.iter().find(|token| {
+        token.range.start >= at
+            && !matches!(
+                token.kind,
+                NativeTokenKind::Whitespace | NativeTokenKind::Comment
+            )
+    });
+    let left = active
+        && before
+            .and_then(|token| source.get(token.range.clone()))
+            .is_some_and(|text| !matches!(text, "{" | ","));
+    let right = active
+        && after
+            .and_then(|token| source.get(token.range.clone()))
+            .is_some_and(|text| !matches!(text, "}" | ","));
+    let text = format!(
+        "{} {statement}{} ",
+        if left { "," } else { "" },
+        if right { "," } else { "" }
+    );
+    let start = at + usize::from(left) + 1;
+    let mut edited = source.to_owned();
+    edited.insert_str(at, &text);
+    Ok((edited, start..start + statement.len()))
+}
+
 fn replace_block_texts(
     source: &str,
     slots: &[&BlockCard],
@@ -721,6 +1323,50 @@ fn replace_block_texts(
 ) -> Result<String, BlockEditError> {
     if slots.len() != order.len() {
         return Err(BlockEditError::NonContiguousSelection);
+    }
+    if slots.iter().any(|slot| slot.disabled) {
+        let mut replacement = String::new();
+        let mut active = false;
+        for (position, index) in order.iter().enumerate() {
+            let block = siblings.get(*index).ok_or(BlockEditError::StaleRange)?;
+            if position > 0 {
+                let gap = &source
+                    [slots[position - 1].source_range.end..slots[position].source_range.start];
+                if !block.disabled && active {
+                    replacement.push(',');
+                }
+                let inventory = parse_native_document(gap);
+                let mut trivia = gap.to_owned();
+                for token in inventory.tokens.iter().rev().filter(|token| {
+                    token.kind == NativeTokenKind::Punctuation
+                        && gap.get(token.range.clone()) == Some(",")
+                }) {
+                    trivia.replace_range(token.range.clone(), "");
+                }
+                replacement.push_str(&trivia);
+            }
+            replacement.push_str(
+                source
+                    .get(block.source_range.clone())
+                    .ok_or(BlockEditError::StaleRange)?,
+            );
+            active |= !block.disabled;
+        }
+        let mut edited = source.to_owned();
+        edited.replace_range(
+            slots
+                .first()
+                .ok_or(BlockEditError::MissingSelection)?
+                .source_range
+                .start
+                ..slots
+                    .last()
+                    .ok_or(BlockEditError::MissingSelection)?
+                    .source_range
+                    .end,
+            &replacement,
+        );
+        return Ok(edited);
     }
     let replacements = order
         .iter()
@@ -901,6 +1547,24 @@ impl<'a> BlockProjectionParser<'a> {
         }
 
         let name = self.text(head_index);
+        let mut command_path = name.to_owned();
+        let mut command_end = head + 1;
+        while tokens
+            .get(command_end)
+            .is_some_and(|index| self.text(*index) == ".")
+            && tokens
+                .get(command_end + 1)
+                .is_some_and(|index| self.tokens[*index].kind == NativeTokenKind::Identifier)
+        {
+            command_path.push('.');
+            command_path.push_str(self.text(tokens[command_end + 1]));
+            command_end += 2;
+        }
+        let dotted_command = command_end > head + 1
+            && tokens
+                .get(command_end)
+                .is_some_and(|index| self.text(*index) == "(")
+            && is_native_dotted_command(&command_path);
         match name {
             "choice" => self.project_choice(tokens, head, source_range, depth, blocks),
             "if" => self.project_if(tokens, head, source_range, depth, blocks),
@@ -922,32 +1586,16 @@ impl<'a> BlockProjectionParser<'a> {
             {
                 self.project_dialogue(tokens, head, source_range, depth, stable_id, blocks);
             }
-            _ if name == "sprite"
-                && [".", "focus", ".", "configure", "("]
-                    .iter()
-                    .enumerate()
-                    .all(|(offset, expected)| {
-                        tokens
-                            .get(head + 1 + offset)
-                            .is_some_and(|index| self.text(*index) == *expected)
-                    }) =>
-            {
+            _ if dotted_command => {
                 blocks.push(self.block(BlockKind::Command, source_range, None, depth, None, false));
-            }
-            _ if tokens
-                .get(head + 1)
-                .is_some_and(|index| self.text(*index) == ".")
-                && tokens.get(head + 2).is_some_and(|index| {
-                    matches!(
-                        (name, self.text(*index)),
-                        ("camera", "move" | "shake") | ("sprite", "focus")
-                    )
-                })
-                && tokens
-                    .get(head + 3)
-                    .is_some_and(|index| self.text(*index) == "(") =>
-            {
-                blocks.push(self.block(BlockKind::Command, source_range, None, depth, None, false));
+                if is_native_structured_command(&command_path)
+                    && let Some(open) = (command_end..tokens.len())
+                        .find(|position| self.text(tokens[*position]) == "{")
+                    && let Some(close) =
+                        matching_delimiter(tokens, open, |index| self.text(index), "{", "}")
+                {
+                    self.project_structured_rows(&tokens[open + 1..close], depth + 1, blocks);
+                }
             }
             _ if tokens
                 .get(head + 1)
@@ -978,6 +1626,28 @@ impl<'a> BlockProjectionParser<'a> {
                 };
                 let read_only = kind == BlockKind::Unsupported;
                 blocks.push(self.block(kind, source_range, None, depth, None, read_only));
+            }
+        }
+    }
+
+    fn project_structured_rows(&self, tokens: &[usize], depth: usize, blocks: &mut Vec<BlockCard>) {
+        for row in split_top_level(tokens, |index| self.text(index), ",") {
+            let (Some(first), Some(last)) = (row.first(), row.last()) else {
+                continue;
+            };
+            blocks.push(self.block(
+                BlockKind::Command,
+                self.tokens[*first].range.start..self.tokens[*last].range.end,
+                None,
+                depth,
+                None,
+                false,
+            ));
+            if let Some(open) = row.iter().position(|index| self.text(*index) == "{")
+                && let Some(close) =
+                    matching_delimiter(row, open, |index| self.text(index), "{", "}")
+            {
+                self.project_structured_rows(&row[open + 1..close], depth + 1, blocks);
             }
         }
     }
@@ -1253,7 +1923,10 @@ impl<'a> BlockProjectionParser<'a> {
         BlockCard {
             summary: compact_summary(self.source.get(source_range.clone()).unwrap_or("")),
             kind,
+            statement_range: source_range.clone(),
             source_range,
+            disabled: false,
+            lifetime_owner: None,
             text_range,
             line,
             column,
@@ -1377,6 +2050,66 @@ fn split_source_ranges(source: &str, separator: char) -> Vec<Range<usize>> {
         start += offset + separator.len_utf8();
     }
     ranges
+}
+
+fn portrait_style_fields(source: &str, parent: &SourceField) -> Option<Vec<SourceField>> {
+    const STYLE_FIELDS: [&str; 6] = [
+        "scale",
+        "brightness",
+        "saturation",
+        "contrast",
+        "blur",
+        "alpha",
+    ];
+    let style = source.get(parent.range.clone())?;
+    if !style.starts_with("style(") || matching_parenthesis(style, 5)? != style.len() - 1 {
+        return None;
+    }
+    let body_start = parent.range.start + 6;
+    let body = &style[6..style.len() - 1];
+    let mut fields = Vec::new();
+    for span in split_source_ranges(body, ',') {
+        let Some(full) =
+            trimmed_source_range(source, body_start + span.start..body_start + span.end)
+        else {
+            if body.trim().is_empty() {
+                break;
+            }
+            return None;
+        };
+        let raw = source.get(full.clone())?;
+        let colon = top_level_position(raw, ':')?;
+        let name = raw[..colon].trim();
+        if !STYLE_FIELDS.contains(&name) {
+            return None;
+        }
+        let range = trimmed_source_range(source, full.start + colon + 1..full.end)?;
+        fields.push(SourceField {
+            key: format!("{}.{}", parent.key, name),
+            range: range.clone(),
+            value: source.get(range)?.to_owned(),
+            quoted: false,
+            insertion: None,
+            insertion_suffix: None,
+        });
+    }
+    let insertion_point = parent.range.end - 1;
+    let has_fields = !body.trim().is_empty();
+    for name in STYLE_FIELDS {
+        let key = format!("{}.{}", parent.key, name);
+        if fields.iter().any(|field| field.key == key) {
+            continue;
+        }
+        fields.push(SourceField {
+            key,
+            range: insertion_point..insertion_point,
+            value: String::new(),
+            quoted: false,
+            insertion: Some(format!("{}{name}: ", if has_fields { ", " } else { "" })),
+            insertion_suffix: None,
+        });
+    }
+    Some(fields)
 }
 
 fn trimmed_source_range(source: &str, range: Range<usize>) -> Option<Range<usize>> {
@@ -1565,9 +2298,395 @@ fn read_only_diagnostic(diagnostic: &Diagnostic) -> ReadOnlyCard {
     }
 }
 
+/// Shared named-argument inventory for Inspector and Text completions.
+pub fn command_argument_names(command: &str) -> Vec<&str> {
+    if command == "event.camera.patch" {
+        let mut fields = vec!["time", "targets"];
+        fields.extend(
+            native_expanded_fields("camera.effect")
+                .unwrap_or(&[])
+                .iter()
+                .copied()
+                .filter(|field| !matches!(*field, "duration" | "easing" | "blocking" | "tween")),
+        );
+        fields
+    } else {
+        let known: &[&str] = match command {
+            "text.box" => &["visible", "auto"],
+            "text.retract" => &["source", "keep"],
+            "text.float.configure" => &["id", "infinite"],
+            "particle.hide" => &["duration"],
+            "video.stop" => &["fade"],
+            "gallery.unlock" => &["name"],
+            "input.simple" => &["title", "button"],
+            "camera.bind" | "camera.unbind" => &["distance"],
+            "style" => &[
+                "scale",
+                "brightness",
+                "saturation",
+                "contrast",
+                "blur",
+                "alpha",
+            ],
+            "background" => &[
+                "transition",
+                "transform_x",
+                "transform_y",
+                "transform_alpha",
+                "transform_scale_x",
+                "transform_scale_y",
+                "transform_rotation",
+                "transform_blur",
+                "transform_width",
+                "transform_height",
+            ],
+            "hide" => &["transition"],
+            "sprite" => &[
+                "position",
+                "anchor_offset",
+                "y",
+                "transition",
+                "z",
+                "blend",
+                "layout",
+                "layout_height",
+                "layout_fit",
+                "layout_x",
+                "layout_y",
+                "layout_anchor_x",
+                "layout_anchor_y",
+                "layout_width",
+                "layout_canvas_width",
+                "layout_canvas_height",
+                "layout_rect_x",
+                "layout_rect_y",
+                "layout_rect_width",
+                "layout_rect_height",
+                "layout_height_ratio",
+                "transform_x",
+                "transform_y",
+                "transform_alpha",
+                "transform_scale_x",
+                "transform_scale_y",
+                "transform_rotation",
+                "transform_blur",
+                "transform_width",
+                "transform_height",
+            ],
+            "move" => &["anchor_offset", "y", "duration", "easing", "blocking"],
+            "bgm" => &["volume", "fade", "loop"],
+            "se" => &["volume"],
+            "video" => &["skippable"],
+            "pop" => &["into"],
+            "camera.move" => &[
+                "x", "y", "alpha", "scale_x", "scale_y", "rotation", "blur", "width", "height",
+                "duration", "easing", "blocking", "tween",
+            ],
+            "camera.shake" => &[
+                "amplitude",
+                "frequency",
+                "amplitude_randomness",
+                "frequency_randomness",
+                "duration",
+                "axis",
+                "falloff",
+                "blocking",
+            ],
+            "sprite.focus.configure" => &[
+                "characters",
+                "speaking",
+                "others",
+                "narration",
+                "enabled",
+                "duration",
+                "easing",
+            ],
+            "sprite.offset" => &["x", "y", "duration", "easing"],
+            "sprite.transform" | "background.transform" => &[
+                "x", "y", "alpha", "scale_x", "scale_y", "rotation", "blur", "width", "height",
+                "duration", "easing",
+            ],
+            "sprite.filter" => &["blur", "brightness", "contrast", "saturation"],
+            "sprite.animate" => &["duration"],
+            "sprite.transition" => &["enter", "exit", "duration"],
+            "se.loop" | "vocal.play" => &["volume"],
+            "video.play" => &["loop", "muted", "alpha", "skippable", "wait", "mode"],
+            "screen.curtain.show" | "screen.curtain.hide" => &["color", "duration"],
+            "text.float" => &[
+                "x",
+                "y",
+                "font_size",
+                "color",
+                "fade_in",
+                "hold",
+                "fade_out",
+                "blocking",
+            ],
+            "scene.parallax" => &[
+                "amplitude_percent",
+                "edge_ease_percent",
+                "return_to_center_on_leave",
+                "scale",
+            ],
+            "particle.show" => &["texture", "count", "wind", "gravity", "fade_in"],
+            "ui.message" => &["title", "message", "confirm_text", "cancel_text", "result"],
+            "text.intro" => &["hold"],
+            "sprite.sequence" => &["fps", "loop"],
+            "sprite.sequence.timed" => &["loop"],
+            "sprite.select" => &["default"],
+            "sprite.select.when" => &["default"],
+            "sprite.keyframes" => &["repeat", "blocking"],
+            "sprite.update" => &[
+                "position",
+                "anchor_offset",
+                "y",
+                "layout",
+                "layout_height",
+                "layout_fit",
+                "layout_x",
+                "layout_y",
+                "layout_anchor_x",
+                "layout_anchor_y",
+                "layout_width",
+                "layout_canvas_width",
+                "layout_canvas_height",
+                "layout_rect_x",
+                "layout_rect_y",
+                "layout_rect_width",
+                "layout_rect_height",
+                "layout_height_ratio",
+                "scale",
+                "duration",
+                "easing",
+                "blocking",
+            ],
+            "assets.loading" => &["mode", "lookahead", "blocking"],
+            "input.request" => &[
+                "type",
+                "title",
+                "description",
+                "placeholder",
+                "confirm_text",
+                "required_text",
+                "required",
+                "min_length",
+                "max_length",
+                "min_value",
+                "max_value",
+                "step",
+                "true_text",
+                "false_text",
+            ],
+            "text.paragraph.style" => &[
+                "typewriter_speed",
+                "reveal_duration",
+                "reveal_effect",
+                "reveal_distance",
+                "reveal_scale",
+                "reveal_rotation",
+                "reveal_blur",
+            ],
+            "camera.effect" | "camera.effect.v2" | "stage.mask.show" => {
+                native_expanded_fields(command).unwrap_or(&[])
+            }
+            "stage.mask.hide" => &["duration", "blocking"],
+            "stage.animate" => &[
+                "duration",
+                "repeat",
+                "infinite",
+                "playback_rate",
+                "blocking",
+            ],
+            "track" => &["image", "muted"],
+            "key" => &["time", "value", "easing"],
+            "event.camera.shake" => &[
+                "time",
+                "amplitude",
+                "frequency",
+                "amplitude_randomness",
+                "frequency_randomness",
+                "duration",
+                "axis",
+                "falloff",
+            ],
+            "event.particle" => &[
+                "time", "texture", "count", "wind", "gravity", "fade_in", "duration", "fade_out",
+            ],
+            "event.scene" => &[
+                "time",
+                "transition",
+                "reset_camera",
+                "fit",
+                "x",
+                "y",
+                "anchor_x",
+                "anchor_y",
+                "width",
+                "height",
+            ],
+            "event.audio" => &["time", "volume", "loop", "duration", "fade_in", "fade_out"],
+            "layer" => &["distance", "x", "y"],
+            _ => &[],
+        };
+        known.to_vec()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disabled_nodes_stay_valid_through_enable_reorder_copy_and_delete() {
+        for command in [
+            "camera.move(scene, x: 1)",
+            "camera.shake(all, amplitude: 2, frequency: 3, duration: 1s)",
+            "wait(1s)",
+        ] {
+            let source = "scene start { camera.move(scene, x: 1), camera.shake(all, amplitude: 2, frequency: 3, duration: 1s), wait(1s) }";
+            let projection = EiyashouProjection::parse(source);
+            let start = projection.scenes[0]
+                .blocks
+                .iter()
+                .find(|block| source.get(block.source_range.clone()) == Some(command))
+                .unwrap()
+                .source_range
+                .start;
+            let disabled = projection.toggle_disabled(source, start).unwrap();
+            let projection = EiyashouProjection::parse(&disabled);
+            assert!(
+                projection.read_only.is_empty(),
+                "{disabled}: {:?}",
+                projection.read_only
+            );
+            let card = projection.scenes[0]
+                .blocks
+                .iter()
+                .find(|block| block.disabled)
+                .unwrap();
+            assert_eq!(
+                disabled_body(&disabled[card.source_range.clone()]),
+                Some(command)
+            );
+            let selected = HashSet::from([card.source_range.start]);
+            let enabled = projection
+                .toggle_disabled(&disabled, card.source_range.start)
+                .unwrap();
+            assert!(
+                EiyashouProjection::parse(&enabled).read_only.is_empty(),
+                "{enabled}"
+            );
+            assert_eq!(
+                EiyashouProjection::parse(&enabled).scenes[0].blocks.len(),
+                3
+            );
+            let deleted = projection.delete_blocks(&disabled, &selected).unwrap();
+            assert!(
+                EiyashouProjection::parse(&deleted).read_only.is_empty(),
+                "{deleted}"
+            );
+            for direction in [MoveDirection::Up, MoveDirection::Down] {
+                if let Ok(moved) = projection.move_blocks(&disabled, &selected, direction) {
+                    assert!(
+                        EiyashouProjection::parse(&moved).read_only.is_empty(),
+                        "{moved}"
+                    );
+                    let copy = projection.copy_blocks(&disabled, &selected).unwrap();
+                    let anchor = projection.scenes[0].blocks[0].source_range.start;
+                    let (pasted, _) = projection
+                        .insert_block_before(&disabled, anchor, &copy)
+                        .unwrap();
+                    assert!(
+                        EiyashouProjection::parse(&pasted).read_only.is_empty(),
+                        "{pasted}"
+                    );
+                }
+            }
+        }
+        let source = r#"scene start { text.float("*/", x: 1, y: 2) }"#;
+        let projection = EiyashouProjection::parse(source);
+        assert!(
+            projection
+                .toggle_disabled(source, projection.scenes[0].blocks[0].source_range.start)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn text_ending_keeps_voice_metadata_and_structural_edits_together() {
+        let source = r#"scene start { @line hero: "Hi", voice, text.box(visible: false, auto: true), hide(hero*, transition: fade(200ms)), "Next" }"#;
+        let projection = EiyashouProjection::parse(source);
+        let text = &projection.scenes[0].blocks[0];
+        let metadata = projection
+            .text_block_metadata(source, text.source_range.start)
+            .unwrap();
+        assert_eq!(metadata.voice.as_deref(), Some("voice"));
+        assert_eq!(
+            projection.scenes[0].blocks[1].lifetime_owner,
+            Some(text.source_range.start)
+        );
+        let changed = projection
+            .replace_text_block_metadata(
+                source,
+                text.source_range.start,
+                &TextBlockMetadata {
+                    speaker: Some("rin".into()),
+                    ..metadata
+                },
+            )
+            .unwrap();
+        assert!(changed.contains("hide(hero*, transition: fade(200ms))"));
+        let selected = HashSet::from([text.source_range.start]);
+        let copied = projection.copy_blocks(source, &selected).unwrap();
+        assert!(copied.contains("text.box(") && copied.contains("hide(hero*"));
+        let deleted = projection.delete_blocks(source, &selected).unwrap();
+        assert!(!deleted.contains("text.box(") && !deleted.contains("hide(hero*"));
+        assert!(EiyashouProjection::parse(&deleted).read_only.is_empty());
+        let kept = projection
+            .replace_text_lifetime(source, text.source_range.start, true, "", "")
+            .unwrap();
+        assert!(
+            EiyashouProjection::parse(&kept).read_only.is_empty(),
+            "{kept}"
+        );
+        assert!(kept.contains(r#"hero: "Hi", voice"#));
+        let added = EiyashouProjection::parse(&kept)
+            .replace_text_lifetime(
+                &kept,
+                text.source_range.start,
+                false,
+                "hero*",
+                "fade(200ms)",
+            )
+            .unwrap();
+        assert!(
+            EiyashouProjection::parse(&added).read_only.is_empty(),
+            "{added}"
+        );
+        assert_eq!(EiyashouProjection::parse(&added).scenes[0].blocks.len(), 4);
+
+        // Retraction is a separate executable presentation step. Ending edits
+        // and whole-Text clipboard operations must not absorb or remove it.
+        let source = r#"scene start { @line hero: "我当然来了", voice, text.retract(source: "我当然来了", keep: "我当然"), text.retract(source: "", keep: "我"), "Next" }"#;
+        let projection = EiyashouProjection::parse(source);
+        let text = &projection.scenes[0].blocks[0];
+        let selected = HashSet::from([text.source_range.start]);
+        let copied = projection.copy_blocks(source, &selected).unwrap();
+        assert!(!copied.contains("text.retract"));
+        let ended = projection
+            .replace_text_lifetime(source, text.source_range.start, false, "hero*", "")
+            .unwrap();
+        assert_eq!(ended.matches("text.retract(").count(), 2);
+        let ended_projection = EiyashouProjection::parse(&ended);
+        assert!(ended_projection.read_only.is_empty());
+        assert!(
+            ended_projection.scenes[0]
+                .blocks
+                .iter()
+                .filter(|block| block.summary.starts_with("text.retract("))
+                .all(|block| block.lifetime_owner.is_none() && block.depth == text.depth)
+        );
+    }
 
     #[test]
     fn projects_scene_blocks_in_source_order() {
@@ -1661,6 +2780,25 @@ mod tests {
             projection.delete_blocks(source, &selected).unwrap(),
             "scene start {\n  \"three\"\n}\n"
         );
+        let (duplicated, _) = projection.duplicate_blocks(source, &selected).unwrap();
+        assert_eq!(duplicated.matches("@a").count(), 1);
+        assert_eq!(duplicated.matches("\"one\"").count(), 2);
+        assert!(EiyashouProjection::parse(&duplicated).read_only.is_empty());
+        let source = "scene start { stage.animate(a, duration: 1s) { track(camera, x) { key(time: 0ms, value: 0) } }, \"next\" }";
+        let projection = EiyashouProjection::parse(source);
+        let blocks = &projection.scenes[0].blocks;
+        let selected = HashSet::from([blocks[0].source_range.start, blocks[2].source_range.start]);
+        let (duplicated, _) = projection.duplicate_blocks(source, &selected).unwrap();
+        let checked = EiyashouProjection::parse(&duplicated);
+        assert_eq!(
+            checked.scenes[0]
+                .blocks
+                .iter()
+                .filter(|block| block.depth == 0)
+                .count(),
+            3
+        );
+        assert!(checked.read_only.is_empty());
     }
 
     #[test]
@@ -1781,7 +2919,7 @@ mod tests {
     }
 
     #[test]
-    fn inserts_after_a_block_without_reformatting_neighbors() {
+    fn inserts_around_a_block_without_reformatting_neighbors() {
         let source = "scene start {\n  \"one\",\n  wait(1s)\n}\n";
         let projection = EiyashouProjection::parse(source);
         let first = projection.scenes[0].blocks[0].source_range.start;
@@ -1793,6 +2931,31 @@ mod tests {
             "scene start {\n  \"one\",\n  \"two\",\n  wait(1s)\n}\n"
         );
         assert_eq!(edited.get(range), Some("\"two\""));
+        let (edited, range) = projection
+            .insert_block_before(source, first, "wait(200ms)")
+            .unwrap();
+        assert_eq!(
+            edited,
+            "scene start {\n  wait(200ms),\n  \"one\",\n  wait(1s)\n}\n"
+        );
+        assert_eq!(edited.get(range), Some("wait(200ms)"));
+        assert!(EiyashouProjection::parse(&edited).read_only.is_empty());
+        let inline = "scene start { loop { \"one\", break } }";
+        let projection = EiyashouProjection::parse(inline);
+        let nested = projection.scenes[0]
+            .blocks
+            .iter()
+            .find(|block| block.kind == BlockKind::Narration)
+            .unwrap();
+        let (edited, range) = projection
+            .insert_block_before(inline, nested.source_range.start, "wait(200ms)")
+            .unwrap();
+        assert_eq!(
+            edited,
+            "scene start { loop { wait(200ms), \"one\", break } }"
+        );
+        assert_eq!(edited.get(range), Some("wait(200ms)"));
+        assert!(EiyashouProjection::parse(&edited).read_only.is_empty());
     }
 
     #[test]
@@ -1833,7 +2996,35 @@ mod tests {
             .source_fields(source, rule.source_range.start)
             .unwrap();
         assert!(fields.iter().any(|field| field.key == "characters"));
-        assert!(fields.iter().any(|field| field.key == "speaking"));
+        let speaking = fields
+            .iter()
+            .find(|field| field.key == "speaking.scale")
+            .unwrap();
+        assert_eq!(speaking.value, "");
+        let mut edited = source.to_owned();
+        edited.replace_range(
+            speaking.range.clone(),
+            &format!("{}1.1", speaking.insertion.as_deref().unwrap()),
+        );
+        assert!(edited.contains("speaking: style(scale: 1.1)"));
+        assert!(fields.iter().any(|field| field.key == "others.alpha"));
+    }
+
+    #[test]
+    fn projects_existing_portrait_style_values_into_independent_fields() {
+        let source = "scene a { sprite.focus.configure(characters: [hero], speaking: style(scale: 1.1, alpha: 0.8), others: style(), narration: style()) }";
+        let projection = EiyashouProjection::parse(source);
+        let block = &projection.scenes[0].blocks[0];
+        let fields = projection
+            .source_fields(source, block.source_range.start)
+            .unwrap();
+        let alpha = fields
+            .iter()
+            .find(|field| field.key == "speaking.alpha")
+            .unwrap();
+        assert_eq!(alpha.value, "0.8");
+        assert_eq!(&source[alpha.range.clone()], "0.8");
+        assert!(alpha.insertion.is_none());
     }
 
     #[test]
@@ -1886,10 +3077,10 @@ mod tests {
             ["0", "1", "position", "transition"]
         );
         assert_eq!(source.get(fields[3].range.clone()), Some("fade(300ms)"));
-        assert_eq!(fields[4].key, "z");
-        assert_eq!(fields[4].insertion.as_deref(), Some(", z: "));
+        let z = fields.iter().find(|field| field.key == "z").unwrap();
+        assert_eq!(z.insertion.as_deref(), Some(", z: "));
         let mut edited = source.to_owned();
-        edited.replace_range(fields[4].range.clone(), ", z: 2");
+        edited.replace_range(z.range.clone(), ", z: 2");
         let edited_projection = EiyashouProjection::parse(&edited);
         assert!(edited_projection.read_only.is_empty());
         assert_eq!(
@@ -1906,6 +3097,61 @@ mod tests {
             .unwrap();
         assert_eq!(fields.len(), 1);
         assert_eq!(fields[0].value, "ready");
+        let source = "scene start { camera.move(scene, x: 20, duration: 300ms), \"after\" }";
+        let projection = EiyashouProjection::parse(source);
+        let start = projection.scenes[0].blocks[0].source_range.start;
+        let edited = projection
+            .replace_block_fields(
+                source,
+                start,
+                &[
+                    ("x".into(), Some("-960".into())),
+                    ("y".into(), Some("540".into())),
+                    ("duration".into(), None),
+                ],
+            )
+            .unwrap();
+        assert_eq!(
+            edited,
+            "scene start { camera.move(scene, x: -960, y: 540), \"after\" }"
+        );
+        assert!(EiyashouProjection::parse(&edited).read_only.is_empty());
+        let source = "scene start { camera.effect(all, vignette_intensity: 0.4, bloom_intensity: 0.5), \"after\" }";
+        let projection = EiyashouProjection::parse(source);
+        let start = projection.scenes[0].blocks[0].source_range.start;
+        let edited = projection
+            .replace_block_fields(source, start, &[("vignette_intensity".into(), None)])
+            .unwrap();
+        assert_eq!(
+            edited,
+            "scene start { camera.effect(all, bloom_intensity: 0.5), \"after\" }"
+        );
+        assert!(EiyashouProjection::parse(&edited).read_only.is_empty());
+    }
+
+    #[test]
+    fn stage_timeline_projects_track_key_and_scene_layer_rows() {
+        let source = "scene a { stage.animate(opening, duration: 2s) { track(camera, x) { key(time: 0ms, value: 0) }, event.scene(next, time: 1s) { layer(front, room, distance: 1) } } }";
+        let projection = EiyashouProjection::parse(source);
+        let blocks = &projection.scenes[0].blocks;
+        assert_eq!(
+            blocks.iter().map(|block| block.depth).collect::<Vec<_>>(),
+            [0, 1, 2, 1, 2]
+        );
+        assert!(
+            blocks
+                .iter()
+                .all(|block| block.kind == BlockKind::Command && !block.read_only)
+        );
+        let key = &blocks[2];
+        let fields = projection
+            .source_fields(source, key.source_range.start)
+            .unwrap();
+        assert!(
+            fields
+                .iter()
+                .any(|field| field.key == "value" && field.value == "0")
+        );
     }
 
     #[test]
@@ -1949,6 +3195,22 @@ mod tests {
         assert_eq!(
             decode_source_string("literal /${value}"),
             Some("literal ${value}".into())
+        );
+        let source = r#"scene start { "Before", text.retract(source: "A👩‍👩‍👧‍👧\n\"B\"", keep: "A"), text.retract(source: "", keep: "") }"#;
+        let projection = EiyashouProjection::parse(source);
+        assert!(projection.read_only.is_empty());
+        let fields = projection
+            .source_fields(source, projection.scenes[0].blocks[1].source_range.start)
+            .unwrap();
+        assert_eq!(fields[0].value, "A👩‍👩‍👧‍👧\n\"B\"");
+        assert!(fields[0].quoted && fields[1].quoted);
+        let empty = projection
+            .source_fields(source, projection.scenes[0].blocks[2].source_range.start)
+            .unwrap();
+        assert!(
+            empty
+                .iter()
+                .all(|field| field.quoted && field.value.is_empty())
         );
     }
 

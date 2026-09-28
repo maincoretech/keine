@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -7,6 +8,122 @@ use gpui_kit::base::input::{
 };
 use gpui_kit::{Context, FontWeight, HighlightStyle, Hsla, SharedString, Window, rgb};
 use keine_loader::{NativeTokenKind, parse_native_document};
+
+/// Editing context is cached independently per editor. It is consulted on edits,
+/// never reparsed while painting. Only Shou's double quote is an automatic quote.
+pub fn install_editing_languages(cx: &mut gpui_kit::App) {
+    gpui_kit::base::input::set_language_provider(Rc::new(EditingLanguages::new()), cx);
+}
+
+struct EditingLanguages {
+    configs: Vec<(
+        &'static str,
+        Rc<gpui_kit::base::input::language_config::LanguageConfig>,
+    )>,
+    fallback: Rc<gpui_kit::base::input::language_config::LanguageConfig>,
+}
+impl EditingLanguages {
+    fn new() -> Self {
+        Self {
+            configs: ["eiyashou", "json", "text"]
+                .into_iter()
+                .map(|name| (name, editing_config(name)))
+                .collect(),
+            fallback: editing_config(""),
+        }
+    }
+}
+impl gpui_kit::base::input::LanguageProvider for EditingLanguages {
+    fn config(&self, name: &str) -> Rc<gpui_kit::base::input::language_config::LanguageConfig> {
+        self.configs
+            .iter()
+            .find(|(key, _)| *key == name)
+            .map(|(_, config)| config)
+            .unwrap_or(&self.fallback)
+            .clone()
+    }
+    fn syntax_context_provider(
+        &self,
+        name: &str,
+    ) -> Option<Rc<dyn gpui_kit::base::input::SyntaxContextProvider>> {
+        let language = SyntaxLanguage::from_name(name)?;
+        Some(Rc::new(EditingContext {
+            language,
+            cache: RefCell::new(None),
+        }))
+    }
+}
+
+fn editing_config(name: &str) -> Rc<gpui_kit::base::input::language_config::LanguageConfig> {
+    use gpui_kit::base::input::language_config::LanguageConfig;
+    use gpui_kit::base::input::{AutoClosingPair, BracketPair, SyntaxContext};
+    let mut rules = LanguageConfig::default();
+    match name {
+        "eiyashou" => {
+            rules = rules.auto_closing_pairs(
+                [("{", "}"), ("[", "]"), ("(", ")"), ("\"", "\"")]
+                    .into_iter()
+                    .map(|(open, close)| {
+                        AutoClosingPair::new(open, close)
+                            .not_in([SyntaxContext::String, SyntaxContext::Comment])
+                    }),
+            );
+        }
+        "text" => rules = rules.brackets([]).auto_closing_pairs([]),
+        "json" => {
+            rules = rules
+                .brackets([BracketPair::new("{", "}"), BracketPair::new("[", "]")])
+                .auto_closing_pairs([("{", "}"), ("[", "]"), ("\"", "\"")].into_iter().map(
+                    |(open, close)| {
+                        AutoClosingPair::new(open, close)
+                            .not_in([SyntaxContext::String, SyntaxContext::Comment])
+                    },
+                ))
+        }
+        _ => {}
+    }
+    Rc::new(rules)
+}
+
+struct EditingContext {
+    language: SyntaxLanguage,
+    cache: RefCell<Option<(Rope, String, Vec<SyntaxSpan>)>>,
+}
+impl gpui_kit::base::input::SyntaxContextProvider for EditingContext {
+    fn context_at(&self, text: &Rope, offset: usize) -> gpui_kit::base::input::SyntaxContext {
+        use gpui_kit::base::input::SyntaxContext;
+        let mut cache = self.cache.borrow_mut();
+        if cache
+            .as_ref()
+            .is_none_or(|(previous, _, _)| previous != text)
+        {
+            let source = text.to_string();
+            let spans = syntax_spans(&source, self.language);
+            *cache = Some((text.clone(), source, spans));
+        }
+        let Some((_, source, spans)) = cache.as_ref() else {
+            return SyntaxContext::Code;
+        };
+        let position = spans.partition_point(|span| span.range.start < offset);
+        let span = position
+            .checked_sub(1)
+            .and_then(|index| spans.get(index))
+            .filter(|span| offset <= span.range.end);
+        if let Some(span) = span.filter(|span| offset == span.range.end) {
+            let raw = &source[span.range.clone()];
+            if (span.kind == SyntaxKind::String && closed_quote(raw))
+                || (span.kind == SyntaxKind::Comment && raw.ends_with("*/"))
+            {
+                return SyntaxContext::Code;
+            }
+        }
+        match span.map(|span| span.kind) {
+            Some(SyntaxKind::String) => SyntaxContext::String,
+            Some(SyntaxKind::Comment) => SyntaxContext::Comment,
+            _ => SyntaxContext::Code,
+        }
+    }
+}
 
 const KEYWORDS: &[&str] = &[
     "scene", "choice", "if", "else", "loop", "let", "break", "return", "true", "false",
@@ -791,6 +908,43 @@ mod tests {
             assert!(source.is_char_boundary(span.range.start));
             assert!(source.is_char_boundary(span.range.end));
             end = span.range.end;
+        }
+    }
+}
+
+fn closed_quote(raw: &str) -> bool {
+    raw.len() > 1
+        && raw.ends_with('"')
+        && raw[..raw.len() - 1]
+            .chars()
+            .rev()
+            .take_while(|character| *character == '\\')
+            .count()
+            .is_multiple_of(2)
+}
+
+#[cfg(test)]
+mod editing_tests {
+    use super::*;
+    use gpui_kit::base::input::{SyntaxContext, SyntaxContextProvider};
+
+    #[test]
+    fn pairing_context_distinguishes_literal_and_delimiter_boundaries() {
+        let provider = EditingContext {
+            language: SyntaxLanguage::Eiyashou,
+            cache: RefCell::new(None),
+        };
+        for (source, expected) in [
+            ("scene a { \"中文", SyntaxContext::String),
+            ("scene a { \"中文\"", SyntaxContext::Code),
+            ("scene a { \"escaped\\\"", SyntaxContext::String),
+            ("// quote \"", SyntaxContext::Comment),
+            ("/* quote \" */", SyntaxContext::Code),
+        ] {
+            assert_eq!(
+                provider.context_at(&Rope::from_str(source), source.len()),
+                expected
+            );
         }
     }
 }

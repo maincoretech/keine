@@ -277,6 +277,10 @@ pub enum StageEventKind {
     },
     Scene(StageSceneCue),
     Audio(StageAudioCue),
+    CameraShakeRandomized {
+        shake: CameraShakeSpec,
+        randomness: crate::types::CameraShakeRandomness,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -723,6 +727,24 @@ pub enum Action {
         volume: f32,
         fade_seconds: f32,
         looped: bool,
+    },
+    /// Select the first image whose strict Eiyashou condition evaluates to true.
+    /// Separate from the compatibility variant so native scripts never inherit
+    /// legacy truthiness or expression parsing.
+    EiyashouSelectSpriteImageByCondition {
+        id: String,
+        default_image: String,
+        variants: Vec<(EiyashouExpr, String)>,
+    },
+    /// Appended variants preserve Postcard's existing enum indices and payload layouts.
+    SetCameraTween {
+        spec: Box<crate::types::CameraTweenSpec>,
+    },
+    ShakeCameraRandomized {
+        targets: CameraTargets,
+        shake: CameraShakeSpec,
+        randomness: crate::types::CameraShakeRandomness,
+        blocking: bool,
     },
 }
 

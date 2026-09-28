@@ -3,7 +3,6 @@ use std::fs;
 use std::io::{self, BufReader};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -14,7 +13,8 @@ use bevy::prelude::{App, Resource, World};
 use bevy::winit::{EventLoopProxyWrapper, WinitUserEvent};
 use keine_authoring::{
     Capability, ClientCommand, ClientMessage, ErrorCode, LifecycleState, MAX_DOCUMENT_BYTES,
-    PROTOCOL_VERSION, ServerMessage, ServerResponse, read_message, write_message,
+    PROTOCOL_VERSION, ServerMessage, ServerResponse, preview_overlay_path, read_message,
+    write_message,
 };
 use keine_loader::LoaderRegistry;
 
@@ -22,7 +22,6 @@ use super::bootstrap::{
     OpenedProject, build_authoring_preview_app, open_project, validate_project,
 };
 
-static OVERLAY_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 type PublishedPosition = (u64, Option<(PathBuf, usize, usize)>);
 
 struct PendingSnapshot {
@@ -37,11 +36,21 @@ struct PreviewOverlay {
 }
 
 impl PreviewOverlay {
-    fn create() -> io::Result<Self> {
-        let sequence = OVERLAY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let root =
-            std::env::temp_dir().join(format!("keine-authoring-{}-{sequence}", std::process::id()));
-        fs::create_dir_all(root.join("scripts"))?;
+    fn create(token: &str) -> io::Result<Self> {
+        let root = preview_overlay_path(token);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            // Temporary parents can be shared (for example /tmp on Linux).
+            // Set owner-only access when creating the save/snapshot root.
+            fs::DirBuilder::new().mode(0o700).create(&root)?;
+        }
+        #[cfg(not(unix))]
+        fs::create_dir(&root)?;
+        if let Err(error) = fs::create_dir(root.join("scripts")) {
+            let _ = fs::remove_dir(&root);
+            return Err(error);
+        }
         Ok(Self { root })
     }
 
@@ -68,10 +77,12 @@ struct Session {
     pending_snapshot: Option<PendingSnapshot>,
     documents: HashMap<PathBuf, Vec<u8>>,
     overlay: PreviewOverlay,
+    #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+    audition: Option<AudioAudition>,
 }
 
 impl Session {
-    fn new() -> io::Result<Self> {
+    fn new(token: &str) -> io::Result<Self> {
         Ok(Self {
             project: None,
             project_path: None,
@@ -79,12 +90,105 @@ impl Session {
             document_revision: 0,
             pending_snapshot: None,
             documents: HashMap::new(),
-            overlay: PreviewOverlay::create()?,
+            overlay: PreviewOverlay::create(token)?,
+            #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+            audition: None,
         })
     }
 
     fn stop(&mut self) {
+        self.stop_audition();
         self.lifecycle = LifecycleState::Stopped;
+    }
+
+    fn stop_audition(&mut self) {
+        #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+        {
+            self.audition = None;
+        }
+    }
+
+    fn audition_path(&self) -> Option<PathBuf> {
+        #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+        {
+            self.audition
+                .as_ref()
+                .filter(|audition| !audition.player.empty())
+                .map(|audition| audition.path.clone())
+        }
+        #[cfg(not(any(feature = "audio-opus", feature = "audio-seekable")))]
+        None
+    }
+
+    fn audition_audio(
+        &mut self,
+        path: Option<&Path>,
+    ) -> Result<ServerResponse, (ErrorCode, String)> {
+        self.stop_audition();
+        let Some(path) = path else {
+            return Ok(ServerResponse::AudioAudition { path: None });
+        };
+        // The Editor sends a project-relative file path. Resolve it into the
+        // last matching asset mount before using the runtime's logical decoder.
+        // ContentMount remains the owner of file and symlink confinement.
+        if path.as_os_str().is_empty()
+            || !path
+                .components()
+                .all(|part| matches!(part, Component::Normal(_)))
+        {
+            return Err((
+                ErrorCode::InvalidRequest,
+                "audio asset path must be project-relative".into(),
+            ));
+        }
+        let project = self
+            .project
+            .as_ref()
+            .ok_or((ErrorCode::ProjectNotOpen, "no project is open".into()))?;
+        #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+        {
+            let requested = project.root.join(path);
+            let (mount, logical) = project
+                .content
+                .asset_mounts()
+                .into_iter()
+                .rev()
+                .find_map(|mount| {
+                    let root = mount.filesystem_root()?;
+                    let logical = requested.strip_prefix(root).ok()?.to_owned();
+                    mount.contains_file(&logical).then_some((mount, logical))
+                })
+                .ok_or((
+                    ErrorCode::InvalidRequest,
+                    "audio asset not found in project mounts".into(),
+                ))?;
+            let source = super::audio::authoring_audio_source(vec![mount].into(), &logical)
+                .map_err(|error| (ErrorCode::InvalidRequest, error.to_string()))?;
+            // Rodio 0.22: both the device sink and Player must live until playback
+            // stops. Dropping this transient owner stops sound, including disconnect.
+            let mut output = rodio::DeviceSinkBuilder::open_default_sink()
+                .map_err(|error| (ErrorCode::Internal, error.to_string()))?;
+            output.log_on_drop(false);
+            let player = rodio::Player::connect_new(output.mixer());
+            player.append(source);
+            self.audition = Some(AudioAudition {
+                path: path.to_owned(),
+                player,
+                _output: output,
+            });
+            Ok(ServerResponse::AudioAudition {
+                path: Some(path.to_owned()),
+            })
+        }
+        #[cfg(not(any(feature = "audio-opus", feature = "audio-seekable")))]
+        {
+            let _ = project;
+            let _ = path;
+            Err((
+                ErrorCode::InvalidRequest,
+                "audio audition requires an audio-enabled Engine".into(),
+            ))
+        }
     }
 
     fn build_runtime(&self, loader: &LoaderRegistry) -> Result<App> {
@@ -98,6 +202,13 @@ impl Session {
             },
         )
     }
+}
+
+#[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+struct AudioAudition {
+    path: PathBuf,
+    player: rodio::Player,
+    _output: rodio::MixerDeviceSink,
 }
 
 #[derive(Resource)]
@@ -253,6 +364,8 @@ pub(crate) fn run(endpoint: &str, token: &str, loader: LoaderRegistry) -> Result
                 Capability::WebGalProject,
                 Capability::Validate,
                 Capability::NativePreviewWindow,
+                #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+                Capability::AudioAudition,
                 Capability::SourceSnapshots,
                 Capability::SourceCursor,
                 Capability::Lifecycle,
@@ -264,7 +377,7 @@ pub(crate) fn run(endpoint: &str, token: &str, loader: LoaderRegistry) -> Result
     stream.set_read_timeout(None)?;
     let wake = Arc::new(Mutex::new(None));
     let messages = spawn_reader(reader, wake.clone());
-    let mut session = Session::new()?;
+    let mut session = Session::new(token)?;
     loop {
         match messages.recv() {
             Ok(Ok(Some(message))) => {
@@ -287,6 +400,7 @@ pub(crate) fn run(endpoint: &str, token: &str, loader: LoaderRegistry) -> Result
                         )?;
                         continue;
                     }
+                    session.stop_audition();
                     session.document_revision = *document_revision;
                     let mut runtime = match session.build_runtime(&loader) {
                         Ok(runtime) => runtime,
@@ -467,6 +581,10 @@ fn handle(
                 state: session.lifecycle,
             })
         }
+        ClientCommand::AuditionAudio { path } => session.audition_audio(path.as_deref()),
+        ClientCommand::AuditionState => Ok(ServerResponse::AudioAudition {
+            path: session.audition_path(),
+        }),
         ClientCommand::Stop => {
             session.stop();
             Ok(ServerResponse::Lifecycle {

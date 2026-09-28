@@ -185,11 +185,17 @@ fn collect_references(
                     keine_core::StageEventKind::CameraPatch { effect, .. } => {
                         collect_visible_lut(effect, &mut resource);
                     }
-                    keine_core::StageEventKind::CameraShake(_) => {}
+                    keine_core::StageEventKind::CameraShake(_)
+                    | keine_core::StageEventKind::CameraShakeRandomized { .. } => {}
                 }
             }
         }
         Action::SetPostProcess { effect, .. } => collect_visible_lut(effect, &mut resource),
+        Action::SetCameraTween { spec } => {
+            if let Some(effect) = &spec.effect {
+                collect_visible_lut(effect, &mut resource);
+            }
+        }
         Action::PlayVideo { video } => resource(&video.file, ResourceKind::Video),
         Action::StageMask {
             mask: Some(mask), ..
@@ -322,13 +328,33 @@ mod tests {
             span,
         );
 
+        report.push(
+            Action::SetCameraTween {
+                spec: Box::new(keine_core::CameraTweenSpec {
+                    targets: CameraTargets::SCENE,
+                    transform: None,
+                    effect: Some(lut_patch("soft")),
+                    v2: None,
+                    fields: vec![keine_core::CameraTweenField::LutIntensity],
+                    duration: 1.0,
+                    easing: Easing::Linear,
+                    blocking: false,
+                }),
+            },
+            span,
+        );
+
         assert_eq!(
             report
                 .resources
                 .iter()
                 .map(|resource| (resource.path.as_str(), resource.kind))
                 .collect::<Vec<_>>(),
-            [("warm", ResourceKind::Lut), ("night", ResourceKind::Lut),]
+            [
+                ("warm", ResourceKind::Lut),
+                ("night", ResourceKind::Lut),
+                ("soft", ResourceKind::Lut),
+            ]
         );
     }
 

@@ -19,7 +19,7 @@ another project phase.
 | P4 | Engine Preview | complete; native companion-window transport supersedes embedded pixels |
 | P5 | Core VN authoring UX | complete; T21 visual acceptance pending |
 | P6 | Pinned Project CI release chain | complete; private-project Linux runner accepted |
-| P7 | Cross-platform packaging, installation, input/DPI, recovery, compatibility, and performance hardening | in progress; T24 and T03 evidence pending |
+| P7 | Cross-platform packaging, installation, input/DPI, recovery, compatibility, and performance hardening | macOS 0.11.0 delivery ready; current installed GUI, source/Inspector/runtime sync, workspace gates and scoped metrics checked; user input/display/Preview-FPS acceptance pending, Windows/Linux deferred |
 
 Asset lifecycle (mapped deletion, recovery, and remapping) is an outstanding feature task, not a
 second P6. Media conversion remains deferred. Neither is part of the completed Project CI P6.
@@ -40,6 +40,14 @@ Formal signing and notarization are outside the current P7 scope.
   once-only variables, homogeneous lists, structured branches/loops, choices, scene flow, stable
   source identity, project manifests, character presentation, scene/media actions, non-looping
   blocking video, typed BGM playback mode, and real crossfade state.
+- Additive Eiyashou v1.1 commands expose native Engine scene, media, text, interaction, camera,
+  mask, particle, asset-loading, and shared-clock Stage Action fields through typed `.shou`
+  lowering. The original v1 spelling remains valid. Structured Page/Frame/Case/Resource and
+  Stage Track/Key/Event/Layer rows project to nested source-backed Blocks. Conditional sprite
+  selection uses a new strict typed Eiyashou Action instead of compatibility truthiness;
+  PostProcessV2 requires its complete 18-field state. Workspace gates and native smoke
+  validation pass; a representative v1.1 project has been validated and visually checked in
+  the Editor for nested Block rows and Focus style Inspector writeback.
 - The Bevy runtime provides 1920x1080 design-space rendering, fixed scene/UI/dialog camera
   composition, reactive lifecycle scheduling, background/sprite/effect synchronization, fixed
   MainCore UI, audio, desktop video, and platform persistence roots.
@@ -86,12 +94,14 @@ Formal signing and notarization are outside the current P7 scope.
   prebuilt Engine child per project for handshake, validation, diagnostics, source snapshots and
   patches, source/runtime cursor exchange, and lifecycle. Preview now opens the normal native
   Engine in a companion OS window from the Editor's icon-only top-right control; Start and Stop
-  remain explicit, and the running control can raise the Engine window. Authoring protocol v6
+  remain explicit, and the running control can raise the Engine window. Authoring protocol v7
   reports the Engine's executed source location: Block selection seeks the Engine, direct Engine
   input advances it, and the corresponding Block/scene/file follows without an input mode.
   The older LetsGal Studio sync session remains view-only. Native authoring Preview permits
   runtime save/load and settings only in a child-owned temporary data root, never in source-project
-  or shipping save data; that test data is discarded on a clean Engine child exit. The Engine owns
+  or shipping save data; that test data is discarded on a clean Engine child exit or after the
+  Editor reaps a crashed Engine. A simultaneous Editor/Engine crash may leave OS-temporary data.
+  The Engine owns
   native input, the usual three-camera composition, and the existing reactive lifecycle. No pixel
   readback, shared-memory frame transfer, or GPUI upload runs in the Editor. Editor and Engine are
   separate interactive windows; on Wayland the compositor may deny programmatic window raising.
@@ -99,6 +109,9 @@ Formal signing and notarization are outside the current P7 scope.
   `cargo migrate <source-project> <target-project>` opens a compatibility source
   read-only, rejects semantics that Eiyashou cannot preserve, stages confined referenced assets,
   emits `.shou` plus native manifests, validates the result, and only then installs a new target.
+  A 0.11.0 attempt on `projects/letsgal` stops at `Particle resources require manual migration`
+  and leaves the target absent. The older ignored `projects/letsgal-native` directory contains
+  invalid `engine {"ron":...}` output and is not an acceptance project for current Block syntax.
 - Eiyashou `assets.yaml` keeps legacy string paths and also accepts `{ path, tags? }` entries
   without migrating untouched source. Asset IDs remain namespaced by resource type. Within one
   type, two IDs cannot resolve to the same physical project file; explicit sharing across
@@ -283,9 +296,45 @@ project / package
   Picker remains searchable and persists favorites, category/item order, and hidden browse entries
   as global Editor preferences outside project files; hidden commands remain searchable. Blocks
   now provides compact direct Scene create/rename/delete/reorder controls in the current document,
-  with exact `goto`/`call` target rewriting on rename. Native commands use distinct short rows,
-  and selected non-Text properties edit bounded source ranges in Inspector, including optional
-  named arguments. These changes passed code gates but still need live visual acceptance.
+  with exact `goto`/`call` target rewriting on rename. Native commands use cards with primary
+  values and visible parameters; Stage Track/Key cards follow source nesting and Key uses a
+  compact single line. Inspector edits bounded source ranges with inputs and common-value choices,
+  while unset named arguments remain unwritten until a property control is edited. Current Block geometry and
+  Key time writeback were checked in the running macOS Editor; broader Picker acceptance remains.
+  On 2026-09-28 the author reopened Block/Inspector to require the full LetsGal UX baseline with
+  Kēne's palette. Installed Studio 2.0.0 was observed; its actual frontend was recovered in the explicitly authorized temporary analysis process.
+  Native command cards now use one-line summaries, external row controls, all-row Wait/resource
+  controls, source-preserving insertion, duplicate and run-to-here actions. Paste inserts before
+  the current Block and selects the insertion. Inspector provides native numeric sliders,
+  searchable selectors with resource thumbnails, direct property groups, effect inclusion/detail
+  controls, Stage Replay, and a position pad with atomic X/Y writeback. Current macOS observations
+  verified invalid-input restoration, two-way Key marker selection, and position dragging from
+  X 20 / Y 0 to X 486 / Y -261; the reused QA source was restored afterward.
+  Resource pickers now share search, thumbnails, keyboard selection and dismissal behavior;
+  Enter uses a dedicated action context. Track image fields apply only to character tracks, and
+  resource rows no longer repeat the selected asset as an argument chip. A rebuilt protocol-7
+  Engine owns transient audition through its existing mount-confined decoder; actual-project
+  Play/Stop state was checked after fixing project-relative versus mount-relative paths.
+  The current paired applications also passed native window launch and dialogue selection /
+  direct Engine click synchronization. The author approved and the Editor now implements disabled
+  Blocks through preserved block comments, and Text Ending through directly following native
+  `text.box()` / `hide()` association. Whole-Text operations include associated commands; metadata
+  still edits the original dialogue statement. Track property choices share the loader inventory.
+  Existing `text.retract()` now has a compact source-to-prefix row, retained multiline Inspector
+  fields and native Replay. Ending/clipboard operations preserve its separate execution step;
+  Engine grapheme deletion, fresh-click waiting, consecutive retraction and Save v11 stay authoritative.
+  Current macOS Replay observations confirmed two consecutive retractions and direct Engine clicks
+  following both source Blocks, then advancing to Camera move. Inspector prefix, multiline draft
+  and escaped-string writeback were exercised in the existing QA project.
+  The author approved shake randomness and per-field tween participation, and explicitly excluded
+  voice-blip. Native camera commands now expose normalized randomness and `tween: [...]` selections;
+  Inspector uses percent controls and field diamonds. LetsGal compilation preserves both features.
+  Old omitted parameters retain their original Actions; new variants append to the enum and transient
+  animations retain the Save v11 layout. The rebuilt macOS pair verified percentage writeback and
+  save/reopen, field-diamond source writes, and direct Engine progression through the new camera Action.
+  A parameter-rich Block target display defect was observed, repaired and checked in the final Editor.
+  Untested implemented interactions are assigned to the author, without adding
+  another test project. See T21's tree for the precise implementation and native-semantic boundary.
 - T22 File/Asset work replaces the flat source list with a confined workspace tree. Explorer
   owns ordinary create, rename, move, copy, delete, internal drag, external drop, and Show in Folder
   operations without becoming a content editor. External resources are accepted only when already
@@ -301,9 +350,11 @@ project / package
   source nodes; Voice is limited to Text blocks. Conversion and mapped-asset deletion remain
   deferred.
   A later Asset Preview view sits above Inspector by default. Clicking a mapped or unmapped
-  image shows it at contained scale; other media show their type and path until player controls
-  are designed. Existing saved layouts receive the view above Inspector without resetting the
-  rest of the workspace.
+  image shows it at contained scale; audio now offers transient Engine-owned Play/Stop audition,
+  while other media show their type and path. Existing saved layouts receive the view above
+  Inspector without resetting the rest of the workspace. The 2026-09-28 LetsGal Asset reference
+  and simplification proposal is recorded as a tree in `docs/editor/assets.md`; the proposal has
+  not replaced the current Asset interface or its accepted data contract.
 
 ## Active task queue
 
@@ -316,10 +367,10 @@ project / package
 | [T17](tasks/T17-editor-phase5-authoring-ux.md) | complete | source-safe core VN authoring workflow |
 | [T19](tasks/T19-project-ci-release.md) | complete | Project P6 pinned Project CI release chain |
 | [T20](tasks/T20-asset-manifest.md) | complete | Asset manifest schema and source-preserving validation |
-| [T21](tasks/T21-card-editor.md) | user acceptance | Card Editor source-preserving core interaction |
+| [T21](tasks/T21-card-editor.md) | implementation complete; user acceptance | approved LetsGal Block/Inspector baseline with native source authority; blip excluded |
 | [T22](tasks/T22-file-asset-import.md) | complete | confined workspace file tree and canonical asset auto-registration |
 | [T23](tasks/T23-asset-browser-inspector-drag.md) | complete | Asset Browser, Inspector, and typed Block View drag |
-| [T24](tasks/T24-project-release-hardening.md) | in progress | Project P7 standalone authoring release and cross-platform acceptance |
+| [T24](tasks/T24-project-release-hardening.md) | macOS delivery ready; user acceptance | Project P7 standalone authoring release; Windows/Linux deferred |
 | [T03](tasks/T03-ui-visual-baseline.md) | user acceptance | UI and cross-platform visual evidence |
 
 ## Canonical references
@@ -332,3 +383,32 @@ project / package
 - Compatibility evidence: `docs/webgal/`
 - Acceptance procedures: `docs/acceptance/`
 - Repeatable measurements: `docs/performance-baseline.md`
+
+### Text authoring assistance (2026-09-29)
+
+Document tabs now share one row with the fixed Text/Blocks switch. Text mode provides default faint Shou suggestions accepted by Tab/Right, 2-space smart
+indentation and contextual quote/bracket pairing. Native syntax diagnostics parse after an idle
+debounce on a background worker and discard stale results. Empty inline Text Blocks can be removed
+with Delete/Backspace, including uncommitted drafts and source-owned Text Ending. Inspector property
+spacing is tighter. These Editor additions do not close the remaining P7 runtime/platform acceptance.
+
+The existing rebuilt macOS QA Editor confirmed the one-row document header, Right/Tab acceptance,
+indentation/quotes, syntax marks and repair cleanup, focused empty Block deletion/undo and draft
+delete. Current workspace gates and native-smoke validation passed. QA source was restored exactly;
+no extra test project was created. T21 records the scoped evidence.
+
+### P7 macOS delivery handoff (2026-09-29)
+
+The current main source was rebuilt and packaged as 0.11.0, extracted from its ZIP, and installed
+in a fresh Applications directory. Both app bundles passed strict signature verification. Computer
+Use checked the installed pair against the real LetsGal source and the existing disposable Shou QA
+project: source/Inspector edits persisted after document reopen, selection and Engine execution
+locations synchronized, saved revisions updated the native scene, and short/multiline/Unicode-prefix
+retraction completed. QA source was restored exactly.
+
+All workspace gates passed (656 tests passed, zero failed, one ignored) and native-smoke validated
+without warnings. Installed standalone Engine metrics measured startup and the blur workload;
+actual native Preview idle CPU was sampled separately. Actual Preview active FPS, Chinese IME,
+1×/multiple-display/ultrawide/tall-window acceptance and broader visual/audio checks remain with the
+user. Windows/Linux are deferred. This is macOS delivery readiness, not full cross-platform P7
+acceptance. T24 contains the tree of evidence, remaining checks and local artifact locations.

@@ -12,6 +12,20 @@ fn project_root() -> PathBuf {
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("projects/letsgal"))
 }
 
+// Selected camera fields now form one atomic Action. Keep counting its original
+// transform/effect components so this acceptance still detects dropped sample content.
+fn camera_components(action: &keine_core::Action) -> usize {
+    match action {
+        keine_core::Action::Flow { action, .. } => camera_components(action),
+        keine_core::Action::SetCameraTween { spec } => {
+            usize::from(spec.transform.is_some())
+                + usize::from(spec.effect.is_some())
+                + usize::from(spec.v2.is_some())
+        }
+        _ => 1,
+    }
+}
+
 #[test]
 fn official_sample_compiles_and_resolves_every_static_resource() {
     let root = project_root();
@@ -40,7 +54,7 @@ fn official_sample_compiles_and_resolves_every_static_resource() {
     assert_eq!(
         scenes
             .iter()
-            .map(|scene| scene.actions.len())
+            .map(|scene| scene.actions.iter().map(camera_components).sum::<usize>())
             .sum::<usize>(),
         1020
     );

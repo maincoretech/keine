@@ -1,6 +1,331 @@
 use super::*;
 
 impl WorkbenchPanel {
+    pub(super) fn switch_document_mode(
+        &mut self,
+        mode: DocumentMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if mode == DocumentMode::Text {
+            if let PanelContent::Document {
+                root,
+                relative,
+                editor,
+                ..
+            } = &self.content
+            {
+                cx.global_mut::<EditorDocuments>()
+                    .clear_asset_selection(root);
+                if let Some((_, line, column)) = cx
+                    .global::<EditorDocuments>()
+                    .selection(root)
+                    .filter(|(path, _, _)| path == relative)
+                {
+                    let position = Position::new(*line as u32, *column as u32);
+                    editor.update(cx, |editor, cx| {
+                        editor.set_cursor_position(position, window, cx)
+                    });
+                }
+            }
+        } else {
+            self.rebuild_visual_editors(window, cx);
+            self.block_scroll_pending = true;
+            if let PanelContent::Document { root, relative, .. } = &self.content {
+                cx.global_mut::<EditorDocuments>().set_block_selection(
+                    root,
+                    relative.clone(),
+                    self.selected_blocks.iter().copied().collect(),
+                );
+            }
+        }
+        self.document_mode = mode;
+        cx.notify();
+        cx.refresh_windows();
+    }
+
+    pub(super) fn accept_source_suggestion(
+        &mut self,
+        _: &gpui_kit::base::input::MoveRight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use gpui_kit::EntityInputHandler;
+        use gpui_kit::base::input::{EditorMode, InputModeKind};
+        cx.propagate();
+        if self.document_mode == DocumentMode::Text
+            && self.resource_picker.is_none()
+            && let PanelContent::Document {
+                document: Some(_),
+                editor,
+                ..
+            } = &self.content
+            && editor.read(cx).focus_handle(cx).is_focused(window)
+            && editor.update(cx, |editor, cx| {
+                editor.selected_range().is_empty()
+                    && editor.marked_text_range(window, cx).is_none()
+                    && EditorMode::accept_inline_completion(editor, window, cx)
+            })
+        {
+            cx.stop_propagation();
+        }
+    }
+
+    pub(super) fn backspace_empty_text(
+        &mut self,
+        _: &gpui_kit::base::input::Backspace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.propagate();
+        if self.delete_empty_focused_text(window, cx) {
+            cx.stop_propagation();
+        }
+    }
+
+    pub(super) fn delete_empty_text(
+        &mut self,
+        _: &gpui_kit::base::input::Delete,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.propagate();
+        if self.delete_empty_focused_text(window, cx) {
+            cx.stop_propagation();
+        }
+    }
+
+    fn delete_empty_focused_text(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        use gpui_kit::EntityInputHandler;
+        if self.document_mode != DocumentMode::Block || self.resource_picker.is_some() {
+            return false;
+        }
+        let source = match &self.content {
+            PanelContent::Document {
+                document: Some(document),
+                ..
+            } => document.borrow().contents().to_owned(),
+            _ => return false,
+        };
+        let draft_focused = self.draft_text.as_ref().is_some_and(|draft| {
+            draft.state.read(cx).focus_handle(cx).is_focused(window)
+                && draft.state.read(cx).value().is_empty()
+        });
+        let (state, text_start) = if draft_focused {
+            let draft = self.draft_text.as_ref().expect("focused draft exists");
+            (
+                draft.state.clone(),
+                draft.text_range.as_ref().map(|range| range.start),
+            )
+        } else if let Some(row) = self.block_text_editors.iter().find(|row| {
+            row.state.read(cx).focus_handle(cx).is_focused(window)
+                && row.state.read(cx).value().is_empty()
+        }) {
+            (row.state.clone(), Some(row.text_start))
+        } else {
+            return false;
+        };
+        if state.update(cx, |state, cx| {
+            state.marked_text_range(window, cx).is_some()
+        }) {
+            return false;
+        }
+        if let Some(text_start) = text_start {
+            let projection = EiyashouProjection::parse(&source);
+            let Some(edited) = projection.delete_empty_text(&source, text_start) else {
+                return false;
+            };
+            self.apply_block_source(edited, "Empty Block deleted", window, cx);
+        } else {
+            self.draft_text = None;
+            self.focus.focus(window, cx);
+            cx.notify();
+        }
+        true
+    }
+
+    pub(super) fn select_current_block(&mut self, start: usize, cx: &mut Context<Self>) {
+        let PanelContent::Document { root, relative, .. } = &self.content else {
+            return;
+        };
+        let Some(source) = cx.global::<EditorDocuments>().source(root, relative) else {
+            return;
+        };
+        let pending = self.block_scroll_pending;
+        self.select_edited_block(&source, start, cx);
+        self.block_scroll_pending = pending;
+    }
+
+    fn select_edited_block(&mut self, source: &str, start: usize, cx: &mut Context<Self>) {
+        let PanelContent::Document { root, relative, .. } = &self.content else {
+            return;
+        };
+        let projection = EiyashouProjection::parse(source);
+        let Some(block) = projection
+            .scenes
+            .iter()
+            .flat_map(|scene| &scene.blocks)
+            .find(|block| block.source_range.start == start)
+        else {
+            return;
+        };
+        self.selected_blocks = HashSet::from([start]);
+        self.block_selection_anchor = Some(start);
+        self.block_scroll_pending = true;
+        cx.global_mut::<EditorDocuments>()
+            .set_block_selection(root, relative.clone(), vec![start]);
+        set_authoring_selection(root, relative.clone(), block.line, block.column, cx);
+    }
+    pub(super) fn insert_text_at(
+        &mut self,
+        row: usize,
+        before: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.block_context_menu = None;
+        self.rebuild_visual_editors(window, cx);
+        self.block_insertion_target = Some(if before {
+            DraftInsertionTarget::Before(row)
+        } else {
+            DraftInsertionTarget::After(row)
+        });
+        self.begin_text_block(&BeginTextBlock, window, cx);
+    }
+
+    pub(super) fn open_block_context_menu(
+        &mut self,
+        row: usize,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.selected_blocks.contains(&row) {
+            self.selected_blocks = HashSet::from([row]);
+            self.block_selection_anchor = Some(row);
+        }
+        if let PanelContent::Document {
+            root,
+            relative,
+            document: Some(document),
+            ..
+        } = &self.content
+        {
+            let source = document.borrow().contents().to_owned();
+            if let Some(block) = EiyashouProjection::parse(&source)
+                .scenes
+                .iter()
+                .flat_map(|scene| &scene.blocks)
+                .find(|block| block.source_range.start == row)
+            {
+                cx.global_mut::<EditorDocuments>().set_block_selection(
+                    root,
+                    relative.clone(),
+                    self.selected_blocks.iter().copied().collect(),
+                );
+                set_authoring_selection(root, relative.clone(), block.line, block.column, cx);
+            }
+        }
+        let source = match &self.content {
+            PanelContent::Document {
+                document: Some(document),
+                ..
+            } => document.borrow().contents().to_owned(),
+            _ => return,
+        };
+        self.block_context_menu = Some((row, position, source));
+        cx.notify();
+    }
+
+    pub(super) fn block_menu_action(
+        &mut self,
+        row: usize,
+        source: &str,
+        action: BlockMenuAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.block_context_menu = None;
+        let current = match &self.content {
+            PanelContent::Document {
+                document: Some(document),
+                ..
+            } => document.borrow().contents().to_owned(),
+            _ => return,
+        };
+        if current != source {
+            self.set_block_notice("Source changed; reopen the Block menu".into(), cx);
+            cx.notify();
+            return;
+        }
+        match action {
+            BlockMenuAction::Run => {
+                if let PanelContent::Document { root, relative, .. } = &self.content {
+                    run_source_block(root, relative, row, cx);
+                }
+            }
+            BlockMenuAction::ToggleDisabled => {
+                let projection = EiyashouProjection::parse(source);
+                match projection.toggle_disabled(source, row) {
+                    Ok(edited) => {
+                        let start = EiyashouProjection::parse(&edited)
+                            .scenes
+                            .iter()
+                            .flat_map(|scene| &scene.blocks)
+                            .min_by_key(|block| block.source_range.start.abs_diff(row))
+                            .map(|block| block.source_range.start)
+                            .unwrap_or(row);
+                        self.apply_block_source(
+                            edited.clone(),
+                            "Block enabled / disabled",
+                            window,
+                            cx,
+                        );
+                        self.select_edited_block(&edited, start, cx);
+                    }
+                    Err(error) => self.set_block_notice(format!("Toggle blocked: {error}"), cx),
+                }
+            }
+            BlockMenuAction::Copy => self.copy_selected_blocks(&CopyBlocks, window, cx),
+            BlockMenuAction::Duplicate => {
+                let projection = EiyashouProjection::parse(source);
+                let duplicated = projection.duplicate_blocks(source, &self.selected_blocks);
+                match duplicated {
+                    Ok((edited, inserted)) => {
+                        self.apply_block_source(edited.clone(), "Blocks duplicated", window, cx);
+                        self.select_edited_block(&edited, inserted.start, cx);
+                    }
+                    Err(error) => self.set_block_notice(format!("Duplicate blocked: {error}"), cx),
+                }
+            }
+            BlockMenuAction::Cut => {
+                self.copy_selected_blocks(&CopyBlocks, window, cx);
+                self.delete_selected_blocks(&DeleteBlocks, window, cx);
+            }
+            BlockMenuAction::Paste => self.paste_blocks(&PasteBlocks, window, cx),
+            BlockMenuAction::SelectAll => {
+                self.selected_blocks = EiyashouProjection::parse(source)
+                    .scenes
+                    .iter()
+                    .flat_map(|scene| &scene.blocks)
+                    .map(|block| block.source_range.start)
+                    .collect();
+                if let PanelContent::Document { root, relative, .. } = &self.content {
+                    cx.global_mut::<EditorDocuments>().set_block_selection(
+                        root,
+                        relative.clone(),
+                        self.selected_blocks.iter().copied().collect(),
+                    );
+                }
+            }
+            BlockMenuAction::InsertAbove => self.insert_text_at(row, true, window, cx),
+            BlockMenuAction::InsertBelow => self.insert_text_at(row, false, window, cx),
+            BlockMenuAction::MoveUp => self.move_selected_blocks(MoveDirection::Up, window, cx),
+            BlockMenuAction::MoveDown => self.move_selected_blocks(MoveDirection::Down, window, cx),
+            BlockMenuAction::Delete => self.delete_selected_blocks(&DeleteBlocks, window, cx),
+        }
+        cx.notify();
+    }
+
     pub(super) fn schedule_visual_editors_rebuild(
         &mut self,
         window: &mut Window,
@@ -194,7 +519,7 @@ impl WorkbenchPanel {
     ) {
         let count = self.filtered_picker_kinds(cx).len();
         if count > 0 {
-            self.block_picker_index = (self.block_picker_index + 1).min(count - 1);
+            self.block_picker_index = (self.block_picker_index + 1) % count;
             cx.notify();
         }
     }
@@ -205,8 +530,54 @@ impl WorkbenchPanel {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.block_picker_index = self.block_picker_index.saturating_sub(1);
+        let count = self.filtered_picker_kinds(cx).len();
+        if count > 0 {
+            self.block_picker_index = (self.block_picker_index + count - 1) % count;
+        }
         cx.notify();
+    }
+
+    fn step_picker_category(&mut self, direction: isize, cx: &mut Context<Self>) {
+        let preferences = cx.global::<EditorDocuments>().block_picker_preferences();
+        let categories = std::iter::once(None)
+            .chain(std::iter::once(Some("Favorites")))
+            .chain(ordered_picker_categories(preferences).into_iter().map(Some))
+            .collect::<Vec<_>>();
+        let current = categories
+            .iter()
+            .position(|category| *category == self.block_picker_category)
+            .unwrap_or(0) as isize;
+        let query = self.block_picker_input.read(cx).value().to_string();
+        let mut candidate = current + direction;
+        while candidate >= 0 && (candidate as usize) < categories.len() {
+            let category = categories[candidate as usize];
+            let kinds = picker_kinds(preferences, &query, category, self.block_picker_customize);
+            if !kinds.is_empty() {
+                self.block_picker_category = category;
+                self.block_picker_index = self.block_picker_index.min(kinds.len() - 1);
+                cx.notify();
+                break;
+            }
+            candidate += direction;
+        }
+    }
+
+    pub(super) fn block_picker_left(
+        &mut self,
+        _: &BlockPickerLeft,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.step_picker_category(-1, cx);
+    }
+
+    pub(super) fn block_picker_right(
+        &mut self,
+        _: &BlockPickerRight,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.step_picker_category(1, cx);
     }
 
     pub(super) fn accept_block_picker(
@@ -233,6 +604,7 @@ impl WorkbenchPanel {
         cx: &mut Context<Self>,
     ) {
         self.block_picker_open = false;
+        self.block_context_menu = None;
         self.focus.focus(window, cx);
         cx.notify();
     }
@@ -349,11 +721,15 @@ impl WorkbenchPanel {
             .filter(|(path, _, _)| path == relative)
             .map_or(0, |(_, line, _)| *line);
         let target = self
-            .selected_blocks
-            .iter()
-            .copied()
-            .max()
-            .map(DraftInsertionTarget::After)
+            .block_insertion_target
+            .take()
+            .or_else(|| {
+                self.selected_blocks
+                    .iter()
+                    .copied()
+                    .max()
+                    .map(DraftInsertionTarget::After)
+            })
             .or_else(|| {
                 projection
                     .scenes
@@ -387,7 +763,7 @@ impl WorkbenchPanel {
             return;
         };
         if let Some(scene) = projection.scenes.iter().find(|scene| match target {
-            DraftInsertionTarget::After(start) => scene
+            DraftInsertionTarget::Before(start) | DraftInsertionTarget::After(start) => scene
                 .blocks
                 .iter()
                 .any(|block| block.source_range.start == start),
@@ -452,6 +828,9 @@ impl WorkbenchPanel {
                 let statement = format!("\"{escaped}\"");
                 let projection = EiyashouProjection::parse(&source);
                 match draft.target {
+                    DraftInsertionTarget::Before(start) => {
+                        projection.insert_block_before(&source, start, &statement)
+                    }
                     DraftInsertionTarget::After(start) => {
                         projection.insert_block_after(&source, start, &statement)
                     }
@@ -532,6 +911,9 @@ impl WorkbenchPanel {
         let inserted = draft
             .filter(|draft| draft.text_range.is_none())
             .map(|draft| match draft.target {
+                DraftInsertionTarget::Before(start) => {
+                    projection.insert_block_before(&source, start, &statement)
+                }
                 DraftInsertionTarget::After(start) => {
                     projection.insert_block_after(&source, start, &statement)
                 }
@@ -672,14 +1054,24 @@ impl WorkbenchPanel {
             self.set_block_notice("Paste blocked: stable ID already exists".into(), cx);
             return;
         }
-        let Some(after_start) = self.selected_blocks.iter().copied().max() else {
+        let Some(before_start) = self
+            .block_selection_anchor
+            .filter(|start| self.selected_blocks.contains(start))
+            .or_else(|| self.selected_blocks.iter().copied().min())
+        else {
             self.set_block_notice("Paste blocked: select an insertion block".into(), cx);
             return;
         };
         let source = document.borrow().contents().to_owned();
-        match EiyashouProjection::parse(&source).insert_block_after(&source, after_start, fragment)
-        {
-            Ok((edited, _)) => self.apply_block_source(edited, "Blocks pasted", window, cx),
+        match EiyashouProjection::parse(&source).insert_block_before(
+            &source,
+            before_start,
+            fragment,
+        ) {
+            Ok((edited, inserted)) => {
+                self.apply_block_source(edited.clone(), "Blocks pasted", window, cx);
+                self.select_edited_block(&edited, inserted.start, cx);
+            }
             Err(error) => self.set_block_notice(format!("Paste blocked: {error}"), cx),
         }
     }
@@ -691,6 +1083,9 @@ impl WorkbenchPanel {
         cx: &mut Context<Self>,
     ) {
         if self.document_mode != DocumentMode::Block {
+            return;
+        }
+        if self.delete_empty_focused_text(window, cx) {
             return;
         }
         let source = match &self.content {
@@ -1253,15 +1648,41 @@ impl WorkbenchPanel {
         let source = document.borrow().contents().to_owned();
         let line = document.borrow().selection().line;
         let index = cx.global::<EditorDocuments>().authoring(root);
-        match insert_statement(&source, line, kind, &index) {
-            Ok(edited) => {
+        let projection = EiyashouProjection::parse(&source);
+        let after = self.selected_blocks.iter().copied().max();
+        let edited = if self.document_mode == DocumentMode::Block
+            && let Some(after) = after
+        {
+            let indent = projection
+                .scenes
+                .iter()
+                .flat_map(|scene| &scene.blocks)
+                .find(|block| block.source_range.start == after)
+                .map_or_else(|| "  ".to_owned(), |block| "  ".repeat(block.depth + 1));
+            insertion_statement(&source, kind, &index, &indent)
+                .map_err(|error| error.to_string())
+                .and_then(|statement| {
+                    projection
+                        .insert_block_after(&source, after, &statement)
+                        .map_err(|error| error.to_string())
+                })
+        } else {
+            insert_statement(&source, line, kind, &index)
+                .map(|edited| (edited, 0..0))
+                .map_err(|error| error.to_string())
+        };
+        match edited {
+            Ok((edited, inserted)) => {
                 cx.global_mut::<EditorDocuments>()
                     .record_source_edit(root, relative, &source, &edited);
-                editor.update(cx, |editor, cx| editor.replace_all(edited, window, cx));
-                cx.global_mut::<EditorDocuments>().set_notice(
-                    root,
-                    format!("Inserted {} at a source line boundary", kind.label()),
-                );
+                editor.update(cx, |editor, cx| {
+                    editor.replace_all(edited.clone(), window, cx)
+                });
+                cx.global_mut::<EditorDocuments>()
+                    .set_notice(root, format!("Inserted {}", kind.label()));
+                if !inserted.is_empty() {
+                    self.select_edited_block(&edited, inserted.start, cx);
+                }
             }
             Err(error) => cx
                 .global_mut::<EditorDocuments>()

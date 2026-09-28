@@ -22,6 +22,20 @@ impl Render for WorkbenchPanel {
             let root = root.clone();
             self.refresh_inspector_editors(&root, window, cx);
         }
+        if self.document_mode == DocumentMode::Block
+            && let PanelContent::Document { root, relative, .. } = &self.content
+        {
+            let root = root.clone();
+            let relative = relative.clone();
+            self.refresh_inline_block_controls(&root, &relative, window, cx);
+        }
+        if self.resource_picker.as_ref().is_some_and(|picker| {
+            picker.epoch != cx.global::<EditorDocuments>().resource_picker_epoch
+                || picker.window_size != window.viewport_size()
+                || !picker.source_is_current(cx)
+        }) {
+            self.close_resource_picker(false, window, cx);
+        }
         let mono = Theme::global(cx).mono_font_family.clone();
         let body = match &self.content {
             PanelContent::Explorer { root, files } => {
@@ -708,75 +722,6 @@ impl Render for WorkbenchPanel {
                 let eiyashou = document.is_some()
                     && relative.extension().and_then(|value| value.to_str()) == Some("shou");
                 let mode = self.document_mode;
-                let text_root = root.clone();
-                let text_relative = relative.clone();
-                let text_editor = editor.clone();
-                let header = eiyashou.then(|| {
-                    let text_selected = mode == DocumentMode::Text;
-                    let block_selected = mode == DocumentMode::Block;
-                    div()
-                        .h(px(34.))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .justify_end()
-                        .gap_1()
-                        .px_2()
-                        .bg(rgb(CHROME))
-                        .when(block_selected, |header| {
-                            header.child(
-                                file_action_icon("scene-new", AssetIconName::Plus, "Add scene")
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.begin_scene_edit(SceneEditMode::New, window, cx)
-                                    })),
-                            )
-                        })
-                        .child(
-                            div()
-                                .flex()
-                                .gap_1()
-                                .child(document_mode_button("Text", text_selected).on_click(
-                                    cx.listener(move |this, _, window, cx| {
-                                        this.document_mode = DocumentMode::Text;
-                                        cx.global_mut::<EditorDocuments>()
-                                            .clear_asset_selection(&text_root);
-                                        if let Some((_, line, column)) = cx
-                                            .global::<EditorDocuments>()
-                                            .selection(&text_root)
-                                            .filter(|(path, _, _)| path == &text_relative)
-                                        {
-                                            let line = *line;
-                                            let column = *column;
-                                            text_editor.update(cx, |editor, cx| {
-                                                editor.set_cursor_position(
-                                                    Position::new(line as u32, column as u32),
-                                                    window,
-                                                    cx,
-                                                );
-                                            });
-                                        }
-                                        cx.notify();
-                                    }),
-                                ))
-                                .child(document_mode_button("Blocks", block_selected).on_click(
-                                    cx.listener(move |this, _, window, cx| {
-                                        this.rebuild_visual_editors(window, cx);
-                                        this.document_mode = DocumentMode::Block;
-                                        this.block_scroll_pending = true;
-                                        if let PanelContent::Document { root, relative, .. } =
-                                            &this.content
-                                        {
-                                            cx.global_mut::<EditorDocuments>().set_block_selection(
-                                                root,
-                                                relative.clone(),
-                                                this.selected_blocks.iter().copied().collect(),
-                                            );
-                                        }
-                                        cx.notify();
-                                    }),
-                                )),
-                        )
-                });
                 let body = if eiyashou && mode == DocumentMode::Block {
                     render_block_projection(
                         BlockProjectionView {
@@ -784,6 +729,7 @@ impl Render for WorkbenchPanel {
                             relative,
                             document: document.as_ref().unwrap(),
                             editors: &self.block_text_editors,
+                            inline: &self.inline_block_controls,
                             collapsed_scenes: &self.collapsed_scenes,
                             selected_blocks: &self.selected_blocks,
                             draft_text: self.draft_text.as_ref(),
@@ -870,6 +816,12 @@ impl Render for WorkbenchPanel {
                     .then(|| self.scene_context_menu.clone())
                     .flatten()
                     .map(|menu| render_scene_context_menu(menu, cx));
+                let block_menu = (eiyashou && mode == DocumentMode::Block)
+                    .then(|| self.block_context_menu.clone())
+                    .flatten()
+                    .map(|(row, position, source)| {
+                        render_block_context_menu(row, position, source, cx)
+                    });
                 if eiyashou && mode == DocumentMode::Block {
                     self.block_scroll_pending = false;
                 }
@@ -881,15 +833,20 @@ impl Render for WorkbenchPanel {
                     .rounded_b(px(VIEW_RADIUS_PX))
                     .bg(rgb(CANVAS))
                     .overflow_hidden()
-                    .when_some(header, |this, header| this.child(header))
                     .child(
                         div()
                             .relative()
                             .flex_1()
                             .min_h_0()
                             .child(body)
+                            .on_scroll_wheel(cx.listener(|this, _, _, cx| {
+                                if this.block_context_menu.take().is_some() {
+                                    cx.notify();
+                                }
+                            }))
                             .when_some(picker, |this, picker| this.child(picker))
-                            .when_some(scene_menu, |this, menu| this.child(menu)),
+                            .when_some(scene_menu, |this, menu| this.child(menu))
+                            .when_some(block_menu, |this, menu| this.child(menu)),
                     )
                     .into_any_element()
             }
@@ -903,14 +860,20 @@ impl Render for WorkbenchPanel {
                     .filter_map(|key| index.assets.iter().find(|asset| asset.key() == *key))
                     .collect::<Vec<_>>();
                 let inputs = self.inspector_inputs.clone();
+                let text_selects = self.inspector_selects.clone();
                 let source_key = self.source_inspector_key.clone();
                 let source_inputs = self.source_inspector_inputs.clone();
+                let source_texts = self.source_inspector_texts.clone();
+                let source_sliders = self.source_inspector_sliders.clone();
+                let source_selects = self.source_inspector_selects.clone();
+                let source_effect = self.source_inspector_effect;
                 let asset_inputs = self.asset_inspector_inputs.clone();
                 let content = div()
                     .flex()
                     .flex_col()
-                    .p_3()
-                    .gap_3()
+                    .px(px(16.))
+                    .py(px(10.))
+                    .gap_2()
                     .when(!selected_assets.is_empty(), |this| {
                         this.child(section_label("ASSET"))
                             .when(selected_assets.len() == 1, |this| {
@@ -990,23 +953,90 @@ impl Render for WorkbenchPanel {
                             })
                     })
                     .when(asset_selection.is_empty() && has_selection, |this| {
-                        this.child(section_label("SELECTION"))
-                            .child(selection_summary(root, &index, cx))
-                            .when(inputs.len() == 3, |this| {
-                                this.child(section_label("TEXT"))
-                                    .child(property_input("Speaker", &inputs[0]))
-                                    .child(property_input("Voice", &inputs[1]))
-                                    .child(property_input("Stable ID", &inputs[2]))
-                            })
-                            .when_some(source_key, |this, key| {
-                                this.child(section_label("PROPERTIES")).children(
-                                    key.fields.iter().zip(source_inputs.iter()).map(
-                                        |(field, input)| {
-                                            property_input(source_field_label(&key, field), input)
-                                        },
-                                    ),
+                        this.when(source_key.is_none() && inputs.is_empty(), |this| {
+                            this.child(selection_summary(root, &index, cx))
+                        })
+                        .when(inputs.len() == 3 && text_selects.len() == 2, |this| {
+                            this.child(section_label("TEXT"))
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .child(section_label("Speaker"))
+                                        .child(
+                                            Select::new(&text_selects[0])
+                                                .small()
+                                                .w_full()
+                                                .menu_max_h(px(320.))
+                                                .accessibility_label("Speaker"),
+                                        ),
                                 )
-                            })
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .child(section_label("Voice"))
+                                        .child(resource_trigger(
+                                            root,
+                                            ResourceTarget::Voice(
+                                                self.inspector_key
+                                                    .clone()
+                                                    .expect("Text Inspector key"),
+                                            ),
+                                            voice_resource_options(root, &index),
+                                            self.inspector_key
+                                                .as_ref()
+                                                .and_then(|key| key.metadata.voice.clone())
+                                                .unwrap_or_default(),
+                                            cx,
+                                        )),
+                                )
+                                .child(property_input("Stable ID", &inputs[2]))
+                                .child(render_text_ending(
+                                    root,
+                                    self.inspector_key.as_ref().expect("Text Inspector key"),
+                                    &self.text_lifetime_inputs,
+                                    cx,
+                                ))
+                        })
+                        .when_some(source_key, |this, key| {
+                            this.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        Icon::new(block_card_icon(&key.kind, &key.command))
+                                            .small()
+                                            .text_color(rgb(PRIMARY)),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(rgb(INK))
+                                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                            .child(block_card_label(&key.kind, &key.command)),
+                                    ),
+                            )
+                            .child(
+                                SourceInspectorView {
+                                    root,
+                                    key: &key,
+                                    inputs: &source_inputs,
+                                    texts: &source_texts,
+                                    sliders: &source_sliders,
+                                    selects: &source_selects,
+                                    effect: source_effect,
+                                    position_bounds: &self.source_position_bounds,
+                                    position_draft: self.source_position_draft,
+                                }
+                                .render(cx),
+                            )
+                        })
                     })
                     .when(asset_selection.is_empty() && !has_selection, |this| {
                         this.child(section_label("WORKSPACE"))
@@ -1023,10 +1053,9 @@ impl Render for WorkbenchPanel {
             }
             PanelContent::AssetPreview { root } => {
                 let documents = cx.global::<EditorDocuments>();
-                render_asset_preview(
-                    documents.asset_preview(root),
-                    documents.asset_selection(root).len(),
-                )
+                let selection = documents.asset_preview(root);
+                let count = documents.asset_selection(root).len();
+                render_asset_preview(root, selection, count, cx)
             }
             PanelContent::Characters { root } => {
                 let index = cx.global::<EditorDocuments>().authoring(root);
@@ -1135,16 +1164,24 @@ impl Render for WorkbenchPanel {
                         cx.global::<EditorDocuments>()
                             .notice(root)
                             .map(str::to_owned),
-                        |this, notice| this.child(output_line("EDIT", PRIMARY, notice)),
+                        |this, notice| this.child(output_line("STATUS", PRIMARY, notice)),
                     );
                 vertical_overflow_view("output-scroll", &self.view_scroll, content)
             }
         };
+        let resource_popup = self.render_resource_picker(window, cx);
         div()
             .track_focus(&self.focus)
-            .when(self.document_mode == DocumentMode::Block, |this| {
-                this.key_context("KeineBlockView")
+            .capture_action(cx.listener(Self::accept_source_suggestion))
+            .capture_action(cx.listener(Self::backspace_empty_text))
+            .capture_action(cx.listener(Self::delete_empty_text))
+            .when(self.resource_picker.is_some(), |this| {
+                this.key_context("KeineResourcePicker")
             })
+            .when(
+                self.document_mode == DocumentMode::Block && self.resource_picker.is_none(),
+                |this| this.key_context("KeineBlockView"),
+            )
             .when(
                 matches!(self.content, PanelContent::Explorer { .. }),
                 |this| this.key_context("KeineExplorer"),
@@ -1152,8 +1189,14 @@ impl Render for WorkbenchPanel {
             .on_action(cx.listener(Self::toggle_block_picker))
             .on_action(cx.listener(Self::block_picker_next))
             .on_action(cx.listener(Self::block_picker_previous))
+            .on_action(cx.listener(Self::block_picker_left))
+            .on_action(cx.listener(Self::block_picker_right))
             .on_action(cx.listener(Self::accept_block_picker))
             .on_action(cx.listener(Self::close_block_picker))
+            .on_action(cx.listener(Self::resource_picker_next))
+            .on_action(cx.listener(Self::resource_picker_previous))
+            .on_action(cx.listener(Self::accept_resource_picker))
+            .on_action(cx.listener(Self::dismiss_resource_picker))
             .on_action(cx.listener(Self::begin_text_block))
             .on_action(cx.listener(Self::copy_selected_blocks))
             .on_action(cx.listener(Self::paste_blocks))
@@ -1167,5 +1210,6 @@ impl Render for WorkbenchPanel {
             .size_full()
             .text_color(rgb(INK))
             .child(body)
+            .children(resource_popup)
     }
 }

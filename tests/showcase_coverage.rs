@@ -236,7 +236,8 @@ fn letsgal_1_9_showcase_exercises_every_timeline_property_and_event() {
                     }
                     for event in animation.events {
                         events.insert(match event.kind {
-                            StageEventKind::CameraShake(_) => "camera-shake",
+                            StageEventKind::CameraShake(_)
+                            | StageEventKind::CameraShakeRandomized { .. } => "camera-shake",
                             StageEventKind::CameraPatch { .. } => "camera-patch",
                             StageEventKind::Particle { .. } => "particle",
                             StageEventKind::Scene(_) => "scene",
@@ -525,6 +526,9 @@ fn action_name(action: &Action) -> &'static str {
         Action::SetCameraBinding { .. } => "set-camera-binding",
         Action::SetCameraTransform { .. } => "set-camera-transform",
         Action::ShakeCamera { .. } => "shake-camera",
+        // Native/Studio semantics; WebGAL remains frozen.
+        Action::SetCameraTween { .. } => "camera-tween",
+        Action::ShakeCameraRandomized { .. } => "camera-shake-randomized",
         Action::HostCommand { .. } => "host-command",
         Action::Vocal { .. } => "vocal",
         Action::RequestInput { .. } => "request-input",
@@ -553,6 +557,9 @@ fn action_name(action: &Action) -> &'static str {
         Action::EiyashouList { .. } => "eiyashou-list",
         Action::EiyashouJumpIf { .. } => "eiyashou-jump-if",
         Action::EiyashouBgm { .. } => "eiyashou-bgm",
+        Action::EiyashouSelectSpriteImageByCondition { .. } => {
+            "eiyashou-select-sprite-image-by-condition"
+        }
     }
 }
 

@@ -73,8 +73,8 @@ pub(super) fn property_row(label: &'static str, value: String) -> impl IntoEleme
     div()
         .flex()
         .flex_col()
-        .gap_1()
-        .pb_2()
+        .gap(px(2.))
+        .pb_1()
         .border_b_1()
         .border_color(rgb(BORDER))
         .child(div().text_xs().text_color(rgb(MUTED)).child(label))
@@ -88,8 +88,8 @@ pub(super) fn property_input(
     div()
         .flex()
         .flex_col()
-        .gap_1()
-        .pb_2()
+        .gap(px(2.))
+        .pb_1()
         .border_b_1()
         .border_color(rgb(BORDER))
         .child(div().text_xs().text_color(rgb(MUTED)).child(label.into()))
@@ -103,6 +103,239 @@ pub(super) fn property_input(
                     .text_color(rgb(INK)),
             ),
         )
+}
+
+pub(super) fn source_field_choices(
+    key: &SourceInspectorKey,
+    field: &SourceField,
+) -> &'static [&'static str] {
+    if (!field.quoted && matches!(field.value.as_str(), "true" | "false"))
+        || matches!(
+            field.key.as_str(),
+            "blocking"
+                | "infinite"
+                | "looped"
+                | "loop"
+                | "muted"
+                | "visible"
+                | "enabled"
+                | "skippable"
+                | "wait_for_finished"
+                | "auto"
+                | "wait"
+                | "godray_parallel"
+                | "speed_lines_radial"
+                | "speed_lines_region_ellipse"
+                | "required"
+                | "reset_camera"
+                | "return_to_center_on_leave"
+        )
+    {
+        return &["true", "false"];
+    }
+    match (key.command.as_str(), field.key.as_str()) {
+        ("screen.film" | "playback.auto", "0") => &["true", "false"],
+        ("text.presentation", "0") => &["paragraph", "dialogue"],
+        ("input.request", "type") => &["string", "number", "bool"],
+        ("assets.loading", "mode") => &["auto", "manual"],
+        ("gallery.unlock", "0") => &["cg", "bgm"],
+        ("ui.message", "0") => &["alert", "confirm"],
+        ("key", "time") => &["0ms", "500ms", "1s", "2s"],
+        ("wait", "0") => &["200ms", "500ms", "1s", "2s"],
+        (_, "easing") => &[
+            "linear",
+            "ease_in",
+            "ease_out",
+            "ease_in_out",
+            "in_out_quad",
+            "out_cubic",
+            "in_out_cubic",
+            "out_back",
+            "out_bounce",
+        ],
+        ("camera.move" | "camera.shake" | "camera.effect" | "camera.effect.v2", "0") => {
+            &["scene", "characters", "all", "none"]
+        }
+        ("text.intro" | "frame", "hold") => &["true", "false"],
+        (_, "falloff") => &["linear", "expo"],
+        (_, "axis") => &["both", "x", "y"],
+        (_, "position") => &["left", "center", "right"],
+        (_, "layout") => &["natural", "viewport_height", "scene", "composite"],
+        (_, "layout_fit" | "fit") => &["contain", "cover", "fill"],
+        (_, "blend") => &["alpha", "add", "multiply", "screen"],
+        ("event.audio", "1") => &["bgm", "effect", "vocal"],
+        ("resource", "kind") => &["background", "figure"],
+        ("stage.mask.show", "mode") => &["overlay", "clip"],
+        ("stage.mask.show", "plane") => &["behind_scene", "bottom", "top", "topmost"],
+        ("stage.mask.show", "scope") => &["scene", "characters", "all", "selected"],
+        ("stage.mask.show", "shape") => &["rectangle", "rounded_rectangle", "ellipse", "image"],
+        ("stage.mask.show", "image_channel") => &["alpha", "luminance"],
+        ("stage.mask.show", "image_fit" | "texture_fit") => &["stretch", "cover", "contain"],
+        ("stage.mask.show", "visibility") => &["inside", "outside"],
+        ("stage.mask.show", "fill_mode") => &["solid", "gradient", "texture"],
+        ("stage.mask.show", "texture_blend") => &["normal", "multiply", "screen", "add"],
+        ("video.play", "mode") => &["fullscreen", "mixed"],
+        _ => &[],
+    }
+}
+
+pub(super) fn source_property_editor(
+    root: &Path,
+    key: &SourceInspectorKey,
+    position: usize,
+    input: &Entity<InputState>,
+    slider: Option<&Entity<SliderState>>,
+    select: Option<&Entity<SelectState<Vec<SourceOption>>>>,
+    cx: &mut Context<WorkbenchPanel>,
+) -> AnyElement {
+    if source_asset_kind(key, &key.fields[position]).is_some() {
+        return div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(rgb(MUTED))
+                    .child(source_field_label(key, &key.fields[position])),
+            )
+            .child(resource_trigger(
+                root,
+                ResourceTarget::Source(key.clone(), position),
+                source_options(root, key, &key.fields[position], cx),
+                key.fields[position].value.clone(),
+                cx,
+            ))
+            .into_any_element();
+    }
+    if let Some(control) = segmented_source_property(root, key, position, cx) {
+        return control;
+    }
+    if let Some(control) = typed_source_property(key, position, input, slider, select) {
+        return control;
+    }
+    let field = &key.fields[position];
+    let enabled = source_field_enabled(key, field);
+    let label = source_field_label(key, field);
+    let choices = source_field_choices(key, field);
+    let root = root.to_owned();
+    let key = key.clone();
+    if choices == ["true", "false"] && matches!(field.value.as_str(), "" | "true" | "false") {
+        let checked = field.value == "true"
+            || (field.value.is_empty()
+                && ((field.key == "blocking" && key.command != "assets.loading")
+                    || field.key == "skippable"
+                    || (key.command == "bgm" && field.key == "loop")
+                    || (key.command == "sprite.focus.configure" && field.key == "enabled")
+                    || (key.command == "video.play" && field.key == "wait")
+                    || matches!(field.key.as_str(), "godray_parallel" | "speed_lines_radial")));
+        return div()
+            .w_full()
+            .min_h(px(34.))
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .child(div().text_sm().text_color(rgb(INK)).child(label.clone()))
+            .child(
+                Switch::new(format!("source-switch-{}-{}", key.block_start, field.key))
+                    .disabled(!enabled)
+                    .checked(checked)
+                    .accessibility_label(label)
+                    .small()
+                    .color(rgb(PRIMARY))
+                    .on_change(cx.listener(move |this, checked: &bool, window, cx| {
+                        this.commit_source_field(
+                            &root,
+                            &key,
+                            position,
+                            checked.to_string(),
+                            window,
+                            cx,
+                        );
+                    })),
+            )
+            .into_any_element();
+    }
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .pb_3()
+        .child(
+            div()
+                .text_xs()
+                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                .text_color(rgb(MUTED))
+                .child(label),
+        )
+        .child(
+            div()
+                .h(px(34.))
+                .w_full()
+                .rounded(px(6.))
+                .border_1()
+                .border_color(rgb(BORDER))
+                .bg(rgb(PANEL))
+                .px_2()
+                .flex()
+                .items_center()
+                .child(
+                    div().flex_1().min_w_0().child(
+                        Input::new(input)
+                            .disabled(!enabled)
+                            .appearance(false)
+                            .bordered(false)
+                            .size_full()
+                            .text_sm()
+                            .text_color(rgb(INK)),
+                    ),
+                ),
+        )
+        .when(!choices.is_empty(), |this| {
+            this.child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_1()
+                    .children(choices.iter().map(|choice| {
+                        let selected = field.value == *choice;
+                        let value = (*choice).to_owned();
+                        let root = root.clone();
+                        let key = key.clone();
+                        div()
+                            .id(format!(
+                                "source-choice-{}-{position}-{choice}",
+                                key.block_start
+                            ))
+                            .px_2()
+                            .py_1()
+                            .rounded(px(5.))
+                            .border_1()
+                            .border_color(rgb(if selected { PRIMARY } else { BORDER }))
+                            .bg(rgb(if selected { PRIMARY_DIM } else { PANEL }))
+                            .text_xs()
+                            .text_color(rgb(if selected { PRIMARY } else { MUTED }))
+                            .cursor_pointer()
+                            .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.commit_source_field(
+                                    &root,
+                                    &key,
+                                    position,
+                                    value.clone(),
+                                    window,
+                                    cx,
+                                );
+                            }))
+                            .child(*choice)
+                    })),
+            )
+        })
+        .into_any_element()
 }
 
 pub(super) fn output_line(label: &'static str, color: u32, value: String) -> impl IntoElement {
@@ -337,6 +570,47 @@ pub(super) fn insert_kind_icon(kind: InsertKind) -> AssetIconName {
         InsertKind::Bgm => AssetIconName::Music,
         InsertKind::Effect => AssetIconName::Volume2,
         InsertKind::Video => AssetIconName::Film,
+        InsertKind::Native(name) => match name {
+            "avatar.show" | "avatar.hide" => AssetIconName::PersonStanding,
+            "vocal.play" | "vocal.stop" => AssetIconName::Volume2,
+            "screen.film"
+            | "video.stop"
+            | "video.play"
+            | "screen.curtain.show"
+            | "screen.curtain.hide" => AssetIconName::Film,
+            "se.loop" | "se.stop" => AssetIconName::Volume2,
+            "text.box"
+            | "text.presentation"
+            | "text.retract"
+            | "text.float.hide"
+            | "text.float.configure"
+            | "text.style"
+            | "text.float"
+            | "text.intro"
+            | "text.paragraph.style" => AssetIconName::MessageSquareText,
+            "wait.advance" => AssetIconName::Clock,
+            "particle.hide" | "particle.layers.clear" | "particle.show" => AssetIconName::EyeOff,
+            "camera.bind"
+            | "camera.unbind"
+            | "scene.parallax.stop"
+            | "scene.parallax"
+            | "camera.effect"
+            | "camera.effect.v2" => AssetIconName::Move,
+            "stage.animate" => AssetIconName::Move,
+            "sprite.offset" | "sprite.transform" | "background.transform" => AssetIconName::Move,
+            "sprite.filter" | "sprite.animate" | "sprite.transition" | "stage.mask.show"
+            | "stage.mask.hide" => AssetIconName::Image,
+            "sprite.sequence"
+            | "sprite.sequence.timed"
+            | "sprite.select"
+            | "sprite.select.when"
+            | "sprite.keyframes"
+            | "sprite.update" => AssetIconName::Image,
+            "assets.loading" => AssetIconName::Workflow,
+            "gallery.unlock" => AssetIconName::Image,
+            "input.simple" | "input.request" => AssetIconName::Braces,
+            _ => AssetIconName::Workflow,
+        },
     }
 }
 
@@ -744,16 +1018,36 @@ pub(super) fn block_card_label(kind: &BlockKind, source: &str) -> String {
 }
 
 pub(super) fn source_field_label(key: &SourceInspectorKey, field: &SourceField) -> String {
-    if field.key.parse::<usize>().is_err() {
-        return title_case(&field.key);
+    command_field_label(&key.kind, &key.command, &field.key)
+}
+
+fn command_field_label(kind: &BlockKind, command: &str, field_key: &str) -> String {
+    if command == "text.retract" {
+        match field_key {
+            "source" => return "Full text".into(),
+            "keep" => return "Keep prefix".into(),
+            _ => {}
+        }
     }
-    let position = field.key.parse::<usize>().unwrap_or_default();
-    match &key.kind {
+    if field_key == "repeat" && matches!(command, "stage.animate" | "sprite.keyframes") {
+        return "Additional repeats".into();
+    }
+    if field_key.parse::<usize>().is_err() {
+        return title_case(
+            &field_key
+                .rsplit('.')
+                .next()
+                .unwrap_or(field_key)
+                .replace('_', " "),
+        );
+    }
+    let position = field_key.parse::<usize>().unwrap_or_default();
+    match kind {
         BlockKind::Choice => "Prompt".into(),
         BlockKind::Conditional | BlockKind::ElseIf => "Condition".into(),
         BlockKind::ChoiceOption => "Option".into(),
         BlockKind::Declaration | BlockKind::Assignment => "Value".into(),
-        BlockKind::Command => match (key.command.as_str(), position) {
+        BlockKind::Command => match (command, position) {
             ("background" | "bgm" | "se" | "video", 0) => "Asset".into(),
             ("sprite", 0) | ("hide", 0) | ("move", 0) => "Slot".into(),
             ("sprite", 1) => "Asset".into(),
@@ -761,6 +1055,51 @@ pub(super) fn source_field_label(key: &SourceInspectorKey, field: &SourceField) 
             ("goto" | "call", 0) => "Scene".into(),
             ("camera.move" | "camera.shake", 0) => "Target".into(),
             ("sprite.focus", 0) => "Speaker".into(),
+            ("avatar.show" | "vocal.play", 0) => "Asset".into(),
+            ("screen.film" | "playback.auto", 0) => "Enabled".into(),
+            ("ui.show" | "ui.hide", 0) => "Surface".into(),
+            ("text.presentation", 0) => "Mode".into(),
+            ("text.style", 0) => "Style".into(),
+            ("particle.hide" | "video.stop" | "text.float.hide", 0) => "Target".into(),
+            ("gallery.unlock", 0) => "Kind".into(),
+            ("gallery.unlock", 1) => "Asset".into(),
+            ("input.simple", 0) => "Variable".into(),
+            ("input.request", 0) => "Variable".into(),
+            ("text.paragraph.style", 0) => "Style".into(),
+            ("particle.show", 0) => "ID".into(),
+            ("particle.show", 1) => "Preset".into(),
+            ("ui.message", 0) => "Mode".into(),
+            ("text.float", 0) => "Text".into(),
+            (
+                "sprite.sequence"
+                | "sprite.sequence.timed"
+                | "sprite.select"
+                | "sprite.select.when"
+                | "sprite.keyframes"
+                | "sprite.update",
+                0,
+            ) => "Target".into(),
+            ("sprite.select", 1) => "Variable".into(),
+            ("page", 0) => "Text".into(),
+            ("frame" | "resource", 0) => "Asset or value".into(),
+            ("case", 0) => "Value".into(),
+            ("case", 1) => "Asset".into(),
+            ("camera.bind" | "camera.unbind", 0) => "Target".into(),
+            ("camera.effect" | "camera.effect.v2", 0) => "Targets".into(),
+            ("stage.animate", 0) => "Animation ID".into(),
+            ("track", 0) => "Target".into(),
+            ("track", 1) => "Property".into(),
+            ("event.scene", 0) => "Scene".into(),
+            ("event.particle" | "event.audio", 0) => "ID".into(),
+            ("stage.mask.show" | "stage.mask.hide", 0) => "Mask ID".into(),
+            ("se.loop", 0) | ("se.stop", 0) | ("video.play", 0) => "ID".into(),
+            ("se.loop", 1) | ("video.play", 1) => "Asset".into(),
+            (
+                "sprite.offset" | "sprite.transform" | "sprite.filter" | "sprite.animate"
+                | "sprite.transition",
+                0,
+            ) => "Target".into(),
+            ("sprite.animate", 1) => "Preset".into(),
             ("wait", 0) => "Duration".into(),
             ("pop", 0) => "List".into(),
             ("pop", 1) => "Index".into(),
@@ -832,13 +1171,58 @@ pub(super) fn block_card_summary(kind: &BlockKind, source: &str, line: usize) ->
                 "camera.move" | "camera.shake" | "sprite.focus" => {
                     values.first().copied().unwrap_or_default()
                 }
-                "sprite.focus.configure" => "Portrait styles",
-                method if method.contains('.') => method.split('.').next().unwrap_or_default(),
+                "sprite.focus.configure" => "Sprite focus styles",
+                method if method.contains('.') => values.first().copied().unwrap_or_default(),
                 _ => values.first().copied().unwrap_or_default(),
             }
             .to_owned()
         }
         BlockKind::Unsupported => format!("Unsupported syntax · L{}", line + 1),
+    }
+}
+
+fn block_card_headline(
+    kind: &BlockKind,
+    source: &str,
+    fields: &[SourceField],
+    fallback: String,
+) -> String {
+    if !matches!(kind, BlockKind::Command) {
+        return fallback;
+    }
+    let command = source.split('(').next().unwrap_or_default().trim();
+    let value = |key: &str| {
+        fields
+            .iter()
+            .find(|field| field.key == key)
+            .map(|field| field.value.as_str())
+    };
+    match command {
+        // Parameter-rich commands may have a truncated projection summary. The
+        // bounded positional source field retains the actual target on reopen.
+        "camera.move" | "camera.shake" | "camera.effect" | "camera.effect.v2" => {
+            value("0").unwrap_or(fallback.as_str()).to_owned()
+        }
+        "text.retract" => format!(
+            "{}  →  {}",
+            value("source")
+                .filter(|text| !text.is_empty())
+                .unwrap_or("Current text"),
+            value("keep")
+                .filter(|text| !text.is_empty())
+                .unwrap_or("Empty")
+        )
+        .replace(['\r', '\n'], " ↵ "),
+        "track" => match (value("0"), value("1")) {
+            (Some(target), Some(property)) => format!("{target}  →  {property}"),
+            _ => fallback,
+        },
+        "key" => value("time").unwrap_or(fallback.as_str()).to_owned(),
+        "stage.animate" => value("0").unwrap_or(fallback.as_str()).to_owned(),
+        event if event.starts_with("event.") => value("time")
+            .map(|time| format!("at {time}"))
+            .unwrap_or(fallback),
+        _ => fallback,
     }
 }
 
@@ -925,6 +1309,7 @@ pub(super) struct BlockProjectionView<'a> {
     pub(super) relative: &'a Path,
     pub(super) document: &'a DocumentHandle,
     pub(super) editors: &'a [BlockTextEditor],
+    pub(super) inline: &'a HashMap<usize, InlineBlockControl>,
     pub(super) collapsed_scenes: &'a HashSet<String>,
     pub(super) selected_blocks: &'a HashSet<usize>,
     pub(super) draft_text: Option<&'a DraftTextBlock>,
@@ -971,9 +1356,15 @@ fn block_row_height(
             .and_then(|state| state.read(cx).text_bounds())
             .map(|bounds| f32::from(bounds.size.height))
             .filter(|height| *height > 0.);
-        measured.map_or(38. + (text_rows.saturating_sub(1) as f32 * 20.), |height| {
-            (height + 8.).max(38.)
-        })
+        let speaker_height = if matches!(block.kind, BlockKind::Dialogue { .. }) {
+            20.
+        } else {
+            0.
+        };
+        speaker_height
+            + measured.map_or(38. + (text_rows.saturating_sub(1) as f32 * 20.), |height| {
+                (height + 8.).max(38.)
+            })
     } else if matches!(
         block.kind,
         BlockKind::Choice
@@ -983,9 +1374,9 @@ fn block_row_height(
             | BlockKind::Else
             | BlockKind::Loop
     ) {
-        28.
+        44.
     } else {
-        32.
+        38.
     }
 }
 
@@ -1098,6 +1489,7 @@ pub(super) fn render_block_projection(
         relative,
         document,
         editors,
+        inline,
         collapsed_scenes,
         selected_blocks,
         draft_text,
@@ -1116,6 +1508,34 @@ pub(super) fn render_block_projection(
         .map(str::to_owned)
         .unwrap_or_else(|| document.borrow().contents().to_owned());
     let projection = EiyashouProjection::parse(&source);
+    let line_number_width = projection
+        .scenes
+        .iter()
+        .map(|scene| scene.blocks.len())
+        .max()
+        .unwrap_or_default()
+        .max(99)
+        .to_string()
+        .len() as f32
+        * 6.;
+    let line_number_gutter = line_number_width + 4.;
+    let block_fields = projection
+        .scenes
+        .iter()
+        .flat_map(|scene| &scene.blocks)
+        .filter(|block| matches!(block.kind, BlockKind::Command))
+        .map(|block| {
+            (
+                block.source_range.start,
+                projection
+                    .source_fields_for_block(&source, block)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|field| field.insertion.is_none() && !field.value.is_empty())
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
     let dragged_height = dragging.map_or(32., |selected| {
         dragged_block_height(&projection, selected, editors, draft_text, cx)
     });
@@ -1292,10 +1712,6 @@ pub(super) fn render_block_projection(
                             .map(|draft| &draft.state)
                     })
             });
-            let is_text = matches!(
-                &block.kind,
-                BlockKind::Narration | BlockKind::Dialogue { .. }
-            );
             let is_structure = matches!(
                 &block.kind,
                 BlockKind::Choice
@@ -1306,6 +1722,10 @@ pub(super) fn render_block_projection(
                     | BlockKind::Loop
             );
             let source_summary = block_card_summary(&block.kind, &block.summary, block.line);
+            let compact_key = block.summary.trim_start().starts_with("key(");
+            let fields = block_fields.get(&row_id).cloned().unwrap_or_default();
+            let headline =
+                block_card_headline(&block.kind, &block.summary, &fields, source_summary.clone());
             let order = block_order.clone();
             let drag_selection = if selected_blocks.contains(&row_id) {
                 selected_blocks.clone()
@@ -1317,12 +1737,17 @@ pub(super) fn render_block_projection(
             let drag_summary = source_summary.clone();
             let drag_count = drag_selection.len();
             let row_height = block_row_height(&block, editors, draft_text, cx);
-            let block_indent = 8. + block.depth as f32 * 18.;
+            let block_indent = block.depth as f32 * 18.;
             let movable = !matches!(&block.kind, BlockKind::ElseIf | BlockKind::Else);
+            let text_block = matches!(
+                &block.kind,
+                BlockKind::Narration | BlockKind::Dialogue { .. }
+            );
             let grip = if movable {
                 div()
                     .id(("block-grip", row_id))
                     .size(px(18.))
+                    .flex_none()
                     .flex()
                     .items_center()
                     .justify_center()
@@ -1376,7 +1801,7 @@ pub(super) fn render_block_projection(
                     )
                     .into_any_element()
             } else {
-                div().size(px(18.)).into_any_element()
+                div().size(px(18.)).flex_none().into_any_element()
             };
             let before_target = BlockDropTarget {
                 row: row_id,
@@ -1405,27 +1830,33 @@ pub(super) fn render_block_projection(
                 cx,
             );
             scene_body_height += row_height + 4. + f32::from(drop_gap_height);
+            let inline_control = inline
+                .get(&row_id)
+                .and_then(|control| render_inline_block(&root, control, cx));
             let mut row = div()
                 .id(("block-row", scene_index * 10_000 + block_index))
                 .relative()
                 .w_full()
+                .when(compact_key, |this| this.w(px(360.)).max_w_full())
                 .min_w_0()
                 .flex()
                 .items_center()
                 .gap_2()
                 .min_h(px(row_height))
                 .px_2()
-                .rounded(px(7.))
+                .rounded(px(4.))
                 .opacity(
                     if dragging.is_some_and(|selected| selected.contains(&row_id)) {
                         0.35
+                    } else if block.disabled {
+                        0.45
                     } else {
                         1.
                     },
                 )
                 .bg(rgb(if selected {
                     SURFACE
-                } else if is_structure {
+                } else if is_structure || text_block {
                     CANVAS
                 } else {
                     PANEL
@@ -1466,48 +1897,176 @@ pub(super) fn render_block_projection(
                     set_authoring_selection(&root, relative.clone(), line, column, cx);
                     cx.notify();
                 }))
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        this.open_block_context_menu(row_id, event.position, cx);
+                    }),
+                )
                 .child(grip)
-                .child(Icon::new(icon).xsmall().text_color(rgb(if block.read_only {
-                    0xd2aa62
-                } else {
-                    MUTED
-                })))
                 .child(
                     div()
-                        .w(px(64.))
-                        .flex_shrink_1()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .text_ellipsis()
-                        .text_xs()
-                        .text_color(rgb(if is_text { PRIMARY } else { MUTED }))
-                        .child(label),
+                        .absolute()
+                        .left(px(-line_number_gutter))
+                        .top(px(8.))
+                        .w(px(line_number_width))
+                        .text_right()
+                        .text_size(px(10.))
+                        .text_color(rgb(if selected { PRIMARY } else { MUTED }))
+                        .child((block_index + 1).to_string()),
                 );
             row = if let Some(state) = text_state.filter(|_| !block.read_only) {
-                row.child(
-                    div().min_h(px(30.)).flex_1().min_w_0().child(
-                        Textarea::new(state)
-                            .appearance(false)
-                            .bordered(false)
-                            .w_full()
-                            .text_sm()
-                            .text_color(rgb(INK)),
-                    ),
-                )
-            } else {
                 row.child(
                     div()
                         .flex_1()
                         .min_w_0()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .text_ellipsis()
-                        .text_sm()
-                        .text_color(rgb(if block.read_only { 0xd2aa62 } else { INK }))
-                        .child(source_summary),
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .when(matches!(&block.kind, BlockKind::Dialogue { .. }), |this| {
+                            this.child(
+                                div()
+                                    .flex_shrink_0()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .text_xs()
+                                    .text_color(rgb(PRIMARY))
+                                    .child(label),
+                            )
+                        })
+                        .child(
+                            div().min_h(px(30.)).flex_1().min_w_0().child(
+                                Textarea::new(state)
+                                    // The row owns the complete-node menu. An empty
+                                    // native input menu prevents a second popup.
+                                    .context_menu(|menu, _, _| menu)
+                                    .appearance(false)
+                                    .bordered(false)
+                                    .w_full()
+                                    .text_size(px(13.))
+                                    .text_color(rgb(INK)),
+                            ),
+                        ),
+                )
+            } else {
+                let command = block.summary.split('(').next().unwrap_or_default().trim();
+                let visible_fields = fields
+                    .iter()
+                    .filter(|field| {
+                        field.insertion.is_none()
+                            && field.key != "tween"
+                            && inline.get(&row_id).is_none_or(|control| {
+                                control.key.fields[control.position].key != field.key
+                            })
+                            && !((command == "track" && matches!(field.key.as_str(), "0" | "1"))
+                                || (command == "key" && field.key == "time")
+                                || (command == "stage.animate" && field.key == "0")
+                                || (command == "text.retract"
+                                    && matches!(field.key.as_str(), "source" | "keep"))
+                                || (command.starts_with("event.") && field.key == "time")
+                                || field.value == headline)
+                    })
+                    .take(4)
+                    .map(|field| {
+                        div()
+                            .max_w(px(220.))
+                            .min_w_0()
+                            .flex_shrink_0()
+                            .flex()
+                            .gap_1()
+                            .px_1()
+                            .rounded(px(4.))
+                            .bg(rgb(CANVAS))
+                            .text_xs()
+                            .child(div().text_color(rgb(MUTED)).child(command_field_label(
+                                &block.kind,
+                                command,
+                                &field.key,
+                            )))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .text_color(rgb(INK))
+                                    .child(field.value.clone()),
+                            )
+                    })
+                    .collect::<Vec<_>>();
+                let has_fields = !visible_fields.is_empty();
+                row.child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .py_1()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .h(px(24.))
+                                        .flex_shrink_0()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(4.))
+                                        .px(px(6.))
+                                        .rounded(px(3.))
+                                        .bg(rgb(PRIMARY_DIM))
+                                        .text_size(px(13.))
+                                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                        .text_color(rgb(if block.read_only && !block.disabled {
+                                            0xd2aa62
+                                        } else {
+                                            PRIMARY
+                                        }))
+                                        .child(Icon::new(icon).xsmall())
+                                        .child(label),
+                                )
+                                .when(inline_control.is_none(), |this| {
+                                    this.child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .overflow_hidden()
+                                            .whitespace_nowrap()
+                                            .text_ellipsis()
+                                            .text_sm()
+                                            .text_color(rgb(
+                                                if block.read_only && !block.disabled {
+                                                    0xd2aa62
+                                                } else {
+                                                    INK
+                                                },
+                                            ))
+                                            .child(headline),
+                                    )
+                                })
+                                .when_some(inline_control, |this, control| this.child(control)),
+                        )
+                        .when(has_fields, |this| {
+                            this.child(
+                                div()
+                                    .min_w_0()
+                                    .max_w(gpui_kit::relative(0.55))
+                                    .flex()
+                                    .gap_1()
+                                    .overflow_hidden()
+                                    .children(visible_fields),
+                            )
+                        }),
                 )
             };
-            if block.read_only {
+            if block.read_only && !block.disabled {
                 row = row.child(
                     div()
                         .id(("open-source", row_id))
@@ -1597,6 +2156,13 @@ pub(super) fn render_block_projection(
                     after_target,
                     cx,
                 ));
+            if let Some(draft) = draft_text.filter(|draft| {
+                matches!(draft.target, DraftInsertionTarget::Before(start) if start == row_id)
+                    && draft.text_range.is_none()
+            }) {
+                scene_body_height += 42.;
+                scene_rows.push(draft_text_row(draft, block_indent, row_id));
+            }
             scene_rows.push(row_wrapper.into_any_element());
             if let Some(draft) = draft_text.filter(|draft| {
                 matches!(draft.target, DraftInsertionTarget::After(start) if start == row_id)
@@ -1615,7 +2181,7 @@ pub(super) fn render_block_projection(
         }) {
             scene_body_height +=
                 42. + (draft.state.read(cx).value().lines().count().clamp(1, 6) - 1) as f32 * 20.;
-            scene_rows.push(draft_text_row(draft, 8., scene.source_range.start));
+            scene_rows.push(draft_text_row(draft, 0., scene.source_range.start));
         }
         scene_body_height = (scene_body_height - 4.).max(0.);
         rows.push(
@@ -1630,9 +2196,9 @@ pub(super) fn render_block_projection(
                         .w_full()
                         .when(collapsed || collapse_progress < 1., |this| {
                             this.h(px(scene_body_height * collapse_progress))
+                                .overflow_hidden()
                         })
                         .opacity(collapse_progress)
-                        .overflow_hidden()
                         .child(
                             div()
                                 .w_full()
@@ -1723,8 +2289,12 @@ pub(super) fn render_block_projection(
         .flex()
         .flex_col()
         .gap_1()
-        .p_2()
-        .pr_4()
+        .w_full()
+        .max_w(px(700.))
+        .pl(px(line_number_gutter))
+        .pr_2()
+        .pt(px(40.))
+        .pb(px(120.))
         .children(rows)
         .on_click(cx.listener(move |this, _, _, cx| {
             this.selected_blocks.clear();
@@ -1737,8 +2307,10 @@ pub(super) fn render_block_projection(
 }
 
 pub(super) fn render_asset_preview(
+    root: &Path,
     selection: Option<AssetPreviewSelection>,
     selected_count: usize,
+    cx: &mut App,
 ) -> AnyElement {
     let Some(asset) = selection else {
         return div()
@@ -1787,6 +2359,24 @@ pub(super) fn render_asset_preview(
         }
     } else if image {
         preview_placeholder("This image format cannot be previewed")
+    } else if matches!(
+        asset.kind,
+        AssetKind::Voice | AssetKind::Bgm | AssetKind::Effect
+    ) {
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .child(
+                Icon::new(AssetIconName::Music)
+                    .size(px(32.))
+                    .text_color(rgb(MUTED)),
+            )
+            .child(audition_control(root, &asset.path, false, cx))
+            .into_any_element()
     } else {
         preview_placeholder(match asset.kind {
             AssetKind::Voice | AssetKind::Bgm | AssetKind::Effect => "Audio asset",

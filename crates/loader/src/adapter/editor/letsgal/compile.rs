@@ -9,15 +9,16 @@ use keine_core::config::{
 };
 use keine_core::{
     Action, Anchor, AssetHint, AssetHintKind, BlendMode, CameraShakeAxis, CameraShakeFalloff,
-    CameraShakeSpec, CameraTargets, ChoiceTarget, ColorToneMode, Easing, InputValueType,
-    LoadingStrategy, LoadingStrategyMode, PortraitStyle, Position, PostProcessEffect,
-    PostProcessPatch, PostProcessV2, SayOptions, SceneFit, SceneLayerLayout, SceneMouseParallax,
-    SpriteLayout, SpriteTransform, StageAnimation, StageAudioCue, StageAudioKind, StageEvent,
-    StageEventKind, StageKeyframe, StageMask, StageMaskFillMode, StageMaskFit,
-    StageMaskImageChannel, StageMaskMode, StageMaskPlane, StageMaskScope, StageMaskShape,
-    StageMaskTextureBlend, StageMaskVisibility, StageProperty, StageSceneCue, StageSceneLayer,
-    StageTarget, StageTrack, SystemMessageMode, SystemMessageSpec, SystemUiSlot, TransformKeyframe,
-    TransformPatch, Transition, UserInputSpec, VideoMode, VideoSpec,
+    CameraShakeRandomness, CameraShakeSpec, CameraTargets, CameraTweenField, CameraTweenSpec,
+    ChoiceTarget, ColorToneMode, Easing, InputValueType, LoadingStrategy, LoadingStrategyMode,
+    PortraitStyle, Position, PostProcessEffect, PostProcessPatch, PostProcessV2, SayOptions,
+    SceneFit, SceneLayerLayout, SceneMouseParallax, SpriteLayout, SpriteTransform, StageAnimation,
+    StageAudioCue, StageAudioKind, StageEvent, StageEventKind, StageKeyframe, StageMask,
+    StageMaskFillMode, StageMaskFit, StageMaskImageChannel, StageMaskMode, StageMaskPlane,
+    StageMaskScope, StageMaskShape, StageMaskTextureBlend, StageMaskVisibility, StageProperty,
+    StageSceneCue, StageSceneLayer, StageTarget, StageTrack, SystemMessageMode, SystemMessageSpec,
+    SystemUiSlot, TransformKeyframe, TransformPatch, Transition, UserInputSpec, VideoMode,
+    VideoSpec,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -2381,6 +2382,62 @@ fn compile_camera(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport
             blocking: wait,
         });
     }
+    // Studio stores camelCase field names. Absence retains the legacy whole-command behavior.
+    if block.props.contains_key("tweenFields") {
+        let mut fields = Vec::new();
+        for name in prop_string(&block.props, "tweenFields")
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            let mapped = match name {
+                "offsetX" => vec![CameraTweenField::X],
+                "offsetY" => vec![CameraTweenField::Y],
+                "zoom" => vec![CameraTweenField::ScaleX, CameraTweenField::ScaleY],
+                _ => CameraTweenField::ALL
+                    .iter()
+                    .copied()
+                    .filter(|field| field.name().replace('_', "").eq_ignore_ascii_case(name))
+                    .collect(),
+            };
+            if mapped.is_empty() {
+                report.diagnostics.push(Diagnostic {
+                    level: DiagnosticLevel::Error,
+                    span,
+                    message: format!("unsupported LetsGal numeric tween field {name:?}"),
+                });
+                return;
+            }
+            for field in mapped {
+                if !fields.contains(&field) {
+                    fields.push(field);
+                }
+            }
+        }
+        let mut spec = CameraTweenSpec {
+            targets,
+            transform: None,
+            effect: None,
+            v2: None,
+            fields,
+            duration,
+            easing: easing(&prop_string(&block.props, "easing")),
+            blocking: wait,
+        };
+        for action in timed.drain(..) {
+            match action {
+                Action::SetCameraTransform { transform, .. } => spec.transform = Some(transform),
+                Action::SetPostProcess { effect, .. } => spec.effect = Some(effect),
+                Action::SetPostProcessV2 { effect, .. } => spec.v2 = Some(effect),
+                _ => unreachable!("camera components are typed above"),
+            }
+        }
+        if spec.transform.is_some() || spec.effect.is_some() || spec.v2.is_some() {
+            timed.push(Action::SetCameraTween {
+                spec: Box::new(spec),
+            });
+        }
+    }
     let timed_len = timed.len();
     for (index, action) in timed.into_iter().enumerate() {
         report.push(
@@ -2394,27 +2451,48 @@ fn compile_camera(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport
     }
     let shake = optional_f32(&block.props, "shakeAmplitude")
         .zip(optional_f32(&block.props, "shakeFrequency"))
-        .zip(optional_f32(&block.props, "shakeDuration"));
+        .zip(
+            optional_f32(&block.props, "duration")
+                .filter(|value| *value > 0.0)
+                .or_else(|| optional_f32(&block.props, "shakeDuration")),
+        );
     if let Some(((amplitude, frequency), duration_ms)) = shake {
+        let randomness = CameraShakeRandomness {
+            amplitude: (prop_f32(&block.props, "shakeAmplitudeRandomness", 0.0) / 100.0)
+                .clamp(0.0, 1.0),
+            frequency: (prop_f32(&block.props, "shakeFrequencyRandomness", 0.0) / 100.0)
+                .clamp(0.0, 1.0),
+        };
+        let shake = CameraShakeSpec {
+            amplitude,
+            frequency,
+            duration: duration_ms.max(0.0) / 1000.0,
+            axis: match prop_string(&block.props, "shakeAxis").as_str() {
+                "x" => CameraShakeAxis::X,
+                "y" => CameraShakeAxis::Y,
+                _ => CameraShakeAxis::Both,
+            },
+            falloff: if prop_string(&block.props, "shakeFalloff") == "expo" {
+                CameraShakeFalloff::Exponential
+            } else {
+                CameraShakeFalloff::Linear
+            },
+        };
+        let blocking = prop_bool(&block.props, "shakeWaitForComplete", false);
         report.push(
-            Action::ShakeCamera {
-                targets,
-                shake: CameraShakeSpec {
-                    amplitude,
-                    frequency,
-                    duration: duration_ms.max(0.0) / 1000.0,
-                    axis: match prop_string(&block.props, "shakeAxis").as_str() {
-                        "x" => CameraShakeAxis::X,
-                        "y" => CameraShakeAxis::Y,
-                        _ => CameraShakeAxis::Both,
-                    },
-                    falloff: if prop_string(&block.props, "shakeFalloff") == "expo" {
-                        CameraShakeFalloff::Exponential
-                    } else {
-                        CameraShakeFalloff::Linear
-                    },
-                },
-                blocking: prop_bool(&block.props, "shakeWaitForComplete", false),
+            if randomness.is_zero() {
+                Action::ShakeCamera {
+                    targets,
+                    shake,
+                    blocking,
+                }
+            } else {
+                Action::ShakeCameraRandomized {
+                    targets,
+                    shake,
+                    randomness,
+                    blocking,
+                }
             },
             span,
         );
@@ -3520,21 +3598,32 @@ fn compile_stage_event(event: &Value, context: &CompileContext<'_>) -> Option<St
         .and_then(Value::as_str)?;
     let time = value_f32(object.get("time").or_else(|| payload.get("time")), 0.0).max(0.0) / 1000.0;
     let kind = match event_type {
-        "cameraShake" => StageEventKind::CameraShake(CameraShakeSpec {
-            amplitude: value_f32(payload.get("amplitude"), 8.0),
-            frequency: value_f32(payload.get("frequency"), 18.0),
-            duration: value_f32(payload.get("duration"), 300.0).max(0.0) / 1000.0,
-            axis: match value_str(payload.get("axis")) {
-                "x" => CameraShakeAxis::X,
-                "y" => CameraShakeAxis::Y,
-                _ => CameraShakeAxis::Both,
-            },
-            falloff: if value_str(payload.get("falloff")) == "expo" {
-                CameraShakeFalloff::Exponential
+        "cameraShake" => {
+            let shake = CameraShakeSpec {
+                amplitude: value_f32(payload.get("amplitude"), 8.0),
+                frequency: value_f32(payload.get("frequency"), 18.0),
+                duration: value_f32(payload.get("duration"), 300.0).max(0.0) / 1000.0,
+                axis: match value_str(payload.get("axis")) {
+                    "x" => CameraShakeAxis::X,
+                    "y" => CameraShakeAxis::Y,
+                    _ => CameraShakeAxis::Both,
+                },
+                falloff: if value_str(payload.get("falloff")) == "expo" {
+                    CameraShakeFalloff::Exponential
+                } else {
+                    CameraShakeFalloff::Linear
+                },
+            };
+            let randomness = CameraShakeRandomness {
+                amplitude: value_f32(payload.get("amplitudeRandomness"), 0.0).clamp(0.0, 1.0),
+                frequency: value_f32(payload.get("frequencyRandomness"), 0.0).clamp(0.0, 1.0),
+            };
+            if randomness.is_zero() {
+                StageEventKind::CameraShake(shake)
             } else {
-                CameraShakeFalloff::Linear
-            },
-        }),
+                StageEventKind::CameraShakeRandomized { shake, randomness }
+            }
+        }
         "cameraPatch" => {
             let patch = payload
                 .get("patch")
@@ -5906,6 +5995,38 @@ mod tests {
         assert_eq!(frames[0].easing, Easing::EaseOut);
         assert_eq!(*repeat, 3);
         assert!(!blocking);
+    }
+
+    #[test]
+    fn camera_preserves_studio_tween_masks_and_randomness_units() {
+        let block = StoryBlock {
+            id: None,
+            kind: "camera".into(),
+            content: Value::Null,
+            props: Map::from_iter([
+                ("offsetX".into(), json!(120)),
+                ("zoom".into(), json!(1.5)),
+                ("blurAmount".into(), json!(3)),
+                ("tweenFields".into(), json!("offsetX,blurAmount")),
+                ("duration".into(), json!(500)),
+                ("shakeAmplitude".into(), json!(8)),
+                ("shakeFrequency".into(), json!(12)),
+                ("shakeAmplitudeRandomness".into(), json!(30)),
+                ("shakeFrequencyRandomness".into(), json!(20)),
+            ]),
+            children: Vec::new(),
+            extras: Map::new(),
+        };
+        let mut report = ParseReport::default();
+        compile_camera(&block, SourceSpan { line: 1, column: 1 }, &mut report);
+        assert!(report.diagnostics.is_empty());
+        assert_eq!(report.actions.len(), 2);
+        assert!(
+            matches!(&report.actions[0], Action::Flow { action, .. } if matches!(action.as_ref(), Action::SetCameraTween { spec } if spec.fields == [CameraTweenField::X, CameraTweenField::BlurAmount] && spec.transform.is_some() && spec.effect.is_some()))
+        );
+        assert!(
+            matches!(&report.actions[1], Action::ShakeCameraRandomized { shake, randomness, .. } if shake.duration == 0.5 && randomness.amplitude == 0.3 && randomness.frequency == 0.2)
+        );
     }
 
     #[test]

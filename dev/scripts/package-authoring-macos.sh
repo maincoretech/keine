@@ -59,6 +59,12 @@ make_app() {
 
 make_app 'Kēne Editor' 'moe.maincore.keine-editor' 'editor' "$editor_binary"
 make_app 'Kēne Engine' 'moe.maincore.keine-engine' 'keine' "$engine_binary"
+# A copied linker-signed Mach-O does not seal the surrounding app resources.
+# Re-sign each assembled bundle locally so Launch Services can validate it.
+for app in "$staging/Kēne Editor.app" "$staging/Kēne Engine.app"; do
+    codesign --force --sign - "$app"
+    codesign --verify --deep --strict "$app"
+done
 mv "$staging" "$output_dir"
 staging=""
 echo "$editor_app"

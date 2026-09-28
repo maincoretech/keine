@@ -5,10 +5,22 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 pub const MAX_MESSAGE_BYTES: usize = 256 * 1024;
 pub const MAX_DOCUMENT_BYTES: usize = 1024 * 1024;
 pub const SNAPSHOT_CHUNK_BYTES: usize = 128 * 1024;
+
+/// The Editor and its Engine child agree on one private scratch directory.
+/// Encoding the launch token keeps path separators out of the directory name.
+pub fn preview_overlay_path(token: &str) -> PathBuf {
+    use std::fmt::Write;
+
+    let mut name = String::from("keine-authoring-");
+    for byte in token.bytes() {
+        write!(name, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    std::env::temp_dir().join(name)
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ClientMessage {
@@ -54,6 +66,12 @@ pub enum ClientCommand {
         document_revision: u64,
     },
     ShowPreview,
+    /// Transient asset audition using a project-relative file path inside an
+    /// asset mount. None stops playback; it never executes Program.
+    AuditionAudio {
+        path: Option<PathBuf>,
+    },
+    AuditionState,
     Stop,
     SetExecutionCursor {
         document_revision: u64,
@@ -106,6 +124,9 @@ pub enum ServerResponse {
         location: Option<(PathBuf, usize, usize)>,
     },
     Pong,
+    AudioAudition {
+        path: Option<PathBuf>,
+    },
     Bye,
     Error {
         code: ErrorCode,
@@ -121,6 +142,7 @@ pub enum Capability {
     WebGalProject,
     Validate,
     NativePreviewWindow,
+    AudioAudition,
     SourceSnapshots,
     SourceCursor,
     Lifecycle,

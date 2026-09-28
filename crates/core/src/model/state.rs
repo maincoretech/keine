@@ -226,10 +226,96 @@ pub struct VideoState {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CameraShakeState {
     pub spec: CameraShakeSpec,
+    pub randomness: crate::CameraShakeRandomness,
+    pub seed: u64,
     pub elapsed: f32,
     pub offset_x: f32,
     pub offset_y: f32,
     pub blocking: bool,
+}
+
+impl CameraShakeState {
+    pub fn new(
+        spec: CameraShakeSpec,
+        randomness: crate::CameraShakeRandomness,
+        seed: u64,
+        blocking: bool,
+    ) -> Self {
+        Self {
+            spec,
+            randomness,
+            seed,
+            elapsed: 0.0,
+            offset_x: 0.0,
+            offset_y: 0.0,
+            blocking,
+        }
+    }
+
+    /// Jitter is a pure function of authored time and seed, independent of frame partitioning.
+    pub fn sample(&mut self) {
+        use crate::{CameraShakeAxis, CameraShakeFalloff};
+        let progress = (self.elapsed / self.spec.duration.max(f32::EPSILON)).clamp(0.0, 1.0);
+        let envelope = match self.spec.falloff {
+            CameraShakeFalloff::Linear => 1.0 - progress,
+            CameraShakeFalloff::Exponential => (1.0 - progress).powi(2),
+        };
+        let amplitude = self.spec.amplitude * envelope;
+        let (x, y) = if self.randomness.is_zero() {
+            // Preserve legacy multiplication order, including f32 rounding, and skip noise entirely.
+            let phase = std::f32::consts::TAU * self.spec.frequency * self.elapsed;
+            (
+                amplitude * phase.sin(),
+                amplitude * (phase + std::f32::consts::FRAC_PI_3).sin(),
+            )
+        } else {
+            // f64 products keep finite authored frequency/time from overflowing during sampling.
+            let cycles = f64::from(self.spec.frequency) * f64::from(self.elapsed);
+            // Smooth noise has derivative at most 3. Scaling phase by 2/3 at half-rate
+            // bounds instantaneous frequency to [1-r, 1+r] of the authored frequency.
+            let jitter =
+                f64::from(shake_noise(cycles * 0.5, self.seed) - shake_noise(0.0, self.seed))
+                    * (2.0 / 3.0)
+                    * f64::from(self.randomness.frequency.clamp(0.0, 1.0));
+            let phase = std::f64::consts::TAU * (cycles + jitter);
+            let offset = |channel, phase: f64| {
+                let gain = 1.0
+                    + f64::from(self.randomness.amplitude.clamp(0.0, 1.0))
+                        * f64::from(shake_noise(cycles, self.seed ^ channel));
+                (f64::from(amplitude) * gain * phase.sin())
+                    .clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32
+            };
+            (
+                offset(0x716f_2c91, phase),
+                offset(0x9814_abb3, phase + std::f64::consts::FRAC_PI_3),
+            )
+        };
+        self.offset_x = if self.spec.axis == CameraShakeAxis::Y {
+            0.0
+        } else {
+            x
+        };
+        self.offset_y = if self.spec.axis == CameraShakeAxis::X {
+            0.0
+        } else {
+            y
+        };
+    }
+}
+
+fn shake_noise(time: f64, seed: u64) -> f32 {
+    let index = time.floor() as u64;
+    let fraction = time.fract() as f32;
+    let smooth = fraction * fraction * (3.0 - 2.0 * fraction);
+    let value = |index: u64| {
+        let mut hash = index.wrapping_add(seed).wrapping_add(0x9e37_79b9_7f4a_7c15);
+        hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        hash = (hash ^ (hash >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        hash ^= hash >> 31;
+        ((hash >> 40) as f32 / 16_777_215.0) * 2.0 - 1.0
+    };
+    let from = value(index);
+    from + (value(index.wrapping_add(1)) - from) * smooth
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -803,6 +889,8 @@ pub struct PostProcessAnimation {
     pub duration: f32,
     pub easing: Easing,
     pub blocking: bool,
+    /// None preserves legacy interpolation; explicit selection covers all continuous fields.
+    pub fields: Option<Vec<crate::CameraTweenField>>,
 }
 
 /// Background transition state.

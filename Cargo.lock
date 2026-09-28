@@ -5321,7 +5321,7 @@ dependencies = [
 
 [[package]]
 name = "keine"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "bevy",
@@ -5367,7 +5367,7 @@ dependencies = [
 
 [[package]]
 name = "keine-authoring"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "postcard",
  "serde",
@@ -5375,7 +5375,7 @@ dependencies = [
 
 [[package]]
 name = "keine-core"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "criterion",
  "log",
@@ -5387,8 +5387,9 @@ dependencies = [
 
 [[package]]
 name = "keine-editor"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
+ "anyhow",
  "bevy",
  "fs2",
  "gpui-kit",
@@ -5396,6 +5397,7 @@ dependencies = [
  "keine-authoring",
  "keine-core",
  "keine-loader",
+ "lsp-types",
  "postcard",
  "serde",
  "serde_json",
@@ -5403,7 +5405,7 @@ dependencies = [
 
 [[package]]
 name = "keine-loader"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "crc32fast",
@@ -5420,7 +5422,7 @@ dependencies = [
 
 [[package]]
 name = "keine-media"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "libwebp-sys",
 ]

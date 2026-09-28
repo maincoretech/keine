@@ -13,8 +13,9 @@ pub use adapter::{
     AdaptedProject, AdapterCategory, AdapterDescriptor, FormatAdapter, KeineStore, LoaderRegistry,
     NativeDocument, NativeLanguage, NativeSceneSyntax, NativeToken, NativeTokenKind,
     ProjectAdapter, ProjectDebugCursor, ProjectInitialState, SavedState, StoreAdapter,
-    StoreMetadata, StoreStatus, StructuredSceneLoader, WebGalLanguage, parse_native_document,
-    parse_native_scenes, parse_webgal, parse_webgal_report,
+    StoreMetadata, StoreStatus, StructuredSceneLoader, WebGalLanguage, is_native_dotted_command,
+    is_native_structured_command, native_expanded_fields, native_stage_property_names,
+    parse_native_document, parse_native_scenes, parse_webgal, parse_webgal_report,
 };
 pub use compiled::{
     CompiledError, CompiledProgramV1, CompiledSceneV1, DecodedProgram, ENVELOPE_VERSION,

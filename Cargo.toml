@@ -80,7 +80,7 @@ video-native = [
 ]
 
 [workspace.package]
-version = "0.10.1"
+version = "0.11.0"
 edition = "2024"
 rust-version = "1.97.1"
 

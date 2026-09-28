@@ -4,12 +4,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use gpui_kit::component::dock::DockAreaState;
+use gpui_kit::{WindowBounds, bounds, point, px, size};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::project_key::ProjectKey;
 
 const STATE_SCHEMA: u32 = 1;
 const BLOCK_PICKER_SCHEMA: u32 = 1;
+const WINDOW_BOUNDS_SCHEMA: u32 = 3;
 const MAX_RECENTS: usize = 12;
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
 
@@ -36,6 +38,24 @@ struct IdentityFile {
     schema: u32,
     project_path: PathBuf,
     workspace_id: String,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+enum SavedWindowMode {
+    Windowed,
+    Maximized,
+    Fullscreen,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct WindowBoundsFile {
+    schema: u32,
+    display_uuid: Option<String>,
+    mode: SavedWindowMode,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -100,6 +120,54 @@ impl AppPersistence {
             },
         )?;
         Ok(paths)
+    }
+
+    pub fn load_window_bounds(&self) -> Option<(WindowBounds, Option<String>)> {
+        let saved = read_json::<WindowBoundsFile>(&self.root.join("window-bounds.json"))?;
+        if saved.schema != WINDOW_BOUNDS_SCHEMA
+            || ![saved.x, saved.y, saved.width, saved.height]
+                .into_iter()
+                .all(f32::is_finite)
+            || saved.width < 720.0
+            || saved.height < 480.0
+        {
+            return None;
+        }
+        let rectangle = bounds(
+            point(px(saved.x), px(saved.y)),
+            size(px(saved.width), px(saved.height)),
+        );
+        let window = match saved.mode {
+            SavedWindowMode::Windowed => WindowBounds::Windowed(rectangle),
+            SavedWindowMode::Maximized => WindowBounds::Maximized(rectangle),
+            SavedWindowMode::Fullscreen => WindowBounds::Fullscreen(rectangle),
+        };
+        Some((window, saved.display_uuid))
+    }
+
+    pub fn save_window_bounds(
+        &self,
+        window: WindowBounds,
+        display_uuid: Option<String>,
+    ) -> io::Result<()> {
+        let mode = match window {
+            WindowBounds::Windowed(_) => SavedWindowMode::Windowed,
+            WindowBounds::Maximized(_) => SavedWindowMode::Maximized,
+            WindowBounds::Fullscreen(_) => SavedWindowMode::Fullscreen,
+        };
+        let rectangle = window.get_bounds();
+        atomic_json(
+            &self.root.join("window-bounds.json"),
+            &WindowBoundsFile {
+                schema: WINDOW_BOUNDS_SCHEMA,
+                display_uuid,
+                mode,
+                x: rectangle.origin.x.as_f32(),
+                y: rectangle.origin.y.as_f32(),
+                width: rectangle.size.width.as_f32(),
+                height: rectangle.size.height.as_f32(),
+            },
+        )
     }
 
     pub fn load_block_picker_preferences(&self) -> BlockPickerPreferences {

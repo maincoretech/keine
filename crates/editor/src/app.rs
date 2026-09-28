@@ -25,7 +25,12 @@ use gpui_kit::component::input::{
 };
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::{Icon, IconName, Root, Sizable as _, Theme, ThemeMode, WindowExt as _};
+use gpui_kit::component::select::{Select, SelectEvent, SelectItem, SelectState};
+use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
+use gpui_kit::component::switch::Switch;
+use gpui_kit::component::{
+    Disableable as _, Icon, IconName, Root, Sizable as _, Theme, ThemeMode, WindowExt as _,
+};
 use gpui_kit::{
     Anchor, Animation, AnimationExt as _, AnyElement, AnyView, App, AppContext as _, Axis, Bounds,
     ClickEvent, ClipboardItem, Context, Div, DragMoveEvent, Element, Empty, Entity, EventEmitter,
@@ -42,9 +47,9 @@ use crate::app_data::APP_ID;
 use crate::authoring::{
     AssetKey, AssetKind, AssetQuery, AssetSort, AuthoringIndex, AuthoringSelection, InsertKind,
     ProblemSeverity, UnmappedAsset, append_character, append_scene, confined_existing_file,
-    delete_scene, dialogues_for_source, escape_eiyashou_string, insert_statement, move_scene,
-    rename_scene, rename_scene_references, replace_dialogue_text, scene_references,
-    valid_identifier,
+    delete_scene, dialogues_for_source, escape_eiyashou_string, insert_statement,
+    insertion_statement, move_scene, rename_scene, rename_scene_references, replace_dialogue_text,
+    scene_references, valid_identifier,
 };
 use crate::document::{DocumentHandle, DocumentManager, SaveError, is_eiyashou_authoring_document};
 use crate::file_ops::{self, ImportResult};
@@ -54,23 +59,28 @@ use crate::persistence::{AppPersistence, BlockPickerPreferences};
 use crate::preview::{PreviewController, PreviewLifecycle};
 use crate::project_key::ProjectKey;
 use crate::projection::{
-    BlockKind, EiyashouProjection, MoveDirection, SourceField, TextBlockMetadata,
+    BlockKind, EiyashouProjection, MoveDirection, SourceField, TextBlockMetadata, TextLifetime,
 };
 use crate::syntax::editor_highlighter_factory;
 use crate::workspace::{WorkspaceEntryKind, WorkspaceFile, WorkspaceSession};
 
 mod blocks;
+mod completion;
 mod dock;
 mod edits;
 mod files;
 mod inspector;
+mod inspector_controls;
 mod render;
+mod resource_picker;
 mod view;
 #[cfg(test)]
 use dock::editor_drop_placement;
 use dock::{ProjectWorkspace, install_default_layout};
 use edits::*;
 use files::FileHistory;
+use inspector_controls::*;
+use resource_picker::*;
 use view::*;
 
 const CANVAS: u32 = 0x070809;
@@ -90,6 +100,7 @@ gpui_kit::assets::icon_assets!(
     EditorExtraIcons,
     [
         Braces,
+        Clipboard,
         Clock,
         Film,
         GitBranch,
@@ -103,6 +114,7 @@ gpui_kit::assets::icon_assets!(
         Music,
         PersonStanding,
         Repeat2,
+        Scissors,
         SlidersHorizontal,
         Square,
         Volume2,
@@ -168,6 +180,7 @@ actions!(
         Save,
         SaveAll,
         ToggleEngine,
+        ShowAssets,
         MigrateEiyashou,
         CopyBlocks,
         PasteBlocks,
@@ -176,8 +189,14 @@ actions!(
         ToggleBlockPicker,
         BlockPickerNext,
         BlockPickerPrevious,
+        BlockPickerLeft,
+        BlockPickerRight,
         AcceptBlockPicker,
         CloseBlockPicker,
+        ResourcePickerNext,
+        ResourcePickerPrevious,
+        AcceptResourcePicker,
+        CloseResourcePicker,
         MoveBlocksUp,
         MoveBlocksDown,
         UndoBlocks,
@@ -340,6 +359,19 @@ fn refresh_asset_preview(root: &Path, workspace: &mut WorkspaceDocuments) {
     } else if workspace.asset_selection.is_empty() {
         let previous = workspace.asset_preview.take();
         workspace.asset_preview = previous.and_then(|previous| {
+            if let Some(asset) = workspace
+                .authoring
+                .assets
+                .iter()
+                .find(|asset| asset.kind == previous.kind && asset.path == previous.path)
+            {
+                return Some(asset_preview_selection(
+                    root,
+                    asset.kind,
+                    previous.label,
+                    asset.path.clone(),
+                ));
+            }
             workspace
                 .authoring
                 .unmapped
@@ -358,6 +390,7 @@ struct EditorDocuments {
     persistence: AppPersistence,
     block_picker_preferences: BlockPickerPreferences,
     workspaces: HashMap<PathBuf, WorkspaceDocuments>,
+    resource_picker_epoch: u64,
 }
 
 impl Global for EditorDocuments {}
@@ -369,6 +402,7 @@ impl EditorDocuments {
             persistence,
             block_picker_preferences,
             workspaces: HashMap::new(),
+            resource_picker_epoch: 0,
         }
     }
 
@@ -455,6 +489,7 @@ impl EditorDocuments {
             workspace.block_selection = (!starts.is_empty()).then_some((relative, starts));
             workspace.asset_selection.clear();
             workspace.asset_preview = None;
+            workspace.preview.stop_audition();
         }
     }
 
@@ -487,12 +522,20 @@ impl EditorDocuments {
                 .map(|asset| {
                     asset_preview_selection(root, asset.kind, asset.id.clone(), asset.path.clone())
                 });
+            workspace.preview.stop_audition();
             workspace.asset_selection = selection;
+        }
+    }
+
+    fn preview_asset(&mut self, root: &Path, kind: AssetKind, label: String, path: PathBuf) {
+        if let Ok(workspace) = self.ensure_workspace(root) {
+            workspace.asset_preview = Some(asset_preview_selection(root, kind, label, path));
         }
     }
 
     fn set_unmapped_asset_preview(&mut self, root: &Path, asset: &UnmappedAsset) {
         if let Ok(workspace) = self.ensure_workspace(root) {
+            workspace.preview.stop_audition();
             workspace.asset_selection.clear();
             workspace.asset_preview = Some(asset_preview_selection(
                 root,
@@ -600,6 +643,11 @@ impl EditorDocuments {
             .and_then(|key| self.workspaces.get(key.path()))
             .map(|workspace| workspace.authoring.clone())
             .unwrap_or_default()
+    }
+
+    fn authoring_ref(&self, root: &Path) -> Option<&AuthoringIndex> {
+        let key = ProjectKey::from_path(root).ok()?;
+        Some(&self.workspaces.get(key.path())?.authoring)
     }
 
     fn explicit_source_ids(&self, root: &Path) -> HashSet<String> {
@@ -854,11 +902,21 @@ impl EditorApp {
         let editor = self.this.clone();
         let persistence = self.persistence.clone();
         let recents = persistence.recent_projects();
+        let options = window_options(0, cx, &persistence);
+        let initial_windowed_bounds = options.window_bounds.unwrap().get_bounds();
         let handle = cx
-            .open_window(window_options(0, cx), move |window, cx| {
+            .open_window(options, move |window, cx| {
                 window.set_window_title("Kēne Editor");
-                let workbench =
-                    cx.new(|cx| WorkbenchWindow::empty(editor, persistence, recents, window, cx));
+                let workbench = cx.new(|cx| {
+                    WorkbenchWindow::empty(
+                        editor,
+                        persistence,
+                        recents,
+                        initial_windowed_bounds,
+                        window,
+                        cx,
+                    )
+                });
                 cx.new(|cx| Root::new(workbench, window, cx))
             })
             .expect("failed to open Kēne Editor workbench");
@@ -915,9 +973,19 @@ impl EditorApp {
             empty
         } else {
             let index = self.windows.windows.len();
-            cx.open_window(window_options(index, cx), move |window, cx| {
-                let workbench =
-                    cx.new(|cx| WorkbenchWindow::project(editor, persistence, session, window, cx));
+            let options = window_options(index, cx, &persistence);
+            let initial_windowed_bounds = options.window_bounds.unwrap().get_bounds();
+            cx.open_window(options, move |window, cx| {
+                let workbench = cx.new(|cx| {
+                    WorkbenchWindow::project(
+                        editor,
+                        persistence,
+                        session,
+                        initial_windowed_bounds,
+                        window,
+                        cx,
+                    )
+                });
                 cx.new(|cx| Root::new(workbench, window, cx))
             })
             .map_err(io::Error::other)?
@@ -1043,8 +1111,21 @@ impl PanelContent {
                     let mut editor = EditorState::new(window, cx)
                         .default_value(contents)
                         .language(language)
-                        .folding(false);
+                        .folding(false)
+                        .auto_close(true)
+                        .smart_indent(true)
+                        .tab_size(gpui_kit::base::input::TabSize {
+                            tab_size: 2,
+                            hard_tabs: false,
+                        });
                     editor.set_highlighter_factory(editor_highlighter_factory(), cx);
+                    if document.is_some() && language == "eiyashou" {
+                        editor.lsp_mut().completion_provider =
+                            Some(Rc::new(completion::ShouCompletion {
+                                root: root.clone(),
+                                relative: relative.clone(),
+                            }));
+                    }
                     editor
                 });
                 Ok(Self::Document {
@@ -1160,19 +1241,33 @@ struct WorkbenchPanel {
     block_picker_category: Option<&'static str>,
     block_picker_customize: bool,
     block_picker_input: Entity<InputState>,
+    block_insertion_target: Option<DraftInsertionTarget>,
+    block_context_menu: Option<(usize, Point<Pixels>, String)>,
     view_scroll: ScrollHandle,
     block_scroll_anchor: ScrollAnchor,
     block_scroll_pending: bool,
     tool_inputs: Vec<Entity<InputState>>,
     recovery_epoch: u64,
+    syntax_check: Option<gpui_kit::Task<()>>,
+    syntax_marks: Option<gpui_kit::base::input::TextDecorationCollection>,
     _subscriptions: Vec<Subscription>,
     visual_subscriptions: Vec<Subscription>,
     inspector_key: Option<InspectorEditKey>,
     inspector_inputs: Vec<Entity<InputState>>,
+    text_lifetime_inputs: Vec<Entity<InputState>>,
+    inspector_selects: Vec<Entity<SelectState<Vec<SourceOption>>>>,
     inspector_subscriptions: Vec<Subscription>,
+    inline_block_controls: HashMap<usize, InlineBlockControl>,
+    resource_picker: Option<ResourcePicker>,
     source_inspector_key: Option<SourceInspectorKey>,
     source_inspector_inputs: Vec<Entity<InputState>>,
+    source_inspector_texts: Vec<Entity<TextareaState>>,
+    source_inspector_sliders: HashMap<String, Entity<SliderState>>,
+    source_inspector_selects: HashMap<String, Entity<SelectState<Vec<SourceOption>>>>,
     source_inspector_subscriptions: Vec<Subscription>,
+    source_inspector_effect: Option<&'static str>,
+    source_position_bounds: Rc<RefCell<Bounds<Pixels>>>,
+    source_position_draft: Option<(usize, f32, f32)>,
     asset_inspector_key: Option<(AssetKey, PathBuf, Vec<String>)>,
     asset_inspector_inputs: Vec<Entity<InputState>>,
     asset_inspector_subscriptions: Vec<Subscription>,
@@ -1306,6 +1401,7 @@ struct InspectorEditKey {
     path: PathBuf,
     block_start: usize,
     metadata: TextBlockMetadata,
+    lifetime: TextLifetime,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1408,8 +1504,25 @@ struct DraftTextBlock {
 
 #[derive(Clone, Copy)]
 enum DraftInsertionTarget {
+    Before(usize),
     After(usize),
     SceneEnd(usize),
+}
+
+#[derive(Clone, Copy)]
+enum BlockMenuAction {
+    Run,
+    Copy,
+    Duplicate,
+    Cut,
+    Paste,
+    SelectAll,
+    ToggleDisabled,
+    InsertAbove,
+    InsertBelow,
+    MoveUp,
+    MoveDown,
+    Delete,
 }
 
 impl WorkbenchPanel {
@@ -1442,6 +1555,22 @@ impl WorkbenchPanel {
             let asset_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
             let view_scroll = ScrollHandle::new();
             let block_scroll_anchor = ScrollAnchor::for_handle(view_scroll.clone());
+            let syntax_marks = match &content {
+                PanelContent::Document {
+                    relative,
+                    document: Some(_),
+                    editor,
+                    ..
+                } if relative
+                    .extension()
+                    .is_some_and(|extension| extension == "shou") =>
+                {
+                    Some(editor.update(cx, |editor, cx| {
+                        editor.create_decorations_collection(Vec::new(), cx)
+                    }))
+                }
+                _ => None,
+            };
             let mut panel = Self {
                 content,
                 focus: cx.focus_handle(),
@@ -1460,19 +1589,33 @@ impl WorkbenchPanel {
                 block_picker_category: None,
                 block_picker_customize: false,
                 block_picker_input: block_picker_input.clone(),
+                block_insertion_target: None,
+                block_context_menu: None,
                 view_scroll,
                 block_scroll_anchor,
                 block_scroll_pending: false,
                 tool_inputs: Vec::new(),
                 recovery_epoch: 0,
+                syntax_check: None,
+                syntax_marks,
                 _subscriptions: Vec::new(),
                 visual_subscriptions: Vec::new(),
                 inspector_key: None,
                 inspector_inputs: Vec::new(),
+                text_lifetime_inputs: Vec::new(),
+                inspector_selects: Vec::new(),
                 inspector_subscriptions: Vec::new(),
+                inline_block_controls: HashMap::new(),
+                resource_picker: None,
                 source_inspector_key: None,
                 source_inspector_inputs: Vec::new(),
+                source_inspector_texts: Vec::new(),
+                source_inspector_sliders: HashMap::new(),
+                source_inspector_selects: HashMap::new(),
                 source_inspector_subscriptions: Vec::new(),
+                source_inspector_effect: None,
+                source_position_bounds: Rc::new(RefCell::new(Bounds::default())),
+                source_position_draft: None,
                 asset_inspector_key: None,
                 asset_inspector_inputs: Vec::new(),
                 asset_inspector_subscriptions: Vec::new(),
@@ -1571,9 +1714,15 @@ impl WorkbenchPanel {
                         );
                         cx.global_mut::<EditorDocuments>()
                             .clear_block_selection(&root_for_selection);
-                        if let Ok(preview) = cx
-                            .global_mut::<EditorDocuments>()
-                            .preview(&root_for_selection)
+                        let disabled = cx
+                            .global::<EditorDocuments>()
+                            .source(&root_for_selection, &relative_for_selection)
+                            .and_then(|source| projected_block_at(&source, cursor.0, cursor.1))
+                            .is_some_and(|(_, block)| block.disabled);
+                        if !disabled
+                            && let Ok(preview) = cx
+                                .global_mut::<EditorDocuments>()
+                                .preview(&root_for_selection)
                         {
                             preview.set_cursor(
                                 relative_for_selection.clone(),
@@ -1584,13 +1733,26 @@ impl WorkbenchPanel {
                         cx.refresh_windows();
                     }));
                 if let Some(document) = document {
+                    if relative
+                        .extension()
+                        .is_some_and(|extension| extension == "shou")
+                    {
+                        panel.syntax_check = Some(completion::schedule_syntax_check(
+                            editor.clone(),
+                            panel.syntax_marks.clone(),
+                            window,
+                            cx,
+                        ));
+                    }
                     let document_for_change = document.clone();
+                    let syntax_window = window.window_handle();
                     let change_subscription = cx.subscribe(
                         editor,
                         move |panel: &mut WorkbenchPanel, editor, event: &InputEvent, cx| {
                             if !matches!(event, InputEvent::Change) {
                                 return;
                             }
+                            let editor_entity = editor.clone();
                             let editor = editor.read(cx);
                             let contents = editor.value().to_string();
                             let position = editor.cursor_position();
@@ -1606,6 +1768,26 @@ impl WorkbenchPanel {
                                 position.character as usize,
                             );
                             if changed {
+                                if relative
+                                    .extension()
+                                    .is_some_and(|extension| extension == "shou")
+                                {
+                                    let window_handle = syntax_window;
+                                    let panel_entity = cx.weak_entity();
+                                    cx.defer(move |cx| {
+                                        let _ = cx.update_window(window_handle, |_, window, cx| {
+                                            let _ = panel_entity.update(cx, |panel, cx| {
+                                                panel.syntax_check =
+                                                    Some(completion::schedule_syntax_check(
+                                                        editor_entity,
+                                                        panel.syntax_marks.clone(),
+                                                        window,
+                                                        cx,
+                                                    ));
+                                            });
+                                        });
+                                    });
+                                }
                                 cx.global_mut::<EditorDocuments>().refresh_authoring(&root);
                                 panel.recovery_epoch = panel.recovery_epoch.wrapping_add(1);
                                 let epoch = panel.recovery_epoch;
@@ -1740,7 +1922,13 @@ impl BasePanel for WorkbenchPanel {
         }
     }
 
-    fn on_removed(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_removed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_resource_picker(false, window, cx);
+        if let PanelContent::AssetPreview { root } = &self.content
+            && let Ok(preview) = cx.global_mut::<EditorDocuments>().preview(root)
+        {
+            preview.stop_audition();
+        }
         match &self.content {
             PanelContent::Document { root, relative, .. } => {
                 let panel = PanelId::from(cx.entity_id());
@@ -1861,8 +2049,12 @@ struct WorkbenchWindow {
     recents: Vec<PathBuf>,
     allow_close: bool,
     close_prompt_open: bool,
+    last_windowed_bounds: Bounds<Pixels>,
+    bounds_epoch: u64,
+    _bounds_subscription: Subscription,
     preview_lifecycle: PreviewLifecycle,
     preview_position: Option<(PathBuf, usize, usize)>,
+    audition_status: (Option<PathBuf>, Option<String>),
     focus: FocusHandle,
 }
 
@@ -1871,6 +2063,23 @@ fn install_close_guard(window: &mut Window, workbench: WeakEntity<WorkbenchWindo
         workbench
             .update(cx, |workbench, cx| {
                 if workbench.allow_close || !workbench.has_unsaved_documents(cx) {
+                    let bounds = if window.is_fullscreen() {
+                        WindowBounds::Fullscreen(workbench.last_windowed_bounds)
+                    } else if window.is_maximized() {
+                        WindowBounds::Maximized(workbench.last_windowed_bounds)
+                    } else {
+                        WindowBounds::Windowed(windowed_content_bounds(window))
+                    };
+                    let display_uuid = window
+                        .display(cx)
+                        .and_then(|display| display.uuid().ok())
+                        .map(|uuid| uuid.to_string());
+                    if let Err(error) = workbench
+                        .persistence
+                        .save_window_bounds(bounds, display_uuid)
+                    {
+                        eprintln!("Kēne Editor could not save window bounds: {error}");
+                    }
                     workbench.stop_preview(cx);
                     true
                 } else {
@@ -1901,8 +2110,22 @@ impl WorkbenchWindow {
                     };
                     let snapshot = controller.snapshot();
                     if this.preview_lifecycle != snapshot.lifecycle {
+                        if let PreviewLifecycle::Failed(error) = &snapshot.lifecycle {
+                            cx.global_mut::<EditorDocuments>()
+                                .set_notice(&root, format!("Preview failed: {error}"));
+                            cx.refresh_windows();
+                        }
                         this.preview_lifecycle = snapshot.lifecycle;
                         cx.notify();
+                    }
+                    let audition_status = (snapshot.audition_path, snapshot.audition_error);
+                    if this.audition_status != audition_status {
+                        if let Some(error) = &audition_status.1 {
+                            cx.global_mut::<EditorDocuments>()
+                                .set_notice(&root, format!("Audition failed: {error}"));
+                        }
+                        this.audition_status = audition_status;
+                        cx.refresh_windows();
                     }
                     if this.preview_position != snapshot.runtime_position {
                         this.preview_position = snapshot.runtime_position.clone();
@@ -1956,11 +2179,13 @@ impl WorkbenchWindow {
         editor: WeakEntity<EditorApp>,
         persistence: AppPersistence,
         recents: Vec<PathBuf>,
+        initial_windowed_bounds: Bounds<Pixels>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         install_close_guard(window, cx.weak_entity(), cx);
         Self::watch_preview(window, cx);
+        let bounds_subscription = Self::watch_window_bounds(window, cx);
         Self {
             editor,
             persistence,
@@ -1968,8 +2193,12 @@ impl WorkbenchWindow {
             recents,
             allow_close: false,
             close_prompt_open: false,
+            last_windowed_bounds: initial_windowed_bounds,
+            bounds_epoch: 0,
+            _bounds_subscription: bounds_subscription,
             preview_lifecycle: PreviewLifecycle::Off,
             preview_position: None,
+            audition_status: (None, None),
             focus: cx.focus_handle(),
         }
     }
@@ -1978,11 +2207,13 @@ impl WorkbenchWindow {
         editor: WeakEntity<EditorApp>,
         persistence: AppPersistence,
         session: WorkspaceSession,
+        initial_windowed_bounds: Bounds<Pixels>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         install_close_guard(window, cx.weak_entity(), cx);
         Self::watch_preview(window, cx);
+        let bounds_subscription = Self::watch_window_bounds(window, cx);
         let workspace = ProjectWorkspace::new(session, &persistence, window, cx);
         Self {
             editor,
@@ -1991,10 +2222,37 @@ impl WorkbenchWindow {
             recents: Vec::new(),
             allow_close: false,
             close_prompt_open: false,
+            last_windowed_bounds: initial_windowed_bounds,
+            bounds_epoch: 0,
+            _bounds_subscription: bounds_subscription,
             preview_lifecycle: PreviewLifecycle::Off,
             preview_position: None,
+            audition_status: (None, None),
             focus: cx.focus_handle(),
         }
+    }
+
+    fn watch_window_bounds(window: &mut Window, cx: &mut Context<Self>) -> Subscription {
+        cx.observe_window_bounds(window, |this, window, cx| {
+            // macOS Zoom reports intermediate windowed sizes while it animates.
+            // Keep only a settled ordinary size as the restore geometry.
+            this.bounds_epoch = this.bounds_epoch.wrapping_add(1);
+            let epoch = this.bounds_epoch;
+            cx.spawn_in(window, async move |this, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(500))
+                    .await;
+                let _ = this.update_in(cx, |this, window, _| {
+                    if this.bounds_epoch == epoch
+                        && !window.is_fullscreen()
+                        && !window.is_maximized()
+                    {
+                        this.last_windowed_bounds = windowed_content_bounds(window);
+                    }
+                });
+            })
+            .detach();
+        })
     }
 
     fn open_session(
@@ -2672,6 +2930,9 @@ impl Render for WorkbenchWindow {
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::save_all))
             .on_action(cx.listener(Self::toggle_engine))
+            .on_action(cx.listener(|this, _: &ShowAssets, window, cx| {
+                this.show_tool(ToolKind::Assets, window, cx)
+            }))
             .on_action(cx.listener(Self::migrate_eiyashou))
             .on_action(cx.listener(Self::undo_sources))
             .on_action(cx.listener(Self::redo_sources))
@@ -2708,6 +2969,18 @@ impl Render for WorkbenchWindow {
                         .flex()
                         .items_center()
                         .gap_1()
+                        .when(
+                            matches!(self.preview_lifecycle, PreviewLifecycle::Failed(_)),
+                            |this| {
+                                this.child(
+                                    div()
+                                        .px_2()
+                                        .text_xs()
+                                        .text_color(rgb(0xdb7780))
+                                        .child("Preview failed · see Output"),
+                                )
+                            },
+                        )
                         .when(running, |this| {
                             this.child(
                                 div()
@@ -2737,7 +3010,7 @@ impl Render for WorkbenchWindow {
     }
 }
 
-struct IconHint(&'static str);
+struct IconHint(SharedString);
 
 impl Render for IconHint {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
@@ -2748,12 +3021,15 @@ impl Render for IconHint {
             .bg(rgb(SURFACE))
             .text_xs()
             .text_color(rgb(INK))
-            .child(self.0)
+            .child(self.0.clone())
     }
 }
 
-fn icon_hint(label: &'static str) -> impl Fn(&mut Window, &mut App) -> AnyView {
-    move |_, cx| cx.new(|_| IconHint(label)).into()
+fn icon_hint(
+    label: impl Into<SharedString> + 'static,
+) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    let label = label.into();
+    move |_, cx| cx.new(|_| IconHint(label.clone())).into()
 }
 
 fn activity_tool(
@@ -2822,6 +3098,158 @@ fn file_context_menu_item(
         .hover(|style| style.bg(rgb(SURFACE_HOVER)))
         .child(Icon::new(icon).xsmall().text_color(rgb(color)))
         .child(label)
+}
+
+fn render_block_context_menu(
+    row: usize,
+    position: Point<Pixels>,
+    source: String,
+    cx: &mut Context<WorkbenchPanel>,
+) -> AnyElement {
+    let block = EiyashouProjection::parse(&source)
+        .scenes
+        .into_iter()
+        .flat_map(|scene| scene.blocks)
+        .find(|block| block.source_range.start == row);
+    let mut items = vec![
+        (
+            BlockMenuAction::Run,
+            AssetIconName::Play,
+            "Run to here",
+            false,
+        ),
+        (BlockMenuAction::Copy, AssetIconName::Copy, "Copy", false),
+        (
+            BlockMenuAction::Duplicate,
+            AssetIconName::Copy,
+            "Duplicate",
+            false,
+        ),
+        (BlockMenuAction::Cut, AssetIconName::Scissors, "Cut", false),
+        (
+            BlockMenuAction::Paste,
+            AssetIconName::Clipboard,
+            "Paste",
+            false,
+        ),
+        (
+            BlockMenuAction::SelectAll,
+            AssetIconName::Square,
+            "Select all",
+            false,
+        ),
+        (
+            BlockMenuAction::InsertAbove,
+            AssetIconName::ArrowUp,
+            "Insert above",
+            false,
+        ),
+        (
+            BlockMenuAction::InsertBelow,
+            AssetIconName::ArrowDown,
+            "Insert below",
+            false,
+        ),
+        (
+            BlockMenuAction::MoveUp,
+            AssetIconName::ArrowUp,
+            "Move up",
+            false,
+        ),
+        (
+            BlockMenuAction::MoveDown,
+            AssetIconName::ArrowDown,
+            "Move down",
+            false,
+        ),
+        (
+            BlockMenuAction::Delete,
+            AssetIconName::Delete,
+            "Delete",
+            true,
+        ),
+    ];
+    if let Some(block) = &block
+        && !matches!(
+            block.kind,
+            BlockKind::Narration | BlockKind::Dialogue { .. } | BlockKind::Else | BlockKind::ElseIf
+        )
+    {
+        items.insert(
+            6,
+            (
+                BlockMenuAction::ToggleDisabled,
+                if block.disabled {
+                    AssetIconName::Eye
+                } else {
+                    AssetIconName::EyeOff
+                },
+                if block.disabled { "Enable" } else { "Disable" },
+                false,
+            ),
+        );
+    }
+    deferred(
+        anchored()
+            .anchor(Anchor::TopLeft)
+            .position(position)
+            .snap_to_window_with_margin(px(6.))
+            .child(
+                div()
+                    .id("block-context-menu")
+                    .w(px(188.))
+                    .p_1()
+                    .rounded(px(5.))
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .bg(rgb(SURFACE))
+                    .shadow_lg()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                        this.block_context_menu = None;
+                        cx.notify();
+                    }))
+                    .children(items.into_iter().enumerate().map(
+                        |(index, (action, icon, label, danger))| {
+                            let source = source.clone();
+                            div()
+                                .id(("block-context-item", index))
+                                .w_full()
+                                .h(px(27.))
+                                .when(
+                                    matches!(
+                                        action,
+                                        BlockMenuAction::Copy
+                                            | BlockMenuAction::ToggleDisabled
+                                            | BlockMenuAction::InsertAbove
+                                            | BlockMenuAction::MoveUp
+                                            | BlockMenuAction::Delete
+                                    ),
+                                    |this| this.mt_1().border_t_1().border_color(rgb(BORDER)),
+                                )
+                                .px_2()
+                                .rounded(px(3.))
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .text_size(px(12.))
+                                .text_color(rgb(if danger { 0xdb7780 } else { INK }))
+                                .cursor_pointer()
+                                .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.block_menu_action(row, &source, action, window, cx);
+                                }))
+                                .child(Icon::new(icon).xsmall())
+                                .child(label)
+                        },
+                    )),
+            ),
+    )
+    .priority(100)
+    .into_any_element()
 }
 
 fn render_scene_context_menu(
@@ -3012,12 +3440,65 @@ fn open_workspace_document(root: &Path, relative: &Path, window: &mut Window, cx
     });
 }
 
-fn window_options(index: usize, cx: &App) -> WindowOptions {
+fn window_options(index: usize, cx: &App, persistence: &AppPersistence) -> WindowOptions {
+    let saved = (index == 0)
+        .then(|| persistence.load_window_bounds())
+        .flatten();
+    let restored = saved.and_then(|(bounds, uuid)| {
+        let display = cx.displays().into_iter().find(|display| {
+            display
+                .uuid()
+                .is_ok_and(|candidate| Some(candidate.to_string()) == uuid)
+        })?;
+        Some((
+            visible_window_bounds(bounds, display.visible_bounds()),
+            display.id(),
+        ))
+    });
     WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(offset_bounds(index, cx))),
+        window_bounds: Some(
+            restored
+                .as_ref()
+                .map(|(bounds, _)| *bounds)
+                .unwrap_or_else(|| WindowBounds::Windowed(offset_bounds(index, cx))),
+        ),
+        display_id: restored.map(|(_, id)| id),
         window_min_size: Some(size(px(720.), px(480.))),
         app_id: Some(APP_ID.into()),
         ..Default::default()
+    }
+}
+
+fn windowed_content_bounds(window: &Window) -> Bounds<Pixels> {
+    let mut frame = window.window_bounds().get_bounds();
+    // WindowOptions expects content size; on macOS frame bounds include the title bar.
+    frame.size = window.viewport_size();
+    frame
+}
+
+fn visible_window_bounds(saved: WindowBounds, area: Bounds<Pixels>) -> WindowBounds {
+    let rectangle = saved.get_bounds();
+    let width = rectangle.size.width.min(area.size.width);
+    let height = rectangle.size.height.min(area.size.height);
+    let restored = Bounds {
+        origin: Point {
+            x: rectangle
+                .origin
+                .x
+                .max(area.origin.x)
+                .min(area.origin.x + area.size.width - width),
+            y: rectangle
+                .origin
+                .y
+                .max(area.origin.y)
+                .min(area.origin.y + area.size.height - height),
+        },
+        size: size(width, height),
+    };
+    match saved {
+        WindowBounds::Windowed(_) => WindowBounds::Windowed(restored),
+        WindowBounds::Maximized(_) => WindowBounds::Maximized(restored),
+        WindowBounds::Fullscreen(_) => WindowBounds::Fullscreen(restored),
     }
 }
 
@@ -3125,6 +3606,7 @@ pub fn run() -> ExitCode {
         .with_quit_mode(gpui_kit::QuitMode::LastWindowClosed)
         .run(move |cx: &mut App| {
             gpui_kit::init(cx);
+            crate::syntax::install_editing_languages(cx);
             configure_dark_theme(cx);
             let persistence = AppPersistence::new(app_data.clone());
             cx.set_global(EditorDocuments::new(persistence.clone()));
@@ -3148,11 +3630,19 @@ pub fn run() -> ExitCode {
                 KeyBinding::new("ctrl-v", PasteBlocks, Some("KeineBlockView")),
                 KeyBinding::new("enter", BeginTextBlock, Some("KeineBlockView")),
                 KeyBinding::new("tab", ToggleBlockPicker, Some("KeineBlockView")),
+                KeyBinding::new("escape", CloseBlockPicker, Some("KeineBlockView")),
                 KeyBinding::new("down", BlockPickerNext, Some("KeineBlockPicker")),
                 KeyBinding::new("up", BlockPickerPrevious, Some("KeineBlockPicker")),
-                KeyBinding::new("tab", AcceptBlockPicker, Some("KeineBlockPicker")),
+                KeyBinding::new("left", BlockPickerLeft, Some("KeineBlockPicker")),
+                KeyBinding::new("right", BlockPickerRight, Some("KeineBlockPicker")),
+                KeyBinding::new("tab", CloseBlockPicker, Some("KeineBlockPicker")),
                 KeyBinding::new("enter", AcceptBlockPicker, Some("KeineBlockPicker")),
                 KeyBinding::new("escape", CloseBlockPicker, Some("KeineBlockPicker")),
+                KeyBinding::new("down", ResourcePickerNext, Some("KeineResourcePicker")),
+                KeyBinding::new("up", ResourcePickerPrevious, Some("KeineResourcePicker")),
+                KeyBinding::new("enter", AcceptResourcePicker, Some("KeineResourcePicker")),
+                KeyBinding::new("escape", CloseResourcePicker, Some("KeineResourcePicker")),
+                KeyBinding::new("tab", CloseResourcePicker, Some("KeineResourcePicker")),
                 KeyBinding::new("backspace", DeleteBlocks, Some("KeineBlockView")),
                 KeyBinding::new("delete", DeleteBlocks, Some("KeineBlockView")),
                 KeyBinding::new("alt-up", MoveBlocksUp, Some("KeineBlockView")),
@@ -3310,7 +3800,7 @@ mod tests {
             &index,
         )
         .unwrap();
-        assert_eq!(changed.matches("background(room)").count(), 1);
+        assert_eq!(changed.as_str().matches("background(room)").count(), 1);
     }
 
     #[test]
@@ -3413,7 +3903,7 @@ mod tests {
         let (source, _) = EiyashouProjection::parse(&source)
             .insert_block_after(&source, inserted.start, "\"\"")
             .unwrap();
-        assert_eq!(source.matches("\"\"").count(), 2);
+        assert_eq!(source.as_str().matches("\"\"").count(), 2);
         assert_eq!(EiyashouProjection::parse(&source).scenes[0].blocks.len(), 3);
     }
 

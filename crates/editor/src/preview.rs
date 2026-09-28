@@ -33,6 +33,8 @@ pub struct PreviewSnapshot {
     pub revision: u64,
     pub runtime_position: Option<(PathBuf, usize, usize)>,
     pub diagnostics: Vec<keine_authoring::Diagnostic>,
+    pub audition_path: Option<PathBuf>,
+    pub audition_error: Option<String>,
 }
 
 impl Default for PreviewSnapshot {
@@ -42,6 +44,8 @@ impl Default for PreviewSnapshot {
             revision: 0,
             runtime_position: None,
             diagnostics: Vec::new(),
+            audition_path: None,
+            audition_error: None,
         }
     }
 }
@@ -50,6 +54,8 @@ enum PreviewCommand {
     Start,
     Stop,
     Show,
+    ToggleAudition(PathBuf),
+    StopAudition,
     Snapshot {
         path: PathBuf,
         contents: Vec<u8>,
@@ -99,6 +105,14 @@ impl PreviewController {
         let _ = self.commands.send(PreviewCommand::Show);
     }
 
+    pub fn toggle_audition(&self, path: PathBuf) {
+        let _ = self.commands.send(PreviewCommand::ToggleAudition(path));
+    }
+
+    pub fn stop_audition(&self) {
+        let _ = self.commands.send(PreviewCommand::StopAudition);
+    }
+
     pub fn apply_snapshot(&self, path: PathBuf, contents: Vec<u8>) {
         let _ = self
             .commands
@@ -133,6 +147,8 @@ struct Worker {
     project: ProjectKey,
     generation: u64,
     engine: Option<EngineProcess>,
+    audition_engine: Option<EngineProcess>,
+    last_audition_poll: Option<Instant>,
     sources: BTreeMap<PathBuf, Vec<u8>>,
     revision: u64,
     cursor: Option<(PathBuf, usize, usize)>,
@@ -150,6 +166,8 @@ fn worker(
         project,
         generation: NEXT_GENERATION.fetch_add(1, Ordering::Relaxed),
         engine: None,
+        audition_engine: None,
+        last_audition_poll: None,
         sources: BTreeMap::new(),
         revision: 0,
         cursor: None,
@@ -166,6 +184,7 @@ fn worker(
             Ok(command) => worker.handle(command),
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
+        worker.poll_audition();
         if let Err(error) = worker.poll_position() {
             worker.fail(error);
         }
@@ -192,6 +211,17 @@ impl Worker {
                 .engine
                 .as_mut()
                 .map_or(Ok(()), |engine| engine.show_preview().map(|_| ())),
+            PreviewCommand::ToggleAudition(path) => {
+                if let Err(error) = self.toggle_audition(path) {
+                    self.stop_audition();
+                    self.mutate(|snapshot| snapshot.audition_error = Some(error.to_string()));
+                }
+                Ok(())
+            }
+            PreviewCommand::StopAudition => {
+                self.stop_audition();
+                Ok(())
+            }
             PreviewCommand::Snapshot { path, contents } => self.apply_snapshot(path, contents),
             PreviewCommand::SetCursor {
                 path,
@@ -203,6 +233,73 @@ impl Worker {
         };
         if let Err(error) = result {
             self.fail(error);
+        }
+    }
+
+    fn toggle_audition(&mut self, path: PathBuf) -> io::Result<()> {
+        let playing = self
+            .shared
+            .lock()
+            .expect("preview snapshot lock poisoned")
+            .audition_path
+            .clone();
+        if playing.as_ref() == Some(&path) {
+            self.stop_audition();
+            return Ok(());
+        }
+        if self.audition_engine.is_none() {
+            let executable = EngineLocator::current()?.locate()?;
+            self.audition_engine = Some(EngineProcess::launch(
+                &executable,
+                self.project.path(),
+                self.generation,
+            )?);
+        }
+        let path = self
+            .audition_engine
+            .as_mut()
+            .expect("audition host was just opened")
+            .audition_audio(Some(path))?;
+        self.last_audition_poll = None;
+        self.mutate(|snapshot| {
+            snapshot.audition_path = path;
+            snapshot.audition_error = None;
+        });
+        Ok(())
+    }
+
+    fn stop_audition(&mut self) {
+        if let Some(mut engine) = self.audition_engine.take() {
+            let _ = engine.shutdown();
+        }
+        self.last_audition_poll = None;
+        self.mutate(|snapshot| {
+            snapshot.audition_path = None;
+            snapshot.audition_error = None;
+        });
+    }
+
+    fn poll_audition(&mut self) {
+        if self.audition_engine.is_none()
+            || self
+                .last_audition_poll
+                .is_some_and(|last| last.elapsed() < IDLE_POLL_INTERVAL)
+        {
+            return;
+        }
+        self.last_audition_poll = Some(Instant::now());
+        match self
+            .audition_engine
+            .as_mut()
+            .expect("audition host checked")
+            .audition_state()
+        {
+            Ok(Some(path)) => self.mutate(|snapshot| snapshot.audition_path = Some(path)),
+            Ok(None) => self.stop_audition(),
+            Err(error) => {
+                self.stop_audition();
+                self.mutate(|snapshot| snapshot.audition_error = Some(error.to_string()));
+            }
         }
     }
 
@@ -234,6 +331,7 @@ impl Worker {
     }
 
     fn stop(&mut self) {
+        self.stop_audition();
         if let Some(engine) = self.engine.as_mut() {
             let _ = engine.stop();
             let _ = engine.shutdown();

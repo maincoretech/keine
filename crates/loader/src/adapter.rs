@@ -23,7 +23,9 @@ pub use editor::{
 pub(crate) use script::eiyashou_semantic_diagnostics;
 pub use script::{
     NativeDocument, NativeLanguage, NativeSceneSyntax, NativeToken, NativeTokenKind,
-    WebGalLanguage, parse_native_document, parse_native_scenes, parse_webgal, parse_webgal_report,
+    WebGalLanguage, is_native_dotted_command, is_native_structured_command, native_expanded_fields,
+    native_stage_property_names, parse_native_document, parse_native_scenes, parse_webgal,
+    parse_webgal_report,
 };
 pub use store::{KeineStore, SavedState, StoreAdapter, StoreMetadata, StoreStatus};
 

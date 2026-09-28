@@ -436,6 +436,33 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                     sprite.image = interpolate(image, &state.vars, &state.global_vars);
                 }
             }
+            Action::EiyashouSelectSpriteImageByCondition {
+                id,
+                default_image,
+                variants,
+            } => {
+                let mut image = default_image;
+                for (condition, candidate) in variants {
+                    match evaluate_eiyashou(condition, &state.vars) {
+                        Ok(crate::Value::Bool(true)) => {
+                            image = candidate;
+                            break;
+                        }
+                        Ok(crate::Value::Bool(false)) => {}
+                        Ok(_) => {
+                            return StepResult::RuntimeError(ScriptRuntimeError::Eiyashou(
+                                EiyashouRuntimeError::TypeMismatch,
+                            ));
+                        }
+                        Err(error) => {
+                            return StepResult::RuntimeError(ScriptRuntimeError::Eiyashou(error));
+                        }
+                    }
+                }
+                if let Some(sprite) = state.sprites.get_mut(id) {
+                    sprite.image = image.clone();
+                }
+            }
             Action::HideSprite { id, transition } => {
                 let transition = *transition;
                 let id = interpolate(id, &state.vars, &state.global_vars);
@@ -1483,6 +1510,7 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                     state.camera_effect_animation = None;
                 } else {
                     state.camera_effect_animation = Some(crate::state::PostProcessAnimation {
+                        fields: None,
                         from: state.camera_effect.clone(),
                         to: target_effect,
                         elapsed: 0.0,
@@ -1541,24 +1569,38 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                     return StepResult::AwaitPresentation;
                 }
             }
+            Action::SetCameraTween { spec } => {
+                if spec.start(state, spec.blocking && !next) {
+                    return StepResult::AwaitPresentation;
+                }
+            }
             Action::ShakeCamera {
                 targets,
                 shake,
                 blocking,
+            }
+            | Action::ShakeCameraRandomized {
+                targets,
+                shake,
+                blocking,
+                ..
             } => {
+                let randomness = match action {
+                    Action::ShakeCameraRandomized { randomness, .. } => *randomness,
+                    _ => Default::default(),
+                };
                 state.camera_targets = *targets;
                 let blocking = *blocking && !next;
                 if shake.amplitude > f32::EPSILON
                     && shake.frequency > f32::EPSILON
                     && shake.duration > f32::EPSILON
                 {
-                    state.camera_shake = Some(crate::state::CameraShakeState {
-                        spec: *shake,
-                        elapsed: 0.0,
-                        offset_x: 0.0,
-                        offset_y: 0.0,
+                    state.camera_shake = Some(crate::state::CameraShakeState::new(
+                        *shake,
+                        randomness,
+                        state.program_fingerprint ^ state.cursor as u64,
                         blocking,
-                    });
+                    ));
                     if blocking {
                         return StepResult::AwaitPresentation;
                     }
@@ -1737,6 +1779,7 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                     state.camera_effect_animation = None;
                 } else {
                     state.camera_effect_animation = Some(crate::state::PostProcessAnimation {
+                        fields: None,
                         from: state.camera_effect.clone(),
                         to: target,
                         elapsed: 0.0,
@@ -2786,6 +2829,99 @@ mod tests {
     }
 
     #[test]
+    fn selective_camera_tween_applies_instant_fields_and_does_not_wait_when_empty() {
+        let mut patch = TransformPatch::default();
+        patch.set_offset_x(120.0);
+        patch.set_scale_x(1.5);
+        let spec = crate::CameraTweenSpec {
+            targets: crate::CameraTargets::SCENE,
+            transform: Some(patch),
+            effect: None,
+            v2: None,
+            fields: vec![crate::CameraTweenField::X],
+            duration: 1.0,
+            easing: Easing::Linear,
+            blocking: true,
+        };
+        let encoded = postcard::to_allocvec(&Action::SetCameraTween {
+            spec: Box::new(spec.clone()),
+        })
+        .unwrap();
+        let decoded: Action = postcard::from_bytes(&encoded).unwrap();
+        assert_eq!(
+            decoded,
+            Action::SetCameraTween {
+                spec: Box::new(spec.clone())
+            }
+        );
+        let mut state = state_with(vec![Action::SetCameraTween {
+            spec: Box::new(spec.clone()),
+        }]);
+        assert_eq!(step(&mut state), StepResult::AwaitPresentation);
+        assert_eq!(state.camera_transform.offset_x, 0.0);
+        assert_eq!(state.camera_transform.scale_x, 1.5);
+        let animation = state.camera_transform_animation.as_ref().unwrap();
+        let halfway = animation.from.lerp(animation.to, 0.5);
+        assert_eq!(halfway.offset_x, 60.0);
+        assert_eq!(halfway.scale_x, 1.5);
+        let mut instant = spec;
+        instant.fields.clear();
+        let mut state = state_with(vec![Action::SetCameraTween {
+            spec: Box::new(instant),
+        }]);
+        assert_eq!(step(&mut state), StepResult::EndOfScene);
+        assert_eq!(state.camera_transform.offset_x, 120.0);
+        assert!(state.camera_transform_animation.is_none());
+    }
+
+    #[test]
+    fn camera_shake_randomness_is_deterministic_bounded_and_zero_preserves_legacy() {
+        use crate::{
+            CameraShakeAxis, CameraShakeFalloff, CameraShakeRandomness, CameraShakeSpec,
+            CameraShakeState,
+        };
+        let spec = CameraShakeSpec {
+            amplitude: 8.,
+            frequency: 12.,
+            duration: 1.,
+            axis: CameraShakeAxis::Both,
+            falloff: CameraShakeFalloff::Linear,
+        };
+        let randomness = CameraShakeRandomness {
+            amplitude: 0.3,
+            frequency: 0.2,
+        };
+        let mut random = CameraShakeState::new(spec, randomness, 123, false);
+        let mut repeated = CameraShakeState::new(spec, randomness, 123, false);
+        let mut legacy = CameraShakeState::new(spec, Default::default(), 999, false);
+        let mut differs = false;
+        for frame in 1..=100 {
+            let time = frame as f32 / 100.;
+            random.elapsed = time;
+            repeated.elapsed = time;
+            legacy.elapsed = time;
+            random.sample();
+            repeated.sample();
+            legacy.sample();
+            assert_eq!(
+                (random.offset_x, random.offset_y),
+                (repeated.offset_x, repeated.offset_y)
+            );
+            let bound = 8. * (1. - time) * 1.3 + 0.00001;
+            assert!(random.offset_x.abs() <= bound && random.offset_y.abs() <= bound);
+            let phase = std::f32::consts::TAU * 12. * time;
+            assert_eq!(legacy.offset_x, 8. * (1. - time) * phase.sin());
+            differs |= random.offset_x != legacy.offset_x;
+        }
+        assert!(differs);
+        assert_eq!((random.offset_x, random.offset_y), (0., 0.));
+        random.spec.axis = CameraShakeAxis::X;
+        random.elapsed = 0.123;
+        random.sample();
+        assert_eq!(random.offset_y, 0.);
+    }
+
+    #[test]
     fn typed_video_blocks_without_losing_playback_options() {
         let spec = crate::VideoSpec {
             id: "opening".into(),
@@ -3611,6 +3747,50 @@ mod tests {
             state.sprites["aya"].layout,
             crate::SpriteLayout::ViewportHeight(0.8)
         );
+    }
+
+    #[test]
+    fn native_conditional_sprite_selection_requires_a_bool() {
+        let sprite = Action::ShowSprite {
+            id: "hero".into(),
+            image: "neutral".into(),
+            position: Position::center(0.0),
+            layout: crate::SpriteLayout::Natural,
+            transition: Transition::Instant,
+            transform: SpriteTransform::default(),
+            z_index: 0,
+            blend: BlendMode::Alpha,
+        };
+        let mut state = state_with(vec![
+            sprite.clone(),
+            Action::EiyashouSelectSpriteImageByCondition {
+                id: "hero".into(),
+                default_image: "neutral".into(),
+                variants: vec![(EiyashouExpr::Literal(Value::Bool(true)), "smile".into())],
+            },
+            Action::Say {
+                speaker: String::new(),
+                text: "Ready".into(),
+                options: SayOptions::default(),
+            },
+        ]);
+        assert_eq!(step(&mut state), StepResult::AwaitClick);
+        assert_eq!(state.sprites["hero"].image, "smile");
+
+        let mut invalid = state_with(vec![
+            sprite,
+            Action::EiyashouSelectSpriteImageByCondition {
+                id: "hero".into(),
+                default_image: "neutral".into(),
+                variants: vec![(EiyashouExpr::Literal(Value::Int(1)), "smile".into())],
+            },
+        ]);
+        assert!(matches!(
+            step(&mut invalid),
+            StepResult::RuntimeError(ScriptRuntimeError::Eiyashou(
+                EiyashouRuntimeError::TypeMismatch
+            ))
+        ));
     }
 
     #[test]

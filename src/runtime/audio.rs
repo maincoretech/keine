@@ -462,9 +462,60 @@ impl Decodable for LoopingOpusAudio {
     }
 }
 
-/// Adds the correct Bevy audio player for a logical asset path. Projects can
-/// keep using the same BGM/voice/effect commands while distribution switches
-/// those files to `.opus`.
+/// Audition uses the gameplay decoder with an already confined logical asset path.
+#[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+pub(crate) fn authoring_audio_source(
+    mounts: Arc<[keine_loader::ContentMount]>,
+    path: &std::path::Path,
+) -> io::Result<Box<dyn Source + Send>> {
+    #[cfg(feature = "audio-opus")]
+    if is_opus(&path.to_string_lossy()) {
+        let source = OpusSource::Mounted {
+            mounts,
+            path: path.to_owned(),
+        };
+        return OpusStream::new(source.open()?, false)
+            .map(|source| Box::new(source) as Box<dyn Source + Send>)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()));
+    }
+    #[cfg(feature = "audio-seekable")]
+    {
+        use std::io::Read;
+        let hint = audio_hint(path)?;
+        let mut file = mounts
+            .iter()
+            .rev()
+            .find(|mount| mount.contains_file(path))
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "audio asset not found"))?
+            .open_file(path)
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        if file.len()? > MAX_IN_MEMORY_AUDIO_BYTES as u64 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "audio asset exceeds memory limit",
+            ));
+        }
+        let mut bytes = Vec::new();
+        (&mut file)
+            .take(MAX_IN_MEMORY_AUDIO_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > MAX_IN_MEMORY_AUDIO_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "audio asset exceeds memory limit",
+            ));
+        }
+        seekable_decoder(bytes.into(), hint)
+            .map(|source| Box::new(source) as Box<dyn Source + Send>)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
+    }
+    #[cfg(not(feature = "audio-seekable"))]
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "audio format is unavailable in this Engine build",
+    ))
+}
+
 pub(crate) fn insert_player(
     entity: &mut EntityCommands<'_>,
     asset_server: &AssetServer,

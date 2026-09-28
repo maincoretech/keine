@@ -109,6 +109,60 @@ impl EditorTabGroupSkin {
         overlay
     }
 
+    fn document_controls(&self, group: &TabGroupContext, cx: &App) -> Option<Div> {
+        let panel = group
+            .active_panel()?
+            .view()
+            .downcast::<WorkbenchPanel>()
+            .ok()?;
+        let state = panel.read(cx);
+        if !matches!(&state.content, PanelContent::Document { relative, document: Some(_), .. }
+            if relative.extension().is_some_and(|extension| extension == "shou"))
+        {
+            return None;
+        }
+        let mode = state.document_mode;
+        let scene_panel = panel.clone();
+        let text_panel = panel.clone();
+        Some(
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap_1()
+                .pr_2()
+                .when(mode == DocumentMode::Block, |controls| {
+                    controls.child(
+                        file_action_icon("scene-new", AssetIconName::Plus, "Add scene").on_click(
+                            move |_, window, cx| {
+                                scene_panel.update(cx, |panel, cx| {
+                                    panel.begin_scene_edit(SceneEditMode::New, window, cx);
+                                })
+                            },
+                        ),
+                    )
+                })
+                .child(
+                    document_mode_button("Text", mode == DocumentMode::Text).on_click(
+                        move |_, window, cx| {
+                            text_panel.update(cx, |panel, cx| {
+                                panel.switch_document_mode(DocumentMode::Text, window, cx);
+                            })
+                        },
+                    ),
+                )
+                .child(
+                    document_mode_button("Blocks", mode == DocumentMode::Block).on_click(
+                        move |_, window, cx| {
+                            panel.update(cx, |panel, cx| {
+                                panel.switch_document_mode(DocumentMode::Block, window, cx);
+                            })
+                        },
+                    ),
+                ),
+        )
+    }
+
     fn singleton_title_bar(
         &self,
         group: &TabGroupContext,
@@ -1072,11 +1126,25 @@ impl TabGroupRenderer for EditorTabGroupSkin {
             .relative()
             .h(px(36.))
             .w_full()
+            .flex()
+            .items_center()
+            .bg(rgb(CHROME))
             .overflow_hidden()
             .rounded_t(px(VIEW_RADIUS_PX))
-            .child(bar)
-            .child(tab_overflow_fade(scroll.clone(), true))
-            .child(tab_overflow_fade(scroll, false))
+            .child(
+                div()
+                    .relative()
+                    .min_w_0()
+                    .flex_1()
+                    .h_full()
+                    .overflow_hidden()
+                    .child(bar)
+                    .child(tab_overflow_fade(scroll.clone(), true))
+                    .child(tab_overflow_fade(scroll, false)),
+            )
+            .when_some(self.document_controls(group, cx), |bar, controls| {
+                bar.child(controls)
+            })
             .into_any_element()
     }
 

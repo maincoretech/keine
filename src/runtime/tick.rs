@@ -1276,6 +1276,16 @@ fn advance_camera_transitions(state: &mut State, delta_seconds: f32) -> bool {
             .easing
             .sample(animation.elapsed / animation.duration.max(f32::EPSILON));
         state.camera_effect = animation.from.interpolate(&animation.to, progress);
+        if let Some(fields) = &animation.fields {
+            for field in fields {
+                field.interpolate_effect(
+                    &mut state.camera_effect,
+                    &animation.from,
+                    &animation.to,
+                    progress,
+                );
+            }
+        }
         if animation.elapsed < animation.duration {
             state.camera_effect_animation = Some(animation);
         } else {
@@ -1298,27 +1308,9 @@ fn advance_camera_transitions(state: &mut State, delta_seconds: f32) -> bool {
     }
 
     let shake_finished = if let Some(shake) = &mut state.camera_shake {
-        use keine_core::{CameraShakeAxis, CameraShakeFalloff};
-
         changed = true;
         shake.elapsed = (shake.elapsed + delta_seconds).min(shake.spec.duration);
-        let progress = shake.elapsed / shake.spec.duration.max(f32::EPSILON);
-        let envelope = match shake.spec.falloff {
-            CameraShakeFalloff::Linear => 1.0 - progress,
-            CameraShakeFalloff::Exponential => (1.0 - progress).powi(2),
-        };
-        let phase = std::f32::consts::TAU * shake.spec.frequency * shake.elapsed;
-        let amplitude = shake.spec.amplitude * envelope;
-        shake.offset_x = if shake.spec.axis == CameraShakeAxis::Y {
-            0.0
-        } else {
-            amplitude * phase.sin()
-        };
-        shake.offset_y = if shake.spec.axis == CameraShakeAxis::X {
-            0.0
-        } else {
-            amplitude * (phase + std::f32::consts::FRAC_PI_3).sin()
-        };
+        shake.sample();
         shake.elapsed >= shake.spec.duration
     } else {
         false
@@ -1903,14 +1895,22 @@ fn trigger_stage_events(state: &mut State, runtime: &keine_core::StageAnimationS
                         }
                     }
                 }
-                keine_core::StageEventKind::CameraShake(shake) if crossed(from, to, at) => {
-                    state.camera_shake = Some(keine_core::CameraShakeState {
-                        spec: *shake,
-                        elapsed: 0.0,
-                        offset_x: 0.0,
-                        offset_y: 0.0,
-                        blocking: false,
-                    });
+                keine_core::StageEventKind::CameraShake(shake)
+                | keine_core::StageEventKind::CameraShakeRandomized { shake, .. }
+                    if crossed(from, to, at) =>
+                {
+                    let randomness = match &event.kind {
+                        keine_core::StageEventKind::CameraShakeRandomized {
+                            randomness, ..
+                        } => *randomness,
+                        _ => Default::default(),
+                    };
+                    state.camera_shake = Some(keine_core::CameraShakeState::new(
+                        *shake,
+                        randomness,
+                        state.program_fingerprint ^ at.to_bits() as u64,
+                        false,
+                    ));
                 }
                 keine_core::StageEventKind::Scene(cue) if crossed(from, to, at) => {
                     apply_stage_scene_cue(state, cue);
@@ -2218,6 +2218,40 @@ mod tests {
             *self.0.lock().unwrap() = Some(std::thread::current().id());
             keine_loader::ParseReport::default()
         }
+    }
+
+    #[test]
+    fn selected_effect_fields_tween_through_runtime_and_instant_fields_stay_fixed() {
+        let mut state = State::new();
+        let spec = keine_core::CameraTweenSpec {
+            targets: keine_core::CameraTargets::SCENE,
+            transform: None,
+            effect: None,
+            v2: Some(Box::new(keine_core::PostProcessV2 {
+                speed_lines_intensity: 0.8,
+                speed_lines_density: 0.95,
+                speed_lines_region_width: 2.,
+                ..Default::default()
+            })),
+            fields: vec![
+                keine_core::CameraTweenField::SpeedLinesDensity,
+                keine_core::CameraTweenField::SpeedLinesRegionWidth,
+            ],
+            duration: 1.,
+            easing: Easing::Linear,
+            blocking: true,
+        };
+        assert!(spec.start(&mut state, true));
+        assert_eq!(state.camera_effect.v2.speed_lines_intensity, 0.8);
+        assert_eq!(state.camera_effect.v2.speed_lines_region_width, 1.);
+        assert!(advance_camera_transitions(&mut state, 0.5));
+        assert_eq!(state.camera_effect.v2.speed_lines_intensity, 0.8);
+        assert!((state.camera_effect.v2.speed_lines_density - 0.75).abs() < 0.00001);
+        assert_eq!(state.camera_effect.v2.speed_lines_region_width, 1.5);
+        assert!(advance_camera_transitions(&mut state, 0.5));
+        assert_eq!(state.camera_effect.v2.speed_lines_density, 0.95);
+        assert_eq!(state.camera_effect.v2.speed_lines_region_width, 2.);
+        assert!(state.camera_effect_animation.is_none());
     }
 
     #[test]

@@ -2024,3 +2024,71 @@ but the Mac locked before the UI could be observed; the test process was then
 stopped. No native active-FPS or idle-CPU parity claim is recorded until a
 repeatable unlocked-window capture is available. Prior embedded throughput
 figures must not be compared directly to the Engine's native presentation rate.
+
+### 2026-09-28 packaged 0.11.0 native-window idle sample
+
+On Apple M5 Pro / Metal, the release Editor and sibling Engine were launched from
+the same extracted macOS ZIP archive. The native Engine displayed the first
+dialogue of `tests/fixtures/native-smoke`. After settling on that dialogue,
+`top -l 3 -s 1 -pid 31406 -stats pid,cpu,time,mem -n 1` reported Engine CPU
+samples of 0.0%, 0.1%, and 0.1%, with 287 MB resident memory in each sample.
+This was a single warm idle observation on a non-isolated host. It measures
+neither first-frame latency nor active presentation FPS, and it is not a
+before/after comparison with the removed embedded Preview path.
+
+### 2026-09-29 installed 0.11.0 Engine baseline and native Preview idle
+
+The current main checkout's release build (`535f7db74682-dirty`, built
+2026-09-28 17:44:21 UTC) was packaged, ZIP-extracted and installed under
+`/Users/shiftz/Applications/Kēne 0.11.0 P7 20260929`. Both bundles passed strict
+signature verification. Engine features were `audio-all,ui-sounds,video-native`
+(including the enabled audio format features and bundled Opus). The host was
+Apple M5 Pro / Metal, macOS 27.0, with 15 logical threads reported by the tool.
+Only the built-in 3024×1964 Retina display was connected. These are baseline
+observations on a non-isolated host, with no performance code change this run.
+
+Commands, run from the repository root with the installed executable:
+
+```sh
+"/Users/shiftz/Applications/Kēne 0.11.0 P7 20260929/Kēne Engine.app/Contents/MacOS/keine" perf projects/letsgal --startup --runs 3
+"/Users/shiftz/Applications/Kēne 0.11.0 P7 20260929/Kēne Engine.app/Contents/MacOS/keine" perf tests/fixtures/letsgal-timeline --seconds 10 --timeline '10-04 blur family'
+top -l 3 -s 1 -pid 87979 -stats pid,cpu,time,mem -n 1
+```
+
+Startup runs each use a new process and a hidden surface-backed window; filesystem
+and GPU caches are not claimed cold. All times below are cumulative from process
+entry. They measure standalone Engine startup, not Editor-click-to-Preview latency.
+The raw runs avoid ambiguity from the tool's lower-median repeat summary.
+
+| Run | Project | App built | First frame | Interactive |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 0.96 ms | 248.13 ms | 968.95 ms | 993.24 ms |
+| 2 | 0.32 ms | 156.10 ms | 330.10 ms | 343.85 ms |
+| 3 | 0.41 ms | 151.89 ms | 313.89 ms | 328.03 ms |
+
+The blur sample excluded three seconds of warm-up, then captured 600 frames in
+ten seconds: average 60.0 FPS, 1% low 55.3 FPS and P99-equivalent 56.1 FPS.
+Frame times were average/P50 16.67 ms, P95 17.48 ms, P99 17.83 ms and maximum
+18.47 ms. The tool reported 429 entities, Runtime profile, scene+UI cameras,
+11 images / 4.0 MiB CPU pixels and two fonts / 9.8 MiB source data. Presentation
+was Fifo, 1920×1080 physical, scale 1.00, reported refresh 120 Hz, hidden false.
+The performance command explicitly selects scale 1.0; this does not accept the
+Editor or Preview on a real 1× display.
+
+The earlier paired `10-04 blur family` sample above also averaged 60.0 FPS
+(after: 54.2 FPS 1% low, P95 17.82 ms, P99 18.44 ms, max 19.62 ms). The builds,
+entity counts and sample durations differ. Both reach the capped 60 FPS target;
+these observations do not establish a before/after improvement or native Preview
+throughput parity.
+
+The `top` sample belongs to the installed companion-window Engine, idle on real
+LetsGal illustrated dialogue. Its CPU samples were 0.0%, 0.4% and 0.6%, with
+451 MB RSS in every sample. The September 28 idle sample used native-smoke and
+287 MB RSS, so it is a different-content comparison. Actual Preview active FPS
+remains a user acceptance item: this host has no `xctrace` tool, and no product
+screenshot hook or GUI capture protocol was introduced to collect it. Removed
+embedded-readback metrics remain incomparable to native window presentation.
+
+Raw logs and the artifact hash manifest are retained in
+`target/authoring/p7-20260929/`. The corresponding ZIP is
+`target/authoring/keine-authoring-0.11.0-macos-aarch64-p7-20260929.zip`.

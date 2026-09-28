@@ -247,7 +247,12 @@ pub(super) fn set_authoring_selection(
 ) {
     cx.global_mut::<EditorDocuments>()
         .set_selection(root, relative.clone(), line, column);
-    if let Ok(preview) = cx.global_mut::<EditorDocuments>().preview(root) {
+    let disabled = cx
+        .global::<EditorDocuments>()
+        .source(root, &relative)
+        .and_then(|source| projected_block_at(&source, line, column))
+        .is_some_and(|(_, block)| block.disabled);
+    if !disabled && let Ok(preview) = cx.global_mut::<EditorDocuments>().preview(root) {
         preview.seek_cursor(relative, line + 1, column + 1);
     }
     cx.refresh_windows();
