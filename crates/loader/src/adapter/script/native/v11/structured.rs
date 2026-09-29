@@ -215,12 +215,8 @@ impl<'a> Parser<'a> {
                                 _ => unreachable!(),
                             }
                         }
-                        if transform.is_empty() {
-                            report
-                                .diagnostics
-                                .push(self.error("frame(...) requires a transform field"));
-                            return None;
-                        }
+                        // An empty sparse patch holds the previous transform for this
+                        // segment's duration, matching the typed keyframe engine.
                         frames.push(TransformKeyframe {
                             transform,
                             duration: self.v11_structured_duration(fields, "duration", report)?,

@@ -5,6 +5,14 @@ v1.1 在 [v1](EIYASHOU_LANGUAGE_REFERENCE_v1.md) 上增加命令，不改变对�
 ## 命令树
 
 ```text
+对白 / 旁白内的等待
+├── "前半句[wait=1000]后半句"：标记处暂停打字 1000 毫秒，之后继续同一句
+├── 相邻标记累加等待；句首标记在第一个字出现前等待
+├── 标记不占引擎字形位置，也不拆分对白的 Action 或源 ID
+└── Block 在原位置显示着色的 [Wait 1s]；点击后直接编辑毫秒数，保持标签显示
+```
+
+```text
 scene name { ... }
 ├── 原 v1
 │   ├── 对白、旁白、choice、if、loop、let/赋值、列表方法
@@ -21,9 +29,9 @@ scene name { ... }
 │   ├── text.float.configure(id: id, infinite: bool) / text.float.hide(id)
 │   └── wait.advance()
 ├── 场景与立绘
-│   ├── background(asset | none, transition: ..., transform_*: ...)
+│   ├── background(asset | none, transition: ..., blocking: ..., transform_*: ...)
 │   ├── background.transform(x: ..., y: ..., alpha: ..., ...)
-│   ├── sprite(id, asset, position: ..., layout: ..., blend: ..., transform_*: ...)
+│   ├── sprite(id, asset, position: ..., layout: ..., blend: ..., blocking: ..., transform_*: ...)
 │   ├── sprite.update(id, asset, position: ..., layout: ..., scale: ..., ...)
 │   ├── sprite.offset(id, x: ..., y: ..., duration: ...)
 │   ├── sprite.transform(id, x: ..., alpha: ..., ...)
@@ -37,13 +45,13 @@ scene name { ... }
 │   ├── sprite.select.when(id, default: asset) { case(strict_bool_expression, asset), ... }
 │   ├── sprite.focus.configure(characters: [...], speaking: style(...), others: style(...), narration: style(...), ...)
 │   ├── sprite.focus(speaker_id | none)
-│   ├── hide(id | prefix* | *, transition: ...)
+│   ├── hide(id | prefix* | *, transition: ..., blocking: ...)
 │   ├── move(id, left | center | right, anchor_offset: ..., y: ..., duration: ..., easing: ..., blocking: ...)
 │   ├── avatar.show(asset) / avatar.hide()
 │   ├── scene.parallax(amplitude_percent: ..., edge_ease_percent: ..., return_to_center_on_leave: ..., scale: ...)
 │   └── scene.parallax.stop()
 ├── 镜头、特效与舞台
-│   ├── camera.move(scene | characters | all | none, transform..., tween: [...], duration: ..., easing: ..., blocking: ...)
+│   ├── camera.move(scene | characters | all | none, transform..., optional_effect_fields..., tween: [...], duration: ..., easing: ..., blocking: ...)
 │   ├── camera.shake(targets, amplitude: ..., frequency: ..., amplitude_randomness: ..., frequency_randomness: ..., duration: ..., axis: ..., falloff: ..., blocking: ...)
 │   ├── camera.bind(id, distance: ...) / camera.unbind(id, distance: ...)
 │   ├── camera.effect(targets, sparse_effect_fields..., tween: [...], duration: ..., easing: ..., blocking: ...)
@@ -150,10 +158,12 @@ camera.shake(...) / event.camera.shake(...)
 ├── 两项均为 0 时使用原有 ShakeCamera / CameraShake 事件和旧采样顺序
 └── 不增加逐字提示音 blip；用户明确排除
 camera.move(...) / camera.effect(...) / camera.effect.v2(...)
+├── camera.move 可同时写变换和 camera.effect 的稀疏特效字段，保持一个原子的 CameraTween Action
+├── 组合 V2 时沿用 camera.effect.v2 的完整字段约束；未涉及的通道保持不变
 ├── tween: [x, scale_x]：列出的数值字段使用本命令 duration / easing；其余立即生效
 ├── 省略 tween：保留原来的整条命令补间行为
 ├── tween: []：全部立即生效，不因 duration 额外阻塞
-├── 不重复或跨命令引用字段；枚举、资源、布尔等离散字段不参与
+├── 字段来自统一数值表，不允许重复；枚举、资源、布尔等离散字段不参与
 ├── 同一条源码仍生成一个有类型 Action；即时字段与动画起点同时应用
 ├── Inspector：◆ 随时长补间，◇ 立即生效；直接修改同一份源码
 └── 可选数值没有前值时（如 focal_distance: none → number）直接取目标值
@@ -170,4 +180,51 @@ scene example {
   camera.effect(scene, blur_amount: 4, bloom_intensity: 0.5, tween: [blur_amount], duration: 500ms),
   camera.shake(all, amplitude: 8, frequency: 12, amplitude_randomness: 0.3, frequency_randomness: 0.2, duration: 300ms)
 }
+```
+
+## 兼容工程转换（2026-09-29）
+
+```text
+background(...) / sprite(...) / hide(...)
+├── blocking 默认为 true：等待本次过渡结束
+├── blocking: false：过渡继续播放，脚本立即执行下一行
+└── 复用现有引擎 Flow 的 next 时序，不增加新的运行时动作
+sprite.keyframes(...) 的 frame(...)
+└── 仅有 duration / easing 的 frame 保持上帧姿态，用于原工程中的停留片段
+```
+
+## 转换工程的清单
+
+```text
+config.yaml
+└── script
+    ├── assets: assets.yaml
+    ├── characters: characters.yaml
+    └── objects: objects.yaml（可选；普通原生工程省略）
+assets.yaml
+├── backgrounds / figures / voices / bgm / se / videos
+└── particles
+    └── snow: assets/migrated/particles/snow.webp
+objects.yaml
+├── objects
+│   ├── scene_layer_0001: scene-layer:原始层ID
+│   ├── character_0001: 原始角色ID
+│   └── character_0001_layer_0001: character-layer:原始角色ID:原始层ID
+└── prefixes
+    ├── scene_layer_: "scene-layer:"
+    └── character_0001_layer_: "character-layer:原始角色ID:"
+.shou
+├── sprite(scene_layer_0001, image_id, blocking: false)
+├── hide(character_0001_layer_*, blocking: false)
+├── sprite.focus(character_0001)
+└── particle.show(snowfall, LIGHT_SNOW, texture: snow)
+```
+
+脚本中的对象参数仍是裸 ID，粒子纹理使用资源 ID。Loader 在生成 typed Program 前一次解析对象和前缀映射，保留原工程的镜头分组、分层立绘聚焦和前缀隐藏；资源路径受现有工程目录约束。映射只作用于对象字段，不改写对白、变量、场景名或资源 ID。未列入映射的普通原生对象 ID 保持原值。对象清单禁止未知字段、空目标和同类重复引擎 ID；别名不递归展开。
+
+```text
+tween: [numeric_field, ...]
+├── 使用 Engine 的统一 CameraTweenField 字段表；顺序和完整选择均保留
+├── 只对当前命令提供值的通道进行补间；其他通道的选择不改写状态
+└── 未知字段和重复字段仍报错
 ```

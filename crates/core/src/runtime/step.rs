@@ -16,6 +16,7 @@ use crate::runtime::eiyashou::{
     EiyashouRuntimeError, assign as assign_eiyashou, evaluate as evaluate_eiyashou,
     mutate_list as mutate_eiyashou_list, render_text as render_eiyashou_text,
 };
+use crate::runtime::text::compile_rich_text;
 use crate::state::{
     BgTransition, Dialogue, DialogueRetraction, IntroState, KeyframeAnimation, MenuChoice,
     MenuState, PresetAnimation, SceneFrame, Sprite, State, TransformAnimation, TransitionRule,
@@ -624,13 +625,14 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                         return StepResult::RuntimeError(ScriptRuntimeError::Eiyashou(error));
                     }
                 };
+                let (text, markup, pauses) = compile_rich_text(&text);
                 state.dialogue = Some(Dialogue {
                     speaker: dialogue.speaker.clone(),
                     speaker_color: dialogue.speaker_color,
-                    markup: text.clone(),
+                    markup,
                     text,
                     visible_chars: 0,
-                    pauses: Vec::new(),
+                    pauses,
                     vocal: dialogue.options.vocal.clone(),
                     volume: dialogue.options.volume.clamp(0.0, 1.0),
                     auto_advance: false,
@@ -2206,72 +2208,6 @@ fn resolve_speaker(source: &str, state: &State) -> String {
         .map_or(speaker, crate::Value::display)
 }
 
-fn compile_rich_text(source: &str) -> (String, String, Vec<crate::state::DialoguePause>) {
-    let chars = source.chars().collect::<Vec<_>>();
-    let mut text = String::new();
-    let mut markup = String::new();
-    let mut pauses = Vec::new();
-    let mut cursor = 0;
-    while cursor < chars.len() {
-        if chars[cursor] != '[' {
-            text.push(chars[cursor]);
-            markup.push(chars[cursor]);
-            cursor += 1;
-            continue;
-        }
-        let Some(label_end) = chars[cursor + 1..].iter().position(|value| *value == ']') else {
-            text.push(chars[cursor]);
-            markup.push(chars[cursor]);
-            cursor += 1;
-            continue;
-        };
-        let label_end = cursor + 1 + label_end;
-        let label = chars[cursor + 1..label_end].iter().collect::<String>();
-        if let Some(duration) = parse_inline_wait(&label) {
-            pauses.push(crate::state::DialoguePause {
-                at: text.chars().count(),
-                duration,
-            });
-            cursor = label_end + 1;
-            continue;
-        }
-        if chars.get(label_end + 1) != Some(&'(') {
-            text.push(chars[cursor]);
-            markup.push(chars[cursor]);
-            cursor += 1;
-            continue;
-        }
-        let Some(argument_end) = chars[label_end + 2..]
-            .iter()
-            .position(|value| *value == ')')
-        else {
-            text.push(chars[cursor]);
-            markup.push(chars[cursor]);
-            cursor += 1;
-            continue;
-        };
-        let argument_end = label_end + 2 + argument_end;
-        text.push_str(&label);
-        markup.extend(chars[cursor..=argument_end].iter());
-        cursor = argument_end + 1;
-    }
-    (text, markup, pauses)
-}
-
-fn parse_inline_wait(label: &str) -> Option<Option<f32>> {
-    let label = label.trim();
-    if label.eq_ignore_ascii_case("wait") {
-        return Some(None);
-    }
-    let milliseconds = label
-        .strip_prefix("wait=")
-        .or_else(|| label.strip_prefix("wait time=\""))?
-        .trim_end_matches('"')
-        .parse::<f32>()
-        .ok()?;
-    Some(Some(milliseconds.max(0.0) / 1000.0))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2281,27 +2217,6 @@ mod tests {
         EiyashouAssignOp, EiyashouChoice, EiyashouDialogue, EiyashouExpr, EiyashouListOperation,
         EiyashouPlace, EiyashouText, EiyashouTextPart, Value, VisualFilter,
     };
-
-    #[test]
-    fn inline_wait_is_removed_from_text_and_retained_as_timing() {
-        let (text, markup, pauses) = compile_rich_text("[前](color=#fff)[wait=1000]後[wait]");
-
-        assert_eq!(text, "前後");
-        assert_eq!(markup, "[前](color=#fff)後");
-        assert_eq!(
-            pauses,
-            [
-                crate::state::DialoguePause {
-                    at: 1,
-                    duration: Some(1.0),
-                },
-                crate::state::DialoguePause {
-                    at: 2,
-                    duration: None,
-                },
-            ]
-        );
-    }
 
     fn state_with(actions: Vec<Action>) -> State {
         let mut state = State::new();

@@ -24,7 +24,7 @@ Reference
 ├── Main UI: assets/main-D5mLo2Vz.js
 └── Main styles: assets/main-CJx_hRCk.css
 Block
-├── Left-aligned content up to 700 px; minimum 16 px line-number gutter, 8 px right padding
+├── Content fills available width beside the overview; minimum 16 px line-number gutter, 8 px right padding
 ├── Right-aligned row numbers with 4 px card gap; no extra base indentation
 ├── 40 px top / 120 px bottom padding
 ├── Narration body without a generic Text tag; dialogue speaker above body
@@ -32,6 +32,11 @@ Block
 ├── No hover insertion arrows beside cards; insertion remains in the node context menu
 ├── Restored original grip drag initiation and before/after drop placement; cards have no outline
 ├── Nested Blocks retain indentation without vertical guide lines
+├── Right overview paints Scene/Block structure, visible range, selection and diagnostic markers
+├── Overview uses twice the vertical scale and a minimum 32 px draggable viewport handle
+├── Overview wheel browses its enlarged content; main-view scrolling follows the current position
+├── Overview click and drag navigate without changing Block selection or seeking Engine
+├── Type badges and overview share one semantic palette; card surfaces retain the workbench colors
 ├── Right-click: run to here, copy, duplicate, cut, paste, select all, insert, move and delete
 ├── Wait: numeric input, hover presets and Wait for input mode on every row
 ├── Resource command: shared source-backed Picker on every row; thumbnails, paths, search and manager
@@ -449,3 +454,52 @@ Native diagnostic hover worked, while its stock wavy underline was not visibly d
 in this macOS build. The Editor therefore adds a faint error-position background through the
 existing decoration collection API; diagnostics remain the sole owner of ranges/messages.
 No test project was added. P7 Engine/package and deferred Windows/Linux acceptance remain separate.
+
+## Block overview scale and adaptive width (2026-09-29)
+
+```text
+Implementation
+├── Block content fills available editor width; compact Key rows retain their existing limit
+├── Overview content uses twice the vertical scale; viewport handle is at least 32 px
+├── Wheel browses the enlarged overview independently; main scrolling follows current position
+├── Click/drag navigates Blocks; dragging beyond an edge pans toward the remaining content
+└── Existing geometry tests cover clipping, grab position and reaching both document ends
+Current-source acceptance
+├── Formatting, workspace check, Clippy with warnings denied and workspace tests passed
+├── Workspace tests: 676 passed, 0 failed, 1 ignored; release Editor build passed
+├── Rebuilt macOS bundle: cards resize with dock width and enlarged viewport is visible
+├── Overview wheel leaves main position unchanged; click/drag changes it while Inspector stays selected
+└── Existing letsgal-native script hash unchanged; no added test project
+```
+
+Logs and the locally signed application are under
+`target/authoring/block-overview-size-20260929/`.
+
+## Native inline dialogue wait (2026-09-29)
+
+```text
+Implementation
+├── Core owns one markup tokenizer used by compatibility Say and native EiyashouSay
+├── Native dialogue removes [wait=milliseconds] from glyphs and retains typed pause positions
+├── Blocks show colored, shortened wait labels at their original inline position
+│   ├── Clicking selects a native millisecond input inside the label for direct typing
+│   ├── Label stays highlighted during editing; Enter exits without creating a Text draft
+│   └── Only duration bytes change; surrounding text and legacy tag spelling are preserved
+└── Parser rejects non-finite wait durations; malformed tags remain literal text
+Current-source acceptance
+├── Formatting, workspace check, Clippy with warnings denied and workspace tests passed
+├── Workspace tests: 680 passed, 0 failed, 1 ignored; native-smoke and current Release build passed
+├── Existing letsgal-native validates: 10 scenes and 1,007 actions
+├── Rebuilt macOS Editor displays inline [Wait 1s] and [Wait 2s] labels
+│   ├── Direct typing changes 1000 → 1500 ms without showing raw wait syntax
+│   ├── Numeric field shares the prose baseline; no duplicate placeholder glyphs
+│   ├── Enter exits editing without adding a Text draft; native undo restores duration/source
+│   └── Save/close/reopen from Explorer retains [Wait 1.5s]; sample then restored to its baseline
+├── Matching Engine pauses after the preceding text, then reveals the remaining sentence
+│   └── Wait syntax is absent from rendered dialogue; exact timing is covered by clock tests
+└── Existing sample source hash unchanged; no added test project
+```
+
+Logs and local app bundles are under `target/authoring/inline-wait-20260929/`.
+Current numeric-edit acceptance and bundle are under
+`target/authoring/inline-wait-edit-20260929/` (`macos-accepted/`).

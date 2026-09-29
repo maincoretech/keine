@@ -71,6 +71,7 @@ mod edits;
 mod files;
 mod inspector;
 mod inspector_controls;
+mod minimap;
 mod render;
 mod resource_picker;
 mod view;
@@ -1102,16 +1103,39 @@ impl EditorApp {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum PanelPayload {
-    Explorer { root: PathBuf },
-    Document { root: PathBuf, relative: PathBuf },
-    Inspector { root: PathBuf },
-    Output { root: PathBuf },
-    Assets { root: PathBuf },
-    AssetPreview { root: PathBuf },
-    Characters { root: PathBuf },
-    Scenes { root: PathBuf },
-    Problems { root: PathBuf },
-    Performance { root: PathBuf },
+    Explorer {
+        root: PathBuf,
+        #[serde(default)]
+        expanded: Vec<PathBuf>,
+    },
+    Document {
+        root: PathBuf,
+        relative: PathBuf,
+    },
+    Inspector {
+        root: PathBuf,
+    },
+    Output {
+        root: PathBuf,
+    },
+    Assets {
+        root: PathBuf,
+    },
+    AssetPreview {
+        root: PathBuf,
+    },
+    Characters {
+        root: PathBuf,
+    },
+    Scenes {
+        root: PathBuf,
+    },
+    Problems {
+        root: PathBuf,
+    },
+    Performance {
+        root: PathBuf,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -1136,7 +1160,10 @@ impl ToolKind {
 
     fn payload(self, root: PathBuf) -> PanelPayload {
         match self {
-            Self::Explorer => PanelPayload::Explorer { root },
+            Self::Explorer => PanelPayload::Explorer {
+                root,
+                expanded: Vec::new(),
+            },
             Self::Assets => PanelPayload::Assets { root },
             Self::Characters => PanelPayload::Characters { root },
             Self::Problems => PanelPayload::Problems { root },
@@ -1150,6 +1177,7 @@ enum PanelContent {
     Explorer {
         root: PathBuf,
         files: Vec<WorkspaceFile>,
+        expanded: HashSet<PathBuf>,
     },
     Document {
         root: PathBuf,
@@ -1189,13 +1217,26 @@ enum PanelContent {
 impl PanelContent {
     fn from_payload(payload: PanelPayload, window: &mut Window, cx: &mut App) -> io::Result<Self> {
         match payload {
-            PanelPayload::Explorer { root } => {
+            PanelPayload::Explorer { root, expanded } => {
                 let files = cx
                     .global_mut::<EditorDocuments>()
                     .workspace_mut(&root)?
                     .files
                     .clone();
-                Ok(Self::Explorer { root, files })
+                let directories = files
+                    .iter()
+                    .filter(|file| file.is_dir())
+                    .map(|file| &file.relative_path)
+                    .collect::<HashSet<_>>();
+                let expanded = expanded
+                    .into_iter()
+                    .filter(|path| directories.contains(path))
+                    .collect();
+                Ok(Self::Explorer {
+                    root,
+                    files,
+                    expanded,
+                })
             }
             PanelPayload::Document { root, relative } => {
                 let document = if is_eiyashou_authoring_document(&root, &relative) {
@@ -1270,7 +1311,14 @@ impl PanelContent {
 
     fn payload(&self) -> PanelPayload {
         match self {
-            Self::Explorer { root, .. } => PanelPayload::Explorer { root: root.clone() },
+            Self::Explorer { root, expanded, .. } => {
+                let mut expanded = expanded.iter().cloned().collect::<Vec<_>>();
+                expanded.sort();
+                PanelPayload::Explorer {
+                    root: root.clone(),
+                    expanded,
+                }
+            }
             Self::Document { root, relative, .. } => PanelPayload::Document {
                 root: root.clone(),
                 relative: relative.clone(),
@@ -1345,6 +1393,7 @@ struct WorkbenchPanel {
     view_scroll: ScrollHandle,
     block_scroll_anchor: ScrollAnchor,
     block_scroll_pending: bool,
+    block_minimap: minimap::BlockMinimap,
     tool_inputs: Vec<Entity<InputState>>,
     recovery_epoch: u64,
     syntax_check: Option<gpui_kit::Task<()>>,
@@ -1374,7 +1423,6 @@ struct WorkbenchPanel {
     asset_inspector_inputs: Vec<Entity<InputState>>,
     asset_inspector_subscriptions: Vec<Subscription>,
     file_selection: Option<PathBuf>,
-    file_collapsed: HashSet<PathBuf>,
     file_drop_target: Option<(PathBuf, Bounds<Pixels>)>,
     file_clipboard: Option<PathBuf>,
     file_history: FileHistory,
@@ -1410,6 +1458,13 @@ enum DocumentMode {
 struct BlockTextEditor {
     text_start: usize,
     state: Entity<TextareaState>,
+    wait: Option<InlineWaitEdit>,
+    _subscription: Subscription,
+}
+
+struct InlineWaitEdit {
+    ordinal: usize,
+    input: Entity<InputState>,
     _subscription: Subscription,
 }
 
@@ -1697,6 +1752,7 @@ impl WorkbenchPanel {
                 view_scroll,
                 block_scroll_anchor,
                 block_scroll_pending: false,
+                block_minimap: minimap::BlockMinimap::default(),
                 tool_inputs: Vec::new(),
                 recovery_epoch: 0,
                 syntax_check: None,
@@ -1726,7 +1782,6 @@ impl WorkbenchPanel {
                 asset_inspector_inputs: Vec::new(),
                 asset_inspector_subscriptions: Vec::new(),
                 file_selection: None,
-                file_collapsed: HashSet::new(),
                 file_drop_target: None,
                 file_clipboard: None,
                 file_history: FileHistory::default(),
@@ -4011,6 +4066,36 @@ pub fn run() -> ExitCode {
 mod tests {
     use super::*;
     use gpui_kit::point;
+
+    #[test]
+    fn explorer_layout_restores_expansion_and_old_layouts_default_to_collapsed() {
+        let legacy: PanelPayload = serde_json::from_value(serde_json::json!({
+            "kind": "explorer",
+            "root": "project"
+        }))
+        .unwrap();
+        assert!(matches!(legacy, PanelPayload::Explorer { expanded, .. } if expanded.is_empty()));
+
+        let content = PanelContent::Explorer {
+            root: PathBuf::from("project"),
+            files: Vec::new(),
+            expanded: HashSet::from([
+                PathBuf::from("chapters"),
+                PathBuf::from("assets/voice"),
+                PathBuf::from("assets"),
+            ]),
+        };
+        let saved = serde_json::to_value(content.payload()).unwrap();
+        let restored: PanelPayload = serde_json::from_value(saved).unwrap();
+        let PanelPayload::Explorer { root, expanded } = restored else {
+            panic!("Explorer state must retain its panel kind");
+        };
+        assert_eq!(root, Path::new("project"));
+        assert_eq!(
+            expanded,
+            ["assets", "assets/voice", "chapters"].map(PathBuf::from)
+        );
+    }
 
     #[test]
     fn late_project_notifications_do_not_recreate_a_released_session() {

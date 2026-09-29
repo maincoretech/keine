@@ -2852,6 +2852,40 @@ mod tests {
     }
 
     #[test]
+    fn native_dialogue_waits_before_and_between_unicode_text() {
+        let mut state = State::new();
+        state.current_scene = "main".into();
+        state.insert_scene(
+            "main".into(),
+            vec![Action::EiyashouSay(keine_core::EiyashouDialogue {
+                speaker: "Rin".into(),
+                speaker_color: None,
+                text: keine_core::EiyashouText::literal("[wait=500]前[wait=500][wait=1000]後"),
+                options: keine_core::SayOptions::default(),
+                source_id: "inline-wait".into(),
+            })],
+        );
+        assert_eq!(step::step(&mut state), step::StepResult::AwaitClick);
+        assert_eq!(state.dialogue.as_ref().unwrap().text, "前後");
+        assert_eq!(state.dialogue.as_ref().unwrap().markup, "前後");
+        assert_eq!(
+            state.active_dialogue_source_id.as_deref(),
+            Some("inline-wait")
+        );
+        let mut clock = TypewriterClock::default();
+        update_typewriter(&mut state, 0., 10., &mut clock);
+        update_typewriter(&mut state, 0.4, 10., &mut clock);
+        assert_eq!(state.dialogue.as_ref().unwrap().visible_chars, 0);
+        update_typewriter(&mut state, 0.2, 10., &mut clock);
+        assert_eq!(state.dialogue.as_ref().unwrap().visible_chars, 1);
+        update_typewriter(&mut state, 1.4, 10., &mut clock);
+        assert_eq!(state.dialogue.as_ref().unwrap().visible_chars, 1);
+        update_typewriter(&mut state, 0.3, 10., &mut clock);
+        assert_eq!(state.dialogue.as_ref().unwrap().visible_chars, 2);
+        assert_eq!(state.dialogue.as_ref().unwrap().text, "前後");
+    }
+
+    #[test]
     fn skip_read_stops_at_unread_dialogue() {
         let mut state = dialogue_state();
         let mut toggles = ToggleStates {

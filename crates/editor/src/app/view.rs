@@ -1003,6 +1003,33 @@ pub(super) fn render_block_picker(
         .into_any_element()
 }
 
+/// One palette for Block type badges and their overview strokes.
+pub(super) fn block_type_color(kind: &BlockKind, source: &str) -> u32 {
+    match kind {
+        BlockKind::Narration | BlockKind::Dialogue { .. } => 0xa4c9a5,
+        BlockKind::Declaration | BlockKind::Assignment => 0xe2c58f,
+        BlockKind::Unsupported => 0xdb7780,
+        BlockKind::Command => {
+            let name = source.split('(').next().unwrap_or_default().trim();
+            match name.split('.').next().unwrap_or(name) {
+                "camera" | "track" | "key" | "stage" => 0xc4b0e5,
+                "background" | "scene" => 0xa4c9a5,
+                "sprite" | "hide" | "move" | "avatar" | "frame" | "resource" | "case" => PRIMARY,
+                "particle" => 0xe2c58f,
+                "screen" => 0xe4abbc,
+                _ => match InsertKind::for_command(name).map(InsertKind::category) {
+                    Some("Text") => 0xa4c9a5,
+                    Some("Media") => 0xe7b18b,
+                    Some("Data") => 0xe2c58f,
+                    Some("Flow") => 0xacaee4,
+                    _ => PRIMARY,
+                },
+            }
+        }
+        _ => 0xacaee4,
+    }
+}
+
 pub(super) fn block_card_label(kind: &BlockKind, source: &str) -> String {
     match kind {
         BlockKind::Dialogue { speaker } => speaker.clone(),
@@ -1319,6 +1346,7 @@ pub(super) struct BlockProjectionView<'a> {
     pub(super) scroll_handle: &'a ScrollHandle,
     pub(super) scroll_anchor: &'a ScrollAnchor,
     pub(super) scroll_pending: bool,
+    pub(super) minimap: &'a minimap::BlockMinimap,
     pub(super) scene_edit: Option<&'a SceneEditMode>,
     pub(super) scene_name_input: &'a Entity<InputState>,
     pub(super) visible: &'a HashSet<usize>,
@@ -1488,6 +1516,204 @@ fn block_drop_slot(
         .into_any_element()
 }
 
+struct WaitPreview {
+    text: String,
+    /// Display and source byte ranges for the shortened wait labels.
+    waits: Vec<(Range<usize>, Range<usize>)>,
+    editing: Option<Range<usize>>,
+}
+
+impl WaitPreview {
+    fn source_selection(&self, offset: usize) -> Range<usize> {
+        let mut delta = 0isize;
+        for (display, source) in &self.waits {
+            if offset < display.start {
+                break;
+            }
+            if offset < display.end {
+                return source.clone();
+            }
+            delta += source.len() as isize - display.len() as isize;
+        }
+        let offset = offset.saturating_add_signed(delta);
+        offset..offset
+    }
+}
+
+fn inline_wait_preview(source: &str, editing: Option<(usize, &str)>) -> WaitPreview {
+    let mut text = String::new();
+    let mut ranges = Vec::new();
+    let mut end = 0;
+    let mut editing_range = None;
+    for (ordinal, wait) in keine_core::runtime::text::inline_waits(source).enumerate() {
+        text.push_str(&source[end..wait.range.start]);
+        let start = text.len();
+        if let Some((_, value)) = editing.filter(|(index, _)| *index == ordinal) {
+            text.push_str("[Wait ");
+            let number_start = text.len();
+            // Reserve the field's width in the same shaped line. The native input is
+            // prepainted over this invisible run, so surrounding prose still wraps normally.
+            text.extend(std::iter::repeat_n(
+                '\u{2007}',
+                value.chars().count().max(6),
+            ));
+            editing_range = Some(number_start..text.len());
+            text.push_str(" ms]");
+        } else {
+            text.push_str(&match wait.duration {
+                Some(seconds) => format!("[Wait {seconds}s]"),
+                None => "[Wait for input]".to_owned(),
+            });
+        }
+        ranges.push((start..text.len(), wait.range.clone()));
+        end = wait.range.end;
+    }
+    text.push_str(&source[end..]);
+    WaitPreview {
+        text,
+        waits: ranges,
+        editing: editing_range,
+    }
+}
+
+fn render_block_text(
+    state: &Entity<TextareaState>,
+    editors: &[BlockTextEditor],
+    window: &mut Window,
+    cx: &mut Context<WorkbenchPanel>,
+) -> AnyElement {
+    let active = editors
+        .iter()
+        .find(|row| row.state == *state)
+        .and_then(|row| row.wait.as_ref())
+        .map(|wait| (wait.ordinal, wait.input.clone()));
+    let value = active.as_ref().map(|(_, input)| input.read(cx).value());
+    let preview = inline_wait_preview(
+        state.read(cx).value().as_ref(),
+        active
+            .as_ref()
+            .zip(value.as_ref())
+            .map(|((ordinal, _), value)| (*ordinal, value.as_ref())),
+    );
+    if !preview.waits.is_empty() && !state.read(cx).focus_handle(cx).is_focused(window) {
+        let color: Hsla = rgb(block_type_color(&BlockKind::Command, "wait(1s)")).into();
+        let highlights = preview.waits.iter().map(|(range, _)| {
+            (
+                range.clone(),
+                gpui_kit::HighlightStyle {
+                    color: Some(color),
+                    background_color: Some(color.opacity(0.16)),
+                    font_weight: Some(gpui_kit::FontWeight::SEMIBOLD),
+                    ..Default::default()
+                },
+            )
+        });
+        let text = gpui_kit::StyledText::new(preview.text.clone()).with_highlights(highlights);
+        let layout = text.layout().clone();
+        let input = state.clone();
+        let overlay = active
+            .zip(preview.editing.clone())
+            .map(|((_, input), range)| {
+                let layout = layout.clone();
+                canvas(
+                    move |_, window, cx| {
+                        let start = layout.position_for_index(range.start)?;
+                        let end = layout.position_for_index(range.end)?;
+                        let height = layout.line_height();
+                        let width = if start.y == end.y {
+                            end.x - start.x
+                        } else {
+                            px(48.)
+                        };
+                        let mut field = div()
+                            .id(("inline-wait-duration", input.entity_id()))
+                            .w(width)
+                            .h(height)
+                            // Single-line native inputs propagate Enter; consume it
+                            // here so committing a duration cannot create a Text block.
+                            .on_action(|_: &gpui_kit::base::input::Enter, _, cx| {
+                                cx.stop_propagation()
+                            })
+                            .child(
+                                Input::new(&input)
+                                    .appearance(false)
+                                    .bordered(false)
+                                    .size_full()
+                                    .min_h_0()
+                                    .px_0()
+                                    .py_0()
+                                    .line_height(height)
+                                    .text_size(px(13.))
+                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                    .text_color(color),
+                            )
+                            .into_any_element();
+                        field.layout_as_root(
+                            size(width, height).map(gpui_kit::AvailableSpace::Definite),
+                            window,
+                            cx,
+                        );
+                        field.prepaint_at(start, window, cx);
+                        Some(field)
+                    },
+                    |_, field, window, cx| {
+                        if let Some(mut field) = field {
+                            field.paint(window, cx);
+                        }
+                    },
+                )
+                .absolute()
+                .size_full()
+            });
+        return div()
+            .relative()
+            .track_focus(&state.read(cx).focus_handle(cx))
+            .w_full()
+            .min_w_0()
+            .py(px(5.))
+            .px_2()
+            .text_size(px(13.))
+            .text_color(rgb(INK))
+            .cursor_text()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    let offset = layout
+                        .index_for_position(event.position)
+                        .unwrap_or_else(|index| index);
+                    if let Some(ordinal) = preview
+                        .waits
+                        .iter()
+                        .position(|(range, _)| range.contains(&offset))
+                    {
+                        // track_focus's default mouse handler would otherwise steal
+                        // focus back from the duration field to the raw textarea.
+                        window.prevent_default();
+                        this.edit_inline_wait(&input, ordinal, window, cx);
+                        return;
+                    }
+                    input.update(cx, |input, cx| {
+                        input.set_selected_range(preview.source_selection(offset), cx);
+                        input.focus(window, cx);
+                    });
+                    cx.notify();
+                }),
+            )
+            .child(text)
+            .children(overlay)
+            .into_any_element();
+    }
+    // The row owns the complete-node menu; preserve ordinary IME, undo and source editing.
+    Textarea::new(state)
+        .context_menu(|menu, _, _| menu)
+        .appearance(false)
+        .bordered(false)
+        .w_full()
+        .text_size(px(13.))
+        .text_color(rgb(INK))
+        .into_any_element()
+}
+
 pub(super) fn render_block_projection(
     view: BlockProjectionView<'_>,
     window: &mut Window,
@@ -1508,6 +1734,7 @@ pub(super) fn render_block_projection(
         scroll_handle,
         scroll_anchor,
         scroll_pending,
+        minimap,
         scene_edit,
         scene_name_input,
         visible,
@@ -1574,6 +1801,8 @@ pub(super) fn render_block_projection(
     let root = root.to_owned();
     let relative = relative.to_owned();
     let mut rows = Vec::new();
+    let mut overview = Vec::new();
+    let mut overview_offset = 40.;
     for (scene_index, scene) in projection.scenes.iter().enumerate() {
         let collapsed = collapsed_scenes.contains(&scene.name);
         let scene_name = scene.name.clone();
@@ -1594,6 +1823,21 @@ pub(super) fn render_block_projection(
             cx,
         );
         let scene_line = source_lines.span(&source, scene.name_range.start).line - 1;
+        overview.push(minimap::Mark {
+            top: overview_offset,
+            height: 32.,
+            depth: 0,
+            width: 60.,
+            color: PRIMARY,
+            selected: selected_line == Some(scene_line)
+                || collapsed
+                    && scene.blocks.iter().any(|block| {
+                        selected_blocks.contains(&block.source_range.start)
+                            || selected_start == Some(block.source_range.start)
+                    }),
+            error: collapsed && scene.blocks.iter().any(|block| block.read_only),
+        });
+        overview_offset += 36.;
         let header = div()
             .id(("scene-section", scene_index))
             .w_full()
@@ -1700,8 +1944,20 @@ pub(super) fn render_block_projection(
         let mut scene_body_height = 0.;
         let mut hidden_height = 0.;
         for (block_index, block) in scene.blocks.iter().enumerate() {
+            let row_height = block_row_height(block, editors, draft_text, heights, cx);
+            // Use the same row height, draft/drop gaps and collapse transition as the main layout.
+            let overview_row = overview.len();
+            if collapse_progress > 0. {
+                overview.push(minimap::Mark::block(
+                    block,
+                    overview_offset + scene_body_height * collapse_progress,
+                    row_height * collapse_progress,
+                    selected_blocks.contains(&block.source_range.start)
+                        || selected_start == Some(block.source_range.start),
+                ));
+            }
             if !visible.contains(&block.source_range.start) {
-                let height = block_row_height(block, editors, draft_text, heights, cx) + 4.;
+                let height = row_height + 4.;
                 scene_body_height += height;
                 hidden_height += height;
                 continue;
@@ -1726,6 +1982,7 @@ pub(super) fn render_block_projection(
             let selected = selected_blocks.contains(&row_id) || selected_start == Some(row_id);
             let icon = block_card_icon(&block.kind, &block.summary);
             let label = block_card_label(&block.kind, &block.summary);
+            let type_color = block_type_color(&block.kind, &block.summary);
             let text_state = block.text_range.as_ref().and_then(|range| {
                 editors
                     .iter()
@@ -1766,7 +2023,6 @@ pub(super) fn render_block_projection(
             let drag_label = label.clone();
             let drag_summary = source_summary.clone();
             let drag_count = drag_selection.len();
-            let row_height = block_row_height(&block, editors, draft_text, heights, cx);
             let block_indent = block.depth as f32 * 18.;
             let movable = !matches!(&block.kind, BlockKind::ElseIf | BlockKind::Else);
             let text_block = matches!(
@@ -1966,17 +2222,11 @@ pub(super) fn render_block_projection(
                             )
                         })
                         .child(
-                            div().min_h(px(30.)).flex_1().min_w_0().child(
-                                Textarea::new(state)
-                                    // The row owns the complete-node menu. An empty
-                                    // native input menu prevents a second popup.
-                                    .context_menu(|menu, _, _| menu)
-                                    .appearance(false)
-                                    .bordered(false)
-                                    .w_full()
-                                    .text_size(px(13.))
-                                    .text_color(rgb(INK)),
-                            ),
+                            div()
+                                .min_h(px(30.))
+                                .flex_1()
+                                .min_w_0()
+                                .child(render_block_text(state, editors, window, cx)),
                         ),
                 )
             } else {
@@ -2050,13 +2300,13 @@ pub(super) fn render_block_projection(
                                         .gap(px(4.))
                                         .px(px(6.))
                                         .rounded(px(3.))
-                                        .bg(rgb(PRIMARY_DIM))
+                                        .bg(gpui_kit::rgba((type_color << 8) | 0x20))
                                         .text_size(px(13.))
                                         .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                         .text_color(rgb(if block.read_only && !block.disabled {
                                             0xd2aa62
                                         } else {
-                                            PRIMARY
+                                            type_color
                                         }))
                                         .child(Icon::new(icon).xsmall())
                                         .child(label),
@@ -2190,6 +2440,9 @@ pub(super) fn render_block_projection(
                     && draft.text_range.is_none()
             }) {
                 scene_body_height += 42.;
+                if let Some(mark) = overview.get_mut(overview_row) {
+                    mark.top += 42. * collapse_progress;
+                }
                 scene_rows.push(draft_text_row(draft, block_indent, row_id));
             }
             scene_rows.push(row_wrapper.into_any_element());
@@ -2221,6 +2474,7 @@ pub(super) fn render_block_projection(
             scene_rows.push(draft_text_row(draft, 0., scene.source_range.start));
         }
         scene_body_height = (scene_body_height - 4.).max(0.);
+        overview_offset += scene_body_height * collapse_progress + 4.;
         rows.push(
             div()
                 .w_full()
@@ -2249,6 +2503,7 @@ pub(super) fn render_block_projection(
         );
     }
     if matches!(scene_edit, Some(SceneEditMode::New)) {
+        overview_offset += 36.;
         rows.push(
             div()
                 .id("new-scene-row")
@@ -2299,6 +2554,16 @@ pub(super) fn render_block_projection(
             .cloned()
             .enumerate()
             .map(|(index, card)| {
+                overview.push(minimap::Mark {
+                    top: overview_offset,
+                    height: 30.,
+                    depth: 0,
+                    width: 48.,
+                    color: 0xdb7780,
+                    selected: false,
+                    error: true,
+                });
+                overview_offset += 34.;
                 div()
                     .id(("projection-diagnostic", index))
                     .w_full()
@@ -2328,7 +2593,7 @@ pub(super) fn render_block_projection(
         .flex_col()
         .gap_1()
         .w_full()
-        .max_w(px(700.))
+        .min_w_0()
         .pl(px(line_number_gutter))
         .pr_2()
         .pt(px(40.))
@@ -2341,7 +2606,23 @@ pub(super) fn render_block_projection(
                 .clear_block_selection(&root);
             cx.notify();
         }));
-    vertical_overflow_view("eiyashou-block-scroll", scroll_handle, content)
+    div()
+        .size_full()
+        .flex()
+        .min_w_0()
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .child(vertical_overflow_view(
+                    "eiyashou-block-scroll",
+                    scroll_handle,
+                    content,
+                )),
+        )
+        .child(minimap::render(overview, scroll_handle, minimap, cx))
+        .into_any_element()
 }
 
 pub(super) fn render_asset_preview(
@@ -2366,7 +2647,10 @@ pub(super) fn render_asset_preview(
             })
             .into_any_element();
     };
-    let image = matches!(asset.kind, AssetKind::Background | AssetKind::Figure);
+    let image = matches!(
+        asset.kind,
+        AssetKind::Background | AssetKind::Figure | AssetKind::Particle
+    );
     let supported_image = asset
         .path
         .extension()
@@ -2419,7 +2703,7 @@ pub(super) fn render_asset_preview(
         preview_placeholder(match asset.kind {
             AssetKind::Voice | AssetKind::Bgm | AssetKind::Effect => "Audio asset",
             AssetKind::Video => "Video asset",
-            AssetKind::Background | AssetKind::Figure => unreachable!(),
+            AssetKind::Background | AssetKind::Figure | AssetKind::Particle => unreachable!(),
         })
     };
     div()
@@ -2582,7 +2866,9 @@ pub(super) fn render_assets(
                 let row_order = ordered.clone();
                 let selected = selection.contains(&key);
                 let icon = match asset.kind {
-                    AssetKind::Background | AssetKind::Figure => AssetIconName::Image,
+                    AssetKind::Background | AssetKind::Figure | AssetKind::Particle => {
+                        AssetIconName::Image
+                    }
                     AssetKind::Voice | AssetKind::Effect => AssetIconName::Volume2,
                     AssetKind::Bgm => AssetIconName::Music,
                     AssetKind::Video => AssetIconName::Film,
@@ -2741,6 +3027,7 @@ pub(super) fn render_asset_filter_menu(
             AssetKind::Bgm,
             AssetKind::Effect,
             AssetKind::Video,
+            AssetKind::Particle,
         ]
         .into_iter()
         .map(|kind| {
@@ -3322,5 +3609,30 @@ pub(super) fn selection_summary(root: &Path, index: &AuthoringIndex, cx: &App) -
             .text_color(rgb(MUTED))
             .child("No source selection")
             .into_any_element(),
+    }
+}
+
+#[cfg(test)]
+mod inline_wait_tests {
+    use super::*;
+
+    #[test]
+    fn shortened_wait_labels_preserve_exact_source_selection() {
+        let source = "前[wait=1000]後[wait=500]尾";
+        let preview = inline_wait_preview(source, None);
+        assert_eq!(preview.text, "前[Wait 1s]後[Wait 0.5s]尾");
+        for (display, range) in &preview.waits {
+            assert_eq!(preview.source_selection(display.start + 1), *range);
+            assert!(source[range.clone()].starts_with("[wait="));
+        }
+        let suffix = preview.text.find('尾').unwrap();
+        assert_eq!(
+            preview.source_selection(suffix).start,
+            source.find('尾').unwrap()
+        );
+        assert_eq!(preview.source_selection(0), 0..0);
+        let invalid = inline_wait_preview("前[wait=bad]後", None);
+        assert!(invalid.waits.is_empty());
+        assert_eq!(invalid.text, "前[wait=bad]後");
     }
 }

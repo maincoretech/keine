@@ -264,7 +264,7 @@ pub(super) fn source_number(key: &SourceInspectorKey, field: &SourceField) -> Op
     let command = key.command.as_str();
     if matches!(
         command,
-        "camera.effect" | "camera.effect.v2" | "event.camera.patch"
+        "camera.move" | "camera.effect" | "camera.effect.v2" | "event.camera.patch"
     ) && let Some(control) = effect_number(&field.key)
     {
         return (field.value.is_empty() || control.parse(&field.value).is_some())
@@ -316,7 +316,7 @@ fn camera_tween_field(key: &SourceInspectorKey, field: &SourceField) -> bool {
         return false;
     };
     match key.command.as_str() {
-        "camera.move" => numeric.is_transform(),
+        "camera.move" => true,
         "camera.effect" => !numeric.is_transform() && !numeric.is_v2(),
         "camera.effect.v2" => numeric.is_v2(),
         _ => false,
@@ -501,15 +501,17 @@ impl SelectItem for SourceOption {
         let Some((root, kind, path)) = &self.asset else {
             return self.title.clone().into_any_element();
         };
-        let image = matches!(kind, AssetKind::Background | AssetKind::Figure)
-            && path
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| {
-                    gpui_kit::Img::extensions()
-                        .iter()
-                        .any(|candidate| candidate.eq_ignore_ascii_case(ext))
-                });
+        let image = matches!(
+            kind,
+            AssetKind::Background | AssetKind::Figure | AssetKind::Particle
+        ) && path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| {
+                gpui_kit::Img::extensions()
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(ext))
+            });
         let preview = if image && let Some(file) = confined_existing_file(root, path) {
             img(file)
                 .size_full()
@@ -517,7 +519,9 @@ impl SelectItem for SourceOption {
                 .into_any_element()
         } else {
             Icon::new(match kind {
-                AssetKind::Background | AssetKind::Figure => AssetIconName::Image,
+                AssetKind::Background | AssetKind::Figure | AssetKind::Particle => {
+                    AssetIconName::Image
+                }
                 AssetKind::Video => AssetIconName::Video,
                 _ => AssetIconName::Music,
             })
@@ -615,6 +619,7 @@ pub(super) fn source_asset_kind(
         ("se", "0") | ("se.loop", "1") => Some(AssetKind::Effect),
         ("vocal.play", "0") => Some(AssetKind::Voice),
         ("video", "0") | ("video.play", "1") => Some(AssetKind::Video),
+        ("particle.show" | "event.particle", "texture") => Some(AssetKind::Particle),
         _ => None,
     }
 }
@@ -949,7 +954,7 @@ fn source_effect_group(name: &str) -> Option<(&'static str, &'static str)> {
 pub(super) fn source_field_enabled(key: &SourceInspectorKey, field: &SourceField) -> bool {
     if !matches!(
         key.command.as_str(),
-        "camera.effect" | "camera.effect.v2" | "event.camera.patch"
+        "camera.move" | "camera.effect" | "camera.effect.v2" | "event.camera.patch"
     ) {
         return true;
     }
@@ -1531,7 +1536,7 @@ impl SourceInspectorView<'_> {
         }
         let effects = matches!(
             self.key.command.as_str(),
-            "camera.effect" | "camera.effect.v2" | "event.camera.patch"
+            "camera.move" | "camera.effect" | "camera.effect.v2" | "event.camera.patch"
         );
         let mut content = div()
             .w_full()

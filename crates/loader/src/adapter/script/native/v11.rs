@@ -67,6 +67,7 @@ pub(super) fn is_structured_command(name: &str) -> bool {
 
 pub(super) fn expanded_fields(name: &str) -> Option<&'static [&'static str]> {
     match name {
+        "camera.move" => Some(camera::move_fields()),
         "camera.effect" => Some(effects::PATCH_FIELDS),
         "camera.effect.v2" => Some(effects::V2_FIELDS),
         "stage.mask.show" => Some(mask::MASK_FIELDS),

@@ -142,91 +142,11 @@ impl<'a> Parser<'a> {
             ),
             "camera.effect.v2" => {
                 // V2 is a full state action, so every field is required. Partial calls would reset omitted effects.
-                let effect = PostProcessV2 {
-                    mirror_shatter_intensity: self.v11_named_number(
-                        args,
-                        "mirror_shatter_intensity",
-                        report,
-                    )?,
-                    mirror_shatter_center_x: self.v11_named_number(
-                        args,
-                        "mirror_shatter_center_x",
-                        report,
-                    )?,
-                    mirror_shatter_center_y: self.v11_named_number(
-                        args,
-                        "mirror_shatter_center_y",
-                        report,
-                    )?,
-                    mirror_shatter_spread: self.v11_named_number(
-                        args,
-                        "mirror_shatter_spread",
-                        report,
-                    )?,
-                    mirror_shatter_seed: self.v11_named_number(
-                        args,
-                        "mirror_shatter_seed",
-                        report,
-                    )?,
-                    speed_lines_intensity: self.v11_named_number(
-                        args,
-                        "speed_lines_intensity",
-                        report,
-                    )?,
-                    speed_lines_radial: self.v11_named_bool(args, "speed_lines_radial", report)?,
-                    speed_lines_density: self.v11_named_number(
-                        args,
-                        "speed_lines_density",
-                        report,
-                    )?,
-                    speed_lines_angle: self.v11_named_number(args, "speed_lines_angle", report)?,
-                    speed_lines_speed: self.v11_named_number(args, "speed_lines_speed", report)?,
-                    speed_lines_center_x: self.v11_named_number(
-                        args,
-                        "speed_lines_center_x",
-                        report,
-                    )?,
-                    speed_lines_center_y: self.v11_named_number(
-                        args,
-                        "speed_lines_center_y",
-                        report,
-                    )?,
-                    speed_lines_region_ellipse: self.v11_named_bool(
-                        args,
-                        "speed_lines_region_ellipse",
-                        report,
-                    )?,
-                    speed_lines_region_x: self.v11_named_number(
-                        args,
-                        "speed_lines_region_x",
-                        report,
-                    )?,
-                    speed_lines_region_y: self.v11_named_number(
-                        args,
-                        "speed_lines_region_y",
-                        report,
-                    )?,
-                    speed_lines_region_width: self.v11_named_number(
-                        args,
-                        "speed_lines_region_width",
-                        report,
-                    )?,
-                    speed_lines_region_height: self.v11_named_number(
-                        args,
-                        "speed_lines_region_height",
-                        report,
-                    )?,
-                    speed_lines_region_feather: self.v11_named_number(
-                        args,
-                        "speed_lines_region_feather",
-                        report,
-                    )?,
-                };
                 self.camera_tween(
                     args,
                     Action::SetPostProcessV2 {
                         targets,
-                        effect: Box::new(effect),
+                        effect: Box::new(self.v11_post_process_v2(args, report)?),
                         duration,
                         easing,
                         blocking,
@@ -237,6 +157,61 @@ impl<'a> Parser<'a> {
             _ => None,
         }
     }
+    pub(super) fn v11_post_process_v2(
+        &self,
+        args: &[Argument],
+        report: &mut ParseReport,
+    ) -> Option<PostProcessV2> {
+        Some(PostProcessV2 {
+            mirror_shatter_intensity: self.v11_named_number(
+                args,
+                "mirror_shatter_intensity",
+                report,
+            )?,
+            mirror_shatter_center_x: self.v11_named_number(
+                args,
+                "mirror_shatter_center_x",
+                report,
+            )?,
+            mirror_shatter_center_y: self.v11_named_number(
+                args,
+                "mirror_shatter_center_y",
+                report,
+            )?,
+            mirror_shatter_spread: self.v11_named_number(args, "mirror_shatter_spread", report)?,
+            mirror_shatter_seed: self.v11_named_number(args, "mirror_shatter_seed", report)?,
+            speed_lines_intensity: self.v11_named_number(args, "speed_lines_intensity", report)?,
+            speed_lines_radial: self.v11_named_bool(args, "speed_lines_radial", report)?,
+            speed_lines_density: self.v11_named_number(args, "speed_lines_density", report)?,
+            speed_lines_angle: self.v11_named_number(args, "speed_lines_angle", report)?,
+            speed_lines_speed: self.v11_named_number(args, "speed_lines_speed", report)?,
+            speed_lines_center_x: self.v11_named_number(args, "speed_lines_center_x", report)?,
+            speed_lines_center_y: self.v11_named_number(args, "speed_lines_center_y", report)?,
+            speed_lines_region_ellipse: self.v11_named_bool(
+                args,
+                "speed_lines_region_ellipse",
+                report,
+            )?,
+            speed_lines_region_x: self.v11_named_number(args, "speed_lines_region_x", report)?,
+            speed_lines_region_y: self.v11_named_number(args, "speed_lines_region_y", report)?,
+            speed_lines_region_width: self.v11_named_number(
+                args,
+                "speed_lines_region_width",
+                report,
+            )?,
+            speed_lines_region_height: self.v11_named_number(
+                args,
+                "speed_lines_region_height",
+                report,
+            )?,
+            speed_lines_region_feather: self.v11_named_number(
+                args,
+                "speed_lines_region_feather",
+                report,
+            )?,
+        })
+    }
+
     pub(super) fn v11_post_process_patch(
         &self,
         args: &[Argument],

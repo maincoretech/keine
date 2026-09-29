@@ -5,11 +5,13 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use keine_core::config::{AssetMap, AssetSourceConfig, GameConfig, ScriptConfig};
 use keine_core::{
-    Action, Anchor, BlendMode, ChoiceTarget, Easing, Position, SpriteLayout, SpriteTransform,
-    Transition, VideoMode,
+    Action, Anchor, ChoiceTarget, Easing, Position, SpriteLayout, SpriteTransform, Transition,
 };
 use keine_loader::{ContentProject, DiagnosticLevel, LoadedScene, LoaderRegistry, ResourceKind};
 use serde::Serialize;
+
+mod objects;
+mod v11;
 
 use crate::runtime::bootstrap::{open_project, validate_project};
 
@@ -28,6 +30,7 @@ struct AssetManifest {
     #[serde(rename = "se")]
     effects: BTreeMap<String, String>,
     videos: BTreeMap<String, String>,
+    particles: BTreeMap<String, String>,
 }
 
 #[derive(Serialize)]
@@ -44,6 +47,11 @@ struct MigrationModel {
     scene_ids: HashMap<String, String>,
     speaker_ids: HashMap<String, String>,
     asset_ids: HashMap<AssetKey, String>,
+    object_ids: BTreeMap<String, String>,
+    prefix_ids: BTreeMap<String, String>,
+    objects: objects::ObjectManifest,
+    variable_ids: BTreeMap<String, String>,
+    initial_variables: BTreeMap<String, keine_core::Value>,
     assets: AssetManifest,
     characters: CharacterManifest,
 }
@@ -254,8 +262,39 @@ fn build_model(
         manifest_namespace_mut(&mut assets, key.kind)?.insert(id.clone(), relative);
         asset_ids.insert(key, id);
     }
+    let initial = content.initial_state()?;
+    if !initial.session_variables.is_empty() || !initial.shared_variables.is_empty() {
+        bail!("persistent compatibility variables require manual migration");
+    }
+    let initial_variables = initial.variables.into_iter().collect::<BTreeMap<_, _>>();
+    let mut variable_names = initial_variables.keys().cloned().collect::<Vec<_>>();
+    for scene in scenes {
+        for action in &scene.actions {
+            if let Action::Set {
+                name,
+                global: false,
+                ..
+            } = action
+            {
+                variable_names.push(name.clone());
+            }
+        }
+    }
+    variable_names.sort();
+    variable_names.dedup();
+    let variable_ids = variable_names
+        .into_iter()
+        .enumerate()
+        .map(|(index, name)| (name, format!("variable_{:04}", index + 1)))
+        .collect();
+    let (object_ids, prefix_ids, objects) = objects::build(scenes);
     Ok(MigrationModel {
         scene_ids,
+        object_ids,
+        prefix_ids,
+        objects,
+        variable_ids,
+        initial_variables,
         speaker_ids,
         asset_ids,
         assets,
@@ -271,8 +310,28 @@ fn write_project(
     loader: &LoaderRegistry,
 ) -> Result<()> {
     fs::create_dir_all(stage.join("scripts"))?;
-    let source = render_scenes(scenes, model)?;
+    let mut source = render_scenes(scenes, model)?;
+    if !model.initial_variables.is_empty() {
+        let source_entry = model
+            .scene_ids
+            .get(&config.script.entry)
+            .unwrap_or(&model.scene_ids[&scenes[0].name]);
+        source.push_str("\nscene migration_start {\n");
+        for (name, value) in &model.initial_variables {
+            source.push_str(&format!(
+                "  // Original variable: {}\n  let {} = {},\n",
+                name.replace(['\n', '\r'], " "),
+                model.variable_ids[name],
+                v11::value(value)?
+            ));
+        }
+        source.push_str(&format!("  goto({source_entry})\n}}\n"));
+    }
     fs::write(stage.join("scripts/main.shou"), source)?;
+    fs::write(
+        stage.join("objects.yaml"),
+        noyalib::to_string(&model.objects)?,
+    )?;
     fs::write(
         stage.join("assets.yaml"),
         noyalib::to_string(&model.assets)?,
@@ -286,15 +345,21 @@ fn write_project(
     config.adapter.script = "keine".into();
     config.assets = AssetMap::default();
     let source_entry = config.script.entry.clone();
+    let entry = model
+        .scene_ids
+        .get(&source_entry)
+        .cloned()
+        .unwrap_or_else(|| model.scene_ids[&scenes[0].name].clone());
     config.script = ScriptConfig {
         version: 1,
-        entry: model
-            .scene_ids
-            .get(&source_entry)
-            .cloned()
-            .unwrap_or_else(|| model.scene_ids[&scenes[0].name].clone()),
+        entry: if model.initial_variables.is_empty() {
+            entry.clone()
+        } else {
+            "migration_start".into()
+        },
         assets: "assets.yaml".into(),
         characters: "characters.yaml".into(),
+        objects: "objects.yaml".into(),
     };
     let title = AssetKey {
         kind: ResourceKind::Background,
@@ -335,12 +400,15 @@ fn render_scenes(scenes: &[LoadedScene], model: &MigrationModel) -> Result<Strin
         if scene_index > 0 {
             output.push('\n');
         }
+        output.push_str("// Original scene: ");
+        output.push_str(&scene.name.replace(['\n', '\r'], " "));
+        output.push('\n');
         output.push_str("scene ");
         output.push_str(&model.scene_ids[&scene.name]);
         output.push_str(" {\n");
         let mut statements = Vec::new();
         for (action_index, action) in scene.actions.iter().enumerate() {
-            if matches!(action, Action::End) && action_index + 1 == scene.actions.len() {
+            if matches!(action, Action::Comment) {
                 continue;
             }
             statements.push(render_action(action, model).with_context(|| {
@@ -364,49 +432,19 @@ fn render_scenes(scenes: &[LoadedScene], model: &MigrationModel) -> Result<Strin
 }
 
 fn render_action(action: &Action, model: &MigrationModel) -> Result<String> {
+    if let Some(source) = v11::render(action, model)? {
+        v11::verify(action, &source, model)?;
+        return Ok(source);
+    }
     match action {
-        Action::ShowBg {
-            image,
-            transition,
-            transform,
-        } if *transform == SpriteTransform::default() => Ok(format!(
-            "background({}{})",
-            asset_id(model, ResourceKind::Background, image)?,
-            transition_arg(*transition)
-        )),
         Action::HideBg { transition } => {
             Ok(format!("background(none{})", transition_arg(*transition)))
         }
-        Action::ShowSprite {
-            id,
-            image,
-            position,
-            layout,
-            transition,
-            transform,
-            z_index,
-            blend,
-        } if *layout == SpriteLayout::Natural
-            && *transform == SpriteTransform::default()
-            && *blend == BlendMode::Alpha =>
-        {
-            Ok(format!(
-                "sprite({}, {}, position: {}, z: {}{})",
-                identifier(id)?,
-                asset_id(model, ResourceKind::Figure, image)?,
-                position_name(*position)?,
-                z_index,
-                transition_arg(*transition)
-            ))
-        }
         Action::HideSprite { id, transition } => Ok(format!(
             "hide({}{})",
-            identifier(id)?,
+            object_id(model, id)?,
             transition_arg(*transition)
         )),
-        Action::HideSprites { prefix, transition } if prefix.is_empty() => {
-            Ok(format!("hide(\"*\"{})", transition_arg(*transition)))
-        }
         Action::MoveSprite {
             id,
             position,
@@ -415,7 +453,7 @@ fn render_action(action: &Action, model: &MigrationModel) -> Result<String> {
             blocking: true,
         } => Ok(format!(
             "move({}, {}, duration: {}, easing: {})",
-            identifier(id)?,
+            object_id(model, id)?,
             position_name(*position)?,
             duration(*seconds),
             easing_name(*easing)
@@ -434,7 +472,7 @@ fn render_action(action: &Action, model: &MigrationModel) -> Result<String> {
                 .vocal
                 .as_ref()
                 .map(|voice| {
-                    asset_id(model, ResourceKind::Voice, voice).map(|id| format!(" voice({id})"))
+                    asset_id(model, ResourceKind::Voice, voice).map(|id| format!(", {id}"))
                 })
                 .transpose()?
                 .unwrap_or_default();
@@ -454,7 +492,11 @@ fn render_action(action: &Action, model: &MigrationModel) -> Result<String> {
             fade_seconds,
         } => Ok(format!(
             "bgm({}, volume: {}, fade: {})",
-            asset_id(model, ResourceKind::Bgm, file)?,
+            if file == "none" {
+                "none".into()
+            } else {
+                asset_id(model, ResourceKind::Bgm, file)?
+            },
             number(*volume),
             duration(*fade_seconds)
         )),
@@ -466,26 +508,6 @@ fn render_action(action: &Action, model: &MigrationModel) -> Result<String> {
                 .unwrap_or_else(|| "none".into()),
             number(*volume)
         )),
-        Action::Wait { seconds } if *seconds > 0.0 => Ok(format!("wait({})", duration(*seconds))),
-        Action::PlayVideo { video }
-            if !video.looped
-                && !video.muted
-                && video.alpha == 1.0
-                && video.wait_for_finished
-                && video.mode == VideoMode::Fullscreen =>
-        {
-            Ok(format!(
-                "video({}, skippable: {})",
-                asset_id(model, ResourceKind::Video, &video.file)?,
-                video.skippable
-            ))
-        }
-        Action::Flow {
-            action,
-            when: None,
-            next: false,
-        } => render_action(action, model),
-        Action::End => bail!("non-final End cannot be represented losslessly"),
         other => bail!("{other:?}"),
     }
 }
@@ -544,16 +566,24 @@ fn scene_id<'a>(model: &'a MigrationModel, name: &str) -> Result<&'a str> {
         .with_context(|| format!("missing migrated scene mapping for {name:?}"))
 }
 
-fn identifier(value: &str) -> Result<&str> {
-    let valid = !value.is_empty()
+fn object_id<'a>(model: &'a MigrationModel, name: &str) -> Result<&'a str> {
+    model
+        .object_ids
+        .get(name)
+        .map(String::as_str)
+        .with_context(|| format!("missing migrated object mapping for {name:?}"))
+}
+
+fn native_identifier(value: &str) -> Result<&str> {
+    if !value.is_empty()
+        && !value.as_bytes()[0].is_ascii_digit()
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-        && !value.as_bytes()[0].is_ascii_digit();
-    if valid {
+    {
         Ok(value)
     } else {
-        bail!("identifier {value:?} requires manual migration")
+        bail!("preset {value:?} is not a native identifier")
     }
 }
 
@@ -616,22 +646,15 @@ fn easing_name(easing: Easing) -> &'static str {
 
 fn duration(seconds: f32) -> String {
     let milliseconds = seconds * 1000.0;
-    if (milliseconds - milliseconds.round()).abs() < 0.0001 {
-        format!("{}ms", milliseconds.round() as i64)
+    if milliseconds.fract() == 0.0 && (milliseconds as f64 / 1000.0) as f32 == seconds {
+        format!("{milliseconds}ms")
     } else {
-        format!("{}s", number(seconds))
+        format!("{seconds}s")
     }
 }
 
 fn number(value: f32) -> String {
-    let mut output = format!("{value:.6}");
-    while output.contains('.') && output.ends_with('0') {
-        output.pop();
-    }
-    if output.ends_with('.') {
-        output.push('0');
-    }
-    output
+    value.to_string()
 }
 
 fn resolve_resource(config: &GameConfig, kind: ResourceKind, name: &str) -> Result<String> {
@@ -642,7 +665,8 @@ fn resolve_resource(config: &GameConfig, kind: ResourceKind, name: &str) -> Resu
         ResourceKind::Bgm => config.bgm_path(name),
         ResourceKind::Effect => config.effect_path(name),
         ResourceKind::Video => config.video_path(name),
-        ResourceKind::Particle | ResourceKind::MiniAvatar | ResourceKind::Lut => {
+        ResourceKind::Particle => name.to_owned(),
+        ResourceKind::MiniAvatar | ResourceKind::Lut => {
             bail!("{kind:?} resources require manual migration")
         }
     })
@@ -670,7 +694,8 @@ fn resource_namespace(kind: ResourceKind) -> Result<&'static str> {
         ResourceKind::Bgm => "bgm",
         ResourceKind::Effect => "se",
         ResourceKind::Video => "videos",
-        ResourceKind::Particle | ResourceKind::MiniAvatar | ResourceKind::Lut => {
+        ResourceKind::Particle => "particles",
+        ResourceKind::MiniAvatar | ResourceKind::Lut => {
             bail!("{kind:?} resources require manual migration")
         }
     })
@@ -687,7 +712,8 @@ fn manifest_namespace_mut(
         ResourceKind::Bgm => &mut manifest.bgm,
         ResourceKind::Effect => &mut manifest.effects,
         ResourceKind::Video => &mut manifest.videos,
-        ResourceKind::Particle | ResourceKind::MiniAvatar | ResourceKind::Lut => {
+        ResourceKind::Particle => &mut manifest.particles,
+        ResourceKind::MiniAvatar | ResourceKind::Lut => {
             bail!("{kind:?} resources require manual migration")
         }
     })

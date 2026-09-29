@@ -3,6 +3,7 @@
 pub mod eiyashou;
 pub mod expression;
 pub mod step;
+pub mod text;
 
 pub use step::{ScriptRuntimeError, StepResult};
 

@@ -574,6 +574,10 @@ impl WorkbenchPanel {
         self.block_text_editors.retain(|editor| {
             visible_text.contains(&editor.text_start)
                 || editor.state.read(cx).focus_handle(cx).is_focused(window)
+                || editor
+                    .wait
+                    .as_ref()
+                    .is_some_and(|wait| wait.input.read(cx).focus_handle(cx).is_focused(window))
         });
         for dialogue in dialogues.iter().filter(|dialogue| {
             dialogue.editable && visible_text.contains(&dialogue.text_range.start)
@@ -599,6 +603,9 @@ impl WorkbenchPanel {
             let subscription = cx.subscribe(&state, move |panel, _, event: &InputEvent, cx| {
                 if panel.block_settle_source.is_some() {
                     return;
+                }
+                if matches!(event, InputEvent::Focus | InputEvent::Blur) {
+                    cx.notify();
                 }
                 if matches!(event, InputEvent::PressEnter { shift: false, .. }) {
                     let panel = cx.weak_entity();
@@ -678,9 +685,102 @@ impl WorkbenchPanel {
             self.block_text_editors.push(BlockTextEditor {
                 text_start: dialogue.text_range.start,
                 state,
+                wait: None,
                 _subscription: subscription,
             });
         }
+    }
+
+    pub(super) fn edit_inline_wait(
+        &mut self,
+        state: &Entity<TextareaState>,
+        ordinal: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(row) = self
+            .block_text_editors
+            .iter_mut()
+            .find(|row| row.state == *state)
+        else {
+            return;
+        };
+        if row
+            .wait
+            .as_ref()
+            .is_some_and(|wait| wait.ordinal == ordinal)
+        {
+            return;
+        }
+        let source = state.read(cx).value();
+        let Some(range) = inline_wait_value_range(&source, ordinal) else {
+            return;
+        };
+        let input =
+            cx.new(|cx| InputState::new(window, cx).default_value(source[range].to_owned()));
+        let text = state.clone();
+        let live_input = input.clone();
+        let window_handle = window.window_handle();
+        let subscription = cx.subscribe(&input, move |panel, _, event: &InputEvent, cx| {
+            let Some(row) = panel.block_text_editors.iter_mut().find(|row| {
+                row.state == text
+                    && row
+                        .wait
+                        .as_ref()
+                        .is_some_and(|wait| wait.input == live_input)
+            }) else {
+                return;
+            };
+            match event {
+                InputEvent::Blur => row.wait = None,
+                InputEvent::PressEnter { .. } => {
+                    let focus = panel.focus.clone();
+                    cx.defer(move |cx| {
+                        let _ = cx.update_window(window_handle, |_, window, cx| {
+                            window.focus(&focus, cx);
+                        });
+                    });
+                }
+                InputEvent::Change => {
+                    let value = live_input.read(cx).value();
+                    // Empty or incomplete drafts stay in the field, never in script source.
+                    let Ok(milliseconds) = value.parse::<f32>() else {
+                        cx.notify();
+                        return;
+                    };
+                    if !milliseconds.is_finite() || milliseconds < 0. {
+                        cx.notify();
+                        return;
+                    }
+                    let source = text.read(cx).value();
+                    let Some(range) = inline_wait_value_range(&source, ordinal) else {
+                        row.wait = None;
+                        cx.notify();
+                        return;
+                    };
+                    if source[range.clone()] != *value {
+                        let _ = cx.update_window(window_handle, |_, window, cx| {
+                            text.update(cx, |text, cx| {
+                                text.set_selected_range(range, cx);
+                                text.replace(value, window, cx);
+                            });
+                        });
+                    }
+                }
+                _ => {}
+            }
+            cx.notify();
+        });
+        row.wait = Some(InlineWaitEdit {
+            ordinal,
+            input: input.clone(),
+            _subscription: subscription,
+        });
+        input.update(cx, |input, cx| {
+            input.set_selected_range(0..input.value().len(), cx);
+            input.focus(window, cx);
+        });
+        cx.notify();
     }
 
     pub(super) fn toggle_block_picker(
@@ -1931,5 +2031,39 @@ impl WorkbenchPanel {
                 .set_notice(root, format!("Character edit blocked: {error}")),
         }
         cx.refresh_windows();
+    }
+}
+
+/// Resolve a duration through the runtime tokenizer, then retain the author's tag spelling.
+/// Input waits and malformed tags deliberately have no numeric editing range.
+fn inline_wait_value_range(source: &str, ordinal: usize) -> Option<Range<usize>> {
+    let wait = keine_core::runtime::text::inline_waits(source).nth(ordinal)?;
+    wait.duration?;
+    let tag = &source[wait.range.clone()];
+    let body = tag.strip_suffix(']')?.trim_end();
+    let start = body.find('=')? + 1;
+    let value = body[start..].strip_prefix('"').unwrap_or(&body[start..]);
+    let value = value.trim_end_matches('"');
+    let start = wait.range.start + start + usize::from(body[start..].starts_with('"'));
+    Some(start..start + value.len())
+}
+
+#[cfg(test)]
+mod inline_wait_edit_tests {
+    use super::*;
+
+    #[test]
+    fn duration_edits_preserve_surrounding_unicode_and_legacy_tag_spelling() {
+        let source = "前[wait=1000]中[wait time=\"0250.5\"]後[wait]尾[wait=bad]";
+        let range = inline_wait_value_range(source, 1).unwrap();
+        assert_eq!(&source[range.clone()], "0250.5");
+        let mut edited = source.to_owned();
+        edited.replace_range(range, "750");
+        assert_eq!(
+            edited,
+            "前[wait=1000]中[wait time=\"750\"]後[wait]尾[wait=bad]"
+        );
+        assert_eq!(inline_wait_value_range(source, 2), None);
+        assert_eq!(inline_wait_value_range(source, 3), None);
     }
 }

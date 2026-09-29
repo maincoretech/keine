@@ -1403,6 +1403,7 @@ pub(super) fn install_default_layout(
     let explorer = WorkbenchPanel::from_payload(
         PanelPayload::Explorer {
             root: session.root().to_owned(),
+            expanded: Vec::new(),
         },
         window,
         cx,

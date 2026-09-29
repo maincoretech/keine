@@ -28,6 +28,7 @@ pub enum AssetKind {
     Bgm,
     Effect,
     Video,
+    Particle,
 }
 
 impl AssetKind {
@@ -39,6 +40,7 @@ impl AssetKind {
             Self::Bgm => "BGM",
             Self::Effect => "Effect",
             Self::Video => "Video",
+            Self::Particle => "Particle",
         }
     }
 
@@ -50,7 +52,8 @@ impl AssetKind {
             ResourceKind::Bgm => Some(Self::Bgm),
             ResourceKind::Effect => Some(Self::Effect),
             ResourceKind::Video => Some(Self::Video),
-            ResourceKind::Particle | ResourceKind::Lut => None,
+            ResourceKind::Particle => Some(Self::Particle),
+            ResourceKind::Lut => None,
         }
     }
 }
@@ -388,6 +391,13 @@ impl AuthoringIndex {
                         &mut asset_lookup,
                         AssetKind::Video,
                         manifest.videos,
+                    );
+                    push_assets(
+                        root,
+                        &mut index,
+                        &mut asset_lookup,
+                        AssetKind::Particle,
+                        manifest.particles,
                     );
                     for namespace in unknown_namespaces {
                         index.problems.push(problem(

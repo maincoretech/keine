@@ -441,6 +441,7 @@ struct AuthoringPolicy {
     enabled: bool,
     assets: PathBuf,
     characters: PathBuf,
+    objects: PathBuf,
 }
 
 impl AuthoringPolicy {
@@ -458,6 +459,7 @@ impl AuthoringPolicy {
             enabled: true,
             assets: PathBuf::from(config.script.assets),
             characters: PathBuf::from(config.script.characters),
+            objects: PathBuf::from(config.script.objects),
         }
     }
 
@@ -466,6 +468,7 @@ impl AuthoringPolicy {
             && (path == Path::new("config.yaml")
                 || path == self.assets
                 || path == self.characters
+                || (!self.objects.as_os_str().is_empty() && path == self.objects)
                 || (path.starts_with("scripts")
                     && path
                         .extension()
@@ -970,14 +973,16 @@ mod tests {
         )
         .unwrap();
         fs::write(project.join("manifests/cast.yaml"), "characters: {}\n").unwrap();
+        fs::write(project.join("manifests/objects.yaml"), "objects: {}\n").unwrap();
         fs::write(
             project.join("config.yaml"),
-            "title: Fixture\nadapter:\n  script: keine\nscript:\n  version: 1\n  entry: opening\n  assets: manifests/resources.yaml\n  characters: manifests/cast.yaml\n",
+            "title: Fixture\nadapter:\n  script: keine\nscript:\n  version: 1\n  entry: opening\n  assets: manifests/resources.yaml\n  characters: manifests/cast.yaml\n  objects: manifests/objects.yaml\n",
         )
         .unwrap();
         let mut manager = DocumentManager::new(project, root.join("app-data/recovery")).unwrap();
         assert!(manager.open("manifests/resources.yaml").is_ok());
         assert!(manager.open("manifests/cast.yaml").is_ok());
+        assert!(manager.open("manifests/objects.yaml").is_ok());
         let error = manager.open("scripts/legacy.txt").unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
         fs::remove_dir_all(root).unwrap();
