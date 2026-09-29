@@ -659,6 +659,7 @@ pub(crate) fn spawn_vocal(
 mod tests {
     use super::*;
 
+    #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
     #[test]
     fn bgm_handoff_keeps_old_track_until_new_sink_exists() {
         let mut app = App::new();
