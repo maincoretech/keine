@@ -1146,7 +1146,7 @@ impl TabGroupRenderer for EditorTabGroupSkin {
             .p_1()
             .track_scroll(&scroll)
             .overflow_x_scroll()
-            .bg(rgb(CHROME))
+            // The outer bar owns the rounded chrome; a child fill covers its corners.
             .children(tabs)
             .child(empty_space)
             .when(group.is_droppable(), |this| {
@@ -1211,14 +1211,10 @@ impl TabGroupRenderer for EditorTabGroupSkin {
         div()
             .relative()
             .size_full()
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .flex()
-                    .flex_col()
-                    .child(active_panel),
-            )
+            .flex()
+            .flex_col()
+            .min_h_0()
+            .child(active_panel)
             .child(overlay)
             .into_any_element()
     }

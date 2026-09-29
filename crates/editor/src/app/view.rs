@@ -3401,34 +3401,6 @@ pub(super) fn problem_row(
         )
 }
 
-pub(super) fn render_performance(
-    controller: &PreviewController,
-    scroll_handle: &ScrollHandle,
-) -> AnyElement {
-    let snapshot = controller.snapshot();
-    let state = match snapshot.lifecycle {
-        PreviewLifecycle::Off => "Stopped",
-        PreviewLifecycle::Starting => "Starting",
-        PreviewLifecycle::Running => "Running",
-        PreviewLifecycle::Failed(_) => "Failed",
-    };
-    let content = div()
-        .flex()
-        .flex_col()
-        .p_3()
-        .gap_3()
-        .child(section_label("ENGINE PREVIEW"))
-        .child(property_row("Window", state.to_owned()))
-        .child(property_row("Pixel transfer", "None".to_owned()))
-        .child(
-            div()
-                .text_xs()
-                .text_color(rgb(MUTED))
-                .child("The Engine window renders and handles input directly."),
-        );
-    vertical_overflow_view("performance-scroll", scroll_handle, content)
-}
-
 pub(super) fn multi_block_summary(source: &str, starts: &[usize]) -> Option<AnyElement> {
     let selected = EiyashouProjection::parse(source)
         .scenes

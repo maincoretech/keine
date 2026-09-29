@@ -1,5 +1,6 @@
 pub mod engine;
 pub mod instance;
+pub mod performance;
 
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
@@ -185,6 +186,7 @@ impl CommandMailbox {
 pub struct PreviewController {
     commands: Arc<CommandMailbox>,
     snapshot: Arc<Mutex<PreviewSnapshot>>,
+    performance: Arc<Mutex<performance::PerformanceState>>,
 }
 
 impl PreviewController {
@@ -218,11 +220,19 @@ impl PreviewController {
         let receiver = commands.clone();
         let snapshot = Arc::new(Mutex::new(PreviewSnapshot::default()));
         let shared = snapshot.clone();
+        let performance = Arc::new(Mutex::new(performance::PerformanceState::new(
+            Instant::now(),
+        )));
+        let history = performance.clone();
         thread::Builder::new()
             .name("keine-preview-control".into())
-            .spawn(move || worker(project, receiver, shared))
+            .spawn(move || worker(project, receiver, shared, history))
             .expect("preview control worker must be spawnable");
-        Arc::new(Self { commands, snapshot })
+        Arc::new(Self {
+            commands,
+            snapshot,
+            performance,
+        })
     }
 
     pub fn snapshot(&self) -> PreviewSnapshot {
@@ -230,6 +240,13 @@ impl PreviewController {
             .lock()
             .expect("preview snapshot lock poisoned")
             .clone()
+    }
+
+    pub fn performance(&self) -> performance::PerformanceSnapshot {
+        self.performance
+            .lock()
+            .expect("preview performance lock poisoned")
+            .snapshot()
     }
 
     pub fn start(&self) {
@@ -293,9 +310,16 @@ struct Worker {
     applied_cursor: Option<(PathBuf, usize, u64)>,
     last_position_poll: Option<Instant>,
     shared: Arc<Mutex<PreviewSnapshot>>,
+    performance: Arc<Mutex<performance::PerformanceState>>,
+    last_performance_sample: Option<Instant>,
 }
 
-fn worker(project: ProjectKey, receiver: Arc<CommandMailbox>, shared: Arc<Mutex<PreviewSnapshot>>) {
+fn worker(
+    project: ProjectKey,
+    receiver: Arc<CommandMailbox>,
+    shared: Arc<Mutex<PreviewSnapshot>>,
+    performance: Arc<Mutex<performance::PerformanceState>>,
+) {
     let mut worker = Worker {
         project,
         generation: NEXT_GENERATION.fetch_add(1, Ordering::Relaxed),
@@ -308,6 +332,8 @@ fn worker(project: ProjectKey, receiver: Arc<CommandMailbox>, shared: Arc<Mutex<
         applied_cursor: None,
         last_position_poll: None,
         shared,
+        performance,
+        last_performance_sample: None,
     };
     loop {
         match receiver.receive(worker.poll_interval()) {
@@ -322,6 +348,7 @@ fn worker(project: ProjectKey, receiver: Arc<CommandMailbox>, shared: Arc<Mutex<
         if let Err(error) = worker.poll_position() {
             worker.fail(error);
         }
+        worker.poll_performance();
     }
 }
 
@@ -452,6 +479,10 @@ impl Worker {
             engine.apply_snapshot(path, self.revision, contents)?;
         }
         engine.start_preview(self.revision)?;
+        self.performance
+            .lock()
+            .expect("preview performance lock poisoned")
+            .begin_process(engine.id());
         self.engine = Some(engine);
         self.applied_cursor = None;
         self.last_position_poll = None;
@@ -472,6 +503,10 @@ impl Worker {
             let _ = engine.shutdown();
         }
         self.engine = None;
+        self.performance
+            .lock()
+            .expect("preview performance lock poisoned")
+            .end_process();
         self.applied_cursor = None;
         self.last_position_poll = None;
         self.mutate(|snapshot| {
@@ -587,6 +622,10 @@ impl Worker {
 
     fn fail(&mut self, error: io::Error) {
         self.engine = None;
+        self.performance
+            .lock()
+            .expect("preview performance lock poisoned")
+            .end_process();
         self.last_position_poll = None;
         self.mutate(|snapshot| {
             snapshot.lifecycle = PreviewLifecycle::Failed(error.to_string());
@@ -595,7 +634,29 @@ impl Worker {
     }
 
     fn mutate(&self, update: impl FnOnce(&mut PreviewSnapshot)) {
-        update(&mut self.shared.lock().expect("preview snapshot lock poisoned"));
+        let mut snapshot = self.shared.lock().expect("preview snapshot lock poisoned");
+        update(&mut snapshot);
+        self.performance
+            .lock()
+            .expect("preview performance lock poisoned")
+            .lifecycle(Instant::now(), &snapshot.lifecycle);
+    }
+
+    fn poll_performance(&mut self) {
+        if self
+            .last_performance_sample
+            .is_some_and(|last| last.elapsed() < performance::SAMPLE_INTERVAL)
+        {
+            return;
+        }
+        // The owned Preview Engine only; audition and Editor processes are excluded.
+        let usage = self.engine.as_mut().and_then(EngineProcess::process_usage);
+        let at = Instant::now();
+        self.performance
+            .lock()
+            .expect("preview performance lock poisoned")
+            .sample(at, usage);
+        self.last_performance_sample = Some(at);
     }
 }
 

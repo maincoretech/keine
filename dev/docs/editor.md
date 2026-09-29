@@ -23,6 +23,7 @@ Text、Blocks、Inspector 共用源文档。Block 编辑只替换准确 source r
 
 ## 交互
 
+- 卡片背景与圆角由外框绘制，标签滚动层保持透明；Dock 内容与 drop overlay 共用定位容器。
 - 淡色行内补全用右方向键/Tab 接受；回车保留缩进，智能处理引号/括号。
 - 空 Text Block 用 Delete/Backspace 删除；关键帧使用紧凑单行，嵌套结构保持层级。
 - 行内 `[wait=1000]` 在原位置显示 Wait 标签，选中直接编辑毫秒，不切回整行原始语法。
@@ -47,6 +48,28 @@ Asset Preview 的 X 关闭面板并记住布局，下一次实际选择资源可
 不传输内嵌画面。源码 revision、cursor 与退出由有界协议协调；不匹配的协议/能力明确报错。
 Engine 发现支持 sibling app、同目录、Resources、PATH 与 `KEINE_ENGINE`。
 Editor 只启动预构建 Engine，不在作者交互中运行 Cargo。
+
+## Performance
+
+```text
+Performance（singleton；打开/关闭/移动只影响自身）
+├── Engine：Off / Starting / Running / Failed，30 秒生命周期带
+├── CPU：仅 Preview child；100% = 1 logical core，允许超过 100%
+├── Memory：当前 RSS、该次子进程的 observed peak
+└── CPU / RSS：30 秒小折线；缺测留空，不作故障判断
+```
+
+现有 Preview worker 约 500 ms 采样，CPU 用累计 CPU 时间差 / 实际 elapsed。
+历史归属工程的 PreviewController：最多 61 个样本、64 个状态转换，按 30 秒过期，
+生命周期保留窗口前的一个状态锚点。关闭 View 仍采样；重启保留历史但清空 peak、
+CPU baseline 并分开折线。历史只在内存，工程/Editor session 结束后丢弃。
+
+macOS 复用锁定的 `libc`，通过 `proc_pid_rusage(RUSAGE_INFO_V2)` 查询 owned child；
+`ri_user_time + ri_system_time` 由 Mach timebase 转换为 CPU 时间，`ri_resident_size` 为 RSS。
+接口失败显示 Unavailable；Windows/Linux 暂未实现进程指标。Peak 仅为采样到的最高 RSS。
+数据口径以 [Apple libproc](https://github.com/apple-oss-distributions/xnu/blob/main/libsyscall/wrappers/libproc/libproc.h)
+与 [XNU task/rusage](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/bsd_kern.c) 为准。
+独立 Engine 不提供帧传输：不保留 Publish rate、overwrite、Paused 或 profiler/Capture 功能。
 
 尚未完成：映射资源删除/恢复/remap 的完整产品流程、媒体规范化导入。
 IME、多显示器、1× DPI、主观音频和实际 Preview FPS 见 [验收](testing.md)。

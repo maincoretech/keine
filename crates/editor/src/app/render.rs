@@ -1200,7 +1200,7 @@ impl Render for WorkbenchPanel {
             }
             PanelContent::Problems { root } => render_problems(root, &self.view_scroll, cx),
             PanelContent::Performance { controller, .. } => {
-                render_performance(controller, &self.view_scroll)
+                performance::render(controller, &self.view_scroll)
             }
             PanelContent::Output { root, file_count } => {
                 let content = div()

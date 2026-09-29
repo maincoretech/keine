@@ -105,6 +105,19 @@ pub struct EngineProcess {
 }
 
 impl EngineProcess {
+    pub fn id(&self) -> u32 {
+        self.child.id()
+    }
+
+    pub(crate) fn process_usage(&mut self) -> Option<super::performance::process::ProcessUsage> {
+        // Check the owned child before querying its PID; never sample an unrelated
+        // process after this child has exited and its PID becomes reusable.
+        if self.closed || self.child.try_wait().ok()?.is_some() {
+            return None;
+        }
+        super::performance::process::read(self.child.id())
+    }
+
     pub fn launch(engine: &Path, project: &Path, generation: u64) -> io::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         listener.set_nonblocking(true)?;

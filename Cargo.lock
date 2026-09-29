@@ -5371,6 +5371,7 @@ dependencies = [
  "keine-authoring",
  "keine-core",
  "keine-loader",
+ "libc",
  "lsp-types",
  "postcard",
  "serde",

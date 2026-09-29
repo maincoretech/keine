@@ -75,12 +75,22 @@ bench 源码保留可重复的热点测量，日志放忽略的 `target/`，不�
 普通 probe 为 11 samples；增量单文档索引 31 samples，中位数 2.341 ms。
 小输入完整索引有变慢；这些数字不是 UI FPS、GPU、磁盘或长期内存结果，不声称全局改善。
 
+Performance 进程采样的 release probe（macOS arm64，11×5,000 次）复用实际
+`preview/performance/process.rs`：关闭采样中位数 0.0002 µs，启用系统查询 0.3869 µs/次。
+Mach timebase 换算的 CPU 增量 0.299014 s，`getrusage` 对照 0.299035 s（ratio 0.9999）。
+这只测本机系统查询，不代表完整 View/渲染开销；原始命令与结果位于
+`target/authoring/performance/probe.rs`、`process-probe.txt`。
+Focused tests 覆盖实际 elapsed / >100% / counter reset、有界过期、PID 重用时 peak 重置、
+unavailable 缺测和 Mach 换算边界；不新增验收工程。
+
 ## 当前验收边界
 
 ```text
 0.11.1
 ├── macOS：原生 Engine、Text/Block/Inspector 写回、保存重开、故障恢复已有运行态证据
 ├── 最新工作台：下拉框、Text 概览、全文搜索、Asset Preview 关闭/重开已目测
+├── Performance：macOS 启停/失败恢复、关闭后持续采样、重开历史、重启 peak 重置已目测
+├── UI 容器简化：多标签圆角、切换、面板缩放/滚动与跨分组拖放已用新 release 目测
 ├── 用户验收：中文 IME、1×/多显示器/极端比例、主观音频、实际 Preview FPS
 ├── Windows x64 / Linux：构建 CI 与运行态验收分别看待；运行态暂缓
 └── 非本次完成：资源删除/remap 产品闭环、媒体规范化、正式签名/notarization

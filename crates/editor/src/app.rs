@@ -73,6 +73,7 @@ mod inspector;
 #[path = "app/inspector/controls.rs"]
 mod inspector_controls;
 mod minimap;
+mod performance;
 mod render;
 #[path = "app/resource/picker.rs"]
 mod resource_picker;
@@ -1835,6 +1836,30 @@ impl WorkbenchPanel {
             if matches!(panel.content, PanelContent::Search { .. }) {
                 panel.install_search(window, cx);
             }
+            if let PanelContent::Performance { controller, .. } = &panel.content {
+                let controller = controller.clone();
+                cx.spawn_in(window, async move |this, cx| {
+                    let mut revision = controller.performance().revision;
+                    loop {
+                        cx.background_executor()
+                            .timer(crate::preview::performance::SAMPLE_INTERVAL)
+                            .await;
+                        let latest = controller.performance().revision;
+                        if this
+                            .update_in(cx, |_, _, cx| {
+                                if latest != revision {
+                                    cx.notify();
+                                }
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                        revision = latest;
+                    }
+                })
+                .detach();
+            }
             panel._subscriptions.push(cx.subscribe(
                 &asset_search,
                 |_: &mut WorkbenchPanel, _, event: &InputEvent, cx| {
@@ -3430,7 +3455,6 @@ impl Render for WorkbenchWindow {
                     .child(self.render_activity_rail(cx))
                     .child(main),
             )
-            .child(div().id("overlay-host").absolute().inset_0())
             .when(self.workspace.is_some(), |this| {
                 let running = matches!(
                     self.preview_lifecycle,
