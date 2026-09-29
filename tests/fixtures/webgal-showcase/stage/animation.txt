@@ -1,0 +1,58 @@
+; Every AnimationPreset, command alias, persistent film bit and VisualFilter field.
+
+changeBg:calibration/day.webp -fade -duration=300
+changeFigure:aya/smile.webp -left -id=hero -fade -duration=280 -zIndex=2
+
+绫:05-01 Enter。
+setAnimation:enter -target=hero -duration=420
+绫:05-02 Enter From Bottom。
+setAnimation:enter-from-bottom -target=hero -duration=420
+绫:05-03 Enter From Left。
+setAnimation:enter-from-left -target=hero -duration=420
+绫:05-04 Enter From Right。
+setAnimation:enter-from-right -target=hero -duration=420
+绫:05-05 Shake，振幅衰减。
+setAnimation:shake -target=hero -duration=500
+绫:05-06 Move Front And Back，结束后回到原尺寸。
+setAnimation:move-front-and-back -target=hero -duration=520
+绫:05-07 Blur，先增强再恢复。
+setAnimation:blur -target=hero -duration=520
+setTransform:{"blur":0} -target=hero
+绫:05-08 Shockwave In。
+setAnimation:shockwaveIn -target=hero -duration=520
+绫:05-09 Shockwave Out。
+setAnimation:shockwaveOut -target=hero -duration=520
+
+setComplexAnimation:shake -target=hero -duration=360
+绫:05-10 setComplexAnimation 进入统一动画时间线。
+setTempAnimation:enter -target=hero -duration=360
+绫:05-11 setTempAnimation 进入统一动画时间线。
+
+setAnimation:oldFilm -target=hero
+绫:05-12 Old Film 只遮罩立绘：随机颗粒与细线原地闪动，没有向上漂移。
+setAnimation:removeFilm -target=hero
+setAnimation:dotFilm -target=hero
+绫:05-13 Dot Film 只遮罩立绘：粗网点与扫描线清楚，中央略微凸起。
+setAnimation:removeFilm -target=hero
+setAnimation:reflectionFilm -target=hero
+绫:05-14 Reflection Film：高光横向扫过立绘，不阻塞对话。
+setAnimation:removeFilm -target=hero
+setAnimation:glitchFilm -target=hero
+绫:05-15 Glitch Film：快速、随机分带错位，不呈现固定周期。
+setAnimation:removeFilm -target=hero
+setAnimation:rgbFilm -target=hero
+绫:05-16 RGB Film：红蓝通道分离。
+setAnimation:removeFilm -target=hero
+setAnimation:godrayFilm -target=hero
+绫:05-17 Godray Film：光束显著慢于普通动效。
+setAnimation:removeFilm -target=hero
+绫:05-18 Remove Film：全部 film bit 一次清空。
+
+setFilter:{"blur":2,"brightness":108,"contrast":108,"saturation":84} -target=hero
+绫:05-19 Filter：blur、brightness、contrast、saturation 同时可辨认。
+setFilter:none -target=hero
+绫:05-20 Filter 清空，立绘恢复普通材质。
+
+绫:05-21 Exit 会在动画最后一帧移除目标。
+setAnimation:exit -target=hero -duration=420
+changeFigure:aya/smile.webp -left -id=hero -fade -duration=280 -zIndex=2

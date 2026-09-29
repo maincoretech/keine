@@ -1,0 +1,6 @@
+target
+corpus/**
+!corpus/webp/
+!corpus/webp/.gitkeep
+artifacts
+coverage

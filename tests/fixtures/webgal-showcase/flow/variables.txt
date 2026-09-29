@@ -1,0 +1,40 @@
+; Variables, interpolation, conditions, labels, jumps, choices and nested scenes.
+
+setVar:chapter=2
+setVar:ratio=1.25
+setVar:passed=true
+setVar:message="变量正常"
+setVar:flags=[true, false, 3]
+setVar:flags[1]=chapter == 2
+setVar:showSecret=false
+setVar:enableLocked=false
+setVar:globalMarker=2026 -global
+
+绫:02-01 类型与插值：chapter={chapter}，ratio={ratio}，passed={passed}，message={message}。
+绫:02-02 数组写入：flags[1]={flags[1]}；全局变量 globalMarker={globalMarker}。
+绫:02-03 -when 为真时显示。 -when=chapter==2&&flags[1]
+绫:错误：这句条件为假，绝不能显示。 -when=chapter==99
+绫:02-04 -next 使当前动作不阻塞。 -next
+绫:02-05 如果直接看到本句，统一 Flow 包装已生效。
+
+jumpLabel:flow_target
+绫:错误：jumpLabel 没有跳过本句。
+label:flow_target
+绫:02-06 label/jumpLabel 使用当前场景索引跳转成功。
+
+choose:(showSecret)->错误：隐藏项:never|[enableLocked]->02-07 可见但禁用:never|02-08 进入嵌套 callScene:callScene(flow/subscene.txt)|02-09 当前场景 label:choice_label|02-12 changeScene 并返回主菜单:flow/reentry.txt
+
+label:choice_return
+绫:02-10 选择结束。隐藏项不可见，禁用项不可点击，任一可用分支都应到达这里。
+jumpLabel:flow_done
+
+label:choice_label
+绫:02-09 label 分支正确。
+jumpLabel:choice_return
+
+label:never
+绫:错误：不应进入禁用或隐藏分支。
+
+label:flow_done
+comment:02-11 explicit no-op; this must never become visible dialogue.
+绫:02-11 comment 没有产生额外对白。流程验收结束。

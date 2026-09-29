@@ -1,6 +1,0 @@
-; changeScene replaces the whole call stack; End returns to title.
-
-changeBg:calibration_sunset.webp -dissolve -duration=400
-changeFigure:aya_thinking.webp -right -id=ending -fade -duration=300
-绫:09-01 此场景由 changeScene 进入，完整调用栈已经替换；下一步 End 应清空舞台、音频和交互并返回标题。
-end

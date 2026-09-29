@@ -1,9 +1,11 @@
 pub(crate) mod activity;
 pub(crate) mod foundation;
 pub(crate) mod i18n;
+#[path = "support/input/scope.rs"]
 pub(crate) mod input_scope;
 pub mod loading;
 pub mod performance;
 #[cfg(feature = "ui-sounds")]
 pub(crate) mod sound;
+#[path = "support/text/style.rs"]
 pub mod text_style;

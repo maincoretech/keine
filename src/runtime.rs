@@ -1,15 +1,19 @@
+#[path = "runtime/asset/reader.rs"]
 pub(crate) mod asset_reader;
 pub(crate) mod audio;
 pub(crate) mod authoring;
 pub(crate) mod bootstrap;
+#[path = "runtime/input/bounded.rs"]
 pub(crate) mod bounded_input;
 mod cli;
 pub(crate) mod host;
 #[cfg(any(feature = "publisher", feature = "startup-metrics"))]
+#[path = "runtime/package/benchmark.rs"]
 pub(crate) mod package_benchmark;
 pub(crate) mod platform;
 pub(crate) mod preview;
 pub(crate) mod resources;
+#[path = "runtime/script/driver.rs"]
 pub(crate) mod script_driver;
 pub(crate) mod tick;
 

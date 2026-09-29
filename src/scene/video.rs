@@ -138,7 +138,7 @@ mod shared;
 mod avfoundation_backend;
 
 #[cfg(all(feature = "video-native", target_os = "macos"))]
-#[path = "video/metal_frame.rs"]
+#[path = "video/metal/frame.rs"]
 mod metal_frame;
 
 #[cfg(all(feature = "video-native", target_os = "macos"))]
@@ -163,7 +163,7 @@ use missing_backend::BackendPlugin as SelectedVideoBackendPlugin;
     feature = "video-ffmpeg",
     not(all(feature = "video-native", target_os = "macos"))
 ))]
-#[path = "video/ffmpeg_io.rs"]
+#[path = "video/ffmpeg/io.rs"]
 mod ffmpeg_io;
 
 pub(crate) struct VideoPlugin;
@@ -1347,7 +1347,7 @@ mod ffmpeg_backend {
 
         #[cfg(feature = "publisher")]
         fn playback_fixture() -> PathBuf {
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("dev/fixtures/video/playback.mp4")
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/video/playback.mp4")
         }
 
         #[cfg(feature = "publisher")]

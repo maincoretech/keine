@@ -768,7 +768,7 @@ impl Render for WorkbenchPanel {
                 } else {
                     let editor_for_fade = editor.clone();
                     let selection_root = root.clone();
-                    div()
+                    let code = div()
                         .absolute()
                         .top_0()
                         .right_0()
@@ -802,6 +802,29 @@ impl Render for WorkbenchPanel {
                                 .visible_row_range()
                                 .is_some_and(|visible| visible.end < row_count)
                         }))
+                        .into_any_element();
+                    div()
+                        .size_full()
+                        .flex()
+                        .min_w_0()
+                        .min_h_0()
+                        .child(
+                            div()
+                                .relative()
+                                .flex_1()
+                                .h_full()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .child(code),
+                        )
+                        .child(text_minimap::render(
+                            editor,
+                            relative,
+                            &mut self.text_minimap,
+                            &self.block_minimap,
+                            window,
+                            cx,
+                        ))
                         .into_any_element()
                 };
                 let picker = (eiyashou && mode == DocumentMode::Block && self.block_picker_open)
@@ -985,13 +1008,17 @@ impl Render for WorkbenchPanel {
                                         .flex_col()
                                         .gap_1()
                                         .child(section_label("Speaker"))
-                                        .child(
-                                            Select::new(&text_selects[0])
-                                                .small()
-                                                .w_full()
-                                                .menu_max_h(px(320.))
-                                                .accessibility_label("Speaker"),
-                                        ),
+                                        .child(resource_trigger(
+                                            root,
+                                            ResourceTarget::Speaker(
+                                                self.inspector_key
+                                                    .clone()
+                                                    .expect("selected text Inspector"),
+                                            ),
+                                            resource_picker::speaker_options(&index),
+                                            inputs[0].read(cx).value().to_string(),
+                                            cx,
+                                        )),
                                 )
                                 .child(
                                     div()
@@ -1065,6 +1092,10 @@ impl Render for WorkbenchPanel {
                             .child(property_row("Open documents", document_count.to_string()))
                     });
                 vertical_overflow_view("inspector-scroll", &self.view_scroll, content)
+            }
+            PanelContent::Search { root } => {
+                let root = root.clone();
+                self.render_search(&root, window, cx)
             }
             PanelContent::Assets { root } => {
                 let root = root.clone();

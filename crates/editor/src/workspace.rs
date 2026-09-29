@@ -1,8 +1,11 @@
+#[path = "workspace/app/data.rs"]
 pub mod app_data;
 pub mod document;
+#[path = "workspace/file/ops.rs"]
 pub(crate) mod file_ops;
 pub mod migration;
 pub mod persistence;
+#[path = "workspace/project/key.rs"]
 pub mod project_key;
 
 use std::fs;
@@ -11,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use crate::project_key::ProjectKey;
 
-const MAX_DOCUMENT_BYTES: u64 = 1024 * 1024;
+pub(crate) const MAX_DOCUMENT_BYTES: u64 = 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkspaceFile {
@@ -157,7 +160,7 @@ fn should_descend(name: &str) -> bool {
     ) && !name.starts_with('.')
 }
 
-fn is_text_document(path: &Path) -> bool {
+pub(crate) fn is_text_document(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|extension| extension.to_str()),
         Some("shou" | "txt" | "json" | "yaml" | "yml" | "toml" | "md" | "webgal")

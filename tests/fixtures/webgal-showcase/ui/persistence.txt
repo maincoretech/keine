@@ -1,0 +1,13 @@
+; Persistent gallery, save surfaces, history, settings, input scopes and engineering checks.
+
+comment:08-00 explicit no-op; this must never become visible dialogue.
+unlockCg:calibration/day.webp -name="1080p 校准天台"
+unlockBgm:calibration_bgm.opus -name="合成校准和弦"
+绫:08-01 CG 与 BGM 已写入鉴赏数据；标题页 EXTRA 应分别显示图片与可拖动音频进度。
+绫:08-02 先确认 Q·SAVE，本句不得被同一次点击推进；再确认 Q·LOAD，必须回到 08-02 而不是 08-03。之后再打开 SAVE、LOAD。
+绫:08-03 打开 SYSTEM，检查 SYSTEM/DISPLAY/AUDIO/ABOUT、语言下拉框、全部滑动条、导入导出与返回按钮。
+绫:08-04 打开 Backlog：当前记录与语音按钮可见；退出时不闪黑、不出现黑色残影。
+绫:08-05 测试 Hide 与 Lock；全屏菜单打开时，推进/Backlog/快捷存读档不得穿透 input scope。
+绫:08-06 调整窗口为宽屏、窄屏和全屏：舞台、UI、blur、遮罩都应锁定同一 1920×1080 设计空间。
+绫:08-07 键盘、鼠标、触控和手柄共用 InputAction：推进、Auto、Skip 均只触发一次。
+绫:08-08 开发模式修改本脚本正文并保存：监控器应只重载受影响场景，不重启进程或清空长期设置。

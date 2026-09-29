@@ -1,22 +1,22 @@
 //! A disposable, painted overview of the Blocks layout. It never selects or edits source.
 use super::*;
 
-const WIDTH: f32 = 72.;
-const INSET: f32 = 6.;
-const MIN_THUMB: f32 = 32.;
-const VERTICAL_SCALE: f32 = 2.;
+pub(super) const WIDTH: f32 = 72.;
+pub(super) const INSET: f32 = 6.;
+pub(super) const MIN_THUMB: f32 = 32.;
+pub(super) const VERTICAL_SCALE: f32 = 2.;
 
 #[derive(Default)]
 pub(super) struct BlockMinimap {
-    bounds: Rc<RefCell<Bounds<Pixels>>>,
-    grab: Option<f32>,
-    pan: Rc<RefCell<Pan>>,
+    pub(super) bounds: Rc<RefCell<Bounds<Pixels>>>,
+    pub(super) grab: Option<f32>,
+    pub(super) pan: Rc<RefCell<Pan>>,
 }
 
 #[derive(Default)]
-struct Pan {
-    offset: f32,
-    last_scroll: Option<f32>,
+pub(super) struct Pan {
+    pub(super) offset: f32,
+    pub(super) last_scroll: Option<f32>,
 }
 
 impl Pan {
@@ -80,18 +80,18 @@ impl Mark {
 
 /// ScrollHandle::set_offset does not clamp or notify (GPUI 0.3.5 div.rs).
 /// Both the painted viewport and pointer navigation use this bounded geometry.
-struct Geometry {
-    height: f32,
-    map_height: f32,
-    content: f32,
-    max_scroll: f32,
-    thumb: f32,
-    top: f32,
-    pan: f32,
+pub(super) struct Geometry {
+    pub(super) height: f32,
+    pub(super) map_height: f32,
+    pub(super) content: f32,
+    pub(super) max_scroll: f32,
+    pub(super) thumb: f32,
+    pub(super) top: f32,
+    pub(super) pan: f32,
 }
 
 impl Geometry {
-    fn new(height: f32, viewport: f32, max_scroll: f32, scroll: f32, pan: f32) -> Self {
+    pub(super) fn new(height: f32, viewport: f32, max_scroll: f32, scroll: f32, pan: f32) -> Self {
         let height = height.max(0.);
         let max_scroll = max_scroll.max(0.);
         let content = (viewport + max_scroll).max(1.);
@@ -118,7 +118,7 @@ impl Geometry {
         }
     }
 
-    fn scroll_at(&self, y: f32, grab: f32) -> f32 {
+    pub(super) fn scroll_at(&self, y: f32, grab: f32) -> f32 {
         let travel = self.map_height - self.thumb;
         if travel <= 0. {
             return 0.;
@@ -126,15 +126,15 @@ impl Geometry {
         ((y + self.pan - grab * self.thumb) / travel).clamp(0., 1.) * self.max_scroll
     }
 
-    fn mark_y(&self, top: f32) -> f32 {
+    pub(super) fn mark_y(&self, top: f32) -> f32 {
         top / self.content * self.map_height - self.pan
     }
 
-    fn viewport_top(&self) -> f32 {
+    pub(super) fn viewport_top(&self) -> f32 {
         self.top - self.pan
     }
 
-    fn visible_span(&self, top: f32, height: f32) -> Option<(f32, f32)> {
+    pub(super) fn visible_span(&self, top: f32, height: f32) -> Option<(f32, f32)> {
         let bottom = (top + height).min(self.height);
         let top = top.max(0.);
         (bottom > top).then_some((top, bottom - top))
@@ -142,7 +142,11 @@ impl Geometry {
 }
 
 impl WorkbenchPanel {
-    fn scroll_minimap(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+    pub(super) fn scroll_minimap(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        if self.document_mode == DocumentMode::Text {
+            self.scroll_text_minimap(position, cx);
+            return;
+        }
         let bounds = *self.block_minimap.bounds.borrow();
         let height = f32::from(bounds.size.height) - INSET * 2.;
         if height <= 0. {

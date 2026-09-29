@@ -1,0 +1,12 @@
+; Sequential tour. Every scene returns naturally before the next one starts.
+
+intro:KEINE FEATURE LAB|00 · 完整连续验收 -hold
+callScene:dialogue/textbox.txt
+callScene:flow/variables.txt
+callScene:stage/transform.txt
+callScene:stage/transitions.txt
+callScene:stage/animation.txt
+callScene:stage/particles.txt
+callScene:media/playback.txt
+callScene:ui/persistence.txt
+绫:00-完成：连续验收结束。下一步返回分项菜单，可重复检查任意模块。

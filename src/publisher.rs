@@ -697,7 +697,7 @@ fn assemble(output: &Path, _features: &str, engine: &Path, benchmark: bool) -> R
         }
     }
     fs::copy(
-        repo_root.join("assets/icons/keine-256.png"),
+        repo_root.join("src/assets/icons/keine-256.png"),
         output.join("keine.png"),
     )?;
     if benchmark {

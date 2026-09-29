@@ -3,11 +3,13 @@
 #[cfg(feature = "publisher")]
 mod compiler;
 #[cfg(feature = "publisher")]
+#[path = "migration/project.rs"]
 mod project_migration;
 #[cfg(feature = "publisher")]
 mod publisher;
 mod render;
 #[cfg(feature = "publisher")]
+#[path = "migration/resource.rs"]
 mod resource_migration;
 mod runtime;
 mod scene;

@@ -33,7 +33,7 @@ pub(crate) struct ParticleMaterialPlugin;
 
 impl Plugin for ParticleMaterialPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "../../assets/shaders/particle_material.wgsl");
+        embedded_asset!(app, "../../assets/shaders/particle/material.wgsl");
         app.add_plugins(Material2dPlugin::<ParticleMaterial>::default());
     }
 }
@@ -76,7 +76,7 @@ impl Material2d for ParticleMaterial {
 fn particle_shader() -> ShaderRef {
     ShaderRef::Path(
         AssetPath::from_path_buf(embedded_path!(
-            "../../assets/shaders/particle_material.wgsl"
+            "../../assets/shaders/particle/material.wgsl"
         ))
         .with_source("embedded"),
     )
@@ -1021,7 +1021,7 @@ mod tests {
 
     #[test]
     fn particle_material_uses_global_time_without_a_cpu_uniform() {
-        let shader = include_str!("../../assets/shaders/particle_material.wgsl");
+        let shader = include_str!("../../assets/shaders/particle/material.wgsl");
         assert_eq!(shader.matches("var<uniform>").count(), 0);
         assert_eq!(shader.matches("@binding(").count(), 2);
         assert!(shader.contains("fract(globals.time * 60.0)"));

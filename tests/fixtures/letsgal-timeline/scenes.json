@@ -7,7 +7,7 @@
         {
           "id": "main",
           "name": "Main",
-          "assetPath": "backgrounds/calibration_day.webp",
+          "assetPath": "backgrounds/calibration/day.webp",
           "distance": 1,
           "offset": "(0, 0)"
         }
@@ -20,7 +20,7 @@
         {
           "id": "main",
           "name": "Main",
-          "assetPath": "backgrounds/calibration_sunset.webp",
+          "assetPath": "backgrounds/calibration/sunset.webp",
           "distance": 1,
           "offset": "(0, 0)"
         }

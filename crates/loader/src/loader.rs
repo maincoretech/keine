@@ -1,4 +1,5 @@
 mod compiled;
+#[path = "loader/native/objects.rs"]
 mod native_objects;
 mod scenes;
 mod source;

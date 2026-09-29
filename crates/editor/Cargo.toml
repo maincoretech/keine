@@ -25,7 +25,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-gpui-kit = { workspace = true, features = ["test-support"] }
 bevy = { workspace = true, features = [
     "bevy_core_pipeline",
     "bevy_render",

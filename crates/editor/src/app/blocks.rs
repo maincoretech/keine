@@ -131,6 +131,7 @@ impl WorkbenchPanel {
                 );
             }
         }
+        self.block_minimap = minimap::BlockMinimap::default();
         self.document_mode = mode;
         cx.notify();
         cx.refresh_windows();

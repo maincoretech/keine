@@ -1318,7 +1318,7 @@ fn set_macos_application_icon() -> Result<()> {
 
     let main_thread =
         MainThreadMarker::new().context("application icon must be set on main thread")?;
-    let bytes = include_bytes!("../../assets/icons/keine-256.png");
+    let bytes = include_bytes!("../assets/icons/keine-256.png");
     // SAFETY: `NSData` copies exactly `bytes.len()` readable bytes from this
     // process-owned static buffer before returning.
     let data = unsafe { NSData::dataWithBytes_length(bytes.as_ptr().cast(), bytes.len()) };
@@ -1339,7 +1339,7 @@ fn load_window_icon() -> Result<winit::window::Icon> {
 
 fn decode_window_icon() -> Result<(Vec<u8>, u32, u32)> {
     let image = Image::from_buffer(
-        include_bytes!("../../assets/icons/keine-256.png"),
+        include_bytes!("../assets/icons/keine-256.png"),
         ImageType::Extension("png"),
         CompressedImageFormats::NONE,
         true,

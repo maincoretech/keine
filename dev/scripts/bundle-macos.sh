@@ -51,7 +51,7 @@ mkdir -p "$staging/Contents/MacOS" "$staging/Contents/Resources"
 cp "$package_dir/keine" "$staging/Contents/MacOS/keine"
 cp "$package_dir/game.haku" "$staging/Contents/Resources/game.haku"
 cp -R "$package_dir/data" "$staging/Contents/Resources/data"
-cp "$root/assets/icons/keine.icns" "$staging/Contents/Resources/keine.icns"
+cp "$root/src/assets/icons/keine.icns" "$staging/Contents/Resources/keine.icns"
 
 sed -e "s/__NAME__/$name/g" -e "s/__VERSION__/$version/g" -e "s/__BUNDLE_IDENTIFIER__/$bundle_identifier/g" > "$staging/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

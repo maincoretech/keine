@@ -13,7 +13,7 @@ pub(crate) struct StageMaterialPlugin;
 
 impl Plugin for StageMaterialPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "../../assets/shaders/stage_material.wgsl");
+        embedded_asset!(app, "../../assets/shaders/stage/material.wgsl");
         app.add_plugins(Material2dPlugin::<StageMaterial>::default())
             .add_systems(Startup, setup_quad);
     }
@@ -488,7 +488,7 @@ impl StageMaterial {
 impl Material2d for StageMaterial {
     fn fragment_shader() -> ShaderRef {
         ShaderRef::Path(
-            AssetPath::from_path_buf(embedded_path!("../../assets/shaders/stage_material.wgsl"))
+            AssetPath::from_path_buf(embedded_path!("../../assets/shaders/stage/material.wgsl"))
                 .with_source("embedded"),
         )
     }
@@ -572,7 +572,7 @@ mod tests {
 
     #[test]
     fn stage_material_keeps_a_compact_bind_group() {
-        let shader = include_str!("../../assets/shaders/stage_material.wgsl");
+        let shader = include_str!("../../assets/shaders/stage/material.wgsl");
 
         assert_eq!(shader.matches("var<uniform>").count(), 1);
         // LUT, source image, and the optional authored clip image each need one

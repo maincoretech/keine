@@ -1,0 +1,5 @@
+; Nested callScene. Natural EOF returns to the Menu continuation.
+
+changeFigure:aya/thinking.webp -right -id=guest -fade -duration=280 -zIndex=3
+访客:02-08 callScene 已进入子场景；自然 EOF 后必须返回原选择的下一条动作。
+changeFigure:none -right -id=guest -fade -duration=280

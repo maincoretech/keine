@@ -1,0 +1,36 @@
+; Dialogue forms, left-aligned name box, rich text, textbox lifecycle and input.
+
+changeFigure:aya/smile.webp -left -id=hero -fade -duration=300 -zIndex=2
+绫:01-01 姓名对话：姓名框应在 textbox 左侧，姓名文字靠左，并留有舒适内边距。
+say:01-02 官方 say 写法：姓名仍为“绫”，位置与上一句完全相同。 -speaker=绫
+say:01-03 speaker 继承：未再次指定姓名，仍应显示“绫”。
+say:01-04 清空 speaker：这是旁白，姓名框必须完全消失，textbox 左边缘平滑扩展。 -clear
+
+绫:01-05 多行第一行
+  |第二行由 WebGAL 缩进行合并，不应显示竖线。
+绫:01-06 转义符：冒号\:、分号\;、竖线\|都应作为正文显示。
+绫:01-07 富文本：[粉色粗体](color=#ff9fbd,bold)、[深色背景](bg=#273044dd)、[放大](size=1.25)、[斜体](italic)、[删除线](del)。
+绫:01-08 Ruby：[蟹](かに)、[桜](さくら)、[学校](がっこう)。注音不能占用正文行数。
+绫:01-09 第一行<br>第二行仍要保持正常基线、字距和阴影。
+绫:01-10 内联等待开始，[wait=500]半秒后才出现这段文字；标记本身不可见。
+
+miniAvatar:aya/thinking.webp
+绫:01-11 mini avatar 出现在左侧；textbox 平滑右移，姓名框仍靠左且不覆盖头像。
+miniAvatar:none
+say:01-12 mini avatar 隐藏；旁白没有姓名框，textbox 平滑恢复完整宽度。 -clear
+
+setTextbox:hide
+wait:500
+setTextbox:show
+绫:01-13 显式 hide/show：隐藏期间 textbox、姓名框和文字应同时消失。
+:
+wait:450
+绫:01-14 冒号简写只自动隐藏一次，新对话出现时应立即恢复。
+
+绫:01-15 这句结束后自动推进到 shake，不需要再次点击。 -notend
+setAnimation:shake -target=hero -duration=360
+绫:01-16 前半句 -next
+绫:与后半句合并，最终只形成一个连续对话记录。 -concat
+
+getUserInput:playerName -title="01-17 输入任意测试名字" -buttonText="确认"
+绫:01-18 输入结果为“{playerName}”。输入框关闭后姓名框与 textbox 应同步恢复。

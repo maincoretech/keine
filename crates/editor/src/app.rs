@@ -25,7 +25,7 @@ use gpui_kit::component::input::{
 };
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::select::{Select, SelectEvent, SelectItem, SelectState};
+use gpui_kit::component::select::{SelectEvent, SelectItem, SelectState};
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{
@@ -70,10 +70,15 @@ mod dock;
 mod edits;
 mod files;
 mod inspector;
+#[path = "app/inspector/controls.rs"]
 mod inspector_controls;
 mod minimap;
 mod render;
+#[path = "app/resource/picker.rs"]
 mod resource_picker;
+mod search;
+#[path = "app/text/minimap.rs"]
+mod text_minimap;
 mod view;
 #[cfg(test)]
 use dock::editor_drop_placement;
@@ -163,6 +168,7 @@ const ASSET_FILTER_MENU_WIDTH_PX: f32 = 240.;
 const SCENE_CONTEXT_MENU_HEIGHT_PX: f32 = 143.;
 
 const EXPLORER_PANEL: &str = "keine.editor.explorer";
+const SEARCH_PANEL: &str = "keine.editor.search";
 const DOCUMENT_PANEL: &str = "keine.editor.document";
 const INSPECTOR_PANEL: &str = "keine.editor.inspector";
 const OUTPUT_PANEL: &str = "keine.editor.output";
@@ -182,6 +188,8 @@ actions!(
         SaveAll,
         ToggleEngine,
         ShowAssets,
+        ShowSearch,
+        ShowAssetPreview,
         MigrateEiyashou,
         CopyBlocks,
         PasteBlocks,
@@ -1118,6 +1126,9 @@ enum PanelPayload {
     Output {
         root: PathBuf,
     },
+    Search {
+        root: PathBuf,
+    },
     Assets {
         root: PathBuf,
     },
@@ -1141,6 +1152,7 @@ enum PanelPayload {
 #[derive(Clone, Copy)]
 enum ToolKind {
     Explorer,
+    Search,
     Assets,
     Characters,
     Problems,
@@ -1151,6 +1163,7 @@ impl ToolKind {
     fn panel_name(self) -> &'static str {
         match self {
             Self::Explorer => EXPLORER_PANEL,
+            Self::Search => SEARCH_PANEL,
             Self::Assets => ASSETS_PANEL,
             Self::Characters => CHARACTERS_PANEL,
             Self::Problems => PROBLEMS_PANEL,
@@ -1164,6 +1177,7 @@ impl ToolKind {
                 root,
                 expanded: Vec::new(),
             },
+            Self::Search => PanelPayload::Search { root },
             Self::Assets => PanelPayload::Assets { root },
             Self::Characters => PanelPayload::Characters { root },
             Self::Problems => PanelPayload::Problems { root },
@@ -1192,6 +1206,9 @@ enum PanelContent {
     Output {
         root: PathBuf,
         file_count: usize,
+    },
+    Search {
+        root: PathBuf,
     },
     Assets {
         root: PathBuf,
@@ -1297,6 +1314,7 @@ impl PanelContent {
                     .len();
                 Ok(Self::Output { root, file_count })
             }
+            PanelPayload::Search { root } => Ok(Self::Search { root }),
             PanelPayload::Assets { root } => Ok(Self::Assets { root }),
             PanelPayload::AssetPreview { root } => Ok(Self::AssetPreview { root }),
             PanelPayload::Characters { root } => Ok(Self::Characters { root }),
@@ -1325,6 +1343,7 @@ impl PanelContent {
             },
             Self::Inspector { root, .. } => PanelPayload::Inspector { root: root.clone() },
             Self::Output { root, .. } => PanelPayload::Output { root: root.clone() },
+            Self::Search { root } => PanelPayload::Search { root: root.clone() },
             Self::Assets { root } => PanelPayload::Assets { root: root.clone() },
             Self::AssetPreview { root } => PanelPayload::AssetPreview { root: root.clone() },
             Self::Characters { root } => PanelPayload::Characters { root: root.clone() },
@@ -1340,6 +1359,7 @@ impl PanelContent {
             Self::Document { .. } => DOCUMENT_PANEL,
             Self::Inspector { .. } => INSPECTOR_PANEL,
             Self::Output { .. } => OUTPUT_PANEL,
+            Self::Search { .. } => SEARCH_PANEL,
             Self::Assets { .. } => ASSETS_PANEL,
             Self::AssetPreview { .. } => ASSET_PREVIEW_PANEL,
             Self::Characters { .. } => CHARACTERS_PANEL,
@@ -1360,6 +1380,7 @@ impl PanelContent {
                 .into(),
             Self::Inspector { .. } => "Inspector".into(),
             Self::Output { .. } => "Output".into(),
+            Self::Search { .. } => "Search".into(),
             Self::Assets { .. } => "Assets".into(),
             Self::AssetPreview { .. } => "Asset Preview".into(),
             Self::Characters { .. } => "Characters".into(),
@@ -1394,6 +1415,8 @@ struct WorkbenchPanel {
     block_scroll_anchor: ScrollAnchor,
     block_scroll_pending: bool,
     block_minimap: minimap::BlockMinimap,
+    text_minimap: text_minimap::TextMinimap,
+    project_search: Option<search::ProjectSearch>,
     tool_inputs: Vec<Entity<InputState>>,
     recovery_epoch: u64,
     syntax_check: Option<gpui_kit::Task<()>>,
@@ -1697,6 +1720,7 @@ impl WorkbenchPanel {
         let tool_registration = match &content {
             PanelContent::Explorer { root, .. } => Some((root.clone(), EXPLORER_PANEL)),
             PanelContent::Inspector { root, .. } => Some((root.clone(), INSPECTOR_PANEL)),
+            PanelContent::Search { root } => Some((root.clone(), SEARCH_PANEL)),
             PanelContent::Assets { root } => Some((root.clone(), ASSETS_PANEL)),
             PanelContent::AssetPreview { root } => Some((root.clone(), ASSET_PREVIEW_PANEL)),
             PanelContent::Characters { root } => Some((root.clone(), CHARACTERS_PANEL)),
@@ -1753,6 +1777,8 @@ impl WorkbenchPanel {
                 block_scroll_anchor,
                 block_scroll_pending: false,
                 block_minimap: minimap::BlockMinimap::default(),
+                text_minimap: text_minimap::TextMinimap::default(),
+                project_search: None,
                 tool_inputs: Vec::new(),
                 recovery_epoch: 0,
                 syntax_check: None,
@@ -1806,6 +1832,9 @@ impl WorkbenchPanel {
                 asset_filter_menu: None,
                 asset_filter_epoch: 0,
             };
+            if matches!(panel.content, PanelContent::Search { .. }) {
+                panel.install_search(window, cx);
+            }
             panel._subscriptions.push(cx.subscribe(
                 &asset_search,
                 |_: &mut WorkbenchPanel, _, event: &InputEvent, cx| {
@@ -1841,6 +1870,17 @@ impl WorkbenchPanel {
                     }
                 },
             ));
+            if let PanelContent::Document { editor, .. } = &panel.content {
+                panel._subscriptions.push(cx.subscribe(
+                    editor,
+                    |panel, _, event: &InputEvent, cx| {
+                        if matches!(event, InputEvent::Change) {
+                            panel.text_minimap.invalidate();
+                            cx.notify();
+                        }
+                    },
+                ));
+            }
             if let PanelContent::Document {
                 root,
                 relative,
@@ -2174,6 +2214,10 @@ impl BasePanel for WorkbenchPanel {
             PanelContent::Inspector { root, .. } => cx
                 .global_mut::<EditorDocuments>()
                 .set_tool_panel(root, INSPECTOR_PANEL, None),
+            PanelContent::Search { root } => {
+                cx.global_mut::<EditorDocuments>()
+                    .set_tool_panel(root, SEARCH_PANEL, None)
+            }
             PanelContent::Assets { root } => {
                 cx.global_mut::<EditorDocuments>()
                     .set_tool_panel(root, ASSETS_PANEL, None)
@@ -2232,6 +2276,7 @@ fn language_for_path(path: &Path) -> &'static str {
 fn register_workbench_panels(cx: &mut App) {
     for name in [
         EXPLORER_PANEL,
+        SEARCH_PANEL,
         DOCUMENT_PANEL,
         INSPECTOR_PANEL,
         OUTPUT_PANEL,
@@ -2680,6 +2725,11 @@ impl WorkbenchWindow {
             workspace
                 .dock
                 .update(cx, |dock, cx| dock.select_panel(panel, window, cx));
+            if matches!(kind, ToolKind::Search)
+                && let Some(panel) = workspace.dock.read(cx).panel(panel)
+            {
+                panel.focus_handle(cx).focus(window, cx);
+            }
             return;
         }
         let panel = match WorkbenchPanel::from_payload(kind.payload(root.clone()), window, cx) {
@@ -2692,7 +2742,8 @@ impl WorkbenchWindow {
             }
         };
         let panel_id = PanelId::from(panel.entity_id());
-        let is_asset = matches!(kind, ToolKind::Assets);
+        let search_focus = matches!(kind, ToolKind::Search).then(|| panel.read(cx).focus.clone());
+        let is_asset = matches!(kind, ToolKind::Assets | ToolKind::Search);
         let tab_anchor = if is_asset {
             cx.global::<EditorDocuments>()
                 .tool_panel(&root, EXPLORER_PANEL)
@@ -2752,7 +2803,30 @@ impl WorkbenchWindow {
             }
             dock.select_panel(panel_id, window, cx);
         });
+        if let Some(focus) = search_focus {
+            focus.focus(window, cx);
+        }
         cx.refresh_windows();
+    }
+
+    fn show_asset_preview(
+        &mut self,
+        _: &ShowAssetPreview,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(workspace) = self.workspace.as_ref() else {
+            return;
+        };
+        let root = workspace.session.root();
+        if cx
+            .global::<EditorDocuments>()
+            .tool_panel(root, ASSET_PREVIEW_PANEL)
+            .is_none()
+        {
+            dock::install_asset_preview(&workspace.dock, root, window, cx);
+            cx.refresh_windows();
+        }
     }
 
     fn migrate_eiyashou(
@@ -2985,7 +3059,14 @@ impl WorkbenchWindow {
             cx.global::<EditorDocuments>()
                 .has_dirty_documents(workspace.session.root())
         });
-        let (explorer_open, assets_open, characters_open, problems_open, performance_open) = self
+        let (
+            explorer_open,
+            search_open,
+            assets_open,
+            characters_open,
+            problems_open,
+            performance_open,
+        ) = self
             .workspace
             .as_ref()
             .map(|workspace| {
@@ -2993,6 +3074,7 @@ impl WorkbenchWindow {
                 let documents = cx.global::<EditorDocuments>();
                 (
                     documents.tool_panel(root, EXPLORER_PANEL).is_some(),
+                    documents.tool_panel(root, SEARCH_PANEL).is_some(),
                     documents.tool_panel(root, ASSETS_PANEL).is_some(),
                     documents.tool_panel(root, CHARACTERS_PANEL).is_some(),
                     documents.tool_panel(root, PROBLEMS_PANEL).is_some(),
@@ -3043,6 +3125,17 @@ impl WorkbenchWindow {
             })
             .when(self.workspace.is_some(), |this| {
                 this.child(
+                    activity_tool(
+                        "activity-search",
+                        AssetIconName::Search,
+                        search_open,
+                        "Search",
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.show_tool(ToolKind::Search, window, cx)
+                    })),
+                )
+                .child(
                     activity_tool(
                         "activity-assets",
                         AssetIconName::Images,
@@ -3315,6 +3408,10 @@ impl Render for WorkbenchWindow {
             .on_action(cx.listener(|this, _: &ShowAssets, window, cx| {
                 this.show_tool(ToolKind::Assets, window, cx)
             }))
+            .on_action(cx.listener(|this, _: &ShowSearch, window, cx| {
+                this.show_tool(ToolKind::Search, window, cx);
+            }))
+            .on_action(cx.listener(Self::show_asset_preview))
             .on_action(cx.listener(Self::migrate_eiyashou))
             .on_action(cx.listener(Self::undo_sources))
             .on_action(cx.listener(Self::redo_sources))
@@ -3998,6 +4095,11 @@ pub fn run() -> ExitCode {
                 KeyBinding::new("ctrl-o", OpenFolder, Some("KeineWorkbench")),
                 KeyBinding::new("cmd-s", Save, Some("KeineWorkbench")),
                 KeyBinding::new("ctrl-s", Save, Some("KeineWorkbench")),
+                KeyBinding::new("cmd-shift-f", ShowSearch, Some("KeineWorkbench")),
+                KeyBinding::new("ctrl-shift-f", ShowSearch, Some("KeineWorkbench")),
+                // Native Input binds cmd-shift-f to Replace. Override at its context depth.
+                KeyBinding::new("cmd-shift-f", ShowSearch, Some("KeineWorkbench > Input")),
+                KeyBinding::new("ctrl-shift-f", ShowSearch, Some("KeineWorkbench > Input")),
                 KeyBinding::new("cmd-shift-s", SaveAll, Some("KeineWorkbench")),
                 KeyBinding::new("cmd-alt-r", ReloadDocument, Some("KeineWorkbench")),
                 KeyBinding::new("ctrl-alt-r", ReloadDocument, Some("KeineWorkbench")),

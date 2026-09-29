@@ -24,13 +24,16 @@ criterion = { workspace = true }
 hakutaku-pack = { workspace = true }
 
 [[bench]]
-name = "program_load"
+name = "program-load"
+path = "../../tests/bench/loader/program/load.rs"
 harness = false
 
 [[bench]]
-name = "content_lookup"
+name = "content-lookup"
+path = "../../tests/bench/loader/content/lookup.rs"
 harness = false
 
 [[bench]]
-name = "letsgal_project"
+name = "letsgal-project"
+path = "../../tests/bench/loader/letsgal/project.rs"
 harness = false

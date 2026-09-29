@@ -14,12 +14,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - name: Check RustSec advisories and yanked dependencies
-        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+      # Use the runner's GNU host; the Alpine action redownloads our pinned
+      # toolchain as musl Rust inside its separate container.
+      - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+      - name: Install pinned cargo-deny
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
-          command: check
-          arguments: --all-features
-          command-arguments: advisories
+          tool: cargo-deny@0.20.2
+          fallback: none
+      - name: Check RustSec advisories and yanked dependencies
+        run: cargo deny --locked --all-features check advisories
 
   rust:
     name: ${{ matrix.name }}
@@ -87,7 +91,7 @@ jobs:
         if: matrix.backend == 'ffmpeg'
         run: >-
           cargo run --locked --no-default-features --features publisher,video-ffmpeg
-          --bin keine-video-acceptance -- dev/fixtures/video/playback.mp4
+          --bin keine-video-acceptance -- tests/fixtures/video/playback.mp4
       - name: Check native video unit contracts
         if: matrix.backend == 'native'
         run: >-
@@ -97,7 +101,7 @@ jobs:
         if: matrix.backend == 'native'
         run: >-
           cargo run --locked --no-default-features --features publisher,video-native
-          --bin keine-video-acceptance -- dev/fixtures/video/playback.mp4
+          --bin keine-video-acceptance -- tests/fixtures/video/playback.mp4
       - name: Build platform release backend
         run: >-
           cargo build --release --locked --no-default-features

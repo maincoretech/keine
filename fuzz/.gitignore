@@ -1,6 +1,0 @@
-target
-corpus/**
-!corpus/webp_decode/
-!corpus/webp_decode/.gitkeep
-artifacts
-coverage

@@ -3,7 +3,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn main() {
-    const WINDOWS_ICON: &str = "assets/icons/keine.ico";
+    const WINDOWS_ICON: &str = "src/assets/icons/keine.ico";
 
     println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-changed=crates");

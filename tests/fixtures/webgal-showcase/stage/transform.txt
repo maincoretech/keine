@@ -1,0 +1,39 @@
+; Background/sprite lifecycle, anchors, z order, sparse transform, easing and blend modes.
+
+changeFigure:none -id=hero
+changeBg:calibration/day.webp -transform={"scale":{"x":1.02,"y":1.02},"position":{"x":0,"y":0}}
+绫:03-01 背景为 1920×1080 校准天台；窗口缩放时只能等比缩放，不能拉伸。
+changeBg:none -fade -duration=300
+wait:250
+changeBg:calibration/sunset.webp -fade -duration=350
+绫:03-02 HideBg 后重新 ShowBg；空白期不能残留上一张图。
+
+changeFigure:aya/smile.webp -left -id=left-demo -fade -duration=250 -zIndex=1
+changeFigure:aya/thinking.webp -center -id=center-demo -fade -duration=250 -zIndex=2
+changeFigure:aya/smile.webp -right -id=right-demo -fade -duration=250 -zIndex=3
+绫:03-03 左、中、右三个锚点均在设计视口内；右侧 zIndex 最高。
+
+setTransform:{"position":{"x":120,"y":-24},"scale":{"x":0.82,"y":0.82},"rotation":0.16,"alpha":0.72,"blur":3} -target=center-demo -duration=450 -ease=linear
+绫:03-04 JSON patch + Linear：中间立绘应偏移、缩放、旋转、半透明并模糊。
+setTransform:center-demo x=0 y=0 scale_x=1 scale_y=1 rotation=0 alpha=1 blur=0 -duration=450 -ease=easeIn
+绫:03-05 空格 patch + EaseIn：所有字段回到默认。
+setTransform:center-demo x=-90 -duration=450 -ease=easeOut
+setTransform:center-demo x=0 -duration=450 -ease=easeInOut
+绫:03-06 EaseOut 与 EaseInOut 均完成，且没有依赖帧率的跳变。
+
+changeFigure:none -id=left-demo
+changeFigure:none -id=center-demo
+changeFigure:none -id=right-demo
+changeFigure:aya/thinking.webp -center -id=blend-alpha -blendMode=alpha -transform={"alpha":0.72,"scale":{"x":0.58,"y":0.58},"position":{"x":-570,"y":0}} -zIndex=4
+changeFigure:aya/thinking.webp -center -id=blend-add -blendMode=add -transform={"alpha":0.72,"scale":{"x":0.58,"y":0.58},"position":{"x":-190,"y":0}} -zIndex=5
+changeFigure:aya/thinking.webp -center -id=blend-multiply -blendMode=multiply -transform={"alpha":0.72,"scale":{"x":0.58,"y":0.58},"position":{"x":190,"y":0}} -zIndex=6
+changeFigure:aya/thinking.webp -center -id=blend-screen -blendMode=screen -transform={"alpha":0.72,"scale":{"x":0.58,"y":0.58},"position":{"x":570,"y":0}} -zIndex=7
+绫:03-07 从左到右为 Alpha、Add、Multiply、Screen；四个对象使用相同 authored alpha。Multiply 应只按底色压暗，不得变成额外的黑色半透明遮罩。
+
+changeFigure:none -id=blend-alpha
+changeFigure:placeholder.webp -id=blend-add -clear
+changeFigure: -id=blend-multiply
+changeFigure:none -id=blend-screen
+绫:03-08 none、-clear、空内容三种退场写法都应移除目标，无占位图报错。
+changeFigure:aya/smile.webp -left -id=hero -fade -duration=300 -zIndex=2
+changeBg:calibration/day.webp -fade -duration=350

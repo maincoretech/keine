@@ -15,9 +15,11 @@ unicode-segmentation = { workspace = true }
 criterion = { workspace = true }
 
 [[bench]]
-name = "script_runtime"
+name = "script-runtime"
+path = "../../tests/bench/core/script/runtime.rs"
 harness = false
 
 [[bench]]
 name = "rollback"
+path = "../../tests/bench/core/rollback.rs"
 harness = false

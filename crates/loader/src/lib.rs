@@ -7,6 +7,7 @@ pub mod compiled;
 mod language;
 mod loader;
 mod report;
+#[path = "source/input.rs"]
 mod source_input;
 
 pub use adapter::{

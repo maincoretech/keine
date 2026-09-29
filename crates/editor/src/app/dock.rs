@@ -223,7 +223,13 @@ impl EditorTabGroupSkin {
         }
         let is_closable_tool = matches!(
             panel_name,
-            ASSETS_PANEL | CHARACTERS_PANEL | SCENES_PANEL | PROBLEMS_PANEL | PERFORMANCE_PANEL
+            ASSETS_PANEL
+                | ASSET_PREVIEW_PANEL
+                | SEARCH_PANEL
+                | CHARACTERS_PANEL
+                | SCENES_PANEL
+                | PROBLEMS_PANEL
+                | PERFORMANCE_PANEL
         );
         let panel_id = panel.panel_id(cx);
         let close_group = group.clone();
@@ -1330,23 +1336,8 @@ impl ProjectWorkspace {
             dock.update(cx, |dock, cx| dock.load(state, window, cx))
                 .is_ok()
         });
-        let added_preview = if !load_succeeded {
+        if !load_succeeded {
             install_default_layout(&dock, &session, window, cx);
-            false
-        } else if cx
-            .global::<EditorDocuments>()
-            .tool_panel(session.root(), ASSET_PREVIEW_PANEL)
-            .is_none()
-        {
-            install_asset_preview(&dock, session.root(), window, cx)
-        } else {
-            false
-        };
-        if added_preview {
-            let state = dock.read(cx).dump(cx);
-            if let Err(error) = persistence.save_layout(session.key(), state) {
-                eprintln!("Kēne Editor could not persist asset preview layout: {error}");
-            }
         }
 
         let project = session.key().clone();
@@ -1479,7 +1470,7 @@ pub(super) fn install_default_layout(
     dock.update(cx, |dock, cx| dock.set_center(layout, window, cx));
 }
 
-fn install_asset_preview(
+pub(super) fn install_asset_preview(
     dock: &Entity<DockArea>,
     root: &Path,
     window: &mut Window,

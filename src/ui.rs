@@ -1,6 +1,7 @@
 mod overlays;
 mod screens;
 mod stage;
+#[path = "ui/startup/error.rs"]
 pub(crate) mod startup_error;
 mod support;
 

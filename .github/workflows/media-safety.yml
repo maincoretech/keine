@@ -7,7 +7,7 @@ on:
       - "Cargo.lock"
       - "Cargo.toml"
       - "crates/media/**"
-      - "fuzz/**"
+      - "tests/fuzz/**"
       - "src/scene/images.rs"
       - "src/scene/video.rs"
       - "src/scene/video/**"
@@ -18,7 +18,7 @@ on:
       - "Cargo.lock"
       - "Cargo.toml"
       - "crates/media/**"
-      - "fuzz/**"
+      - "tests/fuzz/**"
       - "src/scene/images.rs"
       - "src/scene/video.rs"
       - "src/scene/video/**"
@@ -61,15 +61,15 @@ jobs:
           cargo install --locked --root "${{ runner.tool_cache }}/cargo-fuzz" --version "$CARGO_FUZZ_VERSION" cargo-fuzz
       - name: Fuzz the production WebP decoder
         run: >-
-          cargo +nightly fuzz run webp_decode fuzz/corpus/webp_decode
-          projects/test-project/assets/backgrounds --
+          cargo +nightly fuzz run --fuzz-dir tests/fuzz webp tests/fuzz/corpus/webp
+          tests/fixtures/letsgal-timeline/assets/backgrounds/calibration --
           -max_total_time=60 -max_len=4194304 -rss_limit_mb=2048
       - name: Upload reproducer
         if: failure()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: webp-fuzz-artifacts-${{ github.sha }}
-          path: fuzz/artifacts/
+          path: tests/fuzz/artifacts/
           if-no-files-found: ignore
 
   ffmpeg-asan:
@@ -102,6 +102,6 @@ jobs:
             --bin keine-video-acceptance --
           )
           for fixture in playback.mp4 no-audio.mp4 long-gop.mp4 tail-moov.mp4; do
-            cargo "${cargo_args[@]}" "dev/fixtures/video/$fixture"
+            cargo "${cargo_args[@]}" "tests/fixtures/video/$fixture"
           done
-          cargo "${cargo_args[@]}" --expect-error dev/fixtures/video/damaged-header.mp4
+          cargo "${cargo_args[@]}" --expect-error tests/fixtures/video/damaged-header.mp4

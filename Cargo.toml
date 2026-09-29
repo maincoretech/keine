@@ -25,14 +25,14 @@ bench = false
 
 [[bin]]
 name = "keine-video-acceptance"
-path = "dev/tools/video_acceptance.rs"
+path = "tests/video/acceptance.rs"
 required-features = ["publisher"]
 test = false
 bench = false
 
 [[bin]]
 name = "keine-video-source-benchmark"
-path = "dev/tools/video_source_benchmark.rs"
+path = "tests/bench/video/source.rs"
 required-features = ["publisher"]
 test = false
 bench = false
@@ -188,19 +188,23 @@ keine-editor = { path = "crates/editor" }
 libwebp-sys = { workspace = true }
 
 [[bench]]
-name = "save_preview"
+name = "save-preview"
+path = "tests/bench/save/preview.rs"
 harness = false
 
 [[bench]]
-name = "backup_decode"
+name = "backup-decode"
+path = "tests/bench/backup/decode.rs"
 harness = false
 
 [[bench]]
-name = "video_queue"
+name = "video-queue"
+path = "tests/bench/video/queue.rs"
 harness = false
 
 [[bench]]
-name = "runtime_hotspots"
+name = "runtime-hotspots"
+path = "tests/bench/runtime/hotspots.rs"
 harness = false
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -229,3 +233,11 @@ windows-sys = { workspace = true, optional = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 bevy = { workspace = true, features = ["x11"] }
 rfd = { workspace = true, features = ["xdg-portal"] }
+
+[[test]]
+name = "authoring-process"
+path = "tests/authoring/process.rs"
+
+[[test]]
+name = "letsgal-sample"
+path = "tests/letsgal/sample.rs"

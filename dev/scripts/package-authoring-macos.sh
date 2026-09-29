@@ -42,7 +42,7 @@ make_app() {
     mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
     cp "$source" "$bundle/Contents/MacOS/$executable"
     chmod +x "$bundle/Contents/MacOS/$executable"
-    cp "$repo_root/assets/icons/keine.icns" "$bundle/Contents/Resources/keine.icns"
+    cp "$repo_root/src/assets/icons/keine.icns" "$bundle/Contents/Resources/keine.icns"
     printf '%s\n' \
         '<?xml version="1.0" encoding="UTF-8"?>' \
         '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \

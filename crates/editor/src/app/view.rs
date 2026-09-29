@@ -212,7 +212,7 @@ pub(super) fn source_property_editor(
     if let Some(control) = segmented_source_property(root, key, position, cx) {
         return control;
     }
-    if let Some(control) = typed_source_property(key, position, input, slider, select) {
+    if let Some(control) = typed_source_property(root, key, position, input, slider, select, cx) {
         return control;
     }
     let field = &key.fields[position];
@@ -2888,7 +2888,7 @@ pub(super) fn render_assets(
                     .bg(rgb(if selected { SURFACE } else { PANEL }))
                     .cursor_pointer()
                     .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-                    .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                    .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                         let previous = cx.global::<EditorDocuments>().asset_selection(&row_root);
                         let modifiers = event.modifiers();
                         let next = select_asset_keys(
@@ -2902,8 +2902,12 @@ pub(super) fn render_assets(
                         if !modifiers.shift {
                             this.asset_anchor = Some(row_key.clone());
                         }
+                        let show_preview = !next.is_empty();
                         cx.global_mut::<EditorDocuments>()
                             .set_asset_selection(&row_root, next);
+                        if show_preview {
+                            window.dispatch_action(Box::new(ShowAssetPreview), cx);
+                        }
                         cx.refresh_windows();
                     }))
                     .on_drag(
@@ -2958,9 +2962,10 @@ pub(super) fn render_assets(
                 .bg(rgb(PANEL))
                 .cursor_pointer()
                 .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-                .on_click(move |_, _, cx| {
+                .on_click(move |_, window, cx| {
                     cx.global_mut::<EditorDocuments>()
                         .set_unmapped_asset_preview(&preview_root, &asset);
+                    window.dispatch_action(Box::new(ShowAssetPreview), cx);
                     cx.refresh_windows();
                 })
                 .child(
@@ -3150,9 +3155,7 @@ pub(super) fn render_asset_filter_menu(
         .h(px(height))
         .overflow_hidden()
         .p_1()
-        .rounded(px(7.))
-        .border_1()
-        .border_color(rgb(BORDER))
+        .rounded(px(8.))
         .bg(rgb(SURFACE))
         .shadow_lg()
         .child(

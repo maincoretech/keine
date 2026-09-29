@@ -2,6 +2,7 @@ pub(crate) mod backup;
 pub(crate) mod gallery;
 mod persistence;
 pub(crate) mod profile;
+#[path = "storage/read/history.rs"]
 pub(crate) mod read_history;
 pub(crate) mod save;
 pub(crate) mod settings;

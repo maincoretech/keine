@@ -248,6 +248,25 @@ impl InputHighlighter for EditorHighlighter {
     }
 }
 
+/// The overview uses the source editor's lexer and palette; no separate language rules.
+pub(crate) fn overview_styles(source: &str, language: &str) -> Vec<(Range<usize>, Hsla)> {
+    SyntaxLanguage::from_name(language)
+        .map(|language| {
+            syntax_spans(source, language)
+                .into_iter()
+                .map(|span| {
+                    (
+                        span.range,
+                        style(span.kind)
+                            .color
+                            .unwrap_or_else(|| rgb(0xc8cbd0).into()),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn syntax_spans(source: &str, language: SyntaxLanguage) -> Vec<SyntaxSpan> {
     match language {
         SyntaxLanguage::Eiyashou => eiyashou_spans(source),

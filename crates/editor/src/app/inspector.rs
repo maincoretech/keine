@@ -986,16 +986,7 @@ impl WorkbenchPanel {
             ));
         }
         let index = cx.global::<EditorDocuments>().authoring(root);
-        let mut speakers = vec![SourceOption {
-            value: "Narrator".into(),
-            title: "Narrator".into(),
-            asset: None,
-        }];
-        speakers.extend(index.characters.iter().map(|character| SourceOption {
-            value: character.id.clone(),
-            title: character.name.clone().into(),
-            asset: None,
-        }));
+        let speakers = speaker_options(&index);
         let mut voices = vec![SourceOption {
             value: String::new(),
             title: "No voice".into(),
