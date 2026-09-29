@@ -870,13 +870,26 @@ impl OpusStream {
                 track_id: Some(self.track_id),
             },
         )?;
-        if let Some(decoder) = self.decoder.as_mut() {
-            decoder.reset();
-        }
+        self.recreate_decoder()?;
         self.samples.clear();
         self.position = 0;
         self.ended = false;
         self.decoded_since_rewind = false;
+        Ok(())
+    }
+
+    fn recreate_decoder(&mut self) -> Result<(), SymphoniaError> {
+        // reset() clears codec history but does not restore the Ogg Opus
+        // pre-skip, so returning to time zero needs a fresh decoder.
+        let params = self
+            .decoder
+            .as_ref()
+            .ok_or(SymphoniaError::Unsupported("opus: missing decoder"))?
+            .codec_params()
+            .clone();
+        let mut codecs = CodecRegistry::new();
+        codecs.register_audio_decoder::<OpusDecoder>();
+        self.decoder = Some(codecs.make_audio_decoder(&params, &AudioDecoderOptions::default())?);
         Ok(())
     }
 }
@@ -945,13 +958,16 @@ impl Source for OpusStream {
             .map_err(opus_seek_error)?;
 
         let time_base = self.time_base;
-        let decoder = self
-            .decoder
-            .as_mut()
-            .ok_or(rodio::source::SeekError::NotSupported {
-                underlying_source: std::any::type_name::<Self>(),
-            })?;
-        decoder.reset();
+        if target.is_zero() {
+            self.recreate_decoder().map_err(opus_seek_error)?;
+        } else {
+            self.decoder
+                .as_mut()
+                .ok_or(rodio::source::SeekError::NotSupported {
+                    underlying_source: std::any::type_name::<Self>(),
+                })?
+                .reset();
+        }
         self.samples.clear();
         self.position = 0;
         self.ended = false;
@@ -1051,7 +1067,8 @@ mod tests {
             .into();
         let mut fresh = opus_stream(bytes.clone()).expect("test Opus asset should open");
         let duration = fresh.total_duration().expect("test Opus has a duration");
-        let full_sample_count = fresh.by_ref().count();
+        let first_samples = fresh.by_ref().take(2_400).collect::<Vec<_>>();
+        let full_sample_count = first_samples.len() + fresh.by_ref().count();
 
         let mut stream = opus_stream(bytes).expect("test Opus asset should open");
         stream
@@ -1065,7 +1082,13 @@ mod tests {
             .expect("rewind should be supported");
         let actual = stream.by_ref().take(2_400).collect::<Vec<_>>();
         assert_eq!(actual.len(), 2_400);
-        assert!(actual.iter().any(|sample| sample.abs() > f32::EPSILON));
+        assert!(
+            actual
+                .iter()
+                .zip(first_samples)
+                .all(|(seeked, first)| (seeked - first).abs() < 1e-6),
+            "seeking to zero must restore the initial Opus pre-skip"
+        );
     }
 
     #[test]
@@ -1073,14 +1096,22 @@ mod tests {
         let bytes: Arc<[u8]> = include_bytes!("../assets/audio/click.opus")
             .as_slice()
             .into();
-        let one_pass = opus_stream(bytes.clone())
+        let first_pass = opus_stream(bytes.clone())
             .expect("test Opus asset should open")
-            .count();
+            .collect::<Vec<_>>();
+        let one_pass = first_pass.len();
         let mut looping = OpusStream::new(Box::new(Cursor::new(bytes)), true)
             .expect("looping test Opus asset should open");
-        let samples = looping.by_ref().take(one_pass + 2_400).count();
+        let samples = looping.by_ref().take(one_pass + 2_400).collect::<Vec<_>>();
 
-        assert_eq!(samples, one_pass + 2_400);
+        assert_eq!(samples.len(), one_pass + 2_400);
+        assert!(
+            samples[one_pass..]
+                .iter()
+                .zip(&first_pass[..2_400])
+                .all(|(looped, first)| (looped - first).abs() < 1e-6),
+            "looped Opus playback must restart at the same decoded sample"
+        );
         assert_eq!(looping.total_duration(), None);
     }
 

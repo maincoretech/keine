@@ -18,6 +18,7 @@ pub struct VocalPlayer {
 
 #[derive(Component)]
 pub struct BgmPlayer {
+    current: bool,
     base_volume: f32,
     envelope: f32,
     fade_from: f32,
@@ -27,8 +28,9 @@ pub struct BgmPlayer {
     applied_volume: Option<f32>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FadeDirection {
+    Waiting,
     In,
     Out,
     Settled,
@@ -154,7 +156,6 @@ impl EffectEventBatch {
 pub struct BgmSyncContext<'w> {
     state: Res<'w, GameState>,
     config: Res<'w, GameConfigResource>,
-    settings: Res<'w, RuntimeSettings>,
     asset_server: Res<'w, AssetServer>,
     playback: ResMut<'w, BgmPlayback>,
     activity: ResMut<'w, AudioAnimationActivity>,
@@ -188,31 +189,23 @@ pub fn sync_bgm(
     };
 
     for (entity, mut player) in &mut players {
-        if duration <= f32::EPSILON {
+        if player.direction == FadeDirection::Waiting {
             commands.entity(entity).despawn();
-        } else {
-            player.elapsed = 0.0;
-            player.duration = duration;
-            player.fade_from = player.envelope;
-            player.direction = FadeDirection::Out;
-            context.activity.0 = true;
         }
+        player.current = false;
     }
     let fading = duration > f32::EPSILON;
     let base_volume = context.state.bgm.volume.clamp(0.0, 1.0);
     let mut entity = commands.spawn((
         Name::new(format!("bgm::{file}")),
         BgmPlayer {
+            current: true,
             base_volume,
             envelope: if fading { 0.0 } else { 1.0 },
             fade_from: 0.0,
-            elapsed: if fading { 0.0 } else { duration },
+            elapsed: 0.0,
             duration,
-            direction: if fading {
-                FadeDirection::In
-            } else {
-                FadeDirection::Settled
-            },
+            direction: FadeDirection::Waiting,
             applied_volume: None,
         },
     ));
@@ -226,15 +219,14 @@ pub fn sync_bgm(
             } else {
                 PlaybackMode::Despawn
             },
-            volume: Volume::Linear(if fading {
-                0.0
-            } else {
-                base_volume * context.settings.master_volume * context.settings.bgm_volume
-            }),
+            // Keep the new track at its first sample until Bevy creates its sink.
+            // The outgoing track is retired only when the new sink can play.
+            paused: true,
+            volume: Volume::Linear(0.0),
             ..default()
         },
     );
-    context.activity.0 = fading;
+    context.activity.0 = true;
 }
 
 pub fn animate_audio(
@@ -247,7 +239,34 @@ pub fn animate_audio(
     mut commands: Commands,
 ) {
     let mut animating = false;
+    let handoff_duration = bgm_players.iter().find_map(|(_, player, sink)| {
+        (player.current && player.direction == FadeDirection::Waiting && sink.is_some())
+            .then_some(player.duration)
+    });
     for (entity, mut player, sink) in &mut bgm_players {
+        if let Some(duration) = handoff_duration {
+            if player.current && player.direction == FadeDirection::Waiting {
+                player.direction = if duration > f32::EPSILON {
+                    FadeDirection::In
+                } else {
+                    FadeDirection::Settled
+                };
+                player.elapsed = 0.0;
+            } else if !player.current && player.direction != FadeDirection::Out {
+                if duration <= f32::EPSILON {
+                    commands.entity(entity).despawn();
+                    continue;
+                }
+                player.fade_from = player.envelope;
+                player.elapsed = 0.0;
+                player.duration = duration;
+                player.direction = FadeDirection::Out;
+            }
+        }
+        if player.direction == FadeDirection::Waiting {
+            animating = true;
+            continue;
+        }
         let sink_added = sink.as_ref().is_some_and(|sink| sink.is_added());
         if player.direction == FadeDirection::Settled
             && !settings.is_changed()
@@ -265,6 +284,7 @@ pub fn animate_audio(
             (player.elapsed / player.duration).clamp(0.0, 1.0)
         };
         player.envelope = match player.direction {
+            FadeDirection::Waiting => unreachable!("waiting players are handled above"),
             FadeDirection::In => progress,
             FadeDirection::Out => player.fade_from * (1.0 - progress),
             FadeDirection::Settled => 1.0,
@@ -279,9 +299,13 @@ pub fn animate_audio(
                 sink.set_volume(Volume::Linear(volume));
                 player.applied_volume = Some(volume);
             }
+            if handoff_duration.is_some() && player.current {
+                sink.play();
+            }
         }
         if progress >= 1.0 {
             match player.direction {
+                FadeDirection::Waiting => unreachable!("waiting players are handled above"),
                 FadeDirection::Out => {
                     commands.entity(entity).despawn();
                     continue;
@@ -634,6 +658,67 @@ pub(crate) fn spawn_vocal(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bgm_handoff_keeps_old_track_until_new_sink_exists() {
+        let mut app = App::new();
+        app.init_resource::<Time>()
+            .init_resource::<RuntimeSettings>()
+            .insert_resource(GameState(keine_core::State::new()))
+            .init_resource::<AudioAnimationActivity>()
+            .add_systems(Update, animate_audio);
+
+        let (old_sink, _) = rodio::Player::new();
+        let old = app
+            .world_mut()
+            .spawn((
+                BgmPlayer {
+                    current: false,
+                    base_volume: 1.0,
+                    envelope: 1.0,
+                    fade_from: 0.0,
+                    elapsed: 0.0,
+                    duration: 0.0,
+                    direction: FadeDirection::Settled,
+                    applied_volume: None,
+                },
+                AudioSink::new(old_sink),
+            ))
+            .id();
+        let incoming = app
+            .world_mut()
+            .spawn(BgmPlayer {
+                current: true,
+                base_volume: 1.0,
+                envelope: 1.0,
+                fade_from: 0.0,
+                elapsed: 0.0,
+                duration: 0.0,
+                direction: FadeDirection::Waiting,
+                applied_volume: None,
+            })
+            .id();
+
+        app.update();
+        assert!(app.world().get_entity(old).is_ok());
+        assert_eq!(
+            app.world().get::<BgmPlayer>(old).unwrap().direction,
+            FadeDirection::Settled
+        );
+
+        let (incoming_sink, _) = rodio::Player::new();
+        incoming_sink.pause();
+        app.world_mut()
+            .entity_mut(incoming)
+            .insert(AudioSink::new(incoming_sink));
+        app.update();
+        assert!(app.world().get_entity(old).is_err());
+        assert_eq!(
+            app.world().get::<BgmPlayer>(incoming).unwrap().direction,
+            FadeDirection::Settled
+        );
+        assert!(!app.world().get::<AudioSink>(incoming).unwrap().is_paused());
+    }
 
     #[test]
     fn playback_envelope_fades_in_and_then_out_from_its_current_gain() {
