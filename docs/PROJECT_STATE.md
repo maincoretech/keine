@@ -109,9 +109,42 @@ Formal signing and notarization are outside the current P7 scope.
   `cargo migrate <source-project> <target-project>` opens a compatibility source
   read-only, rejects semantics that Eiyashou cannot preserve, stages confined referenced assets,
   emits `.shou` plus native manifests, validates the result, and only then installs a new target.
-  A 0.11.0 attempt on `projects/letsgal` stops at `Particle resources require manual migration`
-  and leaves the target absent. The older ignored `projects/letsgal-native` directory contains
-  invalid `engine {"ron":...}` output and is not an acceptance project for current Block syntax.
+  On 2026-09-29 the current CLI converted the ignored `projects/letsgal` source into the stable
+  ignored `projects/letsgal-native` directory using current v1.1 commands, with no opaque `engine`
+  or RON statements. The nine source scenes plus a variable-initialization entry scene validate
+  as 10 scenes and 1007 actions. The only validation warning marks the configured title background
+  as unused by scene commands; the asset is retained. All 145 original source files retain their
+  SHA-256 hashes. The earlier conversion is preserved under
+  `target/authoring/letsgal-migration-20260929/previous-native`. Migrated object IDs are bare names;
+  optional `script.objects` selects `objects.yaml`, which lowers exact object/prefix aliases once
+  in Loader and preserves Engine scene-layer and character-layer grouping. Particle textures use
+  the native `particles` asset namespace and lower to confined logical paths. Asynchronous image
+  changes use optional `blocking: false`; combined camera transform/effect commands use
+  `camera.move(..., effect_fields..., tween: [...])` and remain one typed atomic action.
+  The source initialization values, sparse clears, hold keyframes, timing and parallel behavior
+  are preserved. Unsupported migration semantics still stop before replacing a target.
+  The release CLI conversion and current workspace fmt/check/clippy/test gates passed, including
+  publisher checks and native-smoke validation. The rebuilt macOS Editor/Engine pair opened this
+  native project: selecting a Block reconstructed the layered village scene and dialogue; Space
+  in the Engine advanced dialogue and synchronized the executing row back to Blocks. The combined
+  camera command appears as one Block with transform, timing and color-tone controls in Inspector.
+  Full-story visual/audio acceptance remains with the user; these checks cover the observed scene.
+- Explorer starts with directories collapsed when no expansion is saved. Per-project Dock layouts
+  remember expanded relative directory paths using the existing debounced writer and close flush;
+  obsolete directories are filtered when restoring or refreshing. macOS acceptance verified initial
+  collapse and assets/voice expansion restoration after quitting and reopening the current Editor.
+- Blocks navigation and type styling (2026-09-29):
+
+  ```text
+  Blocks
+  ├── Type badges: one semantic palette shared with the overview; card surfaces stay unchanged
+  ├── Right overview: source-backed Scene/Block strokes, nesting, selection and diagnostic markers
+  ├── Viewport: translucent range with a draggable minimum-size handle
+  ├── Navigation: click, drag and wheel scroll; selection and Engine seek remain separate
+  ├── Layout: reuses row heights, collapsed Scene progress and temporary draft/drop gaps
+  └── Evidence: current workspace gates and native smoke pass; macOS click/drag,
+      return-to-top, Scene collapse and preserved Inspector selection observed
+  ```
 - Eiyashou `assets.yaml` keeps legacy string paths and also accepts `{ path, tags? }` entries
   without migrating untouched source. Asset IDs remain namespaced by resource type. Within one
   type, two IDs cannot resolve to the same physical project file; explicit sharing across

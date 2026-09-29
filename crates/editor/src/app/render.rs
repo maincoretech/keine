@@ -40,7 +40,11 @@ impl Render for WorkbenchPanel {
         }
         let mono = Theme::global(cx).mono_font_family.clone();
         let body = match &self.content {
-            PanelContent::Explorer { root, files } => {
+            PanelContent::Explorer {
+                root,
+                files,
+                expanded,
+            } => {
                 let project_root = root.clone();
                 let files = files.clone();
                 let project_name = project_root
@@ -69,7 +73,7 @@ impl Render for WorkbenchPanel {
                     .filter(|file| {
                         let mut ancestor = file.relative_path.parent();
                         while let Some(path) = ancestor {
-                            if self.file_collapsed.contains(path) {
+                            if !path.as_os_str().is_empty() && !expanded.contains(path) {
                                 return false;
                             }
                             ancestor = path.parent();
@@ -469,7 +473,7 @@ impl Render for WorkbenchPanel {
                                                 .unwrap_or("File")
                                                 .to_owned();
                                             let row_selected = selected.as_ref() == Some(&relative);
-                                            let collapsed = self.file_collapsed.contains(&relative);
+                                            let collapsed = !expanded.contains(&relative);
                                             let drop_target = relative.clone();
                                             let external_target = relative.clone();
                                             let folder_hovered = is_dir
@@ -531,13 +535,15 @@ impl Render for WorkbenchPanel {
                                                         this.file_selection =
                                                             Some(click_relative.clone());
                                                         if is_dir {
-                                                            if !this
-                                                                .file_collapsed
-                                                                .insert(click_relative.clone())
+                                                            if let PanelContent::Explorer {
+                                                                expanded, ..
+                                                            } = &mut this.content
+                                                                && !expanded.remove(&click_relative)
                                                             {
-                                                                this.file_collapsed
-                                                                    .remove(&click_relative);
+                                                                expanded
+                                                                    .insert(click_relative.clone());
                                                             }
+                                                            this.persist_explorer_state(cx);
                                                             cx.notify();
                                                         } else if openable {
                                                             open_workspace_document(
@@ -750,6 +756,7 @@ impl Render for WorkbenchPanel {
                             scroll_handle: &self.view_scroll,
                             scroll_anchor: &self.block_scroll_anchor,
                             scroll_pending: self.block_scroll_pending,
+                            minimap: &self.block_minimap,
                             scene_edit: self.scene_edit.as_ref(),
                             scene_name_input: &self.scene_name_input,
                             visible: &self.block_visible,

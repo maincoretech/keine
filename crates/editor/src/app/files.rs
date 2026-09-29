@@ -546,9 +546,19 @@ impl WorkbenchPanel {
                         {
                             workspace.files.clone_from(&refreshed);
                         }
-                        if let PanelContent::Explorer { files, .. } = &mut this.content {
+                        if let PanelContent::Explorer {
+                            files, expanded, ..
+                        } = &mut this.content
+                        {
+                            let directories = refreshed
+                                .iter()
+                                .filter(|file| file.is_dir())
+                                .map(|file| &file.relative_path)
+                                .collect::<HashSet<_>>();
+                            expanded.retain(|path| directories.contains(path));
                             *files = refreshed;
                         }
+                        this.persist_explorer_state(cx);
                         schedule_authoring_refresh(&root, None, cx);
                     }
                     Err(error) => cx
@@ -559,6 +569,19 @@ impl WorkbenchPanel {
             });
         })
         .detach();
+    }
+
+    pub(super) fn persist_explorer_state(&self, cx: &mut Context<Self>) {
+        if let Some(root) = self.explorer_root()
+            && let Some(dock) = cx
+                .global::<EditorDocuments>()
+                .workspaces
+                .get(&root)
+                .and_then(|workspace| workspace.dock.clone())
+        {
+            // Reuse the project's debounced background layout writer and close flush.
+            let _ = dock.update(cx, |_, cx| cx.emit(DockEvent::LayoutChanged));
+        }
     }
 
     pub(super) fn paste_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -658,7 +681,11 @@ impl WorkbenchPanel {
                     before: source.to_owned(),
                     after: result.destination.clone(),
                 });
-                self.file_collapsed.remove(target);
+                if !target.as_os_str().is_empty()
+                    && let PanelContent::Explorer { expanded, .. } = &mut self.content
+                {
+                    expanded.insert(target.to_owned());
+                }
                 self.accept_file_result(&root, result, window, cx);
                 self.focus.focus(window, cx);
             }

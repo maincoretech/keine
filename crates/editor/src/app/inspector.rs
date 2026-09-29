@@ -1259,6 +1259,7 @@ impl WorkbenchPanel {
                         "bgm" => AssetKind::Bgm,
                         "effect" | "se" => AssetKind::Effect,
                         "video" => AssetKind::Video,
+                        "particle" => AssetKind::Particle,
                         _ => {
                             panel.asset_inspector_key = None;
                             cx.global_mut::<EditorDocuments>()

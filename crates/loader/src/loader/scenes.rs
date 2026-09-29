@@ -147,6 +147,24 @@ fn apply_eiyashou_project(project: &ContentProject, scenes: &mut [LoadedScene]) 
             }
         }
     }
+    // Particle textures are lowered to confined logical paths once, below the
+    // native adapter. The typed runtime has no manifest or author-ID knowledge.
+    for scene in scenes
+        .iter_mut()
+        .filter(|scene| is_native_scene_path(&scene.path))
+    {
+        for action in &mut scene.actions {
+            project_data.objects.resolve(action);
+            resolve_particle_textures(action, &project_data.particle_paths);
+        }
+        for resource in &mut scene.resources {
+            if resource.kind == crate::ResourceKind::Particle
+                && let Some(path) = project_data.particle_paths.get(&resource.path)
+            {
+                resource.path.clone_from(path);
+            }
+        }
+    }
     for (scene_index, diagnostic) in pending {
         scenes[scene_index].diagnostics.push(diagnostic);
     }
@@ -173,6 +191,28 @@ fn apply_eiyashou_project(project: &ContentProject, scenes: &mut [LoadedScene]) 
                 });
             }
         }
+    }
+}
+
+fn resolve_particle_textures(action: &mut Action, paths: &HashMap<String, String>) {
+    let resolve = |texture: &mut Option<String>| {
+        if let Some(id) = texture
+            && let Some(path) = paths.get(id)
+        {
+            id.clone_from(path);
+        }
+    };
+    match action {
+        Action::ShowParticles { effect, .. } => resolve(&mut effect.texture),
+        Action::Flow { action, .. } => resolve_particle_textures(action, paths),
+        Action::StageAnimation { animation } => {
+            for event in &mut animation.events {
+                if let keine_core::StageEventKind::Particle { effect, .. } = &mut event.kind {
+                    resolve(&mut effect.texture);
+                }
+            }
+        }
+        _ => {}
     }
 }
 

@@ -409,6 +409,7 @@ fn mapped_entries_from_source(source: &str) -> io::Result<Vec<(AssetKind, PathBu
         (AssetKind::Bgm, manifest.bgm),
         (AssetKind::Effect, manifest.effects),
         (AssetKind::Video, manifest.videos),
+        (AssetKind::Particle, manifest.particles),
     ]
     .into_iter()
     .flat_map(|(kind, entries)| entries.into_values().map(move |entry| (kind, entry)))
@@ -427,6 +428,7 @@ fn entries_for_kind(
         AssetKind::Bgm => &manifest.bgm,
         AssetKind::Effect => &manifest.effects,
         AssetKind::Video => &manifest.videos,
+        AssetKind::Particle => &manifest.particles,
     }
 }
 
@@ -756,7 +758,7 @@ fn validate_resource(path: &Path, kind: AssetKind, extension: &str) -> io::Resul
         return Err(invalid("Resource size is invalid"));
     }
     match kind {
-        AssetKind::Background | AssetKind::Figure => {
+        AssetKind::Background | AssetKind::Figure | AssetKind::Particle => {
             if extension != "webp" {
                 return Err(invalid("Images must already be WebP"));
             }
@@ -801,6 +803,7 @@ fn kind_for_path(path: &Path) -> Option<AssetKind> {
             "bgm" | "music" => Some(AssetKind::Bgm),
             "se" | "effect" | "effects" | "sfx" => Some(AssetKind::Effect),
             "video" | "videos" | "movie" | "movies" => Some(AssetKind::Video),
+            "particle" | "particles" => Some(AssetKind::Particle),
             _ => None,
         }
     })
@@ -810,7 +813,9 @@ pub fn unmapped_candidate_kind(path: &Path) -> Option<AssetKind> {
     let kind = kind_for_path(path)?;
     let ext = extension(path);
     match kind {
-        AssetKind::Background | AssetKind::Figure if ext == "webp" => Some(kind),
+        AssetKind::Background | AssetKind::Figure | AssetKind::Particle if ext == "webp" => {
+            Some(kind)
+        }
         AssetKind::Voice | AssetKind::Bgm | AssetKind::Effect
             if matches!(ext.as_str(), "ogg" | "opus") =>
         {
@@ -829,13 +834,14 @@ fn namespace(kind: AssetKind) -> &'static str {
         AssetKind::Bgm => "bgm",
         AssetKind::Effect => "se",
         AssetKind::Video => "videos",
+        AssetKind::Particle => "particles",
     }
 }
 
 fn is_asset_namespace(value: &str) -> bool {
     matches!(
         value,
-        "backgrounds" | "figures" | "voices" | "bgm" | "se" | "videos"
+        "backgrounds" | "figures" | "voices" | "bgm" | "se" | "videos" | "particles"
     )
 }
 

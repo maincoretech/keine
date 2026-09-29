@@ -1937,6 +1937,7 @@ impl<'a> Parser<'a> {
                     &args,
                     1,
                     &[
+                        "blocking",
                         "transition",
                         "transform_x",
                         "transform_y",
@@ -1960,6 +1961,7 @@ impl<'a> Parser<'a> {
                         "position",
                         "anchor_offset",
                         "y",
+                        "blocking",
                         "transition",
                         "z",
                         "blend",
@@ -1992,17 +1994,14 @@ impl<'a> Parser<'a> {
                 );
             }
             "hide" => {
-                self.validate_signature(&name, &args, 1, &["transition"], report);
+                self.validate_signature(&name, &args, 1, &["transition", "blocking"], report);
             }
             "camera.move" => {
                 self.validate_signature(
                     &name,
                     &args,
                     1,
-                    &[
-                        "x", "y", "alpha", "scale_x", "scale_y", "rotation", "blur", "width",
-                        "height", "duration", "easing", "blocking", "tween",
-                    ],
+                    v11::expanded_fields("camera.move").expect("static camera command"),
                     report,
                 );
             }
@@ -2083,7 +2082,7 @@ impl<'a> Parser<'a> {
             _ => {}
         }
         let first = args.first();
-        match name.as_str() {
+        let action = match name.as_str() {
             "goto" | "call" => {
                 let scene = first.and_then(|arg| self.argument_identifier(arg));
                 match (name.as_str(), scene) {
@@ -2349,6 +2348,17 @@ impl<'a> Parser<'a> {
                     .push(self.error(format!("unknown native command `{name}`")));
                 None
             }
+        }?;
+        if matches!(name.as_str(), "background" | "sprite" | "hide")
+            && !self.checked_bool(&args, "blocking", true, report)?
+        {
+            Some(Action::Flow {
+                action: Box::new(action),
+                when: None,
+                next: true,
+            })
+        } else {
+            Some(action)
         }
     }
 
@@ -2896,23 +2906,7 @@ impl<'a> Parser<'a> {
                 _ => unreachable!(),
             }
         }
-        if !any {
-            report
-                .diagnostics
-                .push(self.error("camera.move(...) requires at least one transform field"));
-            return None;
-        }
-        self.camera_tween(
-            args,
-            Action::SetCameraTransform {
-                targets,
-                transform,
-                duration: self.named_duration_checked(args, "duration", report)?,
-                easing: self.named_easing(args, "easing", report)?,
-                blocking: self.checked_bool(args, "blocking", true, report)?,
-            },
-            report,
-        )
+        self.combined_camera_move(args, targets, any.then_some(transform), report)
     }
 
     fn configure_sprite_focus(
@@ -4011,7 +4005,7 @@ scene ending { "Done" }
     #[test]
     fn camera_tween_and_randomness_are_typed_and_validate_domains() {
         let scenes = parse_native_scenes(
-            "scene a { camera.move(scene, x: 120, scale_x: 1.5, tween: [x], duration: 1s), camera.effect(scene, blur_amount: 4, tween: [], duration: 1s), camera.effect.v2(scene, mirror_shatter_intensity: 0, mirror_shatter_center_x: 0.5, mirror_shatter_center_y: 0.5, mirror_shatter_spread: 1, mirror_shatter_seed: 0, speed_lines_intensity: 0, speed_lines_radial: true, speed_lines_density: 0.8, speed_lines_angle: 0, speed_lines_speed: 0, speed_lines_center_x: 0.5, speed_lines_center_y: 0.5, speed_lines_region_ellipse: false, speed_lines_region_x: 0.5, speed_lines_region_y: 0.5, speed_lines_region_width: 1, speed_lines_region_height: 1, speed_lines_region_feather: 0.05, tween: [speed_lines_density], duration: 1s), camera.shake(all, amplitude: 8, frequency: 12, amplitude_randomness: 0.3, frequency_randomness: 0.2, duration: 300ms), stage.animate(a, duration: 1s) { event.camera.shake(time: 0ms, amplitude: 8, frequency: 12, amplitude_randomness: 0.3, duration: 300ms) } }",
+            "scene a { camera.move(scene, x: 120, scale_x: 1.5, tween: [x, blur_amount], duration: 1s), camera.effect(scene, blur_amount: 4, tween: [], duration: 1s), camera.effect.v2(scene, mirror_shatter_intensity: 0, mirror_shatter_center_x: 0.5, mirror_shatter_center_y: 0.5, mirror_shatter_spread: 1, mirror_shatter_seed: 0, speed_lines_intensity: 0, speed_lines_radial: true, speed_lines_density: 0.8, speed_lines_angle: 0, speed_lines_speed: 0, speed_lines_center_x: 0.5, speed_lines_center_y: 0.5, speed_lines_region_ellipse: false, speed_lines_region_x: 0.5, speed_lines_region_y: 0.5, speed_lines_region_width: 1, speed_lines_region_height: 1, speed_lines_region_feather: 0.05, tween: [speed_lines_density], duration: 1s), camera.shake(all, amplitude: 8, frequency: 12, amplitude_randomness: 0.3, frequency_randomness: 0.2, duration: 300ms), stage.animate(a, duration: 1s) { event.camera.shake(time: 0ms, amplitude: 8, frequency: 12, amplitude_randomness: 0.3, duration: 300ms) } }",
         );
         assert!(
             errors(&scenes[0]).is_empty(),
@@ -4020,7 +4014,7 @@ scene ending { "Done" }
         );
         let actions = &scenes[0].report.actions;
         assert!(
-            matches!(&actions[0], Action::SetCameraTween { spec } if spec.fields == [keine_core::CameraTweenField::X])
+            matches!(&actions[0], Action::SetCameraTween { spec } if spec.fields == [keine_core::CameraTweenField::X, keine_core::CameraTweenField::BlurAmount])
         );
         assert!(matches!(&actions[1], Action::SetCameraTween { spec } if spec.fields.is_empty()));
         assert!(
@@ -4036,7 +4030,6 @@ scene ending { "Done" }
             "camera.move(scene, x: 1, tween: [unknown])",
             "camera.move(scene, x: 1, tween: [x,x])",
             "camera.move(scene, x: 1, tween: [x,])",
-            "camera.move(scene, x: 1, tween: [blur_amount])",
             "camera.effect(scene, blur_amount: 1, tween: [color_tone])",
             "camera.shake(all, amplitude: 8, frequency: 12, amplitude_randomness: 1.1, duration: 1s)",
             "camera.shake(all, amplitude: 8, frequency: 12, frequency_randomness: -0.1, duration: 1s)",

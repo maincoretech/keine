@@ -197,6 +197,10 @@ pub(super) fn insert_assets_at_block(
             AssetKind::Bgm => format!("bgm({})", asset.id),
             AssetKind::Effect => format!("se({})", asset.id),
             AssetKind::Video => format!("video({})", asset.id),
+            AssetKind::Particle => format!(
+                "particle.show({}_emitter, LIGHT_SNOW, texture: {})",
+                asset.id, asset.id
+            ),
             AssetKind::Voice => unreachable!(),
         };
         if position == 0 && assets.len() == 1 && matches!(target.kind, BlockKind::Command) {
@@ -209,6 +213,7 @@ pub(super) fn insert_assets_at_block(
                 AssetKind::Bgm => "bgm(",
                 AssetKind::Effect => "se(",
                 AssetKind::Video => "video(",
+                AssetKind::Particle => "particle.show(",
                 AssetKind::Voice => unreachable!(),
             });
             if compatible {

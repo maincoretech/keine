@@ -1,7 +1,95 @@
 use super::*;
 use keine_core::{CameraShakeRandomness, CameraTweenField, CameraTweenSpec};
 
+pub(super) fn move_fields() -> &'static [&'static str] {
+    static FIELDS: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+    FIELDS
+        .get_or_init(|| {
+            let mut fields = vec![
+                "x", "y", "alpha", "scale_x", "scale_y", "rotation", "blur", "width", "height",
+            ];
+            for field in effects::PATCH_FIELDS.iter().chain(effects::V2_FIELDS) {
+                if !fields.contains(field) {
+                    fields.push(field);
+                }
+            }
+            fields
+        })
+        .as_slice()
+}
+
 impl<'a> Parser<'a> {
+    pub(in crate::adapter::script::native) fn combined_camera_move(
+        &self,
+        args: &[Argument],
+        targets: CameraTargets,
+        transform: Option<TransformPatch>,
+        report: &mut ParseReport,
+    ) -> Option<Action> {
+        let present = |fields: &[&str]| {
+            args.iter().any(|arg| {
+                arg.name.as_deref().is_some_and(|name| {
+                    !matches!(name, "duration" | "easing" | "blocking" | "tween")
+                        && fields.contains(&name)
+                })
+            })
+        };
+        let effect = if present(effects::PATCH_FIELDS) {
+            Some(Box::new(self.v11_post_process_patch(args, report)?))
+        } else {
+            None
+        };
+        let v2 = if present(effects::V2_FIELDS) {
+            Some(Box::new(self.v11_post_process_v2(args, report)?))
+        } else {
+            None
+        };
+        if transform.is_none() && effect.is_none() && v2.is_none() {
+            report.diagnostics.push(
+                self.error("camera.move(...) requires at least one transform or effect field"),
+            );
+            return None;
+        }
+        let action = self.camera_tween(
+            args,
+            Action::SetCameraTransform {
+                targets,
+                transform: transform.unwrap_or_default(),
+                duration: self.named_duration_checked(args, "duration", report)?,
+                easing: self.named_easing(args, "easing", report)?,
+                blocking: self.checked_bool(args, "blocking", true, report)?,
+            },
+            report,
+        )?;
+        if effect.is_none() && v2.is_none() {
+            return Some(action);
+        }
+        let mut spec = match action {
+            Action::SetCameraTween { spec } => spec,
+            Action::SetCameraTransform {
+                targets,
+                duration,
+                easing,
+                blocking,
+                ..
+            } => Box::new(CameraTweenSpec {
+                targets,
+                transform: None,
+                effect: None,
+                v2: None,
+                fields: CameraTweenField::ALL.to_vec(),
+                duration,
+                easing,
+                blocking,
+            }),
+            _ => unreachable!("camera_tween only wraps the supplied camera transform"),
+        };
+        spec.transform = transform;
+        spec.effect = effect;
+        spec.v2 = v2;
+        Some(Action::SetCameraTween { spec })
+    }
+
     pub(in crate::adapter::script::native) fn camera_randomness(
         &self,
         args: &[Argument],
@@ -101,18 +189,13 @@ impl<'a> Parser<'a> {
                 }
                 continue;
             }
-            let Some(field) = CameraTweenField::from_name(text).filter(|field| {
-                if transform.is_some() {
-                    field.is_transform()
-                } else if v2.is_some() {
-                    field.is_v2()
-                } else {
-                    !field.is_transform() && !field.is_v2()
-                }
-            }) else {
-                report.diagnostics.push(self.error(format!(
-                    "unknown numeric tween field `{text}` for this camera command"
-                )));
+            // Compatibility authoring stores one shared numeric selection across
+            // camera channels. Preserve it exactly; core's typed sampler ignores
+            // fields outside the supplied patch (CameraTweenSpec::start).
+            let Some(field) = CameraTweenField::from_name(text) else {
+                report
+                    .diagnostics
+                    .push(self.error(format!("unknown numeric tween field `{text}`")));
                 return None;
             };
             if fields.contains(&field) {

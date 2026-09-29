@@ -1003,6 +1003,33 @@ pub(super) fn render_block_picker(
         .into_any_element()
 }
 
+/// One palette for Block type badges and their overview strokes.
+pub(super) fn block_type_color(kind: &BlockKind, source: &str) -> u32 {
+    match kind {
+        BlockKind::Narration | BlockKind::Dialogue { .. } => 0xa4c9a5,
+        BlockKind::Declaration | BlockKind::Assignment => 0xe2c58f,
+        BlockKind::Unsupported => 0xdb7780,
+        BlockKind::Command => {
+            let name = source.split('(').next().unwrap_or_default().trim();
+            match name.split('.').next().unwrap_or(name) {
+                "camera" | "track" | "key" | "stage" => 0xc4b0e5,
+                "background" | "scene" => 0xa4c9a5,
+                "sprite" | "hide" | "move" | "avatar" | "frame" | "resource" | "case" => PRIMARY,
+                "particle" => 0xe2c58f,
+                "screen" => 0xe4abbc,
+                _ => match InsertKind::for_command(name).map(InsertKind::category) {
+                    Some("Text") => 0xa4c9a5,
+                    Some("Media") => 0xe7b18b,
+                    Some("Data") => 0xe2c58f,
+                    Some("Flow") => 0xacaee4,
+                    _ => PRIMARY,
+                },
+            }
+        }
+        _ => 0xacaee4,
+    }
+}
+
 pub(super) fn block_card_label(kind: &BlockKind, source: &str) -> String {
     match kind {
         BlockKind::Dialogue { speaker } => speaker.clone(),
@@ -1319,6 +1346,7 @@ pub(super) struct BlockProjectionView<'a> {
     pub(super) scroll_handle: &'a ScrollHandle,
     pub(super) scroll_anchor: &'a ScrollAnchor,
     pub(super) scroll_pending: bool,
+    pub(super) minimap: &'a minimap::BlockMinimap,
     pub(super) scene_edit: Option<&'a SceneEditMode>,
     pub(super) scene_name_input: &'a Entity<InputState>,
     pub(super) visible: &'a HashSet<usize>,
@@ -1508,6 +1536,7 @@ pub(super) fn render_block_projection(
         scroll_handle,
         scroll_anchor,
         scroll_pending,
+        minimap,
         scene_edit,
         scene_name_input,
         visible,
@@ -1574,6 +1603,8 @@ pub(super) fn render_block_projection(
     let root = root.to_owned();
     let relative = relative.to_owned();
     let mut rows = Vec::new();
+    let mut overview = Vec::new();
+    let mut overview_offset = 40.;
     for (scene_index, scene) in projection.scenes.iter().enumerate() {
         let collapsed = collapsed_scenes.contains(&scene.name);
         let scene_name = scene.name.clone();
@@ -1594,6 +1625,21 @@ pub(super) fn render_block_projection(
             cx,
         );
         let scene_line = source_lines.span(&source, scene.name_range.start).line - 1;
+        overview.push(minimap::Mark {
+            top: overview_offset,
+            height: 32.,
+            depth: 0,
+            width: 60.,
+            color: PRIMARY,
+            selected: selected_line == Some(scene_line)
+                || collapsed
+                    && scene.blocks.iter().any(|block| {
+                        selected_blocks.contains(&block.source_range.start)
+                            || selected_start == Some(block.source_range.start)
+                    }),
+            error: collapsed && scene.blocks.iter().any(|block| block.read_only),
+        });
+        overview_offset += 36.;
         let header = div()
             .id(("scene-section", scene_index))
             .w_full()
@@ -1700,8 +1746,20 @@ pub(super) fn render_block_projection(
         let mut scene_body_height = 0.;
         let mut hidden_height = 0.;
         for (block_index, block) in scene.blocks.iter().enumerate() {
+            let row_height = block_row_height(block, editors, draft_text, heights, cx);
+            // Use the same row height, draft/drop gaps and collapse transition as the main layout.
+            let overview_row = overview.len();
+            if collapse_progress > 0. {
+                overview.push(minimap::Mark::block(
+                    block,
+                    overview_offset + scene_body_height * collapse_progress,
+                    row_height * collapse_progress,
+                    selected_blocks.contains(&block.source_range.start)
+                        || selected_start == Some(block.source_range.start),
+                ));
+            }
             if !visible.contains(&block.source_range.start) {
-                let height = block_row_height(block, editors, draft_text, heights, cx) + 4.;
+                let height = row_height + 4.;
                 scene_body_height += height;
                 hidden_height += height;
                 continue;
@@ -1726,6 +1784,7 @@ pub(super) fn render_block_projection(
             let selected = selected_blocks.contains(&row_id) || selected_start == Some(row_id);
             let icon = block_card_icon(&block.kind, &block.summary);
             let label = block_card_label(&block.kind, &block.summary);
+            let type_color = block_type_color(&block.kind, &block.summary);
             let text_state = block.text_range.as_ref().and_then(|range| {
                 editors
                     .iter()
@@ -1766,7 +1825,6 @@ pub(super) fn render_block_projection(
             let drag_label = label.clone();
             let drag_summary = source_summary.clone();
             let drag_count = drag_selection.len();
-            let row_height = block_row_height(&block, editors, draft_text, heights, cx);
             let block_indent = block.depth as f32 * 18.;
             let movable = !matches!(&block.kind, BlockKind::ElseIf | BlockKind::Else);
             let text_block = matches!(
@@ -2050,13 +2108,13 @@ pub(super) fn render_block_projection(
                                         .gap(px(4.))
                                         .px(px(6.))
                                         .rounded(px(3.))
-                                        .bg(rgb(PRIMARY_DIM))
+                                        .bg(gpui_kit::rgba((type_color << 8) | 0x20))
                                         .text_size(px(13.))
                                         .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                         .text_color(rgb(if block.read_only && !block.disabled {
                                             0xd2aa62
                                         } else {
-                                            PRIMARY
+                                            type_color
                                         }))
                                         .child(Icon::new(icon).xsmall())
                                         .child(label),
@@ -2190,6 +2248,9 @@ pub(super) fn render_block_projection(
                     && draft.text_range.is_none()
             }) {
                 scene_body_height += 42.;
+                if let Some(mark) = overview.get_mut(overview_row) {
+                    mark.top += 42. * collapse_progress;
+                }
                 scene_rows.push(draft_text_row(draft, block_indent, row_id));
             }
             scene_rows.push(row_wrapper.into_any_element());
@@ -2221,6 +2282,7 @@ pub(super) fn render_block_projection(
             scene_rows.push(draft_text_row(draft, 0., scene.source_range.start));
         }
         scene_body_height = (scene_body_height - 4.).max(0.);
+        overview_offset += scene_body_height * collapse_progress + 4.;
         rows.push(
             div()
                 .w_full()
@@ -2249,6 +2311,7 @@ pub(super) fn render_block_projection(
         );
     }
     if matches!(scene_edit, Some(SceneEditMode::New)) {
+        overview_offset += 36.;
         rows.push(
             div()
                 .id("new-scene-row")
@@ -2299,6 +2362,16 @@ pub(super) fn render_block_projection(
             .cloned()
             .enumerate()
             .map(|(index, card)| {
+                overview.push(minimap::Mark {
+                    top: overview_offset,
+                    height: 30.,
+                    depth: 0,
+                    width: 48.,
+                    color: 0xdb7780,
+                    selected: false,
+                    error: true,
+                });
+                overview_offset += 34.;
                 div()
                     .id(("projection-diagnostic", index))
                     .w_full()
@@ -2341,7 +2414,23 @@ pub(super) fn render_block_projection(
                 .clear_block_selection(&root);
             cx.notify();
         }));
-    vertical_overflow_view("eiyashou-block-scroll", scroll_handle, content)
+    div()
+        .size_full()
+        .flex()
+        .min_w_0()
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .child(vertical_overflow_view(
+                    "eiyashou-block-scroll",
+                    scroll_handle,
+                    content,
+                )),
+        )
+        .child(minimap::render(overview, scroll_handle, minimap, cx))
+        .into_any_element()
 }
 
 pub(super) fn render_asset_preview(
@@ -2366,7 +2455,10 @@ pub(super) fn render_asset_preview(
             })
             .into_any_element();
     };
-    let image = matches!(asset.kind, AssetKind::Background | AssetKind::Figure);
+    let image = matches!(
+        asset.kind,
+        AssetKind::Background | AssetKind::Figure | AssetKind::Particle
+    );
     let supported_image = asset
         .path
         .extension()
@@ -2419,7 +2511,7 @@ pub(super) fn render_asset_preview(
         preview_placeholder(match asset.kind {
             AssetKind::Voice | AssetKind::Bgm | AssetKind::Effect => "Audio asset",
             AssetKind::Video => "Video asset",
-            AssetKind::Background | AssetKind::Figure => unreachable!(),
+            AssetKind::Background | AssetKind::Figure | AssetKind::Particle => unreachable!(),
         })
     };
     div()
@@ -2582,7 +2674,9 @@ pub(super) fn render_assets(
                 let row_order = ordered.clone();
                 let selected = selection.contains(&key);
                 let icon = match asset.kind {
-                    AssetKind::Background | AssetKind::Figure => AssetIconName::Image,
+                    AssetKind::Background | AssetKind::Figure | AssetKind::Particle => {
+                        AssetIconName::Image
+                    }
                     AssetKind::Voice | AssetKind::Effect => AssetIconName::Volume2,
                     AssetKind::Bgm => AssetIconName::Music,
                     AssetKind::Video => AssetIconName::Film,
@@ -2741,6 +2835,7 @@ pub(super) fn render_asset_filter_menu(
             AssetKind::Bgm,
             AssetKind::Effect,
             AssetKind::Video,
+            AssetKind::Particle,
         ]
         .into_iter()
         .map(|kind| {

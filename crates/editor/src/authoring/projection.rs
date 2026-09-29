@@ -2334,6 +2334,7 @@ pub fn command_argument_names(command: &str) -> Vec<&str> {
                 "alpha",
             ],
             "background" => &[
+                "blocking",
                 "transition",
                 "transform_x",
                 "transform_y",
@@ -2345,8 +2346,9 @@ pub fn command_argument_names(command: &str) -> Vec<&str> {
                 "transform_width",
                 "transform_height",
             ],
-            "hide" => &["transition"],
+            "hide" => &["transition", "blocking"],
             "sprite" => &[
+                "blocking",
                 "position",
                 "anchor_offset",
                 "y",
@@ -2383,10 +2385,6 @@ pub fn command_argument_names(command: &str) -> Vec<&str> {
             "se" => &["volume"],
             "video" => &["skippable"],
             "pop" => &["into"],
-            "camera.move" => &[
-                "x", "y", "alpha", "scale_x", "scale_y", "rotation", "blur", "width", "height",
-                "duration", "easing", "blocking", "tween",
-            ],
             "camera.shake" => &[
                 "amplitude",
                 "frequency",
@@ -2491,7 +2489,7 @@ pub fn command_argument_names(command: &str) -> Vec<&str> {
                 "reveal_rotation",
                 "reveal_blur",
             ],
-            "camera.effect" | "camera.effect.v2" | "stage.mask.show" => {
+            "camera.move" | "camera.effect" | "camera.effect.v2" | "stage.mask.show" => {
                 native_expanded_fields(command).unwrap_or(&[])
             }
             "stage.mask.hide" => &["duration", "blocking"],

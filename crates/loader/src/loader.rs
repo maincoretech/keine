@@ -1,4 +1,5 @@
 mod compiled;
+mod native_objects;
 mod scenes;
 mod source;
 #[cfg(feature = "hot-reload")]
@@ -107,6 +108,8 @@ pub struct ContentProject {
 pub(crate) struct EiyashouProjectData {
     pub(crate) characters: HashMap<String, EiyashouCharacterData>,
     pub(crate) assets: HashMap<ResourceKind, HashSet<String>>,
+    pub(crate) particle_paths: HashMap<String, String>,
+    objects: native_objects::ObjectAliases,
     pub(crate) warnings: Vec<String>,
 }
 
@@ -202,7 +205,10 @@ impl ContentProject {
             .with_context(|| format!("invalid Eiyashou manifest {}", assets_path.display()))?;
         let characters = EiyashouCharacterManifest::from_yaml(&characters_yaml)
             .with_context(|| format!("invalid Eiyashou manifest {}", characters_path.display()))?;
-        let mut data = EiyashouProjectData::default();
+        let mut data = EiyashouProjectData {
+            objects: native_objects::load(&self.root, &config.script.objects)?,
+            ..Default::default()
+        };
         let asset_roots = self
             .asset_mounts()
             .into_iter()
@@ -288,6 +294,16 @@ impl ContentProject {
             &mut config.assets.videos,
             &mut data,
         )?;
+        let mut particle_paths = HashMap::new();
+        install_asset_namespace(
+            &self.root,
+            &asset_roots,
+            ResourceKind::Particle,
+            assets.particles,
+            &mut particle_paths,
+            &mut data,
+        )?;
+        data.particle_paths = particle_paths;
         self.eiyashou = Some(data);
         Ok(())
     }
@@ -644,9 +660,10 @@ mod tests {
         fs::create_dir_all(root.join("scripts")).unwrap();
         fs::write(root.join("assets/background/day.webp"), b"image").unwrap();
         fs::write(root.join("packs/voices/hello.opus"), b"voice").unwrap();
+        fs::write(root.join("assets/background/snow.webp"), b"particle").unwrap();
         fs::write(
             root.join("assets.yaml"),
-            "backgrounds:\n  day: assets/background/day.webp\nfigures:\n  shared: assets/background/day.webp\nvoices:\n  hello:\n    path: packs/voices/hello.opus\n    tags: [rin, chapter-1]\n",
+            "backgrounds:\n  day: assets/background/day.webp\nfigures:\n  shared: assets/background/day.webp\nvoices:\n  hello:\n    path: packs/voices/hello.opus\n    tags: [rin, chapter-1]\nparticles:\n  snow: assets/background/snow.webp\n",
         )
         .unwrap();
         fs::write(
@@ -656,11 +673,13 @@ mod tests {
         .unwrap();
         fs::write(
             root.join("scripts/main.shou"),
-            "scene start { rin: \"Hi\", background(day) }",
+            "scene start { rin: \"Hi\", background(day), sprite(layer, shared, blocking: false), hide(scene_layers*, blocking: false), particle.show(snowfall, LIGHT_SNOW, texture: snow), sprite.focus(rin_portrait) }",
         )
         .unwrap();
 
+        fs::write(root.join("objects.yaml"), "objects:\n  layer: scene-layer:original\n  rin_portrait: original-character\nprefixes:\n  scene_layers: \"scene-layer:\"\n").unwrap();
         let mut config = GameConfig::default();
+        config.script.objects = "objects.yaml".into();
         config.adapter.script = "keine".into();
         config.adapter.asset.push(AssetSourceConfig {
             path: "packs/voices".into(),
@@ -692,6 +711,18 @@ mod tests {
                 if dialogue.speaker == "Rin"
                     && dialogue.speaker_color == Some(Rgba::new(186.0 / 255.0, 235.0 / 255.0, 1.0, 1.0))
         ));
+        assert!(
+            matches!(&scenes[0].actions[2], keine_core::Action::Flow { action, next: true, .. } if matches!(action.as_ref(), keine_core::Action::ShowSprite { id, .. } if id == "scene-layer:original"))
+        );
+        assert!(
+            matches!(&scenes[0].actions[3], keine_core::Action::Flow { action, next: true, .. } if matches!(action.as_ref(), keine_core::Action::HideSprites { prefix, .. } if prefix == "scene-layer:"))
+        );
+        assert!(
+            matches!(&scenes[0].actions[4], keine_core::Action::ShowParticles { effect, .. } if effect.texture.as_deref() == Some("background/snow.webp"))
+        );
+        assert!(
+            matches!(&scenes[0].actions[5], keine_core::Action::FocusPortrait { speaker_id } if speaker_id.as_deref() == Some("original-character"))
+        );
         let _ = fs::remove_dir_all(root);
     }
 

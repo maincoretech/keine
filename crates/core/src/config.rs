@@ -226,6 +226,27 @@ pub struct ScriptConfig {
     pub assets: String,
     #[serde(default = "default_characters_manifest")]
     pub characters: String,
+    /// Optional author-ID to runtime-ID mapping for migrated native projects.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub objects: String,
+}
+
+/// Optional migration aliases. Missing maps are empty; unknown fields fail closed.
+/// Serde field/container attributes: https://serde.rs/field-attrs.html and
+/// https://serde.rs/container-attrs.html. Runtime actions contain only resolved IDs.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EiyashouObjectManifest {
+    #[serde(default)]
+    pub objects: HashMap<String, String>,
+    #[serde(default)]
+    pub prefixes: HashMap<String, String>,
+}
+
+impl EiyashouObjectManifest {
+    pub fn from_yaml(yaml: &str) -> Result<Self, noyalib::Error> {
+        noyalib::from_str(yaml)
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -242,6 +263,8 @@ pub struct EiyashouAssetManifest {
     pub effects: HashMap<String, EiyashouAssetEntry>,
     #[serde(default)]
     pub videos: HashMap<String, EiyashouAssetEntry>,
+    #[serde(default)]
+    pub particles: HashMap<String, EiyashouAssetEntry>,
     #[serde(flatten)]
     unknown: HashMap<String, noyalib::Value>,
 }
@@ -362,6 +385,7 @@ impl Default for ScriptConfig {
             entry: default_script_entry(),
             assets: default_assets_manifest(),
             characters: default_characters_manifest(),
+            objects: String::new(),
         }
     }
 }

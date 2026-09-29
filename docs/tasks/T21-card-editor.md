@@ -32,6 +32,9 @@ Block
 ├── No hover insertion arrows beside cards; insertion remains in the node context menu
 ├── Restored original grip drag initiation and before/after drop placement; cards have no outline
 ├── Nested Blocks retain indentation without vertical guide lines
+├── Right overview paints Scene/Block structure, visible range, selection and diagnostic markers
+├── Overview click, drag and wheel navigate without changing Block selection or seeking Engine
+├── Type badges and overview share one semantic palette; card surfaces retain the workbench colors
 ├── Right-click: run to here, copy, duplicate, cut, paste, select all, insert, move and delete
 ├── Wait: numeric input, hover presets and Wait for input mode on every row
 ├── Resource command: shared source-backed Picker on every row; thumbnails, paths, search and manager
