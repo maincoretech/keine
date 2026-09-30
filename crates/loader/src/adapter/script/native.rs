@@ -1918,6 +1918,7 @@ impl<'a> Parser<'a> {
         if v11::is_extension_command(&name) {
             return self.parse_v11_command(&name, &args, report);
         }
+        let before = report.diagnostics.len();
         match name.as_str() {
             "goto" | "call" | "wait" => {
                 self.validate_signature(&name, &args, 1, &[], report);
@@ -1933,6 +1934,7 @@ impl<'a> Parser<'a> {
                         "x",
                         "y",
                         "alpha",
+                        "scale",
                         "scale_x",
                         "scale_y",
                         "rotation",
@@ -1950,30 +1952,15 @@ impl<'a> Parser<'a> {
                     2,
                     &[
                         "position",
-                        "anchor_offset",
-                        "position_y",
                         "blocking",
                         "transition",
                         "z",
                         "blend",
                         "layout",
-                        "layout_height",
-                        "layout_fit",
-                        "layout_x",
-                        "layout_y",
-                        "layout_anchor_x",
-                        "layout_anchor_y",
-                        "layout_width",
-                        "layout_canvas_width",
-                        "layout_canvas_height",
-                        "layout_rect_x",
-                        "layout_rect_y",
-                        "layout_rect_width",
-                        "layout_rect_height",
-                        "layout_height_ratio",
                         "x",
                         "y",
                         "alpha",
+                        "scale",
                         "scale_x",
                         "scale_y",
                         "rotation",
@@ -1983,7 +1970,7 @@ impl<'a> Parser<'a> {
                         "brightness",
                         "contrast",
                         "saturation",
-                        "environment_light",
+                        "light",
                     ],
                     report,
                 );
@@ -2043,7 +2030,7 @@ impl<'a> Parser<'a> {
                     &name,
                     &args,
                     2,
-                    &["anchor_offset", "y", "duration", "easing", "blocking"],
+                    &["duration", "easing", "blocking"],
                     report,
                 );
             }
@@ -2054,6 +2041,13 @@ impl<'a> Parser<'a> {
                 self.validate_signature(&name, &args, 1, &["volume"], report);
             }
             "video" => {
+                if self.named_arg(&args, "loop").is_some()
+                    || self.named_arg(&args, "wait").is_some()
+                {
+                    report.diagnostics.push(self.error(
+                        "video v1 has no `loop` or `wait` parameter; playback is always non-looping and blocking",
+                    ));
+                }
                 self.validate_signature(&name, &args, 1, &["skippable"], report);
             }
             "pop" => {
@@ -2075,6 +2069,9 @@ impl<'a> Parser<'a> {
                 }
             }
             _ => {}
+        }
+        if report.diagnostics.len() != before {
+            return None;
         }
         let first = args.first();
         let action = match name.as_str() {
@@ -2134,10 +2131,7 @@ impl<'a> Parser<'a> {
             "sprite" => {
                 let slot = first.and_then(|arg| self.argument_identifier(arg));
                 let image = args.get(1).and_then(|arg| self.argument_identifier(arg));
-                let mut position = self.v11_position(&args, "position", report)?;
-                position.y = self
-                    .checked_number(&args, "position_y", report)?
-                    .unwrap_or(0.0);
+                let position = self.author_position(self.named_arg(&args, "position"), report)?;
                 let z = self.checked_number(&args, "z", report)?.unwrap_or(0.0);
                 if z.fract() != 0.0 || z < i32::MIN as f32 || z > i32::MAX as f32 {
                     report
@@ -2227,34 +2221,7 @@ impl<'a> Parser<'a> {
             "sprite.focus.configure" => self.configure_sprite_focus(&args, report),
             "move" => {
                 let id = first.and_then(|argument| self.argument_identifier(argument));
-                let position = args
-                    .get(1)
-                    .and_then(|argument| self.argument_identifier(argument));
-                let anchor_offset = self
-                    .checked_number(&args, "anchor_offset", report)?
-                    .unwrap_or(0.0);
-                let y = self.checked_number(&args, "y", report)?.unwrap_or(0.0);
-                let position = match position.as_deref() {
-                    Some("left") => Some(Position {
-                        x: keine_core::Anchor::Left(anchor_offset),
-                        y,
-                    }),
-                    Some("center") => Some(Position {
-                        x: keine_core::Anchor::Center(anchor_offset),
-                        y,
-                    }),
-                    Some("right") => Some(Position {
-                        x: keine_core::Anchor::Right(anchor_offset),
-                        y,
-                    }),
-                    Some(_) => {
-                        report
-                            .diagnostics
-                            .push(self.error("move position must be `left`, `center`, or `right`"));
-                        None
-                    }
-                    None => None,
-                };
+                let position = self.author_position(args.get(1), report);
                 let duration = self.named_duration_checked(&args, "duration", report)?;
                 let easing = self.named_easing(&args, "easing", report)?;
                 match (id, position) {
@@ -2298,14 +2265,6 @@ impl<'a> Parser<'a> {
                 })
             }
             "video" => {
-                if self.named_arg(&args, "loop").is_some()
-                    || self.named_arg(&args, "wait").is_some()
-                {
-                    report.diagnostics.push(self.error(
-                        "video v1 has no `loop` or `wait` parameter; playback is always non-looping and blocking",
-                    ));
-                    return None;
-                }
                 let file = first.and_then(|arg| self.argument_identifier(arg));
                 file.map(|file| Action::PlayVideo {
                     video: VideoSpec {
@@ -2348,7 +2307,7 @@ impl<'a> Parser<'a> {
             "setting" => {
                 report
                     .diagnostics
-                    .push(self.error("generic `setting(...)` is not part of keine native DSL v1"));
+                    .push(self.error("generic `setting(...)` is not part of Eiyashou v2.0"));
                 None
             }
             _ => {
@@ -2668,48 +2627,16 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn v11_position(
-        &self,
-        args: &[Argument],
-        name: &str,
-        report: &mut ParseReport,
-    ) -> Option<Position> {
-        let anchor = match self.named_arg(args, name) {
-            Some(arg) => match self.argument_identifier(arg) {
-                Some(value) => value,
-                None => {
-                    report
-                        .diagnostics
-                        .push(self.error("position requires an anchor identifier"));
-                    return None;
-                }
-            },
-            None => "center".to_owned(),
-        };
-        let offset = self
-            .checked_number(args, "anchor_offset", report)?
-            .unwrap_or(0.0);
-        let y = self.checked_number(args, "y", report)?.unwrap_or(0.0);
-        let x = match anchor.as_str() {
-            "left" => keine_core::Anchor::Left(offset),
-            "center" => keine_core::Anchor::Center(offset),
-            "right" => keine_core::Anchor::Right(offset),
-            _ => {
-                report
-                    .diagnostics
-                    .push(self.error("position must be `left`, `center`, or `right`"));
-                return None;
-            }
-        };
-        Some(Position { x, y })
-    }
-
     fn v11_full_transform(
         &self,
         args: &[Argument],
         report: &mut ParseReport,
     ) -> Option<SpriteTransform> {
         let mut transform = SpriteTransform::default();
+        if let Some(scale) = self.v11_uniform_scale(args, report)? {
+            transform.scale_x = scale;
+            transform.scale_y = scale;
+        }
         for (name, slot) in [
             ("x", &mut transform.offset_x),
             ("y", &mut transform.offset_y),
@@ -2726,173 +2653,6 @@ impl<'a> Parser<'a> {
             }
         }
         Some(transform)
-    }
-
-    fn v11_sprite_layout(
-        &self,
-        args: &[Argument],
-        report: &mut ParseReport,
-    ) -> Option<SpriteLayout> {
-        let mode = match self.named_arg(args, "layout") {
-            Some(arg) => match self.argument_identifier(arg) {
-                Some(value) => value,
-                None => {
-                    report
-                        .diagnostics
-                        .push(self.error("layout requires a mode identifier"));
-                    return None;
-                }
-            },
-            None => "natural".to_owned(),
-        };
-        let allowed: &[&str] = match mode.as_str() {
-            "natural" => &[],
-            "viewport_height" => &["layout_height"],
-            "scene" => &[
-                "layout_fit",
-                "layout_x",
-                "layout_y",
-                "layout_anchor_x",
-                "layout_anchor_y",
-                "layout_width",
-                "layout_height",
-            ],
-            "composite" => &[
-                "layout_canvas_width",
-                "layout_canvas_height",
-                "layout_rect_x",
-                "layout_rect_y",
-                "layout_rect_width",
-                "layout_rect_height",
-                "layout_height_ratio",
-            ],
-            _ => {
-                report.diagnostics.push(self.error("unknown sprite layout"));
-                return None;
-            }
-        };
-        for arg in args {
-            if let Some(field) = arg.name.as_deref()
-                && field.starts_with("layout_")
-                && !allowed.contains(&field)
-            {
-                report
-                    .diagnostics
-                    .push(self.error(format!("`{field}` is not valid for `{mode}` layout")));
-                return None;
-            }
-        }
-        let layout = match mode.as_str() {
-            "natural" => SpriteLayout::Natural,
-            "viewport_height" => {
-                let Some(height) = self.checked_number(args, "layout_height", report)? else {
-                    report
-                        .diagnostics
-                        .push(self.error("viewport_height layout requires `layout_height`"));
-                    return None;
-                };
-                if height <= 0.0 {
-                    report
-                        .diagnostics
-                        .push(self.error("layout_height must be positive"));
-                    return None;
-                }
-                SpriteLayout::ViewportHeight(height)
-            }
-            "scene" => {
-                let fit = match self.named_identifier(args, "layout_fit").as_deref() {
-                    None | Some("by_height") => keine_core::SceneFit::ByHeight,
-                    Some("by_width") => keine_core::SceneFit::ByWidth,
-                    Some("cover") => keine_core::SceneFit::Cover,
-                    Some("contain") => keine_core::SceneFit::Contain,
-                    Some("stretch") => keine_core::SceneFit::Stretch,
-                    Some("center") => keine_core::SceneFit::Center,
-                    _ => {
-                        report
-                            .diagnostics
-                            .push(self.error("unknown scene layout fit"));
-                        return None;
-                    }
-                };
-                let width = self.checked_number(args, "layout_width", report)?;
-                let height = self.checked_number(args, "layout_height", report)?;
-                if width.is_some() != height.is_some() {
-                    report
-                        .diagnostics
-                        .push(self.error("scene layout size requires both width and height"));
-                    return None;
-                }
-                SpriteLayout::Scene(keine_core::SceneLayerLayout {
-                    fit,
-                    position: [
-                        self.checked_number(args, "layout_x", report)?
-                            .unwrap_or(0.0),
-                        self.checked_number(args, "layout_y", report)?
-                            .unwrap_or(0.0),
-                    ],
-                    anchor: [
-                        self.checked_number(args, "layout_anchor_x", report)?
-                            .unwrap_or(0.5),
-                        self.checked_number(args, "layout_anchor_y", report)?
-                            .unwrap_or(0.5),
-                    ],
-                    size: width.zip(height).map(|(w, h)| [w, h]),
-                })
-            }
-            "composite" => {
-                let Some(canvas_width) =
-                    self.checked_number(args, "layout_canvas_width", report)?
-                else {
-                    report
-                        .diagnostics
-                        .push(self.error("composite layout requires canvas width"));
-                    return None;
-                };
-                let Some(canvas_height) =
-                    self.checked_number(args, "layout_canvas_height", report)?
-                else {
-                    report
-                        .diagnostics
-                        .push(self.error("composite layout requires canvas height"));
-                    return None;
-                };
-                let rect_fields = [
-                    "layout_rect_x",
-                    "layout_rect_y",
-                    "layout_rect_width",
-                    "layout_rect_height",
-                ];
-                let mut rect_values = Vec::new();
-                for field in rect_fields {
-                    rect_values.push(self.checked_number(args, field, report)?);
-                }
-                let rect = if rect_values.iter().all(Option::is_none) {
-                    None
-                } else if rect_values.iter().all(Option::is_some) {
-                    Some([
-                        rect_values[0]?,
-                        rect_values[1]?,
-                        rect_values[2]?,
-                        rect_values[3]?,
-                    ])
-                } else {
-                    report
-                        .diagnostics
-                        .push(self.error("composite rect requires all four fields"));
-                    return None;
-                };
-                SpriteLayout::Composite {
-                    canvas: [canvas_width, canvas_height],
-                    rect,
-                    height_ratio: self.checked_number(args, "layout_height_ratio", report)?,
-                }
-            }
-            _ => {
-                report.diagnostics.push(self.error("unknown sprite layout"));
-                return None;
-            }
-        };
-        Some(layout)
     }
 
     fn camera_targets(&self, args: &[Argument], report: &mut ParseReport) -> Option<CameraTargets> {
@@ -3869,9 +3629,107 @@ mod tests {
     use super::*;
 
     #[test]
-    fn portrait_environment_light_is_a_strict_sparse_boolean() {
+    fn sprite_update_is_sparse_and_uniform_scale_is_unambiguous() {
+        let scenes = parse_native_scenes(
+            "scene start { sprite(hero, face, scale: 1.2), sprite.transform(hero, scale: 0.8), sprite.update(hero, other), sprite.update(hero, face, position: center, layout: natural, scale: 1) }",
+        );
+        assert!(
+            errors(&scenes[0]).is_empty(),
+            "{:?}",
+            scenes[0].report.diagnostics
+        );
+        let actions = &scenes[0].report.actions;
+        assert!(
+            matches!(&actions[0], Action::ShowSprite { transform, .. } if transform.scale_x == 1.2 && transform.scale_y == 1.2)
+        );
+        let Action::SetTransform { transform, .. } = &actions[1] else {
+            panic!("missing scale patch")
+        };
+        let scaled = transform.apply_to(SpriteTransform {
+            offset_x: 42.0,
+            ..Default::default()
+        });
+        assert_eq!(
+            (scaled.scale_x, scaled.scale_y, scaled.offset_x),
+            (0.8, 0.8, 42.0)
+        );
+        assert!(matches!(
+            &actions[2],
+            Action::PatchSprite {
+                position: None,
+                layout: None,
+                scale: None,
+                ..
+            }
+        ));
+        assert!(
+            matches!(&actions[3], Action::PatchSprite { position: Some(position), layout: Some(SpriteLayout::Natural), scale: Some(1.0), .. } if *position == Position::center(0.0))
+        );
+        for command in [
+            "sprite(hero, face, scale: 0)",
+            "sprite.update(hero, face, scale: -1)",
+            "sprite.transform(hero, scale: 0)",
+            "sprite(hero, face, scale: 1, scale_x: 2)",
+            "sprite.transform(hero, scale: 1, scale_y: 2)",
+        ] {
+            let parsed = parse_native_scenes(&format!("scene start {{ {command} }}"));
+            assert!(!errors(&parsed[0]).is_empty(), "{command}");
+            assert!(parsed[0].report.actions.is_empty(), "{command}");
+        }
+    }
+
+    #[test]
+    fn grouped_positions_and_layouts_preserve_distinct_coordinate_spaces() {
+        let scenes = parse_native_scenes(
+            "scene start { sprite(hero, face, position: right(x: 500, y: -20), layout: viewport(height: 0.85), x: 12, y: 24), sprite.update(hero, other, position: left(y: 30), layout: scene(fit: cover, x: 960, y: 540, anchor: point(y: 1), width: 700, height: 900)), move(hero, center(x: -50, y: 10), duration: 300ms), sprite(layer, face, layout: composite(canvas: size(width: 1920, height: 1080), rect: rect(x: 10, y: 20, width: 700, height: 900), height: 0.8)) }",
+        );
+        assert!(
+            errors(&scenes[0]).is_empty(),
+            "{:?}",
+            scenes[0].report.diagnostics
+        );
+        let actions = &scenes[0].report.actions;
+        assert!(
+            matches!(&actions[0], Action::ShowSprite { position, layout: SpriteLayout::ViewportHeight(height), transform, .. } if position.x == keine_core::Anchor::Right(500.0) && position.y == -20.0 && *height == 0.85 && transform.offset_x == 12.0 && transform.offset_y == 24.0)
+        );
+        assert!(
+            matches!(&actions[1], Action::PatchSprite { position: Some(position), layout: Some(SpriteLayout::Scene(layout)), .. } if position.x == keine_core::Anchor::Left(0.0) && position.y == 30.0 && layout.position == [960.0, 540.0] && layout.anchor == [0.5, 1.0] && layout.size == Some([700.0, 900.0]))
+        );
+        assert!(
+            matches!(&actions[2], Action::MoveSprite { position, .. } if position.x == keine_core::Anchor::Center(-50.0) && position.y == 10.0)
+        );
+        assert!(
+            matches!(&actions[3], Action::ShowSprite { layout: SpriteLayout::Composite { canvas, rect, height_ratio }, .. } if *canvas == [1920.0, 1080.0] && *rect == Some([10.0, 20.0, 700.0, 900.0]) && *height_ratio == Some(0.8))
+        );
+        for command in [
+            "sprite(hero, face, position: right(x: 1, x: 2))",
+            "sprite(hero, face, position: right(z: 1))",
+            "sprite(hero, face, position: right(1))",
+            "sprite(hero, face, position: right(x: 1,))",
+            "sprite(hero, face, position: right(x: 1)(y: 2))",
+            "sprite(hero, face, layout: viewport(height: 0))",
+            "sprite(hero, face, layout: viewport(width: 1))",
+            "sprite(hero, face, layout: scene(width: 10))",
+            "sprite(hero, face, layout: scene(anchor: point(x: true)))",
+            "sprite(hero, face, layout: scene(fit: 3))",
+            "sprite(hero, face, layout: composite(canvas: size(width: 1920)))",
+            "sprite(hero, face, layout: composite(canvas: size(width: 1920, height: 1080), rect: rect(x: 0, y: 0, width: 10)))",
+            "sprite(hero, face, anchor_offset: 10)",
+            "sprite(hero, face, position_y: 10)",
+            "sprite(hero, face, layout: viewport_height, layout_height: 0.85)",
+            "sprite.update(hero, face, y: 10)",
+            "move(hero, right, y: 10)",
+        ] {
+            let parsed = parse_native_scenes(&format!("scene start {{ {command} }}"));
+            assert!(!errors(&parsed[0]).is_empty(), "{command}");
+            assert!(parsed[0].report.actions.is_empty(), "{command}");
+        }
+    }
+
+    #[test]
+    fn portrait_light_is_a_strict_sparse_boolean() {
         let parsed = parse_native_scenes(
-            "scene start { sprite(hero, face, environment_light: false), sprite.transform(hero, environment_light: true) }",
+            "scene start { sprite(hero, face, light: false), sprite.transform(hero, light: true) }",
         );
         assert!(
             errors(&parsed[0]).is_empty(),
@@ -3885,9 +3743,11 @@ mod tests {
             matches!(&parsed[0].report.actions[1], Action::SpriteVisual { filter, .. } if filter.environment_light == Some(true))
         );
         for source in [
-            "sprite(hero, face, environment_light: 0)",
-            "sprite.transform(hero, environment_light: nope)",
-            "background.transform(environment_light: false)",
+            "sprite(hero, face, light: 0)",
+            "sprite.transform(hero, light: nope)",
+            "background.transform(light: false)",
+            "sprite(hero, face, environment_light: false)",
+            "sprite.transform(hero, environment_light: true)",
         ] {
             assert!(
                 !errors(&parse_native_scenes(&format!("scene start {{ {source} }}"))[0]).is_empty(),
@@ -3927,6 +3787,7 @@ mod tests {
         for removed in [
             "camera.effect.v2(all, mirror_shatter_intensity: 1)",
             "sprite.filter(hero, brightness: 1)",
+            "sprite.offset(hero, x: 20)",
             "sprite.sequence.timed(hero) { frame(face, duration: 100ms) }",
             "input.simple(name)",
             "sprite(hero, face, transform_alpha: 1)",
@@ -4296,7 +4157,7 @@ scene ending { "Done" }
     #[test]
     fn lowers_v11_visual_and_media_commands_without_changing_v1() {
         let scenes = parse_native_scenes(
-            "scene a { sprite.offset(hero, x: -24, duration: 300ms), sprite.transform(hero, alpha: 0.5), background.transform(scale_x: 1.1), sprite.transform(hero, brightness: 0.7), sprite.animate(hero, shake, duration: 300ms), sprite.transition(hero, enter: enter, duration: 300ms), se.loop(rain, rain_sound, volume: 0.5), se.stop(rain), video.play(cutscene, movie, loop: true, muted: true, alpha: 0.8, skippable: false, wait: false, mode: mixed), background(room), sprite(hero, face) }",
+            "scene a { sprite.transform(hero, x: -24, duration: 300ms), sprite.transform(hero, alpha: 0.5), background.transform(scale_x: 1.1), sprite.transform(hero, brightness: 0.7), sprite.animate(hero, shake, duration: 300ms), sprite.transition(hero, enter: enter, duration: 300ms), se.loop(rain, rain_sound, volume: 0.5), se.stop(rain), video.play(cutscene, movie, loop: true, muted: true, alpha: 0.8, skippable: false, wait: false, mode: mixed), background(room), sprite(hero, face) }",
         );
         assert!(
             errors(&scenes[0]).is_empty(),
@@ -4416,7 +4277,7 @@ scene ending { "Done" }
     #[test]
     fn sprite_and_background_initial_state_survive_transition_lowering() {
         let scenes = parse_native_scenes(
-            "scene a { background(room, transition: fade(300ms), alpha: 0.4), sprite(hero, face, position: right, anchor_offset: 12, position_y: -20, layout: scene, layout_fit: cover, layout_x: 40, layout_y: 10, layout_anchor_x: 0.5, layout_anchor_y: 1, layout_width: 700, layout_height: 900, blend: add, scale_x: 1.2, transition: fade(300ms)), sprite.update(hero, face_alt, position: center, layout: viewport_height, layout_height: 0.8, scale: 1.1, blocking: false) }",
+            "scene a { background(room, transition: fade(300ms), alpha: 0.4), sprite(hero, face, position: right(x: 12, y: -20), layout: scene(fit: cover, x: 40, y: 10, anchor: point(x: 0.5, y: 1), width: 700, height: 900), blend: add, scale_x: 1.2, transition: fade(300ms)), sprite.update(hero, face_alt, position: center, layout: viewport(height: 0.8), scale: 1.1, blocking: false) }",
         );
         assert!(
             errors(&scenes[0]).is_empty(),
@@ -4429,7 +4290,7 @@ scene ending { "Done" }
             matches!(&actions[1], Action::ShowSprite { position, layout: SpriteLayout::Scene(_), transform, blend: BlendMode::Add, .. } if matches!(position.x, keine_core::Anchor::Right(12.0)) && position.y == -20.0 && transform.scale_x == 1.2)
         );
         assert!(
-            matches!(&actions[2], Action::UpdateSprite { layout: SpriteLayout::ViewportHeight(height), blocking: false, .. } if *height == 0.8)
+            matches!(&actions[2], Action::PatchSprite { layout: Some(SpriteLayout::ViewportHeight(height)), blocking: false, .. } if *height == 0.8)
         );
     }
 

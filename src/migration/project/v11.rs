@@ -68,11 +68,70 @@ pub(super) fn render(action: &Action, model: &MigrationModel) -> Result<Option<S
             duration: seconds,
             easing,
         } => format!(
-            "sprite.transform({}{}{})",
+            "sprite.transform({}{}, duration: {}, easing: {})",
             object_id(model, id)?,
             patch_fields(*transform),
-            timing(*seconds, *easing, true)
+            duration(*seconds),
+            easing_name(*easing)
         ),
+        Action::MoveSprite {
+            id,
+            position,
+            duration: seconds,
+            easing,
+            blocking,
+        } => format!(
+            "move({}, {}{})",
+            object_id(model, id)?,
+            position_fields(*position).trim_start_matches("position: "),
+            timing(*seconds, *easing, *blocking)
+        ),
+        Action::UpdateSprite {
+            id,
+            image,
+            position,
+            layout,
+            scale,
+            duration: seconds,
+            easing,
+            blocking,
+        } => format!(
+            "sprite.update({}, {}, {}{}, scale: {}{})",
+            object_id(model, id)?,
+            asset_id(model, ResourceKind::Figure, image)?,
+            position_fields(*position),
+            explicit_layout_fields(*layout),
+            number(*scale),
+            timing(*seconds, *easing, *blocking)
+        ),
+        Action::PatchSprite {
+            id,
+            image,
+            position,
+            layout,
+            scale,
+            duration: seconds,
+            easing,
+            blocking,
+        } => {
+            let mut fields = String::new();
+            if let Some(position) = position {
+                fields.push_str(&format!(", {}", position_fields(*position)));
+            }
+            if let Some(layout) = layout {
+                fields.push_str(&explicit_layout_fields(*layout));
+            }
+            if let Some(scale) = scale {
+                fields.push_str(&format!(", scale: {}", number(*scale)));
+            }
+            format!(
+                "sprite.update({}, {}{}{})",
+                object_id(model, id)?,
+                asset_id(model, ResourceKind::Figure, image)?,
+                fields,
+                timing(*seconds, *easing, *blocking)
+            )
+        }
         Action::SetFilter { target, filter } => format!(
             "sprite.transform({}, blur: {}, brightness: {}, contrast: {}, saturation: {})",
             object_id(model, target)?,
@@ -609,6 +668,25 @@ fn expected_action(action: &Action, model: &MigrationModel) -> Result<Action> {
     }
     let normalized = normalize_camera(action);
     let mut expected = match normalized.as_ref() {
+        Action::UpdateSprite {
+            id,
+            image,
+            position,
+            layout,
+            scale,
+            duration,
+            easing,
+            blocking,
+        } => Action::PatchSprite {
+            id: id.clone(),
+            image: image.clone(),
+            position: Some(*position),
+            layout: Some(*layout),
+            scale: Some(*scale),
+            duration: *duration,
+            easing: *easing,
+            blocking: *blocking,
+        },
         Action::SetFilter { target, filter } => {
             let mut transform = TransformPatch::default();
             transform.set_blur(filter.blur);
@@ -651,6 +729,9 @@ fn expected_action(action: &Action, model: &MigrationModel) -> Result<Action> {
         | Action::ConfigureSpriteSequence { id, .. }
         | Action::ConfigureTimedSpriteSequence { id, .. }
         | Action::ShowSprite { id, .. }
+        | Action::MoveSprite { id, .. }
+        | Action::UpdateSprite { id, .. }
+        | Action::PatchSprite { id, .. }
         | Action::HideSprite { id, .. }
         | Action::ShowParticles { id, .. } => *id = object_id(model, id)?.into(),
         Action::SetCameraBinding { target, .. } | Action::AnimateKeyframes { target, .. } => {
@@ -686,7 +767,11 @@ fn expected_action(action: &Action, model: &MigrationModel) -> Result<Action> {
             }
         }
         Action::ShowBg { image, .. } => *image = asset_id(model, ResourceKind::Background, image)?,
-        Action::ShowSprite { image, .. } => *image = asset_id(model, ResourceKind::Figure, image)?,
+        Action::ShowSprite { image, .. }
+        | Action::UpdateSprite { image, .. }
+        | Action::PatchSprite { image, .. } => {
+            *image = asset_id(model, ResourceKind::Figure, image)?
+        }
         Action::PlayVideo { video } => {
             video.file = asset_id(model, ResourceKind::Video, &video.file)?
         }
@@ -825,12 +910,19 @@ fn transform_values(transform: &SpriteTransform) -> [(&'static str, f32); 9] {
     ]
 }
 fn full_transform(transform: &SpriteTransform) -> String {
-    transform_values(transform)
+    let uniform = transform.scale_x == transform.scale_y && transform.scale_x > 0.0;
+    let mut result: String = transform_values(transform)
         .into_iter()
         .zip(transform_values(&SpriteTransform::default()))
-        .filter(|((_, value), (_, default))| value != default)
+        .filter(|((name, value), (_, default))| {
+            value != default && !(uniform && matches!(*name, "scale_x" | "scale_y"))
+        })
         .map(|((name, value), _)| format!(", {name}: {}", number(value)))
-        .collect()
+        .collect();
+    if uniform && transform.scale_x != 1.0 {
+        result.push_str(&format!(", scale: {}", number(transform.scale_x)));
+    }
+    result
 }
 fn patch_fields(patch: TransformPatch) -> String {
     // Apply to an absent sentinel through the public patch API, preserving presence
@@ -846,11 +938,19 @@ fn patch_fields(patch: TransformPatch) -> String {
         width: f32::NAN,
         height: f32::NAN,
     };
-    transform_values(&patch.apply_to(unset))
+    let values = patch.apply_to(unset);
+    let uniform = values.scale_x == values.scale_y && values.scale_x > 0.0;
+    let mut result: String = transform_values(&values)
         .into_iter()
-        .filter(|(_, value)| !value.is_nan())
+        .filter(|(name, value)| {
+            !value.is_nan() && !(uniform && matches!(*name, "scale_x" | "scale_y"))
+        })
         .map(|(name, value)| format!(", {name}: {}", number(value)))
-        .collect()
+        .collect();
+    if uniform {
+        result.push_str(&format!(", scale: {}", number(values.scale_x)));
+    }
+    result
 }
 fn position_fields(position: Position) -> String {
     let (name, offset) = match position.x {
@@ -858,25 +958,35 @@ fn position_fields(position: Position) -> String {
         Anchor::Center(offset) => ("center", offset),
         Anchor::Right(offset) => ("right", offset),
     };
-    let mut fields = format!("position: {name}");
+    let mut fields = Vec::new();
     if offset != 0.0 {
-        fields.push_str(&format!(", anchor_offset: {}", number(offset)));
+        fields.push(format!("x: {}", number(offset)));
     }
     if position.y != 0.0 {
-        fields.push_str(&format!(", position_y: {}", number(position.y)));
+        fields.push(format!("y: {}", number(position.y)));
     }
-    fields
+    if fields.is_empty() {
+        format!("position: {name}")
+    } else {
+        format!("position: {name}({})", fields.join(", "))
+    }
+}
+fn explicit_layout_fields(layout: SpriteLayout) -> String {
+    if layout == SpriteLayout::Natural {
+        ", layout: natural".into()
+    } else {
+        layout_fields(layout)
+    }
 }
 fn layout_fields(layout: SpriteLayout) -> String {
     match layout {
-        SpriteLayout::Natural => ", layout: natural".into(),
-        SpriteLayout::ViewportHeight(height) => format!(
-            ", layout: viewport_height, layout_height: {}",
-            number(height)
-        ),
+        SpriteLayout::Natural => String::new(),
+        SpriteLayout::ViewportHeight(height) => {
+            format!(", layout: viewport(height: {})", number(height))
+        }
         SpriteLayout::Scene(layout) => {
-            let mut args = format!(
-                ", layout: scene, layout_fit: {}, layout_x: {}, layout_y: {}, layout_anchor_x: {}, layout_anchor_y: {}",
+            let mut fields = vec![format!(
+                "fit: {}",
                 match layout.fit {
                     keine_core::SceneFit::Cover => "cover",
                     keine_core::SceneFit::Contain => "contain",
@@ -884,38 +994,52 @@ fn layout_fields(layout: SpriteLayout) -> String {
                     keine_core::SceneFit::ByHeight => "by_height",
                     keine_core::SceneFit::Stretch => "stretch",
                     keine_core::SceneFit::Center => "center",
-                },
-                number(layout.position[0]),
-                number(layout.position[1]),
-                number(layout.anchor[0]),
-                number(layout.anchor[1])
-            );
+                }
+            )];
+            for (name, value) in [("x", layout.position[0]), ("y", layout.position[1])] {
+                if value != 0.0 {
+                    fields.push(format!("{name}: {}", number(value)));
+                }
+            }
+            if layout.anchor != [0.5; 2] {
+                fields.push(format!(
+                    "anchor: point(x: {}, y: {})",
+                    number(layout.anchor[0]),
+                    number(layout.anchor[1])
+                ));
+            }
             if let Some(size) = layout.size {
-                args.push_str(&format!(
-                    ", layout_width: {}, layout_height: {}",
+                fields.push(format!(
+                    "width: {}, height: {}",
                     number(size[0]),
                     number(size[1])
                 ));
             }
-            args
+            format!(", layout: scene({})", fields.join(", "))
         }
         SpriteLayout::Composite {
             canvas,
             rect,
             height_ratio,
         } => {
-            let mut args = format!(
-                ", layout: composite, layout_canvas_width: {}, layout_canvas_height: {}",
+            let mut fields = vec![format!(
+                "canvas: size(width: {}, height: {})",
                 number(canvas[0]),
                 number(canvas[1])
-            );
+            )];
             if let Some(rect) = rect {
-                args.push_str(&format!(", layout_rect_x: {}, layout_rect_y: {}, layout_rect_width: {}, layout_rect_height: {}",number(rect[0]),number(rect[1]),number(rect[2]),number(rect[3])));
+                fields.push(format!(
+                    "rect: rect(x: {}, y: {}, width: {}, height: {})",
+                    number(rect[0]),
+                    number(rect[1]),
+                    number(rect[2]),
+                    number(rect[3])
+                ));
             }
             if let Some(height) = height_ratio {
-                args.push_str(&format!(", layout_height_ratio: {}", number(height)));
+                fields.push(format!("height: {}", number(height)));
             }
-            args
+            format!(", layout: composite({})", fields.join(", "))
         }
     }
 }
@@ -995,7 +1119,13 @@ mod tests {
         let model = MigrationModel {
             scene_ids: HashMap::new(),
             speaker_ids: HashMap::new(),
-            asset_ids: HashMap::new(),
+            asset_ids: HashMap::from([(
+                AssetKey {
+                    kind: ResourceKind::Figure,
+                    source_name: "face.png".into(),
+                },
+                "face".into(),
+            )]),
             object_ids: BTreeMap::from([("animation_target".into(), "animation_target".into())]),
             prefix_ids: BTreeMap::from([("scene-layer:".into(), "scene_layer_".into())]),
             objects: objects::ObjectManifest::default(),
@@ -1089,6 +1219,82 @@ mod tests {
                     easing: Easing::EaseInOut,
                     blocking: false,
                 }),
+            },
+            Action::ShowSprite {
+                id: "animation_target".into(),
+                image: "face.png".into(),
+                position: Position {
+                    x: Anchor::Right(500.0),
+                    y: -20.0,
+                },
+                layout: SpriteLayout::Composite {
+                    canvas: [1920.0, 1080.0],
+                    rect: Some([10.0, 20.0, 700.0, 900.0]),
+                    height_ratio: Some(0.85),
+                },
+                transform: SpriteTransform::default(),
+                transition: Transition::Crossfade(0.2),
+                z_index: 2,
+                blend: keine_core::BlendMode::Alpha,
+            },
+            Action::MoveSprite {
+                id: "animation_target".into(),
+                position: Position {
+                    x: Anchor::Left(-40.0),
+                    y: 12.0,
+                },
+                duration: 0.3,
+                easing: Easing::Linear,
+                blocking: false,
+            },
+            Action::UpdateSprite {
+                id: "animation_target".into(),
+                image: "face.png".into(),
+                position: Position {
+                    x: Anchor::Center(20.0),
+                    y: 30.0,
+                },
+                layout: SpriteLayout::ViewportHeight(0.9),
+                scale: 1.2,
+                duration: 0.3,
+                easing: Easing::Linear,
+                blocking: false,
+            },
+            Action::UpdateSprite {
+                id: "animation_target".into(),
+                image: "face.png".into(),
+                position: Position::center(0.0),
+                layout: SpriteLayout::Natural,
+                scale: 1.0,
+                duration: 0.0,
+                easing: Easing::Linear,
+                blocking: true,
+            },
+            Action::PatchSprite {
+                id: "animation_target".into(),
+                image: "face.png".into(),
+                position: None,
+                layout: None,
+                scale: None,
+                duration: 0.0,
+                easing: Easing::Linear,
+                blocking: true,
+            },
+            Action::PatchSprite {
+                id: "animation_target".into(),
+                image: "face.png".into(),
+                position: None,
+                layout: Some(SpriteLayout::Natural),
+                scale: Some(1.0),
+                duration: 0.0,
+                easing: Easing::Linear,
+                blocking: true,
+            },
+            Action::SetTransform {
+                id: "animation_target".into(),
+                transform: patch,
+                duration: 0.3,
+                easing: Easing::Linear,
             },
             Action::End,
         ];

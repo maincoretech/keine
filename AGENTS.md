@@ -45,6 +45,7 @@ dev              current docs and scripts
 ## Evidence
 
 - Run fmt/check/clippy/workspace tests; run native-smoke validation for loader/project/publisher changes.
+- The local macOS sandbox can block Unix socket creation in IPC tests (`Operation not permitted` / `PermissionDenied`). When this occurs, rerun the affected tests with sandbox escalation; do not skip them or treat the sandbox failure as a code regression.
 - Check affected optional features. Serialization, unsafe/FFI, dependency and performance claims require primary-source verification.
 - Performance changes require raw before/after commands and results; current summary belongs in dev/docs/testing.md.
 - Native visual acceptance uses Computer Use directly. Do not add screenshot hooks, readiness protocols or GUI automation just for evidence.

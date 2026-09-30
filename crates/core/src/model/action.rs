@@ -750,6 +750,18 @@ pub enum Action {
         action: Box<Action>,
         filter: crate::VisualFilterPatch,
     },
+    /// Replace a visible sprite image, preserving every omitted placement field.
+    /// Appended to keep existing compatibility action payloads stable.
+    PatchSprite {
+        id: String,
+        image: String,
+        position: Option<Position>,
+        layout: Option<SpriteLayout>,
+        scale: Option<f32>,
+        duration: f32,
+        easing: Easing,
+        blocking: bool,
+    },
 }
 
 /// Fixed system surfaces owned by the engine shell, never by a script adapter.

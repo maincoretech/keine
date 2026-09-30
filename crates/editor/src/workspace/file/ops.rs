@@ -1125,7 +1125,7 @@ mod tests {
         fs::create_dir_all(root.join("scripts")).unwrap();
         fs::write(
             root.join("config.yaml"),
-            "adapter:\n  script: keine\nscript:\n  version: 1\n  entry: opening\n  assets: assets.yaml\n  characters: characters.yaml\n",
+            "adapter:\n  script: keine\nscript:\n  version: 2\n  entry: opening\n  assets: assets.yaml\n  characters: characters.yaml\n",
         )
         .unwrap();
         fs::write(

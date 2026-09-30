@@ -737,7 +737,7 @@ pub(in crate::app) fn source_property_editor(
         let checked = field.value == "true"
             || (field.value.is_empty()
                 && ((field.key == "blocking" && key.command != "assets.loading")
-                    || field.key == "environment_light"
+                    || field.key == "light"
                     || field.key == "skippable"
                     || (key.command == "bgm" && field.key == "loop")
                     || (key.command == "sprite.focus.configure" && field.key == "enabled")

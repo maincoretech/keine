@@ -109,7 +109,9 @@ fn collect_references(
     };
     match action {
         Action::ShowBg { image, .. } => resource(image, ResourceKind::Background),
-        Action::ShowSprite { image, .. } | Action::UpdateSprite { image, .. } => {
+        Action::ShowSprite { image, .. }
+        | Action::UpdateSprite { image, .. }
+        | Action::PatchSprite { image, .. } => {
             resource(image, ResourceKind::Figure);
         }
         Action::ConfigureSpriteSequence { frames, .. }

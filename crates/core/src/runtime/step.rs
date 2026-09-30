@@ -1202,16 +1202,42 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                     active.infinite = *infinite;
                 }
             }
-            Action::UpdateSprite {
-                id,
-                image,
-                position,
-                layout,
-                scale,
-                duration,
-                easing,
-                blocking,
-            } => {
+            Action::UpdateSprite { .. } | Action::PatchSprite { .. } => {
+                let (id, image, position, layout, scale, duration, easing, blocking) = match action
+                {
+                    Action::UpdateSprite {
+                        id,
+                        image,
+                        position,
+                        layout,
+                        scale,
+                        duration,
+                        easing,
+                        blocking,
+                    } => (
+                        id,
+                        image,
+                        Some(*position),
+                        Some(*layout),
+                        Some(*scale),
+                        duration,
+                        easing,
+                        blocking,
+                    ),
+                    Action::PatchSprite {
+                        id,
+                        image,
+                        position,
+                        layout,
+                        scale,
+                        duration,
+                        easing,
+                        blocking,
+                    } => (
+                        id, image, *position, *layout, *scale, duration, easing, blocking,
+                    ),
+                    _ => unreachable!(),
+                };
                 let id = interpolate(id, &state.vars, &state.global_vars);
                 let image = interpolate(image, &state.vars, &state.global_vars);
                 let duration = duration.max(0.0);
@@ -1221,11 +1247,15 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                 };
                 let from_position = sprite.position;
                 let mut target_transform = sprite.transform;
-                target_transform.scale_x = scale.max(f32::EPSILON);
-                target_transform.scale_y = scale.max(f32::EPSILON);
+                if let Some(scale) = scale {
+                    target_transform.scale_x = scale.max(f32::EPSILON);
+                    target_transform.scale_y = scale.max(f32::EPSILON);
+                }
                 sprite.image = image;
-                sprite.layout = *layout;
-                sprite.position = *position;
+                if let Some(layout) = layout {
+                    sprite.layout = layout;
+                }
+                sprite.position = position.unwrap_or(from_position);
                 sprite.keyframe_animation = None;
                 sprite.animation = None;
                 state.sprite_sequences.remove(&id);
@@ -1240,7 +1270,7 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                     });
                     sprite.position_animation = Some(crate::state::PositionAnimation {
                         from: from_position,
-                        to: *position,
+                        to: sprite.position,
                         elapsed: 0.0,
                         duration,
                         easing: *easing,
@@ -2690,6 +2720,87 @@ mod tests {
             },
         ]);
 
+        assert_eq!(step(&mut state), StepResult::EndOfScene);
+        assert!(!state.sprites.contains_key("hero"));
+    }
+
+    #[test]
+    fn sparse_sprite_update_preserves_omitted_values_and_accepts_explicit_resets() {
+        let mut state = state_with(vec![
+            Action::ShowSprite {
+                id: "hero".into(),
+                image: "calm.webp".into(),
+                position: Position::right(42.0),
+                layout: crate::SpriteLayout::ViewportHeight(0.8),
+                transition: Transition::Instant,
+                transform: SpriteTransform {
+                    scale_x: 1.2,
+                    scale_y: 0.7,
+                    offset_x: 15.0,
+                    ..Default::default()
+                },
+                z_index: 123,
+                blend: BlendMode::Alpha,
+            },
+            Action::PatchSprite {
+                id: "hero".into(),
+                image: "smile.webp".into(),
+                position: None,
+                layout: None,
+                scale: None,
+                duration: 0.0,
+                easing: Easing::Linear,
+                blocking: true,
+            },
+        ]);
+        assert_eq!(step(&mut state), StepResult::EndOfScene);
+        let sprite = &state.sprites["hero"];
+        assert_eq!(sprite.image, "smile.webp");
+        assert_eq!(sprite.position, Position::right(42.0));
+        assert_eq!(sprite.layout, crate::SpriteLayout::ViewportHeight(0.8));
+        assert_eq!(
+            (sprite.transform.scale_x, sprite.transform.scale_y),
+            (1.2, 0.7)
+        );
+        assert_eq!(sprite.transform.offset_x, 15.0);
+        let sprite = sprite.clone();
+        let mut state = state_with(vec![Action::PatchSprite {
+            id: "hero".into(),
+            image: "calm.webp".into(),
+            position: Some(Position::center(0.0)),
+            layout: Some(crate::SpriteLayout::Natural),
+            scale: Some(1.0),
+            duration: 0.5,
+            easing: Easing::EaseOut,
+            blocking: true,
+        }]);
+        state.sprites.insert("hero".into(), sprite);
+        assert_eq!(step(&mut state), StepResult::AwaitPresentation);
+        let sprite = &state.sprites["hero"];
+        assert_eq!(sprite.layout, crate::SpriteLayout::Natural);
+        assert_eq!(sprite.position, Position::center(0.0));
+        let transform = sprite.transform_animation.as_ref().unwrap();
+        assert_eq!((transform.from.scale_x, transform.from.scale_y), (1.2, 0.7));
+        assert_eq!((transform.to.scale_x, transform.to.scale_y), (1.0, 1.0));
+        assert_eq!(transform.to.offset_x, 15.0);
+        assert_eq!(
+            sprite.position_animation.as_ref().unwrap().from,
+            Position::right(42.0)
+        );
+    }
+
+    #[test]
+    fn sparse_sprite_update_skips_absent_targets() {
+        let mut state = state_with(vec![Action::PatchSprite {
+            id: "hero".into(),
+            image: "face.webp".into(),
+            position: None,
+            layout: None,
+            scale: None,
+            duration: 1.0,
+            easing: Easing::Linear,
+            blocking: true,
+        }]);
         assert_eq!(step(&mut state), StepResult::EndOfScene);
         assert!(!state.sprites.contains_key("hero"));
     }

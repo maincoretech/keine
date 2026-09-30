@@ -60,7 +60,7 @@ impl InsertKind {
         })
     }
 
-    pub const ALL: [Self; 71] = [
+    pub const ALL: [Self; 70] = [
         Self::Narration,
         Self::Dialogue,
         Self::Background,
@@ -105,7 +105,6 @@ impl InsertKind {
         Self::Native("gallery.unlock"),
         Self::Native("camera.bind"),
         Self::Native("camera.unbind"),
-        Self::Native("sprite.offset"),
         Self::Native("sprite.transform"),
         Self::Native("background.transform"),
         Self::Native("sprite.animate"),
@@ -181,7 +180,6 @@ impl InsertKind {
                 "gallery.unlock" => "Unlock gallery",
                 "camera.bind" => "Bind camera",
                 "camera.unbind" => "Unbind camera",
-                "sprite.offset" => "Sprite offset",
                 "sprite.transform" => "Sprite transform",
                 "background.transform" => "Background transform",
                 "sprite.animate" => "Animate sprite",
@@ -267,7 +265,6 @@ impl InsertKind {
                 | "particle.hide"
                 | "camera.bind"
                 | "camera.unbind"
-                | "sprite.offset"
                 | "sprite.transform"
                 | "background.transform"
                 | "sprite.animate"
@@ -461,10 +458,6 @@ pub fn insertion_statement(
             ),
             "camera.bind" | "camera.unbind" => format!(
                 "{name}({}_slot, distance: 1.5)",
-                first_figure.ok_or(AuthoringEditError::MissingInsertionPoint)?
-            ),
-            "sprite.offset" => format!(
-                "sprite.offset({}_slot, x: 0, y: 0)",
                 first_figure.ok_or(AuthoringEditError::MissingInsertionPoint)?
             ),
             "sprite.transform" => format!(

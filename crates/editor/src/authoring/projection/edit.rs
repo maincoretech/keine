@@ -217,6 +217,9 @@ impl EiyashouProjection {
         let fields = self
             .source_fields_for_block(source, block)
             .ok_or(BlockEditError::StaleRange)?;
+        if updates.iter().any(|(name, _)| name.contains('.')) {
+            return replace_grouped_fields(source, block, &fields, updates);
+        }
         let node = source
             .get(block.source_range.clone())
             .ok_or(BlockEditError::StaleRange)?;
@@ -479,6 +482,37 @@ impl EiyashouProjection {
         if selected.contains(&target_start) {
             return Ok(source.to_owned());
         }
+        let (siblings, selected_indices, target_index) =
+            self.block_drop_siblings(selected, target_start)?;
+        if selected_indices.contains(&target_index) {
+            return Ok(source.to_owned());
+        }
+        let selected_order = (0..siblings.len())
+            .filter(|index| selected_indices.contains(index))
+            .collect::<Vec<_>>();
+        let mut order = (0..siblings.len())
+            .filter(|index| !selected_indices.contains(index))
+            .collect::<Vec<_>>();
+        let insertion = order
+            .iter()
+            .position(|index| *index == target_index)
+            .ok_or(BlockEditError::NoMoveTarget)?
+            + usize::from(after);
+        order.splice(insertion..insertion, selected_order);
+        replace_block_texts(source, &siblings, &siblings, &order)
+    }
+
+    /// Same scope/selection validation used by the source edit, without copying source.
+    pub fn accepts_block_drop(&self, selected: &HashSet<usize>, target_start: usize) -> bool {
+        !selected.contains(&target_start)
+            && self.block_drop_siblings(selected, target_start).is_ok()
+    }
+
+    fn block_drop_siblings(
+        &self,
+        selected: &HashSet<usize>,
+        target_start: usize,
+    ) -> Result<(Vec<&BlockCard>, HashSet<usize>, usize), BlockEditError> {
         let ranges = self.selected_ranges(selected)?;
         let starts = ranges
             .iter()
@@ -538,22 +572,7 @@ impl EiyashouProjection {
             .position(|block| block.source_range.start == target_start)
             .ok_or(BlockEditError::NoMoveTarget)?;
         let selected_indices = selected_indices.into_iter().collect::<HashSet<_>>();
-        if selected_indices.contains(&target_index) {
-            return Ok(source.to_owned());
-        }
-        let selected_order = (0..siblings.len())
-            .filter(|index| selected_indices.contains(index))
-            .collect::<Vec<_>>();
-        let mut order = (0..siblings.len())
-            .filter(|index| !selected_indices.contains(index))
-            .collect::<Vec<_>>();
-        let insertion = order
-            .iter()
-            .position(|index| *index == target_index)
-            .ok_or(BlockEditError::NoMoveTarget)?
-            + usize::from(after);
-        order.splice(insertion..insertion, selected_order);
-        replace_block_texts(source, &siblings, &siblings, &order)
+        Ok((siblings, selected_indices, target_index))
     }
 
     pub fn insert_block_before(
@@ -996,4 +1015,89 @@ fn deletion_range(source: &str, range: Range<usize>) -> Range<usize> {
         start -= 1;
     }
     start..range.end
+}
+
+/// Nested updates retain the original argument text, including unrelated comments.
+fn replace_grouped_fields(
+    source: &str,
+    block: &BlockCard,
+    fields: &[super::SourceField],
+    updates: &[(String, Option<String>)],
+) -> Result<String, BlockEditError> {
+    let mut edits: Vec<(Range<usize>, String)> = Vec::new();
+    let mut seen = HashSet::new();
+    for (key, value) in updates {
+        if !seen.insert(key) {
+            return Err(BlockEditError::StaleRange);
+        }
+        let field = fields
+            .iter()
+            .find(|field| &field.key == key)
+            .ok_or(BlockEditError::StaleRange)?;
+        if field.quoted {
+            return Err(BlockEditError::StaleRange);
+        }
+        if let Some(prefix) = &field.insertion {
+            let Some(value) = value else {
+                continue;
+            };
+            if let Some((_, insertion)) = edits.iter_mut().find(|(range, _)| range == &field.range)
+            {
+                let suffix = field.insertion_suffix.as_deref().unwrap_or("");
+                insertion.truncate(insertion.len() - suffix.len());
+                insertion.push_str(&format!(
+                    ", {}: {value}{suffix}",
+                    key.rsplit('.').next().unwrap()
+                ));
+            } else {
+                edits.push((
+                    field.range.clone(),
+                    format!(
+                        "{prefix}{value}{}",
+                        field.insertion_suffix.as_deref().unwrap_or("")
+                    ),
+                ));
+            }
+        } else if let Some(value) = value {
+            edits.push((field.range.clone(), value.clone()));
+        } else {
+            // Select the smallest call containing this argument, then its comma span.
+            let node = &source[block.source_range.clone()];
+            let (open, close) = node
+                .char_indices()
+                .filter(|(_, c)| *c == '(')
+                .filter_map(|(open, _)| matching_parenthesis(node, open).map(|close| (open, close)))
+                .filter(|(open, close)| {
+                    block.source_range.start + open < field.range.start
+                        && block.source_range.start + close >= field.range.end
+                })
+                .max_by_key(|(open, _)| *open)
+                .ok_or(BlockEditError::StaleRange)?;
+            let base = block.source_range.start + open + 1;
+            let spans = split_source_ranges(&node[open + 1..close], ',');
+            let index = spans
+                .iter()
+                .position(|span| {
+                    base + span.start <= field.range.start && base + span.end >= field.range.end
+                })
+                .ok_or(BlockEditError::StaleRange)?;
+            let range = if index + 1 < spans.len() {
+                base + spans[index].start..base + spans[index + 1].start
+            } else if index > 0 {
+                base + spans[index - 1].end..base + spans[index].end
+            } else {
+                base + spans[index].start..base + spans[index].end
+            };
+            edits.push((range, String::new()));
+        }
+    }
+    edits.sort_by_key(|(range, _)| (range.start, range.end));
+    if edits.windows(2).any(|pair| pair[0].0.end > pair[1].0.start) {
+        return Err(BlockEditError::StaleRange);
+    }
+    let mut edited = source.to_owned();
+    for (range, value) in edits.into_iter().rev() {
+        edited.replace_range(range, &value);
+    }
+    Ok(edited)
 }

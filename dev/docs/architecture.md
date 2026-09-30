@@ -61,7 +61,7 @@ release/
 └── data/*.taku        不可变密文内容段
 ```
 
-编译 Program envelope v1 / IR schema v4 保存 typed 内容；发行资源由 allowlist 重建。
+编译 Program envelope v1 / IR schema v5 保存 typed 内容；发行资源由 allowlist 重建。
 包中不包含 `.shou`、WebGAL 脚本、LetsGal 作者工程或 publisher identity。
 Hakutaku 的字节布局以锁定依赖自身 `FORMAT.md` 为准；Kēne 不维护第二套 wire spec。
 每个文件直接引用物理块；快照更新复用旧块并原子切换。随机读取不先解密整包到磁盘。

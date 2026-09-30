@@ -1,4 +1,4 @@
-//! Eiyashou v1.1 author commands that lower directly to existing typed IR.
+//! Eiyashou v2.0 author commands that lower directly to existing typed IR.
 //! The names are shared with the Block projection; compatibility adapter IR
 //! remains outside this authoring surface.
 
@@ -8,6 +8,7 @@ use keine_core::{DialogueStyle, SystemUiSlot, UnlockKind};
 mod camera;
 mod effects;
 mod interaction;
+mod layout;
 mod mask;
 mod media;
 mod shell;

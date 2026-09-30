@@ -2,7 +2,6 @@ use super::*;
 use keine_core::{AnimationPreset, VisualFilterPatch};
 
 pub(super) const VISUAL_COMMANDS: &[&str] = &[
-    "sprite.offset",
     "sprite.transform",
     "background.transform",
     "sprite.animate",
@@ -18,13 +17,13 @@ impl<'a> Parser<'a> {
         report: &mut ParseReport,
     ) -> Option<Action> {
         let (positional, named): (usize, &[&str]) = match name {
-            "sprite.offset" => (1, &["x", "y", "duration", "easing"]),
             "sprite.transform" => (
                 1,
                 &[
                     "x",
                     "y",
                     "alpha",
+                    "scale",
                     "scale_x",
                     "scale_y",
                     "rotation",
@@ -34,7 +33,7 @@ impl<'a> Parser<'a> {
                     "brightness",
                     "contrast",
                     "saturation",
-                    "environment_light",
+                    "light",
                     "duration",
                     "easing",
                 ],
@@ -45,6 +44,7 @@ impl<'a> Parser<'a> {
                     "x",
                     "y",
                     "alpha",
+                    "scale",
                     "scale_x",
                     "scale_y",
                     "rotation",
@@ -63,28 +63,7 @@ impl<'a> Parser<'a> {
             "sprite.update" => (
                 2,
                 &[
-                    "position",
-                    "anchor_offset",
-                    "y",
-                    "layout",
-                    "layout_height",
-                    "layout_fit",
-                    "layout_x",
-                    "layout_y",
-                    "layout_anchor_x",
-                    "layout_anchor_y",
-                    "layout_width",
-                    "layout_canvas_width",
-                    "layout_canvas_height",
-                    "layout_rect_x",
-                    "layout_rect_y",
-                    "layout_rect_width",
-                    "layout_rect_height",
-                    "layout_height_ratio",
-                    "scale",
-                    "duration",
-                    "easing",
-                    "blocking",
+                    "position", "layout", "scale", "duration", "easing", "blocking",
                 ],
             ),
             _ => return None,
@@ -95,21 +74,20 @@ impl<'a> Parser<'a> {
             return None;
         }
         match name {
-            "sprite.offset" | "sprite.transform" | "background.transform" => {
+            "sprite.transform" | "background.transform" => {
                 let id = if name == "background.transform" {
                     "background".to_owned()
                 } else {
                     self.v11_identifier(args.first(), "sprite target", report)?
                 };
-                let names: &[&str] = if name == "sprite.offset" {
-                    &["x", "y"]
-                } else {
-                    &[
-                        "x", "y", "alpha", "scale_x", "scale_y", "rotation", "blur", "width",
-                        "height",
-                    ]
-                };
+                let names = &[
+                    "x", "y", "alpha", "scale_x", "scale_y", "rotation", "blur", "width", "height",
+                ];
                 let mut transform = TransformPatch::default();
+                if let Some(scale) = self.v11_uniform_scale(args, report)? {
+                    transform.set_scale_x(scale);
+                    transform.set_scale_y(scale);
+                }
                 for field in names {
                     let Some(value) = self.checked_number(args, field, report)? else {
                         continue;
@@ -169,18 +147,20 @@ impl<'a> Parser<'a> {
                 duration: self.v11_required_duration(args, "duration", report)?,
             }),
             "sprite.update" => {
-                let scale = self.v11_optional_number(args, "scale", 1.0, report)?;
-                if scale <= 0.0 {
-                    report
-                        .diagnostics
-                        .push(self.error("sprite scale must be positive"));
-                    return None;
-                }
-                Some(Action::UpdateSprite {
+                let scale = self.v11_uniform_scale(args, report)?;
+                Some(Action::PatchSprite {
                     id: self.v11_identifier(args.first(), "sprite ID", report)?,
                     image: self.v11_identifier(args.get(1), "sprite asset", report)?,
-                    position: self.v11_position(args, "position", report)?,
-                    layout: self.v11_sprite_layout(args, report)?,
+                    position: if let Some(arg) = self.named_arg(args, "position") {
+                        Some(self.author_position(Some(arg), report)?)
+                    } else {
+                        None
+                    },
+                    layout: if self.named_arg(args, "layout").is_some() {
+                        Some(self.v11_sprite_layout(args, report)?)
+                    } else {
+                        None
+                    },
                     scale,
                     duration: self.named_duration_checked(args, "duration", report)?,
                     easing: self.named_easing(args, "easing", report)?,
@@ -191,17 +171,39 @@ impl<'a> Parser<'a> {
         }
     }
 
+    pub(in crate::adapter::script::native) fn v11_uniform_scale(
+        &self,
+        args: &[Argument],
+        report: &mut ParseReport,
+    ) -> Option<Option<f32>> {
+        let scale = self.checked_number(args, "scale", report)?;
+        if let Some(value) = scale {
+            if value <= 0.0 {
+                report
+                    .diagnostics
+                    .push(self.error("sprite scale must be positive"));
+                return None;
+            }
+            if self.named_arg(args, "scale_x").is_some()
+                || self.named_arg(args, "scale_y").is_some()
+            {
+                report
+                    .diagnostics
+                    .push(self.error("use either scale or scale_x/scale_y, not both"));
+                return None;
+            }
+        }
+        Some(scale)
+    }
+
     pub(in crate::adapter::script::native) fn v11_filter_patch(
         &self,
         args: &[Argument],
         report: &mut ParseReport,
     ) -> Option<VisualFilterPatch> {
         let filter = VisualFilterPatch {
-            environment_light: if args
-                .iter()
-                .any(|arg| arg.name.as_deref() == Some("environment_light"))
-            {
-                Some(self.v11_optional_bool(args, "environment_light", true, report)?)
+            environment_light: if args.iter().any(|arg| arg.name.as_deref() == Some("light")) {
+                Some(self.v11_optional_bool(args, "light", true, report)?)
             } else {
                 None
             },

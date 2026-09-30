@@ -78,7 +78,7 @@ impl SourceInspectorView<'_> {
     pub(super) fn position_pad(&self, cx: &mut Context<WorkbenchPanel>) -> Option<AnyElement> {
         if !matches!(
             self.key.command.as_str(),
-            "camera.move" | "sprite.offset" | "sprite.transform" | "background.transform"
+            "camera.move" | "sprite.transform" | "background.transform"
         ) {
             return None;
         }

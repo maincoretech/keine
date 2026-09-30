@@ -363,7 +363,7 @@ impl EiyashouCharacter {
 }
 
 const fn default_native_script_version() -> u32 {
-    1
+    2
 }
 
 fn default_script_entry() -> String {
@@ -685,10 +685,10 @@ impl GameConfig {
     /// values.
     pub fn validate(&self) -> Result<(), ConfigValidationError> {
         if self.adapter.script.eq_ignore_ascii_case("keine") {
-            if self.script.version != 1 {
+            if self.script.version != default_native_script_version() {
                 return Err(ConfigValidationError::new(
                     "script.version",
-                    "must be 1 for adapter.script: keine",
+                    "must be 2 for adapter.script: keine (Eiyashou v2.0)",
                 ));
             }
             if self.script.entry.trim().is_empty() {
@@ -1117,7 +1117,7 @@ adapter:
 adapter:
   script: keine
 script:
-  version: 1
+  version: 2
   entry: opening
   assets: manifests/assets.yaml
   characters: manifests/characters.yaml
@@ -1125,7 +1125,8 @@ script:
         )
         .unwrap();
 
-        assert_eq!(cfg.script.version, 1);
+        assert_eq!(cfg.script.version, 2);
+        assert_eq!(ScriptConfig::default().version, 2);
         assert_eq!(cfg.script.entry, "opening");
         assert_eq!(cfg.script.assets, "manifests/assets.yaml");
         assert_eq!(cfg.script.characters, "manifests/characters.yaml");
@@ -1176,16 +1177,13 @@ script:
 
     #[test]
     fn native_script_configuration_rejects_unknown_versions_and_escaping_paths() {
-        let version_error = GameConfig::from_yaml(
-            r#"
-adapter:
-  script: keine
-script:
-  version: 2
-"#,
-        )
-        .unwrap_err();
-        assert!(version_error.to_string().contains("script.version"));
+        for version in [1, 3] {
+            let version_error = GameConfig::from_yaml(&format!(
+                "adapter:\n  script: keine\nscript:\n  version: {version}\n"
+            ))
+            .unwrap_err();
+            assert!(version_error.to_string().contains("script.version"));
+        }
 
         let path_error = GameConfig::from_yaml(
             r#"

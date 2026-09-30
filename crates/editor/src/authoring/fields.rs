@@ -13,6 +13,24 @@ pub(crate) struct SourceContext {
     pub(crate) fields: Vec<SourceField>,
 }
 
+/// Keep optional Inspector fields and Text suggestions consistent with scale exclusivity.
+pub(crate) fn scale_argument_conflicts(command: &str, name: &str, fields: &[SourceField]) -> bool {
+    if !matches!(
+        command,
+        "sprite" | "background" | "sprite.transform" | "background.transform"
+    ) {
+        return false;
+    }
+    fields
+        .iter()
+        .filter(|field| field.insertion.is_none())
+        .any(|field| match name {
+            "scale" => matches!(field.key.as_str(), "scale_x" | "scale_y"),
+            "scale_x" | "scale_y" => field.key == "scale",
+            _ => false,
+        })
+}
+
 /// Shared named-argument inventory for Inspector and Text completions.
 pub fn command_argument_names(command: &str) -> Vec<&str> {
     if command == "event.camera.patch" {
@@ -27,6 +45,12 @@ pub fn command_argument_names(command: &str) -> Vec<&str> {
         fields
     } else {
         let known: &[&str] = match command {
+            "left" | "center" | "right" | "point" => &["x", "y"],
+            "viewport" => &["height"],
+            "scene" => &["fit", "x", "y", "anchor", "width", "height"],
+            "composite" => &["canvas", "rect", "height"],
+            "size" => &["width", "height"],
+            "rect" => &["x", "y", "width", "height"],
             "text.box" => &["visible", "auto"],
             "text.retract" => &["source", "keep"],
             "text.float.configure" => &["id", "infinite"],
@@ -48,6 +72,7 @@ pub fn command_argument_names(command: &str) -> Vec<&str> {
                 "x",
                 "y",
                 "alpha",
+                "scale",
                 "scale_x",
                 "scale_y",
                 "rotation",
@@ -59,29 +84,14 @@ pub fn command_argument_names(command: &str) -> Vec<&str> {
             "sprite" => &[
                 "blocking",
                 "position",
-                "anchor_offset",
-                "position_y",
                 "transition",
                 "z",
                 "blend",
                 "layout",
-                "layout_height",
-                "layout_fit",
-                "layout_x",
-                "layout_y",
-                "layout_anchor_x",
-                "layout_anchor_y",
-                "layout_width",
-                "layout_canvas_width",
-                "layout_canvas_height",
-                "layout_rect_x",
-                "layout_rect_y",
-                "layout_rect_width",
-                "layout_rect_height",
-                "layout_height_ratio",
                 "x",
                 "y",
                 "alpha",
+                "scale",
                 "scale_x",
                 "scale_y",
                 "rotation",
@@ -91,9 +101,9 @@ pub fn command_argument_names(command: &str) -> Vec<&str> {
                 "brightness",
                 "contrast",
                 "saturation",
-                "environment_light",
+                "light",
             ],
-            "move" => &["anchor_offset", "y", "duration", "easing", "blocking"],
+            "move" => &["duration", "easing", "blocking"],
             "bgm" => &["volume", "fade", "loop"],
             "se" => &["volume"],
             "video" => &["skippable"],
@@ -117,12 +127,12 @@ pub fn command_argument_names(command: &str) -> Vec<&str> {
                 "duration",
                 "easing",
             ],
-            "sprite.offset" => &["x", "y", "duration", "easing"],
             "sprite.transform" => &[
-                "environment_light",
+                "light",
                 "x",
                 "y",
                 "alpha",
+                "scale",
                 "scale_x",
                 "scale_y",
                 "rotation",
@@ -139,6 +149,7 @@ pub fn command_argument_names(command: &str) -> Vec<&str> {
                 "x",
                 "y",
                 "alpha",
+                "scale",
                 "scale_x",
                 "scale_y",
                 "rotation",
@@ -180,28 +191,7 @@ pub fn command_argument_names(command: &str) -> Vec<&str> {
             "sprite.select.when" => &["default"],
             "sprite.keyframes" => &["repeat", "blocking"],
             "sprite.update" => &[
-                "position",
-                "anchor_offset",
-                "y",
-                "layout",
-                "layout_height",
-                "layout_fit",
-                "layout_x",
-                "layout_y",
-                "layout_anchor_x",
-                "layout_anchor_y",
-                "layout_width",
-                "layout_canvas_width",
-                "layout_canvas_height",
-                "layout_rect_x",
-                "layout_rect_y",
-                "layout_rect_width",
-                "layout_rect_height",
-                "layout_height_ratio",
-                "scale",
-                "duration",
-                "easing",
-                "blocking",
+                "position", "layout", "scale", "duration", "easing", "blocking",
             ],
             "assets.loading" => &["mode", "lookahead", "blocking"],
             "input.request" => &[
@@ -282,7 +272,7 @@ pub(crate) fn source_field_choices(
     if (!field.quoted && matches!(field.value.as_str(), "true" | "false"))
         || matches!(
             field.key.as_str(),
-            "environment_light"
+            "light"
                 | "blocking"
                 | "infinite"
                 | "looped"
@@ -331,9 +321,27 @@ pub(crate) fn source_field_choices(
         ("text.intro" | "frame", "hold") => &["true", "false"],
         (_, "falloff") => &["linear", "expo"],
         (_, "axis") => &["both", "x", "y"],
-        (_, "position") => &["left", "center", "right"],
-        (_, "layout") => &["natural", "viewport_height", "scene", "composite"],
-        (_, "layout_fit" | "fit") => &["contain", "cover", "fill"],
+        ("move", "1") | (_, "position") => &["left", "center", "right"],
+        (_, "layout") => &[
+            "natural",
+            "viewport(height: 0.85)",
+            "scene(fit: cover, x: 960, y: 540)",
+            "composite(canvas: size(width: 1920, height: 1080))",
+        ],
+        (_, "layout.fit") | ("scene", "fit") => &[
+            "by_height",
+            "by_width",
+            "cover",
+            "contain",
+            "stretch",
+            "center",
+        ],
+        (_, "layout.anchor") | ("scene", "anchor") => &["point(x: 0.5, y: 0.5)"],
+        (_, "layout.canvas") | ("composite", "canvas") => &["size(width: 1920, height: 1080)"],
+        (_, "layout.rect") | ("composite", "rect") => {
+            &["rect(x: 0, y: 0, width: 1920, height: 1080)"]
+        }
+        (_, "fit") => &["contain", "cover", "fill"],
         (_, "blend") => &["alpha", "add", "multiply", "screen"],
         ("event.audio", "1") => &["bgm", "effect", "vocal"],
         ("resource", "kind") => &["background", "figure"],
@@ -352,6 +360,11 @@ pub(crate) fn source_field_choices(
 }
 
 pub(crate) fn source_field_label(key: &SourceContext, field: &SourceField) -> String {
+    if let Some((group, name)) = field.key.split_once('.')
+        && matches!(group, "position" | "1" | "layout")
+    {
+        return title_case(&name.replace(['.', '_'], " "));
+    }
     command_field_label(&key.kind, &key.command, &field.key)
 }
 
@@ -365,6 +378,19 @@ pub(crate) fn command_field_label(kind: &BlockKind, command: &str, field_key: &s
     }
     if field_key == "repeat" && matches!(command, "stage.animate" | "sprite.keyframes") {
         return "Additional repeats".into();
+    }
+    if let Some((group, name)) = field_key.split_once('.')
+        && matches!(group, "position" | "1" | "layout")
+    {
+        return format!(
+            "{} {}",
+            if group == "1" {
+                "Position".into()
+            } else {
+                title_case(group)
+            },
+            title_case(&name.replace(['.', '_'], " "))
+        );
     }
     if field_key.parse::<usize>().is_err() {
         return title_case(
@@ -423,9 +449,7 @@ pub(crate) fn command_field_label(kind: &BlockKind, command: &str, field_key: &s
             ("stage.mask.show" | "stage.mask.hide", 0) => "Mask ID".into(),
             ("se.loop", 0) | ("se.stop", 0) | ("video.play", 0) => "ID".into(),
             ("se.loop", 1) | ("video.play", 1) => "Asset".into(),
-            ("sprite.offset" | "sprite.transform" | "sprite.animate" | "sprite.transition", 0) => {
-                "Target".into()
-            }
+            ("sprite.transform" | "sprite.animate" | "sprite.transition", 0) => "Target".into(),
             ("sprite.animate", 1) => "Preset".into(),
             ("wait", 0) => "Duration".into(),
             ("pop", 0) => "List".into(),
@@ -607,6 +631,33 @@ pub(crate) fn source_number(key: &SourceContext, field: &SourceField) -> Option<
     if field.key == "hold" && command == "text.intro" {
         return None;
     }
+    if field.key.starts_with("layout.anchor.") {
+        let control = SourceNumber {
+            min: 0.,
+            max: 1.,
+            step: 0.01,
+            default: 0.5,
+            unit: "",
+        };
+        return (field.value.is_empty() || control.parse(&field.value).is_some())
+            .then_some(control);
+    }
+    if field.key == "layout.height"
+        && key.fields.iter().any(|parent| {
+            parent.key == "layout"
+                && (parent.value.starts_with("viewport(") || parent.value.starts_with("composite("))
+        })
+    {
+        let control = SourceNumber {
+            min: 0.01,
+            max: 4.,
+            step: 0.01,
+            default: 1.,
+            unit: "×",
+        };
+        return (field.value.is_empty() || control.parse(&field.value).is_some())
+            .then_some(control);
+    }
     let name = field.key.rsplit('.').next().unwrap_or(&field.key);
     let (min, max, step, default, unit) = match name {
         "volume" => (0., 100., 1., 100., "%"),
@@ -615,9 +666,7 @@ pub(crate) fn source_number(key: &SourceContext, field: &SourceField) -> Option<
         }
         "0" if command == "wait" => (0., 5000., 100., 1000., "ms"),
         "x" | "y" if command == "camera.move" => (-1000., 1000., 1., 0., "px"),
-        "x" | "y" | "position_y" | "anchor_offset" | "layout_x" | "layout_y" => {
-            (-1920., 1920., 1., 0., "px")
-        }
+        "x" | "y" => (-1920., 1920., 1., 0., "px"),
         "rotation" | "angle" => (-180., 180., 1., 0., "°"),
         "scale" | "scale_x" | "scale_y" => (0.1, 3., 0.01, 1., "×"),
         "alpha" => (0., 100., 1., 100., "%"),
@@ -626,6 +675,7 @@ pub(crate) fn source_number(key: &SourceContext, field: &SourceField) -> Option<
         "amplitude_randomness" | "frequency_randomness" => (0., 100., 5., 0., "%"),
         "frequency" => (0., 30., 0.5, 12., "Hz"),
         "fps" => (1., 60., 1., 12., "fps"),
+        "width" | "height" if field.key.starts_with("layout.") => (1., 4096., 1., 1080., "px"),
         "font_size" => (8., 128., 1., 32., "px"),
         "count" => (1., 1000., 1., 100., ""),
         "playback_rate" => (0.1, 4., 0.1, 1., "×"),
@@ -845,6 +895,12 @@ pub(crate) fn source_field_enabled(key: &SourceContext, field: &SourceField) -> 
 
 pub(crate) fn source_property_group(field: &SourceField) -> &'static str {
     let name = field.key.as_str();
+    if name == "position" || name.starts_with("position.") || name.starts_with("1.") {
+        return "Position";
+    }
+    if name.starts_with("layout.") {
+        return "Layout";
+    }
     if name.starts_with("speaking.") {
         return "Speaking";
     }
@@ -859,20 +915,11 @@ pub(crate) fn source_property_group(field: &SourceField) -> &'static str {
         "duration" | "easing" | "blocking" | "time" | "fade" | "fade_in" | "fade_out"
     ) {
         "Timing"
-    } else if name.starts_with("layout_") || name == "layout" {
+    } else if name == "layout" {
         "Layout"
     } else if matches!(
         name,
-        "x" | "y"
-            | "alpha"
-            | "scale"
-            | "scale_x"
-            | "scale_y"
-            | "rotation"
-            | "width"
-            | "height"
-            | "anchor_offset"
-            | "position_y"
+        "x" | "y" | "alpha" | "scale" | "scale_x" | "scale_y" | "rotation" | "width" | "height"
     ) {
         "Transform"
     } else if matches!(
@@ -984,7 +1031,8 @@ pub(crate) fn field_options(
         "axis" => Some("both"),
         "position" => Some("center"),
         "layout" => Some("natural"),
-        "layout_fit" | "fit" => Some("contain"),
+        "layout.fit" => Some("by_height"),
+        "fit" => Some("contain"),
         "blend" => Some("alpha"),
         "mode" if key.command == "video.play" => Some("fullscreen"),
         _ => None,

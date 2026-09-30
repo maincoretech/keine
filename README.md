@@ -35,11 +35,11 @@ dev/scripts/  build and fixture scripts
 ## Documentation
 
 - [Architecture and data contracts](dev/docs/architecture.md)
-- [Eiyashou v1 + v1.1](dev/docs/language.md)
+- [Eiyashou v2.0](dev/docs/language.md)
 - [Editor](dev/docs/editor.md)
 - [Development, testing and acceptance](dev/docs/testing.md)
 - [Publishing](dev/docs/release.md)
 - [Compatibility limits](dev/docs/compatibility.md)
 
-Current version: 0.11.1. macOS is the current acceptance focus; Windows/Linux runtime acceptance is deferred.
+Current version: 0.12.0. macOS is the current acceptance focus; Windows/Linux runtime acceptance is deferred.
 Build/test success and manual input/display/media acceptance are separate gates.

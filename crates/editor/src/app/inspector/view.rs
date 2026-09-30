@@ -156,6 +156,7 @@ impl SourceInspectorView<'_> {
         let groups = if camera {
             [
                 "Properties",
+                "Position",
                 "Timing",
                 "Transform",
                 "Speaking",
@@ -167,6 +168,7 @@ impl SourceInspectorView<'_> {
         } else {
             [
                 "Properties",
+                "Position",
                 "Speaking",
                 "Other characters",
                 "Narration",

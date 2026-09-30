@@ -1,7 +1,9 @@
 use super::*;
 
+mod motion;
 mod picker;
 mod view;
+pub(super) use motion::BlockReorderMotion;
 pub(super) use picker::*;
 pub(super) use view::*;
 
@@ -478,10 +480,22 @@ impl WorkbenchPanel {
         cx.defer(move |cx| {
             let _ = cx.update_window(window_handle, |_, window, cx| {
                 let _ = panel.update(cx, |panel, cx| {
+                    if panel.block_settle_source.is_some()
+                        && let Some(motion) = panel.block_reorder_motion.as_mut()
+                        && let PanelContent::Document {
+                            document: Some(document),
+                            ..
+                        } = &panel.content
+                    {
+                        motion.revision = Some(document.borrow().revision());
+                        panel.block_heights = motion.heights.clone();
+                        panel.block_height_revision = document.borrow().revision();
+                    }
                     panel.rebuild_visual_editors(window, cx);
                     if panel.block_settle_source.take().is_some() {
                         panel.block_drop_target = None;
                         panel.block_dragging = None;
+                        panel.block_drag_size = None;
                         panel.selected_blocks.clear();
                         panel.block_selection_anchor = None;
                         if let PanelContent::Document { root, .. } = &panel.content {
@@ -497,10 +511,16 @@ impl WorkbenchPanel {
     }
 
     pub(super) fn hover_block_drop(&mut self, candidate: BlockDropTarget, cx: &mut Context<Self>) {
+        if self.block_drop_target == Some(candidate) {
+            return;
+        }
         let target = self
             .block_dragging
             .as_ref()
-            .filter(|selected| !selected.contains(&candidate.row))
+            .filter(|selected| {
+                matches!(&self.content, PanelContent::Document { document: Some(document), .. }
+                    if document.borrow().projection().accepts_block_drop(selected, candidate.row))
+            })
             .map(|_| candidate);
         if self.block_drop_target != target {
             self.block_drop_target = target;
@@ -567,7 +587,13 @@ impl WorkbenchPanel {
                             && editor.state.read(cx).focus_handle(cx).is_focused(window)
                     })
                 });
+                let moving_into_view = self
+                    .block_reorder_motion
+                    .as_ref()
+                    .and_then(|motion| motion.positions.get(&block.source_range.start))
+                    .is_some_and(|origin| *origin + height >= top && *origin <= bottom);
                 if offset + height >= top && offset <= bottom
+                    || moving_into_view
                     || self.selected_blocks.contains(&block.source_range.start)
                     || focused
                 {
@@ -1507,13 +1533,18 @@ impl WorkbenchPanel {
             } => document.borrow().contents().to_owned(),
             _ => return,
         };
-        match EiyashouProjection::parse(&source).move_blocks_to(
-            &source,
-            &drag.selected,
-            target_start,
-            after,
-        ) {
+        let projection = EiyashouProjection::parse(&source);
+        match projection.move_blocks_to(&source, &drag.selected, target_start, after) {
             Ok(edited) if edited != source => {
+                self.block_reorder_motion = BlockReorderMotion::for_drop(
+                    &projection,
+                    &EiyashouProjection::parse(&edited),
+                    &drag.selected,
+                    target_start,
+                    after,
+                    &self.block_row_positions.borrow(),
+                    &self.block_heights,
+                );
                 self.block_drop_target = Some(BlockDropTarget {
                     row: target_start,
                     after,

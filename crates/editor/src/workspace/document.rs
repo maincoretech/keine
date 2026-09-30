@@ -687,7 +687,7 @@ mod tests {
         fs::create_dir_all(project.join("scripts")).unwrap();
         fs::write(
             project.join("config.yaml"),
-            "title: Fixture\nadapter:\n  script: keine\nscript:\n  version: 1\n  entry: opening\n",
+            "title: Fixture\nadapter:\n  script: keine\nscript:\n  version: 2\n  entry: opening\n",
         )
         .unwrap();
         fs::write(project.join("assets.yaml"), "backgrounds: {}\n").unwrap();
@@ -976,7 +976,7 @@ mod tests {
         fs::write(project.join("manifests/objects.yaml"), "objects: {}\n").unwrap();
         fs::write(
             project.join("config.yaml"),
-            "title: Fixture\nadapter:\n  script: keine\nscript:\n  version: 1\n  entry: opening\n  assets: manifests/resources.yaml\n  characters: manifests/cast.yaml\n  objects: manifests/objects.yaml\n",
+            "title: Fixture\nadapter:\n  script: keine\nscript:\n  version: 2\n  entry: opening\n  assets: manifests/resources.yaml\n  characters: manifests/cast.yaml\n  objects: manifests/objects.yaml\n",
         )
         .unwrap();
         let mut manager = DocumentManager::new(project, root.join("app-data/recovery")).unwrap();

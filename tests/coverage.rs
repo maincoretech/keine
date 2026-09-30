@@ -541,6 +541,7 @@ fn action_name(action: &Action) -> &'static str {
         Action::WaitForAdvance => "wait-for-advance",
         Action::SelectSpriteImage { .. } => "select-sprite-image",
         Action::UpdateSprite { .. } => "update-sprite",
+        Action::PatchSprite { .. } => "patch-sprite",
         // LetsGal owns this adapter-native loading policy; the WebGAL
         // showcase intentionally does not manufacture structured editor JSON.
         Action::ConfigureLoading { .. } => "configure-loading",

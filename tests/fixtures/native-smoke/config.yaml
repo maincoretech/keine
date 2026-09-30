@@ -4,5 +4,5 @@ project:
 adapter:
   script: keine
 script:
-  version: 1
+  version: 2
   entry: start

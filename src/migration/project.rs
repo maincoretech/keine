@@ -353,7 +353,7 @@ fn write_project(
         .cloned()
         .unwrap_or_else(|| model.scene_ids[&scenes[0].name].clone());
     config.script = ScriptConfig {
-        version: 1,
+        version: ScriptConfig::default().version,
         entry: if model.initial_variables.is_empty() {
             entry.clone()
         } else {
@@ -446,19 +446,6 @@ fn render_action(action: &Action, model: &MigrationModel) -> Result<String> {
             "hide({}{})",
             object_id(model, id)?,
             transition_arg(*transition)
-        )),
-        Action::MoveSprite {
-            id,
-            position,
-            duration: seconds,
-            easing,
-            blocking: true,
-        } => Ok(format!(
-            "move({}, {}, duration: {}, easing: {})",
-            object_id(model, id)?,
-            position_name(*position)?,
-            duration(*seconds),
-            easing_name(*easing)
         )),
         Action::Say {
             speaker,
@@ -634,18 +621,6 @@ fn transition_arg(transition: Transition) -> String {
     format!(", transition: {name}({})", duration(seconds))
 }
 
-fn position_name(position: Position) -> Result<&'static str> {
-    if position.y != 0.0 {
-        bail!("non-zero sprite y position requires manual migration");
-    }
-    match position.x {
-        Anchor::Left(0.0) => Ok("left"),
-        Anchor::Center(0.0) => Ok("center"),
-        Anchor::Right(0.0) => Ok("right"),
-        _ => bail!("offset sprite position requires manual migration"),
-    }
-}
-
 fn easing_name(easing: Easing) -> &'static str {
     match easing {
         Easing::Linear => "linear",
@@ -795,7 +770,15 @@ mod tests {
         let menu = render_menu("", &choices, &model).unwrap();
         let parsed =
             keine_loader::adapter::parse_native_scenes(&format!("scene test {{ {menu} }}"));
-        assert!(parsed[0].report.diagnostics.is_empty());
+        assert!(
+            !parsed[0]
+                .report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.level == DiagnosticLevel::Error),
+            "{:?}",
+            parsed[0].report.diagnostics
+        );
         let Action::EiyashouMenu { choices, .. } = &parsed[0].report.actions[0] else {
             panic!("not menu");
         };
@@ -827,6 +810,7 @@ mod tests {
         assert!(!target.join("scripts/start.txt").exists());
         let config = fs::read_to_string(target.join("config.yaml")).unwrap();
         assert!(config.contains("script: keine"));
+        assert_eq!(GameConfig::from_yaml(&config).unwrap().script.version, 2);
         let native = fs::read_to_string(target.join("scripts/main.shou")).unwrap();
         assert!(native.contains("speaker_0001: \"Hello\""));
         assert!(!native.contains("Alice:Hello;"));

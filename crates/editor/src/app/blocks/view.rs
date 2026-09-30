@@ -181,7 +181,11 @@ pub(in crate::app) struct BlockProjectionView<'a> {
     pub(in crate::app) draft_text: Option<&'a DraftTextBlock>,
     pub(in crate::app) drop_target: Option<BlockDropTarget>,
     pub(in crate::app) dragging: Option<&'a HashSet<usize>>,
+    pub(in crate::app) drag_size: Option<(f32, f32)>,
+    pub(in crate::app) row_bounds: &'a Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     pub(in crate::app) settle_source: Option<&'a str>,
+    pub(in crate::app) reorder_motion: Option<&'a BlockReorderMotion>,
+    pub(in crate::app) row_positions: &'a RefCell<HashMap<usize, f32>>,
     pub(in crate::app) scroll_handle: &'a ScrollHandle,
     pub(in crate::app) scroll_anchor: &'a ScrollAnchor,
     pub(in crate::app) scroll_pending: bool,
@@ -219,7 +223,7 @@ pub(in crate::app) fn block_row_height(
                         .map(|draft| &draft.state)
                 })
         });
-        if text_state.is_none()
+        if text_state.is_none_or(|state| state.read(cx).text_bounds().is_none())
             && let Some(height) = heights.get(&block.source_range.start)
         {
             return *height;
@@ -261,6 +265,7 @@ fn dragged_block_height(
     editors: &[BlockTextEditor],
     draft_text: Option<&DraftTextBlock>,
     heights: &HashMap<usize, f32>,
+    bounds: &HashMap<usize, Bounds<Pixels>>,
     cx: &App,
 ) -> f32 {
     let ranges = projection
@@ -280,7 +285,12 @@ fn dragged_block_height(
                 .any(|range| range.contains(&block.source_range.start))
         })
         .filter(|block| !block.is_textbox_ending())
-        .map(|block| block_row_height(block, editors, draft_text, heights, cx))
+        .map(|block| {
+            bounds.get(&block.source_range.start).map_or_else(
+                || block_row_height(block, editors, draft_text, heights, cx),
+                |bounds| f32::from(bounds.size.height),
+            )
+        })
         .collect::<Vec<_>>();
     heights.iter().sum::<f32>() + 4. * heights.len().saturating_sub(1) as f32
 }
@@ -332,6 +342,7 @@ pub(in crate::app) fn draft_text_row(draft: &DraftTextBlock, indent: f32, id: us
 fn block_drop_slot(
     height: Pixels,
     dragged_height: f32,
+    dragged_width: Option<f32>,
     indent: f32,
     target: BlockDropTarget,
     cx: &mut Context<WorkbenchPanel>,
@@ -341,16 +352,22 @@ fn block_drop_slot(
         .min_h_0()
         .flex_none()
         .overflow_hidden()
-        .pl(px(indent))
-        .pr_2()
+        .relative()
+        .ml(px(indent))
         .on_mouse_move(cx.listener(move |this, _, _, cx| {
             this.hover_block_drop(target, cx);
             cx.stop_propagation();
         }))
         .child(
             div()
+                .absolute()
+                .top_0()
+                .left_0()
                 .h(px(dragged_height))
-                .rounded(px(7.))
+                .w_full()
+                .when_some(dragged_width, |this, width| this.w(px(width)))
+                .max_w_full()
+                .rounded(px(4.))
                 .bg(rgb(SURFACE_HOVER)),
         )
         .into_any_element()
@@ -570,7 +587,11 @@ pub(in crate::app) fn render_block_projection(
         draft_text,
         drop_target,
         dragging,
+        drag_size,
+        row_bounds,
         settle_source,
+        reorder_motion,
+        row_positions,
         scroll_handle,
         scroll_anchor,
         scroll_pending,
@@ -580,6 +601,13 @@ pub(in crate::app) fn render_block_projection(
         visible,
         heights,
     } = view;
+    let motion_progress = reorder_motion.map_or(1., BlockReorderMotion::progress);
+    if motion_progress < 1. {
+        window.request_animation_frame();
+    }
+    let mut row_positions = row_positions.borrow_mut();
+    row_positions.clear();
+    row_bounds.borrow_mut().clear();
     // Hold the drag-time projection until source and row states settle in the
     // same paint; otherwise release briefly flashes the previous row order.
     let source = settle_source
@@ -631,9 +659,31 @@ pub(in crate::app) fn render_block_projection(
         .filter(|block| block.is_textbox_ending())
         .filter_map(|block| block.lifetime_owner)
         .collect::<HashSet<_>>();
-    let dragged_height = dragging.map_or(32., |selected| {
-        dragged_block_height(&projection, selected, editors, draft_text, heights, cx)
-    });
+    let dragged_ranges = projection
+        .scenes
+        .iter()
+        .flat_map(|scene| &scene.blocks)
+        .filter(|block| {
+            dragging.is_some_and(|selected| selected.contains(&block.source_range.start))
+        })
+        .map(|block| block.source_range.clone())
+        .collect::<Vec<_>>();
+    let dragged_height = drag_size.map_or_else(
+        || {
+            dragging.map_or(32., |selected| {
+                dragged_block_height(
+                    &projection,
+                    selected,
+                    editors,
+                    draft_text,
+                    heights,
+                    &row_bounds.borrow(),
+                    cx,
+                )
+            })
+        },
+        |(_, height)| height,
+    );
     let block_order = Arc::new(
         projection
             .scenes
@@ -805,6 +855,7 @@ pub(in crate::app) fn render_block_projection(
             .enumerate()
         {
             let row_height = block_row_height(block, editors, draft_text, heights, cx);
+            let row_top = overview_offset + scene_body_height * collapse_progress;
             // Use the same row height, draft/drop gaps and collapse transition as the main layout.
             let overview_row = overview.len();
             if collapse_progress > 0. {
@@ -883,7 +934,7 @@ pub(in crate::app) fn render_block_projection(
             };
             let drag_panel = cx.entity().downgrade();
             let drag_label = label.clone();
-            let drag_summary = source_summary.clone();
+            let drag_summary = headline.clone();
             let drag_count = drag_selection.len();
             let block_indent = block.depth as f32 * 18.;
             let movable = !matches!(&block.kind, BlockKind::ElseIf | BlockKind::Else);
@@ -905,15 +956,29 @@ pub(in crate::app) fn render_block_projection(
                             selected: drag_selection.clone(),
                         },
                         move |_, _, _, cx| {
-                            let (width, height) = drag_panel
+                            let (width, grip_height) = drag_panel
                                 .update(cx, |panel, cx| {
                                     panel.block_dragging = Some(drag_selection.clone());
                                     panel.block_drop_target = None;
                                     cx.notify();
-                                    let width = (f32::from(panel.view_scroll.bounds().size.width)
-                                        - 24.
-                                        - block_indent)
-                                        .max(72.);
+                                    let bounds = panel.block_row_bounds.borrow();
+                                    let grip_height = bounds
+                                        .get(&row_id)
+                                        .map_or(row_height, |bounds| f32::from(bounds.size.height));
+                                    let width = bounds
+                                        .get(&row_id)
+                                        .map(|bounds| f32::from(bounds.size.width))
+                                        .unwrap_or_else(|| {
+                                            if compact_key {
+                                                360.
+                                            } else {
+                                                (f32::from(panel.view_scroll.bounds().size.width)
+                                                    - line_number_gutter
+                                                    - 16.
+                                                    - block_indent)
+                                                    .max(72.)
+                                            }
+                                        });
                                     let height = match &panel.content {
                                         PanelContent::Document {
                                             document: Some(document),
@@ -924,11 +989,13 @@ pub(in crate::app) fn render_block_projection(
                                             &panel.block_text_editors,
                                             panel.draft_text.as_ref(),
                                             &panel.block_heights,
+                                            &bounds,
                                             cx,
                                         ),
                                         _ => row_height,
                                     };
-                                    (width, height)
+                                    panel.block_drag_size = Some((width, height));
+                                    (width, grip_height)
                                 })
                                 .unwrap_or((300., row_height));
                             cx.new(|_| BlockDragPreview {
@@ -937,7 +1004,9 @@ pub(in crate::app) fn render_block_projection(
                                 icon,
                                 count: drag_count,
                                 width,
-                                height,
+                                height: grip_height,
+                                color: type_color,
+                                grip_top: (grip_height - 18.) * 0.5,
                             })
                         },
                     )
@@ -958,25 +1027,41 @@ pub(in crate::app) fn render_block_projection(
                 row: row_id,
                 after: true,
             };
-            let show_drop_gap = drop_target.is_some_and(|target| target.row == row_id)
-                && (cx.has_active_drag() || settle_source.is_some())
-                && dragging.is_none_or(|selected| !selected.contains(&row_id));
-            let drop_gap_height = transition(
-                (format!("block-drop-gap-{row_id}"), "height"),
-                if show_drop_gap {
+            let can_show_gap = (cx.has_active_drag() || settle_source.is_some())
+                && !dragged_ranges.iter().any(|range| range.contains(&row_id));
+            let gap_policy = Transition::new(if cx.has_active_drag() || settle_source.is_some() {
+                TAB_MOTION_DURATION
+            } else {
+                Duration::ZERO
+            });
+            // Both slots retain their collapsing height when the pointer changes sides/rows.
+            // Layout, overview and reorder origins must sample exactly the same heights.
+            let before_gap_height = transition(
+                (format!("block-drop-gap-{row_id}"), "before"),
+                if can_show_gap && drop_target == Some(before_target) {
                     px(dragged_height + 4.)
                 } else {
                     px(0.)
                 },
-                Transition::new(if cx.has_active_drag() {
-                    TAB_MOTION_DURATION
-                } else {
-                    Duration::ZERO
-                }),
+                gap_policy.clone(),
                 window,
                 cx,
             );
-            scene_body_height += row_height + 4. + f32::from(drop_gap_height);
+            let after_gap_height = transition(
+                (format!("block-drop-gap-{row_id}"), "after"),
+                if can_show_gap && drop_target == Some(after_target) {
+                    px(dragged_height + 4.)
+                } else {
+                    px(0.)
+                },
+                gap_policy,
+                window,
+                cx,
+            );
+            scene_body_height += row_height + 4. + f32::from(before_gap_height + after_gap_height);
+            if let Some(mark) = overview.get_mut(overview_row) {
+                mark.top += f32::from(before_gap_height) * collapse_progress;
+            }
             let inline_control = inline
                 .get(&row_id)
                 .and_then(|control| render_inline_block(&root, control, cx));
@@ -993,7 +1078,7 @@ pub(in crate::app) fn render_block_projection(
                 .px_2()
                 .rounded(px(4.))
                 .opacity(
-                    if dragging.is_some_and(|selected| selected.contains(&row_id)) {
+                    if dragged_ranges.iter().any(|range| range.contains(&row_id)) {
                         0.35
                     } else if block.disabled {
                         0.45
@@ -1299,12 +1384,34 @@ pub(in crate::app) fn render_block_projection(
                             ))),
                     );
             }
+            let measured_bounds = row_bounds.clone();
+            row = row.child(
+                canvas(
+                    move |bounds, _, _| {
+                        measured_bounds.borrow_mut().insert(row_id, bounds);
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            );
+            let row_top = row_top + f32::from(before_gap_height) * collapse_progress;
+            let displacement = if settle_source.is_none() {
+                reorder_motion
+                    .and_then(|motion| motion.positions.get(&row_id))
+                    .map_or(0., |origin| (origin - row_top) * (1. - motion_progress))
+            } else {
+                0.
+            };
+            row_positions.insert(row_id, row_top + displacement);
             let row_wrapper = div()
                 .relative()
+                .top(px(displacement))
                 .w_full()
                 .min_w_0()
                 .flex()
                 .flex_col()
+                .flex_none()
                 .on_drop(cx.listener(move |this, drag: &BlockDrag, window, cx| {
                     cx.stop_propagation();
                     let after = this
@@ -1319,12 +1426,9 @@ pub(in crate::app) fn render_block_projection(
                     this.drop_assets(drag, row_id, false, window, cx);
                 }))
                 .child(block_drop_slot(
-                    if drop_target == Some(before_target) {
-                        drop_gap_height
-                    } else {
-                        px(0.)
-                    },
+                    before_gap_height,
                     dragged_height,
+                    drag_size.map(|size| size.0),
                     block_indent,
                     before_target,
                     cx,
@@ -1343,12 +1447,9 @@ pub(in crate::app) fn render_block_projection(
                         })),
                 )
                 .child(block_drop_slot(
-                    if drop_target == Some(after_target) {
-                        drop_gap_height
-                    } else {
-                        px(0.)
-                    },
+                    after_gap_height,
                     dragged_height,
+                    drag_size.map(|size| size.0),
                     block_indent,
                     after_target,
                     cx,

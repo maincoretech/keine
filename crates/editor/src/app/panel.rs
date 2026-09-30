@@ -41,9 +41,8 @@ use super::inspector::{InlineBlockControl, SourceOption};
 use super::resource::ResourcePicker;
 use super::{
     ASSET_PREVIEW_PANEL, ASSETS_PANEL, CHARACTERS_PANEL, DOCUMENT_PANEL, EXPLORER_PANEL, INK,
-    INSPECTOR_PANEL, OUTPUT_PANEL, PERFORMANCE_PANEL, PREVIEW_SOURCE_DEBOUNCE, PRIMARY,
-    PROBLEMS_PANEL, SCENES_PANEL, SEARCH_PANEL, SURFACE, SURFACE_HOVER, completion, minimap,
-    search, text_minimap,
+    INSPECTOR_PANEL, OUTPUT_PANEL, PERFORMANCE_PANEL, PREVIEW_SOURCE_DEBOUNCE, PROBLEMS_PANEL,
+    SCENES_PANEL, SEARCH_PANEL, SURFACE, SURFACE_HOVER, completion, minimap, search, text_minimap,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -341,7 +340,11 @@ pub(super) struct WorkbenchPanel {
     pub(super) draft_text: Option<DraftTextBlock>,
     pub(super) block_drop_target: Option<BlockDropTarget>,
     pub(super) block_dragging: Option<HashSet<usize>>,
+    pub(super) block_drag_size: Option<(f32, f32)>,
+    pub(super) block_row_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     pub(super) block_settle_source: Option<String>,
+    pub(super) block_reorder_motion: Option<super::blocks::BlockReorderMotion>,
+    pub(super) block_row_positions: RefCell<HashMap<usize, f32>>,
     pub(super) block_picker_open: bool,
     pub(super) block_picker_index: usize,
     pub(super) block_picker_category: Option<&'static str>,
@@ -560,6 +563,8 @@ pub(super) struct BlockDragPreview {
     pub(super) count: usize,
     pub(super) width: f32,
     pub(super) height: f32,
+    pub(super) color: u32,
+    pub(super) grip_top: f32,
 }
 
 impl Render for BlockDragPreview {
@@ -567,32 +572,56 @@ impl Render for BlockDragPreview {
         div()
             .w(px(self.width))
             .h(px(self.height))
+            .relative()
+            .left(px(-8.))
+            .top(px(-self.grip_top))
+            .overflow_hidden()
             .flex()
             .items_center()
             .gap_2()
             .px_2()
-            .rounded(px(7.))
+            .rounded(px(4.))
             .bg(rgb(SURFACE_HOVER))
             .text_sm()
             .text_color(rgb(INK))
-            .child(Icon::new(AssetIconName::GripVertical).xsmall())
-            .child(Icon::new(self.icon).xsmall())
             .child(
                 div()
-                    .w(px(64.))
+                    .size(px(18.))
                     .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        Icon::new(AssetIconName::GripVertical)
+                            .xsmall()
+                            .text_color(rgb(0x686e75)),
+                    ),
+            )
+            .child(
+                div()
+                    .h(px(24.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .px(px(6.))
+                    .rounded(px(3.))
+                    .bg(gpui_kit::rgba((self.color << 8) | 0x20))
                     .overflow_hidden()
                     .whitespace_nowrap()
-                    .text_ellipsis()
-                    .text_xs()
-                    .text_color(rgb(PRIMARY))
+                    .text_size(px(13.))
+                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                    .text_color(rgb(self.color))
+                    .child(Icon::new(self.icon).xsmall())
                     .child(self.label.clone()),
             )
             .child(
                 div()
                     .min_w_0()
                     .flex_1()
-                    .whitespace_normal()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
                     .child(if self.count == 1 {
                         self.summary.clone()
                     } else {
@@ -713,7 +742,11 @@ impl WorkbenchPanel {
                 draft_text: None,
                 block_drop_target: None,
                 block_dragging: None,
+                block_drag_size: None,
+                block_row_bounds: Rc::new(RefCell::new(HashMap::new())),
                 block_settle_source: None,
+                block_reorder_motion: None,
+                block_row_positions: RefCell::new(HashMap::new()),
                 block_picker_open: false,
                 block_picker_index: 0,
                 block_picker_category: None,

@@ -20,12 +20,12 @@ cargo migrate projects/letsgal projects/letsgal-native
 ```text
 文档
 ├── architecture.md    职责、资源、格式与安全边界
-├── language.md        当前 Eiyashou v1 + v1.1 语法
+├── language.md        当前 Eiyashou v2.0 语法
 ├── editor.md          Text / Blocks / Inspector / Preview
 ├── testing.md         开发检查、基准与验收缺口
 ├── release.md         打包、macOS 与 Project CI
 └── compatibility.md   LetsGal 与 WebGAL 的支持边界
 ```
 
-当前版本 0.11.1。macOS 是当前验收重点；Windows/Linux 的运行态验收暂缓。
+当前版本 0.12.0。macOS 是当前验收重点；Windows/Linux 的运行态验收暂缓。
 编译和自动测试通过不等于 IME、DPI、音视频和运行态验收通过。

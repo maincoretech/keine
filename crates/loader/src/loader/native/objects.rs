@@ -69,6 +69,7 @@ impl ObjectAliases {
             | Action::ConfigureSpriteSequence { id, .. }
             | Action::ConfigureTimedSpriteSequence { id, .. }
             | Action::UpdateSprite { id, .. }
+            | Action::PatchSprite { id, .. }
             | Action::MoveSprite { id, .. } => self.id(id),
             Action::Animate { target, .. }
             | Action::SetTransition { target, .. }

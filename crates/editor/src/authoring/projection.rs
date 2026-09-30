@@ -317,6 +317,22 @@ impl EiyashouProjection {
                 }
                 if block.kind == BlockKind::Command {
                     let command = node[..open].trim();
+                    if matches!(command, "sprite" | "sprite.update" | "move") {
+                        fields = fields
+                            .into_iter()
+                            .flat_map(|field| {
+                                if field.key == "layout"
+                                    || field.key == "position"
+                                    || (command == "move" && field.key == "1")
+                                {
+                                    grouped_visual_fields(source, &field)
+                                        .unwrap_or_else(|| vec![field])
+                                } else {
+                                    vec![field]
+                                }
+                            })
+                            .collect();
+                    }
                     if command == "sprite.focus.configure" {
                         fields = fields
                             .into_iter()
@@ -335,9 +351,11 @@ impl EiyashouProjection {
                     let insertion_point = argument_start + arguments.trim_end().len();
                     let has_arguments = !arguments.trim().is_empty();
                     for name in optional {
-                        if fields.iter().any(|field| {
-                            field.key == name || field.key.starts_with(&format!("{name}."))
-                        }) {
+                        if super::fields::scale_argument_conflicts(command, name, &fields)
+                            || fields.iter().any(|field| {
+                                field.key == name || field.key.starts_with(&format!("{name}."))
+                            })
+                        {
                             continue;
                         }
                         fields.push(SourceField {
@@ -700,6 +718,97 @@ fn portrait_style_fields(source: &str, parent: &SourceField) -> Option<Vec<Sourc
             quoted: false,
             insertion: Some(format!("{}{name}: ", if has_fields { ", " } else { "" })),
             insertion_suffix: None,
+        });
+    }
+    Some(fields)
+}
+
+fn grouped_visual_fields(source: &str, parent: &SourceField) -> Option<Vec<SourceField>> {
+    let value = source.get(parent.range.clone())?;
+    let open = value.find('(');
+    let constructor = value[..open.unwrap_or(value.len())].trim();
+    if !matches!(
+        constructor,
+        "left"
+            | "center"
+            | "right"
+            | "natural"
+            | "viewport"
+            | "scene"
+            | "composite"
+            | "point"
+            | "size"
+            | "rect"
+    ) {
+        return None;
+    }
+    let position = matches!(constructor, "left" | "center" | "right");
+    let mut root = parent.clone();
+    if position {
+        root.value = constructor.into();
+        root.range.end = root.range.start + constructor.len();
+    }
+    let mut fields = vec![root];
+    let names = command_argument_names(constructor);
+    let body = if let Some(open) = open {
+        let close = matching_parenthesis(value, open)?;
+        if close != value.len() - 1 {
+            return None;
+        }
+        &value[open + 1..close]
+    } else {
+        ""
+    };
+    let body_start = parent.range.start + open.map_or(value.len(), |index| index + 1);
+    for span in split_source_ranges(body, ',') {
+        let Some(full) =
+            trimmed_source_range(source, body_start + span.start..body_start + span.end)
+        else {
+            continue;
+        };
+        let raw = source.get(full.clone())?;
+        let colon = top_level_position(raw, ':')?;
+        let name = raw[..colon].trim();
+        if !names.contains(&name) {
+            return None;
+        }
+        let range = trimmed_source_range(source, full.start + colon + 1..full.end)?;
+        let field = SourceField {
+            key: format!("{}.{}", parent.key, name),
+            value: source[range.clone()].to_owned(),
+            range,
+            quoted: false,
+            insertion: None,
+            insertion_suffix: None,
+        };
+        if matches!(name, "anchor" | "canvas" | "rect") {
+            fields.extend(grouped_visual_fields(source, &field).unwrap_or_else(|| vec![field]));
+        } else {
+            fields.push(field);
+        }
+    }
+    for name in names {
+        let key = format!("{}.{}", parent.key, name);
+        if fields.iter().any(|field| field.key == key) {
+            continue;
+        }
+        let at = parent.range.end - usize::from(open.is_some());
+        fields.push(SourceField {
+            key,
+            value: String::new(),
+            range: at..at,
+            quoted: false,
+            insertion: Some(format!(
+                "{}{name}: ",
+                if open.is_none() {
+                    "("
+                } else if body.trim().is_empty() {
+                    ""
+                } else {
+                    ", "
+                }
+            )),
+            insertion_suffix: open.is_none().then(|| ")".into()),
         });
     }
     Some(fields)
@@ -1271,6 +1380,67 @@ mod tests {
     }
 
     #[test]
+    fn drag_targets_share_nested_source_edit_boundaries() {
+        let source = r#"scene start {
+  wait(1s),
+  choice {
+    "First": { wait(2s), wait(3s) },
+    "Second": { wait(4s), wait(5s) }
+  },
+  wait(6s)
+}
+scene other { wait(7s) }"#;
+        let projection = EiyashouProjection::parse(source);
+        assert!(projection.read_only.is_empty());
+        let start = |text: &str| source.find(text).unwrap();
+        for (selected, target, accepted) in [
+            ("wait(1s)", "wait(6s)", true),
+            ("wait(2s)", "wait(3s)", true),
+            ("\"First\"", "\"Second\"", true),
+            ("wait(1s)", "wait(2s)", false),
+            ("wait(2s)", "wait(1s)", false),
+            ("wait(2s)", "wait(4s)", false),
+            ("choice", "wait(2s)", false),
+            ("wait(1s)", "wait(7s)", false),
+        ] {
+            let selected = HashSet::from([start(selected)]);
+            let target = start(target);
+            assert_eq!(projection.accepts_block_drop(&selected, target), accepted);
+            for after in [false, true] {
+                let edited = projection.move_blocks_to(source, &selected, target, after);
+                assert_eq!(edited.is_ok(), accepted);
+                if let Ok(edited) = edited {
+                    assert!(EiyashouProjection::parse(&edited).read_only.is_empty());
+                    assert_eq!(edited.matches("wait(").count(), 7);
+                }
+            }
+        }
+        let selected = HashSet::from([start("wait(1s)"), start("wait(2s)")]);
+        assert!(!projection.accepts_block_drop(&selected, start("wait(6s)")));
+        assert!(
+            projection
+                .move_blocks_to(source, &selected, start("wait(6s)"), true)
+                .is_err()
+        );
+        let selected = HashSet::from([start("wait(2s)")]);
+        assert!(!projection.accepts_block_drop(&selected, start("wait(2s)")));
+        assert_eq!(
+            projection
+                .move_blocks_to(source, &selected, start("wait(2s)"), true)
+                .unwrap(),
+            source
+        );
+        // Moving a complete option preserves both children inside their original branch.
+        let selected = HashSet::from([start("\"Second\"")]);
+        let edited = projection
+            .move_blocks_to(source, &selected, start("\"First\""), false)
+            .unwrap();
+        assert!(edited.contains(
+            "\"Second\": { wait(4s), wait(5s) },\n    \"First\": { wait(2s), wait(3s) }"
+        ));
+    }
+
+    #[test]
     fn reordered_text_blocks_keep_their_text_and_new_offsets() {
         let source = "scene opening {\n  background(day),\n  \"First narration.\",\n  aya: \"A different line.\",\n  \"Second narration wraps\\nonto another line.\"\n}\n";
         let projection = EiyashouProjection::parse(source);
@@ -1457,6 +1627,78 @@ mod tests {
     }
 
     #[test]
+    fn grouped_batch_edits_preserve_siblings_and_combine_insertions() {
+        let source = "scene start { sprite(hero, face, position: right, layout: viewport(height: 0.85), y: 24) /* kept */ }";
+        let projection = EiyashouProjection::parse(source);
+        let start = source.find("sprite(").unwrap();
+        let edited = projection
+            .replace_block_fields(
+                source,
+                start,
+                &[
+                    ("position.x".into(), Some("500".into())),
+                    ("position.y".into(), Some("20".into())),
+                    ("layout.height".into(), Some("0.9".into())),
+                ],
+            )
+            .unwrap();
+        assert_eq!(
+            edited,
+            "scene start { sprite(hero, face, position: right(x: 500, y: 20), layout: viewport(height: 0.9), y: 24) /* kept */ }"
+        );
+        let removed = EiyashouProjection::parse(&edited)
+            .replace_block_fields(&edited, start, &[("position.x".into(), None)])
+            .unwrap();
+        assert!(removed.contains("right( y: 20)") && removed.contains("y: 24"));
+        assert!(EiyashouProjection::parse(&removed).read_only.is_empty());
+    }
+
+    #[test]
+    fn grouped_visual_fields_keep_precise_ranges_and_nested_insertions() {
+        let source = "scene a { sprite(hero, face, position: right(x: 500, y: 20), layout: viewport(height: 0.85), y: 12), move(hero, left) }";
+        let projection = EiyashouProjection::parse(source);
+        assert!(projection.read_only.is_empty());
+        let fields = projection
+            .source_fields(source, projection.scenes[0].blocks[0].source_range.start)
+            .unwrap();
+        for (name, expected) in [
+            ("position", "right"),
+            ("position.x", "500"),
+            ("position.y", "20"),
+            ("layout.height", "0.85"),
+            ("y", "12"),
+        ] {
+            let field = fields.iter().find(|field| field.key == name).unwrap();
+            assert_eq!(&source[field.range.clone()], expected);
+        }
+        let fields = projection
+            .source_fields(source, projection.scenes[0].blocks[1].source_range.start)
+            .unwrap();
+        let x = fields.iter().find(|field| field.key == "1.x").unwrap();
+        let mut edited = source.to_owned();
+        edited.replace_range(
+            x.range.clone(),
+            &format!(
+                "{}30{}",
+                x.insertion.as_deref().unwrap(),
+                x.insertion_suffix.as_deref().unwrap()
+            ),
+        );
+        assert!(edited.ends_with("move(hero, left(x: 30)) }"));
+        assert!(EiyashouProjection::parse(&edited).read_only.is_empty());
+        let source = "scene a { sprite(layer, face, layout: composite(canvas: size(width: 1920, height: 1080), rect: rect(x: 0, y: 0, width: 700, height: 900))) }";
+        let projection = EiyashouProjection::parse(source);
+        let fields = projection
+            .source_fields(source, projection.scenes[0].blocks[0].source_range.start)
+            .unwrap();
+        let width = fields
+            .iter()
+            .find(|field| field.key == "layout.rect.width")
+            .unwrap();
+        assert_eq!(&source[width.range.clone()], "700");
+    }
+
+    #[test]
     fn inserts_the_first_block_in_an_empty_scene() {
         let source = "scene empty {\n}\n";
         let projection = EiyashouProjection::parse(source);
@@ -1499,13 +1741,18 @@ mod tests {
             .source_fields(source, sprite.source_range.start)
             .unwrap();
         assert_eq!(
-            fields[..4]
+            fields
                 .iter()
+                .filter(|field| field.insertion.is_none())
                 .map(|field| field.key.as_str())
                 .collect::<Vec<_>>(),
             ["0", "1", "position", "transition"]
         );
-        assert_eq!(source.get(fields[3].range.clone()), Some("fade(300ms)"));
+        let transition = fields
+            .iter()
+            .find(|field| field.key == "transition")
+            .unwrap();
+        assert_eq!(source.get(transition.range.clone()), Some("fade(300ms)"));
         let z = fields.iter().find(|field| field.key == "z").unwrap();
         assert_eq!(z.insertion.as_deref(), Some(", z: "));
         let mut edited = source.to_owned();

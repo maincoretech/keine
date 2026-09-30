@@ -31,7 +31,7 @@ use crate::{LoadedScene, ResourceRef, SceneRef};
 
 pub const PROGRAM_MAGIC: [u8; 8] = *b"KEINEPG\0";
 pub const ENVELOPE_VERSION: u32 = 1;
-pub const IR_SCHEMA_VERSION: u32 = 4;
+pub const IR_SCHEMA_VERSION: u32 = 5;
 pub const FIXED_HEADER_LEN: usize = 64;
 
 /// Upper bounds for the envelope. Values follow the v2 plan; they are
@@ -535,6 +535,43 @@ mod tests {
     }
 
     #[test]
+    fn roundtrip_distinguishes_omitted_sprite_fields_from_explicit_defaults() {
+        let mut input = fixture_input();
+        input.scenes[0].actions = vec![
+            keine_core::Action::PatchSprite {
+                id: "hero".into(),
+                image: "face".into(),
+                position: None,
+                layout: None,
+                scale: None,
+                duration: 0.0,
+                easing: keine_core::Easing::Linear,
+                blocking: true,
+            },
+            keine_core::Action::PatchSprite {
+                id: "hero".into(),
+                image: "face".into(),
+                position: Some(keine_core::Position::center(0.0)),
+                layout: Some(keine_core::SpriteLayout::Natural),
+                scale: Some(1.0),
+                duration: 0.0,
+                easing: keine_core::Easing::Linear,
+                blocking: true,
+            },
+        ];
+        input.fingerprint = Program::from_scenes(
+            input
+                .scenes
+                .iter()
+                .map(|scene| (scene.name.clone(), scene.actions.clone())),
+        )
+        .fingerprint();
+        let bytes = encode(&input).unwrap();
+        let decoded = decode(&bytes, IR_SCHEMA_VERSION).unwrap();
+        assert_eq!(decoded.scenes, input.scenes);
+    }
+
+    #[test]
     fn encoding_is_reproducible() {
         let input = fixture_input();
         assert_eq!(encode(&input).unwrap(), encode(&input).unwrap());
@@ -673,7 +710,7 @@ mod tests {
     }
 
     fn const_hex() -> Vec<u8> {
-        const HEX: &str = "4b45494e45504700010000000400000000000000160000001900000000000000200f16e1d813f0f720c8f62ed624edd80000000000000000000000000000000005302e382e3105302e382e310677656267616c01020001057374617274021c0f0573636f72650531202b2031000000";
+        const HEX: &str = "4b45494e45504700010000000500000000000000160000001900000000000000200f16e1d813f0f720c8f62ed624edd80000000000000000000000000000000005302e382e3105302e382e310677656267616c01020001057374617274021c0f0573636f72650531202b2031000000";
         (0..HEX.len())
             .step_by(2)
             .map(|index| u8::from_str_radix(&HEX[index..index + 2], 16).unwrap())

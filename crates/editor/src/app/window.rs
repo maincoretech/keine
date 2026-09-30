@@ -1000,17 +1000,6 @@ impl WorkbenchWindow {
             .when(self.workspace.is_some(), |this| {
                 this.child(
                     activity_tool(
-                        "activity-search",
-                        AssetIconName::Search,
-                        search_open,
-                        "Search",
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.show_tool(ToolKind::Search, window, cx)
-                    })),
-                )
-                .child(
-                    activity_tool(
                         "activity-assets",
                         AssetIconName::Images,
                         assets_open,
@@ -1029,6 +1018,17 @@ impl WorkbenchWindow {
                     )
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.show_tool(ToolKind::Characters, window, cx)
+                    })),
+                )
+                .child(
+                    activity_tool(
+                        "activity-search",
+                        AssetIconName::Search,
+                        search_open,
+                        "Search",
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.show_tool(ToolKind::Search, window, cx)
                     })),
                 )
                 .child(activity_divider())

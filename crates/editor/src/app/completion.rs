@@ -341,7 +341,12 @@ fn suggestion(
                 raw,
                 crate::authoring::fields::command_argument_names(&command)
                     .into_iter()
-                    .filter(|name| !fields.iter().any(|field| field.key == *name))
+                    .filter(|name| {
+                        !fields.iter().any(|field| field.key == *name)
+                            && !crate::authoring::fields::scale_argument_conflicts(
+                                &command, name, &fields,
+                            )
+                    })
                     .map(|name| format!("{name}: "))
                     .collect::<Vec<_>>()
                     .iter()
@@ -517,6 +522,22 @@ mod tests {
             Some("alse".into())
         );
         assert_eq!(complete("scene start {\n  \"你好\", auto: true, au"), None);
+    }
+
+    #[test]
+    fn grouped_visual_completion_uses_the_current_constructor() {
+        assert_eq!(
+            complete("scene start { sprite(hero, face, position: right(x: 20, y"),
+            Some(": ".into())
+        );
+        assert_eq!(
+            complete("scene start { sprite(hero, face, layout: viewport(he"),
+            Some("ight: ".into())
+        );
+        assert_eq!(
+            complete("scene start { sprite(hero, face, layout: composite(canvas: size(wi"),
+            Some("dth: ".into())
+        );
     }
 
     #[test]
