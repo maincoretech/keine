@@ -1,8 +1,8 @@
-# Eiyashou v1 + v1.1
+# Eiyashou
 
-当前原生脚本为 UTF-8 `.shou`，保留 v1 写法；v1.1 增加点号命令。
+当前原生脚本为 UTF-8 `.shou`，命令按对象职责分组，省略的修改字段保留当前值。
 每条作者命令 lower 为 typed Engine Action，Editor 只编辑同一份源码。
-`script.version: 1` 仍是当前配置值；v1.1 是增量命令集合。
+`script.version: 1` 是当前配置值。已合并的旧命令不提供别名。
 
 ## 工程
 
@@ -99,18 +99,17 @@ scene name { ... }
 │   ├── text.float.configure(id: id, infinite: bool) / text.float.hide(id)
 │   └── wait.advance()
 ├── 场景与立绘
-│   ├── background(asset | none, transition: ..., blocking: ..., transform_*: ...)
+│   ├── background(asset | none, transition: ..., blocking: ..., x: ..., y: ..., alpha: ..., ...)
 │   ├── background.transform(x: ..., y: ..., alpha: ..., ...)
-│   ├── sprite(id, asset, position: ..., layout: ..., blend: ..., blocking: ..., transform_*: ...)
+│   ├── sprite(id, asset, position: ..., layout: ..., blend: ..., blocking: ..., x: ..., y: ..., alpha: ..., ...)
 │   ├── sprite.update(id, asset, position: ..., layout: ..., scale: ..., ...)
 │   ├── sprite.offset(id, x: ..., y: ..., duration: ...)
-│   ├── sprite.transform(id, x: ..., alpha: ..., ...)
-│   ├── sprite.filter(id, blur: ..., brightness: ..., contrast: ..., saturation: ...)
+│   ├── sprite.transform(id, x: ..., alpha: ..., brightness: ..., contrast: ..., saturation: ..., ...)
 │   ├── sprite.animate(id, preset, duration: ...)
 │   ├── sprite.transition(id, enter: preset, exit: preset, duration: ...)
 │   ├── sprite.keyframes(id, repeat: ..., blocking: ...) { frame(duration: ..., easing: ..., transform...), ... }
 │   ├── sprite.sequence(id, fps: ..., loop: ...) { frame(asset), ... }
-│   ├── sprite.sequence.timed(id, loop: ...) { frame(asset, duration: ...), ... }
+│   │   └── 或省略 fps，每帧写 frame(asset, duration: ...)，所有帧必须有时长
 │   ├── sprite.select(id, variable, default: asset) { case("value", asset), ... }
 │   ├── sprite.select.when(id, default: asset) { case(strict_bool_expression, asset), ... }
 │   ├── sprite.focus.configure(characters: [...], speaking: style(...), others: style(...), narration: style(...), ...)
@@ -125,7 +124,6 @@ scene name { ... }
 │   ├── camera.shake(targets, amplitude: ..., frequency: ..., amplitude_randomness: ..., frequency_randomness: ..., duration: ..., axis: ..., falloff: ..., blocking: ...)
 │   ├── camera.bind(id, distance: ...) / camera.unbind(id, distance: ...)
 │   ├── camera.effect(targets, sparse_effect_fields..., tween: [...], duration: ..., easing: ..., blocking: ...)
-│   ├── camera.effect.v2(targets, all_18_v2_fields..., tween: [...], duration: ..., easing: ..., blocking: ...)
 │   ├── stage.mask.show(id, typed_mask_fields..., duration: ..., blocking: ...)
 │   ├── stage.mask.hide(id, duration: ..., blocking: ...)
 │   └── stage.animate(id, duration: ..., repeat: ..., infinite: ..., playback_rate: ..., blocking: ...) {
@@ -147,7 +145,6 @@ scene name { ... }
 │   ├── particle.hide(id | *, duration: ...)
 │   └── particle.layers.clear()
 └── 交互、系统与资源
-    ├── input.simple(variable, title: "...", button: "...")
     ├── input.request(variable, type: string | number | bool, title: "...", ...)
     ├── ui.show(slot) / ui.hide(slot) / ui.message(alert | confirm, title: "...", message: "...", ...)
     ├── playback.auto(bool)
@@ -164,14 +161,16 @@ scene name { ... }
 
 ```text
 sprite(...) / sprite.update(...)
-├── position = left | center | right；anchor_offset 与 y 可为负数
+├── position = left | center | right；anchor_offset 是水平锚点偏移
+├── 初始 sprite：position_y 是锚点高度，x/y 是变换偏移；sprite.update 的 y 仍为锚点高度
 ├── layout = natural | viewport_height | scene | composite
 │   ├── viewport_height：layout_height
 │   ├── scene：layout_fit、layout_x/y、layout_anchor_x/y、可选 layout_width/height 成对
 │   └── composite：layout_canvas_width/height、可选 layout_rect_x/y/width/height 四项成组、layout_height_ratio
 ├── sprite(...)：blend = alpha | add | multiply | screen；z 为整数
-└── 初始 transform_x/y/alpha/scale_x/scale_y/rotation/blur/width/height
-    └── 与 transition 在同一 ShowSprite/ShowBg Action 中生效；后续 sprite.transform/background.transform 为稀疏更新
+└── 初始 x/y/alpha/scale_x/scale_y/rotation/blur/width/height 与 brightness/contrast/saturation
+    └── 与 transition 原子生效；后续 sprite.transform/background.transform 为稀疏更新
+    └── duration/easing 只控制变换；颜色字段即时应用，纯颜色修改不接受非零 duration
 
 sprite.focus.configure(...)
 ├── characters 是 stage sprite/角色 ID 列表，不创建另一种 portrait 对象
@@ -180,9 +179,9 @@ sprite.focus.configure(...)
 └── Block Inspector 将三组 style 的字段分别编辑，写回原有 style(...) 源码
 
 camera.effect(...)
-├── PostProcessPatch 的全部 73 个字段由 Inspector 的共享字段清单提供
+├── 与 camera.move 使用同一 PostProcessPatch；包含镜面破碎与速度线，所有效果均可稀疏更新
 ├── focal_distance 与 lut_preset：不写=保持；none=清除；值=设置
-└── camera.effect.v2(...) 是完整状态，18 个 V2 字段必须全部显式填写
+└── 一个作者命令始终是一个原子 Action / Block，不因效果种类拆开
 
 stage.mask.show(...)
 ├── mode、plane、scope、targets、shape、image、image_channel、image_fit
@@ -207,6 +206,7 @@ text.retract(source: "原文", keep: "保留前缀")
     └── Text Ending 关联只处理 text.box / hide，不吸收退格步骤
 
 input.request(...)
+├── 可只写 input.request(variable)；默认 string，其他字段沿用引擎默认值
 ├── type、title、description、placeholder、confirm_text、required_text、required
 ├── min_length、max_length、min_value、max_value、step
 └── true_text、false_text
@@ -252,4 +252,44 @@ v1.1
 完整参数 owner：[`native`](../../crates/loader/src/adapter/script/native.rs)、
 [`v11`](../../crates/loader/src/adapter/script/native/v11.rs)、
 [`typed model`](../../crates/core/src/model/action.rs)。字段列表与诊断在代码中维护，
-不在文档复制另一套 73 字段表。未知宿主扩展和 WebGAL wrapper 不成为新原生命令。
+不在文档复制另一套字段表。未知宿主扩展和 WebGAL wrapper 不成为新原生命令。
+
+## 手写与维护
+
+```text
+写作习惯
+├── 一句对白 / 一条命令一行；较长参数按行展开，仍用逗号分隔
+├── 常用命令只写必要字段；资源和角色采用有意义的 ID
+├── 镜头：camera.move 写变换，camera.effect 写特效；可在 move 中原子组合
+├── 立绘：创建与 transform 共用变换/颜色名称；move 改锚点，offset 改相对偏移
+├── 序列：固定帧率用 fps；不规则节奏用每帧 duration，不能混用
+├── 输入：统一 input.request；需要时再增加验证字段
+└── 复用剧情使用 scene/call；不要复制整组长参数到每句对白
+```
+
+不合并语义不同的项：sprite 创建与 update 的“仅修改已显示对象”、预设动画与时间轴、
+每句 auto 与全局 playback.auto、屏幕视频与多层 video.play、资源变量选择与条件选择。
+它们有不同的生命周期或执行约束，统一名称会隐藏作者必须理解的差别。
+
+## 立绘环境光照
+
+```text
+config.yaml → layout.environment_light
+├── 默认 1.0，范围 0–1；0 全局关闭；只对 native keine 项目生效
+├── 逐立绘 Block：sprite(hero, face, environment_light: false) 关闭该立绘，省略默认开启
+│   ├── sprite.transform(hero, environment_light: true) 可重新开启；省略保留当前状态
+│   └── 跟随该对象的换图、存档和回退；再次 sprite 创建同 ID 时按新 Block 的设置重置
+├── 图片准备时在线性颜色空间取最多 256 个样本，忽略透明像素
+├── 先计算样本亮度 Y = 0.2126R + 0.7152G + 0.0722B，用第 75 百分位估计环境亮度
+│   ├── 开平方压缩明暗变化，最暗增益限制为 0.65，避免把材质阴影当成无光环境
+│   └── 用第 50–95 百分位区域估计色偏，独立归一化亮度；满强度通道偏移最多 25%
+├── 背景过渡按进度混合；无背景时使用最底层可见 scene-layer 原图
+├── 没有可取色场景时回退中性白；不保留整张 CPU 图片或回读 GPU
+└── 只染色普通 alpha 立绘，不作用于背景、加法/乘法层、头像、文字或 UI
+```
+
+这是温和的背景色调适配，不产生方向光、阴影或法线重照明。
+现有立绘滤镜/说话者聚焦仍生效，镜头效果和 LUT 再按原渲染顺序处理。
+取色不包含镜头调色，避免反馈式重复染色；已有强手工调色可将该配置设为 0。
+已发布的旧编译包需要重新编译为 IR schema v4；Save v11 的状态布局不变，
+修改脚本后的存档仍受 Program fingerprint 检查。

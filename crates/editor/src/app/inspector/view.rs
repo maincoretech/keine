@@ -96,7 +96,7 @@ impl SourceInspectorView<'_> {
         }
         let effects = matches!(
             self.key.command.as_str(),
-            "camera.move" | "camera.effect" | "camera.effect.v2" | "event.camera.patch"
+            "camera.move" | "camera.effect" | "event.camera.patch"
         );
         let mut content = div()
             .w_full()

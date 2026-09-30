@@ -420,6 +420,9 @@ pub struct LayoutConfig {
     /// Positive values move figures up; negative values move them down.
     #[serde(default = "default_sprite_y_offset")]
     pub sprite_y_offset: f32,
+    /// Background-derived portrait tint for native projects; zero disables it.
+    #[serde(default = "default_environment_light")]
+    pub environment_light: f32,
 
     // ── Textbox positioning (percent of the 1920×1080 design area) ──
     /// Textbox left edge when no mini avatar is displayed (%).
@@ -448,6 +451,9 @@ fn default_sprite_height() -> f32 {
 fn default_sprite_y_offset() -> f32 {
     0.0
 }
+fn default_environment_light() -> f32 {
+    1.0
+}
 fn default_textbox_left() -> f32 {
     0.0
 }
@@ -470,6 +476,7 @@ impl Default for LayoutConfig {
             anchor_offset: default_anchor_offset(),
             sprite_height: default_sprite_height(),
             sprite_y_offset: default_sprite_y_offset(),
+            environment_light: default_environment_light(),
             textbox_left: default_textbox_left(),
             textbox_dodge_left: default_textbox_dodge_left(),
             textbox_bottom: default_textbox_bottom(),
@@ -720,6 +727,12 @@ impl GameConfig {
             MAX_SPRITE_HEIGHT,
         )?;
         finite_f32("layout.sprite_y_offset", self.layout.sprite_y_offset)?;
+        bounded_f32(
+            "layout.environment_light",
+            self.layout.environment_light,
+            0.0,
+            1.0,
+        )?;
         percent("layout.textbox_left", self.layout.textbox_left, false)?;
         percent(
             "layout.textbox_dodge_left",
@@ -972,6 +985,15 @@ styles:
             config.validate().unwrap_err().to_string(),
             "styles.textbox_alpha is outside its valid range"
         );
+
+        config = GameConfig::default();
+        config.layout.environment_light = 1.1;
+        assert_eq!(
+            config.validate().unwrap_err().to_string(),
+            "layout.environment_light is outside its valid range"
+        );
+        config.layout.environment_light = 0.0;
+        assert!(config.validate().is_ok());
 
         config = GameConfig::default();
         config.styles.typewriter_speed = 0.0;

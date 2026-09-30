@@ -59,7 +59,85 @@ pub(super) fn render(action: &Action, model: &MigrationModel) -> Result<Option<S
         }
         return super::render_action(&inner, model).map(Some);
     }
+    let normalized = normalize_camera(action);
+    let action = normalized.as_ref();
     let source = match action {
+        Action::SetTransform {
+            id,
+            transform,
+            duration: seconds,
+            easing,
+        } => format!(
+            "sprite.transform({}{}{})",
+            object_id(model, id)?,
+            patch_fields(*transform),
+            timing(*seconds, *easing, true)
+        ),
+        Action::SetFilter { target, filter } => format!(
+            "sprite.transform({}, blur: {}, brightness: {}, contrast: {}, saturation: {})",
+            object_id(model, target)?,
+            number(filter.blur),
+            number(filter.brightness),
+            number(filter.contrast),
+            number(filter.saturation)
+        ),
+        Action::UserInput {
+            variable,
+            title,
+            button,
+        } => format!(
+            "input.request({}, title: {}, confirm_text: {})",
+            model
+                .variable_ids
+                .get(variable)
+                .context("missing input variable mapping")?,
+            string_literal(title),
+            string_literal(button)
+        ),
+        Action::ConfigureSpriteSequence {
+            id,
+            frames,
+            fps,
+            looped,
+        } => format!(
+            "sprite.sequence({}, fps: {}, loop: {}) {{ {} }}",
+            object_id(model, id)?,
+            number(*fps),
+            looped,
+            frames
+                .iter()
+                .map(|frame| Ok(format!(
+                    "frame({})",
+                    asset_id(model, ResourceKind::Figure, frame)?
+                )))
+                .collect::<Result<Vec<_>>>()?
+                .join(", ")
+        ),
+        Action::ConfigureTimedSpriteSequence {
+            id,
+            frames,
+            frame_durations,
+            looped,
+        } => {
+            if frames.len() != frame_durations.len() {
+                bail!("sequence duration count differs from frame count");
+            }
+            format!(
+                "sprite.sequence({}, loop: {}) {{ {} }}",
+                object_id(model, id)?,
+                looped,
+                frames
+                    .iter()
+                    .zip(frame_durations)
+                    .map(|(frame, seconds)| Ok(format!(
+                        "frame({}, duration: {})",
+                        asset_id(model, ResourceKind::Figure, frame)?,
+                        duration(*seconds)
+                    )))
+                    .collect::<Result<Vec<_>>>()?
+                    .join(", ")
+            )
+        }
         Action::ShowBg {
             image,
             transition,
@@ -264,7 +342,7 @@ pub(super) fn render(action: &Action, model: &MigrationModel) -> Result<Option<S
             easing,
             blocking,
         } => format!(
-            "camera.effect.v2({}, {}{})",
+            "camera.effect({}, {}{})",
             camera_target(*targets),
             fields(effect)?,
             timing(*seconds, *easing, *blocking)
@@ -282,7 +360,7 @@ pub(super) fn render(action: &Action, model: &MigrationModel) -> Result<Option<S
                     effect_fields(effect, model)?
                 ),
                 (None, None, Some(effect)) => format!(
-                    "camera.effect.v2({}, {}",
+                    "camera.effect({}, {}",
                     camera_target(spec.targets),
                     fields(effect)?
                 ),
@@ -452,6 +530,50 @@ pub(super) fn verify(action: &Action, source: &str, model: &MigrationModel) -> R
     Ok(())
 }
 
+fn normalize_camera(action: &Action) -> std::borrow::Cow<'_, Action> {
+    match action {
+        Action::SetPostProcessV2 {
+            targets,
+            effect,
+            duration,
+            easing,
+            blocking,
+        } => std::borrow::Cow::Owned(Action::SetPostProcess {
+            targets: *targets,
+            effect: Box::new(keine_core::PostProcessPatch::from_v2(effect)),
+            duration: *duration,
+            easing: *easing,
+            blocking: *blocking,
+        }),
+        Action::SetCameraTween { spec } if spec.v2.is_some() => {
+            let mut spec = spec.clone();
+            let v2 = spec.v2.take().unwrap();
+            let mut patch = spec.effect.take().map(|patch| *patch).unwrap_or_default();
+            patch.mirror_shatter_intensity = Some(v2.mirror_shatter_intensity);
+            patch.mirror_shatter_center_x = Some(v2.mirror_shatter_center_x);
+            patch.mirror_shatter_center_y = Some(v2.mirror_shatter_center_y);
+            patch.mirror_shatter_spread = Some(v2.mirror_shatter_spread);
+            patch.mirror_shatter_seed = Some(v2.mirror_shatter_seed);
+            patch.speed_lines_intensity = Some(v2.speed_lines_intensity);
+            patch.speed_lines_radial = Some(v2.speed_lines_radial);
+            patch.speed_lines_density = Some(v2.speed_lines_density);
+            patch.speed_lines_angle = Some(v2.speed_lines_angle);
+            patch.speed_lines_speed = Some(v2.speed_lines_speed);
+            patch.speed_lines_center_x = Some(v2.speed_lines_center_x);
+            patch.speed_lines_center_y = Some(v2.speed_lines_center_y);
+            patch.speed_lines_region_ellipse = Some(v2.speed_lines_region_ellipse);
+            patch.speed_lines_region_x = Some(v2.speed_lines_region_x);
+            patch.speed_lines_region_y = Some(v2.speed_lines_region_y);
+            patch.speed_lines_region_width = Some(v2.speed_lines_region_width);
+            patch.speed_lines_region_height = Some(v2.speed_lines_region_height);
+            patch.speed_lines_region_feather = Some(v2.speed_lines_region_feather);
+            spec.effect = Some(Box::new(patch));
+            std::borrow::Cow::Owned(Action::SetCameraTween { spec })
+        }
+        _ => std::borrow::Cow::Borrowed(action),
+    }
+}
+
 fn expected_action(action: &Action, model: &MigrationModel) -> Result<Action> {
     if let Action::Flow {
         action,
@@ -485,9 +607,50 @@ fn expected_action(action: &Action, model: &MigrationModel) -> Result<Action> {
             }
         }
     }
-    let mut expected = action.clone();
+    let normalized = normalize_camera(action);
+    let mut expected = match normalized.as_ref() {
+        Action::SetFilter { target, filter } => {
+            let mut transform = TransformPatch::default();
+            transform.set_blur(filter.blur);
+            Action::SpriteVisual {
+                action: Box::new(Action::SetTransform {
+                    id: object_id(model, target)?.into(),
+                    transform,
+                    duration: 0.0,
+                    easing: Easing::Linear,
+                }),
+                filter: keine_core::VisualFilterPatch {
+                    environment_light: None,
+                    brightness: Some(filter.brightness),
+                    contrast: Some(filter.contrast),
+                    saturation: Some(filter.saturation),
+                },
+            }
+        }
+        Action::UserInput {
+            variable,
+            title,
+            button,
+        } => Action::RequestInput {
+            spec: keine_core::UserInputSpec {
+                variable: model
+                    .variable_ids
+                    .get(variable)
+                    .context("missing input variable mapping")?
+                    .clone(),
+                title: title.clone(),
+                confirm_text: button.clone(),
+                ..Default::default()
+            },
+        },
+        _ => normalized.as_ref().clone(),
+    };
+
     match &mut expected {
-        Action::ShowSprite { id, .. }
+        Action::SetTransform { id, .. }
+        | Action::ConfigureSpriteSequence { id, .. }
+        | Action::ConfigureTimedSpriteSequence { id, .. }
+        | Action::ShowSprite { id, .. }
         | Action::HideSprite { id, .. }
         | Action::ShowParticles { id, .. } => *id = object_id(model, id)?.into(),
         Action::SetCameraBinding { target, .. } | Action::AnimateKeyframes { target, .. } => {
@@ -516,6 +679,12 @@ fn expected_action(action: &Action, model: &MigrationModel) -> Result<Action> {
         _ => {}
     }
     match &mut expected {
+        Action::ConfigureSpriteSequence { frames, .. }
+        | Action::ConfigureTimedSpriteSequence { frames, .. } => {
+            for frame in frames {
+                *frame = asset_id(model, ResourceKind::Figure, frame)?;
+            }
+        }
         Action::ShowBg { image, .. } => *image = asset_id(model, ResourceKind::Background, image)?,
         Action::ShowSprite { image, .. } => *image = asset_id(model, ResourceKind::Figure, image)?,
         Action::PlayVideo { video } => {
@@ -658,7 +827,9 @@ fn transform_values(transform: &SpriteTransform) -> [(&'static str, f32); 9] {
 fn full_transform(transform: &SpriteTransform) -> String {
     transform_values(transform)
         .into_iter()
-        .map(|(name, value)| format!(", transform_{name}: {}", number(value)))
+        .zip(transform_values(&SpriteTransform::default()))
+        .filter(|((_, value), (_, default))| value != default)
+        .map(|((name, value), _)| format!(", {name}: {}", number(value)))
         .collect()
 }
 fn patch_fields(patch: TransformPatch) -> String {
@@ -687,11 +858,14 @@ fn position_fields(position: Position) -> String {
         Anchor::Center(offset) => ("center", offset),
         Anchor::Right(offset) => ("right", offset),
     };
-    format!(
-        "position: {name}, anchor_offset: {}, y: {}",
-        number(offset),
-        number(position.y)
-    )
+    let mut fields = format!("position: {name}");
+    if offset != 0.0 {
+        fields.push_str(&format!(", anchor_offset: {}", number(offset)));
+    }
+    if position.y != 0.0 {
+        fields.push_str(&format!(", position_y: {}", number(position.y)));
+    }
+    fields
 }
 fn layout_fields(layout: SpriteLayout) -> String {
     match layout {

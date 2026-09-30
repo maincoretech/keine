@@ -60,7 +60,7 @@ impl InsertKind {
         })
     }
 
-    pub const ALL: [Self; 75] = [
+    pub const ALL: [Self; 71] = [
         Self::Narration,
         Self::Dialogue,
         Self::Background,
@@ -103,13 +103,11 @@ impl InsertKind {
         Self::Native("particle.hide"),
         Self::Native("video.stop"),
         Self::Native("gallery.unlock"),
-        Self::Native("input.simple"),
         Self::Native("camera.bind"),
         Self::Native("camera.unbind"),
         Self::Native("sprite.offset"),
         Self::Native("sprite.transform"),
         Self::Native("background.transform"),
-        Self::Native("sprite.filter"),
         Self::Native("sprite.animate"),
         Self::Native("sprite.transition"),
         Self::Native("se.loop"),
@@ -123,7 +121,6 @@ impl InsertKind {
         Self::Native("ui.message"),
         Self::Native("text.intro"),
         Self::Native("sprite.sequence"),
-        Self::Native("sprite.sequence.timed"),
         Self::Native("sprite.select"),
         Self::Native("sprite.keyframes"),
         Self::Native("assets.loading"),
@@ -131,7 +128,6 @@ impl InsertKind {
         Self::Native("text.paragraph.style"),
         Self::Native("sprite.update"),
         Self::Native("camera.effect"),
-        Self::Native("camera.effect.v2"),
         Self::Native("stage.mask.show"),
         Self::Native("stage.mask.hide"),
         Self::Native("sprite.select.when"),
@@ -183,13 +179,11 @@ impl InsertKind {
                 "particle.hide" => "Hide particles",
                 "video.stop" => "Stop video",
                 "gallery.unlock" => "Unlock gallery",
-                "input.simple" => "Input",
                 "camera.bind" => "Bind camera",
                 "camera.unbind" => "Unbind camera",
                 "sprite.offset" => "Sprite offset",
                 "sprite.transform" => "Sprite transform",
                 "background.transform" => "Background transform",
-                "sprite.filter" => "Sprite filter",
                 "sprite.animate" => "Animate sprite",
                 "sprite.transition" => "Sprite transition",
                 "se.loop" => "Loop sound",
@@ -203,7 +197,6 @@ impl InsertKind {
                 "ui.message" => "System message",
                 "text.intro" => "Intro pages",
                 "sprite.sequence" => "Sprite sequence",
-                "sprite.sequence.timed" => "Timed sprite sequence",
                 "sprite.select" => "Select sprite image",
                 "sprite.keyframes" => "Sprite keyframes",
                 "assets.loading" => "Prepare assets",
@@ -211,7 +204,6 @@ impl InsertKind {
                 "text.paragraph.style" => "Paragraph style",
                 "sprite.update" => "Update sprite",
                 "camera.effect" => "Camera effect",
-                "camera.effect.v2" => "Camera effect V2",
                 "stage.mask.show" => "Show stage mask",
                 "stage.mask.hide" => "Hide stage mask",
                 "sprite.select.when" => "Select sprite by condition",
@@ -278,24 +270,15 @@ impl InsertKind {
                 | "sprite.offset"
                 | "sprite.transform"
                 | "background.transform"
-                | "sprite.filter"
                 | "sprite.animate"
                 | "sprite.transition"
                 | "screen.curtain.show"
                 | "screen.curtain.hide"
                 | "scene.parallax"
                 | "particle.show" => "Scene",
-                "sprite.sequence"
-                | "sprite.sequence.timed"
-                | "sprite.select"
-                | "sprite.select.when"
-                | "stage.animate"
-                | "sprite.keyframes"
-                | "assets.loading"
-                | "sprite.update" => "Scene",
-                "camera.effect" | "camera.effect.v2" | "stage.mask.show" | "stage.mask.hide" => {
-                    "Scene"
-                }
+                "sprite.sequence" | "sprite.select" | "sprite.select.when" | "stage.animate"
+                | "sprite.keyframes" | "assets.loading" | "sprite.update" => "Scene",
+                "camera.effect" | "stage.mask.show" | "stage.mask.hide" => "Scene",
                 "vocal.play" | "vocal.stop" | "video.stop" | "se.loop" | "se.stop"
                 | "video.play" => "Media",
                 "text.box"
@@ -476,10 +459,6 @@ pub fn insertion_statement(
                 "gallery.unlock(cg, {}, name: \"Artwork\")",
                 first_background.ok_or(AuthoringEditError::MissingInsertionPoint)?
             ),
-            "input.simple" => format!(
-                "input.simple({}, title: \"Name\", button: \"OK\")",
-                unique_variable_name(source)
-            ),
             "camera.bind" | "camera.unbind" => format!(
                 "{name}({}_slot, distance: 1.5)",
                 first_figure.ok_or(AuthoringEditError::MissingInsertionPoint)?
@@ -493,10 +472,6 @@ pub fn insertion_statement(
                 first_figure.ok_or(AuthoringEditError::MissingInsertionPoint)?
             ),
             "background.transform" => "background.transform(alpha: 1)".to_owned(),
-            "sprite.filter" => format!(
-                "sprite.filter({}_slot, brightness: 1)",
-                first_figure.ok_or(AuthoringEditError::MissingInsertionPoint)?
-            ),
             "sprite.animate" => format!(
                 "sprite.animate({}_slot, shake, duration: 300ms)",
                 first_figure.ok_or(AuthoringEditError::MissingInsertionPoint)?
@@ -536,11 +511,6 @@ pub fn insertion_statement(
                 first_figure.ok_or(AuthoringEditError::MissingInsertionPoint)?,
                 first_figure.ok_or(AuthoringEditError::MissingInsertionPoint)?
             ),
-            "sprite.sequence.timed" => format!(
-                "sprite.sequence.timed({}_slot, loop: true) {{ frame({}, duration: 120ms) }}",
-                first_figure.ok_or(AuthoringEditError::MissingInsertionPoint)?,
-                first_figure.ok_or(AuthoringEditError::MissingInsertionPoint)?
-            ),
             "sprite.select" => format!(
                 "sprite.select({}_slot, mood, default: {}) {{ case(\"happy\", {}) }}",
                 first_figure.ok_or(AuthoringEditError::MissingInsertionPoint)?,
@@ -566,16 +536,6 @@ pub fn insertion_statement(
                 first_figure.ok_or(AuthoringEditError::MissingInsertionPoint)?
             ),
             "camera.effect" => "camera.effect(scene, bloom_intensity: 0.4, duration: 300ms)".to_owned(),
-            "camera.effect.v2" => concat!(
-                "camera.effect.v2(scene, mirror_shatter_intensity: 0, mirror_shatter_center_x: 0.5, ",
-                "mirror_shatter_center_y: 0.5, mirror_shatter_spread: 1, mirror_shatter_seed: 0, ",
-                "speed_lines_intensity: 0, speed_lines_radial: true, speed_lines_density: 0.55, ",
-                "speed_lines_angle: 0, speed_lines_speed: 0, speed_lines_center_x: 0.5, ",
-                "speed_lines_center_y: 0.5, speed_lines_region_ellipse: false, ",
-                "speed_lines_region_x: 0.5, speed_lines_region_y: 0.5, ",
-                "speed_lines_region_width: 1, speed_lines_region_height: 1, ",
-                "speed_lines_region_feather: 0.05)"
-            ).to_owned(),
             "stage.mask.show" => "stage.mask.show(overlay, shape: rectangle, opacity: 0.5)".to_owned(),
             "stage.mask.hide" => "stage.mask.hide(overlay)".to_owned(),
             "sprite.select.when" => format!(

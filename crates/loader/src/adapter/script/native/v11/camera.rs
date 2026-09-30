@@ -8,7 +8,7 @@ pub(super) fn move_fields() -> &'static [&'static str] {
             let mut fields = vec![
                 "x", "y", "alpha", "scale_x", "scale_y", "rotation", "blur", "width", "height",
             ];
-            for field in effects::PATCH_FIELDS.iter().chain(effects::V2_FIELDS) {
+            for field in effects::PATCH_FIELDS {
                 if !fields.contains(field) {
                     fields.push(field);
                 }
@@ -39,12 +39,7 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let v2 = if present(effects::V2_FIELDS) {
-            Some(Box::new(self.v11_post_process_v2(args, report)?))
-        } else {
-            None
-        };
-        if transform.is_none() && effect.is_none() && v2.is_none() {
+        if transform.is_none() && effect.is_none() {
             report.diagnostics.push(
                 self.error("camera.move(...) requires at least one transform or effect field"),
             );
@@ -61,7 +56,7 @@ impl<'a> Parser<'a> {
             },
             report,
         )?;
-        if effect.is_none() && v2.is_none() {
+        if effect.is_none() {
             return Some(action);
         }
         let mut spec = match action {
@@ -86,7 +81,7 @@ impl<'a> Parser<'a> {
         };
         spec.transform = transform;
         spec.effect = effect;
-        spec.v2 = v2;
+        spec.v2 = None;
         Some(Action::SetCameraTween { spec })
     }
 

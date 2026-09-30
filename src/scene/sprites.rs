@@ -237,6 +237,13 @@ pub(crate) fn sync_sprites(
         entities.cache.capture(&state);
     }
     let viewport = DesignViewport::from_window(&window);
+    let environment = crate::scene::lighting::environment(
+        &state,
+        &config,
+        &render.asset_server,
+        &render.image_roles,
+        &render.dimensions,
+    );
     let parallax = state.scene_mouse_parallax.map(|config| {
         let axes = scene_parallax_axes(&window, viewport, config, &mut entities.last_parallax_axes);
         (config, axes)
@@ -377,10 +384,18 @@ pub(crate) fn sync_sprites(
         let z =
             0.1 + data.z_index as f32 * 0.001 + data.position.y.clamp(-999.0, 999.0) * 0.000_000_01;
 
+        let tint = if group == "characters"
+            && data.blend == BlendMode::Alpha
+            && data.films.environment_light_enabled()
+        {
+            environment
+        } else {
+            Vec3::ONE
+        };
         let sprite = Sprite {
             image: handle.clone(),
             custom_size: Some(Vec2::new(width, height) * viewport.scale),
-            color: Color::srgba(1.0, 1.0, 1.0, alpha),
+            color: Color::linear_rgba(tint.x, tint.y, tint.z, alpha),
             ..default()
         };
         let entity_transform = Transform::from_translation(world_position.extend(z))
@@ -410,6 +425,7 @@ pub(crate) fn sync_sprites(
                     let mut material = StageMaterial::new(
                         handle, alpha, filter, data.blend, animation, &post, lut,
                     );
+                    material.tint = tint.extend(alpha);
                     if let Some(clip) = clip.clone() {
                         clip.apply(&mut material);
                     }
@@ -454,6 +470,7 @@ pub(crate) fn sync_sprites(
         if uses_material {
             let mut material =
                 StageMaterial::new(handle, alpha, filter, data.blend, animation, &post, lut);
+            material.tint = tint.extend(alpha);
             if let Some(clip) = clip {
                 clip.apply(&mut material);
             }

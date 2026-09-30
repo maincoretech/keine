@@ -123,7 +123,9 @@ impl ObjectAliases {
                     }
                 }
             }
-            Action::Flow { action, .. } => self.resolve(action),
+            Action::Flow { action, .. } | Action::SpriteVisual { action, .. } => {
+                self.resolve(action)
+            }
             _ => {}
         }
     }

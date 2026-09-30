@@ -1930,15 +1930,15 @@ impl<'a> Parser<'a> {
                     &[
                         "blocking",
                         "transition",
-                        "transform_x",
-                        "transform_y",
-                        "transform_alpha",
-                        "transform_scale_x",
-                        "transform_scale_y",
-                        "transform_rotation",
-                        "transform_blur",
-                        "transform_width",
-                        "transform_height",
+                        "x",
+                        "y",
+                        "alpha",
+                        "scale_x",
+                        "scale_y",
+                        "rotation",
+                        "blur",
+                        "width",
+                        "height",
                     ],
                     report,
                 );
@@ -1951,7 +1951,7 @@ impl<'a> Parser<'a> {
                     &[
                         "position",
                         "anchor_offset",
-                        "y",
+                        "position_y",
                         "blocking",
                         "transition",
                         "z",
@@ -1971,15 +1971,19 @@ impl<'a> Parser<'a> {
                         "layout_rect_width",
                         "layout_rect_height",
                         "layout_height_ratio",
-                        "transform_x",
-                        "transform_y",
-                        "transform_alpha",
-                        "transform_scale_x",
-                        "transform_scale_y",
-                        "transform_rotation",
-                        "transform_blur",
-                        "transform_width",
-                        "transform_height",
+                        "x",
+                        "y",
+                        "alpha",
+                        "scale_x",
+                        "scale_y",
+                        "rotation",
+                        "blur",
+                        "width",
+                        "height",
+                        "brightness",
+                        "contrast",
+                        "saturation",
+                        "environment_light",
                     ],
                     report,
                 );
@@ -2104,7 +2108,7 @@ impl<'a> Parser<'a> {
                         if args
                             .iter()
                             .filter_map(|arg| arg.name.as_deref())
-                            .any(|name| name.starts_with("transform_"))
+                            .any(|name| !matches!(name, "transition" | "blocking"))
                         {
                             report.diagnostics.push(
                                 self.error("background(none) cannot carry an initial transform"),
@@ -2130,7 +2134,10 @@ impl<'a> Parser<'a> {
             "sprite" => {
                 let slot = first.and_then(|arg| self.argument_identifier(arg));
                 let image = args.get(1).and_then(|arg| self.argument_identifier(arg));
-                let position = self.v11_position(&args, "position", report)?;
+                let mut position = self.v11_position(&args, "position", report)?;
+                position.y = self
+                    .checked_number(&args, "position_y", report)?
+                    .unwrap_or(0.0);
                 let z = self.checked_number(&args, "z", report)?.unwrap_or(0.0);
                 if z.fract() != 0.0 || z < i32::MIN as f32 || z > i32::MAX as f32 {
                     report
@@ -2151,16 +2158,27 @@ impl<'a> Parser<'a> {
                     }
                 };
                 match (slot, image) {
-                    (Some(id), Some(image)) => Some(Action::ShowSprite {
-                        id,
-                        image,
-                        position,
-                        layout: self.v11_sprite_layout(&args, report)?,
-                        transition: self.named_transition(&args, report),
-                        transform: self.v11_full_transform(&args, report)?,
-                        z_index: z as i32,
-                        blend,
-                    }),
+                    (Some(id), Some(image)) => {
+                        let filter = self.v11_filter_patch(&args, report)?;
+                        let action = Action::ShowSprite {
+                            id,
+                            image,
+                            position,
+                            layout: self.v11_sprite_layout(&args, report)?,
+                            transition: self.named_transition(&args, report),
+                            transform: self.v11_full_transform(&args, report)?,
+                            z_index: z as i32,
+                            blend,
+                        };
+                        Some(if filter.is_empty() {
+                            action
+                        } else {
+                            Action::SpriteVisual {
+                                action: Box::new(action),
+                                filter,
+                            }
+                        })
+                    }
                     _ => {
                         report
                             .diagnostics
@@ -2693,15 +2711,15 @@ impl<'a> Parser<'a> {
     ) -> Option<SpriteTransform> {
         let mut transform = SpriteTransform::default();
         for (name, slot) in [
-            ("transform_x", &mut transform.offset_x),
-            ("transform_y", &mut transform.offset_y),
-            ("transform_alpha", &mut transform.alpha),
-            ("transform_scale_x", &mut transform.scale_x),
-            ("transform_scale_y", &mut transform.scale_y),
-            ("transform_rotation", &mut transform.rotation),
-            ("transform_blur", &mut transform.blur),
-            ("transform_width", &mut transform.width),
-            ("transform_height", &mut transform.height),
+            ("x", &mut transform.offset_x),
+            ("y", &mut transform.offset_y),
+            ("alpha", &mut transform.alpha),
+            ("scale_x", &mut transform.scale_x),
+            ("scale_y", &mut transform.scale_y),
+            ("rotation", &mut transform.rotation),
+            ("blur", &mut transform.blur),
+            ("width", &mut transform.width),
+            ("height", &mut transform.height),
         ] {
             if let Some(value) = self.checked_number(args, name, report)? {
                 *slot = value;
@@ -3851,6 +3869,76 @@ mod tests {
     use super::*;
 
     #[test]
+    fn portrait_environment_light_is_a_strict_sparse_boolean() {
+        let parsed = parse_native_scenes(
+            "scene start { sprite(hero, face, environment_light: false), sprite.transform(hero, environment_light: true) }",
+        );
+        assert!(
+            errors(&parsed[0]).is_empty(),
+            "{:?}",
+            parsed[0].report.diagnostics
+        );
+        assert!(
+            matches!(&parsed[0].report.actions[0], Action::SpriteVisual { filter, .. } if filter.environment_light == Some(false))
+        );
+        assert!(
+            matches!(&parsed[0].report.actions[1], Action::SpriteVisual { filter, .. } if filter.environment_light == Some(true))
+        );
+        for source in [
+            "sprite(hero, face, environment_light: 0)",
+            "sprite.transform(hero, environment_light: nope)",
+            "background.transform(environment_light: false)",
+        ] {
+            assert!(
+                !errors(&parse_native_scenes(&format!("scene start {{ {source} }}"))[0]).is_empty(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn unified_visual_commands_are_sparse_and_removed_spellings_fail() {
+        let scenes = parse_native_scenes(
+            "scene start { sprite(hero, face, x: 20, y: 10, brightness: 0.8), sprite.transform(hero, saturation: 0.4), camera.effect(all, speed_lines_intensity: 0.3, speed_lines_radial: false), camera.move(all, x: 10, mirror_shatter_intensity: 0.2), sprite.sequence(hero) { frame(face, duration: 100ms), frame(other, duration: 200ms) }, input.request(name) }",
+        );
+        assert!(
+            errors(&scenes[0]).is_empty(),
+            "{:?}",
+            scenes[0].report.diagnostics
+        );
+        let actions = &scenes[0].report.actions;
+        assert_eq!(actions.len(), 6);
+        assert!(
+            matches!(&actions[0], Action::SpriteVisual { action, filter } if matches!(action.as_ref(), Action::ShowSprite { transform, .. } if transform.offset_x == 20.0 && transform.offset_y == 10.0) && filter.brightness == Some(0.8))
+        );
+        assert!(
+            matches!(&actions[2], Action::SetPostProcess { effect, .. } if effect.speed_lines_intensity == Some(0.3) && effect.speed_lines_radial == Some(false) && effect.speed_lines_density.is_none())
+        );
+        assert!(
+            matches!(&actions[3], Action::SetCameraTween { spec } if spec.v2.is_none() && spec.effect.as_ref().unwrap().mirror_shatter_intensity == Some(0.2))
+        );
+        assert!(
+            matches!(&actions[4], Action::ConfigureTimedSpriteSequence { frame_durations, .. } if frame_durations == &[0.1, 0.2])
+        );
+        let cleared = parse_native_scenes(
+            "scene start { background(none, transition: fade(200ms), blocking: false) }",
+        );
+        assert!(errors(&cleared[0]).is_empty());
+        for removed in [
+            "camera.effect.v2(all, mirror_shatter_intensity: 1)",
+            "sprite.filter(hero, brightness: 1)",
+            "sprite.sequence.timed(hero) { frame(face, duration: 100ms) }",
+            "input.simple(name)",
+            "sprite(hero, face, transform_alpha: 1)",
+            "sprite.sequence(hero, fps: 12) { frame(face, duration: 100ms) }",
+            "sprite.sequence(hero) { frame(face, duration: 100ms), frame(other) }",
+        ] {
+            let scenes = parse_native_scenes(&format!("scene start {{ {removed} }}"));
+            assert!(!errors(&scenes[0]).is_empty(), "{removed}");
+        }
+    }
+
+    #[test]
     fn dialogue_options_validate_without_consuming_the_next_statement() {
         let parsed = parse_native_scenes(
             "scene start { hero: \"Hi\", voice, volume: 0.4, concat: true, auto: true, inherit_speaker: true, wait(1s) }",
@@ -4105,7 +4193,7 @@ scene ending { "Done" }
     #[test]
     fn camera_tween_and_randomness_are_typed_and_validate_domains() {
         let scenes = parse_native_scenes(
-            "scene a { camera.move(scene, x: 120, scale_x: 1.5, tween: [x, blur_amount], duration: 1s), camera.effect(scene, blur_amount: 4, tween: [], duration: 1s), camera.effect.v2(scene, mirror_shatter_intensity: 0, mirror_shatter_center_x: 0.5, mirror_shatter_center_y: 0.5, mirror_shatter_spread: 1, mirror_shatter_seed: 0, speed_lines_intensity: 0, speed_lines_radial: true, speed_lines_density: 0.8, speed_lines_angle: 0, speed_lines_speed: 0, speed_lines_center_x: 0.5, speed_lines_center_y: 0.5, speed_lines_region_ellipse: false, speed_lines_region_x: 0.5, speed_lines_region_y: 0.5, speed_lines_region_width: 1, speed_lines_region_height: 1, speed_lines_region_feather: 0.05, tween: [speed_lines_density], duration: 1s), camera.shake(all, amplitude: 8, frequency: 12, amplitude_randomness: 0.3, frequency_randomness: 0.2, duration: 300ms), stage.animate(a, duration: 1s) { event.camera.shake(time: 0ms, amplitude: 8, frequency: 12, amplitude_randomness: 0.3, duration: 300ms) } }",
+            "scene a { camera.move(scene, x: 120, scale_x: 1.5, tween: [x, blur_amount], duration: 1s), camera.effect(scene, blur_amount: 4, tween: [], duration: 1s), camera.effect(scene, mirror_shatter_intensity: 0, mirror_shatter_center_x: 0.5, mirror_shatter_center_y: 0.5, mirror_shatter_spread: 1, mirror_shatter_seed: 0, speed_lines_intensity: 0, speed_lines_radial: true, speed_lines_density: 0.8, speed_lines_angle: 0, speed_lines_speed: 0, speed_lines_center_x: 0.5, speed_lines_center_y: 0.5, speed_lines_region_ellipse: false, speed_lines_region_x: 0.5, speed_lines_region_y: 0.5, speed_lines_region_width: 1, speed_lines_region_height: 1, speed_lines_region_feather: 0.05, tween: [speed_lines_density], duration: 1s), camera.shake(all, amplitude: 8, frequency: 12, amplitude_randomness: 0.3, frequency_randomness: 0.2, duration: 300ms), stage.animate(a, duration: 1s) { event.camera.shake(time: 0ms, amplitude: 8, frequency: 12, amplitude_randomness: 0.3, duration: 300ms) } }",
         );
         assert!(
             errors(&scenes[0]).is_empty(),
@@ -4174,7 +4262,7 @@ scene ending { "Done" }
   text.style(cinematic), scene.parallax.stop(),
   particle.hide(*, duration: 300ms), video.stop(*, fade: 300ms),
   gallery.unlock(cg, image, name: "Artwork"),
-  input.simple(player, title: "Name", button: "OK"),
+  input.request(player, title: "Name", confirm_text: "OK"),
   camera.bind(hero, distance: 1.5), camera.unbind(hero, distance: 1.5),
   story.end()
 }"#,
@@ -4208,7 +4296,7 @@ scene ending { "Done" }
     #[test]
     fn lowers_v11_visual_and_media_commands_without_changing_v1() {
         let scenes = parse_native_scenes(
-            "scene a { sprite.offset(hero, x: -24, duration: 300ms), sprite.transform(hero, alpha: 0.5), background.transform(scale_x: 1.1), sprite.filter(hero, brightness: 0.7), sprite.animate(hero, shake, duration: 300ms), sprite.transition(hero, enter: enter, duration: 300ms), se.loop(rain, rain_sound, volume: 0.5), se.stop(rain), video.play(cutscene, movie, loop: true, muted: true, alpha: 0.8, skippable: false, wait: false, mode: mixed), background(room), sprite(hero, face) }",
+            "scene a { sprite.offset(hero, x: -24, duration: 300ms), sprite.transform(hero, alpha: 0.5), background.transform(scale_x: 1.1), sprite.transform(hero, brightness: 0.7), sprite.animate(hero, shake, duration: 300ms), sprite.transition(hero, enter: enter, duration: 300ms), se.loop(rain, rain_sound, volume: 0.5), se.stop(rain), video.play(cutscene, movie, loop: true, muted: true, alpha: 0.8, skippable: false, wait: false, mode: mixed), background(room), sprite(hero, face) }",
         );
         assert!(
             errors(&scenes[0]).is_empty(),
@@ -4221,7 +4309,9 @@ scene ending { "Done" }
             matches!(&actions[0], Action::SetTransform { id, transform, duration, .. } if id == "hero" && transform.apply_to(SpriteTransform::default()).offset_x == -24.0 && (*duration - 0.3).abs() < f32::EPSILON)
         );
         assert!(matches!(&actions[2], Action::SetTransform { id, .. } if id == "background"));
-        assert!(matches!(&actions[3], Action::SetFilter { target, .. } if target == "hero"));
+        assert!(
+            matches!(&actions[3], Action::SpriteVisual { action, filter } if matches!(action.as_ref(), Action::SetTransform { id, .. } if id == "hero") && filter.brightness == Some(0.7))
+        );
         assert!(
             matches!(&actions[6], Action::Effect { id: Some(id), file: Some(file), .. } if id == "rain" && file == "rain_sound")
         );
@@ -4271,7 +4361,7 @@ scene ending { "Done" }
             r#"scene a {
   text.intro(hold: true) { page("First"), page("Second") },
   sprite.sequence(hero, fps: 12, loop: true) { frame(hero_a), frame(hero_b) },
-  sprite.sequence.timed(hero, loop: false) { frame(hero_a, duration: 120ms), frame(hero_b, duration: 200ms) },
+  sprite.sequence(hero, loop: false) { frame(hero_a, duration: 120ms), frame(hero_b, duration: 200ms) },
   sprite.select(hero, mood, default: hero_a) { case("happy", hero_b) },
   sprite.keyframes(hero, repeat: 2, blocking: true) { frame(x: -20, duration: 300ms), frame(x: 20, duration: 300ms) },
   assets.loading(mode: manual, lookahead: 5, blocking: true) { resource(room, kind: background), resource(hero_a, kind: figure) }
@@ -4326,7 +4416,7 @@ scene ending { "Done" }
     #[test]
     fn sprite_and_background_initial_state_survive_transition_lowering() {
         let scenes = parse_native_scenes(
-            "scene a { background(room, transition: fade(300ms), transform_alpha: 0.4), sprite(hero, face, position: right, anchor_offset: 12, y: -20, layout: scene, layout_fit: cover, layout_x: 40, layout_y: 10, layout_anchor_x: 0.5, layout_anchor_y: 1, layout_width: 700, layout_height: 900, blend: add, transform_scale_x: 1.2, transition: fade(300ms)), sprite.update(hero, face_alt, position: center, layout: viewport_height, layout_height: 0.8, scale: 1.1, blocking: false) }",
+            "scene a { background(room, transition: fade(300ms), alpha: 0.4), sprite(hero, face, position: right, anchor_offset: 12, position_y: -20, layout: scene, layout_fit: cover, layout_x: 40, layout_y: 10, layout_anchor_x: 0.5, layout_anchor_y: 1, layout_width: 700, layout_height: 900, blend: add, scale_x: 1.2, transition: fade(300ms)), sprite.update(hero, face_alt, position: center, layout: viewport_height, layout_height: 0.8, scale: 1.1, blocking: false) }",
         );
         assert!(
             errors(&scenes[0]).is_empty(),

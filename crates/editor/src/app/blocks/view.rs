@@ -129,7 +129,7 @@ fn block_card_headline(
     match command {
         // Parameter-rich commands may have a truncated projection summary. The
         // bounded positional source field retains the actual target on reopen.
-        "camera.move" | "camera.shake" | "camera.effect" | "camera.effect.v2" => {
+        "camera.move" | "camera.shake" | "camera.effect" => {
             value("0").unwrap_or(fallback.as_str()).to_owned()
         }
         "text.retract" => format!(

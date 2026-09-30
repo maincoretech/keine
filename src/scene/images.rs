@@ -176,19 +176,31 @@ async fn read_webp_input(reader: &mut dyn Reader) -> io::Result<Vec<u8>> {
 }
 
 #[derive(Resource, Default)]
-pub(crate) struct ImageDimensions(HashMap<AssetId<Image>, UVec2>);
+pub(crate) struct ImageDimensions(HashMap<AssetId<Image>, ImageMetadata>);
+
+struct ImageMetadata {
+    size: UVec2,
+    environment: Option<super::lighting::EnvironmentSample>,
+}
 
 #[derive(Resource, Default)]
 pub(crate) struct PreparedImages(HashSet<AssetId<Image>>);
 
 impl ImageDimensions {
     pub(crate) fn size(&self, handle: &Handle<Image>) -> Option<UVec2> {
-        self.0.get(&handle.id()).copied()
+        self.0.get(&handle.id()).map(|metadata| metadata.size)
     }
 
     pub(crate) fn aspect(&self, handle: &Handle<Image>) -> Option<f32> {
         let size = self.size(handle)?;
         (size.y > 0).then_some(size.x as f32 / size.y as f32)
+    }
+
+    pub(crate) fn environment(
+        &self,
+        handle: &Handle<Image>,
+    ) -> Option<super::lighting::EnvironmentSample> {
+        self.0.get(&handle.id())?.environment
     }
 }
 
@@ -245,18 +257,28 @@ pub(crate) fn prepare(
         if prepared.0.contains(&id) {
             continue;
         }
-        let Some(mut image) = images.get_mut(id) else {
+        // The Added/Modified event already schedules render extraction. Our
+        // preparation must not emit another Modified event after CPU pixels
+        // have been released, which would invalidate their cached colour.
+        let Some(image) = images.get_mut_untracked(id) else {
             continue;
         };
         let original = image.size();
         let target = target_size(role, original, config.layout.sprite_height);
-        dimensions.0.insert(id, target);
+        let environment = super::lighting::sample(image);
+        dimensions.0.insert(
+            id,
+            ImageMetadata {
+                size: target,
+                environment,
+            },
+        );
 
-        if target != original && is_resizeable(&image) {
+        if target != original && is_resizeable(image) {
             // The image loader guarantees valid tightly packed RGBA8 here, so
             // transfer the pixel allocation instead of cloning a full-size
             // image before resizing it.
-            let source = std::mem::take(&mut *image)
+            let source = std::mem::take(image)
                 .try_into_dynamic()
                 .expect("validated RGBA8 image must convert");
             *image = Image::from_dynamic(
@@ -383,6 +405,77 @@ mod tests {
         assert_eq!(
             target_size(ImageRole::FIGURE, UVec2::new(1536, 2742), 825.0),
             UVec2::new(462, 825)
+        );
+    }
+
+    #[test]
+    fn environment_metadata_survives_render_extraction_and_refreshes_on_reload() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()))
+            .init_asset::<Image>()
+            .init_resource::<ImageDimensions>()
+            .init_resource::<PreparedImages>()
+            .insert_resource(GameConfigResource(GameConfig::default()))
+            .add_systems(PostUpdate, prepare.after(bevy::asset::AssetEventSystems));
+        let image = Image::new_fill(
+            Extent3d {
+                width: 2,
+                height: 2,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            &[128, 128, 128, 255],
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::RENDER_WORLD,
+        );
+        let handle = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+        let mut roles = ImageRoleRegistry::default();
+        roles.register("room.webp".into(), ImageRole::BACKGROUND);
+        let mut cache = LocalAssetCache::default();
+        cache
+            .handles
+            .insert("room.webp".into(), handle.clone().untyped());
+        app.insert_resource(roles).insert_resource(cache);
+        app.update();
+        assert!(
+            app.world()
+                .resource::<ImageDimensions>()
+                .environment(&handle)
+                .is_some()
+        );
+        app.world_mut()
+            .resource_mut::<Assets<Image>>()
+            .get_mut_untracked(handle.id())
+            .unwrap()
+            .data
+            .take();
+        app.update();
+        assert!(
+            app.world()
+                .resource::<ImageDimensions>()
+                .environment(&handle)
+                .is_some()
+        );
+
+        // A genuine reload supplies new pixels before its Modified event.
+        app.world_mut()
+            .resource_mut::<Assets<Image>>()
+            .get_mut(&handle)
+            .unwrap()
+            .data = Some([64, 64, 64, 255].repeat(4));
+        app.update();
+        let dimensions = app.world().resource::<ImageDimensions>();
+        let tint = super::super::lighting::tint(dimensions.environment(&handle).unwrap(), 1.0);
+        assert!((tint - Vec3::splat(0.65)).length() < 0.00001);
+        app.world_mut()
+            .resource_mut::<Assets<Image>>()
+            .remove(handle.id());
+        app.update();
+        assert!(
+            app.world()
+                .resource::<ImageDimensions>()
+                .environment(&handle)
+                .is_none()
         );
     }
 

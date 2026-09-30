@@ -98,8 +98,21 @@ unavailable 缺测和 Mach 换算边界；不新增验收工程。
 └── 暂缓：媒体规范化、正式签名/notarization；Windows/Linux 系统废纸篓尚未实现
 ```
 
-当前未提交代码已通过 fmt、workspace check、clippy、workspace tests 与 native-smoke validate。
+当前代码已通过 fmt、workspace check、clippy、workspace tests 与 native-smoke validate。
 测试覆盖源码/文件事务、macOS 废纸篓恢复、对白尾部参数解析/执行/迁移；这些不代替完整运行态验收。
+
+Eiyashou 统一入口的解析、执行、迁移及旧入口拒绝已通过回归；IR schema 为 v4。
+环境光的线性取样、明暗/色偏分离、透明像素、GPU 提取后缓存及重载边界已通过回归。
+macOS debug 原生预览用只读复制的 tday 教室、海边夕阳、暴雨卧室目测；
+用户通过夕阳和夜景，采用验收强度 1.0 为默认。临时工程位于
+`/private/tmp/keine-environment-tday`，已只读复制全部 46 张背景并逐文件校验内容一致，
+按章节提供目录及前后切换，先展示画面再打开导航；工程校验无警告。
+用户反馈大部分画面正常并结束本轮验收；这不等于逐张无条件通过。
+逐立绘 environment_light 开关覆盖严格布尔解析、独立对象状态、恢复开启及存储回归；
+原生 Inspector 灰/蓝状态切换与保存写回、同背景双立绘的开启/关闭对照已检查。
+no-default-features + video-native 测试也通过。
+临时工程未加入仓库，原背景未修改。
+这些是本机画面证据，不代表物理光照、全素材效果或 Windows/Linux 运行态验收。
 
 视觉验收直接操作当前构建的原生应用；不得为采证新增 screenshot hook、环境变量协议或自动化。
 构建、测试、包签名和 UI/音视频验收必须分别报告。历史一次通过不替代当前代码复验。

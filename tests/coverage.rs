@@ -475,6 +475,7 @@ fn record_command_spellings(source: &str, commands: &mut BTreeSet<&'static str>)
 /// into a compile error here until its showcase ownership is decided.
 fn action_name(action: &Action) -> &'static str {
     match action {
+        Action::SpriteVisual { action, .. } => action_name(action),
         Action::ShowBg { .. } => "show-bg",
         Action::HideBg { .. } => "hide-bg",
         Action::ShowSprite { .. } => "show-sprite",

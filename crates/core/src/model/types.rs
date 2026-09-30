@@ -173,17 +173,21 @@ pub enum AnimationPreset {
     Custom(String),
 }
 
-/// Persistent film effects attached to one stage object.
+/// Persistent visual effect flags attached to one stage object.
 ///
-/// WebGAL models these as independent boolean properties, so several effects
-/// may be enabled at once and `removeFilm` clears the complete set. Keeping the
-/// state as a compact bit set preserves those semantics without allocating a
-/// collection for every background and sprite.
+/// The historical `FilmEffects` name remains an alias for public API stability.
+///
+/// Film presets occupy bits 0–5; bit 6 stores the per-object lighting policy.
+/// Film shader inputs and removal exclude that policy. Keeping the existing
+/// transparent u8 representation preserves the Save v11 field layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(transparent)]
-pub struct FilmEffects(u8);
+pub struct StageObjectEffects(u8);
 
-impl FilmEffects {
+/// Historical public name for the serialized stage-object effect flags.
+pub type FilmEffects = StageObjectEffects;
+
+impl StageObjectEffects {
     pub const OLD_FILM: u8 = 1 << 0;
     pub const DOT_FILM: u8 = 1 << 1;
     pub const REFLECTION_FILM: u8 = 1 << 2;
@@ -191,12 +195,28 @@ impl FilmEffects {
     pub const RGB_FILM: u8 = 1 << 4;
     pub const GODRAY_FILM: u8 = 1 << 5;
 
+    const ENVIRONMENT_LIGHT_DISABLED: u8 = 1 << 6;
+    const FILM_MASK: u8 = (1 << 6) - 1;
+
+    /// Film-only shader flags; the lighting policy never enters the film shader.
     pub const fn bits(self) -> u8 {
-        self.0
+        self.0 & Self::FILM_MASK
+    }
+
+    pub const fn environment_light_enabled(self) -> bool {
+        self.0 & Self::ENVIRONMENT_LIGHT_DISABLED == 0
+    }
+
+    pub fn set_environment_light(&mut self, enabled: bool) {
+        if enabled {
+            self.0 &= !Self::ENVIRONMENT_LIGHT_DISABLED;
+        } else {
+            self.0 |= Self::ENVIRONMENT_LIGHT_DISABLED;
+        }
     }
 
     pub const fn is_empty(self) -> bool {
-        self.0 == 0
+        self.bits() == 0
     }
 
     /// Returns whether this set changes as presentation time advances.
@@ -213,7 +233,7 @@ impl FilmEffects {
     }
 
     pub fn clear(&mut self) {
-        self.0 = 0;
+        self.0 &= Self::ENVIRONMENT_LIGHT_DISABLED;
     }
 
     /// Applies one built-in film preset. Returns `false` for non-film presets.
@@ -1252,9 +1272,51 @@ pub struct PostProcessPatch {
     pub eyelid_softness: Option<f32>,
     pub eyelid_center_x: Option<f32>,
     pub eyelid_center_y: Option<f32>,
+    pub mirror_shatter_intensity: Option<f32>,
+    pub mirror_shatter_center_x: Option<f32>,
+    pub mirror_shatter_center_y: Option<f32>,
+    pub mirror_shatter_spread: Option<f32>,
+    pub mirror_shatter_seed: Option<f32>,
+    pub speed_lines_intensity: Option<f32>,
+    pub speed_lines_radial: Option<bool>,
+    pub speed_lines_density: Option<f32>,
+    pub speed_lines_angle: Option<f32>,
+    pub speed_lines_speed: Option<f32>,
+    pub speed_lines_center_x: Option<f32>,
+    pub speed_lines_center_y: Option<f32>,
+    pub speed_lines_region_ellipse: Option<bool>,
+    pub speed_lines_region_x: Option<f32>,
+    pub speed_lines_region_y: Option<f32>,
+    pub speed_lines_region_width: Option<f32>,
+    pub speed_lines_region_height: Option<f32>,
+    pub speed_lines_region_feather: Option<f32>,
 }
 
 impl PostProcessPatch {
+    pub fn from_v2(effect: &PostProcessV2) -> Self {
+        Self {
+            mirror_shatter_intensity: Some(effect.mirror_shatter_intensity),
+            mirror_shatter_center_x: Some(effect.mirror_shatter_center_x),
+            mirror_shatter_center_y: Some(effect.mirror_shatter_center_y),
+            mirror_shatter_spread: Some(effect.mirror_shatter_spread),
+            mirror_shatter_seed: Some(effect.mirror_shatter_seed),
+            speed_lines_intensity: Some(effect.speed_lines_intensity),
+            speed_lines_radial: Some(effect.speed_lines_radial),
+            speed_lines_density: Some(effect.speed_lines_density),
+            speed_lines_angle: Some(effect.speed_lines_angle),
+            speed_lines_speed: Some(effect.speed_lines_speed),
+            speed_lines_center_x: Some(effect.speed_lines_center_x),
+            speed_lines_center_y: Some(effect.speed_lines_center_y),
+            speed_lines_region_ellipse: Some(effect.speed_lines_region_ellipse),
+            speed_lines_region_x: Some(effect.speed_lines_region_x),
+            speed_lines_region_y: Some(effect.speed_lines_region_y),
+            speed_lines_region_width: Some(effect.speed_lines_region_width),
+            speed_lines_region_height: Some(effect.speed_lines_region_height),
+            speed_lines_region_feather: Some(effect.speed_lines_region_feather),
+            ..Self::default()
+        }
+    }
+
     /// Restore exactly the fields addressed by this patch from a stable base.
     /// A looping timeline uses this before every sample so an event from the
     /// previous loop cannot leak into the next one.
@@ -1340,6 +1402,60 @@ impl PostProcessPatch {
         restore!(eyelid_softness);
         restore!(eyelid_center_x);
         restore!(eyelid_center_y);
+        if self.mirror_shatter_intensity.is_some() {
+            effect.v2.mirror_shatter_intensity = base.v2.mirror_shatter_intensity;
+        }
+        if self.mirror_shatter_center_x.is_some() {
+            effect.v2.mirror_shatter_center_x = base.v2.mirror_shatter_center_x;
+        }
+        if self.mirror_shatter_center_y.is_some() {
+            effect.v2.mirror_shatter_center_y = base.v2.mirror_shatter_center_y;
+        }
+        if self.mirror_shatter_spread.is_some() {
+            effect.v2.mirror_shatter_spread = base.v2.mirror_shatter_spread;
+        }
+        if self.mirror_shatter_seed.is_some() {
+            effect.v2.mirror_shatter_seed = base.v2.mirror_shatter_seed;
+        }
+        if self.speed_lines_intensity.is_some() {
+            effect.v2.speed_lines_intensity = base.v2.speed_lines_intensity;
+        }
+        if self.speed_lines_radial.is_some() {
+            effect.v2.speed_lines_radial = base.v2.speed_lines_radial;
+        }
+        if self.speed_lines_density.is_some() {
+            effect.v2.speed_lines_density = base.v2.speed_lines_density;
+        }
+        if self.speed_lines_angle.is_some() {
+            effect.v2.speed_lines_angle = base.v2.speed_lines_angle;
+        }
+        if self.speed_lines_speed.is_some() {
+            effect.v2.speed_lines_speed = base.v2.speed_lines_speed;
+        }
+        if self.speed_lines_center_x.is_some() {
+            effect.v2.speed_lines_center_x = base.v2.speed_lines_center_x;
+        }
+        if self.speed_lines_center_y.is_some() {
+            effect.v2.speed_lines_center_y = base.v2.speed_lines_center_y;
+        }
+        if self.speed_lines_region_ellipse.is_some() {
+            effect.v2.speed_lines_region_ellipse = base.v2.speed_lines_region_ellipse;
+        }
+        if self.speed_lines_region_x.is_some() {
+            effect.v2.speed_lines_region_x = base.v2.speed_lines_region_x;
+        }
+        if self.speed_lines_region_y.is_some() {
+            effect.v2.speed_lines_region_y = base.v2.speed_lines_region_y;
+        }
+        if self.speed_lines_region_width.is_some() {
+            effect.v2.speed_lines_region_width = base.v2.speed_lines_region_width;
+        }
+        if self.speed_lines_region_height.is_some() {
+            effect.v2.speed_lines_region_height = base.v2.speed_lines_region_height;
+        }
+        if self.speed_lines_region_feather.is_some() {
+            effect.v2.speed_lines_region_feather = base.v2.speed_lines_region_feather;
+        }
     }
 
     pub fn apply_to(&self, mut effect: PostProcessEffect) -> PostProcessEffect {
@@ -1423,6 +1539,61 @@ impl PostProcessPatch {
         apply!(eyelid_softness);
         apply!(eyelid_center_x);
         apply!(eyelid_center_y);
+        if let Some(value) = self.mirror_shatter_intensity {
+            effect.v2.mirror_shatter_intensity = value;
+        }
+        if let Some(value) = self.mirror_shatter_center_x {
+            effect.v2.mirror_shatter_center_x = value;
+        }
+        if let Some(value) = self.mirror_shatter_center_y {
+            effect.v2.mirror_shatter_center_y = value;
+        }
+        if let Some(value) = self.mirror_shatter_spread {
+            effect.v2.mirror_shatter_spread = value;
+        }
+        if let Some(value) = self.mirror_shatter_seed {
+            effect.v2.mirror_shatter_seed = value;
+        }
+        if let Some(value) = self.speed_lines_intensity {
+            effect.v2.speed_lines_intensity = value;
+        }
+        if let Some(value) = self.speed_lines_radial {
+            effect.v2.speed_lines_radial = value;
+        }
+        if let Some(value) = self.speed_lines_density {
+            effect.v2.speed_lines_density = value;
+        }
+        if let Some(value) = self.speed_lines_angle {
+            effect.v2.speed_lines_angle = value;
+        }
+        if let Some(value) = self.speed_lines_speed {
+            effect.v2.speed_lines_speed = value;
+        }
+        if let Some(value) = self.speed_lines_center_x {
+            effect.v2.speed_lines_center_x = value;
+        }
+        if let Some(value) = self.speed_lines_center_y {
+            effect.v2.speed_lines_center_y = value;
+        }
+        if let Some(value) = self.speed_lines_region_ellipse {
+            effect.v2.speed_lines_region_ellipse = value;
+        }
+        if let Some(value) = self.speed_lines_region_x {
+            effect.v2.speed_lines_region_x = value;
+        }
+        if let Some(value) = self.speed_lines_region_y {
+            effect.v2.speed_lines_region_y = value;
+        }
+        if let Some(value) = self.speed_lines_region_width {
+            effect.v2.speed_lines_region_width = value;
+        }
+        if let Some(value) = self.speed_lines_region_height {
+            effect.v2.speed_lines_region_height = value;
+        }
+        if let Some(value) = self.speed_lines_region_feather {
+            effect.v2.speed_lines_region_feather = value;
+        }
+
         effect
     }
 
@@ -1707,5 +1878,31 @@ mod transform_patch_tests {
         // Nine scalar transform channels plus one bit mask; still much smaller
         // than nine `Option<f32>` values and allocation-free to apply.
         assert_eq!(std::mem::size_of::<TransformPatch>(), 40);
+    }
+}
+
+/// Sparse colour and lighting update shared by native sprite creation and transforms.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub struct VisualFilterPatch {
+    pub environment_light: Option<bool>,
+    pub brightness: Option<f32>,
+    pub contrast: Option<f32>,
+    pub saturation: Option<f32>,
+}
+impl VisualFilterPatch {
+    pub fn is_empty(self) -> bool {
+        self == Self::default()
+    }
+    pub fn apply_to(self, mut filter: VisualFilter) -> VisualFilter {
+        if let Some(value) = self.brightness {
+            filter.brightness = value;
+        }
+        if let Some(value) = self.contrast {
+            filter.contrast = value;
+        }
+        if let Some(value) = self.saturation {
+            filter.saturation = value;
+        }
+        filter
     }
 }

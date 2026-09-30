@@ -6,7 +6,6 @@ use keine_core::{
 pub(super) const STRUCTURED_COMMANDS: &[&str] = &[
     "text.intro",
     "sprite.sequence",
-    "sprite.sequence.timed",
     "sprite.select",
     "sprite.select.when",
     "sprite.keyframes",
@@ -23,7 +22,6 @@ impl<'a> Parser<'a> {
         let (positional, named): (usize, &[&str]) = match name {
             "text.intro" => (0, &["hold"]),
             "sprite.sequence" => (1, &["fps", "loop"]),
-            "sprite.sequence.timed" => (1, &["loop"]),
             "sprite.select" => (2, &["default"]),
             "sprite.select.when" => (1, &["default"]),
             "sprite.keyframes" => (1, &["repeat", "blocking"]),
@@ -62,52 +60,53 @@ impl<'a> Parser<'a> {
                     })
                 }
                 "sprite.sequence" => {
-                    let mut frames = Vec::new();
-                    for (row, fields) in &rows {
-                        self.validate_signature(row, fields, 1, &[], report);
-                        if row != "frame" {
-                            report
-                                .diagnostics
-                                .push(self.error("sprite.sequence children must be frame(asset)"));
-                            return None;
-                        }
-                        frames.push(self.v11_identifier(fields.first(), "frame asset", report)?);
-                    }
-                    let fps = self.v11_optional_number(args, "fps", 12.0, report)?;
-                    if fps <= 0.0 {
-                        report
-                            .diagnostics
-                            .push(self.error("`fps` must be positive"));
+                    let timed = rows
+                        .iter()
+                        .any(|(_, fields)| self.named_arg(fields, "duration").is_some());
+                    if timed && self.named_arg(args, "fps").is_some() {
+                        report.diagnostics.push(
+                            self.error("sprite.sequence uses fps or per-frame duration, not both"),
+                        );
                         return None;
                     }
-                    Some(Action::ConfigureSpriteSequence {
-                        id: self.v11_identifier(args.first(), "sprite ID", report)?,
-                        frames,
-                        fps,
-                        looped: self.v11_optional_bool(args, "loop", false, report)?,
-                    })
-                }
-                "sprite.sequence.timed" => {
                     let mut frames = Vec::new();
                     let mut frame_durations = Vec::new();
                     for (row, fields) in &rows {
                         self.validate_signature(row, fields, 1, &["duration"], report);
                         if row != "frame" {
                             report.diagnostics.push(self.error(
-                            "sprite.sequence.timed children must be frame(asset, duration: ...)",
-                        ));
+                                "sprite.sequence children must be frame(asset, duration: ...)",
+                            ));
                             return None;
                         }
                         frames.push(self.v11_identifier(fields.first(), "frame asset", report)?);
-                        frame_durations
-                            .push(self.v11_structured_duration(fields, "duration", report)?);
+                        if timed {
+                            frame_durations
+                                .push(self.v11_structured_duration(fields, "duration", report)?);
+                        }
                     }
-                    Some(Action::ConfigureTimedSpriteSequence {
-                        id: self.v11_identifier(args.first(), "sprite ID", report)?,
-                        frames,
-                        frame_durations,
-                        looped: self.v11_optional_bool(args, "loop", false, report)?,
-                    })
+                    let id = self.v11_identifier(args.first(), "sprite ID", report)?;
+                    let looped = self.v11_optional_bool(args, "loop", false, report)?;
+                    if timed {
+                        Some(Action::ConfigureTimedSpriteSequence {
+                            id,
+                            frames,
+                            frame_durations,
+                            looped,
+                        })
+                    } else {
+                        let fps = self.v11_optional_number(args, "fps", 12.0, report)?;
+                        if fps <= 0.0 {
+                            report.diagnostics.push(self.error("fps must be positive"));
+                            return None;
+                        }
+                        Some(Action::ConfigureSpriteSequence {
+                            id,
+                            frames,
+                            fps,
+                            looped,
+                        })
+                    }
                 }
                 "sprite.select" => {
                     let mut variants = Vec::new();

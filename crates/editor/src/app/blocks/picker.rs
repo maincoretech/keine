@@ -188,21 +188,17 @@ pub(in crate::app) fn insert_kind_icon(kind: InsertKind) -> AssetIconName {
             | "camera.unbind"
             | "scene.parallax.stop"
             | "scene.parallax"
-            | "camera.effect"
-            | "camera.effect.v2" => AssetIconName::Move,
+            | "camera.effect" => AssetIconName::Move,
             "stage.animate" => AssetIconName::Move,
             "sprite.offset" | "sprite.transform" | "background.transform" => AssetIconName::Move,
-            "sprite.filter" | "sprite.animate" | "sprite.transition" | "stage.mask.show"
-            | "stage.mask.hide" => AssetIconName::Image,
-            "sprite.sequence"
-            | "sprite.sequence.timed"
-            | "sprite.select"
-            | "sprite.select.when"
-            | "sprite.keyframes"
+            "sprite.animate" | "sprite.transition" | "stage.mask.show" | "stage.mask.hide" => {
+                AssetIconName::Image
+            }
+            "sprite.sequence" | "sprite.select" | "sprite.select.when" | "sprite.keyframes"
             | "sprite.update" => AssetIconName::Image,
             "assets.loading" => AssetIconName::Workflow,
             "gallery.unlock" => AssetIconName::Image,
-            "input.simple" | "input.request" => AssetIconName::Braces,
+            "input.request" => AssetIconName::Braces,
             _ => AssetIconName::Workflow,
         },
     }

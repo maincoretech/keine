@@ -2634,6 +2634,7 @@ fn post_process_patch_from_props(props: &Map<String, Value>) -> PostProcessPatch
         eyelid_softness: optional_f32(props, "eyelidSoftness"),
         eyelid_center_x: optional_f32(props, "eyelidCenterX"),
         eyelid_center_y: optional_f32(props, "eyelidCenterY"),
+        ..Default::default()
     }
 }
 
@@ -2757,6 +2758,7 @@ fn push_camera_reset(
             eyelid_softness: Some(defaults.eyelid_softness),
             eyelid_center_x: Some(defaults.eyelid_center_x),
             eyelid_center_y: Some(defaults.eyelid_center_y),
+            ..Default::default()
         }),
         duration,
         easing,

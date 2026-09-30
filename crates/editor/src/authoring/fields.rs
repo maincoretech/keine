@@ -33,7 +33,6 @@ pub fn command_argument_names(command: &str) -> Vec<&str> {
             "particle.hide" => &["duration"],
             "video.stop" => &["fade"],
             "gallery.unlock" => &["name"],
-            "input.simple" => &["title", "button"],
             "camera.bind" | "camera.unbind" => &["distance"],
             "style" => &[
                 "scale",
@@ -46,22 +45,22 @@ pub fn command_argument_names(command: &str) -> Vec<&str> {
             "background" => &[
                 "blocking",
                 "transition",
-                "transform_x",
-                "transform_y",
-                "transform_alpha",
-                "transform_scale_x",
-                "transform_scale_y",
-                "transform_rotation",
-                "transform_blur",
-                "transform_width",
-                "transform_height",
+                "x",
+                "y",
+                "alpha",
+                "scale_x",
+                "scale_y",
+                "rotation",
+                "blur",
+                "width",
+                "height",
             ],
             "hide" => &["transition", "blocking"],
             "sprite" => &[
                 "blocking",
                 "position",
                 "anchor_offset",
-                "y",
+                "position_y",
                 "transition",
                 "z",
                 "blend",
@@ -80,15 +79,19 @@ pub fn command_argument_names(command: &str) -> Vec<&str> {
                 "layout_rect_width",
                 "layout_rect_height",
                 "layout_height_ratio",
-                "transform_x",
-                "transform_y",
-                "transform_alpha",
-                "transform_scale_x",
-                "transform_scale_y",
-                "transform_rotation",
-                "transform_blur",
-                "transform_width",
-                "transform_height",
+                "x",
+                "y",
+                "alpha",
+                "scale_x",
+                "scale_y",
+                "rotation",
+                "blur",
+                "width",
+                "height",
+                "brightness",
+                "contrast",
+                "saturation",
+                "environment_light",
             ],
             "move" => &["anchor_offset", "y", "duration", "easing", "blocking"],
             "bgm" => &["volume", "fade", "loop"],
@@ -115,11 +118,39 @@ pub fn command_argument_names(command: &str) -> Vec<&str> {
                 "easing",
             ],
             "sprite.offset" => &["x", "y", "duration", "easing"],
-            "sprite.transform" | "background.transform" => &[
-                "x", "y", "alpha", "scale_x", "scale_y", "rotation", "blur", "width", "height",
-                "duration", "easing",
+            "sprite.transform" => &[
+                "environment_light",
+                "x",
+                "y",
+                "alpha",
+                "scale_x",
+                "scale_y",
+                "rotation",
+                "blur",
+                "width",
+                "height",
+                "brightness",
+                "contrast",
+                "saturation",
+                "duration",
+                "easing",
             ],
-            "sprite.filter" => &["blur", "brightness", "contrast", "saturation"],
+            "background.transform" => &[
+                "x",
+                "y",
+                "alpha",
+                "scale_x",
+                "scale_y",
+                "rotation",
+                "blur",
+                "width",
+                "height",
+                "brightness",
+                "contrast",
+                "saturation",
+                "duration",
+                "easing",
+            ],
             "sprite.animate" => &["duration"],
             "sprite.transition" => &["enter", "exit", "duration"],
             "se.loop" | "vocal.play" => &["volume"],
@@ -145,7 +176,6 @@ pub fn command_argument_names(command: &str) -> Vec<&str> {
             "ui.message" => &["title", "message", "confirm_text", "cancel_text", "result"],
             "text.intro" => &["hold"],
             "sprite.sequence" => &["fps", "loop"],
-            "sprite.sequence.timed" => &["loop"],
             "sprite.select" => &["default"],
             "sprite.select.when" => &["default"],
             "sprite.keyframes" => &["repeat", "blocking"],
@@ -199,7 +229,7 @@ pub fn command_argument_names(command: &str) -> Vec<&str> {
                 "reveal_rotation",
                 "reveal_blur",
             ],
-            "camera.move" | "camera.effect" | "camera.effect.v2" | "stage.mask.show" => {
+            "camera.move" | "camera.effect" | "stage.mask.show" => {
                 native_expanded_fields(command).unwrap_or(&[])
             }
             "stage.mask.hide" => &["duration", "blocking"],
@@ -252,7 +282,8 @@ pub(crate) fn source_field_choices(
     if (!field.quoted && matches!(field.value.as_str(), "true" | "false"))
         || matches!(
             field.key.as_str(),
-            "blocking"
+            "environment_light"
+                | "blocking"
                 | "infinite"
                 | "looped"
                 | "loop"
@@ -293,7 +324,7 @@ pub(crate) fn source_field_choices(
             "out_back",
             "out_bounce",
         ],
-        ("camera.move" | "camera.shake" | "camera.effect" | "camera.effect.v2", "0") => {
+        ("camera.move" | "camera.shake" | "camera.effect", "0") => {
             &["scene", "characters", "all", "none"]
         }
         ("dialogue", "concat" | "auto" | "inherit_speaker") => &["true", "false"],
@@ -366,7 +397,6 @@ pub(crate) fn command_field_label(kind: &BlockKind, command: &str, field_key: &s
             ("particle.hide" | "video.stop" | "text.float.hide", 0) => "Target".into(),
             ("gallery.unlock", 0) => "Kind".into(),
             ("gallery.unlock", 1) => "Asset".into(),
-            ("input.simple", 0) => "Variable".into(),
             ("input.request", 0) => "Variable".into(),
             ("text.paragraph.style", 0) => "Style".into(),
             ("particle.show", 0) => "ID".into(),
@@ -374,11 +404,7 @@ pub(crate) fn command_field_label(kind: &BlockKind, command: &str, field_key: &s
             ("ui.message", 0) => "Mode".into(),
             ("text.float", 0) => "Text".into(),
             (
-                "sprite.sequence"
-                | "sprite.sequence.timed"
-                | "sprite.select"
-                | "sprite.select.when"
-                | "sprite.keyframes"
+                "sprite.sequence" | "sprite.select" | "sprite.select.when" | "sprite.keyframes"
                 | "sprite.update",
                 0,
             ) => "Target".into(),
@@ -388,7 +414,7 @@ pub(crate) fn command_field_label(kind: &BlockKind, command: &str, field_key: &s
             ("case", 0) => "Value".into(),
             ("case", 1) => "Asset".into(),
             ("camera.bind" | "camera.unbind", 0) => "Target".into(),
-            ("camera.effect" | "camera.effect.v2", 0) => "Targets".into(),
+            ("camera.effect", 0) => "Targets".into(),
             ("stage.animate", 0) => "Animation ID".into(),
             ("track", 0) => "Target".into(),
             ("track", 1) => "Property".into(),
@@ -397,11 +423,9 @@ pub(crate) fn command_field_label(kind: &BlockKind, command: &str, field_key: &s
             ("stage.mask.show" | "stage.mask.hide", 0) => "Mask ID".into(),
             ("se.loop", 0) | ("se.stop", 0) | ("video.play", 0) => "ID".into(),
             ("se.loop", 1) | ("video.play", 1) => "Asset".into(),
-            (
-                "sprite.offset" | "sprite.transform" | "sprite.filter" | "sprite.animate"
-                | "sprite.transition",
-                0,
-            ) => "Target".into(),
+            ("sprite.offset" | "sprite.transform" | "sprite.animate" | "sprite.transition", 0) => {
+                "Target".into()
+            }
             ("sprite.animate", 1) => "Preset".into(),
             ("wait", 0) => "Duration".into(),
             ("pop", 0) => "List".into(),
@@ -574,7 +598,7 @@ pub(crate) fn source_number(key: &SourceContext, field: &SourceField) -> Option<
     let command = key.command.as_str();
     if matches!(
         command,
-        "camera.move" | "camera.effect" | "camera.effect.v2" | "event.camera.patch"
+        "camera.move" | "camera.effect" | "event.camera.patch"
     ) && let Some(control) = effect_number(&field.key)
     {
         return (field.value.is_empty() || control.parse(&field.value).is_some())
@@ -584,7 +608,6 @@ pub(crate) fn source_number(key: &SourceContext, field: &SourceField) -> Option<
         return None;
     }
     let name = field.key.rsplit('.').next().unwrap_or(&field.key);
-    let name = name.strip_prefix("transform_").unwrap_or(name);
     let (min, max, step, default, unit) = match name {
         "volume" => (0., 100., 1., 100., "%"),
         "duration" | "fade" | "fade_in" | "fade_out" | "hold" | "time" | "reveal_duration" => {
@@ -592,7 +615,9 @@ pub(crate) fn source_number(key: &SourceContext, field: &SourceField) -> Option<
         }
         "0" if command == "wait" => (0., 5000., 100., 1000., "ms"),
         "x" | "y" if command == "camera.move" => (-1000., 1000., 1., 0., "px"),
-        "x" | "y" | "anchor_offset" | "layout_x" | "layout_y" => (-1920., 1920., 1., 0., "px"),
+        "x" | "y" | "position_y" | "anchor_offset" | "layout_x" | "layout_y" => {
+            (-1920., 1920., 1., 0., "px")
+        }
         "rotation" | "angle" => (-180., 180., 1., 0., "°"),
         "scale" | "scale_x" | "scale_y" => (0.1, 3., 0.01, 1., "×"),
         "alpha" => (0., 100., 1., 100., "%"),
@@ -627,8 +652,7 @@ pub(crate) fn camera_tween_field(key: &SourceContext, field: &SourceField) -> bo
     };
     match key.command.as_str() {
         "camera.move" => true,
-        "camera.effect" => !numeric.is_transform() && !numeric.is_v2(),
-        "camera.effect.v2" => numeric.is_v2(),
+        "camera.effect" => !numeric.is_transform(),
         _ => false,
     }
 }
@@ -806,7 +830,7 @@ pub(crate) fn source_effect_group(name: &str) -> Option<(&'static str, &'static 
 pub(crate) fn source_field_enabled(key: &SourceContext, field: &SourceField) -> bool {
     if !matches!(
         key.command.as_str(),
-        "camera.move" | "camera.effect" | "camera.effect.v2" | "event.camera.patch"
+        "camera.move" | "camera.effect" | "event.camera.patch"
     ) {
         return true;
     }
@@ -837,20 +861,19 @@ pub(crate) fn source_property_group(field: &SourceField) -> &'static str {
         "Timing"
     } else if name.starts_with("layout_") || name == "layout" {
         "Layout"
-    } else if name.starts_with("transform_")
-        || matches!(
-            name,
-            "x" | "y"
-                | "alpha"
-                | "scale"
-                | "scale_x"
-                | "scale_y"
-                | "rotation"
-                | "width"
-                | "height"
-                | "anchor_offset"
-        )
-    {
+    } else if matches!(
+        name,
+        "x" | "y"
+            | "alpha"
+            | "scale"
+            | "scale_x"
+            | "scale_y"
+            | "rotation"
+            | "width"
+            | "height"
+            | "anchor_offset"
+            | "position_y"
+    ) {
         "Transform"
     } else if matches!(
         name,

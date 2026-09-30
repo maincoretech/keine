@@ -746,6 +746,10 @@ pub enum Action {
         randomness: crate::types::CameraShakeRandomness,
         blocking: bool,
     },
+    SpriteVisual {
+        action: Box<Action>,
+        filter: crate::VisualFilterPatch,
+    },
 }
 
 /// Fixed system surfaces owned by the engine shell, never by a script adapter.

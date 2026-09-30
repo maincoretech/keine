@@ -1,11 +1,10 @@
 use super::*;
-use keine_core::{AnimationPreset, VisualFilter};
+use keine_core::{AnimationPreset, VisualFilterPatch};
 
 pub(super) const VISUAL_COMMANDS: &[&str] = &[
     "sprite.offset",
     "sprite.transform",
     "background.transform",
-    "sprite.filter",
     "sprite.animate",
     "sprite.transition",
     "sprite.update",
@@ -23,18 +22,42 @@ impl<'a> Parser<'a> {
             "sprite.transform" => (
                 1,
                 &[
-                    "x", "y", "alpha", "scale_x", "scale_y", "rotation", "blur", "width", "height",
-                    "duration", "easing",
+                    "x",
+                    "y",
+                    "alpha",
+                    "scale_x",
+                    "scale_y",
+                    "rotation",
+                    "blur",
+                    "width",
+                    "height",
+                    "brightness",
+                    "contrast",
+                    "saturation",
+                    "environment_light",
+                    "duration",
+                    "easing",
                 ],
             ),
             "background.transform" => (
                 0,
                 &[
-                    "x", "y", "alpha", "scale_x", "scale_y", "rotation", "blur", "width", "height",
-                    "duration", "easing",
+                    "x",
+                    "y",
+                    "alpha",
+                    "scale_x",
+                    "scale_y",
+                    "rotation",
+                    "blur",
+                    "width",
+                    "height",
+                    "brightness",
+                    "contrast",
+                    "saturation",
+                    "duration",
+                    "easing",
                 ],
             ),
-            "sprite.filter" => (1, &["blur", "brightness", "contrast", "saturation"]),
             "sprite.animate" => (2, &["duration"]),
             "sprite.transition" => (1, &["enter", "exit", "duration"]),
             "sprite.update" => (
@@ -104,35 +127,35 @@ impl<'a> Parser<'a> {
                         _ => unreachable!(),
                     }
                 }
-                if transform.is_empty() {
+                let filter = self.v11_filter_patch(args, report)?;
+                if transform.is_empty() && filter.is_empty() {
                     report.diagnostics.push(
                         self.error(format!("{name}(...) requires at least one transform field")),
                     );
                     return None;
                 }
-                Some(Action::SetTransform {
+                if transform.is_empty()
+                    && self.named_duration_checked(args, "duration", report)? > 0.0
+                {
+                    report.diagnostics.push(self.error(
+                        "duration animates transform fields; colour/lighting-only updates are immediate",
+                    ));
+                    return None;
+                }
+                let action = Action::SetTransform {
                     id,
                     transform,
                     duration: self.named_duration_checked(args, "duration", report)?,
                     easing: self.named_easing(args, "easing", report)?,
-                })
-            }
-            "sprite.filter" => {
-                let target = self.v11_identifier(args.first(), "filter target", report)?;
-                let mut filter = VisualFilter::default();
-                for field in ["blur", "brightness", "contrast", "saturation"] {
-                    let Some(value) = self.checked_number(args, field, report)? else {
-                        continue;
-                    };
-                    match field {
-                        "blur" => filter.blur = value,
-                        "brightness" => filter.brightness = value,
-                        "contrast" => filter.contrast = value,
-                        "saturation" => filter.saturation = value,
-                        _ => unreachable!(),
+                };
+                Some(if filter.is_empty() {
+                    action
+                } else {
+                    Action::SpriteVisual {
+                        action: Box::new(action),
+                        filter,
                     }
-                }
-                Some(Action::SetFilter { target, filter })
+                })
             }
             "sprite.animate" => Some(Action::Animate {
                 target: self.v11_identifier(args.first(), "animation target", report)?,
@@ -166,6 +189,37 @@ impl<'a> Parser<'a> {
             }
             _ => None,
         }
+    }
+
+    pub(in crate::adapter::script::native) fn v11_filter_patch(
+        &self,
+        args: &[Argument],
+        report: &mut ParseReport,
+    ) -> Option<VisualFilterPatch> {
+        let filter = VisualFilterPatch {
+            environment_light: if args
+                .iter()
+                .any(|arg| arg.name.as_deref() == Some("environment_light"))
+            {
+                Some(self.v11_optional_bool(args, "environment_light", true, report)?)
+            } else {
+                None
+            },
+            brightness: self.checked_number(args, "brightness", report)?,
+            contrast: self.checked_number(args, "contrast", report)?,
+            saturation: self.checked_number(args, "saturation", report)?,
+        };
+        if [filter.brightness, filter.contrast, filter.saturation]
+            .into_iter()
+            .flatten()
+            .any(|value| !(0.0..=4.0).contains(&value))
+        {
+            report
+                .diagnostics
+                .push(self.error("sprite colour fields must be from 0 to 4"));
+            return None;
+        }
+        Some(filter)
     }
 
     fn v11_optional_animation_preset(

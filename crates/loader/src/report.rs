@@ -259,7 +259,7 @@ fn collect_references(
                 }
             }
         }
-        Action::Flow { action, .. } => {
+        Action::Flow { action, .. } | Action::SpriteVisual { action, .. } => {
             collect_references(action, action_index, span, report);
         }
         _ => {}

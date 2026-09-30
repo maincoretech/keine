@@ -1,7 +1,7 @@
 use super::*;
-use keine_core::{ColorToneMode, PostProcessPatch, PostProcessV2};
+use keine_core::{ColorToneMode, PostProcessPatch};
 
-pub(super) const EFFECT_COMMANDS: &[&str] = &["camera.effect", "camera.effect.v2"];
+pub(super) const EFFECT_COMMANDS: &[&str] = &["camera.effect"];
 
 pub(super) const PATCH_FIELDS: &[&str] = &[
     "duration",
@@ -81,12 +81,6 @@ pub(super) const PATCH_FIELDS: &[&str] = &[
     "eyelid_softness",
     "eyelid_center_x",
     "eyelid_center_y",
-];
-pub(super) const V2_FIELDS: &[&str] = &[
-    "duration",
-    "easing",
-    "blocking",
-    "tween",
     "mirror_shatter_intensity",
     "mirror_shatter_center_x",
     "mirror_shatter_center_y",
@@ -106,7 +100,6 @@ pub(super) const V2_FIELDS: &[&str] = &[
     "speed_lines_region_height",
     "speed_lines_region_feather",
 ];
-
 impl<'a> Parser<'a> {
     pub(super) fn parse_v11_effect_command(
         &self,
@@ -114,104 +107,23 @@ impl<'a> Parser<'a> {
         args: &[Argument],
         report: &mut ParseReport,
     ) -> Option<Action> {
-        let fields = if name == "camera.effect" {
-            PATCH_FIELDS
-        } else {
-            V2_FIELDS
-        };
         let before = report.diagnostics.len();
-        self.validate_signature(name, args, 1, fields, report);
+        self.validate_signature(name, args, 1, PATCH_FIELDS, report);
         if report.diagnostics.len() != before {
             return None;
         }
-        let targets = self.camera_targets(args, report)?;
-        let duration = self.named_duration_checked(args, "duration", report)?;
-        let easing = self.named_easing(args, "easing", report)?;
-        let blocking = self.v11_optional_bool(args, "blocking", true, report)?;
-        match name {
-            "camera.effect" => self.camera_tween(
-                args,
-                Action::SetPostProcess {
-                    targets,
-                    effect: Box::new(self.v11_post_process_patch(args, report)?),
-                    duration,
-                    easing,
-                    blocking,
-                },
-                report,
-            ),
-            "camera.effect.v2" => {
-                // V2 is a full state action, so every field is required. Partial calls would reset omitted effects.
-                self.camera_tween(
-                    args,
-                    Action::SetPostProcessV2 {
-                        targets,
-                        effect: Box::new(self.v11_post_process_v2(args, report)?),
-                        duration,
-                        easing,
-                        blocking,
-                    },
-                    report,
-                )
-            }
-            _ => None,
-        }
+        self.camera_tween(
+            args,
+            Action::SetPostProcess {
+                targets: self.camera_targets(args, report)?,
+                effect: Box::new(self.v11_post_process_patch(args, report)?),
+                duration: self.named_duration_checked(args, "duration", report)?,
+                easing: self.named_easing(args, "easing", report)?,
+                blocking: self.v11_optional_bool(args, "blocking", true, report)?,
+            },
+            report,
+        )
     }
-    pub(super) fn v11_post_process_v2(
-        &self,
-        args: &[Argument],
-        report: &mut ParseReport,
-    ) -> Option<PostProcessV2> {
-        Some(PostProcessV2 {
-            mirror_shatter_intensity: self.v11_named_number(
-                args,
-                "mirror_shatter_intensity",
-                report,
-            )?,
-            mirror_shatter_center_x: self.v11_named_number(
-                args,
-                "mirror_shatter_center_x",
-                report,
-            )?,
-            mirror_shatter_center_y: self.v11_named_number(
-                args,
-                "mirror_shatter_center_y",
-                report,
-            )?,
-            mirror_shatter_spread: self.v11_named_number(args, "mirror_shatter_spread", report)?,
-            mirror_shatter_seed: self.v11_named_number(args, "mirror_shatter_seed", report)?,
-            speed_lines_intensity: self.v11_named_number(args, "speed_lines_intensity", report)?,
-            speed_lines_radial: self.v11_named_bool(args, "speed_lines_radial", report)?,
-            speed_lines_density: self.v11_named_number(args, "speed_lines_density", report)?,
-            speed_lines_angle: self.v11_named_number(args, "speed_lines_angle", report)?,
-            speed_lines_speed: self.v11_named_number(args, "speed_lines_speed", report)?,
-            speed_lines_center_x: self.v11_named_number(args, "speed_lines_center_x", report)?,
-            speed_lines_center_y: self.v11_named_number(args, "speed_lines_center_y", report)?,
-            speed_lines_region_ellipse: self.v11_named_bool(
-                args,
-                "speed_lines_region_ellipse",
-                report,
-            )?,
-            speed_lines_region_x: self.v11_named_number(args, "speed_lines_region_x", report)?,
-            speed_lines_region_y: self.v11_named_number(args, "speed_lines_region_y", report)?,
-            speed_lines_region_width: self.v11_named_number(
-                args,
-                "speed_lines_region_width",
-                report,
-            )?,
-            speed_lines_region_height: self.v11_named_number(
-                args,
-                "speed_lines_region_height",
-                report,
-            )?,
-            speed_lines_region_feather: self.v11_named_number(
-                args,
-                "speed_lines_region_feather",
-                report,
-            )?,
-        })
-    }
-
     pub(super) fn v11_post_process_patch(
         &self,
         args: &[Argument],
@@ -287,6 +199,46 @@ impl<'a> Parser<'a> {
             eyelid_softness: self.checked_number(args, "eyelid_softness", report)?,
             eyelid_center_x: self.checked_number(args, "eyelid_center_x", report)?,
             eyelid_center_y: self.checked_number(args, "eyelid_center_y", report)?,
+            mirror_shatter_intensity: self.checked_number(
+                args,
+                "mirror_shatter_intensity",
+                report,
+            )?,
+            mirror_shatter_center_x: self.checked_number(
+                args,
+                "mirror_shatter_center_x",
+                report,
+            )?,
+            mirror_shatter_center_y: self.checked_number(
+                args,
+                "mirror_shatter_center_y",
+                report,
+            )?,
+            mirror_shatter_spread: self.checked_number(args, "mirror_shatter_spread", report)?,
+            mirror_shatter_seed: self.checked_number(args, "mirror_shatter_seed", report)?,
+            speed_lines_intensity: self.checked_number(args, "speed_lines_intensity", report)?,
+            speed_lines_density: self.checked_number(args, "speed_lines_density", report)?,
+            speed_lines_angle: self.checked_number(args, "speed_lines_angle", report)?,
+            speed_lines_speed: self.checked_number(args, "speed_lines_speed", report)?,
+            speed_lines_center_x: self.checked_number(args, "speed_lines_center_x", report)?,
+            speed_lines_center_y: self.checked_number(args, "speed_lines_center_y", report)?,
+            speed_lines_region_x: self.checked_number(args, "speed_lines_region_x", report)?,
+            speed_lines_region_y: self.checked_number(args, "speed_lines_region_y", report)?,
+            speed_lines_region_width: self.checked_number(
+                args,
+                "speed_lines_region_width",
+                report,
+            )?,
+            speed_lines_region_height: self.checked_number(
+                args,
+                "speed_lines_region_height",
+                report,
+            )?,
+            speed_lines_region_feather: self.checked_number(
+                args,
+                "speed_lines_region_feather",
+                report,
+            )?,
             ..PostProcessPatch::default()
         };
         if let Some(arg) = self.named_arg(args, "focal_distance") {
@@ -320,6 +272,14 @@ impl<'a> Parser<'a> {
         }
         if self.named_arg(args, "godray_parallel").is_some() {
             effect.godray_parallel = Some(self.v11_named_bool(args, "godray_parallel", report)?);
+        }
+        if self.named_arg(args, "speed_lines_radial").is_some() {
+            effect.speed_lines_radial =
+                Some(self.v11_named_bool(args, "speed_lines_radial", report)?);
+        }
+        if self.named_arg(args, "speed_lines_region_ellipse").is_some() {
+            effect.speed_lines_region_ellipse =
+                Some(self.v11_named_bool(args, "speed_lines_region_ellipse", report)?);
         }
         if effect.is_empty() {
             report

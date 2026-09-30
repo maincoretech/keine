@@ -128,6 +128,29 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
             action => (action, false),
         };
 
+        let (action, visual_filter) = match action {
+            Action::SpriteVisual { action, filter } => (action.as_ref(), Some(*filter)),
+            action => (action, None),
+        };
+        if let (Some(filter), Action::SetTransform { id, .. }) = (visual_filter, action) {
+            let id = interpolate(id, &state.vars, &state.global_vars);
+            if matches!(id.as_str(), "bg-main" | "background") {
+                state.bg_filter = filter.apply_to(state.bg_filter);
+            } else if is_character_group_target(&id) {
+                for sprite in state.sprites.values_mut() {
+                    sprite.filter = filter.apply_to(sprite.filter);
+                    if let Some(enabled) = filter.environment_light {
+                        sprite.films.set_environment_light(enabled);
+                    }
+                }
+            } else if let Some(sprite) = state.sprites.get_mut(&id) {
+                sprite.filter = filter.apply_to(sprite.filter);
+                if let Some(enabled) = filter.environment_light {
+                    sprite.films.set_environment_light(enabled);
+                }
+            }
+        }
+
         // Script actions are infrequent relative to rendered frames. One
         // conservative revision bump here covers every sprite/camera mutation
         // branch without scattering an easy-to-miss manual invalidation.
@@ -227,6 +250,9 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                 duration,
                 easing,
             } => {
+                if target.is_empty() {
+                    continue;
+                }
                 let duration = *duration;
                 let easing = *easing;
                 let id = interpolate(id, &state.vars, &state.global_vars);
@@ -351,8 +377,18 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                         transform_animation: None,
                         position_animation: None,
                         keyframe_animation: None,
-                        filter: Default::default(),
-                        films: Default::default(),
+                        filter: visual_filter
+                            .unwrap_or_default()
+                            .apply_to(Default::default()),
+                        films: {
+                            let mut effects = crate::StageObjectEffects::default();
+                            if let Some(enabled) =
+                                visual_filter.and_then(|patch| patch.environment_light)
+                            {
+                                effects.set_environment_light(enabled);
+                            }
+                            effects
+                        },
                         animation: rule_animation,
                         z_index,
                         blend,
@@ -1857,7 +1893,9 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                     .particle_effects
                     .retain(|id, _| !id.starts_with("scene-particle:"));
             }
-            Action::Flow { .. } => unreachable!("flow wrappers are removed before dispatch"),
+            Action::SpriteVisual { .. } | Action::Flow { .. } => {
+                unreachable!("flow wrappers are removed before dispatch")
+            }
         }
     }
 
@@ -2234,6 +2272,120 @@ fn resolve_speaker(source: &str, state: &State) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_visual_patch_is_atomic_and_preserves_other_channels() {
+        use crate::{Action, PostProcessPatch, State, VisualFilterPatch};
+        let parsed_show = Action::SpriteVisual {
+            action: Box::new(Action::ShowSprite {
+                id: "hero".into(),
+                image: "face".into(),
+                position: crate::Position {
+                    x: crate::Anchor::Center(0.0),
+                    y: 0.0,
+                },
+                layout: Default::default(),
+                transition: crate::Transition::Fade(0.1),
+                transform: Default::default(),
+                z_index: 0,
+                blend: Default::default(),
+            }),
+            filter: VisualFilterPatch {
+                brightness: Some(0.8),
+                ..Default::default()
+            },
+        };
+        let mut state = State::new();
+        state.insert_scene("start".into(), vec![parsed_show]);
+        state.current_scene = "start".into();
+        assert_eq!(
+            super::step(&mut state),
+            super::StepResult::AwaitPresentation
+        );
+        assert_eq!(state.sprites["hero"].filter.brightness, 0.8);
+        let original = state.sprites["hero"].filter;
+        let updated = VisualFilterPatch {
+            saturation: Some(0.4),
+            ..Default::default()
+        }
+        .apply_to(original);
+        assert_eq!(updated.brightness, 0.8);
+        let mut effect = crate::PostProcessEffect::default();
+        effect.v2.speed_lines_density = 0.75;
+        let patch = PostProcessPatch {
+            speed_lines_intensity: Some(0.4),
+            ..Default::default()
+        };
+        let updated = patch.apply_to(effect.clone());
+        assert_eq!(updated.v2.speed_lines_density, 0.75);
+        let mut changed = updated;
+        patch.restore_affected_from(&mut changed, &effect);
+        assert_eq!(changed, effect);
+    }
+    #[test]
+    fn portrait_environment_policy_is_per_object_and_persists() {
+        use crate::{Action, State, VisualFilterPatch};
+        let show = |id: &str, environment_light| Action::SpriteVisual {
+            action: Box::new(Action::ShowSprite {
+                id: id.into(),
+                image: "face".into(),
+                position: crate::Position::center(0.0),
+                layout: Default::default(),
+                transition: crate::Transition::Instant,
+                transform: Default::default(),
+                z_index: 0,
+                blend: Default::default(),
+            }),
+            filter: VisualFilterPatch {
+                environment_light,
+                brightness: Some(0.8),
+                ..Default::default()
+            },
+        };
+        let mut state = State::new();
+        state.insert_scene(
+            "start".into(),
+            vec![show("hero", Some(false)), show("other", None)],
+        );
+        state.current_scene = "start".into();
+        super::step(&mut state);
+        assert!(!state.sprites["hero"].films.environment_light_enabled());
+        assert!(state.sprites["other"].films.environment_light_enabled());
+        // The policy uses an independent bit in the existing u8 wire field.
+        // Film removal and disk-state serialization must preserve it.
+        state
+            .sprites
+            .get_mut("hero")
+            .unwrap()
+            .films
+            .apply(&crate::AnimationPreset::OldFilm);
+        state.sprites.get_mut("hero").unwrap().films.clear();
+        assert!(state.sprites["hero"].films.is_empty());
+        assert_eq!(state.sprites["hero"].films.bits(), 0);
+        let bytes = postcard::to_stdvec(&state).unwrap();
+        let restored: State = postcard::from_bytes(&bytes).unwrap();
+        assert!(!restored.sprites["hero"].films.environment_light_enabled());
+        assert!(restored.sprites["other"].films.environment_light_enabled());
+        state.insert_scene(
+            "update".into(),
+            vec![Action::SpriteVisual {
+                action: Box::new(Action::SetTransform {
+                    id: "hero".into(),
+                    transform: Default::default(),
+                    duration: 0.0,
+                    easing: crate::Easing::Linear,
+                }),
+                filter: VisualFilterPatch {
+                    environment_light: Some(true),
+                    ..Default::default()
+                },
+            }],
+        );
+        state.current_scene = "update".into();
+        state.cursor = 0;
+        super::step(&mut state);
+        assert!(state.sprites["hero"].films.environment_light_enabled());
+        assert_eq!(state.sprites["hero"].filter.brightness, 0.8);
+    }
     use super::*;
     use crate::action::{Choice, SayOptions};
     use crate::types::{BlendMode, Easing, Position, SpriteTransform, TransformPatch};

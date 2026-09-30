@@ -204,7 +204,9 @@ fn resolve_particle_textures(action: &mut Action, paths: &HashMap<String, String
     };
     match action {
         Action::ShowParticles { effect, .. } => resolve(&mut effect.texture),
-        Action::Flow { action, .. } => resolve_particle_textures(action, paths),
+        Action::Flow { action, .. } | Action::SpriteVisual { action, .. } => {
+            resolve_particle_textures(action, paths)
+        }
         Action::StageAnimation { animation } => {
             for event in &mut animation.events {
                 if let keine_core::StageEventKind::Particle { effect, .. } = &mut event.kind {
@@ -740,7 +742,9 @@ fn collect_eiyashou_expression_reads(expression: &EiyashouExpr, reads: &mut Hash
 }
 
 fn unwrap_flow(mut action: &Action) -> &Action {
-    while let Action::Flow { action: inner, .. } = action {
+    while let Action::Flow { action: inner, .. } | Action::SpriteVisual { action: inner, .. } =
+        action
+    {
         action = inner;
     }
     action
@@ -774,7 +778,9 @@ fn collect_native_call_edges(
                 }
             }
         }
-        Action::Flow { action, .. } => collect_native_call_edges(action, source, span, edges),
+        Action::Flow { action, .. } | Action::SpriteVisual { action, .. } => {
+            collect_native_call_edges(action, source, span, edges)
+        }
         _ => {}
     }
 }
@@ -790,7 +796,7 @@ fn action_yields(action: &Action) -> bool {
         Action::MoveSprite {
             duration, blocking, ..
         } => *blocking && *duration > 0.0,
-        Action::Flow { action, .. } => action_yields(action),
+        Action::Flow { action, .. } | Action::SpriteVisual { action, .. } => action_yields(action),
         _ => false,
     }
 }
@@ -977,7 +983,9 @@ fn register_labels(
                 });
             }
         }
-        Action::Flow { action, .. } => register_labels(action, span, labels, diagnostics),
+        Action::Flow { action, .. } | Action::SpriteVisual { action, .. } => {
+            register_labels(action, span, labels, diagnostics)
+        }
         _ => {}
     }
 }
@@ -1014,7 +1022,7 @@ fn validate_label_references(
             }
         }
         Action::EiyashouJumpIf { label, .. } => validate(label),
-        Action::Flow { action, .. } => {
+        Action::Flow { action, .. } | Action::SpriteVisual { action, .. } => {
             validate_label_references(action, span, labels, diagnostics);
         }
         _ => {}

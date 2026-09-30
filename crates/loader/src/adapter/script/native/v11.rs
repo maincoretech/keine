@@ -37,7 +37,6 @@ pub(super) const SIMPLE_COMMANDS: &[&str] = &[
     "particle.hide",
     "video.stop",
     "gallery.unlock",
-    "input.simple",
     "camera.bind",
     "camera.unbind",
 ];
@@ -69,7 +68,6 @@ pub(super) fn expanded_fields(name: &str) -> Option<&'static [&'static str]> {
     match name {
         "camera.move" => Some(camera::move_fields()),
         "camera.effect" => Some(effects::PATCH_FIELDS),
-        "camera.effect.v2" => Some(effects::V2_FIELDS),
         "stage.mask.show" => Some(mask::MASK_FIELDS),
         _ => None,
     }
@@ -127,7 +125,6 @@ impl<'a> Parser<'a> {
             "particle.hide" => (1, &["duration"]),
             "video.stop" => (1, &["fade"]),
             "gallery.unlock" => (2, &["name"]),
-            "input.simple" => (1, &["title", "button"]),
             "camera.bind" | "camera.unbind" => (1, &["distance"]),
             // The active floating text may be hidden without naming an ID.
             "text.float.hide" => {
@@ -246,11 +243,6 @@ impl<'a> Parser<'a> {
                     name: self.v11_named_string(args, "name", report)?,
                 })
             }
-            "input.simple" => Some(Action::UserInput {
-                variable: self.v11_identifier(first, "input variable", report)?,
-                title: self.v11_named_string(args, "title", report)?,
-                button: self.v11_named_string(args, "button", report)?,
-            }),
             "camera.bind" | "camera.unbind" => Some(Action::SetCameraBinding {
                 target: self.v11_identifier(first, "camera binding target", report)?,
                 bound: name == "camera.bind",

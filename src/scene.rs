@@ -3,6 +3,7 @@ pub mod audio;
 pub mod background;
 pub(crate) mod effects;
 pub(crate) mod images;
+pub(crate) mod lighting;
 pub(crate) mod masks;
 pub mod sprites;
 pub(crate) mod video;
@@ -37,12 +38,7 @@ impl Plugin for ScenePlugin {
         app.add_systems(
             Update,
             (
-                (
-                    assets::prefetch_local_assets,
-                    images::prepare,
-                    assets::update_loading_gate,
-                )
-                    .chain(),
+                (assets::prefetch_local_assets, assets::update_loading_gate).chain(),
                 background::sync_bg,
                 sprites::sync_sprites,
                 (
@@ -56,6 +52,13 @@ impl Plugin for ScenePlugin {
                     .chain(),
             )
                 .in_set(GameSystemSet::Sync),
+        );
+        // Observe Added/Modified before render extraction takes CPU pixels.
+        // Update runs before AssetEventSystems, so preparing there would let
+        // the following frame invalidate metadata after its pixels are gone.
+        app.add_systems(
+            PostUpdate,
+            images::prepare.after(bevy::asset::AssetEventSystems),
         );
     }
 }
