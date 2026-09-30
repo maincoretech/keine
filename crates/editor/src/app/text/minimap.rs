@@ -128,24 +128,7 @@ fn geometry(editor: &EditorState, rows: usize, height: f32, pan: &mut minimap::P
     // Native editor defaults to three trailing scroll rows; its public setter clamps offsets.
     let content = (rows + 3) as f32 * line_height;
     let scroll = -f32::from(editor.scroll_offset().y);
-    let mut geometry = Geometry::new(
-        height,
-        viewport,
-        (content - viewport).max(0.),
-        scroll,
-        pan.offset,
-    );
-    if pan.last_scroll != Some(scroll) {
-        pan.offset = if geometry.max_scroll > 0. {
-            scroll / geometry.max_scroll * (geometry.map_height - height)
-        } else {
-            0.
-        };
-        geometry.pan = pan.offset.clamp(0., geometry.map_height - height);
-    }
-    pan.offset = geometry.pan;
-    pan.last_scroll = Some(scroll);
-    geometry
+    pan.geometry(height, viewport, (content - viewport).max(0.), scroll)
 }
 
 impl TextMinimap {
@@ -162,32 +145,19 @@ impl WorkbenchPanel {
         let Some(rows) = &self.text_minimap.cache else {
             return;
         };
-        let bounds = *self.block_minimap.bounds.borrow();
+        let bounds = *self.minimap_navigation.bounds.borrow();
         let height = (f32::from(bounds.size.height) - INSET * 2.).max(0.);
         if height <= 0. {
             return;
         }
         let y = f32::from(position.y - bounds.origin.y) - INSET;
-        let mut pan = self.block_minimap.pan.borrow_mut();
-        let mut mapped = geometry(editor.read(cx), rows.strokes.len(), height, &mut pan);
-        if self.block_minimap.grab.is_some() {
-            pan.offset += y - y.clamp(0., height);
-            mapped = geometry(editor.read(cx), rows.strokes.len(), height, &mut pan);
-        }
-        let grab = *self.block_minimap.grab.get_or_insert_with(|| {
-            let top = mapped.viewport_top();
-            if y >= top && y <= top + mapped.thumb && mapped.thumb > 0. {
-                (y - top) / mapped.thumb
-            } else {
-                0.5
-            }
-        });
-        let scroll = mapped.scroll_at(y, grab);
+        let mut pan = self.minimap_navigation.pan.borrow_mut();
+        let mapped = geometry(editor.read(cx), rows.strokes.len(), height, &mut pan);
+        let scroll = pan.drag(mapped, y, &mut self.minimap_navigation.grab);
         let offset = editor.read(cx).scroll_offset();
         editor.update(cx, |editor, cx| {
             editor.set_scroll_offset(gpui_kit::point(offset.x, px(-scroll)), cx)
         });
-        pan.last_scroll = Some(scroll);
         cx.notify();
     }
 }
@@ -196,7 +166,7 @@ pub(super) fn render(
     editor: &Entity<EditorState>,
     relative: &Path,
     state: &mut TextMinimap,
-    navigation: &minimap::BlockMinimap,
+    navigation: &minimap::Navigation,
     window: &mut Window,
     cx: &mut Context<WorkbenchPanel>,
 ) -> AnyElement {
@@ -237,7 +207,7 @@ pub(super) fn render(
             MouseButton::Left,
             cx.listener(|panel, event: &MouseDownEvent, _, cx| {
                 cx.stop_propagation();
-                panel.block_minimap.grab = None;
+                panel.minimap_navigation.grab = None;
                 panel.scroll_minimap(event.position, cx);
             }),
         )
@@ -250,10 +220,10 @@ pub(super) fn render(
                 let Some(cache) = &panel.text_minimap.cache else {
                     return;
                 };
-                let height = (f32::from(panel.block_minimap.bounds.borrow().size.height)
+                let height = (f32::from(panel.minimap_navigation.bounds.borrow().size.height)
                     - INSET * 2.)
                     .max(0.);
-                let mut pan = panel.block_minimap.pan.borrow_mut();
+                let mut pan = panel.minimap_navigation.pan.borrow_mut();
                 geometry(editor.read(cx), cache.strokes.len(), height, &mut pan);
                 pan.offset -= f32::from(event.delta.pixel_delta(px(20.)).y);
                 geometry(editor.read(cx), cache.strokes.len(), height, &mut pan);
@@ -328,14 +298,14 @@ pub(super) fn render(
                         let Some(panel) = moving.upgrade() else {
                             return;
                         };
-                        if panel.read(cx).block_minimap.grab.is_none() {
+                        if panel.read(cx).minimap_navigation.grab.is_none() {
                             return;
                         }
                         panel.update(cx, |panel, cx| {
                             if event.pressed_button == Some(MouseButton::Left) {
                                 panel.scroll_minimap(event.position, cx);
                             } else {
-                                panel.block_minimap.grab = None;
+                                panel.minimap_navigation.grab = None;
                             }
                         });
                     });
@@ -346,7 +316,7 @@ pub(super) fn render(
                         }
                         if let Some(panel) = release.upgrade() {
                             panel.update(cx, |panel, cx| {
-                                panel.block_minimap.grab = None;
+                                panel.minimap_navigation.grab = None;
                                 cx.notify();
                             });
                         }

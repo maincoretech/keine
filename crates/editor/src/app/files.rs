@@ -33,6 +33,7 @@ impl ManifestChange {
 }
 
 enum FileEdit {
+    Trash(file_ops::AssetFileChange),
     Relocate {
         before: PathBuf,
         after: PathBuf,
@@ -48,6 +49,7 @@ enum FileEdit {
 impl FileEdit {
     fn affected_paths(&self) -> Vec<&Path> {
         match self {
+            Self::Trash(change) => vec![&change.from],
             Self::Relocate { before, after } => vec![before, after],
             Self::Toggle { paths, .. } => paths.iter().map(|(path, _)| path.as_path()).collect(),
         }
@@ -55,6 +57,14 @@ impl FileEdit {
 
     fn replay(&mut self, root: &Path, undo: bool) -> io::Result<ImportResult> {
         match self {
+            Self::Trash(change) => {
+                change.apply(root, undo)?;
+                Ok(ImportResult {
+                    destination: change.from.clone(),
+                    manifest_update: None,
+                    registered: false,
+                })
+            }
             Self::Relocate { before, after } => {
                 let (source, destination) = if undo {
                     (after, before)
@@ -198,7 +208,7 @@ impl FileHistory {
         match edit {
             Some(FileEdit::Relocate { .. }) => true,
             Some(FileEdit::Toggle { manifest, .. }) => manifest.is_some(),
-            None => false,
+            Some(FileEdit::Trash(_)) | None => false,
         }
     }
 
@@ -718,14 +728,12 @@ impl WorkbenchPanel {
                 if !this.affected_files_closed(&root, &[&path], window, cx) {
                     return;
                 }
-                match file_ops::stage_deleted_entry(&root, &path) {
-                    Ok(stash) => {
-                        this.file_history.record(FileEdit::Toggle {
-                            paths: vec![(path, Some(stash))],
-                            after_present: false,
-                            present: false,
-                            manifest: None,
-                        });
+                let mut change = file_ops::AssetFileChange::delete(path.clone());
+                let result = file_ops::ensure_unmapped_deletion(&root, &path)
+                    .and_then(|()| change.apply(&root, false));
+                match result {
+                    Ok(()) => {
+                        this.file_history.record(FileEdit::Trash(change));
                         this.file_selection = None;
                         this.refresh_explorer(&root, cx);
                         this.focus.focus(window, cx);

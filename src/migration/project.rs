@@ -464,13 +464,9 @@ fn render_action(action: &Action, model: &MigrationModel) -> Result<String> {
             speaker,
             text,
             options,
-        } if options.volume == 1.0
-            && !options.concat
-            && !options.auto_advance
-            && !options.inherit_speaker =>
-        {
+        } => {
             let text = string_literal(text);
-            let voice = options
+            let mut voice = options
                 .vocal
                 .as_ref()
                 .map(|voice| {
@@ -478,6 +474,18 @@ fn render_action(action: &Action, model: &MigrationModel) -> Result<String> {
                 })
                 .transpose()?
                 .unwrap_or_default();
+            if options.volume != 1.0 {
+                voice.push_str(&format!(", volume: {}", number(options.volume)));
+            }
+            if options.concat {
+                voice.push_str(", concat: true");
+            }
+            if options.auto_advance {
+                voice.push_str(", auto: true");
+            }
+            if options.inherit_speaker {
+                voice.push_str(", inherit_speaker: true");
+            }
             if speaker.is_empty() {
                 Ok(format!("{text}{voice}"))
             } else {
@@ -528,8 +536,8 @@ fn render_menu(
         format!("choice({}) {{\n", string_literal(prompt))
     };
     for (index, choice) in choices.iter().enumerate() {
-        if choice.show_when.is_some() || choice.enable_when.is_some() {
-            bail!("conditional legacy choices require manual migration");
+        if choice.enable_when.is_some() {
+            bail!("disabled legacy choices require an enabled condition");
         }
         let target = match &choice.target {
             ChoiceTarget::ChangeScene(scene) => format!("goto({})", scene_id(model, scene)?),
@@ -538,6 +546,12 @@ fn render_menu(
         };
         output.push_str("    ");
         output.push_str(&string_literal(&choice.text));
+        if let Some(condition) = &choice.show_when {
+            output.push_str(&format!(
+                " when ({})",
+                v11::expression_source(condition, model)?
+            ));
+        }
         output.push_str(": ");
         output.push_str(&target);
         if index + 1 < choices.len() {
@@ -731,6 +745,61 @@ mod tests {
             string_literal("cost ${value} /${raw}"),
             "\"cost /${value} //${raw}\""
         );
+    }
+
+    #[test]
+    fn dialogue_and_choice_visibility_migrate_without_losing_options() {
+        let model = MigrationModel {
+            scene_ids: HashMap::from([("next".into(), "next".into())]),
+            speaker_ids: HashMap::from([("Hero".into(), "hero".into())]),
+            asset_ids: HashMap::new(),
+            object_ids: BTreeMap::new(),
+            prefix_ids: BTreeMap::new(),
+            objects: objects::ObjectManifest::default(),
+            variable_ids: BTreeMap::new(),
+            initial_variables: BTreeMap::new(),
+            assets: AssetManifest::default(),
+            characters: CharacterManifest {
+                characters: BTreeMap::new(),
+            },
+        };
+        let options = keine_core::action::SayOptions {
+            volume: 0.3,
+            concat: true,
+            auto_advance: true,
+            inherit_speaker: true,
+            ..Default::default()
+        };
+        let dialogue = render_action(
+            &Action::Say {
+                speaker: "Hero".into(),
+                text: "前[wait=100]后".into(),
+                options: options.clone(),
+            },
+            &model,
+        )
+        .unwrap();
+        let parsed =
+            keine_loader::adapter::parse_native_scenes(&format!("scene test {{ {dialogue} }}"));
+        assert!(parsed[0].report.diagnostics.is_empty());
+        let Action::EiyashouSay(say) = &parsed[0].report.actions[0] else {
+            panic!("not dialogue");
+        };
+        assert_eq!(say.options, options);
+        let choices = [keine_core::action::Choice {
+            text: "Next".into(),
+            target: ChoiceTarget::ChangeScene("next".into()),
+            show_when: Some("false".into()),
+            enable_when: None,
+        }];
+        let menu = render_menu("", &choices, &model).unwrap();
+        let parsed =
+            keine_loader::adapter::parse_native_scenes(&format!("scene test {{ {menu} }}"));
+        assert!(parsed[0].report.diagnostics.is_empty());
+        let Action::EiyashouMenu { choices, .. } = &parsed[0].report.actions[0] else {
+            panic!("not menu");
+        };
+        assert!(choices[0].show_when.is_some());
     }
 
     #[test]

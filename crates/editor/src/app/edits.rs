@@ -7,19 +7,24 @@ pub(super) struct SourceChange {
     after: String,
 }
 
+#[derive(Clone, Default)]
+struct SourceTransaction {
+    changes: Vec<SourceChange>,
+    files: Vec<file_ops::AssetFileChange>,
+}
+
 #[derive(Default)]
 pub(super) struct SourceHistory {
-    undo: VecDeque<Vec<SourceChange>>,
-    redo: Vec<Vec<SourceChange>>,
+    undo: VecDeque<SourceTransaction>,
+    redo: Vec<SourceTransaction>,
 }
 
 impl SourceHistory {
     pub(super) fn forget(&mut self, path: &Path) {
-        for edit in self.undo.iter_mut().chain(&mut self.redo) {
-            edit.retain(|change| change.path != path);
-        }
-        self.undo.retain(|edit| !edit.is_empty());
-        self.redo.retain(|edit| !edit.is_empty());
+        self.undo
+            .retain(|edit| !edit.changes.iter().any(|change| change.path == path));
+        self.redo
+            .retain(|edit| !edit.changes.iter().any(|change| change.path == path));
     }
     const BYTE_BUDGET: usize = 16 * 1024 * 1024;
 
@@ -27,7 +32,7 @@ impl SourceHistory {
         self.undo
             .iter()
             .chain(&self.redo)
-            .flatten()
+            .flat_map(|edit| &edit.changes)
             .map(|change| change.before.len().saturating_add(change.after.len()))
             .sum()
     }
@@ -39,18 +44,30 @@ impl SourceHistory {
         if changes.is_empty() {
             return;
         }
-        self.undo.push_back(changes);
+        self.record_transaction(SourceTransaction {
+            changes,
+            files: Vec::new(),
+        });
+    }
+
+    fn record_transaction(&mut self, transaction: SourceTransaction) {
+        self.undo.push_back(transaction);
         self.redo.clear();
         while self.undo.len() > 32 || self.bytes() > Self::BYTE_BUDGET {
             self.undo.pop_front();
         }
     }
 
+    #[cfg(test)]
     fn next(&self, undo: bool) -> Option<&[SourceChange]> {
+        self.transaction(undo).map(|edit| edit.changes.as_slice())
+    }
+
+    fn transaction(&self, undo: bool) -> Option<&SourceTransaction> {
         if undo {
-            self.undo.back().map(Vec::as_slice)
+            self.undo.back()
         } else {
-            self.redo.last().map(Vec::as_slice)
+            self.redo.last()
         }
     }
 
@@ -97,17 +114,17 @@ pub(super) fn replay_source_history(
     cx: &mut App,
 ) -> Result<bool, String> {
     let key = ProjectKey::from_path(root).map_err(|error| error.to_string())?;
-    let Some(changes) = cx
+    let Some(mut transaction) = cx
         .global::<EditorDocuments>()
         .workspaces
         .get(key.path())
-        .and_then(|workspace| workspace.source_history.next(undo))
-        .map(<[SourceChange]>::to_vec)
+        .and_then(|workspace| workspace.source_history.transaction(undo))
+        .cloned()
     else {
         return Ok(false);
     };
-    let mut replacements = Vec::with_capacity(changes.len());
-    for change in &changes {
+    let mut replacements = Vec::with_capacity(transaction.changes.len());
+    for change in &transaction.changes {
         let expected = if undo { &change.after } else { &change.before };
         let replacement = if undo { &change.before } else { &change.after };
         if cx
@@ -123,22 +140,145 @@ pub(super) fn replay_source_history(
         }
         replacements.push((change.path.clone(), replacement.clone()));
     }
-    apply_prepared_edits_impl(root, &replacements, false, window, cx)?;
+    apply_file_changes(root, &mut transaction.files, undo)?;
+    if let Err(error) = apply_prepared_edits_impl(root, &replacements, false, window, cx) {
+        let rollback = apply_file_changes(root, &mut transaction.files, !undo);
+        return Err(format!("{error}; file rollback: {rollback:?}"));
+    }
     if let Some(workspace) = cx
         .global_mut::<EditorDocuments>()
         .workspaces
         .get_mut(key.path())
     {
+        if let Some(original) = if undo {
+            workspace.source_history.undo.back_mut()
+        } else {
+            workspace.source_history.redo.last_mut()
+        } {
+            original.files = transaction.files;
+        }
         workspace.source_history.finish(undo);
     }
+    refresh_resource_files(root, cx);
     Ok(true)
 }
 
+fn apply_file_changes(
+    root: &Path,
+    files: &mut [file_ops::AssetFileChange],
+    undo: bool,
+) -> Result<(), String> {
+    let order = if undo {
+        (0..files.len()).rev().collect::<Vec<_>>()
+    } else {
+        (0..files.len()).collect()
+    };
+    for (count, &position) in order.iter().enumerate() {
+        if let Err(error) = files[position].apply(root, undo) {
+            let mut failures = Vec::new();
+            for &completed in order[..count].iter().rev() {
+                if let Err(error) = files[completed].apply(root, !undo) {
+                    failures.push(error.to_string());
+                }
+            }
+            return Err(format!(
+                "{error}{}",
+                if failures.is_empty() {
+                    String::new()
+                } else {
+                    format!("; rollback failed: {}", failures.join("; "))
+                }
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn apply_asset_transaction(
+    root: &Path,
+    edits: &[(PathBuf, String)],
+    mut files: Vec<file_ops::AssetFileChange>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Result<(), String> {
+    let changes = edits
+        .iter()
+        .map(|(path, after)| {
+            let before = cx
+                .global::<EditorDocuments>()
+                .source(root, path)
+                .ok_or_else(|| format!("{} unavailable", path.display()))?;
+            Ok(SourceChange {
+                path: path.clone(),
+                before,
+                after: after.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    // Prepare every editor before touching files, so a failed open leaves the project intact.
+    for (path, _) in edits {
+        open_workspace_document(root, path, window, cx);
+        if cx
+            .global::<EditorDocuments>()
+            .editor_for(root, path)
+            .and_then(|editor| editor.upgrade())
+            .is_none()
+        {
+            return Err(format!("Could not open {}", path.display()));
+        }
+    }
+    apply_file_changes(root, &mut files, false)?;
+    if let Err(error) = apply_prepared_edits_impl(root, edits, false, window, cx) {
+        let rollback = apply_file_changes(root, &mut files, true);
+        return Err(format!("{error}; file rollback: {rollback:?}"));
+    }
+    cx.global_mut::<EditorDocuments>()
+        .workspace_mut(root)
+        .map_err(|error| error.to_string())?
+        .source_history
+        .record_transaction(SourceTransaction { changes, files });
+    refresh_resource_files(root, cx);
+    Ok(())
+}
+
+pub(super) fn refresh_resource_files(root: &Path, cx: &mut App) {
+    let root = root.to_owned();
+    let scan_root = root.clone();
+    let background = cx.background_executor().spawn(async move {
+        WorkspaceSession::open(scan_root).map(|session| session.files().to_vec())
+    });
+    cx.spawn(async move |cx| {
+        let result = background.await;
+        cx.update(|cx| {
+            if let Ok(files) = result
+                && let Some(workspace) =
+                    cx.global_mut::<EditorDocuments>().workspaces.get_mut(&root)
+            {
+                workspace.files = files;
+                schedule_authoring_refresh(&root, None, cx);
+                cx.refresh_windows();
+            }
+        });
+    })
+    .detach();
+}
+
+#[cfg(test)]
 pub(super) fn insert_assets_at_block(
     source: &str,
     target_start: usize,
     keys: &[AssetKey],
     index: &AuthoringIndex,
+) -> Result<String, String> {
+    asset_drop_edit(source, target_start, keys, index, false)
+}
+
+pub(super) fn asset_drop_edit(
+    source: &str,
+    target_start: usize,
+    keys: &[AssetKey],
+    index: &AuthoringIndex,
+    insertion: bool,
 ) -> Result<String, String> {
     if keys.is_empty() {
         return Err("No asset selected".into());
@@ -163,14 +303,8 @@ pub(super) fn insert_assets_at_block(
                 .ok_or_else(|| format!("{} is unavailable", key.id))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    assets.sort_by_key(|asset| {
-        index
-            .assets
-            .iter()
-            .position(|candidate| std::ptr::eq(candidate, *asset))
-            .unwrap_or(usize::MAX)
-    });
-    assets.dedup_by(|left, right| left.kind == right.kind && left.id == right.id);
+    let mut seen = HashSet::new();
+    assets.retain(|asset| seen.insert(asset.key()));
     if assets.iter().any(|asset| !valid_identifier(&asset.id)) {
         return Err("Asset ID is not a script identifier".into());
     }
@@ -203,23 +337,43 @@ pub(super) fn insert_assets_at_block(
             ),
             AssetKind::Voice => unreachable!(),
         };
-        if position == 0 && assets.len() == 1 && matches!(target.kind, BlockKind::Command) {
-            let old = source
-                .get(target.source_range.clone())
-                .ok_or("Target changed")?;
-            let compatible = old.trim_start().starts_with(match asset.kind {
-                AssetKind::Background => "background(",
-                AssetKind::Figure => "sprite(",
-                AssetKind::Bgm => "bgm(",
-                AssetKind::Effect => "se(",
-                AssetKind::Video => "video(",
-                AssetKind::Particle => "particle.show(",
-                AssetKind::Voice => unreachable!(),
-            });
-            if compatible {
-                edited.replace_range(target.source_range.clone(), &statement);
+        if !insertion
+            && position == 0
+            && assets.len() == 1
+            && matches!(target.kind, BlockKind::Command)
+        {
+            let fields = projection
+                .source_fields(source, target_start)
+                .ok_or("Target has no asset field")?;
+            let command = source
+                .get(target.statement_range.clone())
+                .ok_or("Target changed")?
+                .split_once('(')
+                .map(|(command, _)| command.trim())
+                .unwrap_or_default();
+            let context = crate::authoring::fields::SourceContext {
+                path: PathBuf::new(),
+                block_start: target_start,
+                kind: target.kind.clone(),
+                command: command.to_owned(),
+                fields: fields.clone(),
+            };
+            if let Some(field) = fields
+                .iter()
+                .find(|field| source_asset_kind(&context, field) == Some(asset.kind))
+            {
+                if field.insertion.is_some() {
+                    return Err("Asset field has no exact source range".into());
+                }
+                let value = if field.quoted {
+                    escape_eiyashou_string(&asset.id)
+                } else {
+                    asset_source_value(field, &asset.id)
+                };
+                edited.replace_range(field.range.clone(), &value);
                 return Ok(edited);
             }
+            return Err("Resource type is incompatible; drop between Blocks to insert".into());
         }
         let (next, inserted) = EiyashouProjection::parse(&edited)
             .insert_block_after(&edited, after_start, &statement)
@@ -365,9 +519,6 @@ pub(super) fn prepare_asset_edits(
             "{} script sources could not be indexed",
             index.unindexed_sources.len()
         ));
-    }
-    if retyped && asset.reference_count > 0 {
-        return Err(format!("{} refs block type change", asset.reference_count));
     }
     if retyped {
         file_ops::validate_asset_type(root, &asset.path, new_kind)
@@ -528,6 +679,7 @@ pub(super) fn block_at_position(
         scene
             .blocks
             .iter()
+            .filter(|block| !block.is_textbox_ending())
             .filter(|block| block.source_range.start <= offset && block.source_range.end >= offset)
             .max_by_key(|block| block.depth)
             .cloned()
@@ -587,6 +739,56 @@ pub(super) fn common_value(values: impl IntoIterator<Item = String>) -> String {
 #[cfg(test)]
 mod history_tests {
     use super::*;
+
+    #[test]
+    fn resource_replacement_preserves_properties_and_multi_drag_preserves_selection_order() {
+        let source =
+            "scene start { sprite(hero, old, position: left, z: 3, transition: fade(2s)) }";
+        let asset = |id: &str| crate::authoring::AssetEntry {
+            kind: AssetKind::Figure,
+            id: id.into(),
+            path: format!("assets/figures/{id}.webp").into(),
+            tags: Vec::new(),
+            exists: true,
+            reference_count: 0,
+        };
+        let index = AuthoringIndex {
+            assets: vec![asset("first"), asset("second")],
+            ..Default::default()
+        };
+        let start = source.find("sprite").unwrap();
+        assert_eq!(
+            insert_assets_at_block(source, start, &[index.assets[1].key()], &index).unwrap(),
+            source.replace("old", "second")
+        );
+        let edited = insert_assets_at_block(
+            source,
+            start,
+            &[index.assets[1].key(), index.assets[0].key()],
+            &index,
+        )
+        .unwrap();
+        assert!(edited.find("second_slot").unwrap() < edited.find("first_slot").unwrap());
+    }
+
+    #[test]
+    fn failed_file_transaction_rolls_back_completed_moves() {
+        let root =
+            std::env::temp_dir().join(format!("keine-asset-rollback-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("one.webp"), b"one").unwrap();
+        fs::write(root.join("two.webp"), b"two").unwrap();
+        fs::write(root.join("collision.webp"), b"untouched").unwrap();
+        let mut files = vec![
+            file_ops::AssetFileChange::relocate("one.webp".into(), "new.webp".into()),
+            file_ops::AssetFileChange::relocate("two.webp".into(), "collision.webp".into()),
+        ];
+        assert!(apply_file_changes(&root, &mut files, false).is_err());
+        assert_eq!(fs::read(root.join("one.webp")).unwrap(), b"one");
+        assert!(!root.join("new.webp").exists());
+        assert_eq!(fs::read(root.join("collision.webp")).unwrap(), b"untouched");
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn source_history_enforces_a_byte_budget_across_undo_and_redo() {

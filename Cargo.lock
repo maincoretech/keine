@@ -5373,6 +5373,7 @@ dependencies = [
  "keine-loader",
  "libc",
  "lsp-types",
+ "objc2-foundation 0.3.2",
  "postcard",
  "serde",
  "serde_json",

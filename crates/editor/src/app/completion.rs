@@ -164,10 +164,21 @@ impl CompletionProvider for ShouCompletion {
                     command: command.into(),
                     fields: fields.to_vec(),
                 };
-                let mut values = source_options(&self.root, &key, field, cx)
-                    .into_iter()
-                    .map(|option| option.value)
-                    .collect::<Vec<_>>();
+                let documents = cx.global::<EditorDocuments>();
+                let projection = (command == "track" && field.key == "0")
+                    .then(|| documents.projection(&self.root, &self.relative, &source));
+                let mut values = crate::authoring::fields::field_options(
+                    &self.root,
+                    &key,
+                    field,
+                    index,
+                    projection
+                        .as_deref()
+                        .map(|projection| (source.as_str(), projection)),
+                )
+                .into_iter()
+                .map(|option| option.value)
+                .collect::<Vec<_>>();
                 if matches!(command, "goto" | "call") && field.key == "0" {
                     values.extend(
                         index
@@ -219,6 +230,46 @@ fn suggestion(
             }
     }) {
         return None;
+    }
+    // Dialogue tails use the same parameter vocabulary without parentheses.
+    let line = prefix.rsplit('\n').next().unwrap_or(prefix);
+    let line_tokens = parse_native_document(line).tokens;
+    if let Some(body) = line_tokens
+        .iter()
+        .find(|token| token.kind == NativeTokenKind::String)
+        && (line[..body.range.start].trim().is_empty()
+            || line[..body.range.start].trim_end().ends_with(':'))
+    {
+        let tail = line.get(body.range.end..)?;
+        if tail.starts_with(',') {
+            let parts = tail.split(',').skip(1).collect::<Vec<_>>();
+            let raw = parts.last()?.trim();
+            if let Some((name, typed)) = raw.split_once(':') {
+                if matches!(name.trim(), "concat" | "auto" | "inherit_speaker") {
+                    return suffix_for(typed.trim(), ["true", "false"]);
+                }
+                return None;
+            }
+            let mut candidates = ["volume", "concat", "auto", "inherit_speaker"]
+                .into_iter()
+                .filter(|name| {
+                    !parts[..parts.len().saturating_sub(1)]
+                        .iter()
+                        .any(|part| part.trim_start().starts_with(&format!("{name}:")))
+                })
+                .map(|name| format!("{name}: "))
+                .collect::<Vec<_>>();
+            if parts.len() == 1 {
+                candidates.extend(
+                    index
+                        .assets
+                        .iter()
+                        .filter(|asset| asset.kind == AssetKind::Voice)
+                        .map(|asset| asset.id.clone()),
+                );
+            }
+            return suffix_for(raw, candidates.iter().map(String::as_str));
+        }
     }
     let tokens = lexical
         .iter()
@@ -288,7 +339,7 @@ fn suggestion(
         if !raw.is_empty() && !raw.contains(':') {
             return suffix_for(
                 raw,
-                crate::projection::command_argument_names(&command)
+                crate::authoring::fields::command_argument_names(&command)
                     .into_iter()
                     .filter(|name| !fields.iter().any(|field| field.key == *name))
                     .map(|name| format!("{name}: "))
@@ -355,22 +406,11 @@ fn suggestion(
             }
         })
         .collect::<Vec<_>>();
-    candidates.extend([
-        "break",
-        "else {\n}",
-        "track(camera, x) {\n}",
-        "key(time: 0ms, value: 0)",
-        "event.camera.shake(time: 0ms, amplitude: 8, duration: 300ms)",
-        "event.camera.patch(time: 0ms, x: 0)",
-        "event.scene(",
-        "event.audio(",
-        "event.particle(",
-        "frame(",
-        "page(\"\")",
-        "case(",
-        "resource(",
-        "layer(",
-    ]);
+    candidates.extend(
+        crate::authoring::commands::CONTEXTUAL_COMPLETIONS
+            .iter()
+            .copied(),
+    );
     // Still offer command names when a required project asset is not yet defined.
     for kind in InsertKind::ALL {
         if let Some(name) = kind.source_name() {
@@ -466,6 +506,19 @@ mod tests {
             None
         );
     }
+    #[test]
+    fn dialogue_tail_completion_preserves_body_and_existing_options() {
+        assert_eq!(
+            complete("scene start {\n  hero: \"你好\", con"),
+            Some("cat: ".into())
+        );
+        assert_eq!(
+            complete("scene start {\n  \"你好\", concat: f"),
+            Some("alse".into())
+        );
+        assert_eq!(complete("scene start {\n  \"你好\", auto: true, au"), None);
+    }
+
     #[test]
     fn contextual_values_and_nested_calls() {
         let source = "scene start { camera.move(sc";

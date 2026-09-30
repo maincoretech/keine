@@ -1309,16 +1309,13 @@ impl<'a> Parser<'a> {
         let Some(text) = self.take_eiyashou_text(report) else {
             return Vec::new();
         };
-        let vocal = self.take_optional_voice();
+        let options = self.take_dialogue_options(report);
         let source_id = self.source_id(explicit_id, "", &text);
         vec![Action::EiyashouSay(EiyashouDialogue {
             speaker: String::new(),
             speaker_color: None,
             text,
-            options: SayOptions {
-                vocal,
-                ..SayOptions::default()
-            },
+            options,
             source_id,
         })]
     }
@@ -1343,16 +1340,13 @@ impl<'a> Parser<'a> {
                     self.recover_statement();
                     break;
                 };
-                let vocal = self.take_optional_voice();
+                let options = self.take_dialogue_options(report);
                 let source_id = self.source_id(entry_id, &speaker, &text);
                 actions.push(Action::EiyashouSay(EiyashouDialogue {
                     speaker: speaker.clone(),
                     speaker_color: None,
                     text,
-                    options: SayOptions {
-                        vocal,
-                        ..SayOptions::default()
-                    },
+                    options,
                     source_id,
                 }));
                 if self.eat("}") {
@@ -1382,16 +1376,13 @@ impl<'a> Parser<'a> {
                 .push(self.error("expected string or dialogue block after `:`"));
             return Vec::new();
         };
-        let vocal = self.take_optional_voice();
+        let options = self.take_dialogue_options(report);
         let source_id = self.source_id(explicit_id, &speaker, &text);
         vec![Action::EiyashouSay(EiyashouDialogue {
             speaker,
             speaker_color: None,
             text,
-            options: SayOptions {
-                vocal,
-                ..SayOptions::default()
-            },
+            options,
             source_id,
         })]
     }
@@ -2443,6 +2434,74 @@ impl<'a> Parser<'a> {
             }
         }
         args
+    }
+
+    fn take_dialogue_options(&mut self, report: &mut ParseReport) -> SayOptions {
+        let mut options = SayOptions {
+            vocal: self.take_optional_voice(),
+            ..SayOptions::default()
+        };
+        let mut seen = std::collections::HashSet::new();
+        while self.peek_text() == Some(",") {
+            let name = self
+                .significant
+                .get(self.cursor + 1)
+                .map(|index| self.text(*index));
+            if !matches!(name, Some("volume" | "concat" | "auto" | "inherit_speaker"))
+                || self
+                    .significant
+                    .get(self.cursor + 2)
+                    .map(|index| self.text(*index))
+                    != Some(":")
+            {
+                break;
+            }
+            // An existing speaker named auto/volume remains a separate dialogue.
+            if self.significant.get(self.cursor + 3).is_some_and(|index| {
+                self.tokens[*index].kind == NativeTokenKind::String || self.text(*index) == "{"
+            }) {
+                break;
+            }
+            let name = name.unwrap().to_owned();
+            self.advance();
+            self.advance();
+            self.advance();
+            let start = self.cursor;
+            while !self.eof() && !matches!(self.peek_text(), Some("," | "}")) {
+                self.advance();
+            }
+            let arg = Argument {
+                name: Some(name.clone()),
+                token_indices: self.significant[start..self.cursor].to_vec(),
+            };
+            if !seen.insert(name.clone()) {
+                report
+                    .diagnostics
+                    .push(self.error(format!("duplicate dialogue option `{name}`")));
+            }
+            if name == "volume" {
+                match self.named_number(std::slice::from_ref(&arg), "volume") {
+                    Some(value) if value.is_finite() && (0.0..=1.0).contains(&value) => {
+                        options.volume = value as f32
+                    }
+                    _ => report
+                        .diagnostics
+                        .push(self.error("dialogue volume must be a number from 0 to 1")),
+                }
+            } else if let Some(value) = self.named_bool(std::slice::from_ref(&arg), &name) {
+                match name.as_str() {
+                    "concat" => options.concat = value,
+                    "auto" => options.auto_advance = value,
+                    "inherit_speaker" => options.inherit_speaker = value,
+                    _ => unreachable!(),
+                }
+            } else {
+                report
+                    .diagnostics
+                    .push(self.error(format!("dialogue `{name}` must be true or false")));
+            }
+        }
+        options
     }
 
     fn take_optional_voice(&mut self) -> Option<String> {
@@ -3790,6 +3849,47 @@ fn error_at(source: &str, offset: usize, message: impl Into<String>) -> Diagnost
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dialogue_options_validate_without_consuming_the_next_statement() {
+        let parsed = parse_native_scenes(
+            "scene start { hero: \"Hi\", voice, volume: 0.4, concat: true, auto: true, inherit_speaker: true, wait(1s) }",
+        );
+        assert!(
+            parsed[0].report.diagnostics.is_empty(),
+            "{:?}",
+            parsed[0].report.diagnostics
+        );
+        assert_eq!(parsed[0].report.actions.len(), 2);
+        let Action::EiyashouSay(dialogue) = &parsed[0].report.actions[0] else {
+            panic!("dialogue")
+        };
+        assert_eq!(dialogue.options.volume, 0.4);
+        assert!(
+            dialogue.options.concat
+                && dialogue.options.auto_advance
+                && dialogue.options.inherit_speaker
+        );
+        let legacy = parse_native_scenes(
+            "scene start { \"first\", auto: \"speaker named auto\", volume: { \"speaker named volume\" } }",
+        );
+        assert!(
+            legacy[0].report.diagnostics.is_empty(),
+            "{:?}",
+            legacy[0].report.diagnostics
+        );
+        assert_eq!(legacy[0].report.actions.len(), 3);
+        for invalid in ["volume: 2", "concat: 1", "auto: true, auto: false"] {
+            let parsed = parse_native_scenes(&format!("scene start {{ \"Hi\", {invalid} }}"));
+            assert!(
+                parsed[0]
+                    .report
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.level == DiagnosticLevel::Error)
+            );
+        }
+    }
 
     #[test]
     fn merged_diagnostics_preserve_order_and_distinct_errors_at_the_same_position() {

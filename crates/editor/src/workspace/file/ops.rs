@@ -1,3 +1,7 @@
+#[path = "assets.rs"]
+mod assets;
+pub use assets::*;
+
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, Read};
@@ -169,7 +173,7 @@ pub fn replace_asset_manifest(
     atomic_source(&root.join(relative), replacement.as_bytes())
 }
 
-pub fn stage_deleted_entry(root: &Path, source: &Path) -> io::Result<PathBuf> {
+pub fn ensure_unmapped_deletion(root: &Path, source: &Path) -> io::Result<()> {
     let source = checked_relative(source)?;
     if mapped_paths(root)?
         .iter()
@@ -180,7 +184,7 @@ pub fn stage_deleted_entry(root: &Path, source: &Path) -> io::Result<PathBuf> {
             "Delete mapped assets from Asset",
         ));
     }
-    stash_entry(root, &source)
+    Ok(())
 }
 
 pub fn stash_entry(root: &Path, source: &Path) -> io::Result<PathBuf> {
@@ -526,7 +530,30 @@ fn insert_manifest_entry(
 
 pub fn validate_asset_type(root: &Path, relative: &Path, kind: AssetKind) -> io::Result<()> {
     let absolute = confined_existing(root, relative)?;
-    validate_resource(&absolute, kind, &extension(relative))
+    let format_path = mapped_path(relative).unwrap_or_else(|| relative.to_owned());
+    let ext = extension(&format_path);
+    let valid = match kind {
+        AssetKind::Background | AssetKind::Figure | AssetKind::Particle => {
+            matches!(ext.as_str(), "webp" | "png" | "jpg" | "jpeg")
+        }
+        AssetKind::Voice | AssetKind::Bgm | AssetKind::Effect => {
+            matches!(ext.as_str(), "ogg" | "opus" | "wav" | "mp3" | "flac")
+        }
+        AssetKind::Video => matches!(ext.as_str(), "mp4" | "m4v"),
+    };
+    if !valid {
+        return Err(invalid("File format does not match the target type"));
+    }
+    if matches!(ext.as_str(), "webp" | "ogg" | "opus" | "mp4" | "m4v") {
+        validate_resource(&absolute, kind, &ext)
+    } else {
+        let size = fs::metadata(absolute)?.len();
+        if size == 0 || size > MAX_MEDIA_BYTES {
+            Err(invalid("Invalid resource size"))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 pub fn edit_manifest_asset(
@@ -810,14 +837,17 @@ fn kind_for_path(path: &Path) -> Option<AssetKind> {
 }
 
 pub fn unmapped_candidate_kind(path: &Path) -> Option<AssetKind> {
-    let kind = kind_for_path(path)?;
-    let ext = extension(path);
+    let path = mapped_path(path)?;
+    let kind = kind_for_path(&path)?;
+    let ext = extension(&path);
     match kind {
-        AssetKind::Background | AssetKind::Figure | AssetKind::Particle if ext == "webp" => {
+        AssetKind::Background | AssetKind::Figure | AssetKind::Particle
+            if matches!(ext.as_str(), "webp" | "png" | "jpg" | "jpeg") =>
+        {
             Some(kind)
         }
         AssetKind::Voice | AssetKind::Bgm | AssetKind::Effect
-            if matches!(ext.as_str(), "ogg" | "opus") =>
+            if matches!(ext.as_str(), "ogg" | "opus" | "wav" | "mp3" | "flac") =>
         {
             Some(kind)
         }
@@ -1365,7 +1395,7 @@ mod tests {
         )
         .unwrap();
         let error =
-            stage_deleted_entry(&root, Path::new("assets/background/day.webp")).unwrap_err();
+            ensure_unmapped_deletion(&root, Path::new("assets/background/day.webp")).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
         assert!(root.join("assets/background/day.webp").is_file());
         fs::remove_dir_all(root).unwrap();
@@ -1397,7 +1427,7 @@ mod tests {
     fn deleted_file_can_be_restored_and_redone_without_overwrite() {
         let root = fixture();
         fs::write(root.join("notes.md"), "keep me").unwrap();
-        let stash = stage_deleted_entry(&root, Path::new("notes.md")).unwrap();
+        let stash = stash_entry(&root, Path::new("notes.md")).unwrap();
         assert!(!root.join("notes.md").exists());
         assert_eq!(fs::read_to_string(root.join(&stash)).unwrap(), "keep me");
         fs::write(root.join("notes.md"), "new file").unwrap();

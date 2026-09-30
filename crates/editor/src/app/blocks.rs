@@ -1,6 +1,52 @@
 use super::*;
 
+mod picker;
+mod view;
+pub(super) use picker::*;
+pub(super) use view::*;
+
 impl WorkbenchPanel {
+    pub(super) fn toggle_text_ending(
+        &mut self,
+        root: &Path,
+        path: &Path,
+        start: usize,
+        was_hidden: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(source) = cx.global::<EditorDocuments>().source(root, path) else {
+            return;
+        };
+        let projection = EiyashouProjection::parse(&source);
+        let Some(lifetime) = projection.text_lifetime(&source, start) else {
+            return;
+        };
+        if lifetime.text_box.is_some() != was_hidden {
+            return;
+        }
+        match projection.replace_text_lifetime(
+            &source,
+            start,
+            was_hidden,
+            &lifetime.target,
+            &lifetime.transition,
+        ) {
+            Ok(edited) => {
+                apply_workspace_edit(root, path, edited, window, cx);
+                cx.global_mut::<EditorDocuments>().set_block_selection(
+                    root,
+                    path.to_owned(),
+                    vec![start],
+                );
+            }
+            Err(error) => cx
+                .global_mut::<EditorDocuments>()
+                .set_notice(root, format!("Text ending edit blocked: {error}")),
+        }
+        cx.refresh_windows();
+    }
+
     pub(super) fn reload_document(
         &mut self,
         _: &ReloadDocument,
@@ -131,7 +177,7 @@ impl WorkbenchPanel {
                 );
             }
         }
-        self.block_minimap = minimap::BlockMinimap::default();
+        self.minimap_navigation = minimap::Navigation::default();
         self.document_mode = mode;
         cx.notify();
         cx.refresh_windows();
@@ -400,6 +446,7 @@ impl WorkbenchPanel {
                     .scenes
                     .iter()
                     .flat_map(|scene| &scene.blocks)
+                    .filter(|block| !block.is_textbox_ending())
                     .map(|block| block.source_range.start)
                     .collect();
                 if let PanelContent::Document { root, relative, .. } = &self.content {
@@ -495,8 +542,12 @@ impl WorkbenchPanel {
             if self.collapsed_scenes.contains(&scene.name) {
                 continue;
             }
-            for block in &scene.blocks {
-                let height = view::block_row_height(
+            for block in scene
+                .blocks
+                .iter()
+                .filter(|block| !block.is_textbox_ending())
+            {
+                let height = block_row_height(
                     block,
                     &self.block_text_editors,
                     self.draft_text.as_ref(),
@@ -1488,6 +1539,7 @@ impl WorkbenchPanel {
         &mut self,
         drag: &AssetDrag,
         target_start: usize,
+        insertion: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1504,7 +1556,7 @@ impl WorkbenchPanel {
         }
         let source = document.borrow().contents().to_owned();
         let index = cx.global::<EditorDocuments>().authoring(root);
-        match insert_assets_at_block(&source, target_start, &drag.keys, &index) {
+        match asset_drop_edit(&source, target_start, &drag.keys, &index, insertion) {
             Ok(edited) => self.apply_block_source(edited, "Assets inserted", window, cx),
             Err(error) => self.set_block_notice(format!("Asset drop blocked: {error}"), cx),
         }
@@ -1859,66 +1911,6 @@ impl WorkbenchPanel {
         .detach();
     }
 
-    pub(super) fn toggle_asset_filter_menu(
-        &mut self,
-        position: Point<Pixels>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self
-            .asset_filter_menu
-            .as_ref()
-            .is_some_and(|menu| !menu.closing)
-        {
-            self.close_asset_filter_menu(window, cx);
-            return;
-        }
-        self.asset_filter_epoch = self.asset_filter_epoch.wrapping_add(1);
-        self.asset_filter_menu = Some(AssetFilterMenu {
-            position: Point {
-                x: position.x - px(ASSET_FILTER_MENU_WIDTH_PX / 2.),
-                y: position.y + px(14.),
-            },
-            epoch: self.asset_filter_epoch,
-            closing: false,
-            expanded: None,
-        });
-        cx.notify();
-    }
-
-    pub(super) fn close_asset_filter_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(menu) = self.asset_filter_menu.as_mut() else {
-            return;
-        };
-        if menu.closing {
-            return;
-        }
-        self.asset_filter_epoch = self.asset_filter_epoch.wrapping_add(1);
-        menu.epoch = self.asset_filter_epoch;
-        menu.closing = true;
-        let epoch = menu.epoch;
-        let delay = if cx.reduce_motion() {
-            Duration::ZERO
-        } else {
-            Duration::from_millis(90)
-        };
-        cx.notify();
-        cx.spawn_in(window, async move |this, cx| {
-            cx.background_executor().timer(delay).await;
-            let _ = this.update_in(cx, |this, _, cx| {
-                if this
-                    .asset_filter_menu
-                    .as_ref()
-                    .is_some_and(|menu| menu.epoch == epoch && menu.closing)
-                {
-                    this.asset_filter_menu = None;
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
-    }
-
     pub(super) fn set_block_notice(&self, notice: String, cx: &mut Context<Self>) {
         if let PanelContent::Document { root, .. } = &self.content {
             cx.global_mut::<EditorDocuments>().set_notice(root, notice);
@@ -1984,52 +1976,6 @@ impl WorkbenchPanel {
             Err(error) => cx
                 .global_mut::<EditorDocuments>()
                 .set_notice(root, format!("Insert blocked: {error}")),
-        }
-        cx.refresh_windows();
-    }
-
-    pub(super) fn add_character(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let PanelContent::Characters { root } = &self.content else {
-            return;
-        };
-        if self.tool_inputs.len() != 3 {
-            return;
-        }
-        let id = self.tool_inputs[0].read(cx).value().to_string();
-        let name = self.tool_inputs[1].read(cx).value().to_string();
-        let color = self.tool_inputs[2].read(cx).value().to_string();
-        let index = cx.global::<EditorDocuments>().authoring(root);
-        let Some(path) = index.characters_manifest.clone() else {
-            cx.global_mut::<EditorDocuments>()
-                .set_notice(root, "Character manifest is unavailable");
-            return;
-        };
-        let result = cx
-            .global_mut::<EditorDocuments>()
-            .open(root, &path)
-            .map_err(|error| error.to_string())
-            .and_then(|document| {
-                append_character(
-                    document.borrow().contents(),
-                    id.trim(),
-                    name.trim(),
-                    Some(color.trim()),
-                )
-                .map_err(|error| error.to_string())
-            });
-        match result {
-            Ok(edited) => {
-                apply_workspace_edit(root, &path, edited, window, cx);
-                self.focus.focus(window, cx);
-                for input in &self.tool_inputs {
-                    input.update(cx, |input, cx| input.set_value("", window, cx));
-                }
-                cx.global_mut::<EditorDocuments>()
-                    .set_notice(root, format!("Added character `{}`", id.trim()));
-            }
-            Err(error) => cx
-                .global_mut::<EditorDocuments>()
-                .set_notice(root, format!("Character edit blocked: {error}")),
         }
         cx.refresh_windows();
     }

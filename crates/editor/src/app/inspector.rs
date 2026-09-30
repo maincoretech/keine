@@ -1,6 +1,44 @@
 use super::*;
 
+mod controls;
+mod spatial;
+mod view;
+pub(super) use controls::*;
+pub(super) use view::*;
+
 impl WorkbenchPanel {
+    pub(super) fn apply_batch_block_field(
+        &mut self,
+        root: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((path, starts)) = cx
+            .global::<EditorDocuments>()
+            .block_selection(root)
+            .cloned()
+            .filter(|(_, starts)| starts.len() > 1)
+        else {
+            return;
+        };
+        let Some(source) = cx.global::<EditorDocuments>().source(root, &path) else {
+            return;
+        };
+        let Some(field) = self.batch_block_field.clone() else {
+            return;
+        };
+        let value = self.batch_block_input.read(cx).value().to_string();
+        match batch_block_edit(&source, &starts, &field, &value) {
+            Ok((edited, starts)) => {
+                apply_workspace_edit(root, &path, edited, window, cx);
+                cx.global_mut::<EditorDocuments>()
+                    .set_block_selection(root, path, starts);
+            }
+            Err(error) => window.push_notification(Notification::error(error), cx),
+        }
+        cx.refresh_windows();
+    }
+
     /// Switch between the two existing native Wait commands without a second
     /// block model or hidden source metadata.
     pub(super) fn commit_wait_mode(
@@ -422,22 +460,24 @@ impl WorkbenchPanel {
                 .iter()
                 .flat_map(|scene| &scene.blocks)
                 .find(|block| block.source_range.start == block_start)?;
-            if block.disabled
-                || matches!(
-                    block.kind,
-                    BlockKind::Narration | BlockKind::Dialogue { .. }
-                )
-            {
+            if block.disabled {
                 return None;
             }
             let fields = projection.source_fields(&source, block_start)?;
-            let command = source
-                .get(block.source_range.clone())?
-                .split('(')
-                .next()
-                .unwrap_or_default()
-                .trim()
-                .to_owned();
+            let command = if matches!(
+                block.kind,
+                BlockKind::Narration | BlockKind::Dialogue { .. }
+            ) {
+                "dialogue".to_owned()
+            } else {
+                source
+                    .get(block.source_range.clone())?
+                    .split('(')
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_owned()
+            };
             Some(SourceInspectorKey {
                 path,
                 block_start,
@@ -1283,31 +1323,58 @@ impl WorkbenchPanel {
                         )
                     };
                     match result {
-                        Ok(edits) => {
-                            let applied = cx.update_window(window_handle, |_, window, cx| {
-                                apply_prepared_edits(&root, &edits, window, cx)
-                            });
-                            match applied {
-                                Ok(Ok(())) => {
-                                    let _ = cx.update_window(window_handle, |_, window, cx| {
-                                        panel.focus.focus(window, cx);
-                                    });
-                                    cx.global_mut::<EditorDocuments>().set_asset_selection(
-                                        &root,
-                                        vec![AssetKey {
-                                            kind,
-                                            id: values[0].trim().to_owned(),
-                                        }],
-                                    );
-                                    cx.global_mut::<EditorDocuments>()
-                                        .set_notice(&root, "Asset updated");
-                                }
-                                _ => {
-                                    panel.asset_inspector_key = None;
-                                    cx.global_mut::<EditorDocuments>()
-                                        .set_notice(&root, "Asset update failed");
+                        Ok(mut edits) => {
+                            let id = values[0].trim().to_owned();
+                            let path = file_ops::asset_edit_path(asset, &id, kind, panel.asset_rename_file);
+                            if path != asset.path {
+                                let update = edits.iter_mut().find(|(path, _)| Some(path) == index.assets_manifest.as_ref());
+                                if let Some((_, source)) = update {
+                                    match file_ops::edit_manifest_asset_path(source, &asset.path, &path) {
+                                        Ok(updated) => *source = updated,
+                                        Err(error) => { cx.global_mut::<EditorDocuments>().set_notice(&root, error.to_string()); return; }
+                                    }
                                 }
                             }
+                            if path != asset.path && index.assets.iter().any(|other| other.path == asset.path && other.key() != asset.key()) {
+                                panel.asset_inspector_key = None;
+                                cx.global_mut::<EditorDocuments>().set_notice(&root, "File is mapped more than once; resolve duplicate mappings before moving it");
+                                return;
+                            }
+                            let files = if path == asset.path || !asset.exists { Vec::new() } else { vec![file_ops::AssetFileChange::relocate(asset.path.clone(), path.clone())] };
+                            let message = format!("{} → {}\n{} → {}\n{} reference(s) in {} source file(s).{}", asset.id, id, asset.path.display(), path.display(), asset.reference_count, edits.len().saturating_sub(1), if asset.kind != kind { "\nReferences incompatible with the new type will be reported in Problems." } else { "" });
+                            let receiver = if id != asset.id || kind != asset.kind {
+                                match cx.update_window(window_handle, |_, window, cx| window.prompt(PromptLevel::Warning, "Update asset?", Some(&message), &[PromptButton::Other("Apply".into()), PromptButton::Cancel("Cancel".into())], cx)) {
+                                    Ok(receiver) => Some(receiver),
+                                    Err(error) => { panel.asset_inspector_key = None; cx.global_mut::<EditorDocuments>().set_notice(&root, error.to_string()); return; }
+                                }
+                            } else { None };
+                            let baselines = edits.iter().filter_map(|(path, _)| cx.global::<EditorDocuments>().source(&root, path).map(|source| (path.clone(), source))).collect::<Vec<_>>();
+                            let root = root.clone();
+                            cx.spawn(async move |this, cx| {
+                                if let Some(receiver) = receiver && receiver.await.ok() != Some(0) {
+                                    let _ = this.update(cx, |panel, cx| { panel.asset_inspector_key = None; cx.refresh_windows(); });
+                                    return;
+                                }
+                                let _ = this.update(cx, |panel, cx| {
+                                    let applied = cx.update_window(window_handle, |_, window, cx| {
+                                        if baselines.len() != edits.len() || baselines.iter().any(|(path, before)| cx.global::<EditorDocuments>().source(&root, path).as_ref() != Some(before)) {
+                                            return Err("Source changed while confirming; refresh Inspector".into());
+                                        }
+                                        let result = apply_asset_transaction(&root, &edits, files, window, cx);
+                                        if result.is_ok() { panel.focus.focus(window, cx); }
+                                        result
+                                    });
+                                    match applied {
+                                        Ok(Ok(())) => {
+                                            cx.global_mut::<EditorDocuments>().set_asset_selection(&root, vec![AssetKey { kind, id }]);
+                                            cx.global_mut::<EditorDocuments>().set_notice(&root, "Asset updated");
+                                        }
+                                        Ok(Err(error)) => { panel.asset_inspector_key = None; cx.global_mut::<EditorDocuments>().set_notice(&root, format!("Asset: {error}")); }
+                                        Err(error) => { cx.global_mut::<EditorDocuments>().set_notice(&root, error.to_string()); }
+                                    }
+                                    cx.refresh_windows();
+                                });
+                            }).detach();
                         }
                         Err(error) => {
                             panel.asset_inspector_key = None;

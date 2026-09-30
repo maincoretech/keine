@@ -34,7 +34,7 @@ pub(super) fn render(controller: &PreviewController, scroll: &ScrollHandle) -> A
         .flex_col()
         .p_3()
         .gap_3()
-        .child(view::section_label("ENGINE PREVIEW"))
+        .child(controls::section_label("ENGINE PREVIEW"))
         .child(
             div()
                 .flex()
@@ -59,7 +59,7 @@ pub(super) fn render(controller: &PreviewController, scroll: &ScrollHandle) -> A
             history.lifecycle.iter().cloned().collect(),
             now,
         ))
-        .child(view::property_row("CPU", cpu))
+        .child(controls::property_row("CPU", cpu))
         .child(sparkline(
             &history,
             now,
@@ -72,14 +72,14 @@ pub(super) fn render(controller: &PreviewController, scroll: &ScrollHandle) -> A
                 .text_color(rgb(MUTED))
                 .child("100% = 1 logical core"),
         )
-        .child(view::property_row("Memory · RSS", memory))
+        .child(controls::property_row("Memory · RSS", memory))
         .child(sparkline(
             &history,
             now,
             |sample| sample.resident_bytes.map(|value| value as f64),
             0x9dc9a5,
         ))
-        .child(view::property_row("Observed peak", peak))
+        .child(controls::property_row("Observed peak", peak))
         .child(
             div()
                 .text_xs()
@@ -92,7 +92,7 @@ pub(super) fn render(controller: &PreviewController, scroll: &ScrollHandle) -> A
                 .text_color(rgb(MUTED))
                 .child("Peak is the highest sampled RSS in this Engine process."),
         );
-    view::vertical_overflow_view("performance-scroll", scroll, content)
+    controls::vertical_overflow_view("performance-scroll", scroll, content)
 }
 
 fn format_memory(bytes: u64) -> String {

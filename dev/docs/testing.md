@@ -89,12 +89,17 @@ unavailable 缺测和 Mach 换算边界；不新增验收工程。
 0.11.1
 ├── macOS：原生 Engine、Text/Block/Inspector 写回、保存重开、故障恢复已有运行态证据
 ├── 最新工作台：下拉框、Text 概览、全文搜索、Asset Preview 关闭/重开已目测
+├── 每句文本结束开关：灰/蓝状态、增删关联指令、Inspector 同步及 Cmd+Z 恢复已目测
+├── Asset 生命周期：改名确认与物理文件/映射更新已目测；Unmapped/Remap/Trash 整套 UI 尚待验收
 ├── Performance：macOS 启停/失败恢复、关闭后持续采样、重开历史、重启 peak 重置已目测
 ├── UI 容器简化：多标签圆角、切换、面板缩放/滚动与跨分组拖放已用新 release 目测
 ├── 用户验收：中文 IME、1×/多显示器/极端比例、主观音频、实际 Preview FPS
 ├── Windows x64 / Linux：构建 CI 与运行态验收分别看待；运行态暂缓
-└── 非本次完成：资源删除/remap 产品闭环、媒体规范化、正式签名/notarization
+└── 暂缓：媒体规范化、正式签名/notarization；Windows/Linux 系统废纸篓尚未实现
 ```
+
+当前未提交代码已通过 fmt、workspace check、clippy、workspace tests 与 native-smoke validate。
+测试覆盖源码/文件事务、macOS 废纸篓恢复、对白尾部参数解析/执行/迁移；这些不代替完整运行态验收。
 
 视觉验收直接操作当前构建的原生应用；不得为采证新增 screenshot hook、环境变量协议或自动化。
 构建、测试、包签名和 UI/音视频验收必须分别报告。历史一次通过不替代当前代码复验。

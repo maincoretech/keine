@@ -544,7 +544,7 @@ fn expected_action(action: &Action, model: &MigrationModel) -> Result<Action> {
     Ok(expected)
 }
 
-fn expression_source(expression: &str, model: &MigrationModel) -> Result<String> {
+pub(super) fn expression_source(expression: &str, model: &MigrationModel) -> Result<String> {
     // Match complete legacy names outside quoted strings. Replacement never expands
     // an expression or rewrites string contents; native validation checks its types.
     let mut names = model.variable_ids.iter().collect::<Vec<_>>();

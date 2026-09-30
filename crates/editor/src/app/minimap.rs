@@ -1,4 +1,4 @@
-//! A disposable, painted overview of the Blocks layout. It never selects or edits source.
+//! Shared overview navigation and the painted Blocks layout. Never owns source selection.
 use super::*;
 
 pub(super) const WIDTH: f32 = 72.;
@@ -7,7 +7,7 @@ pub(super) const MIN_THUMB: f32 = 32.;
 pub(super) const VERTICAL_SCALE: f32 = 2.;
 
 #[derive(Default)]
-pub(super) struct BlockMinimap {
+pub(super) struct Navigation {
     pub(super) bounds: Rc<RefCell<Bounds<Pixels>>>,
     pub(super) grab: Option<f32>,
     pub(super) pan: Rc<RefCell<Pan>>,
@@ -20,15 +20,23 @@ pub(super) struct Pan {
 }
 
 impl Pan {
-    fn geometry(&mut self, handle: &ScrollHandle, height: f32) -> Geometry {
-        let scroll = -f32::from(handle.offset().y);
-        let mut geometry = Geometry::new(
+    fn for_blocks(&mut self, handle: &ScrollHandle, height: f32) -> Geometry {
+        self.geometry(
             height,
             f32::from(handle.bounds().size.height),
             f32::from(handle.max_offset().y),
-            scroll,
-            self.offset,
-        );
+            -f32::from(handle.offset().y),
+        )
+    }
+
+    pub(super) fn geometry(
+        &mut self,
+        height: f32,
+        viewport: f32,
+        max_scroll: f32,
+        scroll: f32,
+    ) -> Geometry {
+        let mut geometry = Geometry::new(height, viewport, max_scroll, scroll, self.offset);
         // Main-view navigation follows the cursor; wheel browsing in the overview stays local.
         if self.last_scroll != Some(scroll) {
             self.offset = if geometry.max_scroll > 0. {
@@ -41,6 +49,26 @@ impl Pan {
         self.offset = geometry.pan;
         self.last_scroll = Some(scroll);
         geometry
+    }
+
+    /// Preserve the initial grab point, and pan when a drag crosses either overview edge.
+    pub(super) fn drag(&mut self, mut geometry: Geometry, y: f32, grab: &mut Option<f32>) -> f32 {
+        if grab.is_some() {
+            self.offset += y - y.clamp(0., geometry.height);
+            geometry.pan = self.offset.clamp(0., geometry.map_height - geometry.height);
+            self.offset = geometry.pan;
+        }
+        let grab = *grab.get_or_insert_with(|| {
+            let top = geometry.viewport_top();
+            if y >= top && y <= top + geometry.thumb && geometry.thumb > 0. {
+                (y - top) / geometry.thumb
+            } else {
+                0.5
+            }
+        });
+        let scroll = geometry.scroll_at(y, grab);
+        self.last_scroll = Some(scroll);
+        scroll
     }
 }
 
@@ -64,7 +92,7 @@ impl Mark {
         let color = if block.disabled {
             BORDER
         } else {
-            view::block_type_color(&block.kind, &block.summary)
+            blocks::block_type_color(&block.kind, &block.summary)
         };
         Self {
             top,
@@ -147,32 +175,18 @@ impl WorkbenchPanel {
             self.scroll_text_minimap(position, cx);
             return;
         }
-        let bounds = *self.block_minimap.bounds.borrow();
+        let bounds = *self.minimap_navigation.bounds.borrow();
         let height = f32::from(bounds.size.height) - INSET * 2.;
         if height <= 0. {
             return;
         }
         let y = f32::from(position.y - bounds.origin.y) - INSET;
-        let mut pan = self.block_minimap.pan.borrow_mut();
-        let mut geometry = pan.geometry(&self.view_scroll, height);
-        if self.block_minimap.grab.is_some() {
-            // Dragging beyond either edge pans toward the rest of the enlarged overview.
-            pan.offset += y - y.clamp(0., height);
-            geometry = pan.geometry(&self.view_scroll, height);
-        }
-        let grab = *self.block_minimap.grab.get_or_insert_with(|| {
-            let top = geometry.viewport_top();
-            if y >= top && y <= top + geometry.thumb && geometry.thumb > 0. {
-                (y - top) / geometry.thumb
-            } else {
-                0.5
-            }
-        });
+        let mut pan = self.minimap_navigation.pan.borrow_mut();
+        let geometry = pan.for_blocks(&self.view_scroll, height);
+        let scroll = pan.drag(geometry, y, &mut self.minimap_navigation.grab);
         let offset = self.view_scroll.offset();
-        let scroll = geometry.scroll_at(y, grab);
         self.view_scroll
             .set_offset(gpui_kit::point(offset.x, px(-scroll)));
-        pan.last_scroll = Some(scroll);
         self.block_scroll_pending = false;
         self.block_context_menu = None;
         cx.notify();
@@ -182,7 +196,7 @@ impl WorkbenchPanel {
 pub(super) fn render(
     marks: Vec<Mark>,
     handle: &ScrollHandle,
-    state: &BlockMinimap,
+    state: &Navigation,
     cx: &mut Context<WorkbenchPanel>,
 ) -> AnyElement {
     let bounds_cell = state.bounds.clone();
@@ -201,20 +215,20 @@ pub(super) fn render(
             MouseButton::Left,
             cx.listener(|this, event: &MouseDownEvent, _, cx| {
                 cx.stop_propagation();
-                this.block_minimap.grab = None;
+                this.minimap_navigation.grab = None;
                 this.scroll_minimap(event.position, cx);
             }),
         )
         .on_click(|_, _, cx| cx.stop_propagation())
         .on_scroll_wheel(
             cx.listener(|this, event: &gpui_kit::ScrollWheelEvent, _, cx| {
-                let bounds = *this.block_minimap.bounds.borrow();
+                let bounds = *this.minimap_navigation.bounds.borrow();
                 let height = (f32::from(bounds.size.height) - INSET * 2.).max(0.);
                 let delta = event.delta.pixel_delta(px(20.));
-                let mut pan = this.block_minimap.pan.borrow_mut();
-                pan.geometry(&this.view_scroll, height);
+                let mut pan = this.minimap_navigation.pan.borrow_mut();
+                pan.for_blocks(&this.view_scroll, height);
                 pan.offset -= f32::from(delta.y);
-                pan.geometry(&this.view_scroll, height);
+                pan.for_blocks(&this.view_scroll, height);
                 cx.stop_propagation();
                 cx.notify();
             }),
@@ -226,7 +240,7 @@ pub(super) fn render(
                 },
                 move |bounds, _, window, _| {
                     let height = (f32::from(bounds.size.height) - INSET * 2.).max(0.);
-                    let geometry = pan_cell.borrow_mut().geometry(&handle, height);
+                    let geometry = pan_cell.borrow_mut().for_blocks(&handle, height);
                     let origin = bounds.origin + gpui_kit::point(px(INSET), px(INSET));
                     let width = (f32::from(bounds.size.width) - INSET * 2.).max(0.);
                     for mark in &marks {
@@ -310,14 +324,14 @@ pub(super) fn render(
                         let Some(panel) = moving_panel.upgrade() else {
                             return;
                         };
-                        if panel.read(cx).block_minimap.grab.is_none() {
+                        if panel.read(cx).minimap_navigation.grab.is_none() {
                             return;
                         }
                         panel.update(cx, |this, cx| {
                             if event.pressed_button == Some(MouseButton::Left) {
                                 this.scroll_minimap(event.position, cx);
                             } else {
-                                this.block_minimap.grab = None;
+                                this.minimap_navigation.grab = None;
                             }
                         });
                     });
@@ -329,9 +343,9 @@ pub(super) fn render(
                         let Some(panel) = release_panel.upgrade() else {
                             return;
                         };
-                        if panel.read(cx).block_minimap.grab.is_some() {
+                        if panel.read(cx).minimap_navigation.grab.is_some() {
                             panel.update(cx, |this, cx| {
-                                this.block_minimap.grab = None;
+                                this.minimap_navigation.grab = None;
                                 cx.notify();
                             });
                         }
@@ -367,6 +381,36 @@ mod tests {
             Geometry::new(0., 100., 1000., 50., 0.).scroll_at(100., 0.5),
             0.
         );
+    }
+
+    #[test]
+    fn overview_browsing_stays_local_until_main_view_scrolls() {
+        let mut pan = Pan::default();
+        let initial = pan.geometry(600., 500., 10000., 2500.);
+        assert_eq!(initial.pan, 150.);
+        pan.offset += 75.;
+        let browsed = pan.geometry(600., 500., 10000., 2500.);
+        assert_eq!(browsed.pan, 225.);
+        assert_eq!(browsed.top, initial.top);
+        assert_eq!(pan.geometry(600., 500., 10000., 5000.).pan, 300.);
+        assert_eq!(pan.geometry(600., 700., 0., 0.).pan, 0.);
+    }
+
+    #[test]
+    fn navigation_preserves_grab_and_pans_to_both_document_ends() {
+        let mut pan = Pan::default();
+        let mut grab = None;
+        let geometry = pan.geometry(600., 500., 10000., 5000.);
+        let y = geometry.viewport_top() + geometry.thumb * 0.25;
+        let scroll = pan.drag(geometry, y, &mut grab);
+        assert!((scroll - 5000.).abs() < 0.01);
+        assert!((grab.unwrap() - 0.25).abs() < 0.001);
+        let geometry = pan.geometry(600., 500., 10000., scroll);
+        assert_eq!(pan.drag(geometry, 1800., &mut grab), 10000.);
+        assert_eq!(pan.offset, 600.);
+        let geometry = pan.geometry(600., 500., 10000., 10000.);
+        assert_eq!(pan.drag(geometry, -1200., &mut grab), 0.);
+        assert_eq!(pan.offset, 0.);
     }
 
     #[test]

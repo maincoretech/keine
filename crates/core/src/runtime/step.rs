@@ -625,9 +625,33 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                         return StepResult::RuntimeError(ScriptRuntimeError::Eiyashou(error));
                     }
                 };
-                let (text, markup, pauses) = compile_rich_text(&text);
+                let (mut text, mut markup, mut pauses) = compile_rich_text(&text);
+                let mut speaker = dialogue.speaker.clone();
+                if let Some(previous) = state.dialogue.as_ref().or(state.previous_dialogue.as_ref())
+                {
+                    if dialogue.options.inherit_speaker {
+                        speaker.clone_from(&previous.speaker);
+                    }
+                    if dialogue.options.concat {
+                        let pause_offset = previous.text.chars().count();
+                        text = previous.text.clone() + &text;
+                        markup = previous.markup.clone() + &markup;
+                        pauses = previous
+                            .pauses
+                            .iter()
+                            .copied()
+                            .chain(pauses.into_iter().map(|mut pause| {
+                                pause.at += pause_offset;
+                                pause
+                            }))
+                            .collect();
+                        if speaker.is_empty() {
+                            speaker.clone_from(&previous.speaker);
+                        }
+                    }
+                }
                 state.dialogue = Some(Dialogue {
-                    speaker: dialogue.speaker.clone(),
+                    speaker,
                     speaker_color: dialogue.speaker_color,
                     markup,
                     text,
@@ -635,7 +659,7 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                     pauses,
                     vocal: dialogue.options.vocal.clone(),
                     volume: dialogue.options.volume.clamp(0.0, 1.0),
-                    auto_advance: false,
+                    auto_advance: dialogue.options.auto_advance,
                 });
                 state.record_dialogue(state.cursor - 1);
                 state.menu = None;
@@ -3146,6 +3170,51 @@ mod tests {
         assert_eq!(
             state.global_vars.get("name"),
             Some(&Value::Str("MainCore".into()))
+        );
+    }
+
+    #[test]
+    fn native_dialogue_options_keep_concat_pauses_and_inherited_speaker() {
+        let say = |text: &str, speaker: &str, options| {
+            Action::EiyashouSay(EiyashouDialogue {
+                text: EiyashouText {
+                    parts: vec![EiyashouTextPart::Literal(text.into())],
+                },
+                speaker: speaker.into(),
+                speaker_color: None,
+                options,
+                source_id: text.into(),
+            })
+        };
+        let mut state = state_with(vec![
+            say("前[wait=100]", "hero", SayOptions::default()),
+            say(
+                "后[wait=200]",
+                "",
+                SayOptions {
+                    concat: true,
+                    inherit_speaker: true,
+                    auto_advance: true,
+                    volume: 0.4,
+                    ..Default::default()
+                },
+            ),
+        ]);
+        assert_eq!(step(&mut state), StepResult::AwaitClick);
+        advance(&mut state);
+        assert_eq!(step(&mut state), StepResult::AwaitClick);
+        let dialogue = state.dialogue.unwrap();
+        assert_eq!(dialogue.text, "前后");
+        assert_eq!(dialogue.speaker, "hero");
+        assert!(dialogue.auto_advance);
+        assert_eq!(dialogue.volume, 0.4);
+        assert_eq!(
+            dialogue
+                .pauses
+                .iter()
+                .map(|pause| pause.at)
+                .collect::<Vec<_>>(),
+            [1, 2]
         );
     }
 

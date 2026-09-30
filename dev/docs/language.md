@@ -55,6 +55,8 @@ scene start {
 ├── scene id { ... }：项目内唯一；goto 替换、call 调用、return 返回
 ├── id: "对白" / "旁白"；id: { "第一句", "第二句" }
 │   ├── 每条字符串单独等待推进；可在后面加一个 voices 资源 ID
+│   ├── 尾部可选 volume: 0–1、concat: bool、auto: bool、inherit_speaker: bool
+│   │   └── 默认 1 / false / false / false；concat 拼接前句，inherit_speaker 沿用前句角色
 │   ├── @source_id 前置注解可赋稳定源身份；没有时由语义内容派生
 │   └── [wait=N] 在同句打字中等待 N 毫秒，相邻标记累加，不占字形位置
 ├── let name = value：全项目一处声明，只在尚未初始化时初始化

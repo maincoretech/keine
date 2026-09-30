@@ -1,7 +1,7 @@
 use super::*;
 use gpui_kit::{DispatchPhase, ScrollWheelEvent, canvas, point};
 
-pub(super) fn speaker_options(index: &AuthoringIndex) -> Vec<SourceOption> {
+pub(in crate::app) fn speaker_options(index: &AuthoringIndex) -> Vec<SourceOption> {
     std::iter::once(SourceOption {
         value: "Narrator".into(),
         title: "Narrator".into(),
@@ -15,7 +15,7 @@ pub(super) fn speaker_options(index: &AuthoringIndex) -> Vec<SourceOption> {
     .collect()
 }
 
-pub(super) fn audition_control(
+pub(in crate::app) fn audition_control(
     root: &Path,
     path: &Path,
     compact: bool,
@@ -70,7 +70,10 @@ pub(super) fn audition_control(
         .into_any_element()
 }
 
-pub(super) fn voice_resource_options(root: &Path, index: &AuthoringIndex) -> Vec<SourceOption> {
+pub(in crate::app) fn voice_resource_options(
+    root: &Path,
+    index: &AuthoringIndex,
+) -> Vec<SourceOption> {
     let mut options = vec![SourceOption {
         value: String::new(),
         title: "No voice".into(),
@@ -97,13 +100,14 @@ pub(super) fn voice_resource_options(root: &Path, index: &AuthoringIndex) -> Vec
 }
 
 #[derive(Clone)]
-pub(super) enum ResourceTarget {
+pub(in crate::app) enum ResourceTarget {
+    Reference,
     Source(SourceInspectorKey, usize),
     Voice(InspectorEditKey),
     Speaker(InspectorEditKey),
 }
 
-pub(super) struct ResourcePicker {
+pub(in crate::app) struct ResourcePicker {
     root: PathBuf,
     target: ResourceTarget,
     options: Vec<SourceOption>,
@@ -122,8 +126,12 @@ pub(super) struct ResourcePicker {
 
 impl ResourcePicker {
     pub fn source_is_current(&self, cx: &App) -> bool {
+        if matches!(self.target, ResourceTarget::Reference) {
+            return true;
+        }
         let documents = cx.global::<EditorDocuments>();
         let (path, start) = match &self.target {
+            ResourceTarget::Reference => return true,
             ResourceTarget::Source(key, _) => (&key.path, key.block_start),
             ResourceTarget::Voice(key) | ResourceTarget::Speaker(key) => {
                 (&key.path, key.block_start)
@@ -142,6 +150,7 @@ impl ResourcePicker {
         };
         let projection = documents.projection(&self.root, path, &source);
         match &self.target {
+            ResourceTarget::Reference => true,
             ResourceTarget::Source(key, _) => projection
                 .scenes
                 .iter()
@@ -149,8 +158,9 @@ impl ResourcePicker {
                 .find(|block| block.source_range.start == start)
                 .is_some_and(|block| {
                     block.kind == key.kind
-                        && block.summary.split('(').next().map(str::trim)
-                            == Some(key.command.as_str())
+                        && (key.command == "dialogue"
+                            || block.summary.split('(').next().map(str::trim)
+                                == Some(key.command.as_str()))
                         && projection.source_fields_for_block(&source, block).as_ref()
                             == Some(&key.fields)
                 }),
@@ -170,11 +180,12 @@ impl ResourcePicker {
 }
 
 /// One source-backed resource popup serves inline Blocks and Inspector.
-pub(super) fn resource_trigger(
+pub(in crate::app) fn resource_trigger(
     root: &Path,
     target: ResourceTarget,
     options: Vec<SourceOption>,
     current: String,
+    inline: bool,
     cx: &mut Context<WorkbenchPanel>,
 ) -> AnyElement {
     let root = root.to_owned();
@@ -184,6 +195,7 @@ pub(super) fn resource_trigger(
         .map(|option| option.title.to_string())
         .unwrap_or_else(|| current.clone());
     let id = match &target {
+        ResourceTarget::Reference => "asset-reference-picker".into(),
         ResourceTarget::Source(key, position) => format!("resource-{}-{position}", key.block_start),
         ResourceTarget::Voice(key) => format!("voice-resource-{}", key.block_start),
         ResourceTarget::Speaker(key) => format!("speaker-resource-{}", key.block_start),
@@ -203,7 +215,8 @@ pub(super) fn resource_trigger(
     div()
         .id(id)
         .relative()
-        .w_full()
+        .when(inline, |this| this.w_auto().max_w(px(320.)).flex_none())
+        .when(!inline, |this| this.w_full())
         .min_w_0()
         .h(px(28.))
         .px_2()
@@ -258,7 +271,7 @@ pub(super) fn resource_trigger(
         })
         .child(
             div()
-                .flex_1()
+                .when(!inline, |this| this.flex_1())
                 .min_w_0()
                 .text_size(px(12.))
                 .overflow_hidden()
@@ -324,7 +337,7 @@ impl WorkbenchPanel {
         cx.notify();
     }
 
-    pub(super) fn resource_picker_next(
+    pub(in crate::app) fn resource_picker_next(
         &mut self,
         _: &ResourcePickerNext,
         _: &mut Window,
@@ -333,7 +346,7 @@ impl WorkbenchPanel {
         self.step_resource_picker(true, cx);
     }
 
-    pub(super) fn resource_picker_previous(
+    pub(in crate::app) fn resource_picker_previous(
         &mut self,
         _: &ResourcePickerPrevious,
         _: &mut Window,
@@ -342,7 +355,7 @@ impl WorkbenchPanel {
         self.step_resource_picker(false, cx);
     }
 
-    pub(super) fn accept_resource_picker(
+    pub(in crate::app) fn accept_resource_picker(
         &mut self,
         _: &AcceptResourcePicker,
         window: &mut Window,
@@ -358,7 +371,7 @@ impl WorkbenchPanel {
         }
     }
 
-    pub(super) fn dismiss_resource_picker(
+    pub(in crate::app) fn dismiss_resource_picker(
         &mut self,
         _: &CloseResourcePicker,
         window: &mut Window,
@@ -431,7 +444,7 @@ impl WorkbenchPanel {
         cx.notify();
     }
 
-    pub(super) fn close_resource_picker(
+    pub(in crate::app) fn close_resource_picker(
         &mut self,
         restore_focus: bool,
         window: &mut Window,
@@ -491,6 +504,13 @@ impl WorkbenchPanel {
         let target = picker.target.clone();
         self.close_resource_picker(true, window, cx);
         match target {
+            ResourceTarget::Reference => {
+                if let Ok((path, line, column)) =
+                    serde_json::from_str::<(PathBuf, usize, usize)>(&option.value)
+                {
+                    navigate_source(&root, &path, line, column, window, cx);
+                }
+            }
             ResourceTarget::Source(key, position) => {
                 if !source_field_enabled(&key, &key.fields[position]) {
                     return;
@@ -533,7 +553,7 @@ impl WorkbenchPanel {
         }
     }
 
-    pub(super) fn render_resource_picker(
+    pub(in crate::app) fn render_resource_picker(
         &self,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -551,6 +571,20 @@ impl WorkbenchPanel {
         let height = px((options.len().max(1) as f32 * row_height
             + if resource { 64. } else { 34. })
         .min(320.));
+        let count = options.len();
+        let scroll = picker.scroll.clone();
+        let old_offset = scroll.offset();
+        let old_bounds = scroll.bounds();
+        let first = ((-f32::from(old_offset.y) / row_height).floor().max(0.) as usize)
+            .saturating_sub(3)
+            .min(count);
+        let visible_height = if old_bounds.size.height > px(0.) {
+            f32::from(old_bounds.size.height)
+        } else {
+            f32::from(height)
+        };
+        let end = (first + (visible_height / row_height).ceil() as usize + 7).min(count);
+        let scroll_entity = cx.weak_entity();
         let closing = picker.closing;
         let y = if picker.trigger.origin.y >= height + px(8.) {
             picker.trigger.origin.y - height
@@ -642,46 +676,70 @@ impl WorkbenchPanel {
                                 .child("No matching resources"),
                         )
                     })
-                    .children(options.into_iter().enumerate().map(|(row, option)| {
-                        let rendered = if resource {
-                            option.render(window, cx).into_any_element()
-                        } else {
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_size(px(12.))
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .whitespace_nowrap()
-                                .child(option.title.clone())
-                                .into_any_element()
-                        };
-                        let current = picker.current == option.value;
-                        div()
-                            .id(("resource-option", row))
-                            .h(px(row_height))
-                            .flex_none()
-                            .px_2()
-                            .py_1()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .bg(rgb(if row == index { SURFACE_HOVER } else { SURFACE }))
-                            .cursor_pointer()
-                            .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-                            .child(rendered)
-                            .when(current, |this| {
-                                this.child(
-                                    Icon::new(AssetIconName::Check)
-                                        .xsmall()
-                                        .text_color(rgb(PRIMARY)),
-                                )
-                            })
-                            .on_click(cx.listener(move |panel, _, window, cx| {
-                                cx.stop_propagation();
-                                panel.choose_resource(option.clone(), window, cx);
-                            }))
-                    })),
+                    .child(div().h(px(first as f32 * row_height)).flex_none())
+                    .children(
+                        options
+                            .into_iter()
+                            .enumerate()
+                            .skip(first)
+                            .take(end - first)
+                            .map(|(row, option)| {
+                                let rendered = if resource {
+                                    option.render(window, cx).into_any_element()
+                                } else {
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_size(px(12.))
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .whitespace_nowrap()
+                                        .child(option.title.clone())
+                                        .into_any_element()
+                                };
+                                let current = picker.current == option.value;
+                                div()
+                                    .id(("resource-option", row))
+                                    .h(px(row_height))
+                                    .flex_none()
+                                    .px_2()
+                                    .py_1()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .bg(rgb(if row == index { SURFACE_HOVER } else { SURFACE }))
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                                    .child(rendered)
+                                    .when(current, |this| {
+                                        this.child(
+                                            Icon::new(AssetIconName::Check)
+                                                .xsmall()
+                                                .text_color(rgb(PRIMARY)),
+                                        )
+                                    })
+                                    .on_click(cx.listener(move |panel, _, window, cx| {
+                                        cx.stop_propagation();
+                                        panel.choose_resource(option.clone(), window, cx);
+                                    }))
+                            }),
+                    )
+                    .child(div().h(px((count - end) as f32 * row_height)).flex_none())
+                    .child(
+                        canvas(
+                            move |_, _, cx| {
+                                if scroll.offset() != old_offset || scroll.bounds() != old_bounds {
+                                    let entity = scroll_entity.clone();
+                                    cx.defer(move |cx| {
+                                        let _ = entity.update(cx, |_, cx| cx.notify());
+                                    });
+                                }
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
+                    ),
             )
             .when(resource, |this| {
                 this.child(
