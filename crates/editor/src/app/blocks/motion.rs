@@ -173,7 +173,9 @@ mod tests {
             .iter()
             .map(|block| motion.positions[&block.source_range.start])
             .collect::<Vec<_>>();
-        assert_eq!(origins, [84., 126., 0., 42.]);
+        assert_eq!(origins, [126., 168., 0., 42., 84.]);
+        assert_eq!(rows[4].kind, crate::projection::BlockKind::Control);
+        assert_eq!(rows[4].depth, 1);
         assert_eq!(motion.heights[&rows[3].source_range.start], 78.);
     }
 }

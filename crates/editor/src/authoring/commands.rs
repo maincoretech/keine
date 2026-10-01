@@ -524,7 +524,7 @@ pub fn insertion_statement(
             ),
             "text.paragraph.style" => "text.paragraph.style(literary, typewriter_speed: 0.03)".to_owned(),
             "sprite.update" => format!(
-                "sprite.update({}_slot, {}, position: center, scale: 1)",
+                "sprite.update({}_slot, {})",
                 first_figure.ok_or(AuthoringEditError::MissingInsertionPoint)?,
                 first_figure.ok_or(AuthoringEditError::MissingInsertionPoint)?
             ),

@@ -1,8 +1,10 @@
 use super::*;
 
+mod drag;
 mod motion;
 mod picker;
 mod view;
+pub(super) use drag::BlockDragState;
 pub(super) use motion::BlockReorderMotion;
 pub(super) use picker::*;
 pub(super) use view::*;
@@ -480,52 +482,41 @@ impl WorkbenchPanel {
         cx.defer(move |cx| {
             let _ = cx.update_window(window_handle, |_, window, cx| {
                 let _ = panel.update(cx, |panel, cx| {
-                    if panel.block_settle_source.is_some()
-                        && let Some(motion) = panel.block_reorder_motion.as_mut()
-                        && let PanelContent::Document {
+                    let state = std::mem::take(&mut panel.block_drag);
+                    if let BlockDragState::Committing {
+                        edited, mut motion, ..
+                    } = state
+                    {
+                        if let PanelContent::Document {
                             document: Some(document),
                             ..
                         } = &panel.content
-                    {
-                        motion.revision = Some(document.borrow().revision());
-                        panel.block_heights = motion.heights.clone();
-                        panel.block_height_revision = document.borrow().revision();
-                    }
-                    panel.rebuild_visual_editors(window, cx);
-                    if panel.block_settle_source.take().is_some() {
-                        panel.block_drop_target = None;
-                        panel.block_dragging = None;
-                        panel.block_drag_size = None;
+                            && document.borrow().contents() == edited
+                            && let Some(motion) = motion.as_mut()
+                        {
+                            motion.revision = Some(document.borrow().revision());
+                            motion.started_at = Some(std::time::Instant::now());
+                            panel.block_heights = motion.heights.clone();
+                            panel.block_height_revision = document.borrow().revision();
+                        } else {
+                            motion = None;
+                        }
+                        panel.block_drag =
+                            motion.map_or(BlockDragState::Idle, BlockDragState::Settling);
                         panel.selected_blocks.clear();
                         panel.block_selection_anchor = None;
                         if let PanelContent::Document { root, .. } = &panel.content {
-                            let root = root.clone();
                             cx.global_mut::<EditorDocuments>()
-                                .clear_block_selection(&root);
+                                .clear_block_selection(&root.clone());
                         }
+                    } else {
+                        panel.block_drag = state;
                     }
+                    panel.rebuild_visual_editors(window, cx);
                     cx.notify();
                 });
             });
         });
-    }
-
-    pub(super) fn hover_block_drop(&mut self, candidate: BlockDropTarget, cx: &mut Context<Self>) {
-        if self.block_drop_target == Some(candidate) {
-            return;
-        }
-        let target = self
-            .block_dragging
-            .as_ref()
-            .filter(|selected| {
-                matches!(&self.content, PanelContent::Document { document: Some(document), .. }
-                    if document.borrow().projection().accepts_block_drop(selected, candidate.row))
-            })
-            .map(|_| candidate);
-        if self.block_drop_target != target {
-            self.block_drop_target = target;
-            cx.notify();
-        }
     }
 
     pub(super) fn update_block_viewport(&mut self, window: &Window, cx: &App) {
@@ -567,13 +558,22 @@ impl WorkbenchPanel {
                 .iter()
                 .filter(|block| !block.is_textbox_ending())
             {
-                let height = block_row_height(
-                    block,
-                    &self.block_text_editors,
-                    self.draft_text.as_ref(),
-                    &self.block_heights,
-                    cx,
-                );
+                let height = self
+                    .block_drag
+                    .session()
+                    .and_then(|session| session.row(block.source_range.start))
+                    .map_or_else(
+                        || {
+                            block_row_height(
+                                block,
+                                &self.block_text_editors,
+                                self.draft_text.as_ref(),
+                                &self.block_heights,
+                                cx,
+                            )
+                        },
+                        |row| row.height,
+                    );
                 if block.text_range.as_ref().is_some_and(|range| {
                     self.block_text_editors
                         .iter()
@@ -588,10 +588,17 @@ impl WorkbenchPanel {
                     })
                 });
                 let moving_into_view = self
-                    .block_reorder_motion
-                    .as_ref()
-                    .and_then(|motion| motion.positions.get(&block.source_range.start))
-                    .is_some_and(|origin| *origin + height >= top && *origin <= bottom);
+                    .block_drag
+                    .session()
+                    .and_then(|session| {
+                        session.position(block.source_range.start, cx.reduce_motion())
+                    })
+                    .or_else(|| {
+                        self.block_drag.motion().and_then(|motion| {
+                            motion.positions.get(&block.source_range.start).copied()
+                        })
+                    })
+                    .is_some_and(|origin| origin + height >= top && origin <= bottom);
                 if offset + height >= top && offset <= bottom
                     || moving_into_view
                     || self.selected_blocks.contains(&block.source_range.start)
@@ -679,7 +686,7 @@ impl WorkbenchPanel {
             let relative = relative.clone();
             let state_for_change = state.clone();
             let subscription = cx.subscribe(&state, move |panel, _, event: &InputEvent, cx| {
-                if panel.block_settle_source.is_some() {
+                if panel.block_drag.committing() {
                     return;
                 }
                 if matches!(event, InputEvent::Focus | InputEvent::Blur) {
@@ -1153,7 +1160,7 @@ impl WorkbenchPanel {
         let root = root.clone();
         let window_handle = window.window_handle();
         let subscription = cx.subscribe(&state, move |panel, _, event: &InputEvent, cx| {
-            if panel.block_settle_source.is_some() {
+            if panel.block_drag.committing() {
                 return;
             }
             if matches!(event, InputEvent::PressEnter { shift: false, .. }) {
@@ -1515,57 +1522,6 @@ impl WorkbenchPanel {
         }
     }
 
-    pub(super) fn drop_blocks(
-        &mut self,
-        drag: &BlockDrag,
-        target_start: usize,
-        after: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.document_mode != DocumentMode::Block {
-            return;
-        }
-        let source = match &self.content {
-            PanelContent::Document {
-                document: Some(document),
-                ..
-            } => document.borrow().contents().to_owned(),
-            _ => return,
-        };
-        let projection = EiyashouProjection::parse(&source);
-        match projection.move_blocks_to(&source, &drag.selected, target_start, after) {
-            Ok(edited) if edited != source => {
-                self.block_reorder_motion = BlockReorderMotion::for_drop(
-                    &projection,
-                    &EiyashouProjection::parse(&edited),
-                    &drag.selected,
-                    target_start,
-                    after,
-                    &self.block_row_positions.borrow(),
-                    &self.block_heights,
-                );
-                self.block_drop_target = Some(BlockDropTarget {
-                    row: target_start,
-                    after,
-                });
-                self.block_dragging = Some(drag.selected.clone());
-                self.block_settle_source = Some(source);
-                self.apply_block_source(edited, "Blocks moved", window, cx)
-            }
-            Ok(_) => {
-                self.block_drop_target = None;
-                self.block_dragging = None;
-                cx.notify();
-            }
-            Err(error) => {
-                self.block_drop_target = None;
-                self.block_dragging = None;
-                self.set_block_notice(format!("Move blocked: {error}"), cx);
-            }
-        }
-    }
-
     pub(super) fn drop_assets(
         &mut self,
         drag: &AssetDrag,
@@ -1619,7 +1575,7 @@ impl WorkbenchPanel {
         let root = root.clone();
         let editor = editor.clone();
         editor.update(cx, |editor, cx| editor.replace_all(edited, window, cx));
-        if self.block_settle_source.is_none() {
+        if !self.block_drag.committing() {
             self.selected_blocks.clear();
             self.block_selection_anchor = None;
             cx.global_mut::<EditorDocuments>()

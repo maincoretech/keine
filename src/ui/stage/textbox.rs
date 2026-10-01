@@ -352,8 +352,9 @@ fn spawn_name_bar(root: &mut ChildSpawnerCommands, config: &GameConfig, assets: 
             display: Display::None,
             bottom: Val::Percent(layout.namebar_bottom),
             left: Val::Percent(layout.textbox_left),
-            padding: UiRect::axes(Val::Px(24.0), Val::Px(9.0)),
+            padding: UiRect::axes(Val::Px(40.0), Val::Px(9.0)),
             min_width: Val::Px(75.0),
+            max_width: Val::Percent(100.0 - layout.textbox_left),
             justify_content: JustifyContent::FlexStart,
             align_items: AlignItems::FlexStart,
             ..default()
@@ -772,16 +773,9 @@ pub fn update_textbox(
             }
             if layout_changed || style_changed {
                 node.left = Val::Percent(left);
-                node.width = if centered {
-                    Val::Percent(100.0)
-                } else {
-                    Val::Auto
-                };
-                node.justify_content = if centered {
-                    JustifyContent::Center
-                } else {
-                    JustifyContent::FlexStart
-                };
+                node.width = Val::Auto;
+                node.max_width = Val::Percent(width);
+                node.justify_content = JustifyContent::FlexStart;
                 let namebar_alpha = if centered { 0.0 } else { 0.7 };
                 hidden.base_alpha = namebar_alpha;
                 background.0 = Color::srgba(

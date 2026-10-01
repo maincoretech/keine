@@ -4,7 +4,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
 use std::{fs, io};
 
 use gpui_kit::component::dock::{DockArea, NodeId, PanelId};
@@ -70,7 +69,6 @@ pub(super) fn schedule_authoring_refresh(root: &Path, path: Option<&Path>, cx: &
     let task_root = root.clone();
     let background = cx.background_executor().clone();
     let task = cx.spawn(async move |cx| {
-        background.timer(Duration::from_millis(60)).await;
         let Some(input) = cx.update(|cx| {
             let workspace = cx.global::<EditorDocuments>().workspaces.get(&task_root)?;
             let pending = workspace.pending_index.clone();
@@ -633,6 +631,16 @@ impl EditorDocuments {
         let key = ProjectKey::from_path(root).ok()?;
         let workspace = self.workspaces.get(key.path())?;
         Some((workspace.dock.clone()?, workspace.document_node))
+    }
+
+    pub(super) fn document_panels(&self, root: &Path) -> Vec<PanelId> {
+        let Ok(key) = ProjectKey::from_path(root) else {
+            return Vec::new();
+        };
+        self.workspaces
+            .get(key.path())
+            .map(|workspace| workspace.panels.values().copied().collect())
+            .unwrap_or_default()
     }
 
     pub(super) fn panel_for(&self, root: &Path, relative: &Path) -> Option<PanelId> {

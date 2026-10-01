@@ -1,5 +1,67 @@
 use super::*;
 
+pub(super) fn document_insert_target(
+    dock: &DockArea,
+    remembered: Option<NodeId>,
+    documents: &[PanelId],
+    output_panel: Option<PanelId>,
+) -> InsertTarget {
+    let placements = [
+        DockPlacement::Center,
+        DockPlacement::Left,
+        DockPlacement::Right,
+        DockPlacement::Bottom,
+    ];
+    let mut document = None;
+    let mut output = None;
+    for placement in placements {
+        let Some(tree) = dock.layout(placement) else {
+            continue;
+        };
+        // This runs inside resource-panel callbacks. Read layout identities,
+        // never the panel entities that may already be mutably leased.
+        for &panel in documents {
+            if let Some(node) = tree.find_panel_node(panel)
+                && (document.is_none() || Some(node) == remembered)
+            {
+                document = Some(node);
+            }
+        }
+        output = output.or_else(|| output_panel.and_then(|panel| tree.find_panel_node(panel)));
+    }
+    document_target(
+        document,
+        output,
+        dock.layout(DockPlacement::Center)
+            .expect("dock always has a center")
+            .root()
+            .id(),
+    )
+}
+
+fn document_target(
+    document: Option<NodeId>,
+    output: Option<NodeId>,
+    center: NodeId,
+) -> InsertTarget {
+    // Closing the final document removes its container. The dock's default
+    // insertion picks the first group, which may be the narrow Explorer.
+    // Reuse Output's workspace group, or create a group when none survives.
+    if let Some(node) = document.or(output) {
+        InsertTarget::Tabs {
+            node,
+            ix: None,
+            activate: true,
+        }
+    } else {
+        InsertTarget::Split {
+            node: center,
+            placement: Placement::Right,
+            size: None,
+        }
+    }
+}
+
 pub(super) struct ProjectWorkspace {
     pub(super) session: WorkspaceSession,
     pub(super) dock: Entity<DockArea>,
@@ -1525,7 +1587,41 @@ pub(super) fn install_asset_preview(
 
 #[cfg(test)]
 mod tab_motion_tests {
-    use super::{tab_drag_width, tab_target_at_x};
+    use super::{document_target, tab_drag_width, tab_target_at_x};
+    use gpui_kit::base::Placement;
+    use gpui_kit::component::dock::{InsertTarget, PaneTree, PanelId, RootKind};
+
+    #[test]
+    fn reopening_after_last_document_closed_keeps_source_out_of_explorer() {
+        let mut tree = PaneTree::new(RootKind::Split);
+        let explorer = PanelId::from_u64(1);
+        let output = PanelId::from_u64(2);
+        let document = PanelId::from_u64(3);
+        tree.insert_panel(explorer, document_target(None, None, tree.root().id()));
+        let explorer_node = tree.find_panel_node(explorer).unwrap();
+        tree.split(explorer_node, output, Placement::Right, None);
+        let output_node = tree.find_panel_node(output).unwrap();
+        tree.split(output_node, document, Placement::Top, None);
+        let removed_node = tree.find_panel_node(document).unwrap();
+        tree.remove_panel(document);
+        assert!(tree.find_node(removed_node).is_none());
+
+        let target = document_target(None, Some(output_node), tree.root().id());
+        // Dock's generic add initially picks the first (Explorer) group.
+        tree.insert_panel(
+            document,
+            InsertTarget::Tabs {
+                node: explorer_node,
+                ix: None,
+                activate: true,
+            },
+        );
+        tree.move_panel(document, target);
+        assert_eq!(tree.find_panel_node(document), Some(output_node));
+        assert_eq!(tree.find_panel_node(explorer), Some(explorer_node));
+        assert_eq!(tree.find_panel_node(output), Some(output_node));
+        assert_eq!(tree.panels().count(), 3);
+    }
 
     #[test]
     fn drag_target_follows_stable_tab_centers() {

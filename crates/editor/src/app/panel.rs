@@ -338,12 +338,8 @@ pub(super) struct WorkbenchPanel {
     pub(super) selected_blocks: HashSet<usize>,
     pub(super) block_selection_anchor: Option<usize>,
     pub(super) draft_text: Option<DraftTextBlock>,
-    pub(super) block_drop_target: Option<BlockDropTarget>,
-    pub(super) block_dragging: Option<HashSet<usize>>,
-    pub(super) block_drag_size: Option<(f32, f32)>,
+    pub(super) block_drag: super::blocks::BlockDragState,
     pub(super) block_row_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
-    pub(super) block_settle_source: Option<String>,
-    pub(super) block_reorder_motion: Option<super::blocks::BlockReorderMotion>,
     pub(super) block_row_positions: RefCell<HashMap<usize, f32>>,
     pub(super) block_picker_open: bool,
     pub(super) block_picker_index: usize,
@@ -547,6 +543,9 @@ pub(super) struct InspectorEditKey {
 
 #[derive(Clone)]
 pub(super) struct BlockDrag {
+    pub(super) token: Rc<()>,
+    pub(super) document: DocumentHandle,
+    pub(super) revision: u64,
     pub(super) selected: HashSet<usize>,
 }
 
@@ -704,6 +703,7 @@ impl WorkbenchPanel {
             PanelContent::Scenes { root } => Some((root.clone(), SCENES_PANEL)),
             PanelContent::Problems { root } => Some((root.clone(), PROBLEMS_PANEL)),
             PanelContent::Performance { root, .. } => Some((root.clone(), PERFORMANCE_PANEL)),
+            PanelContent::Output { root, .. } => Some((root.clone(), OUTPUT_PANEL)),
             _ => None,
         };
         let panel = cx.new(|cx| {
@@ -740,12 +740,8 @@ impl WorkbenchPanel {
                 selected_blocks: HashSet::new(),
                 block_selection_anchor: None,
                 draft_text: None,
-                block_drop_target: None,
-                block_dragging: None,
-                block_drag_size: None,
+                block_drag: Default::default(),
                 block_row_bounds: Rc::new(RefCell::new(HashMap::new())),
-                block_settle_source: None,
-                block_reorder_motion: None,
                 block_row_positions: RefCell::new(HashMap::new()),
                 block_picker_open: false,
                 block_picker_index: 0,
@@ -1258,6 +1254,10 @@ impl BasePanel for WorkbenchPanel {
             PanelContent::Performance { root, .. } => cx
                 .global_mut::<EditorDocuments>()
                 .set_tool_panel(root, PERFORMANCE_PANEL, None),
+            PanelContent::Output { root, .. } => {
+                cx.global_mut::<EditorDocuments>()
+                    .set_tool_panel(root, OUTPUT_PANEL, None)
+            }
             _ => {}
         }
     }

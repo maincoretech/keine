@@ -179,12 +179,8 @@ pub(in crate::app) struct BlockProjectionView<'a> {
     pub(in crate::app) collapsed_scenes: &'a HashSet<String>,
     pub(in crate::app) selected_blocks: &'a HashSet<usize>,
     pub(in crate::app) draft_text: Option<&'a DraftTextBlock>,
-    pub(in crate::app) drop_target: Option<BlockDropTarget>,
-    pub(in crate::app) dragging: Option<&'a HashSet<usize>>,
-    pub(in crate::app) drag_size: Option<(f32, f32)>,
+    pub(in crate::app) drag: &'a super::BlockDragState,
     pub(in crate::app) row_bounds: &'a Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
-    pub(in crate::app) settle_source: Option<&'a str>,
-    pub(in crate::app) reorder_motion: Option<&'a BlockReorderMotion>,
     pub(in crate::app) row_positions: &'a RefCell<HashMap<usize, f32>>,
     pub(in crate::app) scroll_handle: &'a ScrollHandle,
     pub(in crate::app) scroll_anchor: &'a ScrollAnchor,
@@ -259,42 +255,6 @@ pub(in crate::app) fn block_row_height(
     }
 }
 
-fn dragged_block_height(
-    projection: &EiyashouProjection,
-    selected: &HashSet<usize>,
-    editors: &[BlockTextEditor],
-    draft_text: Option<&DraftTextBlock>,
-    heights: &HashMap<usize, f32>,
-    bounds: &HashMap<usize, Bounds<Pixels>>,
-    cx: &App,
-) -> f32 {
-    let ranges = projection
-        .scenes
-        .iter()
-        .flat_map(|scene| &scene.blocks)
-        .filter(|block| selected.contains(&block.source_range.start))
-        .map(|block| block.source_range.clone())
-        .collect::<Vec<_>>();
-    let heights = projection
-        .scenes
-        .iter()
-        .flat_map(|scene| &scene.blocks)
-        .filter(|block| {
-            ranges
-                .iter()
-                .any(|range| range.contains(&block.source_range.start))
-        })
-        .filter(|block| !block.is_textbox_ending())
-        .map(|block| {
-            bounds.get(&block.source_range.start).map_or_else(
-                || block_row_height(block, editors, draft_text, heights, cx),
-                |bounds| f32::from(bounds.size.height),
-            )
-        })
-        .collect::<Vec<_>>();
-    heights.iter().sum::<f32>() + 4. * heights.len().saturating_sub(1) as f32
-}
-
 pub(in crate::app) fn draft_text_row(draft: &DraftTextBlock, indent: f32, id: usize) -> AnyElement {
     div()
         .w_full()
@@ -335,40 +295,6 @@ pub(in crate::app) fn draft_text_row(draft: &DraftTextBlock, indent: f32, id: us
                             .text_color(rgb(INK)),
                     ),
                 ),
-        )
-        .into_any_element()
-}
-
-fn block_drop_slot(
-    height: Pixels,
-    dragged_height: f32,
-    dragged_width: Option<f32>,
-    indent: f32,
-    target: BlockDropTarget,
-    cx: &mut Context<WorkbenchPanel>,
-) -> AnyElement {
-    div()
-        .h(height)
-        .min_h_0()
-        .flex_none()
-        .overflow_hidden()
-        .relative()
-        .ml(px(indent))
-        .on_mouse_move(cx.listener(move |this, _, _, cx| {
-            this.hover_block_drop(target, cx);
-            cx.stop_propagation();
-        }))
-        .child(
-            div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .h(px(dragged_height))
-                .w_full()
-                .when_some(dragged_width, |this, width| this.w(px(width)))
-                .max_w_full()
-                .rounded(px(4.))
-                .bg(rgb(SURFACE_HOVER)),
         )
         .into_any_element()
 }
@@ -585,12 +511,8 @@ pub(in crate::app) fn render_block_projection(
         collapsed_scenes,
         selected_blocks,
         draft_text,
-        drop_target,
-        dragging,
-        drag_size,
+        drag,
         row_bounds,
-        settle_source,
-        reorder_motion,
         row_positions,
         scroll_handle,
         scroll_anchor,
@@ -601,8 +523,12 @@ pub(in crate::app) fn render_block_projection(
         visible,
         heights,
     } = view;
+    let session = drag.session();
+    let reorder_motion = drag.motion();
     let motion_progress = reorder_motion.map_or(1., BlockReorderMotion::progress);
-    if motion_progress < 1. {
+    if motion_progress < 1.
+        || session.is_some_and(|session| session.animating()) && !cx.reduce_motion()
+    {
         window.request_animation_frame();
     }
     let mut row_positions = row_positions.borrow_mut();
@@ -610,7 +536,8 @@ pub(in crate::app) fn render_block_projection(
     row_bounds.borrow_mut().clear();
     // Hold the drag-time projection until source and row states settle in the
     // same paint; otherwise release briefly flashes the previous row order.
-    let source = settle_source
+    let source = drag
+        .source()
         .map(str::to_owned)
         .unwrap_or_else(|| document.borrow().contents().to_owned());
     let projection = cx
@@ -659,31 +586,6 @@ pub(in crate::app) fn render_block_projection(
         .filter(|block| block.is_textbox_ending())
         .filter_map(|block| block.lifetime_owner)
         .collect::<HashSet<_>>();
-    let dragged_ranges = projection
-        .scenes
-        .iter()
-        .flat_map(|scene| &scene.blocks)
-        .filter(|block| {
-            dragging.is_some_and(|selected| selected.contains(&block.source_range.start))
-        })
-        .map(|block| block.source_range.clone())
-        .collect::<Vec<_>>();
-    let dragged_height = drag_size.map_or_else(
-        || {
-            dragging.map_or(32., |selected| {
-                dragged_block_height(
-                    &projection,
-                    selected,
-                    editors,
-                    draft_text,
-                    heights,
-                    &row_bounds.borrow(),
-                    cx,
-                )
-            })
-        },
-        |(_, height)| height,
-    );
     let block_order = Arc::new(
         projection
             .scenes
@@ -703,6 +605,29 @@ pub(in crate::app) fn render_block_projection(
         block_at_position(&projection, &source, line, column)
             .map(|(_, block)| block.source_range.start)
     });
+    let executing_start = cx
+        .global_mut::<EditorDocuments>()
+        .preview(root)
+        .ok()
+        .map(|preview| preview.snapshot())
+        .filter(|snapshot| matches!(snapshot.lifecycle, PreviewLifecycle::Running))
+        .and_then(|snapshot| snapshot.runtime_position)
+        .filter(|(path, _, _)| path == relative)
+        .and_then(|(_, line, column)| {
+            block_at_position(
+                &projection,
+                &source,
+                line.saturating_sub(1),
+                column.saturating_sub(1),
+            )
+            .map(|(_, block)| {
+                if block.is_textbox_ending() {
+                    block.lifetime_owner.unwrap_or(block.source_range.start)
+                } else {
+                    block.source_range.start
+                }
+            })
+        });
     let root = root.to_owned();
     let relative = relative.to_owned();
     let mut rows = Vec::new();
@@ -867,6 +792,25 @@ pub(in crate::app) fn render_block_projection(
                         || selected_start == Some(block.source_range.start),
                 ));
             }
+            let frozen_height = session
+                .and_then(|session| session.row(block.source_range.start))
+                .map_or(row_height, |row| row.height);
+            let row_height = frozen_height;
+            let position = session
+                .and_then(|session| session.position(block.source_range.start, cx.reduce_motion()))
+                .or_else(|| {
+                    reorder_motion.and_then(|motion| {
+                        motion
+                            .positions
+                            .get(&block.source_range.start)
+                            .map(|origin| row_top + (origin - row_top) * (1. - motion_progress))
+                    })
+                })
+                .unwrap_or(row_top);
+            row_positions.insert(block.source_range.start, row_top);
+            if let Some(mark) = overview.get_mut(overview_row) {
+                mark.top = position;
+            }
             if !visible.contains(&block.source_range.start) {
                 let height = row_height + 4.;
                 scene_body_height += height;
@@ -893,6 +837,7 @@ pub(in crate::app) fn render_block_projection(
             let visibility_root = root.clone();
             let visibility_path = relative.clone();
             let selected = selected_blocks.contains(&row_id) || selected_start == Some(row_id);
+            let executing = executing_start == Some(row_id);
             let icon = block_card_icon(&block.kind, &block.summary);
             let label = block_card_label(&block.kind, &block.summary);
             let type_color = block_type_color(&block.kind, &block.summary);
@@ -942,6 +887,12 @@ pub(in crate::app) fn render_block_projection(
                 &block.kind,
                 BlockKind::Narration | BlockKind::Dialogue { .. }
             );
+            let payload = BlockDrag {
+                selected: drag_selection.clone(),
+                token: Rc::new(()),
+                document: document.clone(),
+                revision: document.borrow().revision(),
+            };
             let grip = if movable {
                 div()
                     .id(("block-grip", row_id))
@@ -951,65 +902,40 @@ pub(in crate::app) fn render_block_projection(
                     .items_center()
                     .justify_center()
                     .cursor_move()
-                    .on_drag(
-                        BlockDrag {
-                            selected: drag_selection.clone(),
-                        },
-                        move |_, _, _, cx| {
-                            let (width, grip_height) = drag_panel
-                                .update(cx, |panel, cx| {
-                                    panel.block_dragging = Some(drag_selection.clone());
-                                    panel.block_drop_target = None;
-                                    cx.notify();
-                                    let bounds = panel.block_row_bounds.borrow();
-                                    let grip_height = bounds
-                                        .get(&row_id)
-                                        .map_or(row_height, |bounds| f32::from(bounds.size.height));
-                                    let width = bounds
-                                        .get(&row_id)
-                                        .map(|bounds| f32::from(bounds.size.width))
-                                        .unwrap_or_else(|| {
-                                            if compact_key {
-                                                360.
-                                            } else {
-                                                (f32::from(panel.view_scroll.bounds().size.width)
-                                                    - line_number_gutter
-                                                    - 16.
-                                                    - block_indent)
-                                                    .max(72.)
-                                            }
-                                        });
-                                    let height = match &panel.content {
-                                        PanelContent::Document {
-                                            document: Some(document),
-                                            ..
-                                        } => dragged_block_height(
-                                            &document.borrow().projection(),
-                                            &drag_selection,
-                                            &panel.block_text_editors,
-                                            panel.draft_text.as_ref(),
-                                            &panel.block_heights,
-                                            &bounds,
-                                            cx,
-                                        ),
-                                        _ => row_height,
-                                    };
-                                    panel.block_drag_size = Some((width, height));
-                                    (width, grip_height)
-                                })
-                                .unwrap_or((300., row_height));
-                            cx.new(|_| BlockDragPreview {
-                                label: drag_label.clone(),
-                                summary: drag_summary.clone(),
-                                icon,
-                                count: drag_count,
-                                width,
-                                height: grip_height,
-                                color: type_color,
-                                grip_top: (grip_height - 18.) * 0.5,
+                    .on_drag(payload, move |drag, _, window, cx| {
+                        let (width, grip_height) = drag_panel
+                            .update(cx, |panel, cx| {
+                                let fallback_width = if compact_key {
+                                    360.
+                                } else {
+                                    (f32::from(panel.view_scroll.bounds().size.width)
+                                        - line_number_gutter
+                                        - 16.
+                                        - block_indent)
+                                        .max(72.)
+                                };
+                                panel.begin_block_drag(
+                                    drag,
+                                    row_id,
+                                    fallback_width,
+                                    row_height,
+                                    block_indent,
+                                    window,
+                                    cx,
+                                )
                             })
-                        },
-                    )
+                            .unwrap_or((300., row_height));
+                        cx.new(|_| BlockDragPreview {
+                            label: drag_label.clone(),
+                            summary: drag_summary.clone(),
+                            icon,
+                            count: drag_count,
+                            width,
+                            height: grip_height,
+                            color: type_color,
+                            grip_top: (grip_height - 18.) * 0.5,
+                        })
+                    })
                     .child(
                         Icon::new(AssetIconName::GripVertical)
                             .xsmall()
@@ -1019,49 +945,7 @@ pub(in crate::app) fn render_block_projection(
             } else {
                 div().size(px(18.)).flex_none().into_any_element()
             };
-            let before_target = BlockDropTarget {
-                row: row_id,
-                after: false,
-            };
-            let after_target = BlockDropTarget {
-                row: row_id,
-                after: true,
-            };
-            let can_show_gap = (cx.has_active_drag() || settle_source.is_some())
-                && !dragged_ranges.iter().any(|range| range.contains(&row_id));
-            let gap_policy = Transition::new(if cx.has_active_drag() || settle_source.is_some() {
-                TAB_MOTION_DURATION
-            } else {
-                Duration::ZERO
-            });
-            // Both slots retain their collapsing height when the pointer changes sides/rows.
-            // Layout, overview and reorder origins must sample exactly the same heights.
-            let before_gap_height = transition(
-                (format!("block-drop-gap-{row_id}"), "before"),
-                if can_show_gap && drop_target == Some(before_target) {
-                    px(dragged_height + 4.)
-                } else {
-                    px(0.)
-                },
-                gap_policy.clone(),
-                window,
-                cx,
-            );
-            let after_gap_height = transition(
-                (format!("block-drop-gap-{row_id}"), "after"),
-                if can_show_gap && drop_target == Some(after_target) {
-                    px(dragged_height + 4.)
-                } else {
-                    px(0.)
-                },
-                gap_policy,
-                window,
-                cx,
-            );
-            scene_body_height += row_height + 4. + f32::from(before_gap_height + after_gap_height);
-            if let Some(mark) = overview.get_mut(overview_row) {
-                mark.top += f32::from(before_gap_height) * collapse_progress;
-            }
+            scene_body_height += row_height + 4.;
             let inline_control = inline
                 .get(&row_id)
                 .and_then(|control| render_inline_block(&root, control, cx));
@@ -1075,11 +959,14 @@ pub(in crate::app) fn render_block_projection(
                 .items_center()
                 .gap_2()
                 .min_h(px(row_height))
+                .when(session.is_some(), |this| {
+                    this.h(px(row_height)).overflow_hidden()
+                })
                 .px_2()
                 .rounded(px(4.))
                 .opacity(
-                    if dragged_ranges.iter().any(|range| range.contains(&row_id)) {
-                        0.35
+                    if session.is_some_and(|session| session.moved.contains(&row_id)) {
+                        0.
                     } else if block.disabled {
                         0.45
                     } else {
@@ -1141,13 +1028,33 @@ pub(in crate::app) fn render_block_projection(
                     div()
                         .absolute()
                         .left(px(-line_number_gutter))
-                        .top(px(8.))
+                        .top_0()
+                        .h_full()
                         .w(px(line_number_width))
-                        .whitespace_nowrap()
-                        .text_right()
-                        .text_size(px(10.))
-                        .text_color(rgb(if selected { PRIMARY } else { MUTED }))
-                        .child((block_index + 1).to_string()),
+                        .flex()
+                        .items_center()
+                        .child(
+                            div()
+                                .w_full()
+                                .h_full()
+                                .flex()
+                                .items_center()
+                                .justify_end()
+                                .pr(px(3.))
+                                .whitespace_nowrap()
+                                .text_size(px(10.))
+                                .when(executing, |this| {
+                                    this.font_weight(gpui_kit::FontWeight::BOLD)
+                                })
+                                .text_color(rgb(if executing {
+                                    CHROME
+                                } else if selected {
+                                    PRIMARY
+                                } else {
+                                    MUTED
+                                }))
+                                .child((block_index + 1).to_string()),
+                        ),
                 );
             row = if let Some(state) = text_state.filter(|_| !block.read_only) {
                 row.child(
@@ -1362,28 +1269,6 @@ pub(in crate::app) fn render_block_projection(
                         .child(Icon::new(IconName::FileText).xsmall()),
                 );
             }
-            if dragging.is_some() && cx.has_active_drag() {
-                row =
-                    row.child(
-                        div()
-                            .absolute()
-                            .inset_0()
-                            .flex()
-                            .flex_col()
-                            .child(div().flex_1().on_mouse_move(cx.listener(
-                                move |this, _, _, cx| {
-                                    this.hover_block_drop(before_target, cx);
-                                    cx.stop_propagation();
-                                },
-                            )))
-                            .child(div().flex_1().on_mouse_move(cx.listener(
-                                move |this, _, _, cx| {
-                                    this.hover_block_drop(after_target, cx);
-                                    cx.stop_propagation();
-                                },
-                            ))),
-                    );
-            }
             let measured_bounds = row_bounds.clone();
             row = row.child(
                 canvas(
@@ -1395,15 +1280,7 @@ pub(in crate::app) fn render_block_projection(
                 .absolute()
                 .size_full(),
             );
-            let row_top = row_top + f32::from(before_gap_height) * collapse_progress;
-            let displacement = if settle_source.is_none() {
-                reorder_motion
-                    .and_then(|motion| motion.positions.get(&row_id))
-                    .map_or(0., |origin| (origin - row_top) * (1. - motion_progress))
-            } else {
-                0.
-            };
-            row_positions.insert(row_id, row_top + displacement);
+            let displacement = position - row_top;
             let row_wrapper = div()
                 .relative()
                 .top(px(displacement))
@@ -1412,28 +1289,32 @@ pub(in crate::app) fn render_block_projection(
                 .flex()
                 .flex_col()
                 .flex_none()
-                .on_drop(cx.listener(move |this, drag: &BlockDrag, window, cx| {
-                    cx.stop_propagation();
-                    let after = this
-                        .block_drop_target
-                        .is_some_and(|target| target.row == row_id && target.after);
-                    this.drop_blocks(drag, row_id, after, window, cx);
-                }))
                 .on_drop(cx.listener(move |this, drag: &AssetDrag, window, cx| {
                     cx.stop_propagation();
-                    this.block_drop_target = None;
-                    this.block_dragging = None;
                     this.drop_assets(drag, row_id, false, window, cx);
                 }))
-                .child(block_drop_slot(
-                    before_gap_height,
-                    dragged_height,
-                    drag_size.map(|size| size.0),
-                    block_indent,
-                    before_target,
-                    cx,
-                ))
-                .child(div().pl(px(block_indent)).child(row))
+                .child(
+                    div().pl(px(block_indent)).child(
+                        div()
+                            .relative()
+                            .w_full()
+                            .when(compact_key, |this| this.w(px(360.)).max_w_full())
+                            .min_w_0()
+                            .when(executing, |this| {
+                                this.child(
+                                    div()
+                                        .absolute()
+                                        .left(px(-line_number_gutter))
+                                        .w(px(line_number_gutter + 4.))
+                                        .top_0()
+                                        .h_full()
+                                        .rounded_l(px(4.))
+                                        .bg(rgb(PRIMARY)),
+                                )
+                            })
+                            .child(row),
+                    ),
+                )
                 .child(
                     div()
                         .absolute()
@@ -1445,15 +1326,7 @@ pub(in crate::app) fn render_block_projection(
                             cx.stop_propagation();
                             this.drop_assets(drag, row_id, true, window, cx);
                         })),
-                )
-                .child(block_drop_slot(
-                    after_gap_height,
-                    dragged_height,
-                    drag_size.map(|size| size.0),
-                    block_indent,
-                    after_target,
-                    cx,
-                ));
+                );
             if let Some(draft) = draft_text.filter(|draft| {
                 matches!(draft.target, DraftInsertionTarget::Before(start) if start == row_id)
                     && draft.text_range.is_none()
@@ -1605,7 +1478,7 @@ pub(in crate::app) fn render_block_projection(
     if scroll_pending && selected_start.is_some() {
         scroll_anchor.scroll_to(window, cx);
     }
-    let content = div()
+    let mut content = div()
         .id("eiyashou-block-content")
         .relative()
         .flex()
@@ -1624,6 +1497,36 @@ pub(in crate::app) fn render_block_projection(
             cx.global_mut::<EditorDocuments>()
                 .clear_block_selection(&root);
             cx.notify();
+        }));
+    if let Some(session) = session.filter(|session| session.target.is_some())
+        && let Some(first) = session
+            .rows
+            .iter()
+            .find(|row| session.moved.contains(&row.id))
+    {
+        content = content.child(
+            div()
+                .absolute()
+                .top(px(session
+                    .position(first.id, cx.reduce_motion())
+                    .unwrap_or(first.top)))
+                .left(px(line_number_gutter + session.indent))
+                .w(px(session.width))
+                .h(px(session.height))
+                .rounded(px(4.))
+                .bg(rgb(SURFACE_HOVER))
+                .opacity(0.5),
+        );
+    }
+    content = content
+        .on_drag_move(
+            cx.listener(|this, event: &DragMoveEvent<BlockDrag>, _, cx| {
+                this.track_block_drag(event, cx);
+            }),
+        )
+        .on_drop(cx.listener(|this, drag: &BlockDrag, window, cx| {
+            this.finish_block_drag(drag, window, cx);
+            cx.stop_propagation();
         }));
     div()
         .size_full()

@@ -878,6 +878,7 @@ fn split_top_level_with_voice<'a>(
                 let after_next = tokens.get(position + 2).copied();
                 let next_is_voice = next.is_some_and(|next| {
                     kind(next) == NativeTokenKind::Identifier
+                        && !matches!(text(next), "return" | "break")
                         && after_next.is_none_or(|after| text(after) == ",")
                 });
                 let next_is_option = next.is_some_and(|next| {
@@ -1224,6 +1225,20 @@ mod tests {
             restored.split_whitespace().collect::<Vec<_>>(),
             source.split_whitespace().collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn dialogue_tail_preserves_standalone_control_blocks() {
+        let source = "scene start { \"Ready\", return, loop { hero: \"Hi\", break } }";
+        let projection = EiyashouProjection::parse(source);
+        let blocks = &projection.scenes[0].blocks;
+        assert_eq!(blocks.len(), 5);
+        assert_eq!(blocks[1].kind, BlockKind::Control);
+        assert_eq!(&source[blocks[1].source_range.clone()], "return");
+        assert_eq!(blocks[4].kind, BlockKind::Control);
+        assert_eq!(&source[blocks[4].source_range.clone()], "break");
+        assert_eq!(blocks[4].depth, 1);
+        assert!(blocks.iter().all(|block| !block.read_only));
     }
 
     #[test]

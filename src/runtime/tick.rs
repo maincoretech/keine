@@ -1157,7 +1157,12 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
             }
         }
     }
-    if (state.curtain.current - state.curtain.target).abs() > f32::EPSILON {
+    // Opacity can round to the target before the clock reaches its deadline.
+    // Keep ticking the clock so a visually settled fade cannot retain its lock.
+    if state.curtain.elapsed < state.curtain.duration
+        || state.curtain.blocking
+        || (state.curtain.current - state.curtain.target).abs() > f32::EPSILON
+    {
         changed = true;
         state.curtain.elapsed = (state.curtain.elapsed + delta_seconds).min(state.curtain.duration);
         let progress = if state.curtain.duration <= f32::EPSILON {
@@ -1174,7 +1179,10 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
         }
     }
     for mask in state.stage_masks.values_mut() {
-        if (mask.current - mask.target).abs() <= f32::EPSILON {
+        if mask.elapsed >= mask.duration
+            && !mask.blocking
+            && (mask.current - mask.target).abs() <= f32::EPSILON
+        {
             continue;
         }
         changed = true;
@@ -1193,9 +1201,12 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
         }
     }
     let mask_count = state.stage_masks.len();
-    state
-        .stage_masks
-        .retain(|_, mask| mask.target > f32::EPSILON || mask.current > f32::EPSILON);
+    state.stage_masks.retain(|_, mask| {
+        mask.elapsed < mask.duration
+            || mask.blocking
+            || mask.target > f32::EPSILON
+            || mask.current > f32::EPSILON
+    });
     if state.stage_masks.len() != mask_count {
         changed = true;
         stage_changed = true;
@@ -3068,6 +3079,81 @@ mod tests {
             keine_core::EffectEvent::StopLoop { id, fade_out }
                 if id == "audio-fixture:audio:rain" && (*fade_out - 0.2).abs() < f32::EPSILON
         )));
+    }
+
+    #[test]
+    fn curtain_resumes_the_script_after_a_2200ms_fade_at_60fps() {
+        let mut state = State::new();
+        state.install_program(Program::from_scenes([(
+            "main".into(),
+            vec![
+                Action::Curtain {
+                    visible: false,
+                    color: [0.0, 0.0, 0.0, 1.0],
+                    duration: 2.2,
+                },
+                Action::Say {
+                    speaker: String::new(),
+                    text: "after curtain".into(),
+                    options: Default::default(),
+                },
+            ],
+        )]));
+        state.current_scene = "main".into();
+        state.curtain.current = 1.0;
+        assert_eq!(
+            step::step(&mut state),
+            keine_core::StepResult::AwaitPresentation
+        );
+
+        let mut checkpoint = Default::default();
+        for _ in 0..180 {
+            if !state.presentation_blocked() {
+                break;
+            }
+            update_transitions(&mut state, 1.0 / 60.0, false);
+            if !state.presentation_blocked() {
+                step_once(&mut state, &mut checkpoint);
+            }
+        }
+
+        assert!(!state.presentation_blocked());
+        assert_eq!(state.dialogue.as_ref().unwrap().text, "after curtain");
+    }
+
+    #[test]
+    fn curtain_and_masks_finish_even_when_opacity_has_already_settled() {
+        for target in [0.0, 1.0] {
+            let mut state = State::new();
+            state.curtain = keine_core::state::CurtainState {
+                current: target,
+                from: 1.0 - target,
+                target,
+                elapsed: 2.1999,
+                duration: 2.2,
+                blocking: true,
+                ..default()
+            };
+            state.stage_masks.insert(
+                "mask".into(),
+                keine_core::state::StageMaskState {
+                    mask: Default::default(),
+                    current: target,
+                    from: 1.0 - target,
+                    target,
+                    elapsed: 2.1999,
+                    duration: 2.2,
+                    blocking: true,
+                    order: 0,
+                },
+            );
+
+            update_transitions(&mut state, 1.0 / 60.0, false);
+
+            assert!(!state.presentation_blocked());
+            assert_eq!(state.curtain.current, target);
+            assert_eq!(state.curtain.elapsed, 2.2);
+        }
     }
 
     #[test]

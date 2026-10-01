@@ -37,7 +37,7 @@ mod tests {
 
     use super::index::confined_relative;
     use super::*;
-    use crate::projection::{BlockKind, EiyashouProjection};
+    use crate::projection::EiyashouProjection;
     use crate::workspace::WorkspaceFile;
     use keine_loader::{DiagnosticLevel, parse_native_document};
 
@@ -371,13 +371,26 @@ mod tests {
     }
 
     #[test]
-    fn v11_palette_templates_parse_and_project_as_blocks() {
+    fn all_palette_templates_parse_and_project_as_editable_blocks() {
         let source = "scene start {\n  \"Ready\"\n}\n";
         let mut index = AuthoringIndex::default();
+        index.characters.push(CharacterEntry {
+            id: "rin".into(),
+            name: "Rin".into(),
+            color: None,
+        });
+        index.scenes.push(SceneEntry {
+            path: "scripts/main.shou".into(),
+            name: "start".into(),
+            line: 1,
+            name_range: 6..11,
+            source_range: 0..source.len(),
+        });
         for (kind, id) in [
             (AssetKind::Background, "room"),
             (AssetKind::Figure, "hero"),
             (AssetKind::Voice, "voice"),
+            (AssetKind::Bgm, "theme"),
             (AssetKind::Effect, "sound"),
             (AssetKind::Video, "movie"),
         ] {
@@ -391,9 +404,6 @@ mod tests {
             });
         }
         for kind in InsertKind::ALL {
-            if !matches!(kind, InsertKind::Native(_)) {
-                continue;
-            }
             let edited = insert_statement(source, 1, kind, &index).unwrap();
             let document = parse_native_document(&edited);
             assert!(
@@ -405,12 +415,24 @@ mod tests {
                 document.diagnostics
             );
             let projection = EiyashouProjection::parse(&edited);
-            assert!(
-                projection.scenes[0]
-                    .blocks
-                    .iter()
-                    .any(|block| block.kind == BlockKind::Command && !block.read_only)
-            );
+            let inserted = projection.scenes[0].blocks.last().unwrap();
+            assert!(!inserted.read_only, "{kind:?}: {inserted:?}");
+            assert!(projection.scenes[0].blocks.len() > 1, "{kind:?}");
+            if kind == InsertKind::Native("sprite.update") {
+                let parsed = keine_loader::parse_native_scenes(&edited);
+                assert!(
+                    parsed[0].report.actions.iter().any(|action| matches!(
+                        action,
+                        keine_core::Action::PatchSprite {
+                            position: None,
+                            layout: None,
+                            scale: None,
+                            ..
+                        }
+                    )),
+                    "palette image updates must preserve the current pose"
+                );
+            }
         }
     }
 

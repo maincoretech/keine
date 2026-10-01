@@ -56,6 +56,7 @@ scene start {
 ├── scene id { ... }：项目内唯一；goto 替换、call 调用、return 返回
 ├── id: "对白" / "旁白"；id: { "第一句", "第二句" }
 │   ├── 每条字符串单独等待推进；可在后面加一个 voices 资源 ID
+│   │   └── return / break 保留为控制语句，不作为语音 ID
 │   ├── 尾部可选 volume: 0–1、concat: bool、auto: bool、inherit_speaker: bool
 │   │   └── 默认 1 / false / false / false；concat 拼接前句，inherit_speaker 沿用前句角色
 │   ├── @source_id 前置注解可赋稳定源身份；没有时由语义内容派生
@@ -248,7 +249,7 @@ input.request(...)
 ├── move：省略 duration 为瞬移；easing 为 linear / ease_in / ease_out / ease_in_out
 ├── bgm(asset, volume: 1, fade: 0ms, loop: true)：新曲 crossfade；bgm(none, fade: ...) 停止
 ├── se(asset, volume: 1)：一次性音效；se(none) 停止
-└── video(asset, skippable: true)：非循环、fullscreen、阻塞到完成/跳过
+└── video(asset, skippable: true)：简写，非循环、fullscreen、阻塞到完成/跳过；video.play(id, asset, ...) 用于带 ID 的视频层
 过渡与补间
 ├── background / sprite / hide：blocking 默认 true；false 允许过渡时继续
 ├── camera.move 可同时设置变换与特效，仍为一个原子 Action / Block

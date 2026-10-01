@@ -5,27 +5,9 @@ const EXPLORER_ROW_GAP: f32 = 1.;
 
 impl Render for WorkbenchPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Start at the first paint of the new order, after row states are rebuilt.
-        if self.block_settle_source.is_none()
-            && let Some(motion) = self.block_reorder_motion.as_mut()
-            && motion.started_at.is_none()
-        {
-            motion.started_at = Some(std::time::Instant::now());
-        }
-        if let Some(motion) = &self.block_reorder_motion
-            && motion.started_at.is_some()
-            && (cx.reduce_motion()
-                || motion.is_finished()
-                || !matches!(&self.content, PanelContent::Document { document: Some(document), .. }
-                    if Some(document.borrow().revision()) == motion.revision))
-        {
-            self.block_reorder_motion = None;
-        }
-        if !cx.has_active_drag() && self.block_settle_source.is_none() {
+        self.refresh_block_drag(window, cx);
+        if !cx.has_active_drag() {
             self.file_drop_target = None;
-            self.block_drop_target = None;
-            self.block_dragging = None;
-            self.block_drag_size = None;
         }
         if self.file_commit_requested {
             self.file_commit_requested = false;
@@ -772,12 +754,8 @@ impl Render for WorkbenchPanel {
                             collapsed_scenes: &self.collapsed_scenes,
                             selected_blocks: &self.selected_blocks,
                             draft_text: self.draft_text.as_ref(),
-                            drop_target: self.block_drop_target,
-                            dragging: self.block_dragging.as_ref(),
-                            drag_size: self.block_drag_size,
+                            drag: &self.block_drag,
                             row_bounds: &self.block_row_bounds,
-                            settle_source: self.block_settle_source.as_deref(),
-                            reorder_motion: self.block_reorder_motion.as_ref(),
                             row_positions: &self.block_row_positions,
                             scroll_handle: &self.view_scroll,
                             scroll_anchor: &self.block_scroll_anchor,
@@ -1540,6 +1518,16 @@ impl Render for WorkbenchPanel {
         let resource_popup = self.render_resource_picker(window, cx);
         div()
             .track_focus(&self.focus)
+            .capture_key_down(
+                cx.listener(|this, event: &gpui_kit::KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "escape"
+                        && matches!(this.block_drag, blocks::BlockDragState::Dragging(_))
+                    {
+                        this.cancel_block_drag(window, cx);
+                        cx.stop_propagation();
+                    }
+                }),
+            )
             .capture_action(cx.listener(Self::accept_source_suggestion))
             .capture_action(cx.listener(Self::backspace_empty_text))
             .capture_action(cx.listener(Self::delete_empty_text))

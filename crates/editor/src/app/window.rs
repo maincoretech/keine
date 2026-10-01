@@ -341,6 +341,7 @@ impl WorkbenchWindow {
                         if let Some((path, line, column)) = snapshot.runtime_position {
                             follow_preview_position(&root, &path, line, column, window, cx);
                         }
+                        cx.refresh_windows();
                     }
                     cx.global_mut::<EditorDocuments>()
                         .set_diagnostics(&root, snapshot.diagnostics);
@@ -1326,10 +1327,17 @@ impl Render for WorkbenchWindow {
                             |this| {
                                 this.child(
                                     div()
-                                        .px_2()
-                                        .text_xs()
-                                        .text_color(rgb(0xdb7780))
-                                        .child("Preview failed · see Output"),
+                                        .id("preview-failure-hint")
+                                        .size(px(28.))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .tooltip(icon_hint("Preview failed · see Output"))
+                                        .child(
+                                            Icon::new(IconName::TriangleAlert)
+                                                .with_size(px(16.))
+                                                .text_color(rgb(0xdb7780)),
+                                        ),
                                 )
                             },
                         )

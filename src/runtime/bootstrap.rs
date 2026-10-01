@@ -1234,11 +1234,9 @@ fn build_opened_app(
         .set(super::platform::log_plugin(
             options.benchmark.is_some() || options.startup_capture.is_some(),
         ));
-    app.add_plugins(plugins);
-    #[cfg(feature = "audio-opus")]
-    app.add_plugins(crate::runtime::audio::OpusAudioPlugin::new(asset_mounts));
-    #[cfg(feature = "audio-seekable")]
-    app.add_plugins(crate::runtime::audio::SeekableAudioPlugin);
+    app.add_plugins(plugins)
+        .insert_resource(ClearColor(Color::BLACK));
+    crate::runtime::audio::configure_audio(&mut app, asset_mounts);
     app.add_plugins((webp, GamePlugin, CameraEffectsPlugin, BlurPlugin))
         .insert_resource(ProjectRoot(project_root))
         .insert_resource(PersistenceRoot(persistence_root))

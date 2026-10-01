@@ -427,20 +427,13 @@ fn open_workspace_document(root: &Path, relative: &Path, window: &mut Window, cx
         }
     };
     let panel_id = PanelId::from(panel.entity_id());
+    let documents = cx.global::<EditorDocuments>();
+    let document_panels = documents.document_panels(root);
+    let output = documents.tool_panel(root, OUTPUT_PANEL);
     let _ = dock.update(cx, |dock, cx| {
+        let target = dock::document_insert_target(dock, document_node, &document_panels, output);
         dock.add_panel_view(panel_handle(panel), DockPlacement::Center, None, window, cx);
-        if let Some(node) = document_node {
-            dock.move_panel(
-                panel_id,
-                InsertTarget::Tabs {
-                    node,
-                    ix: None,
-                    activate: true,
-                },
-                window,
-                cx,
-            );
-        }
+        dock.move_panel(panel_id, target, window, cx);
         dock.select_panel(panel_id, window, cx);
     });
 }

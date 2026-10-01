@@ -2488,7 +2488,11 @@ impl<'a> Parser<'a> {
         let saved = self.cursor;
         self.advance();
         let voice = self.take_identifier();
-        if voice.is_some() && matches!(self.peek_text(), Some("," | "}") | None) {
+        // Standalone control statements take precedence over optional voice IDs.
+        if voice.is_some()
+            && !matches!(voice.as_deref(), Some("return" | "break"))
+            && matches!(self.peek_text(), Some("," | "}") | None)
+        {
             voice
         } else {
             self.cursor = saved;
@@ -3838,6 +3842,31 @@ mod tests {
                     .any(|diagnostic| diagnostic.level == DiagnosticLevel::Error)
             );
         }
+    }
+
+    #[test]
+    fn dialogue_voice_does_not_consume_return_or_break() {
+        let scenes = parse_native_scenes(
+            "scene start { hero: \"Hi\", return, loop { \"Loop\", break }, loop { \"Spoken\", voice, auto: true, break } }",
+        );
+        assert!(
+            errors(&scenes[0]).is_empty(),
+            "{:?}",
+            scenes[0].report.diagnostics
+        );
+        let actions = &scenes[0].report.actions;
+        assert!(
+            matches!(&actions[0], Action::EiyashouSay(dialogue) if dialogue.options.vocal.is_none())
+        );
+        assert!(matches!(&actions[1], Action::ReturnScene));
+        assert_eq!(
+            actions
+                .iter()
+                .filter(|action| matches!(action, Action::Jump(_)))
+                .count(),
+            4
+        );
+        assert!(actions.iter().any(|action| matches!(action, Action::EiyashouSay(dialogue) if dialogue.options.vocal.as_deref() == Some("voice") && dialogue.options.auto_advance)));
     }
 
     #[test]

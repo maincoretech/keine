@@ -53,6 +53,19 @@ use symphonia::core::units::{Time as SymphoniaTime, TimeBase, Timestamp};
 #[cfg(feature = "audio-opus")]
 use symphonia_adapter_libopus::OpusDecoder;
 
+pub(crate) fn configure_audio(app: &mut App, _mounts: Vec<keine_loader::ContentMount>) {
+    // Bevy only registers AudioSource when one of its decoder features is enabled.
+    // Unsupported-format placeholders still need a registered handle type.
+    #[cfg(not(feature = "audio-seekable"))]
+    if !app.world().contains_resource::<Assets<AudioSource>>() {
+        app.init_asset::<AudioSource>();
+    }
+    #[cfg(feature = "audio-opus")]
+    app.add_plugins(OpusAudioPlugin::new(_mounts));
+    #[cfg(feature = "audio-seekable")]
+    app.add_plugins(SeekableAudioPlugin);
+}
+
 /// Compatibility formats are retained in compressed form for seek/loop.
 /// Opus assets from the project mount stay streaming and do not consume this
 /// allowance; this bounds only paths that must become one in-memory asset.
@@ -641,6 +654,69 @@ pub(crate) fn load_untyped(asset_server: &AssetServer, path: String) -> UntypedH
 fn is_opus(path: &str) -> bool {
     path.rsplit_once('.')
         .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("opus"))
+}
+
+#[cfg(all(test, not(feature = "audio-seekable")))]
+mod unavailable_tests {
+    use super::*;
+
+    #[test]
+    fn configuration_preserves_an_existing_audio_registry() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()));
+        app.init_asset::<AudioSource>();
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<AudioSource>>()
+            .add(AudioSource { bytes: [].into() });
+
+        configure_audio(&mut app, Vec::new());
+
+        assert!(
+            app.world()
+                .resource::<Assets<AudioSource>>()
+                .contains(&handle)
+        );
+    }
+
+    #[test]
+    fn unsupported_audio_can_be_loaded_and_queued_without_a_decoder() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()));
+        configure_audio(&mut app, Vec::new());
+        let server = app.world().resource::<AssetServer>().clone();
+        let handle = load_untyped(&server, "missing.wav".into());
+        assert_eq!(handle.type_id(), std::any::TypeId::of::<AudioSource>());
+        let (player, gallery) = {
+            let mut commands = app.world_mut().commands();
+            let mut player = commands.spawn_empty();
+            insert_player(
+                &mut player,
+                &server,
+                "missing.wav".into(),
+                PlaybackSettings::LOOP,
+            );
+            let player = player.id();
+            let mut gallery = commands.spawn_empty();
+            insert_gallery_player(
+                &mut gallery,
+                &server,
+                "missing.wav".into(),
+                PlaybackSettings::ONCE,
+            );
+            (player, gallery.id())
+        };
+        app.world_mut().flush();
+        assert!(
+            app.world()
+                .get::<AudioPlayer<AudioSource>>(player)
+                .is_some()
+        );
+        assert!(matches!(
+            app.world().get::<GalleryAudio>(gallery),
+            Some(GalleryAudio::Unavailable)
+        ));
+    }
 }
 
 #[cfg(all(test, feature = "audio-seekable", feature = "audio-wav"))]

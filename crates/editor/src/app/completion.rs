@@ -18,58 +18,68 @@ pub(super) fn schedule_syntax_check(
     window: &mut Window,
     cx: &mut Context<WorkbenchPanel>,
 ) -> gpui_kit::Task<()> {
-    // One owned task per document panel: dropping it cancels debounce/work and
-    // prevents an older parse from painting diagnostics onto newer source.
-    if let Some(marks) = &marks {
-        marks.clear(cx);
-    }
-    editor.update(cx, |editor, cx| {
+    use gpui_kit::EntityInputHandler;
+    // Snapshot confirmed text before spawning work. Composition updates are
+    // local to the input control; they must not become diagnostic input.
+    let source = editor.update(cx, |editor, cx| {
+        if editor.marked_text_range(window, cx).is_some() {
+            return None;
+        }
         editor.clear_diagnostic_popover(cx);
         if let Some(diagnostics) = editor.diagnostics_mut() {
             diagnostics.clear();
         }
         cx.notify();
+        Some(editor.value().to_string())
     });
+    let Some(source) = source else {
+        return Task::ready(());
+    };
+    if let Some(marks) = &marks {
+        marks.clear(cx);
+    }
+    // One owned task per panel: newer confirmed edits cancel obsolete work.
     cx.spawn_in(window, async move |_, cx| {
-        cx.background_executor()
-            .timer(Duration::from_millis(180))
-            .await;
-        let source = editor.read_with(cx, |editor, _| editor.value().to_string());
         let checked = source.clone();
         let diagnostics = cx
             .background_executor()
             .spawn(async move { syntax_diagnostics(&checked) })
             .await;
-        let decorations = editor.update(cx, |editor, cx| {
-            if editor.value().as_ref() != source {
-                return None;
-            }
-            let text = editor.text().clone();
-            let decorations = diagnostics
-                .iter()
-                .map(|diagnostic| {
-                    let color: Hsla = rgb(match diagnostic.severity {
-                        gpui_kit::base::input::DiagnosticSeverity::Warning => 0xd2aa62,
-                        _ => 0xdb7780,
+        let decorations = editor
+            .update_in(cx, |editor, window, cx| {
+                if editor.marked_text_range(window, cx).is_some()
+                    || editor.value().as_ref() != source
+                {
+                    return None;
+                }
+                let text = editor.text().clone();
+                let decorations = diagnostics
+                    .iter()
+                    .map(|diagnostic| {
+                        let color: Hsla = rgb(match diagnostic.severity {
+                            gpui_kit::base::input::DiagnosticSeverity::Warning => 0xd2aa62,
+                            _ => 0xdb7780,
+                        })
+                        .into();
+                        gpui_kit::base::input::TextDecoration::new(
+                            text.position_to_offset(&diagnostic.range.start)
+                                ..text.position_to_offset(&diagnostic.range.end),
+                            gpui_kit::HighlightStyle {
+                                background_color: Some(color.opacity(0.18)),
+                                ..Default::default()
+                            },
+                        )
                     })
-                    .into();
-                    gpui_kit::base::input::TextDecoration::new(
-                        text.position_to_offset(&diagnostic.range.start)
-                            ..text.position_to_offset(&diagnostic.range.end),
-                        gpui_kit::HighlightStyle {
-                            background_color: Some(color.opacity(0.18)),
-                            ..Default::default()
-                        },
-                    )
-                })
-                .collect();
-            if let Some(set) = editor.diagnostics_mut() {
-                set.reset(&text);
-                set.extend(diagnostics);
-            }
-            cx.notify();
-            Some(decorations)
-        });
+                    .collect();
+                if let Some(set) = editor.diagnostics_mut() {
+                    set.reset(&text);
+                    set.extend(diagnostics);
+                }
+                cx.notify();
+                Some(decorations)
+            })
+            .ok()
+            .flatten();
         if let (Some(marks), Some(decorations)) = (marks, decorations) {
             let _ = cx.update(|_, cx| marks.set(decorations, cx));
         }
@@ -138,7 +148,7 @@ impl CompletionProvider for ShouCompletion {
     }
 
     fn inline_completion_debounce(&self) -> Duration {
-        Duration::from_millis(120)
+        Duration::ZERO
     }
 
     fn inline_completion(
@@ -206,7 +216,7 @@ impl CompletionProvider for ShouCompletion {
 }
 
 // Only insert a suffix at a token boundary. Existing text, narration and comments
-// are never replaced. GPUI's 120 ms cancellable request owns the visible ghost;
+// are never replaced. GPUI's cancellable committed-input request owns the ghost;
 // acceptance uses its native edit transaction (including undo and Change events).
 fn suggestion(
     source: &str,
