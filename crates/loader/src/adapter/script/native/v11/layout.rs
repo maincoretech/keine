@@ -2,7 +2,7 @@
 use super::*;
 
 impl<'a> Parser<'a> {
-    fn grouped_args(
+    pub(in crate::adapter::script::native) fn grouped_args(
         &self,
         argument: &Argument,
         report: &mut ParseReport,
@@ -73,7 +73,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn checked_group(
+    pub(in crate::adapter::script::native) fn checked_group(
         &self,
         name: &str,
         args: &[Argument],

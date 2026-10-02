@@ -11,11 +11,11 @@ macro_rules! camera_fields {
      effect { $( $ev:ident => $ef:ident ),* $(,)? }
      v2 { $( $vv:ident => $vf:ident ),* $(,)? }) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-        pub enum CameraTweenField { $( $tv, )* $( $ev, )* FocalDistance, $( $vv, )* }
+        pub enum CameraTweenField { $( $tv, )* $( $ev, )* FocalDistance, $( $vv, )* ShakeAmplitude, ShakeFrequency }
         impl CameraTweenField {
-            pub const ALL: &'static [Self] = &[ $(Self::$tv,)* $(Self::$ev,)* Self::FocalDistance, $(Self::$vv,)* ];
+            pub const ALL: &'static [Self] = &[ $(Self::$tv,)* $(Self::$ev,)* Self::FocalDistance, $(Self::$vv,)* Self::ShakeAmplitude, Self::ShakeFrequency ];
             pub const fn name(self) -> &'static str { match self {
-                $(Self::$tv => $tn,)* $(Self::$ev => stringify!($ef),)* Self::FocalDistance => "focal_distance", $(Self::$vv => stringify!($vf),)*
+                $(Self::$tv => $tn,)* $(Self::$ev => stringify!($ef),)* Self::FocalDistance => "focal_distance", $(Self::$vv => stringify!($vf),)* Self::ShakeAmplitude => "shake_amplitude", Self::ShakeFrequency => "shake_frequency",
             }}
             pub fn from_name(name: &str) -> Option<Self> { Self::ALL.iter().copied().find(|field| field.name() == name) }
             pub const fn is_transform(self) -> bool { matches!(self, $(Self::$tv)|*) }
@@ -154,10 +154,17 @@ pub struct CameraTweenSpec {
     pub transform: Option<TransformPatch>,
     pub effect: Option<Box<PostProcessPatch>>,
     pub v2: Option<Box<PostProcessV2>>,
+    pub shake: Option<CameraShakeTweenSpec>,
     pub fields: Vec<CameraTweenField>,
     pub duration: f32,
     pub easing: Easing,
     pub blocking: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CameraShakeTweenSpec {
+    pub shake: super::CameraShakeSpec,
+    pub randomness: CameraShakeRandomness,
 }
 
 /// Normalized authored jitter. Zero retains the original sinusoidal shake exactly.
@@ -231,6 +238,133 @@ impl CameraTweenSpec {
                 None
             };
         }
+        if let Some(shake) = self.shake {
+            state.camera_targets = self.targets;
+            let previous = state.camera_shake.as_ref();
+            let from_amplitude = if timed && self.fields.contains(&CameraTweenField::ShakeAmplitude)
+            {
+                previous.map_or(0.0, |value| value.spec.amplitude)
+            } else {
+                shake.shake.amplitude
+            };
+            let from_frequency = if timed && self.fields.contains(&CameraTweenField::ShakeFrequency)
+            {
+                previous.map_or(0.0, |value| value.spec.frequency)
+            } else {
+                shake.shake.frequency
+            };
+            let interpolated = timed
+                && (from_amplitude != shake.shake.amplitude
+                    || from_frequency != shake.shake.frequency);
+            let mut value = crate::CameraShakeState::new(
+                shake.shake,
+                shake.randomness,
+                state.program_fingerprint ^ state.cursor as u64,
+                blocking && interpolated,
+            );
+            if interpolated {
+                animated = true;
+                value.tween = Some(crate::state::CameraShakeTween {
+                    from_amplitude,
+                    from_frequency,
+                    to_amplitude: shake.shake.amplitude,
+                    to_frequency: shake.shake.frequency,
+                    duration: self.duration,
+                    easing: self.easing,
+                    cycles: previous.map_or(0.0, |value| {
+                        value.tween.as_ref().map_or_else(
+                            || f64::from(value.spec.frequency) * f64::from(value.elapsed),
+                            |tween| tween.cycles,
+                        )
+                    }),
+                });
+                value.spec.amplitude = from_amplitude;
+                value.spec.frequency = from_frequency;
+                if let Some(previous) = previous {
+                    value.seed = previous.seed;
+                }
+                value.sample();
+            }
+            state.camera_shake = (shake.shake.duration > f32::EPSILON
+                && (interpolated
+                    || (shake.shake.amplitude > f32::EPSILON
+                        && shake.shake.frequency > f32::EPSILON)))
+                .then_some(value);
+        }
         blocking && animated
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{CameraShakeAxis, CameraShakeFalloff, CameraShakeSpec, CameraShakeState, State};
+
+    #[test]
+    fn shake_tween_keeps_phase_updates_selected_values_and_releases_wait() {
+        let mut state = State::new();
+        let initial = CameraShakeSpec {
+            amplitude: 2.0,
+            frequency: 1.0,
+            duration: 2.0,
+            axis: CameraShakeAxis::Both,
+            falloff: CameraShakeFalloff::Linear,
+        };
+        let mut previous = CameraShakeState::new(initial, Default::default(), 42, false);
+        previous.advance(0.5);
+        state.camera_shake = Some(previous);
+        let spec = CameraTweenSpec {
+            targets: CameraTargets::ALL,
+            transform: None,
+            effect: None,
+            v2: None,
+            shake: Some(CameraShakeTweenSpec {
+                shake: CameraShakeSpec {
+                    amplitude: 4.0,
+                    frequency: 2.0,
+                    ..initial
+                },
+                randomness: Default::default(),
+            }),
+            fields: vec![
+                CameraTweenField::ShakeAmplitude,
+                CameraTweenField::ShakeFrequency,
+            ],
+            duration: 1.0,
+            easing: Easing::Linear,
+            blocking: true,
+        };
+        assert!(spec.start(&mut state, true));
+        let shake = state.camera_shake.as_mut().unwrap();
+        assert_eq!(shake.seed, 42);
+        assert_eq!(shake.tween.as_ref().unwrap().cycles, 0.5);
+        shake.advance(0.5);
+        assert_eq!((shake.spec.amplitude, shake.spec.frequency), (3.0, 1.5));
+        assert_eq!(shake.tween.as_ref().unwrap().cycles, 1.125);
+        assert!(state.presentation_blocked());
+        state.camera_shake.as_mut().unwrap().advance(0.5);
+        assert!(!state.presentation_blocked());
+        assert_eq!(state.camera_shake.as_ref().unwrap().spec.amplitude, 4.0);
+
+        let mut fade = spec.clone();
+        fade.fields = vec![CameraTweenField::ShakeAmplitude];
+        fade.shake.as_mut().unwrap().shake.amplitude = 0.0;
+        fade.shake.as_mut().unwrap().shake.frequency = 3.0;
+        assert!(fade.start(&mut state, true));
+        let shake = state.camera_shake.as_mut().unwrap();
+        assert_eq!(shake.spec.frequency, 3.0);
+        shake.advance(1.0);
+        assert_eq!(shake.spec.amplitude, 0.0);
+        assert_eq!((shake.offset_x, shake.offset_y), (0.0, 0.0));
+        assert!(!state.presentation_blocked());
+
+        fade.fields.clear();
+        assert!(!fade.start(&mut state, true));
+        assert!(state.camera_shake.is_none());
+        let encoded = postcard::to_allocvec(&spec).unwrap();
+        assert_eq!(
+            postcard::from_bytes::<CameraTweenSpec>(&encoded).unwrap(),
+            spec
+        );
     }
 }

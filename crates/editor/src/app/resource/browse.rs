@@ -4,7 +4,7 @@ use crate::authoring::{AssetEntry, UnmappedAsset};
 
 pub(in crate::app) fn render_assets(
     root: &Path,
-    index: &AuthoringIndex,
+    index: &Arc<AuthoringIndex>,
     panel: &WorkbenchPanel,
     window: &Window,
     cx: &mut Context<WorkbenchPanel>,
@@ -19,39 +19,35 @@ pub(in crate::app) fn render_assets(
         size: panel.asset_size,
         modified: panel.asset_modified,
     };
-    let unmapped_entries = query
-        .unmapped_results_with_media(&index.unmapped, &index.media)
-        .into_iter()
-        .map(|asset| AssetEntry {
-            kind: asset.kind,
-            id: String::new(),
-            path: asset.path.clone(),
-            tags: Vec::new(),
-            exists: true,
-            reference_count: 0,
-        })
-        .collect::<Vec<_>>();
-    let results = if panel.asset_unmapped {
-        unmapped_entries.iter().collect()
+    let bounds = panel.view_scroll.bounds();
+    let offset = panel.view_scroll.offset();
+    let width = (if bounds.size.width > px(0.) {
+        f32::from(bounds.size.width)
     } else {
-        query.results_with_media(&index.assets, &index.media)
+        280.
+    } - 16.)
+        .max(1.);
+    let height = if bounds.size.height > px(0.) {
+        f32::from(bounds.size.height)
+    } else {
+        f32::from(window.viewport_size().height)
     };
-    let ordered = Arc::new(results.iter().map(|asset| asset.key()).collect::<Vec<_>>());
+    let columns = (width / if panel.asset_large { 176. } else { 120. })
+        .floor()
+        .max(1.) as usize;
+    let snapshot = panel.asset_browser.borrow_mut().resolve(
+        index,
+        &query,
+        panel.asset_unmapped,
+        columns,
+        panel.asset_large,
+        panel.asset_grid,
+    );
+    let results = &snapshot.assets;
+    let rows = &snapshot.rows;
+    let ordered = snapshot.ordered.clone();
     let unmapped_mode = panel.asset_unmapped;
     let selection = cx.global::<EditorDocuments>().asset_selection(root);
-    let folders = index
-        .assets
-        .iter()
-        .filter_map(|asset| asset.path.parent().map(Path::to_path_buf))
-        .chain(
-            index
-                .unmapped
-                .iter()
-                .filter_map(|asset| asset.path.parent().map(Path::to_path_buf)),
-        )
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
     let filter_active = panel.asset_tag.is_some()
         || panel.asset_status != crate::authoring::AssetStatus::All
         || panel.asset_size != crate::authoring::AssetSize::All
@@ -65,7 +61,7 @@ pub(in crate::app) fn render_assets(
     let filter_menu = panel
         .asset_filter_menu
         .clone()
-        .map(|menu| render_asset_filter_menu(menu, &folders, index, panel, cx));
+        .map(|menu| render_asset_filter_menu(menu, &snapshot.folders, index, panel, cx));
     let controls = div()
         .flex()
         .p_2()
@@ -119,30 +115,7 @@ pub(in crate::app) fn render_assets(
                 ),
         );
     let root = root.to_owned();
-    let bounds = panel.view_scroll.bounds();
-    let offset = panel.view_scroll.offset();
-    let width = (if bounds.size.width > px(0.) {
-        f32::from(bounds.size.width)
-    } else {
-        280.
-    } - 16.)
-        .max(1.);
-    let height = if bounds.size.height > px(0.) {
-        f32::from(bounds.size.height)
-    } else {
-        f32::from(window.viewport_size().height)
-    };
-    let columns = (width / if panel.asset_large { 176. } else { 120. })
-        .floor()
-        .max(1.) as usize;
-    let rows = browse_rows(
-        results
-            .iter()
-            .map(|asset| panel.asset_grid.unwrap_or_else(|| image_kind(asset.kind))),
-        columns,
-        panel.asset_large,
-    );
-    let (visible, before, after) = visible_rows(&rows, -f32::from(offset.y), height);
+    let (visible, before, after) = visible_rows(rows, -f32::from(offset.y), height);
     let cell_width = (width - (columns - 1) as f32 * 4.) / columns as f32;
     let cards = div()
         .id("asset-cards")
@@ -159,7 +132,7 @@ pub(in crate::app) fn render_assets(
                 .flex()
                 .gap_1()
                 .children(layout.items.clone().map(|row| {
-                    let asset = results[row];
+                    let asset = &results[row];
                     let media = index.media.get(&asset.path);
                     let key = asset.key();
                     let row_key = key.clone();
@@ -181,10 +154,16 @@ pub(in crate::app) fn render_assets(
                         .min_w_0()
                         .gap_1()
                         .p_1()
+                        .when(!layout.grid, |this| this.px_2().py(px(6.)))
                         .rounded(px(7.))
                         .bg(rgb(if selected { SURFACE } else { PANEL }))
                         .tooltip(icon_hint(format!(
-                            "{} · {}",
+                            "{}{} · {}",
+                            if !unmapped_mode && asset.exists {
+                                "Registered resource · "
+                            } else {
+                                ""
+                            },
                             asset.path.display(),
                             asset.tags.join(", ")
                         )))
@@ -235,7 +214,14 @@ pub(in crate::app) fn render_assets(
                                 |_, _, _, cx| cx.new(|_| Empty),
                             )
                         })
-                        .child(asset_content(&root, asset, media, layout.grid, cx))
+                        .child(asset_content(
+                            &root,
+                            asset,
+                            media,
+                            layout.grid,
+                            &panel.asset_thumbnails,
+                            cx,
+                        ))
                 }))
         }))
         .child(div().h(px(after)).flex_none())
@@ -318,6 +304,7 @@ fn asset_content(
     asset: &AssetEntry,
     media: Option<&file_ops::AssetMediaInfo>,
     grid: bool,
+    thumbnails: &Entity<super::thumbnail::Thumbnails>,
     cx: &mut App,
 ) -> AnyElement {
     let image = image_kind(asset.kind);
@@ -343,20 +330,10 @@ fn asset_content(
         .items_center()
         .justify_center()
         .child(if image {
-            confined_existing_file(root, &asset.path)
-                .filter(|_| {
-                    file_ops::mapped_path(&asset.path)
-                        .unwrap_or_else(|| asset.path.clone())
-                        .extension()
-                        .and_then(|s| s.to_str())
-                        .is_some_and(|ext| {
-                            gpui_kit::Img::extensions()
-                                .iter()
-                                .any(|candidate| candidate.eq_ignore_ascii_case(ext))
-                        })
-                })
-                .map(|file| {
-                    img(file)
+            media
+                .filter(|_| asset.exists)
+                .map(|media| {
+                    super::thumbnail::Thumbnails::image(thumbnails, root, &asset.path, media)
                         .size_full()
                         .with_fallback(|| {
                             Icon::new(AssetIconName::Image)
@@ -391,7 +368,16 @@ fn asset_content(
         format!("{} · {} refs", asset.id, asset.reference_count)
     };
     let mut metadata = String::new();
+    if !asset.id.is_empty() && asset.exists {
+        metadata.push_str("Resource");
+        if let Some(extension) = asset.path.extension().and_then(|value| value.to_str()) {
+            metadata.push_str(&format!(" · {}", extension.to_ascii_uppercase()));
+        }
+    }
     if let Some(info) = media {
+        if !metadata.is_empty() {
+            metadata.push_str(" · ");
+        }
         metadata.push_str(&asset_bytes(info.bytes));
         if audio {
             if let Some(duration) = info.duration {
@@ -427,6 +413,7 @@ fn asset_content(
                         .whitespace_nowrap()
                         .text_ellipsis()
                         .text_size(px(12.))
+                        .when(!grid, |this| this.line_height(px(12.)))
                         .text_color(rgb(INK))
                         .child(name),
                 )
@@ -437,6 +424,7 @@ fn asset_content(
                         .whitespace_nowrap()
                         .text_ellipsis()
                         .text_size(px(10.))
+                        .when(!grid, |this| this.line_height(px(10.)))
                         .text_color(rgb(if asset.exists { MUTED } else { 0xe68e98 }))
                         .child(detail),
                 )
@@ -448,6 +436,7 @@ fn asset_content(
                             .whitespace_nowrap()
                             .text_ellipsis()
                             .text_size(px(10.))
+                            .when(!grid, |this| this.line_height(px(10.)))
                             .text_color(rgb(MUTED))
                             .child(metadata),
                     )
@@ -457,6 +446,92 @@ fn asset_content(
             this.child(audition_control(root, &asset.path, true, cx))
         })
         .into_any_element()
+}
+
+#[derive(Default)]
+pub(in crate::app) struct Cache {
+    index: std::sync::Weak<AuthoringIndex>,
+    key: Option<(AssetQuery, bool, usize, bool, Option<bool>)>,
+    snapshot: Option<Rc<Snapshot>>,
+}
+
+struct Snapshot {
+    assets: Vec<AssetEntry>,
+    ordered: Arc<Vec<AssetKey>>,
+    folders: Vec<PathBuf>,
+    rows: Vec<BrowseRow>,
+}
+
+impl Cache {
+    fn resolve(
+        &mut self,
+        index: &Arc<AuthoringIndex>,
+        query: &AssetQuery,
+        unmapped: bool,
+        columns: usize,
+        large: bool,
+        grid: Option<bool>,
+    ) -> Rc<Snapshot> {
+        let key = (query.clone(), unmapped, columns, large, grid);
+        // Age-based filters expire with wall time; evaluate those on each render.
+        if query.modified.is_none()
+            && self
+                .index
+                .upgrade()
+                .is_some_and(|previous| Arc::ptr_eq(&previous, index))
+            && self.key.as_ref() == Some(&key)
+            && let Some(snapshot) = &self.snapshot
+        {
+            return snapshot.clone();
+        }
+        let assets = if unmapped {
+            query
+                .unmapped_results_with_media(&index.unmapped, &index.media)
+                .into_iter()
+                .map(|asset| AssetEntry {
+                    kind: asset.kind,
+                    id: String::new(),
+                    path: asset.path.clone(),
+                    tags: Vec::new(),
+                    exists: true,
+                    reference_count: 0,
+                })
+                .collect::<Vec<_>>()
+        } else {
+            query
+                .results_with_media(&index.assets, &index.media)
+                .into_iter()
+                .cloned()
+                .collect()
+        };
+        let ordered = Arc::new(assets.iter().map(AssetEntry::key).collect());
+        let folders = index
+            .assets
+            .iter()
+            .map(|asset| &asset.path)
+            .chain(index.unmapped.iter().map(|asset| &asset.path))
+            .filter_map(|path| path.parent().map(Path::to_path_buf))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let rows = browse_rows(
+            assets
+                .iter()
+                .map(|asset| grid.unwrap_or_else(|| image_kind(asset.kind))),
+            columns,
+            large,
+        );
+        let snapshot = Rc::new(Snapshot {
+            assets,
+            ordered,
+            folders,
+            rows,
+        });
+        self.index = Arc::downgrade(index);
+        self.key = Some(key);
+        self.snapshot = Some(snapshot.clone());
+        snapshot
+    }
 }
 
 #[derive(Debug)]
@@ -526,6 +601,78 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cached_browser_invalidates_on_source_query_and_layout_changes() {
+        let mut index = Arc::new(AuthoringIndex::default());
+        Arc::get_mut(&mut index).unwrap().assets = vec![AssetEntry {
+            kind: AssetKind::Background,
+            id: "room".into(),
+            path: "assets/room.webp".into(),
+            tags: vec![],
+            exists: true,
+            reference_count: 0,
+        }];
+        let mut cache = Cache::default();
+        let query = AssetQuery::default();
+        let first = cache.resolve(&index, &query, false, 2, false, None);
+        assert!(Rc::ptr_eq(
+            &first,
+            &cache.resolve(&index, &query, false, 2, false, None)
+        ));
+        let list = cache.resolve(&index, &query, false, 2, false, Some(false));
+        assert!(!list.rows[0].grid);
+        let missing = AssetQuery {
+            status: crate::authoring::AssetStatus::Missing,
+            ..Default::default()
+        };
+        assert!(
+            cache
+                .resolve(&index, &missing, false, 2, false, None)
+                .assets
+                .is_empty()
+        );
+        let filtered = AssetQuery {
+            search: "ROOM".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            cache
+                .resolve(&index, &filtered, false, 2, false, None)
+                .ordered[0]
+                .id,
+            "room"
+        );
+        let mut replacement = (*index).clone();
+        replacement.assets[0].exists = false;
+        let replacement = Arc::new(replacement);
+        assert_eq!(
+            cache
+                .resolve(&replacement, &missing, false, 2, false, None)
+                .assets
+                .len(),
+            1
+        );
+        let large = cache.resolve(&replacement, &query, false, 1, true, None);
+        assert_eq!(large.rows[0].height, 188.);
+        let timed = AssetQuery {
+            modified: Some(std::time::Duration::from_secs(60)),
+            ..Default::default()
+        };
+        let before = cache.resolve(&replacement, &timed, false, 1, true, None);
+        let after = cache.resolve(&replacement, &timed, false, 1, true, None);
+        assert!(!Rc::ptr_eq(&before, &after));
+        let mut unmapped = (*replacement).clone();
+        unmapped.unmapped.push(UnmappedAsset {
+            kind: AssetKind::Figure,
+            path: "assets/hero.webp.unmapped".into(),
+        });
+        let unmapped = cache.resolve(&Arc::new(unmapped), &query, true, 1, false, None);
+        assert_eq!(
+            unmapped.assets[0].path,
+            Path::new("assets/hero.webp.unmapped")
+        );
+    }
+
+    #[test]
     fn mixed_rows_preserve_asset_order_and_responsive_grid() {
         let modes = [true, true, true, false, false, true, true];
         for columns in [0, 1, 2, 4] {
@@ -562,3 +709,7 @@ mod tests {
         assert_eq!(before + after, 0.);
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../tests/bench/editor/filter.rs"]
+mod benchmark;

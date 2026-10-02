@@ -1,6 +1,8 @@
 #[path = "assets.rs"]
 mod assets;
 pub use assets::*;
+#[path = "media.rs"]
+mod media;
 
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
@@ -74,21 +76,21 @@ pub fn import_external(root: &Path, target_dir: &Path, source: &Path) -> io::Res
     let file_name = source
         .file_name()
         .ok_or_else(|| invalid("The imported file has no name"))?;
-    let relative = checked_relative(target_dir)?.join(file_name);
-    let destination = confined_destination(root, &relative)?;
-    if destination.exists() {
-        return Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            format!("{} already exists", relative.display()),
-        ));
-    }
-
+    let mut relative = checked_relative(target_dir)?.join(file_name);
     let extension = extension(source);
     if is_media_extension(&extension) {
         let kind = kind_for_path(&relative).ok_or_else(|| {
             invalid("Drop media into Background, Figure, Voice, BGM, SE, or Video")
         })?;
-        validate_resource(source, kind, &extension)?;
+        let output_extension = media::output_extension(source, kind)?;
+        relative.set_extension(output_extension);
+        let destination = confined_destination(root, &relative)?;
+        if destination.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("{} already exists", relative.display()),
+            ));
+        }
         let id = identifier_from_filename(source)?;
         let (manifest_relative, old_manifest) = manifest_source(root)?;
         let manifest = EiyashouAssetManifest::from_yaml(&old_manifest)
@@ -97,7 +99,7 @@ pub fn import_external(root: &Path, target_dir: &Path, source: &Path) -> io::Res
         let new_manifest = insert_manifest_entry(&old_manifest, kind, &id, &relative)?;
         let manifest_path = root.join(&manifest_relative);
 
-        copy_atomic(source, &destination)?;
+        media::import(source, &destination, kind)?;
         let commit = (|| {
             if fs::read_to_string(&manifest_path)? != old_manifest {
                 return Err(io::Error::other(
@@ -122,6 +124,13 @@ pub fn import_external(root: &Path, target_dir: &Path, source: &Path) -> io::Res
         });
     }
 
+    let destination = confined_destination(root, &relative)?;
+    if destination.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("{} already exists", relative.display()),
+        ));
+    }
     copy_atomic(source, &destination)?;
     Ok(ImportResult {
         destination: relative,
@@ -1232,13 +1241,264 @@ mod tests {
     }
 
     #[test]
+    fn png_import_in_its_original_folder_preserves_source_and_alpha() {
+        let root = fixture();
+        let source = root.join("assets/background/portrait.png");
+        let image = image::RgbaImage::from_raw(
+            2,
+            2,
+            vec![240, 80, 30, 255, 10, 40, 90, 128, 90, 10, 40, 0, 1, 2, 3, 1],
+        )
+        .unwrap();
+        image.save(&source).unwrap();
+        let before = fs::read(&source).unwrap();
+        let original_permissions = fs::metadata(&source).unwrap().permissions();
+        let mut readonly = original_permissions.clone();
+        readonly.set_readonly(true);
+        fs::set_permissions(&source, readonly).unwrap();
+        let result = import_external(&root, Path::new("assets/background"), &source).unwrap();
+        assert_eq!(
+            result.destination,
+            Path::new("assets/background/portrait.webp")
+        );
+        assert_eq!(
+            image::open(root.join(&result.destination))
+                .unwrap()
+                .into_rgba8(),
+            image
+        );
+        assert_eq!(fs::read(&source).unwrap(), before);
+        assert!(fs::metadata(&source).unwrap().permissions().readonly());
+        let manifest = EiyashouAssetManifest::from_yaml(
+            &fs::read_to_string(root.join("assets.yaml")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            manifest.backgrounds["portrait"].path(),
+            "assets/background/portrait.webp"
+        );
+        // A second conversion cannot replace the existing output or change the source.
+        assert_eq!(
+            import_external(&root, Path::new("assets/background"), &source)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(fs::read(&source).unwrap(), before);
+        fs::set_permissions(source, original_permissions).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn jpeg_import_applies_orientation_before_lossless_encoding() {
+        use image::ImageEncoder;
+        let root = fixture();
+        let source = root.join("photo.jpg");
+        let image = image::RgbImage::from_pixel(3, 2, image::Rgb([200, 90, 30]));
+        let mut encoder =
+            image::codecs::jpeg::JpegEncoder::new_with_quality(File::create(&source).unwrap(), 95);
+        // TIFF IFD0 Orientation = 6 (90 degrees clockwise).
+        encoder
+            .set_exif_metadata(vec![
+                b'I', b'I', 42, 0, 8, 0, 0, 0, 1, 0, 0x12, 0x01, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, 0,
+                0, 0, 0,
+            ])
+            .unwrap();
+        encoder.encode_image(&image).unwrap();
+        let before = fs::read(&source).unwrap();
+        let mut expected = image::open(&source).unwrap();
+        expected.apply_orientation(image::metadata::Orientation::Rotate90);
+        let result = import_external(&root, Path::new("assets/background"), &source).unwrap();
+        assert_eq!(
+            image::open(root.join(result.destination))
+                .unwrap()
+                .into_rgba8(),
+            expected.into_rgba8()
+        );
+        assert_eq!(fs::read(source).unwrap(), before);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn animated_image_import_does_not_discard_frames_or_leave_output() {
+        let root = fixture();
+        let source = root.join("animation.gif");
+        let frame = image::Frame::new(image::RgbaImage::from_pixel(
+            2,
+            2,
+            image::Rgba([1, 2, 3, 255]),
+        ));
+        let mut encoder = image::codecs::gif::GifEncoder::new(File::create(&source).unwrap());
+        encoder.encode_frames([frame.clone(), frame]).unwrap();
+        drop(encoder);
+        let before = fs::read(&source).unwrap();
+        let manifest = fs::read_to_string(root.join("assets.yaml")).unwrap();
+        assert!(
+            import_external(&root, Path::new("assets/background"), &source)
+                .unwrap_err()
+                .to_string()
+                .contains("Animated")
+        );
+        assert_eq!(fs::read(&source).unwrap(), before);
+        assert_eq!(
+            fs::read_to_string(root.join("assets.yaml")).unwrap(),
+            manifest
+        );
+        assert_eq!(
+            fs::read_dir(root.join("assets/background"))
+                .unwrap()
+                .count(),
+            0
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires FFmpeg with libopus and audio fixture encoders"]
+    fn audio_import_converts_real_formats_and_preserves_duration_and_source() {
+        use std::process::{Command, Stdio};
+        let root = fixture();
+        fs::create_dir_all(root.join("assets/bgm")).unwrap();
+        let ffmpeg = media::ffmpeg_executable().unwrap();
+        for (extension, codec) in [
+            ("wav", "pcm_s16le"),
+            ("flac", "flac"),
+            ("mp3", "libmp3lame"),
+            ("ogg", "vorbis"),
+        ] {
+            let source = root.join(format!("tone_{extension}.{extension}"));
+            assert!(
+                Command::new(&ffmpeg)
+                    .args([
+                        "-nostdin",
+                        "-loglevel",
+                        "error",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "sine=frequency=440:sample_rate=48000:duration=2",
+                        "-ac",
+                        "2",
+                        "-c:a",
+                        codec,
+                        "-strict",
+                        "experimental"
+                    ])
+                    .arg(&source)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            let before = fs::read(&source).unwrap();
+            let imported = import_external(&root, Path::new("assets/bgm"), &source).unwrap();
+            assert_eq!(imported.destination.extension().unwrap(), "opus");
+            let converted = root.join(&imported.destination);
+            let duration = asset_media_info(&root, &imported.destination)
+                .unwrap()
+                .duration
+                .unwrap();
+            assert!((duration - 2.0).abs() < 0.025, "{extension}: {duration}");
+            let decode = |path: &Path| {
+                let output = Command::new(&ffmpeg)
+                    .args(["-nostdin", "-loglevel", "error", "-i"])
+                    .arg(path)
+                    .args([
+                        "-map", "0:a:0", "-ar", "48000", "-ac", "1", "-f", "s16le", "pipe:1",
+                    ])
+                    .stdin(Stdio::null())
+                    .output()
+                    .unwrap();
+                assert!(output.status.success());
+                output.stdout
+            };
+            assert_eq!(
+                decode(&source).len(),
+                decode(&converted).len(),
+                "encoder padding changed duration: {extension}"
+            );
+            assert_eq!(fs::read(&source).unwrap(), before);
+        }
+        // An already normalized stream is copied byte-for-byte, without another lossy encode.
+        fs::create_dir_all(root.join("assets/voices")).unwrap();
+        let canonical = root.join("assets/bgm/tone_wav.opus");
+        let copy = import_external(&root, Path::new("assets/voices"), &canonical).unwrap();
+        assert_eq!(
+            fs::read(canonical).unwrap(),
+            fs::read(root.join(copy.destination)).unwrap()
+        );
+        let manifest = fs::read_to_string(root.join("assets.yaml")).unwrap();
+        let corrupt = root.join("corrupt.wav");
+        fs::write(&corrupt, b"invalid audio").unwrap();
+        assert!(import_external(&root, Path::new("assets/bgm"), &corrupt).is_err());
+        assert_eq!(fs::read(&corrupt).unwrap(), b"invalid audio");
+        assert_eq!(
+            fs::read_to_string(root.join("assets.yaml")).unwrap(),
+            manifest
+        );
+        assert!(fs::read_dir(root.join("assets/bgm")).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with('.')
+        }));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires FFmpeg with libx264"]
+    fn video_import_converts_mov_to_decodable_h264_mp4_without_changing_source() {
+        use std::process::{Command, Stdio};
+        let root = fixture();
+        fs::create_dir_all(root.join("assets/videos")).unwrap();
+        let ffmpeg = media::ffmpeg_executable().unwrap();
+        let source = root.join("movie.mov");
+        assert!(
+            Command::new(&ffmpeg)
+                .args([
+                    "-nostdin",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=size=128x72:rate=10:duration=0.3",
+                    "-c:v",
+                    "mpeg4"
+                ])
+                .arg(&source)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let before = fs::read(&source).unwrap();
+        let imported = import_external(&root, Path::new("assets/videos"), &source).unwrap();
+        assert_eq!(imported.destination, Path::new("assets/videos/movie.mp4"));
+        let converted = root.join(imported.destination);
+        assert!(contains_marker(&fs::read(&converted).unwrap(), b"avc1"));
+        assert!(
+            Command::new(&ffmpeg)
+                .args(["-nostdin", "-loglevel", "error", "-i"])
+                .arg(converted)
+                .args(["-f", "null", "-"])
+                .stdout(Stdio::null())
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert_eq!(fs::read(source).unwrap(), before);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn noncanonical_image_leaves_no_destination_or_mapping() {
         let root = fixture();
         let source = root.parent().unwrap().join("wrong.png");
         fs::write(&source, b"not a png").unwrap();
         let error = import_external(&root, Path::new("assets/background"), &source).unwrap_err();
-        assert!(error.to_string().contains("WebP"));
+        assert!(error.to_string().contains("image"));
         assert!(!root.join("assets/background/wrong.png").exists());
+        assert!(!root.join("assets/background/wrong.webp").exists());
         assert!(
             !fs::read_to_string(root.join("assets.yaml"))
                 .unwrap()

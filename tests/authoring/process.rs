@@ -28,6 +28,8 @@ fn editor_and_engine_complete_the_control_handshake() {
     // Audition stays in the Ready host: no game window or Program execution is
     // needed, and the logical content boundary rejects arbitrary host paths.
     assert_eq!(process.audition_state().unwrap(), None);
+    assert_eq!(process.pause_audition(true).unwrap(), None);
+    assert_eq!(process.pause_audition(false).unwrap(), None);
     assert_eq!(process.audition_audio(None).unwrap(), None);
     for path in ["/etc/passwd", "../outside.opus"] {
         assert!(process.audition_audio(Some(path.into())).is_err());

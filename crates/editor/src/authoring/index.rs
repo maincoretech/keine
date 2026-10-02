@@ -105,7 +105,7 @@ pub enum AssetSort {
     Size,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AssetQuery {
     pub search: String,
     pub kind: Option<AssetKind>,
@@ -197,6 +197,9 @@ impl AssetQuery {
                 })
             })
             .filter(|asset| {
+                if search.is_empty() {
+                    return true;
+                }
                 let mut fields = vec![
                     asset.id.to_lowercase(),
                     asset.path.to_string_lossy().to_lowercase(),
@@ -327,20 +330,67 @@ impl AuthoringIndex {
     /// Replace only changed script contributions; config/manifests invalidate
     /// the project namespace and use a full load instead.
     pub fn with_sources(&self, sources: &BTreeMap<PathBuf, String>) -> Self {
-        let mut index = self.clone();
+        self.with_sources_cancellable(sources, || false).unwrap()
+    }
+
+    pub(crate) fn with_sources_cancellable(
+        &self,
+        sources: &BTreeMap<PathBuf, String>,
+        cancelled: impl Fn() -> bool,
+    ) -> Option<Self> {
+        if cancelled() {
+            return None;
+        }
+        // Copy only surviving script contributions. The public Vec-based index
+        // stays stable; replaced dialogue bodies are never cloned and discarded.
+        let mut index = Self {
+            native: self.native,
+            assets_manifest: self.assets_manifest.clone(),
+            characters_manifest: self.characters_manifest.clone(),
+            assets: self.assets.clone(),
+            media: self.media.clone(),
+            unmapped: self.unmapped.clone(),
+            characters: self.characters.clone(),
+            scenes: self
+                .scenes
+                .iter()
+                .filter(|entry| !sources.contains_key(&entry.path))
+                .cloned()
+                .collect(),
+            dialogues: self
+                .dialogues
+                .iter()
+                .filter(|entry| !sources.contains_key(&entry.path))
+                .cloned()
+                .collect(),
+            asset_references: self
+                .asset_references
+                .iter()
+                .filter(|entry| !sources.contains_key(&entry.path))
+                .cloned()
+                .collect(),
+            problems: self
+                .problems
+                .iter()
+                .filter(|entry| !sources.contains_key(&entry.path))
+                .cloned()
+                .collect(),
+            unindexed_sources: self
+                .unindexed_sources
+                .iter()
+                .filter(|path| !sources.contains_key(*path))
+                .cloned()
+                .collect(),
+        };
         let lookup = index
             .assets
             .iter()
             .map(|asset| (asset.kind, asset.id.clone()))
             .collect::<HashSet<_>>();
         for (path, source) in sources {
-            index.scenes.retain(|scene| &scene.path != path);
-            index.dialogues.retain(|dialogue| &dialogue.path != path);
-            index
-                .asset_references
-                .retain(|reference| &reference.path != path);
-            index.problems.retain(|problem| &problem.path != path);
-            index.unindexed_sources.retain(|entry| entry != path);
+            if cancelled() {
+                return None;
+            }
             index_source(path, source, &mut index, &mut HashMap::new(), &lookup);
             if index
                 .problems
@@ -375,7 +425,7 @@ impl AuthoringIndex {
                 .then(a.message.cmp(&b.message))
         });
         index.problems.dedup();
-        index
+        if cancelled() { None } else { Some(index) }
     }
 
     pub fn load(
@@ -1037,3 +1087,7 @@ pub fn dialogues_for_source(path: &Path, source: &str) -> Vec<DialogueEntry> {
     }
     index.dialogues
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/bench/editor/index.rs"]
+mod benchmark;

@@ -34,13 +34,30 @@ pub(crate) struct BacklogUiState {
 pub(crate) struct BacklogScrollMotion {
     current: f32,
     target: f32,
-    close_gesture: f32,
+    overscroll: f32,
     initialized: bool,
 }
 
 impl BacklogScrollMotion {
     pub(crate) fn is_animating(&self) -> bool {
-        self.initialized && (self.current - self.target).abs() > 0.1
+        self.initialized
+            && ((self.current - self.target).abs() > 0.1 || self.overscroll.abs() > 0.1)
+    }
+
+    fn advance(&mut self, delta: f32, max: f32, seconds: f32) {
+        let desired = self.target - delta;
+        self.target = desired.clamp(0.0, max);
+        self.overscroll *= (-14.0 * seconds).exp();
+        if delta != 0.0 {
+            self.overscroll = (self.overscroll - (desired - self.target) * 0.35).clamp(-72.0, 72.0);
+        }
+        self.current += (self.target - self.current) * exp_lerp(seconds, 24.0);
+        if (self.current - self.target).abs() <= 0.1 {
+            self.current = self.target;
+        }
+        if self.overscroll.abs() <= 0.1 {
+            self.overscroll = 0.0;
+        }
     }
 
     fn reset(&mut self) {
@@ -71,6 +88,9 @@ pub(crate) struct BacklogBlurProxy;
 
 #[derive(Component)]
 pub(crate) struct BacklogScroll;
+
+#[derive(Component)]
+struct BacklogList;
 
 #[derive(Component)]
 pub(crate) struct BacklogClose;
@@ -295,51 +315,65 @@ fn spawn_content(root: &mut ChildSpawnerCommands, state: &GameState, assets: &Ui
             width: Val::Percent(100.0),
             height: Val::Percent(80.0),
             padding: UiRect::axes(Val::Px(120.0), Val::Px(12.0)),
-            // WebGAL K uses `flex-flow: column-reverse`: the newest line sits
-            // at the bottom and older dialogue is reached by scrolling up.
-            flex_direction: FlexDirection::ColumnReverse,
+            flex_direction: FlexDirection::Column,
             overflow: Overflow::scroll_y(),
             ..default()
         },
     ))
-    .with_children(|list| {
-        for (order, (index, entry)) in state.backlog.iter().enumerate().rev().enumerate() {
-            let mut item = list.spawn((
-                Name::new(format!("backlog_item::{index}")),
+    .with_children(|viewport| {
+        viewport
+            .spawn((
+                BacklogList,
+                UiTransform::default(),
                 Node {
                     width: Val::Percent(100.0),
-                    min_height: Val::Px(51.0),
-                    margin: UiRect::top(Val::Px(15.0)),
+                    min_height: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Column,
+                    justify_content: JustifyContent::FlexEnd,
                     flex_shrink: 0.0,
                     ..default()
                 },
-            ));
-            if order < ANIMATED_ITEM_LIMIT {
-                item.insert((
-                    BacklogItemAnimation { order },
-                    UiTransform::from_xy(Val::Px(-11.25), Val::Px(7.5)),
-                ));
-            } else {
-                item.insert(UiTransform::default());
-            }
-            item.with_children(|row| {
-                spawn_item_functions(row, index, order, entry, assets);
-                row.spawn((
-                    Node {
-                        width: Val::Percent(70.0),
-                        padding: UiRect::left(Val::Px(12.0)),
-                        ..default()
-                    },
-                    children![item_text(
-                        entry.text.clone(),
-                        &assets.text,
-                        26.25,
-                        order,
-                        false,
-                    )],
-                ));
+            ))
+            .with_children(|list| {
+                for (index, entry) in state.backlog.iter().enumerate() {
+                    let order = state.backlog.len() - 1 - index;
+                    let mut item = list.spawn((
+                        Name::new(format!("backlog_item::{index}")),
+                        Node {
+                            width: Val::Percent(100.0),
+                            min_height: Val::Px(51.0),
+                            margin: UiRect::top(Val::Px(15.0)),
+                            flex_shrink: 0.0,
+                            ..default()
+                        },
+                    ));
+                    if order < ANIMATED_ITEM_LIMIT {
+                        item.insert((
+                            BacklogItemAnimation { order },
+                            UiTransform::from_xy(Val::Px(-11.25), Val::Px(7.5)),
+                        ));
+                    } else {
+                        item.insert(UiTransform::default());
+                    }
+                    item.with_children(|row| {
+                        spawn_item_functions(row, index, order, entry, assets);
+                        row.spawn((
+                            Node {
+                                width: Val::Percent(70.0),
+                                padding: UiRect::left(Val::Px(12.0)),
+                                ..default()
+                            },
+                            children![item_text(
+                                entry.text.clone(),
+                                &assets.text,
+                                26.25,
+                                order,
+                                false,
+                            )],
+                        ));
+                    });
+                }
             });
-        }
     });
 }
 
@@ -590,6 +624,7 @@ pub(crate) struct BacklogScrollContext<'w, 's> {
     motion: ResMut<'w, BacklogScrollMotion>,
     scroll:
         Query<'w, 's, (&'static mut ScrollPosition, &'static ComputedNode), With<BacklogScroll>>,
+    list: Query<'w, 's, &'static mut UiTransform, With<BacklogList>>,
 }
 
 pub fn scroll_backlog(mut context: BacklogScrollContext) {
@@ -623,32 +658,25 @@ pub fn scroll_backlog(mut context: BacklogScrollContext) {
         context.motion.reset();
         return;
     };
-    if !context.motion.initialized {
-        context.motion.current = position.y;
-        context.motion.target = position.y;
-        context.motion.initialized = true;
-    }
     let max =
         (computed.content_size().y - computed.size().y).max(0.0) * computed.inverse_scale_factor();
-    context.motion.target = (context.motion.target + delta).clamp(0.0, max);
-    if delta < 0.0 && context.motion.current <= 0.5 && context.motion.target <= f32::EPSILON {
-        // A trackpad emits many tiny inertial events. Require one deliberate
-        // gesture instead of closing the panel on the first negative pixel.
-        context.motion.close_gesture += -delta;
-        if context.motion.close_gesture >= 72.0 {
-            context.ui.open = false;
-            context.motion.reset();
+    if !context.motion.initialized {
+        if computed.size().y <= 0.0 {
+            return;
         }
-    } else {
-        if delta > 0.0 {
-            context.motion.close_gesture = 0.0;
-        }
-        let amount = exp_lerp(context.time.delta_secs(), 24.0);
-        context.motion.current += (context.motion.target - context.motion.current) * amount;
-        if (context.motion.current - context.motion.target).abs() <= 0.1 {
-            context.motion.current = context.motion.target;
-        }
-        position.y = context.motion.current.clamp(0.0, max);
+        // Chronological layout uses positive offsets; open at the newest line.
+        context.motion.current = max;
+        context.motion.target = max;
+        context.motion.initialized = true;
+    }
+    context
+        .motion
+        .advance(delta, max, context.time.delta_secs());
+    position.y = context.motion.current.clamp(0.0, max);
+    if let Ok(mut transform) = context.list.single_mut() {
+        // Bevy clamps ScrollPosition, so apply edge movement to the list while
+        // keeping its viewport and clipping bounds fixed.
+        *transform = UiTransform::from_xy(Val::Px(0.0), Val::Px(context.motion.overscroll));
     }
 }
 
@@ -691,6 +719,47 @@ pub fn handle_backlog_action(mut context: BacklogActionContext) {
                 dialogue.0,
                 0.0,
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wheel_up_moves_towards_older_lines_and_down_returns_to_newest() {
+        let mut motion = BacklogScrollMotion {
+            current: 300.0,
+            target: 300.0,
+            initialized: true,
+            ..default()
+        };
+        motion.advance(36.0, 300.0, 1.0 / 60.0);
+        assert_eq!(motion.target, 264.0);
+        assert!(motion.current < 300.0);
+        motion.advance(-36.0, 300.0, 1.0 / 60.0);
+        assert_eq!(motion.target, 300.0);
+    }
+
+    #[test]
+    fn both_edges_resist_and_return_without_moving_the_scroll_bounds() {
+        for (edge, delta, sign) in [(0.0, 120.0, 1.0), (300.0, -120.0, -1.0)] {
+            let mut motion = BacklogScrollMotion {
+                current: edge,
+                target: edge,
+                initialized: true,
+                ..default()
+            };
+            motion.advance(delta, 300.0, 1.0 / 60.0);
+            assert_eq!(motion.target, edge);
+            assert!(motion.overscroll * sign > 0.0);
+            assert!(motion.is_animating());
+            for _ in 0..120 {
+                motion.advance(0.0, 300.0, 1.0 / 60.0);
+            }
+            assert_eq!(motion.overscroll, 0.0);
+            assert!(!motion.is_animating());
         }
     }
 }

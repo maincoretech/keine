@@ -339,6 +339,9 @@ pub fn insertion_statement(
         .find(|entry| entry.kind == AssetKind::Figure)
         .map(|entry| entry.id.as_str());
     let first_scene = index.scenes.first().map(|entry| entry.name.as_str());
+    let figure_slot = first_character
+        .map(str::to_owned)
+        .or_else(|| first_figure.map(|figure| format!("{figure}_slot")));
     let statement = match kind {
         InsertKind::Narration => "\"New narration\"".to_owned(),
         InsertKind::Dialogue => format!(
@@ -351,7 +354,8 @@ pub fn insertion_statement(
         ),
         InsertKind::Figure => {
             let figure = first_figure.ok_or(AuthoringEditError::MissingInsertionPoint)?;
-            format!("sprite({figure}_slot, {figure}, position: center)")
+            let slot = figure_slot.as_deref().ok_or(AuthoringEditError::MissingInsertionPoint)?;
+            format!("sprite({slot}, {figure}, position: center)")
         }
         InsertKind::Choice => {
             let scene = first_scene.ok_or(AuthoringEditError::MissingInsertionPoint)?;
@@ -374,21 +378,21 @@ pub fn insertion_statement(
         ),
         InsertKind::Wait => "wait(500ms)".to_owned(),
         InsertKind::Hide => {
-            let figure = first_figure.ok_or(AuthoringEditError::MissingInsertionPoint)?;
-            format!("hide({figure}_slot)")
+            let slot = figure_slot.as_deref().ok_or(AuthoringEditError::MissingInsertionPoint)?;
+            format!("hide({slot})")
         }
         InsertKind::Move => {
-            let figure = first_figure.ok_or(AuthoringEditError::MissingInsertionPoint)?;
-            format!("move({figure}_slot, center)")
+            let slot = figure_slot.as_deref().ok_or(AuthoringEditError::MissingInsertionPoint)?;
+            format!("move({slot}, center)")
         }
         InsertKind::CameraMove => "camera.move(scene, x: 0, y: 0, duration: 300ms)".to_owned(),
         InsertKind::CameraShake => {
             "camera.shake(scene, amplitude: 8, frequency: 12, duration: 300ms)".to_owned()
         }
         InsertKind::SpriteFocusRule => {
-            let figure = first_figure.ok_or(AuthoringEditError::MissingInsertionPoint)?;
+            let slot = figure_slot.as_deref().ok_or(AuthoringEditError::MissingInsertionPoint)?;
             format!(
-                "sprite.focus.configure(characters: [{figure}_slot], speaking: style(), others: style(brightness: 0.7), narration: style(), duration: 300ms)"
+                "sprite.focus.configure(characters: [{slot}], speaking: style(), others: style(brightness: 0.7), narration: style(), duration: 300ms)"
             )
         }
         InsertKind::SpriteFocus => "sprite.focus(none)".to_owned(),

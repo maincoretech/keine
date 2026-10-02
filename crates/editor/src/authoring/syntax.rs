@@ -243,9 +243,50 @@ impl InputHighlighter for EditorHighlighter {
         styles
     }
 
-    fn fold_ranges(&self, _text: &Rope) -> Vec<FoldRange> {
-        Vec::new()
+    fn fold_ranges(&self, text: &Rope) -> Vec<FoldRange> {
+        if self.language == SyntaxLanguage::Eiyashou {
+            eiyashou_folds(&text.to_string())
+        } else {
+            Vec::new()
+        }
     }
+}
+
+/// Fold only matched, multiline syntax groups. The language lexer keeps
+/// brackets inside strings/comments out of this stack, including incomplete input.
+fn eiyashou_folds(source: &str) -> Vec<FoldRange> {
+    let mut stack = Vec::new();
+    let mut folds = Vec::new();
+    let mut line = 0;
+    for token in native_tokens(source) {
+        let raw = &source[token.range];
+        if token.kind == NativeTokenKind::Punctuation {
+            match raw {
+                "{" | "(" | "[" => stack.push((raw, line)),
+                "}" | ")" | "]" => {
+                    let expected = match raw {
+                        "}" => "{",
+                        ")" => "(",
+                        _ => "[",
+                    };
+                    if stack.last().is_some_and(|(open, _)| *open == expected) {
+                        let (_, start) = stack.pop().unwrap();
+                        if line > start + 1 {
+                            folds.push(FoldRange::new(start, line));
+                        }
+                    } else {
+                        stack.clear();
+                    }
+                }
+                _ => {}
+            }
+        }
+        line += raw.bytes().filter(|byte| *byte == b'\n').count();
+    }
+    folds.sort_by_key(|fold| (fold.start_line, std::cmp::Reverse(fold.end_line)));
+    // One gutter button per line: the outermost group owns shared headers.
+    folds.dedup_by_key(|fold| fold.start_line);
+    folds
 }
 
 /// The overview uses the source editor's lexer and palette; no separate language rules.
@@ -876,6 +917,34 @@ mod tests {
         assert_eq!(
             tokens(source, SyntaxLanguage::Json, SyntaxKind::Keyword),
             ["true"]
+        );
+    }
+
+    #[test]
+    fn folds_nested_groups_without_reading_brackets_in_text() {
+        let source = "scene 开始 {\r\n  camera.effect(\r\n    all,\r\n    // ) } [\r\n    color_tone: rgba(1, 1, 1, 1)\r\n  ),\r\n  choice {\r\n    option \"括号 } \\\" (\" {\r\n      goto(结束),\r\n    }\r\n  }\r\n}\r\n";
+        let highlighter = EditorHighlighter {
+            language: SyntaxLanguage::Eiyashou,
+            spans: Vec::new(),
+        };
+        assert_eq!(
+            highlighter.fold_ranges(&Rope::from(source)),
+            vec![
+                FoldRange::new(0, 11),
+                FoldRange::new(1, 5),
+                FoldRange::new(6, 10),
+                FoldRange::new(7, 9),
+            ]
+        );
+        assert!(eiyashou_folds("camera.effect(all),\n[\n]\n").is_empty());
+        assert_eq!(
+            eiyashou_folds("scene 未完成 {\n  call(\n    [\n      1\n    ]\n  ),\n"),
+            vec![FoldRange::new(1, 5), FoldRange::new(2, 4)]
+        );
+        assert!(eiyashou_folds("call(\n  ]\n)\n").is_empty());
+        assert_eq!(
+            eiyashou_folds("outer(inner(\n  1\n))\n"),
+            vec![FoldRange::new(0, 2)]
         );
     }
 

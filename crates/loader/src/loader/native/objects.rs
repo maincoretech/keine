@@ -78,6 +78,7 @@ impl ObjectAliases {
             | Action::SetCameraBinding { target, .. } => self.id(target),
             Action::HideParticles { id, .. }
             | Action::Effect { id, .. }
+            | Action::SoundEffect { id, .. }
             | Action::StopVideo { id, .. }
             | Action::HideFloatingText { id, .. }
             | Action::ConfigureFloatingText { id, .. } => self.optional_id(id),

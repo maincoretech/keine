@@ -587,6 +587,192 @@ pub(super) fn apply_prepared_edits(
     apply_prepared_edits_impl(root, edits, true, window, cx)
 }
 
+/// Save is the only automatic formatting boundary. Update the shared document
+/// immediately: GPUI's Change subscriber runs after this action returns.
+pub(super) fn format_and_save(
+    root: &Path,
+    window: &mut Window,
+    cx: &mut App,
+) -> Result<usize, crate::document::SaveError> {
+    use gpui_kit::EntityInputHandler;
+    let documents = {
+        let workspace = cx.global_mut::<EditorDocuments>().workspace_mut(root)?;
+        if workspace.file_operation_active {
+            return Err(io::Error::other(
+                "A file operation is still running; save when it finishes",
+            )
+            .into());
+        }
+        workspace.manager.documents().cloned().collect::<Vec<_>>()
+    };
+    let mut changes = Vec::new();
+    for document in documents {
+        let (path, before) = {
+            let document = document.borrow();
+            (
+                document.relative_path().to_owned(),
+                document.contents().to_owned(),
+            )
+        };
+        if path.extension().is_none_or(|extension| extension != "shou") {
+            continue;
+        }
+        let editor = cx
+            .global::<EditorDocuments>()
+            .editor_for(root, &path)
+            .and_then(|editor| editor.upgrade());
+        if editor.as_ref().is_some_and(|editor| {
+            editor.update(cx, |editor, cx| {
+                editor.marked_text_range(window, cx).is_some()
+            })
+        }) {
+            return Err(io::Error::other("Finish text composition before saving").into());
+        }
+        let Some(after) =
+            keine_loader::format_native_source(&before).filter(|after| after != &before)
+        else {
+            continue;
+        };
+        if after.len() > 1024 * 1024 {
+            return Err(io::Error::other("Formatted document exceeds the 1 MiB size limit").into());
+        }
+        changes.push((
+            document,
+            editor,
+            SourceChange {
+                path,
+                before,
+                after,
+            },
+        ));
+    }
+    let mut history = Vec::new();
+    for (document, editor, change) in changes {
+        document
+            .borrow_mut()
+            .replace_contents(change.after.clone())?;
+        if let Some(editor) = editor {
+            editor.update(cx, |editor, cx| {
+                let focused = editor.focus_handle(cx).is_focused(window);
+                let position = editor.cursor_position();
+                let offset = keine_loader::SourceLineIndex::new(&change.before).offset(
+                    &change.before,
+                    position.line as usize,
+                    position.character as usize,
+                );
+                let offset = formatted_offset(&change.before, &change.after, offset);
+                editor.replace_all(change.after.clone(), window, cx);
+                if focused {
+                    let span = keine_loader::SourceLineIndex::new(&change.after)
+                        .span(&change.after, offset);
+                    editor.set_cursor_position(
+                        Position::new((span.line - 1) as u32, (span.column - 1) as u32),
+                        window,
+                        cx,
+                    );
+                }
+            });
+        }
+        schedule_authoring_refresh(root, Some(&change.path), cx);
+        history.push(change);
+    }
+    cx.global_mut::<EditorDocuments>()
+        .record_source_transaction(root, history);
+    cx.global_mut::<EditorDocuments>().save_all(root)
+}
+
+fn formatted_offset(before: &str, after: &str, offset: usize) -> usize {
+    use keine_loader::{NativeTokenKind, native_tokens};
+    let original = native_tokens(before);
+    let formatted = native_tokens(after);
+    let mut previous = 0;
+    for (old, new) in original
+        .iter()
+        .filter(|token| token.kind != NativeTokenKind::Whitespace)
+        .zip(
+            formatted
+                .iter()
+                .filter(|token| token.kind != NativeTokenKind::Whitespace),
+        )
+    {
+        if offset < old.range.start {
+            return previous;
+        }
+        if offset <= old.range.end {
+            return new.range.start + offset - old.range.start;
+        }
+        previous = new.range.end;
+    }
+    after.len()
+}
+
+#[cfg(test)]
+mod formatting_tests {
+    use super::*;
+
+    #[gpui_kit::test]
+    fn save_formats_shared_source_and_editor_before_writing(cx: &mut gpui_kit::TestAppContext) {
+        let temporary = std::env::temp_dir().join(format!(
+            "keine-format-save-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = temporary.join("project");
+        fs::create_dir_all(root.join("scripts")).unwrap();
+        fs::write(
+            root.join("config.yaml"),
+            include_str!("../../../../tests/fixtures/native-smoke/config.yaml"),
+        )
+        .unwrap();
+        let source = "scene start {wait(1s),\"中文\"}";
+        let path = Path::new("scripts/main.shou");
+        fs::write(root.join(path), source).unwrap();
+        let cx = cx.add_empty_window();
+        cx.update(|window, cx| {
+            gpui_kit::init(cx);
+            let session = crate::workspace::WorkspaceSession::open(&root).unwrap();
+            let root = session.root();
+            let mut documents = EditorDocuments::new(crate::persistence::AppPersistence::new(
+                temporary.join("app-data"),
+            ));
+            documents
+                .ensure_workspace_with_files(root, session.files())
+                .unwrap();
+            let document = documents.open(root, path).unwrap();
+            let editor = cx.new(|cx| EditorState::new(window, cx).default_value(source));
+            documents.register_editor(root, path.to_owned(), editor.downgrade());
+            cx.set_global(documents);
+            let position = Position::new(0, source.find('中').unwrap() as u32);
+            editor.update(cx, |editor, cx| {
+                editor.set_cursor_position(position, window, cx)
+            });
+            assert_eq!(format_and_save(root, window, cx).unwrap(), 1);
+            let formatted = keine_loader::format_native_source(source).unwrap();
+            assert_eq!(fs::read_to_string(root.join(path)).unwrap(), formatted);
+            assert_eq!(editor.read(cx).value().as_ref(), formatted);
+            assert_eq!(editor.read(cx).cursor_position(), Position::new(2, 3));
+            assert_eq!(document.borrow().contents(), formatted);
+            assert!(!document.borrow().is_dirty());
+            assert_eq!(format_and_save(root, window, cx).unwrap(), 0);
+            let workspace = cx.global::<EditorDocuments>().workspaces.get(root).unwrap();
+            let transaction = workspace.source_history.next(true).unwrap();
+            assert_eq!(transaction[0].before, source);
+            assert_eq!(transaction[0].after, formatted);
+            fs::write(root.join(path), "external").unwrap();
+            document
+                .borrow_mut()
+                .replace_contents("scene start {wait(2s)}".into())
+                .unwrap();
+            assert!(format_and_save(root, window, cx).is_err());
+            assert_eq!(fs::read_to_string(root.join(path)).unwrap(), "external");
+        });
+        fs::remove_dir_all(temporary).unwrap();
+    }
+}
+
 fn apply_prepared_edits_impl(
     root: &Path,
     edits: &[(PathBuf, String)],
@@ -672,6 +858,16 @@ pub(super) fn block_at_position(
     column: usize,
 ) -> Option<(String, crate::projection::BlockCard)> {
     let offset = keine_loader::SourceLineIndex::new(source).offset(source, line, column);
+    block_at_offset(projection, offset).map(|(scene, block)| (scene.name.clone(), block.clone()))
+}
+
+pub(super) fn block_at_offset(
+    projection: &EiyashouProjection,
+    offset: usize,
+) -> Option<(
+    &crate::projection::SceneSection,
+    &crate::projection::BlockCard,
+)> {
     projection.scenes.iter().find_map(|scene| {
         if !scene.source_range.contains(&offset) && offset != scene.source_range.end {
             return None;
@@ -682,8 +878,7 @@ pub(super) fn block_at_position(
             .filter(|block| !block.is_textbox_ending())
             .filter(|block| block.source_range.start <= offset && block.source_range.end >= offset)
             .max_by_key(|block| block.depth)
-            .cloned()
-            .map(|block| (scene.name.clone(), block))
+            .map(|block| (scene, block))
     })
 }
 

@@ -146,6 +146,9 @@ fn collect_references(
         } => resource(file, ResourceKind::Bgm),
         Action::Effect {
             file: Some(file), ..
+        }
+        | Action::SoundEffect {
+            file: Some(file), ..
         } => resource(file, ResourceKind::Effect),
         Action::Vocal {
             file: Some(file), ..
@@ -337,6 +340,7 @@ mod tests {
                     transform: None,
                     effect: Some(lut_patch("soft")),
                     v2: None,
+                    shake: None,
                     fields: vec![keine_core::CameraTweenField::LutIntensity],
                     duration: 1.0,
                     easing: Easing::Linear,

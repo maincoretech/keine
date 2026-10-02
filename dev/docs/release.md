@@ -29,6 +29,9 @@ bash dev/scripts/bundle-macos.sh <project> <app-name> <reverse-dns-bundle-id>
 
 第一条打包脚本使用预构建二进制，产出相邻 `Kēne Editor.app` / `Kēne Engine.app`。
 目标必须是新目录；Engine discovery 与协议必须匹配。
+Editor 导入图片无需外部工具；导入非规范音视频需要可执行的 FFmpeg（libopus/libx264），
+可安装到 PATH 或放在 Editor executable 旁/Resources 内。当前打包脚本不附带 FFmpeg；
+Engine 播放规范媒体不依赖这项导入工具。
 开发包使用 ad hoc 签名；正式签名和 notarization 尚不属于当前交付。
 验收包括 `codesign --verify --deep --strict`、ZIP 解压后启动、独立安装后 sibling discovery。
 

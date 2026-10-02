@@ -10,8 +10,8 @@ impl<'a> Parser<'a> {
         report: &mut ParseReport,
     ) -> Option<Action> {
         let (positional, named): (usize, &[&str]) = match name {
-            "se.loop" => (2, &["volume"]),
-            "se.stop" => (1, &[]),
+            "se.loop" => (2, &["volume", "fade"]),
+            "se.stop" => (1, &["fade"]),
             "video.play" => (2, &["loop", "muted", "alpha", "skippable", "wait", "mode"]),
             _ => return None,
         };
@@ -21,16 +21,39 @@ impl<'a> Parser<'a> {
             return None;
         }
         match name {
-            "se.loop" => Some(Action::Effect {
-                id: Some(self.v11_identifier(args.first(), "effect ID", report)?),
-                file: Some(self.v11_identifier(args.get(1), "effect asset", report)?),
-                volume: self.v11_volume(args, report)?,
-            }),
-            "se.stop" => Some(Action::Effect {
-                file: None,
-                volume: 1.0,
-                id: self.v11_optional_star_id(args.first(), "effect ID", report)?,
-            }),
+            "se.loop" => {
+                let id = Some(self.v11_identifier(args.first(), "effect ID", report)?);
+                let file = Some(self.v11_identifier(args.get(1), "effect asset", report)?);
+                let volume = self.v11_volume(args, report)?;
+                Some(if self.named_arg(args, "fade").is_some() {
+                    Action::SoundEffect {
+                        id,
+                        file,
+                        volume,
+                        looped: true,
+                        fade: self.named_duration_checked(args, "fade", report)?,
+                    }
+                } else {
+                    Action::Effect { id, file, volume }
+                })
+            }
+            "se.stop" => {
+                let id = self.v11_optional_star_id(args.first(), "effect ID", report)?;
+                let fade = self.named_duration_checked(args, "fade", report)?;
+                if id.is_none() && fade > 0.0 {
+                    report
+                        .diagnostics
+                        .push(self.error("se.stop(*) is immediate; fade requires an effect ID"));
+                    return None;
+                }
+                Some(Action::SoundEffect {
+                    file: None,
+                    volume: 1.0,
+                    id,
+                    looped: false,
+                    fade,
+                })
+            }
             "video.play" => {
                 let mode = match self.named_arg(args, "mode") {
                     None => VideoMode::Fullscreen,

@@ -95,12 +95,33 @@ fn apply_eiyashou_project(project: &ContentProject, scenes: &mut [LoadedScene]) 
     };
     let mut used = HashSet::<(crate::ResourceKind, String)>::new();
     let mut pending = Vec::<(usize, Diagnostic)>::new();
+    let automatic_focus = scenes
+        .iter()
+        .flat_map(|scene| &scene.actions)
+        .any(|action| matches!(action, Action::ConfigurePortraits { .. }));
     for (scene_index, scene) in scenes.iter_mut().enumerate() {
         if !is_native_scene_path(&scene.path) {
             continue;
         }
-        for (action_index, action) in scene.actions.iter_mut().enumerate() {
-            if let Action::EiyashouSay(dialogue) = action
+        let actions = std::mem::take(&mut scene.actions);
+        let spans = std::mem::take(&mut scene.action_spans);
+        for (action_index, mut action) in actions.into_iter().enumerate() {
+            let span = spans
+                .get(action_index)
+                .copied()
+                .unwrap_or(crate::SourceSpan { line: 1, column: 1 });
+            if automatic_focus
+                && let Action::EiyashouSay(dialogue) = &action
+                && !matches!(scene.actions.last(), Some(Action::FocusPortrait { .. }))
+                && !dialogue.options.inherit_speaker
+                && !(dialogue.options.concat && dialogue.speaker.is_empty())
+            {
+                scene.actions.push(Action::FocusPortrait {
+                    speaker_id: (!dialogue.speaker.is_empty()).then(|| dialogue.speaker.clone()),
+                });
+                scene.action_spans.push(span);
+            }
+            if let Action::EiyashouSay(dialogue) = &mut action
                 && !dialogue.speaker.is_empty()
             {
                 match project_data.characters.get(&dialogue.speaker) {
@@ -112,11 +133,7 @@ fn apply_eiyashou_project(project: &ContentProject, scenes: &mut [LoadedScene]) 
                         scene_index,
                         Diagnostic {
                             level: DiagnosticLevel::Error,
-                            span: scene
-                                .action_spans
-                                .get(action_index)
-                                .copied()
-                                .unwrap_or(crate::SourceSpan { line: 1, column: 1 }),
+                            span,
                             message: format!(
                                 "undefined character id `{}` in dialogue",
                                 dialogue.speaker
@@ -125,6 +142,8 @@ fn apply_eiyashou_project(project: &ContentProject, scenes: &mut [LoadedScene]) 
                     )),
                 }
             }
+            scene.actions.push(action);
+            scene.action_spans.push(span);
         }
         for resource in &scene.resources {
             used.insert((resource.kind, resource.path.clone()));

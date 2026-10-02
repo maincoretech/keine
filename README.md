@@ -11,10 +11,10 @@ Shipping projects use Hakutaku v1, WebP images and Ogg Opus audio.
 ## Run
 
 ```sh
-cargo editor projects/test-project
+cargo editor projects/tday
 cargo validate tests/fixtures/native-smoke
 cargo dev tests/fixtures/native-smoke
-cargo migrate projects/letsgal projects/letsgal-native
+cargo migrate /path/to/letsgal/tday projects/tday
 cargo bundle <project> --output <release-directory>
 ```
 

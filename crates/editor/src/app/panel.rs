@@ -207,7 +207,7 @@ impl PanelContent {
                     let mut editor = EditorState::new(window, cx)
                         .default_value(contents)
                         .language(language)
-                        .folding(false)
+                        .folding(language == "eiyashou")
                         .auto_close(true)
                         .smart_indent(true)
                         .tab_size(gpui_kit::base::input::TabSize {
@@ -368,6 +368,7 @@ pub(super) struct WorkbenchPanel {
     pub(super) inline_block_controls: HashMap<usize, InlineBlockControl>,
     pub(super) block_visible: HashSet<usize>,
     pub(super) block_heights: HashMap<usize, f32>,
+    pub(super) block_layout: RefCell<super::blocks::layout::Cache>,
     pub(super) block_height_revision: u64,
     pub(super) resource_picker: Option<ResourcePicker>,
     pub(super) source_inspector_key: Option<SourceInspectorKey>,
@@ -411,6 +412,8 @@ pub(super) struct WorkbenchPanel {
     pub(super) asset_modified: Option<Duration>,
     pub(super) asset_grid: Option<bool>,
     pub(super) asset_large: bool,
+    pub(super) asset_browser: RefCell<super::resource::browse::Cache>,
+    pub(super) asset_thumbnails: Entity<super::resource::thumbnail::Thumbnails>,
     pub(super) asset_unmapped: bool,
     pub(super) asset_anchor: Option<AssetKey>,
     pub(super) asset_filter_menu: Option<AssetFilterMenu>,
@@ -770,6 +773,7 @@ impl WorkbenchPanel {
                 inline_block_controls: HashMap::new(),
                 block_visible: HashSet::new(),
                 block_heights: HashMap::new(),
+                block_layout: RefCell::new(super::blocks::layout::Cache::default()),
                 block_height_revision: 0,
                 resource_picker: None,
                 source_inspector_key: None,
@@ -814,6 +818,8 @@ impl WorkbenchPanel {
                 asset_modified: None,
                 asset_grid: None,
                 asset_large: false,
+                asset_browser: RefCell::new(super::resource::browse::Cache::default()),
+                asset_thumbnails: super::resource::thumbnail::Thumbnails::new(cx),
                 asset_unmapped: false,
                 asset_anchor: None,
                 asset_filter_menu: None,

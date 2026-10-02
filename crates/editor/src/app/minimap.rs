@@ -72,6 +72,7 @@ impl Pan {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct Mark {
     pub top: f32,
     pub height: f32,
@@ -194,7 +195,7 @@ impl WorkbenchPanel {
 }
 
 pub(super) fn render(
-    marks: Vec<Mark>,
+    marks: Rc<Vec<Mark>>,
     handle: &ScrollHandle,
     state: &Navigation,
     cx: &mut Context<WorkbenchPanel>,
@@ -243,78 +244,82 @@ pub(super) fn render(
                     let geometry = pan_cell.borrow_mut().for_blocks(&handle, height);
                     let origin = bounds.origin + gpui_kit::point(px(INSET), px(INSET));
                     let width = (f32::from(bounds.size.width) - INSET * 2.).max(0.);
-                    for mark in &marks {
-                        let y = geometry.mark_y(mark.top);
-                        let h =
-                            (mark.height / geometry.content * geometry.map_height).clamp(1., 4.);
-                        let Some((y, h)) = geometry.visible_span(y, h) else {
-                            continue;
-                        };
-                        if mark.selected {
+                    // One ordered layer avoids a bounds-tree insertion for every stroke.
+                    window.paint_layer(bounds, |window| {
+                        for mark in marks.iter() {
+                            let y = geometry.mark_y(mark.top);
+                            let h = (mark.height / geometry.content * geometry.map_height)
+                                .clamp(1., 4.);
+                            let Some((y, h)) = geometry.visible_span(y, h) else {
+                                continue;
+                            };
+                            if mark.selected {
+                                window.paint_quad(fill(
+                                    Bounds::new(
+                                        origin + gpui_kit::point(px(0.), px(y)),
+                                        size(px(width), px(h.max(3.).min(height - y))),
+                                    ),
+                                    rgb(PRIMARY_DIM),
+                                ));
+                            }
+                            let indent = (mark.depth as f32 * 3.).min(width / 2.);
+                            let color = if mark.selected { PRIMARY } else { mark.color };
                             window.paint_quad(fill(
                                 Bounds::new(
-                                    origin + gpui_kit::point(px(0.), px(y)),
-                                    size(px(width), px(h.max(3.).min(height - y))),
+                                    origin + gpui_kit::point(px(indent), px(y)),
+                                    size(px(mark.width.min(width - indent)), px(h)),
                                 ),
-                                rgb(PRIMARY_DIM),
+                                gpui_kit::rgba(
+                                    (color << 8) | if mark.selected { 0xff } else { 0x60 },
+                                ),
                             ));
+                            if mark.error {
+                                window.paint_quad(fill(
+                                    Bounds::new(
+                                        origin + gpui_kit::point(px(width - 3.), px(y)),
+                                        size(px(3.), px(h.max(3.).min(height - y))),
+                                    ),
+                                    rgb(0xdb7780),
+                                ));
+                            }
                         }
-                        let indent = (mark.depth as f32 * 3.).min(width / 2.);
-                        let color = if mark.selected { PRIMARY } else { mark.color };
-                        window.paint_quad(fill(
-                            Bounds::new(
-                                origin + gpui_kit::point(px(indent), px(y)),
-                                size(px(mark.width.min(width - indent)), px(h)),
-                            ),
-                            gpui_kit::rgba((color << 8) | if mark.selected { 0xff } else { 0x60 }),
-                        ));
-                        if mark.error {
+                        // Dense rows may overlap a stroke; keep selection markers above all rows.
+                        for mark in marks.iter().filter(|mark| mark.selected) {
+                            let Some((y, h)) = geometry.visible_span(geometry.mark_y(mark.top), 3.)
+                            else {
+                                continue;
+                            };
                             window.paint_quad(fill(
                                 Bounds::new(
-                                    origin + gpui_kit::point(px(width - 3.), px(y)),
-                                    size(px(3.), px(h.max(3.).min(height - y))),
+                                    origin + gpui_kit::point(px(width - 5.), px(y)),
+                                    size(px(5.), px(h)),
                                 ),
-                                rgb(0xdb7780),
+                                rgb(PRIMARY),
                             ));
                         }
-                    }
-                    // Dense rows may overlap a stroke; keep selection markers above all rows.
-                    for mark in marks.iter().filter(|mark| mark.selected) {
-                        let Some((y, h)) = geometry.visible_span(geometry.mark_y(mark.top), 3.)
-                        else {
-                            continue;
-                        };
-                        window.paint_quad(fill(
-                            Bounds::new(
-                                origin + gpui_kit::point(px(width - 5.), px(y)),
-                                size(px(5.), px(h)),
-                            ),
-                            rgb(PRIMARY),
-                        ));
-                    }
-                    if let Some((top, h)) =
-                        geometry.visible_span(geometry.viewport_top(), geometry.thumb)
-                    {
-                        let viewport = Bounds::new(
-                            origin + gpui_kit::point(px(0.), px(top)),
-                            size(px(width), px(h)),
-                        );
-                        window.paint_quad(fill(viewport, gpui_kit::rgba(0xbaebff20)));
-                        window.paint_quad(fill(
-                            Bounds::new(viewport.origin, size(px(2.), viewport.size.height)),
-                            gpui_kit::rgba(0xbaebff90),
-                        ));
-                        for y in [viewport.top(), viewport.bottom() - px(1.)] {
+                        if let Some((top, h)) =
+                            geometry.visible_span(geometry.viewport_top(), geometry.thumb)
+                        {
+                            let viewport = Bounds::new(
+                                origin + gpui_kit::point(px(0.), px(top)),
+                                size(px(width), px(h)),
+                            );
+                            window.paint_quad(fill(viewport, gpui_kit::rgba(0xbaebff20)));
                             window.paint_quad(fill(
-                                Bounds::new(
-                                    gpui_kit::point(viewport.left(), y),
-                                    size(viewport.size.width, px(1.)),
-                                ),
-                                gpui_kit::rgba(0xbaebff60),
+                                Bounds::new(viewport.origin, size(px(2.), viewport.size.height)),
+                                gpui_kit::rgba(0xbaebff90),
                             ));
+                            for y in [viewport.top(), viewport.bottom() - px(1.)] {
+                                window.paint_quad(fill(
+                                    Bounds::new(
+                                        gpui_kit::point(viewport.left(), y),
+                                        size(viewport.size.width, px(1.)),
+                                    ),
+                                    gpui_kit::rgba(0xbaebff60),
+                                ));
+                            }
                         }
-                    }
-
+                    });
                     // Window listeners retain a drag outside the narrow overview; no polling task.
                     let moving_panel = panel.clone();
                     window.on_mouse_event(move |event: &gpui_kit::MouseMoveEvent, phase, _, cx| {

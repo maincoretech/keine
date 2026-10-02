@@ -1,17 +1,15 @@
 use std::collections::{HashMap, HashSet};
 
 use bevy::asset::{AssetPath, RenderAssetUsages, embedded_asset, embedded_path};
-use bevy::camera::visibility::RenderLayers;
+use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
 use bevy::ecs::system::SystemParam;
-use bevy::mesh::{
-    Indices, MeshVertexAttribute, MeshVertexBufferLayoutRef, PrimitiveTopology,
-    VertexAttributeValues,
-};
+use bevy::mesh::{Indices, MeshVertexBufferLayoutRef, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{
-    AsBindGroup, Extent3d, RenderPipelineDescriptor, SpecializedMeshPipelineError,
-    TextureDimension, TextureFormat, VertexFormat,
+    AsBindGroup, Extent3d, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
+    TextureDimension, TextureFormat,
 };
+use bevy::render::storage::ShaderBuffer;
 use bevy::shader::ShaderRef;
 use bevy::sprite_render::{AlphaMode2d, Material2d, Material2dKey, Material2dPlugin};
 use keine_core::{DESIGN_HEIGHT, DESIGN_WIDTH, ParticleEffect};
@@ -23,11 +21,6 @@ const MAX_PARTICLE_COUNT: usize = 256;
 const FALLBACK_TEXTURE_SIZE: u32 = 32;
 const PARTICLE_STEP_SECONDS: f32 = 1.0 / 60.0;
 const MAX_PARTICLE_STEPS_PER_FRAME: usize = 8;
-const ATTRIBUTE_PREVIOUS_POSITION: MeshVertexAttribute = MeshVertexAttribute::new(
-    "ParticlePreviousPosition",
-    988_540_918,
-    VertexFormat::Float32x3,
-);
 
 pub(crate) struct ParticleMaterialPlugin;
 
@@ -43,6 +36,8 @@ pub(crate) struct ParticleMaterial {
     #[texture(0, visibility(fragment))]
     #[sampler(1, visibility(fragment))]
     texture: Handle<Image>,
+    #[storage(2, read_only, visibility(vertex))]
+    particles: Handle<ShaderBuffer>,
 }
 
 impl Material2d for ParticleMaterial {
@@ -66,8 +61,6 @@ impl Material2d for ParticleMaterial {
         descriptor.vertex.buffers = vec![layout.0.get_layout(&[
             Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
             Mesh::ATTRIBUTE_UV_0.at_shader_location(2),
-            Mesh::ATTRIBUTE_COLOR.at_shader_location(4),
-            ATTRIBUTE_PREVIOUS_POSITION.at_shader_location(5),
         ])?];
         Ok(())
     }
@@ -87,6 +80,7 @@ pub(crate) struct ParticleAssets<'w> {
     images: ResMut<'w, Assets<Image>>,
     meshes: ResMut<'w, Assets<Mesh>>,
     materials: ResMut<'w, Assets<ParticleMaterial>>,
+    buffers: ResMut<'w, Assets<ShaderBuffer>>,
 }
 
 #[derive(Resource, Default)]
@@ -98,7 +92,7 @@ pub(crate) struct ParticleRuntime {
 /// Fixed-rate weather simulation clock.
 ///
 /// A 120/144 Hz presentation no longer integrates and uploads the same small
-/// particle mesh at the monitor refresh rate. Rendering remains uncapped and
+/// particle buffer at the monitor refresh rate. Rendering remains uncapped and
 /// frame-rate independent; only the ambient simulation uses a stable 60 Hz
 /// cadence, catching up in bounded steps after a slow frame.
 #[derive(Resource, Default)]
@@ -162,9 +156,8 @@ struct Particle {
     cycle: u32,
 }
 
-/// One ECS/render entity per emitter. Individual particles are packed into a
-/// single dynamic mesh instead of paying transform, sprite extraction and
-/// batching costs for every flake or rain streak.
+/// One entity per emitter. The mesh contains fixed particle IDs/corners; only
+/// the compact storage buffer changes, reusing its GPU allocation each step.
 #[derive(Component)]
 pub(crate) struct ParticleBatch {
     effect_id: String,
@@ -175,6 +168,16 @@ pub(crate) struct ParticleBatch {
     color: Color,
     mesh: Handle<Mesh>,
     material: Handle<ParticleMaterial>,
+    buffer: Handle<ShaderBuffer>,
+    gpu_particles: Vec<ParticleGpu>,
+}
+
+#[derive(Clone, Copy, ShaderType)]
+struct ParticleGpu {
+    previous: Vec4,
+    current: Vec4,
+    size_depth: Vec4,
+    color: Vec4,
 }
 
 pub(crate) fn sync(
@@ -209,10 +212,12 @@ pub(crate) fn sync(
         .collect::<HashSet<_>>();
     let mut stale_meshes = Vec::new();
     let mut stale_materials = Vec::new();
+    let mut stale_buffers = Vec::new();
     for (entity, batch) in &batches {
         if changed.contains(&batch.effect_id) {
             stale_meshes.push(batch.mesh.id());
             stale_materials.push(batch.material.id());
+            stale_buffers.push(batch.buffer.id());
             commands.entity(entity).despawn();
         }
     }
@@ -221,6 +226,9 @@ pub(crate) fn sync(
     }
     for material in stale_materials {
         assets.materials.remove(material);
+    }
+    for buffer in stale_buffers {
+        assets.buffers.remove(buffer);
     }
 
     for id in &changed {
@@ -289,17 +297,26 @@ pub(crate) fn sync(
                 }
             })
             .collect::<Vec<_>>();
-        let mesh = assets.meshes.add(particle_mesh(
-            &particles,
-            style.kind,
-            style.color,
-            state
-                .particle_effects
-                .get(id)
-                .map_or(1.0, |active| active.opacity()),
-            clock.elapsed,
-        ));
-        let material = assets.materials.add(ParticleMaterial { texture });
+        let opacity = state
+            .particle_effects
+            .get(id)
+            .map_or(1.0, |active| active.opacity());
+        let linear = style.color.to_linear().to_f32_array();
+        let frame = ParticleFrame {
+            steps: 0,
+            previous_elapsed: clock.elapsed,
+            current_elapsed: clock.elapsed,
+        };
+        let gpu_particles = particles
+            .iter()
+            .map(|particle| ParticleGpu::new(particle, style.kind, linear, opacity, frame))
+            .collect::<Vec<_>>();
+        let buffer = assets.buffers.add(ShaderBuffer::from(&gpu_particles));
+        let mesh = assets.meshes.add(particle_mesh(count));
+        let material = assets.materials.add(ParticleMaterial {
+            texture,
+            particles: buffer.clone(),
+        });
         commands.spawn((
             Name::new(format!("particle-batch::{id}")),
             ParticleBatch {
@@ -314,9 +331,14 @@ pub(crate) fn sync(
                 color: style.color,
                 mesh: mesh.clone(),
                 material: material.clone(),
+                buffer,
+                gpu_particles,
             },
             Mesh2d(mesh),
             MeshMaterial2d(material),
+            // POSITION stores IDs/corners, not moving world-space bounds.
+            // Weather spans the viewport and must not use those encoded bounds.
+            NoFrustumCulling,
             Transform::from_xyz(0.0, 0.0, 0.8),
             RenderLayers::layer(0),
         ));
@@ -329,7 +351,7 @@ pub(crate) fn animate(
     state: Res<GameState>,
     windows: Query<&Window>,
     mut clock: ResMut<ParticleClock>,
-    mut meshes: ResMut<Assets<Mesh>>,
+    mut buffers: ResMut<Assets<ShaderBuffer>>,
     mut batches: Query<(&mut ParticleBatch, &mut Transform)>,
 ) {
     if batches.is_empty() {
@@ -361,7 +383,6 @@ pub(crate) fn animate(
         let drag_factor = (-batch.drag * PARTICLE_STEP_SECONDS).exp();
         let opacity = effect.opacity();
         let linear = batch.color.to_linear().to_f32_array();
-        let mesh_handle = batch.mesh.clone();
         for particle in &mut batch.particles {
             for _ in 0..frame.steps {
                 particle.previous_position = particle.position;
@@ -391,46 +412,18 @@ pub(crate) fn animate(
             }
         }
 
-        let Some(mut mesh) = meshes.get_mut(&mesh_handle) else {
-            continue;
-        };
-        let Some(VertexAttributeValues::Float32x3(previous_positions)) =
-            mesh.attribute_mut(ATTRIBUTE_PREVIOUS_POSITION)
-        else {
-            continue;
-        };
-        write_batch_positions(
-            previous_positions,
-            &batch.particles,
-            kind,
-            frame.previous_elapsed,
-            true,
-        );
-        let Some(VertexAttributeValues::Float32x3(current_positions)) =
-            mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)
-        else {
-            continue;
-        };
-        write_batch_positions(
-            current_positions,
-            &batch.particles,
-            kind,
-            frame.current_elapsed,
-            false,
-        );
-        let Some(VertexAttributeValues::Float32x4(colors)) =
-            mesh.attribute_mut(Mesh::ATTRIBUTE_COLOR)
-        else {
-            continue;
-        };
-        write_particle_colors(
-            colors,
-            &batch.particles,
-            kind,
-            linear,
-            opacity,
-            frame.current_elapsed,
-        );
+        let ParticleBatch {
+            particles,
+            gpu_particles,
+            buffer,
+            ..
+        } = &mut *batch;
+        for (particle, gpu) in particles.iter().zip(gpu_particles.iter_mut()) {
+            *gpu = ParticleGpu::new(particle, kind, linear, opacity, frame);
+        }
+        if let Some(mut buffer) = buffers.get_mut(&*buffer) {
+            buffer.set_data(&*gpu_particles);
+        }
     }
 }
 
@@ -499,89 +492,67 @@ impl ParticlePerspective {
     }
 }
 
-fn particle_mesh(
-    particles: &[Particle],
-    kind: ParticleKind,
-    color: Color,
-    opacity: f32,
-    elapsed: f32,
-) -> Mesh {
-    let count = particles.len();
+fn particle_mesh(count: usize) -> Mesh {
+    let mut vertices = Vec::with_capacity(count * 4);
     let mut uvs = Vec::with_capacity(count * 4);
     let mut indices = Vec::with_capacity(count * 6);
     for index in 0..count {
+        // x is a local particle ID, y/z are unit corners. Unlike vertex_index,
+        // this remains valid when Bevy places the mesh in a shared GPU slab.
+        for [x, y] in [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]] {
+            vertices.push([index as f32, x, y]);
+        }
         uvs.extend_from_slice(&[[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]]);
         let base = (index * 4) as u32;
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
-        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        RenderAssetUsages::RENDER_WORLD,
     );
-    let mut positions = vec![[0.0; 3]; count * 4];
-    write_batch_positions(&mut positions, particles, kind, elapsed, false);
-    let mut colors = vec![[1.0, 1.0, 1.0, 0.0]; count * 4];
-    write_particle_colors(
-        &mut colors,
-        particles,
-        kind,
-        color.to_linear().to_f32_array(),
-        opacity,
-        elapsed,
-    );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions.clone());
-    mesh.insert_attribute(ATTRIBUTE_PREVIOUS_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
     mesh.insert_indices(Indices::U32(indices));
     mesh
 }
 
-fn write_particle_colors(
-    colors: &mut [[f32; 4]],
-    particles: &[Particle],
-    kind: ParticleKind,
-    linear: [f32; 4],
-    opacity: f32,
-    elapsed: f32,
-) {
-    for (index, particle) in particles.iter().enumerate() {
+impl ParticleGpu {
+    fn new(
+        particle: &Particle,
+        kind: ParticleKind,
+        linear: [f32; 4],
+        opacity: f32,
+        frame: ParticleFrame,
+    ) -> Self {
+        let center = Vec2::new(DESIGN_WIDTH, DESIGN_HEIGHT) * 0.5;
+        let previous = particle.previous_position
+            + particle_motion(kind, particle, frame.previous_elapsed)
+            - center;
+        let current =
+            particle.position + particle_motion(kind, particle, frame.current_elapsed) - center;
+        let (previous_sin, previous_cos) = particle.previous_rotation.sin_cos();
+        let (sin, cos) = particle.rotation.sin_cos();
         let pulse = if kind == ParticleKind::Firefly {
-            0.7 + 0.3 * (elapsed * 2.1 + particle.phase).sin().abs()
+            0.7 + 0.3 * (frame.current_elapsed * 2.1 + particle.phase).sin().abs()
         } else {
             1.0
         };
-        let alpha = (particle.base_alpha * opacity * pulse).clamp(0.0, 1.0);
-        colors[index * 4..index * 4 + 4].fill([linear[0], linear[1], linear[2], alpha]);
-    }
-}
-
-fn write_batch_positions(
-    positions: &mut [[f32; 3]],
-    particles: &[Particle],
-    kind: ParticleKind,
-    elapsed: f32,
-    previous: bool,
-) {
-    for (index, particle) in particles.iter().enumerate() {
-        let center = if previous {
-            particle.previous_position
-        } else {
-            particle.position
-        } + particle_motion(kind, particle, elapsed);
-        let rotation = if previous {
-            particle.previous_rotation
-        } else {
-            particle.rotation
-        };
-        write_particle_quad(
-            positions,
-            index,
-            center,
-            particle.size,
-            rotation,
-            particle.depth,
-        );
+        Self {
+            previous: Vec4::new(previous.x, previous.y, previous_cos, previous_sin),
+            current: Vec4::new(current.x, current.y, cos, sin),
+            size_depth: Vec4::new(
+                particle.size.x,
+                particle.size.y,
+                particle.depth * 0.001,
+                0.0,
+            ),
+            color: Vec4::new(
+                linear[0],
+                linear[1],
+                linear[2],
+                (particle.base_alpha * opacity * pulse).clamp(0.0, 1.0),
+            ),
+        }
     }
 }
 
@@ -600,35 +571,6 @@ fn particle_motion(kind: ParticleKind, particle: &Particle, elapsed: f32) -> Vec
             (elapsed * 1.07 + particle.phase * 0.7).cos() * particle.drift * 0.45,
         ),
         ParticleKind::Rain | ParticleKind::Ambient => Vec2::ZERO,
-    }
-}
-
-fn write_particle_quad(
-    positions: &mut [[f32; 3]],
-    particle_index: usize,
-    center: Vec2,
-    size: Vec2,
-    rotation: f32,
-    depth: f32,
-) {
-    let center = center - Vec2::new(DESIGN_WIDTH, DESIGN_HEIGHT) * 0.5;
-    let half = size * 0.5;
-    let (sin, cos) = rotation.sin_cos();
-    for (corner_index, corner) in [
-        Vec2::new(-half.x, -half.y),
-        Vec2::new(half.x, -half.y),
-        Vec2::new(half.x, half.y),
-        Vec2::new(-half.x, half.y),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let rotated = Vec2::new(
-            corner.x * cos - corner.y * sin,
-            corner.x * sin + corner.y * cos,
-        );
-        let point = center + rotated;
-        positions[particle_index * 4 + corner_index] = [point.x, point.y, depth * 0.001];
     }
 }
 
@@ -996,36 +938,189 @@ mod tests {
 
     #[test]
     fn emitter_mesh_batches_four_vertices_and_six_indices_per_particle() {
-        let particle = Particle {
-            position: Vec2::ZERO,
-            previous_position: Vec2::ZERO,
-            velocity: Vec2::ZERO,
-            size: Vec2::ONE,
-            drift: 0.0,
-            phase: 0.0,
-            angular_velocity: 0.0,
-            rotation: 0.0,
-            previous_rotation: 0.0,
-            base_alpha: 1.0,
-            depth: 1.0,
-            cycle: 0,
-        };
-        let particles = std::iter::repeat_with(|| Particle { ..particle })
-            .take(192)
-            .collect::<Vec<_>>();
-        let mesh = particle_mesh(&particles, ParticleKind::Snow, Color::WHITE, 1.0, 0.0);
-        assert_eq!(mesh.count_vertices(), 192 * 4);
-        assert_eq!(mesh.indices().unwrap().len(), 192 * 6);
-        assert!(mesh.attribute(ATTRIBUTE_PREVIOUS_POSITION).is_some());
+        use bevy::mesh::VertexAttributeValues;
+        for count in [1, 192, MAX_PARTICLE_COUNT] {
+            let mesh = particle_mesh(count);
+            assert_eq!(mesh.count_vertices(), count * 4);
+            assert_eq!(mesh.indices().unwrap().len(), count * 6);
+            let VertexAttributeValues::Float32x3(vertices) =
+                mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap()
+            else {
+                panic!("positions")
+            };
+            for (id, corners) in vertices.chunks_exact(4).enumerate() {
+                assert!(corners.iter().all(|point| point[0] == id as f32));
+            }
+        }
     }
 
     #[test]
-    fn particle_material_uses_global_time_without_a_cpu_uniform() {
-        let shader = include_str!("../../assets/shaders/particle/material.wgsl");
-        assert_eq!(shader.matches("var<uniform>").count(), 0);
-        assert_eq!(shader.matches("@binding(").count(), 2);
-        assert!(shader.contains("fract(globals.time * 60.0)"));
-        assert!(shader.contains("@location(5) previous_position"));
-        assert!(shader.contains("let local_position = mix("));
+    fn storage_payload_preserves_quad_interpolation_and_fading() {
+        let particle = Particle {
+            position: Vec2::new(380.0, 610.0),
+            previous_position: Vec2::new(377.0, 612.0),
+            velocity: Vec2::ZERO,
+            size: Vec2::new(21.0, 37.0),
+            drift: 12.0,
+            phase: 0.31,
+            angular_velocity: 0.45,
+            rotation: 0.72,
+            previous_rotation: 0.69,
+            base_alpha: 0.82,
+            depth: 0.7,
+            cycle: 0,
+        };
+        let frame = ParticleFrame {
+            steps: 1,
+            previous_elapsed: 2.5,
+            current_elapsed: 2.5 + PARTICLE_STEP_SECONDS,
+        };
+        for kind in [
+            ParticleKind::Snow,
+            ParticleKind::Rain,
+            ParticleKind::Firefly,
+            ParticleKind::Leaf,
+            ParticleKind::Ambient,
+        ] {
+            for opacity in [0.0, 0.3, 1.0] {
+                let gpu = ParticleGpu::new(&particle, kind, [0.7, 0.8, 1.0, 1.0], opacity, frame);
+                let buffer = ShaderBuffer::from(vec![gpu]);
+                assert_eq!(buffer.data.as_ref().unwrap().len(), 64);
+                assert!((gpu.size_depth.z - particle.depth * 0.001).abs() < f32::EPSILON);
+                let pulse = if kind == ParticleKind::Firefly {
+                    0.7 + 0.3 * (frame.current_elapsed * 2.1 + particle.phase).sin().abs()
+                } else {
+                    1.0
+                };
+                assert!((gpu.color.w - particle.base_alpha * opacity * pulse).abs() < 1e-6);
+                for corner in [
+                    Vec2::new(-0.5, -0.5),
+                    Vec2::new(0.5, -0.5),
+                    Vec2::new(0.5, 0.5),
+                    Vec2::new(-0.5, 0.5),
+                ] {
+                    let corner = corner * particle.size;
+                    let expand = |data: Vec4| {
+                        data.xy()
+                            + Vec2::new(
+                                corner.x * data.z - corner.y * data.w,
+                                corner.x * data.w + corner.y * data.z,
+                            )
+                    };
+                    let previous = particle.previous_position
+                        + particle_motion(kind, &particle, frame.previous_elapsed)
+                        - Vec2::new(DESIGN_WIDTH, DESIGN_HEIGHT) * 0.5
+                        + Mat2::from_angle(particle.previous_rotation) * corner;
+                    let current = particle.position
+                        + particle_motion(kind, &particle, frame.current_elapsed)
+                        - Vec2::new(DESIGN_WIDTH, DESIGN_HEIGHT) * 0.5
+                        + Mat2::from_angle(particle.rotation) * corner;
+                    for interpolation in [0.0, 0.25, 1.0] {
+                        assert!(
+                            expand(gpu.previous)
+                                .lerp(expand(gpu.current), interpolation)
+                                .distance(previous.lerp(current, interpolation))
+                                < 1e-4
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stepping_updates_buffer_without_dirtying_mesh_and_clearing_releases_assets() {
+        use bevy::asset::AssetPlugin;
+        use bevy::time::TimeUpdateStrategy;
+        use keine_core::{ActiveParticleEffect, State};
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<Image>()
+            .init_asset::<Mesh>()
+            .init_asset::<ParticleMaterial>()
+            .init_asset::<ShaderBuffer>()
+            .init_resource::<ParticleRuntime>()
+            .init_resource::<ParticleClock>()
+            .insert_resource(GameState(State::new()))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_secs_f32(PARTICLE_STEP_SECONDS),
+            ))
+            .add_systems(Update, (sync, animate).chain());
+        app.world_mut().spawn(Window::default());
+        app.world_mut()
+            .resource_mut::<GameState>()
+            .particle_effects
+            .insert(
+                "snow".into(),
+                ActiveParticleEffect::new(ParticleEffect::preset("HEAVY_SNOW")),
+            );
+        app.update();
+        app.update();
+        let (mesh, buffer, material) = {
+            let world = app.world_mut();
+            let batch = world.query::<&ParticleBatch>().single(world).unwrap();
+            (batch.mesh.id(), batch.buffer.id(), batch.material.id())
+        };
+        app.world_mut()
+            .resource_mut::<Messages<AssetEvent<Mesh>>>()
+            .drain()
+            .for_each(drop);
+        let previous = app
+            .world()
+            .resource::<Assets<ShaderBuffer>>()
+            .get(buffer)
+            .unwrap()
+            .data
+            .clone();
+        app.update();
+        assert_ne!(
+            app.world()
+                .resource::<Assets<ShaderBuffer>>()
+                .get(buffer)
+                .unwrap()
+                .data,
+            previous
+        );
+        assert_eq!(
+            app.world_mut()
+                .resource_mut::<Messages<AssetEvent<Mesh>>>()
+                .drain()
+                .count(),
+            0
+        );
+        // Replacing density must replace/release all three assets, then clear
+        // must remove the batch without retaining stale GPU buffer handles.
+        app.world_mut()
+            .resource_mut::<GameState>()
+            .particle_effects
+            .get_mut("snow")
+            .unwrap()
+            .effect
+            .count = 8;
+        app.update();
+        assert!(app.world().resource::<Assets<Mesh>>().get(mesh).is_none());
+        assert!(
+            app.world()
+                .resource::<Assets<ShaderBuffer>>()
+                .get(buffer)
+                .is_none()
+        );
+        assert!(
+            app.world()
+                .resource::<Assets<ParticleMaterial>>()
+                .get(material)
+                .is_none()
+        );
+        assert_eq!(app.world().resource::<Assets<ShaderBuffer>>().len(), 1);
+        app.world_mut()
+            .resource_mut::<GameState>()
+            .particle_effects
+            .clear();
+        app.update();
+        let world = app.world_mut();
+        assert_eq!(world.query::<&ParticleBatch>().iter(world).count(), 0);
+        assert_eq!(world.resource::<Assets<Mesh>>().len(), 0);
+        assert_eq!(world.resource::<Assets<ShaderBuffer>>().len(), 0);
+        assert_eq!(world.resource::<Assets<ParticleMaterial>>().len(), 0);
     }
 }

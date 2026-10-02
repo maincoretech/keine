@@ -51,6 +51,15 @@ pub fn command_argument_names(command: &str) -> Vec<&str> {
             "composite" => &["canvas", "rect", "height"],
             "size" => &["width", "height"],
             "rect" => &["x", "y", "width", "height"],
+            "shake" => &[
+                "amplitude",
+                "frequency",
+                "duration",
+                "axis",
+                "falloff",
+                "amplitude_randomness",
+                "frequency_randomness",
+            ],
             "text.box" => &["visible", "auto"],
             "text.retract" => &["source", "keep"],
             "text.float.configure" => &["id", "infinite"],
@@ -105,7 +114,7 @@ pub fn command_argument_names(command: &str) -> Vec<&str> {
             ],
             "move" => &["duration", "easing", "blocking"],
             "bgm" => &["volume", "fade", "loop"],
-            "se" => &["volume"],
+            "se" => &["volume", "id", "fade"],
             "video" => &["skippable"],
             "pop" => &["into"],
             "camera.shake" => &[
@@ -164,7 +173,9 @@ pub fn command_argument_names(command: &str) -> Vec<&str> {
             ],
             "sprite.animate" => &["duration"],
             "sprite.transition" => &["enter", "exit", "duration"],
-            "se.loop" | "vocal.play" => &["volume"],
+            "se.loop" => &["volume", "fade"],
+            "se.stop" => &["fade"],
+            "vocal.play" => &["volume"],
             "video.play" => &["loop", "muted", "alpha", "skippable", "wait", "mode"],
             "screen.curtain.show" | "screen.curtain.hide" => &["color", "duration"],
             "text.float" => &[
@@ -319,8 +330,9 @@ pub(crate) fn source_field_choices(
         }
         ("dialogue", "concat" | "auto" | "inherit_speaker") => &["true", "false"],
         ("text.intro" | "frame", "hold") => &["true", "false"],
-        (_, "falloff") => &["linear", "expo"],
-        (_, "axis") => &["both", "x", "y"],
+        (_, "falloff" | "shake.falloff") => &["linear", "exponential"],
+        (_, "axis" | "shake.axis") => &["both", "x", "y"],
+        ("camera.move", "shake") => &["shake(amplitude: 4, frequency: 2)"],
         ("move", "1") | (_, "position") => &["left", "center", "right"],
         (_, "layout") => &[
             "natural",
@@ -361,7 +373,7 @@ pub(crate) fn source_field_choices(
 
 pub(crate) fn source_field_label(key: &SourceContext, field: &SourceField) -> String {
     if let Some((group, name)) = field.key.split_once('.')
-        && matches!(group, "position" | "1" | "layout")
+        && matches!(group, "position" | "1" | "layout" | "shake")
     {
         return title_case(&name.replace(['.', '_'], " "));
     }
@@ -380,7 +392,7 @@ pub(crate) fn command_field_label(kind: &BlockKind, command: &str, field_key: &s
         return "Additional repeats".into();
     }
     if let Some((group, name)) = field_key.split_once('.')
-        && matches!(group, "position" | "1" | "layout")
+        && matches!(group, "position" | "1" | "layout" | "shake")
     {
         return format!(
             "{} {}",
@@ -900,6 +912,9 @@ pub(crate) fn source_property_group(field: &SourceField) -> &'static str {
     }
     if name.starts_with("layout.") {
         return "Layout";
+    }
+    if name == "shake" || name.starts_with("shake.") {
+        return "Shake";
     }
     if name.starts_with("speaking.") {
         return "Speaking";

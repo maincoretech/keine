@@ -15,9 +15,9 @@ pub use adapter::{
     NativeDocument, NativeLanguage, NativeSceneSyntax, NativeToken, NativeTokenKind,
     ProjectAdapter, ProjectDebugCursor, ProjectInitialState, SavedState, SourceLineIndex,
     StoreAdapter, StoreMetadata, StoreStatus, StructuredSceneLoader, WebGalLanguage,
-    is_native_dotted_command, is_native_structured_command, native_expanded_fields,
-    native_stage_property_names, native_tokens, parse_native_document, parse_native_scenes,
-    parse_webgal, parse_webgal_report,
+    format_native_source, is_native_dotted_command, is_native_structured_command,
+    native_expanded_fields, native_stage_property_names, native_tokens, parse_native_document,
+    parse_native_scenes, parse_webgal, parse_webgal_report,
 };
 pub use compiled::{
     CompiledError, CompiledProgramV1, CompiledSceneV1, DecodedProgram, ENVELOPE_VERSION,

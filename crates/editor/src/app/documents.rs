@@ -30,6 +30,7 @@ pub(super) struct WorkspaceDocuments {
     pub(super) index_epoch: u64,
     pending_index: BTreeMap<PathBuf, String>,
     index_task: Option<gpui_kit::Task<()>>,
+    index_cancelled: Option<Arc<std::sync::atomic::AtomicBool>>,
     force_index_reload: bool,
     notice: String,
     selection: Option<(PathBuf, usize, usize)>,
@@ -46,6 +47,14 @@ pub(super) struct WorkspaceDocuments {
     pub(super) preview: Arc<PreviewController>,
     tools: HashMap<&'static str, PanelId>,
     pub(super) file_operation_active: bool,
+}
+
+impl Drop for WorkspaceDocuments {
+    fn drop(&mut self) {
+        if let Some(cancelled) = &self.index_cancelled {
+            cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
 }
 
 pub(super) fn schedule_authoring_refresh(root: &Path, path: Option<&Path>, cx: &mut App) {
@@ -66,6 +75,11 @@ pub(super) fn schedule_authoring_refresh(root: &Path, path: Option<&Path>, cx: &
     workspace.index_epoch = workspace.index_epoch.wrapping_add(1);
     let epoch = workspace.index_epoch;
     workspace.index_task.take();
+    if let Some(cancelled) = workspace.index_cancelled.take() {
+        cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    workspace.index_cancelled = Some(cancelled.clone());
     let task_root = root.clone();
     let background = cx.background_executor().clone();
     let task = cx.spawn(async move |cx| {
@@ -78,7 +92,7 @@ pub(super) fn schedule_authoring_refresh(root: &Path, path: Option<&Path>, cx: &
                     .any(|path| path.extension().is_none_or(|ext| ext != "shou"));
             Some((
                 workspace.authoring.clone(),
-                workspace.files.clone(),
+                full.then(|| workspace.files.clone()),
                 pending,
                 full.then(|| workspace.manager.source_overrides()),
             ))
@@ -89,13 +103,22 @@ pub(super) fn schedule_authoring_refresh(root: &Path, path: Option<&Path>, cx: &
         let index = background
             .spawn(async move {
                 let (previous, files, pending, full) = input;
+                let is_cancelled = || cancelled.load(std::sync::atomic::Ordering::Relaxed);
+                if is_cancelled() {
+                    return None;
+                }
                 if let Some(overrides) = full {
-                    AuthoringIndex::load(&calculation_root, &files, &overrides)
+                    let index =
+                        AuthoringIndex::load(&calculation_root, &files.unwrap(), &overrides);
+                    (!is_cancelled()).then_some(index)
                 } else {
-                    previous.with_sources(&pending)
+                    previous.with_sources_cancellable(&pending, is_cancelled)
                 }
             })
             .await;
+        let Some(index) = index else {
+            return;
+        };
         cx.update(|cx| {
             if let Some(workspace) = cx
                 .global_mut::<EditorDocuments>()
@@ -226,6 +249,7 @@ impl EditorDocuments {
                     index_epoch: 0,
                     pending_index: BTreeMap::new(),
                     index_task: None,
+                    index_cancelled: None,
                     force_index_reload: false,
                     notice: "Ready".into(),
                     selection: None,

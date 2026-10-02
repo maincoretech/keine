@@ -27,7 +27,7 @@ use crate::workspace::WorkspaceSession;
 use super::controls::preview_transport_button;
 use super::dock::{ProjectWorkspace, install_default_layout};
 use super::documents::EditorDocuments;
-use super::edits::{follow_preview_position, replay_source_history};
+use super::edits::{follow_preview_position, format_and_save, replay_source_history};
 use super::panel::{ToolKind, WorkbenchPanel};
 use super::{
     ACTIVITY_BRAND_SIZE_PX, ACTIVITY_ICON_SIZE_PX, ACTIVITY_ITEM_SIZE_PX, ACTIVITY_RAIL_WIDTH_PX,
@@ -208,7 +208,7 @@ pub(super) struct WorkbenchWindow {
     _bounds_subscription: Subscription,
     preview_lifecycle: PreviewLifecycle,
     preview_position: Option<(PathBuf, usize, usize)>,
-    audition_status: (Option<PathBuf>, Option<String>),
+    audition_status: (Option<PathBuf>, Option<String>, bool),
     focus: FocusHandle,
 }
 
@@ -327,7 +327,11 @@ impl WorkbenchWindow {
                         this.preview_lifecycle = snapshot.lifecycle;
                         cx.notify();
                     }
-                    let audition_status = (snapshot.audition_path, snapshot.audition_error);
+                    let audition_status = (
+                        snapshot.audition_path,
+                        snapshot.audition_error,
+                        snapshot.audition_paused,
+                    );
                     if this.audition_status != audition_status {
                         if let Some(error) = &audition_status.1 {
                             cx.global_mut::<EditorDocuments>()
@@ -409,7 +413,7 @@ impl WorkbenchWindow {
             _bounds_subscription: bounds_subscription,
             preview_lifecycle: PreviewLifecycle::Off,
             preview_position: None,
-            audition_status: (None, None),
+            audition_status: (None, None, false),
             focus: cx.focus_handle(),
         }
     }
@@ -439,7 +443,7 @@ impl WorkbenchWindow {
             _bounds_subscription: bounds_subscription,
             preview_lifecycle: PreviewLifecycle::Off,
             preview_position: None,
-            audition_status: (None, None),
+            audition_status: (None, None, false),
             focus: cx.focus_handle(),
         }
     }
@@ -521,15 +525,15 @@ impl WorkbenchWindow {
         cx.notify();
     }
 
-    fn save(&mut self, _: &Save, _: &mut Window, cx: &mut Context<Self>) {
-        self.save_documents(cx);
+    fn save(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
+        self.save_documents(window, cx);
     }
 
-    fn save_all(&mut self, _: &SaveAll, _: &mut Window, cx: &mut Context<Self>) {
-        self.save_documents(cx);
+    fn save_all(&mut self, _: &SaveAll, window: &mut Window, cx: &mut Context<Self>) {
+        self.save_documents(window, cx);
     }
 
-    fn save_documents(&mut self, cx: &mut Context<Self>) {
+    fn save_documents(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(root) = self
             .workspace
             .as_ref()
@@ -537,7 +541,7 @@ impl WorkbenchWindow {
         else {
             return;
         };
-        let result = cx.global_mut::<EditorDocuments>().save_all(&root);
+        let result = format_and_save(&root, window, cx);
         let notice = match result {
             Ok(0) => "No changes to save".to_owned(),
             Ok(1) => "Saved 1 document".to_owned(),
@@ -912,7 +916,7 @@ impl WorkbenchWindow {
                         this.finish_close(window, cx);
                         return;
                     };
-                    match cx.global_mut::<EditorDocuments>().save_all(&root) {
+                    match format_and_save(&root, window, cx) {
                         Ok(_) => {
                             this.finish_close(window, cx);
                         }

@@ -674,11 +674,11 @@ mod tests {
         .unwrap();
         fs::write(
             root.join("scripts/main.shou"),
-            "scene start { rin: \"Hi\", background(day), sprite(layer, shared, blocking: false), hide(scene_layers*, blocking: false), particle.show(snowfall, LIGHT_SNOW, texture: snow), sprite.focus(rin_portrait) }",
+            "scene start { rin: \"Hi\", background(day), sprite(layer, shared, blocking: false), hide(scene_layers*, blocking: false), particle.show(snowfall, LIGHT_SNOW, texture: snow), sprite.focus(rin) }",
         )
         .unwrap();
 
-        fs::write(root.join("objects.yaml"), "objects:\n  layer: scene-layer:original\n  rin_portrait: original-character\nprefixes:\n  scene_layers: \"scene-layer:\"\n").unwrap();
+        fs::write(root.join("objects.yaml"), "objects:\n  layer: scene-layer:original\n  rin: original-character\nprefixes:\n  scene_layers: \"scene-layer:\"\n").unwrap();
         let mut config = GameConfig::default();
         config.script.objects = "objects.yaml".into();
         config.adapter.script = "keine".into();
@@ -724,6 +724,46 @@ mod tests {
         assert!(
             matches!(&scenes[0].actions[5], keine_core::Action::FocusPortrait { speaker_id } if speaker_id.as_deref() == Some("original-character"))
         );
+        // A single rule enables automatic focus; display names and runtime
+        // object aliases must not replace the character identity used to focus.
+        fs::write(
+            root.join("scripts/main.shou"),
+            concat!(
+                "scene start { sprite.focus.configure(characters: [rin, other], ",
+                "speaking: style(brightness: 1.2), others: style(brightness: 0.4), ",
+                "narration: style(brightness: 0.8), duration: 0ms), ",
+                "sprite(rin, shared, blocking: false), sprite(other, shared, blocking: false), ",
+                "rin: \"Hi\", \"continued\", inherit_speaker: true, \"Narration\" }",
+            ),
+        )
+        .unwrap();
+        let scenes = load_scenes(&project).unwrap();
+        assert!(
+            scenes[0]
+                .diagnostics
+                .iter()
+                .all(|d| d.level != crate::DiagnosticLevel::Error),
+            "{:?}",
+            scenes[0].diagnostics
+        );
+        assert_eq!(scenes[0].actions.len(), scenes[0].action_spans.len());
+        let mut state = keine_core::State::new();
+        state.install_program(keine_core::Program::from_scenes(
+            scenes.into_iter().map(|scene| (scene.name, scene.actions)),
+        ));
+        state.current_scene = "start".into();
+        for (speaking, others) in [(1.2, 0.4), (1.2, 0.4), (0.8, 0.8)] {
+            assert_eq!(
+                keine_core::step::step(&mut state),
+                keine_core::StepResult::AwaitClick
+            );
+            assert_eq!(
+                state.sprites["original-character"].filter.brightness,
+                speaking
+            );
+            assert_eq!(state.sprites["other"].filter.brightness, others);
+            keine_core::step::advance(&mut state);
+        }
         let _ = fs::remove_dir_all(root);
     }
 

@@ -9,10 +9,8 @@ target/
 # Save files (runtime user data)
 saves/
 
-# Local LetsGal Studio commercial sample and temporary example
-projects/letsgal/
-projects/letsgal-native/
-projects/test-project
+# Local authoring demo and its copied media
+projects/
 
 # Engine-generated artifacts (compiled program, caches)
 **/.keine/

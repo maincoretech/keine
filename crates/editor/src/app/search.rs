@@ -179,6 +179,7 @@ impl WorkbenchPanel {
                 let editor = editor.clone();
                 editor.update(cx, |editor, cx| {
                     let position = editor.text().offset_to_position(hit.range.start);
+                    editor.unfold_at(position, cx);
                     editor.set_cursor_position(position, window, cx);
                     editor.set_selected_range(hit.range.clone(), cx);
                     if panel.document_mode == DocumentMode::Text {

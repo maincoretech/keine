@@ -1,5 +1,5 @@
 use super::*;
-use keine_core::{CameraShakeRandomness, CameraTweenField, CameraTweenSpec};
+use keine_core::{CameraShakeRandomness, CameraShakeTweenSpec, CameraTweenField, CameraTweenSpec};
 
 pub(super) fn move_fields() -> &'static [&'static str] {
     static FIELDS: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
@@ -7,6 +7,7 @@ pub(super) fn move_fields() -> &'static [&'static str] {
         .get_or_init(|| {
             let mut fields = vec![
                 "x", "y", "alpha", "scale_x", "scale_y", "rotation", "blur", "width", "height",
+                "shake",
             ];
             for field in effects::PATCH_FIELDS {
                 if !fields.contains(field) {
@@ -39,9 +40,53 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        if transform.is_none() && effect.is_none() {
+        let shake = if let Some(argument) = self.named_arg(args, "shake") {
+            let (name, mut values) = self.grouped_args(argument, report)?;
+            if name != "shake" {
+                report
+                    .diagnostics
+                    .push(self.error("shake requires `shake(amplitude: ..., frequency: ...)`"));
+                return None;
+            }
+            self.checked_group(
+                &name,
+                &values,
+                &[
+                    "amplitude",
+                    "frequency",
+                    "duration",
+                    "axis",
+                    "falloff",
+                    "amplitude_randomness",
+                    "frequency_randomness",
+                ],
+                report,
+            )?;
+            if self.named_arg(&values, "duration").is_none()
+                && let Some(duration) = self.named_arg(args, "duration")
+            {
+                values.push(duration.clone());
+            }
+            values.insert(0, args[0].clone());
+            let action = self.camera_shake(&values, report)?;
+            Some(match action {
+                Action::ShakeCamera { shake, .. } => CameraShakeTweenSpec {
+                    shake,
+                    randomness: Default::default(),
+                },
+                Action::ShakeCameraRandomized {
+                    shake, randomness, ..
+                } => CameraShakeTweenSpec { shake, randomness },
+                _ => unreachable!("camera_shake returns a typed shake"),
+            })
+        } else {
+            None
+        };
+        if transform.is_none() && effect.is_none() && shake.is_none() {
             report.diagnostics.push(
-                self.error("camera.move(...) requires at least one transform or effect field"),
+                self.error(
+                    "camera.move(...) requires at least one transform, effect or shake field",
+                ),
             );
             return None;
         }
@@ -56,7 +101,7 @@ impl<'a> Parser<'a> {
             },
             report,
         )?;
-        if effect.is_none() {
+        if effect.is_none() && shake.is_none() {
             return Some(action);
         }
         let mut spec = match action {
@@ -72,6 +117,7 @@ impl<'a> Parser<'a> {
                 transform: None,
                 effect: None,
                 v2: None,
+                shake: None,
                 fields: CameraTweenField::ALL.to_vec(),
                 duration,
                 easing,
@@ -82,6 +128,7 @@ impl<'a> Parser<'a> {
         spec.transform = transform;
         spec.effect = effect;
         spec.v2 = None;
+        spec.shake = shake;
         Some(Action::SetCameraTween { spec })
     }
 
@@ -213,6 +260,7 @@ impl<'a> Parser<'a> {
                 transform,
                 effect,
                 v2,
+                shake: None,
                 fields,
                 duration,
                 easing,

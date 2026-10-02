@@ -87,6 +87,8 @@ fn collect(action: &Action, names: &mut Names) {
             Some(target)
         }
         Action::FocusPortrait { speaker_id }
+        | Action::Effect { id: speaker_id, .. }
+        | Action::SoundEffect { id: speaker_id, .. }
         | Action::HideParticles { id: speaker_id, .. }
         | Action::StopVideo { id: speaker_id, .. } => speaker_id.as_ref(),
         Action::PlayVideo { video } => Some(&video.id),

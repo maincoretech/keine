@@ -10,12 +10,12 @@ use keine_loader::{AdaptedProject, LoaderRegistry, load_scenes};
 const EXPECTED_ACTIONS: u64 = 896;
 
 fn project_root() -> PathBuf {
-    let configured = std::env::var_os("KEINE_LETSGAL_PROJECT").map(PathBuf::from);
-    let default = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../projects/letsgal");
-    let root = configured.unwrap_or(default);
+    let root = std::env::var_os("KEINE_LETSGAL_PROJECT")
+        .map(PathBuf::from)
+        .expect("set KEINE_LETSGAL_PROJECT to the external official LetsGal sample");
     root.canonicalize().unwrap_or_else(|error| {
         panic!(
-            "LetsGal sample is unavailable at {} ({error}); copy the official Studio template to projects/letsgal or set KEINE_LETSGAL_PROJECT",
+            "LetsGal sample is unavailable at {} ({error}); check KEINE_LETSGAL_PROJECT",
             root.display()
         )
     })

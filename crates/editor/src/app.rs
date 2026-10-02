@@ -129,6 +129,7 @@ gpui_kit::assets::icon_assets!(
         Music,
         PersonStanding,
         Repeat2,
+        RotateCcw,
         Scissors,
         SlidersHorizontal,
         Square,

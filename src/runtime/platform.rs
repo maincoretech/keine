@@ -13,8 +13,8 @@ use bevy::prelude::*;
 use bevy::render::batching::gpu_preprocessing::{GpuPreprocessingMode, GpuPreprocessingSupport};
 use bevy::render::renderer::RenderAdapterInfo;
 use bevy::render::{Render, RenderApp};
-use bevy::window::PrimaryWindow;
 use bevy::window::WindowCloseRequested;
+use bevy::window::{Monitor, OnMonitor, PrimaryWindow};
 use bevy::winit::{UpdateMode, WinitSettings};
 use keine_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
@@ -264,7 +264,8 @@ pub(crate) struct LifecycleContext<'w, 's> {
     auto_hide: Res<'w, AutoHideTiming>,
     input_caret: Res<'w, UserInputCaretBlink>,
     real_time: Res<'w, Time<Real>>,
-    windows: Query<'w, 's, &'static Window>,
+    windows: Query<'w, 's, (&'static Window, Option<&'static OnMonitor>)>,
+    monitors: Query<'w, 's, &'static Monitor>,
     benchmark: Option<Res<'w, crate::ui::performance::RuntimeCaptureConfig>>,
     startup_capture: Option<Res<'w, crate::ui::performance::StartupCapture>>,
     editor_sync: Option<Res<'w, EditorSyncSession>>,
@@ -278,7 +279,10 @@ pub(crate) fn update_lifecycle(
     mut virtual_time: ResMut<Time<Virtual>>,
     mut dialogue_length: Local<DialogueLengthCache>,
 ) {
-    let focused = context.windows.single().is_ok_and(|window| window.focused);
+    let focused = context
+        .windows
+        .single()
+        .is_ok_and(|(window, _)| window.focused);
     let studio_sync = context.editor_sync.is_some();
     let companion_preview = context.authoring_preview.is_some();
     let preview_settling = context
@@ -321,27 +325,27 @@ pub(crate) fn update_lifecycle(
         RuntimeActivity::Idle
     };
 
-    let benchmark_mode = benchmark_active
-        .then(|| UpdateMode::reactive_low_power(std::time::Duration::from_secs_f64(1.0 / 60.0)));
-    let focused_mode = match (benchmark_mode, next) {
-        (Some(mode), _) => mode,
-        (None, RuntimeActivity::Active | RuntimeActivity::Loading) => UpdateMode::Continuous,
-        (None, RuntimeActivity::Idle | RuntimeActivity::Background) => {
+    let refresh_rate = context
+        .windows
+        .single()
+        .ok()
+        .and_then(|(_, monitor)| monitor)
+        .and_then(|monitor| context.monitors.get(monitor.0).ok())
+        .and_then(|monitor| monitor.refresh_rate_millihertz);
+    let active_mode = active_update_mode(refresh_rate);
+    let focused_mode = match next {
+        RuntimeActivity::Active | RuntimeActivity::Loading => active_mode,
+        RuntimeActivity::Idle | RuntimeActivity::Background => {
             UpdateMode::reactive_low_power(reactive_wait)
         }
     };
     if winit.focused_mode != focused_mode {
         winit.focused_mode = focused_mode;
     }
-    let unfocused_mode = if let Some(mode) = benchmark_mode {
-        mode
+    let unfocused_mode = if benchmark_active || studio_sync && !companion_preview {
+        active_mode
     } else if companion_preview {
         focused_mode
-    } else if studio_sync {
-        // Only Studio synchronization needs an unfocused live render loop.
-        // Ordinary `dev` hot reload is event-driven and follows release focus
-        // semantics, avoiding a permanent background CPU cost.
-        UpdateMode::Continuous
     } else {
         UpdateMode::reactive_low_power(std::time::Duration::MAX)
     };
@@ -359,6 +363,25 @@ pub(crate) fn update_lifecycle(
             virtual_time.unpause();
         }
     }
+}
+
+/// AppKit can issue synthetic redraws faster than the display presents them.
+/// Schedule active macOS playback on the current monitor's cadence instead of
+/// driving extra updates from those events. Input is consumed on the next frame;
+/// idle windows still wake directly on input. Other platforms retain vsync pacing.
+fn active_update_mode(refresh_rate_millihertz: Option<u32>) -> UpdateMode {
+    #[cfg(target_os = "macos")]
+    if let Some(rate) = refresh_rate_millihertz.filter(|rate| *rate > 0) {
+        return UpdateMode::Reactive {
+            wait: std::time::Duration::from_secs_f64(1_000.0 / f64::from(rate)),
+            react_to_device_events: false,
+            react_to_user_events: false,
+            react_to_window_events: false,
+        };
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = refresh_rate_millihertz;
+    UpdateMode::Continuous
 }
 
 const fn should_pause_for_background(focused: bool, studio_sync: bool) -> bool {
@@ -785,6 +808,69 @@ mod tests {
             app.world().resource::<Messages<AppExit>>().is_empty(),
             "duplicate native close events must not start another shutdown"
         );
+    }
+
+    #[test]
+    fn runtime_capture_uses_playback_cadence_in_both_focus_states() {
+        use crate::ui::performance::{BenchmarkCameras, install_runtime_capture};
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut app = App::new();
+        app.insert_resource(GameState(keine_core::State::new()))
+            .init_resource::<AssetLoadingGate>()
+            .init_resource::<UiAnimationActivity>()
+            .init_resource::<AudioAnimationActivity>()
+            .init_resource::<ToggleStates>()
+            .init_resource::<AutoHideTiming>()
+            .init_resource::<UserInputCaretBlink>()
+            .init_resource::<Time<Real>>()
+            .init_resource::<Time<Virtual>>()
+            .init_resource::<RuntimeActivity>()
+            .insert_resource(WinitSettings::desktop_app());
+        install_runtime_capture(&mut app, 12.0, None, BenchmarkCameras::Runtime);
+        let monitor = app
+            .world_mut()
+            .spawn(Monitor {
+                name: None,
+                physical_height: 1898,
+                physical_width: 3024,
+                physical_position: IVec2::ZERO,
+                refresh_rate_millihertz: Some(120_000),
+                scale_factor: 1.0,
+                video_modes: Vec::new(),
+            })
+            .id();
+        let entity = app
+            .world_mut()
+            .spawn((Window::default(), OnMonitor(monitor)))
+            .id();
+        for focused in [true, false] {
+            app.world_mut().get_mut::<Window>(entity).unwrap().focused = focused;
+            app.world_mut().run_system_once(update_lifecycle).unwrap();
+            let winit = app.world().resource::<WinitSettings>();
+            assert_eq!(winit.focused_mode, active_update_mode(Some(120_000)));
+            assert_eq!(winit.unfocused_mode, winit.focused_mode);
+            assert!(!app.world().resource::<Time<Virtual>>().is_paused());
+        }
+    }
+
+    #[test]
+    fn active_cadence_follows_refresh_rate_without_a_sixty_hz_cap() {
+        assert_eq!(active_update_mode(None), UpdateMode::Continuous);
+        assert_eq!(active_update_mode(Some(0)), UpdateMode::Continuous);
+        #[cfg(target_os = "macos")]
+        for rate in [60_000, 120_000, 144_000] {
+            let UpdateMode::Reactive {
+                wait,
+                react_to_window_events,
+                ..
+            } = active_update_mode(Some(rate))
+            else {
+                panic!("monitor cadence")
+            };
+            assert!((wait.as_secs_f64() - 1_000.0 / f64::from(rate)).abs() < 1e-9);
+            assert!(!react_to_window_events);
+        }
     }
 
     #[test]

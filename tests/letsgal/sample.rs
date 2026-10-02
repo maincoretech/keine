@@ -6,14 +6,8 @@ use std::path::{Path, PathBuf};
 
 use keine_loader::{DiagnosticLevel, LoaderRegistry, load_scenes};
 
-fn project_root() -> PathBuf {
-    std::env::var_os("KEINE_LETSGAL_PROJECT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("projects/letsgal"))
-}
-
 // Selected camera fields now form one atomic Action. Keep counting its original
-// transform/effect components so this acceptance still detects dropped sample content.
+// transform/effect/shake components so this acceptance still detects dropped sample content.
 fn camera_components(action: &keine_core::Action) -> usize {
     match action {
         keine_core::Action::Flow { action, .. } => camera_components(action),
@@ -21,6 +15,7 @@ fn camera_components(action: &keine_core::Action) -> usize {
             usize::from(spec.transform.is_some())
                 + usize::from(spec.effect.is_some())
                 + usize::from(spec.v2.is_some())
+                + usize::from(spec.shake.is_some())
         }
         _ => 1,
     }
@@ -28,19 +23,17 @@ fn camera_components(action: &keine_core::Action) -> usize {
 
 #[test]
 fn official_sample_compiles_and_resolves_every_static_resource() {
-    let root = project_root();
-    if !root.join("project.json").is_file() {
-        assert!(
-            std::env::var_os("KEINE_LETSGAL_PROJECT").is_none(),
-            "KEINE_LETSGAL_PROJECT does not contain project.json: {}",
-            root.display()
-        );
+    let Some(root) = std::env::var_os("KEINE_LETSGAL_PROJECT").map(PathBuf::from) else {
         eprintln!(
-            "skipping local LetsGal sample acceptance; copy the official Studio template to {}",
-            root.display()
+            "skipping official sample acceptance; set KEINE_LETSGAL_PROJECT to its external directory"
         );
         return;
-    }
+    };
+    assert!(
+        root.join("project.json").is_file(),
+        "KEINE_LETSGAL_PROJECT does not contain project.json: {}",
+        root.display()
+    );
 
     let project = LoaderRegistry::default()
         .open_project(&root)

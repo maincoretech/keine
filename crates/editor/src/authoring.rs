@@ -67,7 +67,7 @@ mod tests {
         let original = AuthoringIndex::load(&root, session.files(), &BTreeMap::new());
         let changes = BTreeMap::from([(
             PathBuf::from("scripts/main.shou"),
-            "scene opening { bg(room), \"changed\", wait(1s) }".into(),
+            "scene opening { background(room), \"changed\", wait(1s) }".into(),
         )]);
         let next = original.with_sources(&changes);
         let fresh = AuthoringIndex::load(&root, session.files(), &changes);
@@ -76,6 +76,48 @@ mod tests {
         assert_eq!(next.assets, fresh.assets);
         assert_eq!(next.asset_references, fresh.asset_references);
         assert_eq!(next.problems, fresh.problems);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn source_refresh_preserves_other_files_and_recovers_errors() {
+        let root = fixture();
+        fs::write(
+            root.join("scripts/other.shou"),
+            "scene other { background(room), \"other\" }",
+        )
+        .unwrap();
+        let session = crate::workspace::WorkspaceSession::open(&root).unwrap();
+        let mut current = AuthoringIndex::load(&root, session.files(), &BTreeMap::new());
+        for source in [
+            "scene opening { background(room), \"new\" }",
+            "scene broken {",
+            "scene fixed { \"fixed\" }",
+        ] {
+            let changes = BTreeMap::from([(PathBuf::from("scripts/main.shou"), source.into())]);
+            let next = current.with_sources(&changes);
+            let fresh = AuthoringIndex::load(&root, session.files(), &changes);
+            assert_eq!(next.scenes, fresh.scenes);
+            assert_eq!(next.dialogues, fresh.dialogues);
+            assert_eq!(next.assets, fresh.assets);
+            assert_eq!(next.problems, fresh.problems);
+            // Resource references are queried by location, not contribution insertion order.
+            let mut actual = next.asset_references.clone();
+            let mut expected = fresh.asset_references.clone();
+            actual.sort_by(|a, b| a.path.cmp(&b.path).then(a.line.cmp(&b.line)));
+            expected.sort_by(|a, b| a.path.cmp(&b.path).then(a.line.cmp(&b.line)));
+            assert_eq!(actual, expected);
+            let cancelled = std::cell::Cell::new(0);
+            assert!(
+                current
+                    .with_sources_cancellable(&changes, || {
+                        cancelled.set(cancelled.get() + 1);
+                        cancelled.get() > 1
+                    })
+                    .is_none()
+            );
+            current = next;
+        }
         fs::remove_dir_all(root).unwrap();
     }
 

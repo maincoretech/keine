@@ -8,7 +8,7 @@ use crate::ScriptLanguage;
 pub(crate) use native::eiyashou_semantic_diagnostics;
 pub use native::{
     NativeDocument, NativeLanguage, NativeSceneSyntax, NativeToken, NativeTokenKind,
-    SourceLineIndex, is_native_dotted_command, is_native_structured_command,
+    SourceLineIndex, format_native_source, is_native_dotted_command, is_native_structured_command,
     native_expanded_fields, native_stage_property_names, native_tokens, parse_native_document,
     parse_native_scenes,
 };

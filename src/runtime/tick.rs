@@ -1320,8 +1320,7 @@ fn advance_camera_transitions(state: &mut State, delta_seconds: f32) -> bool {
 
     let shake_finished = if let Some(shake) = &mut state.camera_shake {
         changed = true;
-        shake.elapsed = (shake.elapsed + delta_seconds).min(shake.spec.duration);
-        shake.sample();
+        shake.advance(delta_seconds);
         shake.elapsed >= shake.spec.duration
     } else {
         false
@@ -2204,10 +2203,10 @@ mod tests {
     use keine_core::config::AssetSourceConfig;
     use keine_core::state::{Dialogue, KeyframeAnimation, TransformAnimation};
     use keine_core::{
-        Action, AnimationPreset, BlendMode, DialoguePause, Easing, Position, PostProcessPatch,
-        SpriteTransform, StageAnimation, StageAudioCue, StageAudioKind, StageEvent, StageEventKind,
-        StageKeyframe, StageProperty, StageTarget, StageTrack, Transition, Value, VideoMode,
-        VideoSpec,
+        Action, AnimationPreset, BlendMode, CameraShakeAxis, CameraShakeFalloff, CameraShakeSpec,
+        DialoguePause, Easing, Position, PostProcessPatch, SpriteTransform, StageAnimation,
+        StageAudioCue, StageAudioKind, StageEvent, StageEventKind, StageKeyframe, StageProperty,
+        StageTarget, StageTrack, Transition, Value, VideoMode, VideoSpec,
     };
 
     use super::*;
@@ -2244,7 +2243,19 @@ mod tests {
                 speed_lines_region_width: 2.,
                 ..Default::default()
             })),
+            shake: Some(keine_core::CameraShakeTweenSpec {
+                shake: CameraShakeSpec {
+                    amplitude: 4.0,
+                    frequency: 2.0,
+                    duration: 2.0,
+                    axis: CameraShakeAxis::Both,
+                    falloff: CameraShakeFalloff::Linear,
+                },
+                randomness: Default::default(),
+            }),
             fields: vec![
+                keine_core::CameraTweenField::ShakeAmplitude,
+                keine_core::CameraTweenField::ShakeFrequency,
                 keine_core::CameraTweenField::SpeedLinesDensity,
                 keine_core::CameraTweenField::SpeedLinesRegionWidth,
             ],
@@ -2257,12 +2268,18 @@ mod tests {
         assert_eq!(state.camera_effect.v2.speed_lines_region_width, 1.);
         assert!(advance_camera_transitions(&mut state, 0.5));
         assert_eq!(state.camera_effect.v2.speed_lines_intensity, 0.8);
+        let shake = state.camera_shake.as_ref().unwrap();
+        assert_eq!((shake.spec.amplitude, shake.spec.frequency), (2.0, 1.0));
         assert!((state.camera_effect.v2.speed_lines_density - 0.75).abs() < 0.00001);
         assert_eq!(state.camera_effect.v2.speed_lines_region_width, 1.5);
         assert!(advance_camera_transitions(&mut state, 0.5));
         assert_eq!(state.camera_effect.v2.speed_lines_density, 0.95);
         assert_eq!(state.camera_effect.v2.speed_lines_region_width, 2.);
         assert!(state.camera_effect_animation.is_none());
+        assert!(!state.presentation_blocked());
+        assert!(state.camera_shake.is_some());
+        advance_camera_transitions(&mut state, 1.0);
+        assert!(state.camera_shake.is_none());
     }
 
     #[test]

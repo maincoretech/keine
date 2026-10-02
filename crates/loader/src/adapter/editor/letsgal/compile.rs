@@ -9,16 +9,16 @@ use keine_core::config::{
 };
 use keine_core::{
     Action, Anchor, AssetHint, AssetHintKind, BlendMode, CameraShakeAxis, CameraShakeFalloff,
-    CameraShakeRandomness, CameraShakeSpec, CameraTargets, CameraTweenField, CameraTweenSpec,
-    ChoiceTarget, ColorToneMode, Easing, InputValueType, LoadingStrategy, LoadingStrategyMode,
-    PortraitStyle, Position, PostProcessEffect, PostProcessPatch, PostProcessV2, SayOptions,
-    SceneFit, SceneLayerLayout, SceneMouseParallax, SpriteLayout, SpriteTransform, StageAnimation,
-    StageAudioCue, StageAudioKind, StageEvent, StageEventKind, StageKeyframe, StageMask,
-    StageMaskFillMode, StageMaskFit, StageMaskImageChannel, StageMaskMode, StageMaskPlane,
-    StageMaskScope, StageMaskShape, StageMaskTextureBlend, StageMaskVisibility, StageProperty,
-    StageSceneCue, StageSceneLayer, StageTarget, StageTrack, SystemMessageMode, SystemMessageSpec,
-    SystemUiSlot, TransformKeyframe, TransformPatch, Transition, UserInputSpec, VideoMode,
-    VideoSpec,
+    CameraShakeRandomness, CameraShakeSpec, CameraShakeTweenSpec, CameraTargets, CameraTweenField,
+    CameraTweenSpec, ChoiceTarget, ColorToneMode, Easing, InputValueType, LoadingStrategy,
+    LoadingStrategyMode, PortraitStyle, Position, PostProcessEffect, PostProcessPatch,
+    PostProcessV2, SayOptions, SceneFit, SceneLayerLayout, SceneMouseParallax, SpriteLayout,
+    SpriteTransform, StageAnimation, StageAudioCue, StageAudioKind, StageEvent, StageEventKind,
+    StageKeyframe, StageMask, StageMaskFillMode, StageMaskFit, StageMaskImageChannel,
+    StageMaskMode, StageMaskPlane, StageMaskScope, StageMaskShape, StageMaskTextureBlend,
+    StageMaskVisibility, StageProperty, StageSceneCue, StageSceneLayer, StageTarget, StageTrack,
+    SystemMessageMode, SystemMessageSpec, SystemUiSlot, TransformKeyframe, TransformPatch,
+    Transition, UserInputSpec, VideoMode, VideoSpec,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -2251,17 +2251,25 @@ fn compile_sound(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport)
     } else {
         let looped = prop_bool(&block.props, "loop", false);
         let id = prop_string(&block.props, "soundId");
+        let id = (!id.is_empty())
+            .then_some(id)
+            .or_else(|| looped.then(|| "letsgal-loop".into()));
+        let fade = prop_f32(&block.props, "fadeDuration", 0.0) / 1000.0;
         report.push(
-            Action::Effect {
-                file: (!file.is_empty()).then_some(file),
-                volume,
-                id: (looped || !id.is_empty()).then(|| {
-                    if id.is_empty() {
-                        "letsgal-loop".into()
-                    } else {
-                        id
-                    }
-                }),
+            if fade == 0.0 && (looped || id.is_none()) {
+                Action::Effect {
+                    file: (!file.is_empty()).then_some(file),
+                    volume,
+                    id,
+                }
+            } else {
+                Action::SoundEffect {
+                    file: (!file.is_empty()).then_some(file),
+                    volume,
+                    id,
+                    looped,
+                    fade,
+                }
             },
             span,
         );
@@ -2290,10 +2298,12 @@ fn compile_stop_sound(block: &StoryBlock, span: SourceSpan, report: &mut ParseRe
     } else {
         let id = prop_string(&block.props, "soundId");
         report.push(
-            Action::Effect {
+            Action::SoundEffect {
                 file: None,
-                volume: 0.0,
+                volume: 1.0,
                 id: (!id.is_empty()).then_some(id),
+                looped: false,
+                fade: prop_f32(&block.props, "fadeDuration", 0.0) / 1000.0,
             },
             span,
         );
@@ -2401,6 +2411,13 @@ fn compile_camera(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport
                     .collect(),
             };
             if mapped.is_empty() {
+                // Studio's mask may include effects with explicitly unset values.
+                // They do not change state and require no runtime capability.
+                if block.props.get(name).is_some_and(|value| {
+                    value.is_null() || value.as_str().is_some_and(|value| value.trim().is_empty())
+                }) {
+                    continue;
+                }
                 report.diagnostics.push(Diagnostic {
                     level: DiagnosticLevel::Error,
                     span,
@@ -2419,6 +2436,7 @@ fn compile_camera(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport
             transform: None,
             effect: None,
             v2: None,
+            shake: camera_shake_spec(block),
             fields,
             duration,
             easing: easing(&prop_string(&block.props, "easing")),
@@ -2432,7 +2450,11 @@ fn compile_camera(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport
                 _ => unreachable!("camera components are typed above"),
             }
         }
-        if spec.transform.is_some() || spec.effect.is_some() || spec.v2.is_some() {
+        if spec.transform.is_some()
+            || spec.effect.is_some()
+            || spec.v2.is_some()
+            || spec.shake.is_some()
+        {
             timed.push(Action::SetCameraTween {
                 spec: Box::new(spec),
             });
@@ -2449,14 +2471,39 @@ fn compile_camera(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport
             span,
         );
     }
-    let shake = optional_f32(&block.props, "shakeAmplitude")
+    if !block.props.contains_key("tweenFields")
+        && let Some(CameraShakeTweenSpec { shake, randomness }) = camera_shake_spec(block)
+    {
+        let blocking = prop_bool(&block.props, "shakeWaitForComplete", false);
+        report.push(
+            if randomness.is_zero() {
+                Action::ShakeCamera {
+                    targets,
+                    shake,
+                    blocking,
+                }
+            } else {
+                Action::ShakeCameraRandomized {
+                    targets,
+                    shake,
+                    randomness,
+                    blocking,
+                }
+            },
+            span,
+        );
+    }
+}
+
+fn camera_shake_spec(block: &StoryBlock) -> Option<CameraShakeTweenSpec> {
+    let values = optional_f32(&block.props, "shakeAmplitude")
         .zip(optional_f32(&block.props, "shakeFrequency"))
         .zip(
             optional_f32(&block.props, "duration")
                 .filter(|value| *value > 0.0)
                 .or_else(|| optional_f32(&block.props, "shakeDuration")),
         );
-    if let Some(((amplitude, frequency), duration_ms)) = shake {
+    values.map(|((amplitude, frequency), duration_ms)| {
         let randomness = CameraShakeRandomness {
             amplitude: (prop_f32(&block.props, "shakeAmplitudeRandomness", 0.0) / 100.0)
                 .clamp(0.0, 1.0),
@@ -2478,25 +2525,8 @@ fn compile_camera(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport
                 CameraShakeFalloff::Linear
             },
         };
-        let blocking = prop_bool(&block.props, "shakeWaitForComplete", false);
-        report.push(
-            if randomness.is_zero() {
-                Action::ShakeCamera {
-                    targets,
-                    shake,
-                    blocking,
-                }
-            } else {
-                Action::ShakeCameraRandomized {
-                    targets,
-                    shake,
-                    randomness,
-                    blocking,
-                }
-            },
-            span,
-        );
-    }
+        CameraShakeTweenSpec { shake, randomness }
+    })
 }
 
 fn post_process_v2(block: &StoryBlock) -> Option<PostProcessV2> {
@@ -6000,6 +6030,71 @@ mod tests {
     }
 
     #[test]
+    fn named_sound_preserves_loop_flag_fade_and_stop() {
+        let mut block: StoryBlock = serde_json::from_value(json!({
+            "type": "sound", "props": { "soundType": "SE", "soundId": "door", "uri": "se/door.wav", "loop": "false", "volume": "40", "fadeDuration": "200" }
+        })).unwrap();
+        let span = SourceSpan { line: 1, column: 1 };
+        let mut report = ParseReport::default();
+        compile_sound(&block, span, &mut report);
+        assert!(
+            matches!(&report.actions[0], Action::SoundEffect { id: Some(id), looped: false, fade, volume, .. }
+            if id == "door" && *fade == 0.2 && *volume == 0.4)
+        );
+        assert_eq!(report.resources[0].kind, crate::ResourceKind::Effect);
+        block.props.insert("loop".into(), json!("true"));
+        compile_sound(&block, span, &mut report);
+        assert!(matches!(
+            &report.actions[1],
+            Action::SoundEffect { looped: true, .. }
+        ));
+        compile_stop_sound(&block, span, &mut report);
+        assert!(
+            matches!(&report.actions[2], Action::SoundEffect { file: None, id: Some(id), fade, .. }
+            if id == "door" && *fade == 0.2)
+        );
+    }
+
+    #[test]
+    fn camera_ignores_unset_unsupported_tweens_but_rejects_active_ones() {
+        let mut block = StoryBlock {
+            id: None,
+            kind: "camera".into(),
+            content: Value::Null,
+            props: Map::from_iter([
+                ("offsetX".into(), json!(120)),
+                (
+                    "tweenFields".into(),
+                    json!("offsetX,inkSplashIntensity,smokeOverlayIntensity"),
+                ),
+                ("inkSplashIntensity".into(), json!("")),
+                ("smokeOverlayIntensity".into(), Value::Null),
+                ("duration".into(), json!(500)),
+            ]),
+            children: Vec::new(),
+            extras: Map::new(),
+        };
+        let span = SourceSpan { line: 1, column: 1 };
+        let mut report = ParseReport::default();
+        compile_camera(&block, span, &mut report);
+        assert!(report.diagnostics.is_empty());
+        assert!(
+            matches!(report.actions.as_slice(), [Action::Flow { action, .. }]
+            if matches!(action.as_ref(), Action::SetCameraTween { spec }
+                if spec.fields == [CameraTweenField::X]))
+        );
+
+        block.props.insert("inkSplashIntensity".into(), json!(0.5));
+        let mut report = ParseReport::default();
+        compile_camera(&block, span, &mut report);
+        assert!(report.actions.is_empty());
+        assert!(
+            matches!(report.diagnostics.as_slice(), [Diagnostic { level: DiagnosticLevel::Error, message, .. }]
+            if message.contains("inkSplashIntensity"))
+        );
+    }
+
+    #[test]
     fn camera_preserves_studio_tween_masks_and_randomness_units() {
         let block = StoryBlock {
             id: None,
@@ -6009,7 +6104,10 @@ mod tests {
                 ("offsetX".into(), json!(120)),
                 ("zoom".into(), json!(1.5)),
                 ("blurAmount".into(), json!(3)),
-                ("tweenFields".into(), json!("offsetX,blurAmount")),
+                (
+                    "tweenFields".into(),
+                    json!("offsetX,blurAmount,shakeAmplitude,shakeFrequency"),
+                ),
                 ("duration".into(), json!(500)),
                 ("shakeAmplitude".into(), json!(8)),
                 ("shakeFrequency".into(), json!(12)),
@@ -6022,13 +6120,14 @@ mod tests {
         let mut report = ParseReport::default();
         compile_camera(&block, SourceSpan { line: 1, column: 1 }, &mut report);
         assert!(report.diagnostics.is_empty());
-        assert_eq!(report.actions.len(), 2);
+        assert_eq!(report.actions.len(), 1);
         assert!(
-            matches!(&report.actions[0], Action::Flow { action, .. } if matches!(action.as_ref(), Action::SetCameraTween { spec } if spec.fields == [CameraTweenField::X, CameraTweenField::BlurAmount] && spec.transform.is_some() && spec.effect.is_some()))
+            matches!(&report.actions[0], Action::Flow { action, .. } if matches!(action.as_ref(), Action::SetCameraTween { spec } if spec.fields == [CameraTweenField::X, CameraTweenField::BlurAmount, CameraTweenField::ShakeAmplitude, CameraTweenField::ShakeFrequency] && spec.transform.is_some() && spec.effect.is_some()))
         );
-        assert!(
-            matches!(&report.actions[1], Action::ShakeCameraRandomized { shake, randomness, .. } if shake.duration == 0.5 && randomness.amplitude == 0.3 && randomness.frequency == 0.2)
-        );
+        assert!(matches!(&report.actions[0], Action::Flow { action, .. }
+            if matches!(action.as_ref(), Action::SetCameraTween { spec }
+                if spec.shake.is_some_and(|value| value.shake.duration == 0.5
+                    && value.randomness.amplitude == 0.3 && value.randomness.frequency == 0.2))));
     }
 
     #[test]

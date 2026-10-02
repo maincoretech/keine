@@ -62,6 +62,61 @@ pub(super) fn render(action: &Action, model: &MigrationModel) -> Result<Option<S
     let normalized = normalize_camera(action);
     let action = normalized.as_ref();
     let source = match action {
+        Action::WaitForAdvance => "wait.advance()".into(),
+        Action::RetractDialogue { source, keep } => format!(
+            "text.retract(source: {}, keep: {})",
+            string_literal(source),
+            string_literal(keep)
+        ),
+        Action::SoundEffect {
+            file,
+            id,
+            volume,
+            looped,
+            fade,
+        } => match file {
+            Some(file) if *looped => format!(
+                "se.loop({}, {}, volume: {}, fade: {})",
+                object_id(
+                    model,
+                    id.as_deref().context("looping effect requires an ID")?
+                )?,
+                asset_id(model, ResourceKind::Effect, file)?,
+                number(*volume),
+                duration(*fade)
+            ),
+            Some(file) => format!(
+                "se({}{}, volume: {}, fade: {})",
+                asset_id(model, ResourceKind::Effect, file)?,
+                id.as_ref()
+                    .map(|id| object_id(model, id).map(|id| format!(", id: {id}")))
+                    .transpose()?
+                    .unwrap_or_default(),
+                number(*volume),
+                duration(*fade)
+            ),
+            None => format!(
+                "se.stop({}, fade: {})",
+                id.as_ref()
+                    .map(|id| object_id(model, id))
+                    .transpose()?
+                    .unwrap_or("*"),
+                duration(*fade)
+            ),
+        },
+        Action::Effect {
+            file,
+            volume,
+            id: Some(id),
+        } => match file {
+            Some(file) => format!(
+                "se.loop({}, {}, volume: {})",
+                object_id(model, id)?,
+                asset_id(model, ResourceKind::Effect, file)?,
+                number(*volume)
+            ),
+            None => format!("se.stop({})", object_id(model, id)?),
+        },
         Action::SetTransform {
             id,
             transform,
@@ -407,7 +462,7 @@ pub(super) fn render(action: &Action, model: &MigrationModel) -> Result<Option<S
             timing(*seconds, *easing, *blocking)
         ),
         Action::SetCameraTween { spec } => {
-            let source = match (&spec.transform, &spec.effect, &spec.v2) {
+            let mut source = match (&spec.transform, &spec.effect, &spec.v2) {
                 (Some(transform), None, None) => format!(
                     "camera.move({}{}",
                     camera_target(spec.targets),
@@ -434,12 +489,29 @@ pub(super) fn render(action: &Action, model: &MigrationModel) -> Result<Option<S
                     if let Some(effect) = &spec.v2 {
                         source.push_str(&format!(", {}", fields(effect)?));
                     }
-                    if spec.transform.is_none() && spec.effect.is_none() && spec.v2.is_none() {
+                    if spec.transform.is_none()
+                        && spec.effect.is_none()
+                        && spec.v2.is_none()
+                        && spec.shake.is_none()
+                    {
                         bail!("empty camera tween requires manual migration");
                     }
                     source
                 }
             };
+            if let Some(value) = spec.shake {
+                // A single native command retains simultaneous camera/shake changes.
+                // camera.effect only accepts post-process fields.
+                if source.starts_with("camera.effect(") {
+                    source = source.replacen("camera.effect(", "camera.move(", 1);
+                }
+                source.push_str(&format!(
+                    ", shake: shake(amplitude: {}, frequency: {}, duration: {}, axis: {}, falloff: {}, amplitude_randomness: {}, frequency_randomness: {})",
+                    number(value.shake.amplitude), number(value.shake.frequency), duration(value.shake.duration),
+                    enum_name(&value.shake.axis)?, enum_name(&value.shake.falloff)?,
+                    number(value.randomness.amplitude), number(value.randomness.frequency),
+                ));
+            }
             format!(
                 "{source}, tween: [{}]{})",
                 spec.fields
@@ -668,6 +740,17 @@ fn expected_action(action: &Action, model: &MigrationModel) -> Result<Action> {
     }
     let normalized = normalize_camera(action);
     let mut expected = match normalized.as_ref() {
+        Action::Effect {
+            file: None,
+            id: Some(id),
+            ..
+        } => Action::SoundEffect {
+            file: None,
+            id: Some(id.clone()),
+            volume: 1.0,
+            looped: false,
+            fade: 0.0,
+        },
         Action::UpdateSprite {
             id,
             image,
@@ -738,6 +821,8 @@ fn expected_action(action: &Action, model: &MigrationModel) -> Result<Action> {
             *target = object_id(model, target)?.into()
         }
         Action::FocusPortrait { speaker_id }
+        | Action::Effect { id: speaker_id, .. }
+        | Action::SoundEffect { id: speaker_id, .. }
         | Action::HideParticles { id: speaker_id, .. }
         | Action::StopVideo { id: speaker_id, .. } => {
             if let Some(id) = speaker_id {
@@ -778,6 +863,12 @@ fn expected_action(action: &Action, model: &MigrationModel) -> Result<Action> {
         Action::Vocal {
             file: Some(file), ..
         } => *file = asset_id(model, ResourceKind::Voice, file)?,
+        Action::Effect {
+            file: Some(file), ..
+        }
+        | Action::SoundEffect {
+            file: Some(file), ..
+        } => *file = asset_id(model, ResourceKind::Effect, file)?,
         Action::ShowParticles { effect, .. } => {
             if let Some(texture) = &mut effect.texture {
                 *texture = asset_id(model, ResourceKind::Particle, texture)?;
@@ -939,18 +1030,11 @@ fn patch_fields(patch: TransformPatch) -> String {
         height: f32::NAN,
     };
     let values = patch.apply_to(unset);
-    let uniform = values.scale_x == values.scale_y && values.scale_x > 0.0;
-    let mut result: String = transform_values(&values)
+    transform_values(&values)
         .into_iter()
-        .filter(|(name, value)| {
-            !value.is_nan() && !(uniform && matches!(*name, "scale_x" | "scale_y"))
-        })
+        .filter(|(_, value)| !value.is_nan())
         .map(|(name, value)| format!(", {name}: {}", number(value)))
-        .collect();
-    if uniform {
-        result.push_str(&format!(", scale: {}", number(values.scale_x)));
-    }
-    result
+        .collect()
 }
 fn position_fields(position: Position) -> String {
     let (name, offset) = match position.x {
@@ -1116,7 +1200,7 @@ mod tests {
 
     #[test]
     fn dotted_output_preserves_sparse_clear_parallel_and_hold_semantics() {
-        let model = MigrationModel {
+        let mut model = MigrationModel {
             scene_ids: HashMap::new(),
             speaker_ids: HashMap::new(),
             asset_ids: HashMap::from([(
@@ -1136,10 +1220,56 @@ mod tests {
                 characters: BTreeMap::new(),
             },
         };
+        model.asset_ids.insert(
+            AssetKey {
+                kind: ResourceKind::Effect,
+                source_name: "sound.wav".into(),
+            },
+            "sound".into(),
+        );
+        model
+            .object_ids
+            .insert("electric-buzz".into(), "effect_0001".into());
         let mut patch = TransformPatch::default();
         patch.set_offset_x(0.0);
         patch.set_scale_x(1.02);
         let actions = [
+            Action::WaitForAdvance,
+            Action::RetractDialogue {
+                source: "我还蛮喜欢她的".into(),
+                keep: "我".into(),
+            },
+            Action::SoundEffect {
+                file: Some("sound.wav".into()),
+                id: Some("electric-buzz".into()),
+                volume: 0.3,
+                looped: false,
+                fade: 0.2,
+            },
+            Action::SoundEffect {
+                file: Some("sound.wav".into()),
+                id: Some("electric-buzz".into()),
+                volume: 0.3,
+                looped: true,
+                fade: 0.2,
+            },
+            Action::SoundEffect {
+                file: None,
+                id: Some("electric-buzz".into()),
+                volume: 1.0,
+                looped: false,
+                fade: 0.4,
+            },
+            Action::Effect {
+                file: Some("sound.wav".into()),
+                id: Some("electric-buzz".into()),
+                volume: 0.3,
+            },
+            Action::Effect {
+                file: None,
+                id: Some("electric-buzz".into()),
+                volume: 0.0,
+            },
             Action::SetCameraTransform {
                 targets: CameraTargets::ALL,
                 transform: patch,
@@ -1193,6 +1323,7 @@ mod tests {
                         ..Default::default()
                     })),
                     v2: None,
+                    shake: None,
                     fields: vec![
                         keine_core::CameraTweenField::X,
                         keine_core::CameraTweenField::DistortionStrength,
@@ -1211,7 +1342,22 @@ mod tests {
                         ..Default::default()
                     })),
                     v2: Some(Box::default()),
+                    shake: Some(keine_core::CameraShakeTweenSpec {
+                        shake: keine_core::CameraShakeSpec {
+                            amplitude: 4.0,
+                            frequency: 2.0,
+                            duration: 2.0,
+                            axis: keine_core::CameraShakeAxis::Both,
+                            falloff: keine_core::CameraShakeFalloff::Linear,
+                        },
+                        randomness: keine_core::CameraShakeRandomness {
+                            amplitude: 0.3,
+                            frequency: 0.2,
+                        },
+                    }),
                     fields: vec![
+                        keine_core::CameraTweenField::ShakeAmplitude,
+                        keine_core::CameraTweenField::ShakeFrequency,
                         keine_core::CameraTweenField::X,
                         keine_core::CameraTweenField::BlurAmount,
                     ],

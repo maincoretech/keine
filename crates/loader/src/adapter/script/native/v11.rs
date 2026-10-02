@@ -253,7 +253,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn v11_identifier(
+    pub(super) fn v11_identifier(
         &self,
         arg: Option<&Argument>,
         description: &str,
@@ -409,7 +409,7 @@ impl<'a> Parser<'a> {
         self.v11_identifier(arg, description, report).map(Some)
     }
 
-    fn v11_volume(&self, args: &[Argument], report: &mut ParseReport) -> Option<f32> {
+    pub(super) fn v11_volume(&self, args: &[Argument], report: &mut ParseReport) -> Option<f32> {
         let volume = self.checked_number(args, "volume", report)?.unwrap_or(1.0);
         if !(0.0..=1.0).contains(&volume) {
             report

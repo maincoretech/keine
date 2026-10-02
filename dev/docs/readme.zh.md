@@ -7,14 +7,14 @@
 ## 开始
 
 ```sh
-cargo editor projects/test-project
+cargo editor projects/tday
 cargo validate tests/fixtures/native-smoke
 cargo dev tests/fixtures/native-smoke
-cargo migrate projects/letsgal projects/letsgal-native
+cargo migrate /path/to/letsgal/tday projects/tday
 ```
 
-`projects/letsgal` 是忽略的本机源工程；`projects/letsgal-native` 是保留的原生转换，
-`projects/test-project` 是原 LetsGal 工程的本机链接。自动回归使用 `tests/fixtures`。
+`projects/tday` 是唯一的本机原生 demo，目录与素材均忽略、不提交。
+源 LetsGal 工程独立保留；目标已存在时不要重复迁移。自动回归使用 `tests/fixtures`。
 迁移先验证新工程再发布目标目录，源工程保持只读。
 
 ```text

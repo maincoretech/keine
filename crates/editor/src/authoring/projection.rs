@@ -317,13 +317,14 @@ impl EiyashouProjection {
                 }
                 if block.kind == BlockKind::Command {
                     let command = node[..open].trim();
-                    if matches!(command, "sprite" | "sprite.update" | "move") {
+                    if matches!(command, "sprite" | "sprite.update" | "move" | "camera.move") {
                         fields = fields
                             .into_iter()
                             .flat_map(|field| {
                                 if field.key == "layout"
                                     || field.key == "position"
                                     || (command == "move" && field.key == "1")
+                                    || (command == "camera.move" && field.key == "shake")
                                 {
                                     grouped_visual_fields(source, &field)
                                         .unwrap_or_else(|| vec![field])
@@ -739,6 +740,7 @@ fn grouped_visual_fields(source: &str, parent: &SourceField) -> Option<Vec<Sourc
             | "point"
             | "size"
             | "rect"
+            | "shake"
     ) {
         return None;
     }
@@ -1666,6 +1668,27 @@ scene other { wait(7s) }"#;
             .unwrap();
         assert!(removed.contains("right( y: 20)") && removed.contains("y: 24"));
         assert!(EiyashouProjection::parse(&removed).read_only.is_empty());
+    }
+
+    #[test]
+    fn grouped_camera_shake_edits_preserve_atomic_tween_and_siblings() {
+        let source = "scene a { camera.move(all, x: 10, shake: shake(amplitude: 4, frequency: 2), duration: 1s, tween: [x, shake_amplitude]) }";
+        let projection = EiyashouProjection::parse(source);
+        assert!(projection.read_only.is_empty());
+        let start = source.find("camera.move").unwrap();
+        let edited = projection
+            .replace_block_fields(
+                source,
+                start,
+                &[
+                    ("shake.amplitude".into(), Some("8".into())),
+                    ("shake.frequency_randomness".into(), Some("0.3".into())),
+                ],
+            )
+            .unwrap();
+        assert!(edited.contains("shake(amplitude: 8, frequency: 2, frequency_randomness: 0.3)"));
+        assert!(edited.contains("x: 10") && edited.contains("tween: [x, shake_amplitude]"));
+        assert!(EiyashouProjection::parse(&edited).read_only.is_empty());
     }
 
     #[test]

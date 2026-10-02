@@ -152,7 +152,7 @@ scene name { ... }
 │       └── event.audio(id, bgm | effect | vocal, asset, time: ..., volume: ..., loop: ..., ...)
 │   }
 ├── 音视频与粒子
-│   ├── se.loop(id, asset, volume: ...) / se.stop(id | *)
+│   ├── se.loop(id, asset, volume: ..., fade: ...) / se.stop(id | *, fade: ...)
 │   ├── vocal.play(asset, volume: ...) / vocal.stop()
 │   ├── video.play(id, asset, loop: ..., muted: ..., alpha: ..., skippable: ..., wait: ..., mode: fullscreen | mixed)
 │   ├── video.stop(id | *, fade: ...)
@@ -195,6 +195,9 @@ sprite(...) / sprite.update(...)
 
 sprite.focus.configure(...)
 ├── characters 是 stage sprite/角色 ID 列表，不创建另一种 portrait 对象
+├── 配置一次后自动跟随对白角色，旁白自动使用 narration；无需逐句 sprite.focus(none)
+│   └── characters.yaml 角色键与 sprite ID 一致；objects.yaml 的运行时别名由 Loader 解析
+│       inherit_speaker 或无角色的 concat 延续上一句聚焦；显式 sprite.focus 可覆盖紧接着的一句
 ├── speaking、others、narration 均为 style(...)
 │   └── 各有 scale、brightness、saturation、contrast、blur、alpha 六个可选字段
 └── Block Inspector 将三组 style 的字段分别编辑，写回原有 style(...) 源码
@@ -235,9 +238,7 @@ input.request(...)
 
 `sprite.select.when` 使用严格 Eiyashou bool 表达式，运行时也按严格类型求值。`sprite.select` 的变量未赋值时使用 `default` 资源。`sprite.animate` 与 `sprite.transition` 的内建 preset 可写标识符；自定义 preset 写带引号的 ID。`text.style` 与段落 style 的自定义 ID 也可写带引号的字符串。
 
-`se.stop(id)` 停止指定循环音效；`se.stop(*)` 调用引擎现有的无 ID Stop 效果事件。`hide(prefix*)` 匹配所有相同前缀的立绘 ID；`hide(*)` 匹配全部。此处的 `*` 不泛化到其他命令参数。
-
-
+`se.stop(id, fade: 200ms)` 按 ID 淡出并停止单次或循环音效；`se.stop(*)` 立即停止所有单次音效，不接受非零 fade；循环音效按 ID 停止。`hide(prefix*)` 匹配所有相同前缀的立绘 ID；`hide(*)` 匹配全部。此处的 `*` 不泛化到其他命令参数。
 
 ## 默认值与补间
 
@@ -248,11 +249,14 @@ input.request(...)
 ├── hide(id | prefix* | *)：前缀或全部立绘共用 hide
 ├── move：省略 duration 为瞬移；easing 为 linear / ease_in / ease_out / ease_in_out
 ├── bgm(asset, volume: 1, fade: 0ms, loop: true)：新曲 crossfade；bgm(none, fade: ...) 停止
-├── se(asset, volume: 1)：一次性音效；se(none) 停止
+├── se(asset, volume: 1, id: optional_id, fade: 0ms)：一次性音效；ID 不使其循环；se(none) 停止
 └── video(asset, skippable: true)：简写，非循环、fullscreen、阻塞到完成/跳过；video.play(id, asset, ...) 用于带 ID 的视频层
 过渡与补间
 ├── background / sprite / hide：blocking 默认 true；false 允许过渡时继续
-├── camera.move 可同时设置变换与特效，仍为一个原子 Action / Block
+├── camera.move 可同时设置变换、特效与 shake: shake(amplitude: 4, frequency: 2)，仍为一个原子 Action / Block
+│   ├── shake 的 duration 省略时沿用外层 duration；振幅、频率和时长必须齐全
+│   ├── tween: [shake_amplitude, shake_frequency] 控制从当前震动值补间；没有正在震动时从 0 开始
+│   └── shake 内还可写 axis、falloff、amplitude_randomness、frequency_randomness；频率变化时连续积累相位
 ├── tween: [x, blur_amount]：仅列出的数值字段补间，其余立即生效
 │   ├── 省略：原整条命令补间；[]：立即生效且不额外阻塞
 │   └── 未知/重复字段报错；离散字段不补间；仅对本命令提供值的通道生效
@@ -313,5 +317,5 @@ config.yaml → layout.environment_light
 这是温和的背景色调适配，不产生方向光、阴影或法线重照明。
 现有立绘滤镜/说话者聚焦仍生效，镜头效果和 LUT 再按原渲染顺序处理。
 取色不包含镜头调色，避免反馈式重复染色；已有强手工调色可将该配置设为 0。
-已发布的旧编译包需要重新编译为 IR schema v5；Save v11 的状态布局不变，
+已发布的旧编译包需要重新编译为 IR schema v6；Save v11 的状态布局不变，
 修改脚本后的存档仍受 Program fingerprint 检查。

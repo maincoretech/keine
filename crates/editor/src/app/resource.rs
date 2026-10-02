@@ -181,8 +181,9 @@ impl WorkbenchPanel {
     }
 }
 
-mod browse;
+pub(super) mod browse;
 mod picker;
+pub(super) mod thumbnail;
 pub(super) use browse::render_assets;
 pub(super) use picker::*;
 
@@ -258,7 +259,13 @@ pub(super) fn render_asset_preview(
                     .size(px(32.))
                     .text_color(rgb(MUTED)),
             )
-            .child(audition_control(root, &asset.path, false, cx))
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(audition_control(root, &asset.path, false, cx))
+                    .child(replay_control(root, &asset.path, cx)),
+            )
             .into_any_element()
     } else {
         preview_placeholder(match asset.kind {

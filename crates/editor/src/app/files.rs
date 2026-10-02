@@ -780,10 +780,17 @@ impl WorkbenchPanel {
         }
         cx.spawn_in(window, async move |this, cx| {
             let mut succeeded = 0;
+            let mut registered = 0;
             let mut failed = 0;
+            let mut first_error = None;
             let mut last_manifest = None;
             let mut imported = Vec::new();
             for (index, source) in paths.into_iter().enumerate() {
+                let source_name = source
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned();
                 let root_for_task = root.clone();
                 let target_for_task = target.clone();
                 let result = background
@@ -794,12 +801,16 @@ impl WorkbenchPanel {
                 match result {
                     Ok(result) => {
                         succeeded += 1;
+                        registered += usize::from(result.registered);
                         imported.push((result.destination.clone(), None));
                         if result.manifest_update.is_some() {
                             last_manifest = result.manifest_update;
                         }
                     }
-                    Err(_) => failed += 1,
+                    Err(error) => {
+                        failed += 1;
+                        first_error.get_or_insert_with(|| format!("{source_name}: {error}"));
+                    }
                 }
                 let _ = this.update_in(cx, |this, _, cx| {
                     this.file_progress = Some(FileProgress {
@@ -846,12 +857,19 @@ impl WorkbenchPanel {
                 }
                 if failed == 0 {
                     window.push_notification(
-                        Notification::success(format!("Imported {succeeded}")),
+                        Notification::success(format!(
+                            "Imported {succeeded} · Registered {registered} resource(s)"
+                        )),
                         cx,
                     );
                 } else {
+                    let detail = first_error.unwrap_or_default();
+                    cx.global_mut::<EditorDocuments>()
+                        .set_notice(&root, format!("Import: {detail}"));
                     window.push_notification(
-                        Notification::warning(format!("Imported {succeeded} · {failed} failed")),
+                        Notification::warning(format!(
+                            "Imported {succeeded} · Registered {registered} resource(s) · {failed} failed · {detail}"
+                        )),
                         cx,
                     );
                 }
@@ -980,13 +998,20 @@ mod history_tests {
     fn imported_file_and_asset_manifest_undo_as_one_step() {
         let root = fixture();
         let before = fs::read_to_string(root.join("assets.yaml")).unwrap();
-        let after = "backgrounds:\n  sky: assets/sky.webp\n".to_owned();
-        fs::create_dir(root.join("assets")).unwrap();
-        fs::write(root.join("assets/sky.webp"), "media").unwrap();
-        fs::write(root.join("assets.yaml"), &after).unwrap();
+        fs::create_dir_all(root.join("assets/backgrounds")).unwrap();
+        let original = root.join("assets/backgrounds/sky.png");
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([1, 2, 3, 128]))
+            .save(&original)
+            .unwrap();
+        let original_bytes = fs::read(&original).unwrap();
+        let imported =
+            file_ops::import_external(&root, Path::new("assets/backgrounds"), &original).unwrap();
+        let output = imported.destination.clone();
+        let output_bytes = fs::read(root.join(&output)).unwrap();
+        let after = imported.manifest_update.unwrap().1;
         let mut history = FileHistory::default();
         history.record(FileEdit::Toggle {
-            paths: vec![("assets/sky.webp".into(), None)],
+            paths: vec![(output.clone(), None)],
             after_present: true,
             present: true,
             manifest: ManifestChange::between(
@@ -996,16 +1021,14 @@ mod history_tests {
         });
 
         history.step(&root, true).unwrap();
-        assert!(!root.join("assets/sky.webp").exists());
+        assert!(!root.join(&output).exists());
+        assert_eq!(fs::read(&original).unwrap(), original_bytes);
         assert_eq!(
             fs::read_to_string(root.join("assets.yaml")).unwrap(),
             before
         );
         history.step(&root, false).unwrap();
-        assert_eq!(
-            fs::read_to_string(root.join("assets/sky.webp")).unwrap(),
-            "media"
-        );
+        assert_eq!(fs::read(root.join(&output)).unwrap(), output_bytes);
         assert_eq!(fs::read_to_string(root.join("assets.yaml")).unwrap(), after);
 
         fs::write(
@@ -1014,7 +1037,8 @@ mod history_tests {
         )
         .unwrap();
         assert!(history.step(&root, true).is_err());
-        assert!(root.join("assets/sky.webp").exists());
+        assert!(root.join(&output).exists());
+        assert_eq!(fs::read(original).unwrap(), original_bytes);
         fs::remove_dir_all(root).unwrap();
     }
 }

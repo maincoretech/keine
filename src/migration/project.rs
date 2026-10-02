@@ -195,12 +195,12 @@ fn build_model(
         .collect::<Vec<_>>();
     speakers.sort();
     speakers.dedup();
-    let speaker_ids = speakers
+    let mut speaker_ids = speakers
         .iter()
         .enumerate()
         .map(|(index, name)| (name.clone(), format!("speaker_{:04}", index + 1)))
         .collect::<HashMap<_, _>>();
-    let characters = CharacterManifest {
+    let mut characters = CharacterManifest {
         characters: speakers
             .into_iter()
             .map(|name| {
@@ -290,6 +290,51 @@ fn build_model(
         .map(|(index, name)| (name, format!("variable_{:04}", index + 1)))
         .collect();
     let (object_ids, prefix_ids, objects) = objects::build(scenes);
+    if scenes
+        .iter()
+        .flat_map(|scene| &scene.actions)
+        .any(has_portrait_rule)
+    {
+        let mut portraits = BTreeMap::new();
+        for scene in scenes {
+            for pair in scene.actions.windows(2) {
+                if let [
+                    Action::FocusPortrait {
+                        speaker_id: Some(id),
+                    },
+                    Action::Say { speaker, .. },
+                ] = pair
+                    && !speaker.is_empty()
+                {
+                    let id = object_ids
+                        .get(id)
+                        .context("missing dialogue portrait mapping")?;
+                    if let Some(previous) = portraits.insert(speaker.clone(), id.clone())
+                        && previous != *id
+                    {
+                        bail!(
+                            "speaker {speaker:?} uses multiple portrait identities; give them distinct character names before migration"
+                        );
+                    }
+                }
+            }
+        }
+        speaker_ids.extend(portraits);
+        if speaker_ids
+            .values()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != speaker_ids.len()
+        {
+            bail!(
+                "multiple speaker names use one portrait identity; unify the character name before migration"
+            );
+        }
+        characters.characters = speaker_ids
+            .iter()
+            .map(|(name, id)| (id.clone(), CharacterEntry { name: name.clone() }))
+            .collect();
+    }
     Ok(MigrationModel {
         scene_ids,
         object_ids,
@@ -329,6 +374,8 @@ fn write_project(
         }
         source.push_str(&format!("  goto({source_entry})\n}}\n"));
     }
+    let source = keine_loader::format_native_source(&source)
+        .context("generated migration source could not be formatted")?;
     fs::write(stage.join("scripts/main.shou"), source)?;
     fs::write(
         stage.join("objects.yaml"),
@@ -397,6 +444,12 @@ fn write_project(
 }
 
 fn render_scenes(scenes: &[LoadedScene], model: &MigrationModel) -> Result<String> {
+    // Without a rule, FocusPortrait is a runtime no-op. Scan the whole project
+    // because a configured rule persists across scene changes.
+    let uses_focus = scenes
+        .iter()
+        .flat_map(|scene| &scene.actions)
+        .any(has_portrait_rule);
     let mut output = String::new();
     for (scene_index, scene) in scenes.iter().enumerate() {
         if scene_index > 0 {
@@ -410,7 +463,14 @@ fn render_scenes(scenes: &[LoadedScene], model: &MigrationModel) -> Result<Strin
         output.push_str(" {\n");
         let mut statements = Vec::new();
         for (action_index, action) in scene.actions.iter().enumerate() {
-            if matches!(action, Action::Comment) {
+            if matches!(action, Action::Comment)
+                || (matches!(action, Action::FocusPortrait { .. })
+                    && (!uses_focus
+                        || matches!(
+                            scene.actions.get(action_index + 1),
+                            Some(Action::Say { .. })
+                        )))
+            {
                 continue;
             }
             statements.push(render_action(action, model).with_context(|| {
@@ -431,6 +491,14 @@ fn render_scenes(scenes: &[LoadedScene], model: &MigrationModel) -> Result<Strin
         output.push_str("}\n");
     }
     Ok(output)
+}
+
+fn has_portrait_rule(action: &Action) -> bool {
+    match action {
+        Action::ConfigurePortraits { .. } => true,
+        Action::Flow { action, .. } => has_portrait_rule(action),
+        _ => false,
+    }
 }
 
 fn render_action(action: &Action, model: &MigrationModel) -> Result<String> {
@@ -783,12 +851,96 @@ mod tests {
             panic!("not menu");
         };
         assert!(choices[0].show_when.is_some());
+        let scene = LoadedScene {
+            name: "next".into(),
+            path: "next.json".into(),
+            actions: vec![
+                Action::FocusPortrait { speaker_id: None },
+                Action::Say {
+                    speaker: "Hero".into(),
+                    text: "Hello".into(),
+                    options: Default::default(),
+                },
+            ],
+            action_spans: Vec::new(),
+            diagnostics: Vec::new(),
+            resources: Vec::new(),
+            sub_scenes: Vec::new(),
+        };
+        let source = render_scenes(&[scene], &model).unwrap();
+        assert!(!source.contains("sprite.focus("));
+        assert!(source.contains("hero: \"Hello\""));
     }
 
     #[test]
     fn durations_prefer_exact_milliseconds() {
         assert_eq!(duration(0.3), "300ms");
         assert_eq!(duration(1.25), "1250ms");
+    }
+
+    #[test]
+    fn configured_portraits_migrate_to_automatic_dialogue_focus() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let stage = root.path().join("native");
+        fs::create_dir_all(source.join("assets")).unwrap();
+        fs::create_dir_all(&stage).unwrap();
+        let config = GameConfig::default();
+        let content = keine_loader::load_project(&source, &config.adapter.asset).unwrap();
+        let scenes = vec![LoadedScene {
+            name: "start".into(),
+            path: "start.json".into(),
+            actions: vec![
+                Action::ConfigurePortraits {
+                    enabled: true,
+                    character_ids: vec!["original-character".into()],
+                    speaking: Default::default(),
+                    others: Default::default(),
+                    narration: Default::default(),
+                    duration: 0.3,
+                    easing: Easing::Linear,
+                },
+                Action::FocusPortrait {
+                    speaker_id: Some("original-character".into()),
+                },
+                Action::Say {
+                    speaker: "Hero".into(),
+                    text: "Hi".into(),
+                    options: Default::default(),
+                },
+                Action::FocusPortrait { speaker_id: None },
+                Action::Say {
+                    speaker: String::new(),
+                    text: "Narration".into(),
+                    options: Default::default(),
+                },
+            ],
+            action_spans: Vec::new(),
+            diagnostics: Vec::new(),
+            resources: Vec::new(),
+            sub_scenes: Vec::new(),
+        }];
+        let model = build_model(&config, &content, &scenes, &stage).unwrap();
+        assert_eq!(
+            model.speaker_ids["Hero"],
+            model.object_ids["original-character"]
+        );
+        write_project(&stage, config, &scenes, &model, &LoaderRegistry::default()).unwrap();
+        let generated = fs::read_to_string(stage.join("scripts/main.shou")).unwrap();
+        assert!(!generated.contains("sprite.focus("));
+        assert_eq!(
+            keine_loader::format_native_source(&generated).unwrap(),
+            generated
+        );
+        let opened = open_project(&stage, &LoaderRegistry::default()).unwrap();
+        let loaded = keine_loader::load_scenes(&opened.content).unwrap();
+        assert!(
+            matches!(&loaded[0].actions[1], Action::FocusPortrait { speaker_id } if speaker_id.as_deref() == Some("original-character"))
+        );
+        assert!(matches!(
+            &loaded[0].actions[3],
+            Action::FocusPortrait { speaker_id: None }
+        ));
     }
 
     #[test]

@@ -9,7 +9,7 @@ on:
       project:
         description: Project directory to bundle
         required: true
-        default: projects/test-project
+        default: tests/fixtures/native-smoke
       identity:
         description: Publisher identity (temporary for tests; stable for production updates)
         required: true

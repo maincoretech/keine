@@ -190,6 +190,7 @@ pub(in crate::app) struct BlockProjectionView<'a> {
     pub(in crate::app) scene_name_input: &'a Entity<InputState>,
     pub(in crate::app) visible: &'a HashSet<usize>,
     pub(in crate::app) heights: &'a HashMap<usize, f32>,
+    pub(in crate::app) layout: &'a RefCell<super::layout::Cache>,
 }
 
 pub(in crate::app) fn block_row_height(
@@ -522,6 +523,7 @@ pub(in crate::app) fn render_block_projection(
         scene_name_input,
         visible,
         heights,
+        layout,
     } = view;
     let session = drag.session();
     let reorder_motion = drag.motion();
@@ -531,47 +533,69 @@ pub(in crate::app) fn render_block_projection(
     {
         window.request_animation_frame();
     }
-    let mut row_positions = row_positions.borrow_mut();
-    row_positions.clear();
-    row_bounds.borrow_mut().clear();
-    // Hold the drag-time projection until source and row states settle in the
-    // same paint; otherwise release briefly flashes the previous row order.
-    let source = drag
-        .source()
-        .map(str::to_owned)
-        .unwrap_or_else(|| document.borrow().contents().to_owned());
-    let projection = cx
-        .global::<EditorDocuments>()
-        .projection(root, relative, &source);
-    let source_lines = keine_loader::SourceLineIndex::new(&source);
-    let line_number_width = projection
-        .scenes
-        .iter()
-        .map(|scene| {
-            scene
-                .blocks
-                .iter()
-                .filter(|block| !block.is_textbox_ending())
-                .count()
-        })
-        .max()
-        .unwrap_or_default()
-        .max(9999)
-        .to_string()
-        .len() as f32
-        * 7.;
+    let mut layout = layout.borrow_mut();
+    let snapshot = layout.snapshot(document, drag.source());
+    let source = &snapshot.source;
+    let projection = &snapshot.projection;
+    let source_lines = &snapshot.lines;
+    let line_number_width = snapshot.number_width;
     let line_number_gutter = line_number_width + 4.;
-    let block_fields = projection
+    let collapse_progresses = projection
         .scenes
         .iter()
-        .flat_map(|scene| &scene.blocks)
+        .enumerate()
+        .map(|(scene_index, scene)| {
+            let closed = collapsed_scenes.contains(&scene.name);
+            transition(
+                (
+                    format!("block-scene-{}-{scene_index}", relative.display()),
+                    "collapse",
+                ),
+                if closed { 0. } else { 1. },
+                Transition::new(Duration::from_millis(120)),
+                window,
+                cx,
+            )
+        })
+        .collect::<Vec<_>>();
+    let geometry = (session.is_none()
+        && reorder_motion.is_none()
+        && draft_text.is_none()
+        && scene_edit.is_none()
+        && projection
+            .scenes
+            .iter()
+            .zip(&collapse_progresses)
+            .all(|(scene, progress)| {
+                *progress
+                    == if collapsed_scenes.contains(&scene.name) {
+                        0.
+                    } else {
+                        1.
+                    }
+            }))
+    .then(|| layout.geometry(&snapshot, collapsed_scenes, heights));
+    let mut row_positions = row_positions.borrow_mut();
+    if let Some(geometry) = &geometry {
+        if !layout.positioned {
+            row_positions.clone_from(&geometry.positions);
+            layout.positioned = true;
+        }
+    } else {
+        row_positions.clear();
+        layout.positioned = false;
+    }
+    row_bounds.borrow_mut().clear();
+    let block_fields = visible
+        .iter()
+        .filter_map(|start| snapshot.lookup.get(start))
+        .map(|&(scene, block)| &projection.scenes[scene].blocks[block])
         .filter(|block| matches!(block.kind, BlockKind::Command))
-        .filter(|block| visible.contains(&block.source_range.start))
         .map(|block| {
             (
                 block.source_range.start,
                 projection
-                    .source_fields_for_block(&source, block)
+                    .source_fields_for_block(source, block)
                     .unwrap_or_default()
                     .into_iter()
                     .filter(|field| field.insertion.is_none() && !field.value.is_empty())
@@ -579,22 +603,8 @@ pub(in crate::app) fn render_block_projection(
             )
         })
         .collect::<std::collections::HashMap<_, _>>();
-    let textbox_endings = projection
-        .scenes
-        .iter()
-        .flat_map(|scene| &scene.blocks)
-        .filter(|block| block.is_textbox_ending())
-        .filter_map(|block| block.lifetime_owner)
-        .collect::<HashSet<_>>();
-    let block_order = Arc::new(
-        projection
-            .scenes
-            .iter()
-            .flat_map(|scene| scene.blocks.iter())
-            .filter(|block| !block.is_textbox_ending())
-            .map(|block| block.source_range.start)
-            .collect::<Vec<_>>(),
-    );
+    let textbox_endings = &snapshot.endings;
+    let block_order = snapshot.order.clone();
     let selected_position = cx
         .global::<EditorDocuments>()
         .selection(root)
@@ -602,8 +612,9 @@ pub(in crate::app) fn render_block_projection(
         .map(|(_, line, column)| (*line, *column));
     let selected_line = selected_position.map(|(line, _)| line);
     let selected_start = selected_position.and_then(|(line, column)| {
-        block_at_position(&projection, &source, line, column)
-            .map(|(_, block)| block.source_range.start)
+        snapshot
+            .block_at_position(line, column)
+            .map(|block| block.source_range.start)
     });
     let executing_start = cx
         .global_mut::<EditorDocuments>()
@@ -614,19 +625,15 @@ pub(in crate::app) fn render_block_projection(
         .and_then(|snapshot| snapshot.runtime_position)
         .filter(|(path, _, _)| path == relative)
         .and_then(|(_, line, column)| {
-            block_at_position(
-                &projection,
-                &source,
-                line.saturating_sub(1),
-                column.saturating_sub(1),
-            )
-            .map(|(_, block)| {
-                if block.is_textbox_ending() {
-                    block.lifetime_owner.unwrap_or(block.source_range.start)
-                } else {
-                    block.source_range.start
-                }
-            })
+            snapshot
+                .block_at_position(line.saturating_sub(1), column.saturating_sub(1))
+                .map(|block| {
+                    if block.is_textbox_ending() {
+                        block.lifetime_owner.unwrap_or(block.source_range.start)
+                    } else {
+                        block.source_range.start
+                    }
+                })
         });
     let root = root.to_owned();
     let relative = relative.to_owned();
@@ -642,31 +649,24 @@ pub(in crate::app) fn render_block_projection(
         let editing_scene = matches!(scene_edit, Some(SceneEditMode::Rename { start, .. }) if *start == scene_start);
         let scene_root = root.clone();
         let scene_relative = relative.clone();
-        let collapse_progress = transition(
-            (
-                format!("block-scene-{}-{scene_index}", relative.display()),
-                "collapse",
-            ),
-            if collapsed { 0. } else { 1. },
-            Transition::new(Duration::from_millis(120)),
-            window,
-            cx,
-        );
-        let scene_line = source_lines.span(&source, scene.name_range.start).line - 1;
-        overview.push(minimap::Mark {
-            top: overview_offset,
-            height: 32.,
-            depth: 0,
-            width: 60.,
-            color: PRIMARY,
-            selected: selected_line == Some(scene_line)
-                || collapsed
-                    && scene.blocks.iter().any(|block| {
-                        selected_blocks.contains(&block.source_range.start)
-                            || selected_start == Some(block.source_range.start)
-                    }),
-            error: collapsed && scene.blocks.iter().any(|block| block.read_only),
-        });
+        let collapse_progress = collapse_progresses[scene_index];
+        let scene_line = source_lines.span(source, scene.name_range.start).line - 1;
+        if geometry.is_none() {
+            overview.push(minimap::Mark {
+                top: overview_offset,
+                height: 32.,
+                depth: 0,
+                width: 60.,
+                color: PRIMARY,
+                selected: selected_line == Some(scene_line)
+                    || collapsed
+                        && scene.blocks.iter().any(|block| {
+                            selected_blocks.contains(&block.source_range.start)
+                                || selected_start == Some(block.source_range.start)
+                        }),
+                error: collapsed && scene.blocks.iter().any(|block| block.read_only),
+            });
+        }
         overview_offset += 36.;
         let header = div()
             .id(("scene-section", scene_index))
@@ -773,17 +773,52 @@ pub(in crate::app) fn render_block_projection(
         let mut scene_rows = Vec::new();
         let mut scene_body_height = 0.;
         let mut hidden_height = 0.;
-        for (block_index, block) in scene
-            .blocks
-            .iter()
-            .filter(|block| !block.is_textbox_ending())
-            .enumerate()
-        {
-            let row_height = block_row_height(block, editors, draft_text, heights, cx);
+        let cached_scene = geometry
+            .as_ref()
+            .map(|geometry| &geometry.scenes[scene_index]);
+        let expanded = if cached_scene.is_none() {
+            scene
+                .blocks
+                .iter()
+                .filter(|block| !block.is_textbox_ending())
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let candidates = if let Some(cached) = cached_scene {
+            let mut indices = visible
+                .iter()
+                .filter_map(|start| snapshot.lookup.get(start))
+                .filter(|(index, _)| *index == scene_index)
+                .filter_map(|(_, index)| cached.indices.binary_search(index).ok())
+                .collect::<Vec<_>>();
+            if collapsed {
+                indices.clear();
+            }
+            indices.sort_unstable();
+            indices
+        } else {
+            (0..expanded.len()).collect()
+        };
+        let mut consumed = 0;
+        for block_index in candidates {
+            let block = if let Some(cached) = cached_scene {
+                let skipped = cached.prefix[block_index] - cached.prefix[consumed];
+                scene_body_height += skipped;
+                hidden_height += skipped;
+                consumed = block_index + 1;
+                &scene.blocks[cached.indices[block_index]]
+            } else {
+                expanded[block_index]
+            };
+            let row_height = cached_scene.map_or_else(
+                || block_row_height(block, editors, draft_text, heights, cx),
+                |cached| cached.prefix[block_index + 1] - cached.prefix[block_index] - 4.,
+            );
             let row_top = overview_offset + scene_body_height * collapse_progress;
             // Use the same row height, draft/drop gaps and collapse transition as the main layout.
             let overview_row = overview.len();
-            if collapse_progress > 0. {
+            if geometry.is_none() && collapse_progress > 0. {
                 overview.push(minimap::Mark::block(
                     block,
                     overview_offset + scene_body_height * collapse_progress,
@@ -807,7 +842,9 @@ pub(in crate::app) fn render_block_projection(
                     })
                 })
                 .unwrap_or(row_top);
-            row_positions.insert(block.source_range.start, row_top);
+            if geometry.is_none() {
+                row_positions.insert(block.source_range.start, row_top);
+            }
             if let Some(mark) = overview.get_mut(overview_row) {
                 mark.top = position;
             }
@@ -1347,6 +1384,11 @@ pub(in crate::app) fn render_block_projection(
                 scene_rows.push(draft_text_row(draft, block_indent, row_id));
             }
         }
+        if let Some(cached) = cached_scene {
+            let skipped = cached.prefix.last().unwrap() - cached.prefix[consumed];
+            scene_body_height += skipped;
+            hidden_height += skipped;
+        }
         if hidden_height > 0. {
             scene_rows.push(
                 div()
@@ -1365,7 +1407,10 @@ pub(in crate::app) fn render_block_projection(
                 42. + (draft.state.read(cx).value().lines().count().clamp(1, 6) - 1) as f32 * 20.;
             scene_rows.push(draft_text_row(draft, 0., scene.source_range.start));
         }
-        scene_body_height = (scene_body_height - 4.).max(0.);
+        scene_body_height = cached_scene.map_or_else(
+            || (scene_body_height - 4.).max(0.),
+            |cached| cached.body_height,
+        );
         overview_offset += scene_body_height * collapse_progress + 4.;
         rows.push(
             div()
@@ -1543,7 +1588,22 @@ pub(in crate::app) fn render_block_projection(
                     content,
                 )),
         )
-        .child(minimap::render(overview, scroll_handle, minimap, cx))
+        .child(minimap::render(
+            geometry.as_ref().map_or_else(
+                || Rc::new(overview),
+                |geometry| {
+                    layout.marks(
+                        &snapshot,
+                        geometry,
+                        selected_blocks,
+                        selected_line.map(|line| (line, selected_start.unwrap_or(usize::MAX))),
+                    )
+                },
+            ),
+            scroll_handle,
+            minimap,
+            cx,
+        ))
         .into_any_element()
 }
 

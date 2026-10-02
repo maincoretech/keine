@@ -229,6 +229,13 @@ impl EngineProcess {
         }
     }
 
+    pub fn pause_audition(&mut self, paused: bool) -> io::Result<Option<PathBuf>> {
+        match self.request(ClientCommand::PauseAudition { paused })? {
+            ServerResponse::AudioAudition { path } => Ok(path),
+            other => Err(unexpected("pause audition", &other)),
+        }
+    }
+
     pub fn audition_state(&mut self) -> io::Result<Option<PathBuf>> {
         match self.request(ClientCommand::AuditionState)? {
             ServerResponse::AudioAudition { path } => Ok(path),

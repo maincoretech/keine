@@ -22,9 +22,22 @@ pub(in crate::app) fn audition_control(
     cx: &mut App,
 ) -> AnyElement {
     let controller = cx.global_mut::<EditorDocuments>().preview(root).ok();
-    let playing = controller
+    let snapshot = controller.as_ref().map(|controller| controller.snapshot());
+    let active = snapshot
         .as_ref()
-        .is_some_and(|controller| controller.snapshot().audition_path.as_deref() == Some(path));
+        .is_some_and(|snapshot| snapshot.audition_path.as_deref() == Some(path));
+    let paused = active
+        && snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.audition_paused);
+    let playing = active && !paused;
+    let label = if playing {
+        "Pause"
+    } else if paused {
+        "Resume"
+    } else {
+        "Play"
+    };
     let path = path.to_owned();
     div()
         .id(format!("audition-{}", path.display()))
@@ -39,10 +52,8 @@ pub(in crate::app) fn audition_control(
         .rounded(px(4.))
         .cursor_pointer()
         .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-        .when(!compact, |this| {
-            this.border_1().border_color(rgb(BORDER)).bg(rgb(SURFACE))
-        })
-        .tooltip(icon_hint(if playing { "Stop" } else { "Audition" }))
+        .when(!compact, |this| this.bg(rgb(SURFACE)))
+        .tooltip(icon_hint(label))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(move |_, _, cx| {
             cx.stop_propagation();
@@ -52,7 +63,7 @@ pub(in crate::app) fn audition_control(
         })
         .child(
             Icon::new(if playing {
-                AssetIconName::Square
+                AssetIconName::Pause
             } else {
                 AssetIconName::Play
             })
@@ -60,13 +71,43 @@ pub(in crate::app) fn audition_control(
             .text_color(rgb(PRIMARY)),
         )
         .when(!compact, |this| {
-            this.child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(rgb(INK))
-                    .child(if playing { "Stop" } else { "Play" }),
-            )
+            this.child(div().text_size(px(12.)).text_color(rgb(INK)).child(label))
         })
+        .into_any_element()
+}
+
+pub(in crate::app) fn replay_control(root: &Path, path: &Path, cx: &mut App) -> AnyElement {
+    let controller = cx.global_mut::<EditorDocuments>().preview(root).ok();
+    let path = path.to_owned();
+    div()
+        .id("audition-replay")
+        .h(px(32.))
+        .px_2()
+        .flex()
+        .items_center()
+        .gap_2()
+        .rounded(px(4.))
+        .bg(rgb(SURFACE))
+        .cursor_pointer()
+        .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+        .tooltip(icon_hint("Replay from beginning"))
+        .on_click(move |_, _, cx| {
+            cx.stop_propagation();
+            if let Some(controller) = &controller {
+                controller.restart_audition(path.clone());
+            }
+        })
+        .child(
+            Icon::new(AssetIconName::RotateCcw)
+                .xsmall()
+                .text_color(rgb(PRIMARY)),
+        )
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(INK))
+                .child("Replay"),
+        )
         .into_any_element()
 }
 

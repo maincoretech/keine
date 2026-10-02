@@ -1,6 +1,7 @@
 use super::*;
 
 mod drag;
+pub(super) mod layout;
 mod motion;
 mod picker;
 mod view;
@@ -166,6 +167,7 @@ impl WorkbenchPanel {
                 {
                     let position = Position::new(*line as u32, *column as u32);
                     editor.update(cx, |editor, cx| {
+                        editor.unfold_at(position, cx);
                         editor.set_cursor_position(position, window, cx)
                     });
                 }
@@ -529,11 +531,68 @@ impl WorkbenchPanel {
         else {
             return;
         };
+        let document_handle = document;
         let document = document.borrow();
-        let projection = document.projection();
+        let snapshot = self
+            .block_layout
+            .borrow_mut()
+            .snapshot(document_handle, None);
+        let projection = &snapshot.projection;
         if self.block_height_revision != document.revision() {
             self.block_heights.clear();
             self.block_height_revision = document.revision();
+        }
+        if self.block_drag.session().is_none()
+            && self.block_drag.motion().is_none()
+            && self.draft_text.is_none()
+        {
+            let mut cache = self.block_layout.borrow_mut();
+            for editor in &self.block_text_editors {
+                if let Some(id) = snapshot.text_lookup.get(&editor.text_start) {
+                    let &(scene, block) = snapshot.lookup.get(id).unwrap();
+                    let block = &snapshot.projection.scenes[scene].blocks[block];
+                    let height = block_row_height(
+                        block,
+                        &self.block_text_editors,
+                        None,
+                        &self.block_heights,
+                        cx,
+                    );
+                    self.block_heights.insert(block.source_range.start, height);
+                }
+            }
+            let geometry = cache.geometry(&snapshot, &self.collapsed_scenes, &self.block_heights);
+            let top = (-f32::from(self.view_scroll.offset().y) - 400.).max(0.);
+            let bottom = top + f32::from(window.viewport_size().height) + 800.;
+            let first = geometry
+                .rows
+                .partition_point(|(_, y, height)| *y + *height < top);
+            let mut visible = geometry.rows[first..]
+                .iter()
+                .take_while(|(_, y, _)| *y <= bottom)
+                .map(|(id, _, _)| *id)
+                .collect::<HashSet<_>>();
+            visible.extend(&self.selected_blocks);
+            if let Some((_, line, column)) = cx
+                .global::<EditorDocuments>()
+                .selection(root)
+                .filter(|(path, _, _)| path == relative)
+                && let Some(block) = snapshot.block_at_position(*line, *column)
+            {
+                visible.insert(block.source_range.start);
+            }
+            for editor in &self.block_text_editors {
+                if (editor.state.read(cx).focus_handle(cx).is_focused(window)
+                    || editor.wait.as_ref().is_some_and(|wait| {
+                        wait.input.read(cx).focus_handle(cx).is_focused(window)
+                    }))
+                    && let Some(id) = snapshot.text_lookup.get(&editor.text_start)
+                {
+                    visible.insert(*id);
+                }
+            }
+            self.block_visible = visible;
+            return;
         }
         let top = (-f32::from(self.view_scroll.offset().y) - 400.).max(0.);
         let bottom = top + f32::from(window.viewport_size().height) + 800.;
@@ -543,8 +602,7 @@ impl WorkbenchPanel {
             .global::<EditorDocuments>()
             .selection(root)
             .filter(|(path, _, _)| path == relative)
-            && let Some((_, block)) =
-                block_at_position(&projection, document.contents(), *line, *column)
+            && let Some(block) = snapshot.block_at_position(*line, *column)
         {
             visible.insert(block.source_range.start);
         }
@@ -642,20 +700,21 @@ impl WorkbenchPanel {
         // SourceDocument may not receive its Change event until later. Build
         // row states from the same revision that the Blocks projection will
         // render after the event, so moved text cannot bind to old offsets.
-        let source = editor.read(cx).value().to_string();
-        let dialogues = if document.borrow().contents() == source {
-            document.borrow().dialogues()
-        } else {
-            Rc::new(dialogues_for_source(relative, &source))
-        };
-        let projection = document.borrow().projection();
-        let visible_text = projection
-            .scenes
+        let mut cache = self.block_layout.borrow_mut();
+        let dialogues = cache.dialogues(editor.read(cx).text(), document, relative);
+        let snapshot = cache.snapshot(document, None);
+        let visible_text = self
+            .block_visible
             .iter()
-            .flat_map(|scene| &scene.blocks)
-            .filter(|block| self.block_visible.contains(&block.source_range.start))
-            .filter_map(|block| block.text_range.as_ref().map(|range| range.start))
+            .filter_map(|start| {
+                let &(scene, block) = snapshot.lookup.get(start)?;
+                snapshot.projection.scenes[scene].blocks[block]
+                    .text_range
+                    .as_ref()
+                    .map(|range| range.start)
+            })
             .collect::<HashSet<_>>();
+        drop(cache);
         self.block_text_editors.retain(|editor| {
             visible_text.contains(&editor.text_start)
                 || editor.state.read(cx).focus_handle(cx).is_focused(window)
@@ -664,8 +723,12 @@ impl WorkbenchPanel {
                     .as_ref()
                     .is_some_and(|wait| wait.input.read(cx).focus_handle(cx).is_focused(window))
         });
-        for dialogue in dialogues.iter().filter(|dialogue| {
-            dialogue.editable && visible_text.contains(&dialogue.text_range.start)
+        for dialogue in visible_text.iter().filter_map(|start| {
+            dialogues
+                .binary_search_by_key(start, |dialogue| dialogue.text_range.start)
+                .ok()
+                .map(|index| &dialogues[index])
+                .filter(|dialogue| dialogue.editable)
         }) {
             if self
                 .block_text_editors

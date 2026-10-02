@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 #[path = "camera.rs"]
 mod camera;
-pub use camera::{CameraShakeRandomness, CameraTweenField, CameraTweenSpec};
+pub use camera::{CameraShakeRandomness, CameraShakeTweenSpec, CameraTweenField, CameraTweenSpec};
 
 /// Design resolution (fixed, everything is drawn in this space).
 /// Native logical canvas used by scene layout, UI and render effects.

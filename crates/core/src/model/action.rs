@@ -762,6 +762,14 @@ pub enum Action {
         easing: Easing,
         blocking: bool,
     },
+    /// Named single-use and looping effects share the existing playback envelopes.
+    SoundEffect {
+        file: Option<String>,
+        id: Option<String>,
+        volume: f32,
+        looped: bool,
+        fade: f32,
+    },
 }
 
 /// Fixed system surfaces owned by the engine shell, never by a script adapter.

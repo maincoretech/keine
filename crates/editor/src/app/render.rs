@@ -765,6 +765,7 @@ impl Render for WorkbenchPanel {
                             scene_name_input: &self.scene_name_input,
                             visible: &self.block_visible,
                             heights: &self.block_heights,
+                            layout: &self.block_layout,
                         },
                         window,
                         cx,

@@ -491,7 +491,7 @@ fn action_name(action: &Action) -> &'static str {
         Action::CallScene(_) => "call-scene",
         Action::End => "end",
         Action::Bgm { .. } => "bgm",
-        Action::Effect { .. } => "effect",
+        Action::Effect { .. } | Action::SoundEffect { .. } => "effect",
         Action::MiniAvatar { .. } => "mini-avatar",
         Action::HideMiniAvatar => "hide-mini-avatar",
         Action::Set { .. } => "set",

@@ -232,6 +232,18 @@ pub struct CameraShakeState {
     pub offset_x: f32,
     pub offset_y: f32,
     pub blocking: bool,
+    pub tween: Option<CameraShakeTween>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CameraShakeTween {
+    pub from_amplitude: f32,
+    pub from_frequency: f32,
+    pub to_amplitude: f32,
+    pub to_frequency: f32,
+    pub duration: f32,
+    pub easing: Easing,
+    pub cycles: f64,
 }
 
 impl CameraShakeState {
@@ -249,19 +261,53 @@ impl CameraShakeState {
             offset_x: 0.0,
             offset_y: 0.0,
             blocking,
+            tween: None,
         }
     }
 
-    /// Jitter is a pure function of authored time and seed, independent of frame partitioning.
+    pub fn advance(&mut self, delta: f32) {
+        let previous = self.elapsed;
+        self.elapsed = (self.elapsed + delta).min(self.spec.duration);
+        if let Some(tween) = &mut self.tween {
+            let old_frequency = self.spec.frequency;
+            let progress = tween
+                .easing
+                .sample((self.elapsed / tween.duration).clamp(0.0, 1.0))
+                .clamp(0.0, 1.0);
+            self.spec.amplitude =
+                tween.from_amplitude + (tween.to_amplitude - tween.from_amplitude) * progress;
+            self.spec.frequency =
+                tween.from_frequency + (tween.to_frequency - tween.from_frequency) * progress;
+            // Integrating frequency keeps the phase continuous as its rate changes.
+            let tween_delta =
+                (self.elapsed.min(tween.duration) - previous.min(tween.duration)).max(0.0);
+            let steady_delta = (self.elapsed - previous - tween_delta).max(0.0);
+            tween.cycles += (f64::from(old_frequency) + f64::from(self.spec.frequency))
+                * 0.5
+                * f64::from(tween_delta)
+                + f64::from(self.spec.frequency) * f64::from(steady_delta);
+            if self.elapsed >= tween.duration {
+                self.blocking = false;
+            }
+        }
+        self.sample();
+    }
+
+    /// Sample jitter from authored phase and seed; fixed-frequency shakes are frame-independent.
     pub fn sample(&mut self) {
         use crate::{CameraShakeAxis, CameraShakeFalloff};
+        if self.spec.amplitude <= f32::EPSILON || self.spec.frequency <= f32::EPSILON {
+            self.offset_x = 0.0;
+            self.offset_y = 0.0;
+            return;
+        }
         let progress = (self.elapsed / self.spec.duration.max(f32::EPSILON)).clamp(0.0, 1.0);
         let envelope = match self.spec.falloff {
             CameraShakeFalloff::Linear => 1.0 - progress,
             CameraShakeFalloff::Exponential => (1.0 - progress).powi(2),
         };
         let amplitude = self.spec.amplitude * envelope;
-        let (x, y) = if self.randomness.is_zero() {
+        let (x, y) = if self.randomness.is_zero() && self.tween.is_none() {
             // Preserve legacy multiplication order, including f32 rounding, and skip noise entirely.
             let phase = std::f32::consts::TAU * self.spec.frequency * self.elapsed;
             (
@@ -270,7 +316,10 @@ impl CameraShakeState {
             )
         } else {
             // f64 products keep finite authored frequency/time from overflowing during sampling.
-            let cycles = f64::from(self.spec.frequency) * f64::from(self.elapsed);
+            let cycles = self.tween.as_ref().map_or_else(
+                || f64::from(self.spec.frequency) * f64::from(self.elapsed),
+                |tween| tween.cycles,
+            );
             // Smooth noise has derivative at most 3. Scaling phase by 2/3 at half-rate
             // bounds instantaneous frequency to [1-r, 1+r] of the authored frequency.
             let jitter =

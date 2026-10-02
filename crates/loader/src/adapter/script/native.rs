@@ -5,7 +5,9 @@
 //! exactly by today's typed core IR; accepted syntax is never routed through
 //! the permissive WebGAL expression evaluator.
 
+mod format;
 mod v11;
+pub use format::format_native_source;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
@@ -2038,7 +2040,7 @@ impl<'a> Parser<'a> {
                 self.validate_signature(&name, &args, 1, &["volume", "fade", "loop"], report);
             }
             "se" => {
-                self.validate_signature(&name, &args, 1, &["volume"], report);
+                self.validate_signature(&name, &args, 1, &["volume", "id", "fade"], report);
             }
             "video" => {
                 if self.named_arg(&args, "loop").is_some()
@@ -2257,12 +2259,38 @@ impl<'a> Parser<'a> {
                 })
             }
             "se" => {
-                let file = first.and_then(|arg| self.argument_identifier(arg));
-                file.map(|file| Action::Effect {
-                    file: (file != "none").then_some(file),
-                    volume: self.named_number(&args, "volume").unwrap_or(1.0) as f32,
-                    id: None,
-                })
+                let file = first.and_then(|arg| self.argument_identifier(arg))?;
+                let volume = self.v11_volume(&args, report)?;
+                if file == "none"
+                    && self.named_arg(&args, "id").is_none()
+                    && self.named_duration_checked(&args, "fade", report)? > 0.0
+                {
+                    report
+                        .diagnostics
+                        .push(self.error("se(none) is immediate; fade requires an effect ID"));
+                    return None;
+                }
+                if self.named_arg(&args, "id").is_some() || self.named_arg(&args, "fade").is_some()
+                {
+                    Some(Action::SoundEffect {
+                        file: (file != "none").then_some(file),
+                        id: match self.named_arg(&args, "id") {
+                            Some(arg) => {
+                                Some(self.v11_identifier(Some(arg), "effect ID", report)?)
+                            }
+                            None => None,
+                        },
+                        volume,
+                        looped: false,
+                        fade: self.named_duration_checked(&args, "fade", report)?,
+                    })
+                } else {
+                    Some(Action::Effect {
+                        file: (file != "none").then_some(file),
+                        volume,
+                        id: None,
+                    })
+                }
             }
             "video" => {
                 let file = first.and_then(|arg| self.argument_identifier(arg));
@@ -3416,7 +3444,7 @@ fn binary(op: EiyashouBinaryOp, left: EiyashouExpr, right: EiyashouExpr) -> Eiya
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Argument {
     name: Option<String>,
     token_indices: Vec<usize>,
@@ -4175,6 +4203,62 @@ scene ending { "Done" }
     }
 
     #[test]
+    fn named_effects_keep_single_use_loop_and_fade_distinct() {
+        let scenes = parse_native_scenes(
+            "scene a { se(door, id: hit, fade: 100ms), se.loop(rain, rain_asset, fade: 200ms), se.stop(hit, fade: 300ms) }",
+        );
+        assert!(
+            errors(&scenes[0]).is_empty(),
+            "{:?}",
+            scenes[0].report.diagnostics
+        );
+        assert!(
+            matches!(&scenes[0].report.actions[0], Action::SoundEffect { looped: false, id: Some(id), fade, .. } if id == "hit" && *fade == 0.1)
+        );
+        assert!(
+            matches!(&scenes[0].report.actions[1], Action::SoundEffect { looped: true, fade, .. } if *fade == 0.2)
+        );
+        assert!(
+            matches!(&scenes[0].report.actions[2], Action::SoundEffect { file: None, fade, .. } if *fade == 0.3)
+        );
+        for source in [
+            "scene a { se(door, volume: 2) }",
+            "scene a { se.stop(*, fade: 1s) }",
+        ] {
+            let scenes = parse_native_scenes(source);
+            assert!(!errors(&scenes[0]).is_empty());
+            assert!(scenes[0].report.actions.is_empty());
+        }
+    }
+
+    #[test]
+    fn camera_move_groups_shake_into_one_atomic_tween() {
+        let scenes = parse_native_scenes(
+            "scene a { camera.move(all, x: 10, shake: shake(amplitude: 4, frequency: 2, amplitude_randomness: 0.3), duration: 1s, tween: [x, shake_amplitude, shake_frequency], blocking: false) }",
+        );
+        assert!(
+            errors(&scenes[0]).is_empty(),
+            "{:?}",
+            scenes[0].report.diagnostics
+        );
+        assert!(
+            matches!(scenes[0].report.actions.as_slice(), [Action::SetCameraTween { spec }]
+            if spec.shake.is_some_and(|value| value.shake.duration == 1.0 && value.randomness.amplitude == 0.3)
+                && spec.transform.is_some() && !spec.blocking)
+        );
+        for source in [
+            "scene a { camera.move(all, shake: shake(amplitude: -1, frequency: 2), duration: 1s) }",
+            "scene a { camera.move(all, shake: shake(amplitude: 4), duration: 1s) }",
+            "scene a { camera.move(all, shake: shake(amplitude: 4, frequency: 2, axis: invalid), duration: 1s) }",
+            "scene a { camera.move(all, shake: shake(amplitude: 4, frequency: 2, frequency: 3), duration: 1s) }",
+        ] {
+            let scenes = parse_native_scenes(source);
+            assert!(!errors(&scenes[0]).is_empty(), "{source}");
+            assert!(scenes[0].report.actions.is_empty());
+        }
+    }
+
+    #[test]
     fn rejects_invalid_v11_arguments_without_lowering() {
         let scenes = parse_native_scenes(
             "scene a { avatar.show(), vocal.play(voice, volume: 2), screen.film(maybe), ui.show(unknown) }",
@@ -4206,7 +4290,7 @@ scene ending { "Done" }
             matches!(&actions[6], Action::Effect { id: Some(id), file: Some(file), .. } if id == "rain" && file == "rain_sound")
         );
         assert!(
-            matches!(&actions[7], Action::Effect { id: Some(id), file: None, .. } if id == "rain")
+            matches!(&actions[7], Action::SoundEffect { id: Some(id), file: None, .. } if id == "rain")
         );
         assert!(
             matches!(&actions[8], Action::PlayVideo { video } if video.looped && video.muted && video.mode == VideoMode::Mixed)

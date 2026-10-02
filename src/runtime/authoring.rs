@@ -120,6 +120,22 @@ impl Session {
         None
     }
 
+    fn pause_audition(&mut self, paused: bool) -> Result<ServerResponse, (ErrorCode, String)> {
+        #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+        if let Some(audition) = &self.audition {
+            if paused {
+                audition.player.pause();
+            } else {
+                audition.player.play();
+            }
+        }
+        #[cfg(not(any(feature = "audio-opus", feature = "audio-seekable")))]
+        let _ = paused;
+        Ok(ServerResponse::AudioAudition {
+            path: self.audition_path(),
+        })
+    }
+
     fn audition_audio(
         &mut self,
         path: Option<&Path>,
@@ -582,6 +598,7 @@ fn handle(
             })
         }
         ClientCommand::AuditionAudio { path } => session.audition_audio(path.as_deref()),
+        ClientCommand::PauseAudition { paused } => session.pause_audition(*paused),
         ClientCommand::AuditionState => Ok(ServerResponse::AudioAudition {
             path: session.audition_path(),
         }),

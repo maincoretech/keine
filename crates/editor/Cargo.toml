@@ -20,6 +20,7 @@ image = { workspace = true }
 keine-authoring = { workspace = true }
 keine-core = { workspace = true }
 keine-loader = { workspace = true }
+keine-media = { workspace = true }
 postcard = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -29,6 +30,7 @@ libc = { workspace = true }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSFileManager", "NSError", "NSString", "NSURL"] }
 
 [dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
 bevy = { workspace = true, features = [
     "bevy_core_pipeline",
     "bevy_render",
@@ -36,3 +38,8 @@ bevy = { workspace = true, features = [
     "bevy_sprite_render",
     "bevy_winit",
 ] }
+
+[[bench]]
+name = "browser"
+path = "../../tests/bench/editor/browser.rs"
+harness = false

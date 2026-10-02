@@ -980,6 +980,56 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                     (None, None) => state.effect_queue.push(crate::state::EffectEvent::Stop),
                 }
             }
+            Action::SoundEffect {
+                file,
+                id,
+                volume,
+                looped,
+                fade,
+            } => {
+                let id = id
+                    .as_ref()
+                    .map(|id| interpolate(id, &state.vars, &state.global_vars));
+                let file = file
+                    .as_ref()
+                    .map(|file| interpolate(file, &state.vars, &state.global_vars));
+                let fade = fade.max(0.0);
+                match (file, id) {
+                    (Some(file), Some(id)) if *looped => {
+                        state.looping_effects.insert(
+                            id.clone(),
+                            crate::EffectState {
+                                file,
+                                volume: volume.clamp(0.0, 1.0),
+                            },
+                        );
+                        state
+                            .effect_queue
+                            .push(crate::EffectEvent::StartLoop { id, fade_in: fade });
+                    }
+                    (Some(file), id) => {
+                        state
+                            .effect_queue
+                            .push(crate::EffectEvent::Play(crate::EffectCue {
+                                id,
+                                file,
+                                volume: volume.clamp(0.0, 1.0),
+                                fade_in: fade,
+                            }))
+                    }
+                    (None, Some(id)) => {
+                        state.looping_effects.remove(&id);
+                        state.effect_queue.push(crate::EffectEvent::StopLoop {
+                            id: id.clone(),
+                            fade_out: fade,
+                        });
+                        state
+                            .effect_queue
+                            .push(crate::EffectEvent::StopOneShot { id, fade_out: fade });
+                    }
+                    (None, None) => state.effect_queue.push(crate::EffectEvent::Stop),
+                }
+            }
             Action::Vocal { file, volume } => {
                 state.vocal_event = Some(crate::state::VocalCue {
                     file: file
@@ -3040,6 +3090,7 @@ mod tests {
             transform: Some(patch),
             effect: None,
             v2: None,
+            shake: None,
             fields: vec![crate::CameraTweenField::X],
             duration: 1.0,
             easing: Easing::Linear,
@@ -3074,6 +3125,59 @@ mod tests {
         assert_eq!(step(&mut state), StepResult::EndOfScene);
         assert_eq!(state.camera_transform.offset_x, 120.0);
         assert!(state.camera_transform_animation.is_none());
+    }
+
+    #[test]
+    fn named_single_effects_do_not_loop_and_named_stop_preserves_envelopes() {
+        let mut state = state_with(vec![
+            Action::SoundEffect {
+                file: Some("door.wav".into()),
+                id: Some("door".into()),
+                volume: 0.4,
+                looped: false,
+                fade: 0.2,
+            },
+            Action::SoundEffect {
+                file: Some("rain.wav".into()),
+                id: Some("rain".into()),
+                volume: 0.3,
+                looped: true,
+                fade: 0.5,
+            },
+            Action::Wait { seconds: 1.0 },
+            Action::SoundEffect {
+                file: None,
+                id: Some("door".into()),
+                volume: 1.0,
+                looped: false,
+                fade: 0.1,
+            },
+            Action::SoundEffect {
+                file: None,
+                id: Some("rain".into()),
+                volume: 1.0,
+                looped: false,
+                fade: 0.4,
+            },
+        ]);
+        assert_eq!(step(&mut state), StepResult::AwaitPresentation);
+        assert_eq!(state.looping_effects.len(), 1);
+        assert!(state.looping_effects.contains_key("rain"));
+        assert!(
+            matches!(&state.effect_queue[0], crate::EffectEvent::Play(cue)
+            if cue.id.as_deref() == Some("door") && cue.fade_in == 0.2)
+        );
+        assert!(
+            matches!(&state.effect_queue[1], crate::EffectEvent::StartLoop { id, fade_in }
+            if id == "rain" && *fade_in == 0.5)
+        );
+        state.wait_remaining = 0.0;
+        assert_eq!(step(&mut state), StepResult::EndOfScene);
+        assert!(state.looping_effects.is_empty());
+        assert!(state.effect_queue.iter().any(|event| matches!(event,
+            crate::EffectEvent::StopOneShot { id, fade_out } if id == "door" && *fade_out == 0.1)));
+        assert!(state.effect_queue.iter().any(|event| matches!(event,
+            crate::EffectEvent::StopLoop { id, fade_out } if id == "rain" && *fade_out == 0.4)));
     }
 
     #[test]
