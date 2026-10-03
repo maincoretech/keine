@@ -14,6 +14,10 @@ sprite 引用背景及错误音频类型拒绝、Editor 增量引用计数和资
 
 迁移文件名与 Explorer 排序：publisher workspace 856 passed / 8 ignored，fmt/check/Clippy、Editor 构建、native-smoke 与 tday validate 通过。回归覆盖源文件名/子目录保留、中文路径、大小写重名、路径隔离，以及入口优先、场景自然排序、多场景文件和增量更新。现有 tday 的 84 个资源恢复原名，168 个原素材/转换成品 SHA256 和 13 个剧本均未变，ID 与引用保留；新版 Editor 已目测原名缩略图、`bedroom.opus` 及全部 13 个剧本的排列。tday 保留 1 条未引用背景警告。
 
+章节接续与右键菜单：publisher workspace 857 passed / 8 ignored，fmt/check/Clippy、Editor 构建及 native-smoke 校验通过；追加菜单焦点修正后 Editor Clippy 和 208 项测试通过（7 项性能测试忽略，IPC/Trash 放行重跑）。线性章节隐式结束回归覆盖下一章、空末章、禁用章、预处理与辅助 fragment 返回；迁移后的实际执行覆盖主线→支线→返回→下一章→结束。当前 tday 的 13 个剧本仅追加章末 goto/结束，删除新增内容可逐字节恢复原正文；validate 为 13 scene / 2659 action，保留原有 1 条未引用背景警告。macOS 新版实测微小滚动不关闭菜单且不滚动下方卡片，点击外部和 Esc 正常关闭；Preview 从 start.shou 章末进入 1.shou，下一章画面、对白及 Editor 文件定位正常。完整剧情仍由用户后续验收。
+
+tday 图片复用清理：逐文件 SHA256 与解码后 RGBA 核对，50 张登记图片中 15 份完全重复；合并 19 处引用后为 35 张图片、69 个资源，保留场景参数和当前正文。重复原素材/成品移到 `projects/.backups/tday-image-merge-20261004`，保留文件哈希未变。validate 为 13 scene / 2659 action / 0 warning；Editor 已显示 69 files / 136.6 MB。登记媒体由 177,273,165 降至 143,211,885 bytes；使用隔离测试密钥执行 `target/debug/keine pack projects/tday --output target/authoring/tday-image-merge-{before,after}`，两次成功，实际 `.haku`/`.taku` 合计由 143,371,230 降至 143,369,230 bytes，仅减少 2,000 bytes：现有 Hakutaku 已按内容去重，此次没有修改引擎。
+
 ### 项目所有者（用户）
 
 | 何时 | 你要做什么 | 完成标准 |

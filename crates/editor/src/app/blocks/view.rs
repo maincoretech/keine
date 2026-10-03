@@ -1075,9 +1075,9 @@ pub(in crate::app) fn render_block_projection(
                 }))
                 .on_mouse_down(
                     MouseButton::Right,
-                    cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
-                        this.open_block_context_menu(row_id, event.position, cx);
+                        this.open_block_context_menu(row_id, event.position, window, cx);
                     }),
                 )
                 .child(grip)

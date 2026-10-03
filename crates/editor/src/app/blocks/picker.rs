@@ -691,6 +691,7 @@ pub(in crate::app) fn render_block_context_menu(
             .child(
                 div()
                     .id("block-context-menu")
+                    .occlude()
                     .w(px(188.))
                     .p_1()
                     .rounded(px(5.))
@@ -848,6 +849,7 @@ pub(in crate::app) fn render_scene_context_menu(
                 div()
                     .w(px(SCENE_CONTEXT_MENU_WIDTH_PX))
                     .h(px(SCENE_CONTEXT_MENU_HEIGHT_PX))
+                    .occlude()
                     .on_mouse_down_out(
                         cx.listener(|this, _, window, cx| {
                             this.close_scene_context_menu(window, cx)

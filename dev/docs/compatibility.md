@@ -12,6 +12,7 @@
 - 完整官方示例是忽略的本机内容，不提交商业资源。
 - Editor 中兼容 JSON 只读；`migrate` 输出原生清单/脚本，转换失败不发布目标。
 - 迁移按源文件分组输出 `.shou`，保留文件名与子目录；同源文件的多个 fragment 仍放在一起。LetsGal `project.json` 生成的入口/调度放在小型 `main.shou`，重名路径加数字后缀。跨文件 `goto` / `call` 仍按全项目 scene ID 连接，初始变量放在入口文件。
+- 默认线性主 fragment 结束时补下一章 `goto`，最后一章补 `story.end()`；辅助 fragment 和章节预处理仍返回，高级调度沿用调度图。见 [LetsGal 执行规则](https://docs.avg-engine.com/reference/script-json)。
 - 对象 ID 重命名后通过 `objects.yaml` 恢复引擎分组；粒子纹理进资源清单。
 - 场景背景按源资源分类进入 `backgrounds`；分层绘制仍使用 `sprite`，不因此改成立绘资源。同一分类下的源文件只复制一次。
 - 资源文件保留源文件名与分类内子目录，引用 ID 独立编号；大小写重名加短数字后缀，不覆盖。后续格式转换仅改变扩展名。

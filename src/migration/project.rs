@@ -1354,7 +1354,13 @@ mod tests {
         )
         .unwrap();
         let fragment = |id: &str| serde_json::json!({"id":id,"blocks":[{"type":"narration","content":[{"type":"text","text":id}],"props":{}}]});
-        let first = serde_json::json!({"id":"one","name":"第一章","fragments":[fragment("first"),fragment("aside")]});
+        let mut main = fragment("first");
+        main["blocks"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"type":"callFragment","props":{"fragmentId":"aside"}}));
+        let first =
+            serde_json::json!({"id":"one","name":"第一章","fragments":[main,fragment("aside")]});
         let second =
             serde_json::json!({"id":"two","name":"第二章","fragments":[fragment("second")]});
         fs::write(source.join("chapters/第一章.json"), first.to_string()).unwrap();
@@ -1370,7 +1376,27 @@ mod tests {
         assert!(entry.contains("// Original scene: start"));
         assert_eq!(entry.matches("\nscene ").count(), 1);
         let opened = open_project(&target, &loader).unwrap();
-        assert_eq!(keine_loader::load_scenes(&opened.content).unwrap().len(), 4);
+        let loaded = keine_loader::load_scenes(&opened.content).unwrap();
+        assert_eq!(loaded.len(), 4);
+        let mut state = keine_core::State {
+            current_scene: opened.config.script.entry.clone(),
+            program: std::sync::Arc::new(keine_core::Program::from_scenes(
+                loaded.into_iter().map(|scene| (scene.name, scene.actions)),
+            )),
+            ..Default::default()
+        };
+        for text in ["first", "aside", "second"] {
+            assert_eq!(
+                keine_core::runtime::step::step(&mut state),
+                keine_core::runtime::StepResult::AwaitClick
+            );
+            assert_eq!(state.dialogue.as_ref().unwrap().text, text);
+        }
+        assert_eq!(
+            keine_core::runtime::step::step(&mut state),
+            keine_core::runtime::StepResult::EndOfScene
+        );
+        assert!(state.scene_stack.is_empty());
         assert_eq!(
             fs::read_to_string(source.join("chapters/第一章.json")).unwrap(),
             first.to_string()

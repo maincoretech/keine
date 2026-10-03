@@ -347,6 +347,7 @@ impl WorkbenchPanel {
         &mut self,
         row: usize,
         position: Point<Pixels>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if !self.selected_blocks.contains(&row) {
@@ -383,6 +384,7 @@ impl WorkbenchPanel {
             _ => return,
         };
         self.block_context_menu = Some((row, position, source));
+        self.focus.focus(window, cx);
         cx.notify();
     }
 

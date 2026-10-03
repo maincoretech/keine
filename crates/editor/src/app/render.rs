@@ -963,11 +963,6 @@ impl Render for WorkbenchPanel {
                             .flex_1()
                             .min_h_0()
                             .child(body)
-                            .on_scroll_wheel(cx.listener(|this, _, _, cx| {
-                                if this.block_context_menu.take().is_some() {
-                                    cx.notify();
-                                }
-                            }))
                             .when_some(picker, |this, picker| this.child(picker))
                             .when_some(scene_menu, |this, menu| this.child(menu))
                             .when_some(block_menu, |this, menu| this.child(menu)),

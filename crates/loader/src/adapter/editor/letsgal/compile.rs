@@ -513,8 +513,14 @@ pub(super) fn compile_project(
 
     let mut loaded = Vec::new();
     for (path, chapter) in all_enabled {
-        for fragment in &chapter.fragments {
-            loaded.push(compile_fragment(path, chapter, fragment, &context));
+        for (index, fragment) in chapter.fragments.iter().enumerate() {
+            loaded.push(compile_fragment(
+                path,
+                chapter,
+                fragment,
+                &context,
+                scheduled.is_none() && chapter.kind != "schedule-preprocessing" && index == 0,
+            ));
         }
     }
     if let Some(graph) = scheduled {
@@ -777,6 +783,7 @@ fn compile_fragment(
     chapter: &ChapterDocument,
     fragment: &StoryFragment,
     context: &CompileContext<'_>,
+    finish_chapter: bool,
 ) -> LoadedScene {
     let mut report = ParseReport::default();
     for (index, block) in fragment.blocks.iter().enumerate() {
@@ -785,6 +792,28 @@ fn compile_fragment(
             column: 1,
         };
         compile_block(block, chapter, context, span, &mut report);
+    }
+    // LetsGal advances linear chapters at the main fragment's end. Auxiliary
+    // fragments and blueprint chapters must still return to their caller.
+    if finish_chapter
+        && !matches!(
+            report.actions.last(),
+            Some(Action::ChangeScene(_) | Action::ReturnScene | Action::End)
+        )
+    {
+        let span = SourceSpan {
+            line: fragment.blocks.len() + 1,
+            column: 1,
+        };
+        if let Some(next) = context
+            .chapter_next
+            .get(&ChapterRoute::Chapter(chapter.id.clone()))
+            .and_then(Clone::clone)
+        {
+            push_chapter_change(next, context, span, &mut report);
+        } else {
+            report.push(Action::End, span);
+        }
     }
     LoadedScene {
         name: fragment.id.clone(),
@@ -6382,6 +6411,77 @@ mod tests {
         ));
         assert_eq!(report.resources.len(), 2);
         assert!(report.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn linear_chapter_fallthrough_keeps_preprocessing_and_auxiliary_returns() {
+        let project = serde_json::from_value(json!({"id":"p", "name":"Project"})).unwrap();
+        let chapter = |name: &str, mut value: Value| {
+            value["name"] = name.into();
+            (
+                PathBuf::from(format!("{name}.json")),
+                serde_json::from_value(value).unwrap(),
+            )
+        };
+        let chapters = vec![
+            chapter(
+                "pre",
+                json!({
+                    "id":"pre-chapter", "kind":"schedule-preprocessing",
+                    "fragments":[{"id":"pre", "blocks":[{"type":"comment"}]}]
+                }),
+            ),
+            chapter(
+                "one",
+                json!({
+                    "id":"one-chapter", "fragments":[
+                        {"id":"one", "blocks":[{"type":"comment"}]},
+                        {"id":"aside", "blocks":[{"type":"comment"}]}
+                    ]
+                }),
+            ),
+            chapter(
+                "disabled",
+                json!({
+                    "id":"disabled-chapter", "disabled":true,
+                    "fragments":[{"id":"disabled", "blocks":[]}]
+                }),
+            ),
+            chapter(
+                "two",
+                json!({
+                    "id":"two-chapter", "fragments":[{"id":"two", "blocks":[]}]
+                }),
+            ),
+        ];
+        let loaded = compile_project(
+            Path::new("."),
+            &project,
+            &chapters,
+            &CharactersDocument::default(),
+            &ScenesDocument::default(),
+            &AssetManifest::default(),
+        )
+        .unwrap();
+        let actions = |name: &str| {
+            &loaded
+                .iter()
+                .find(|scene| scene.name == name)
+                .unwrap()
+                .actions
+        };
+        assert_eq!(
+            actions("one"),
+            &vec![
+                Action::Comment,
+                Action::CallScene("pre".into()),
+                Action::ChangeScene("two".into())
+            ]
+        );
+        assert_eq!(actions("pre"), &vec![Action::Comment]);
+        assert_eq!(actions("aside"), &vec![Action::Comment]);
+        assert_eq!(actions("two"), &vec![Action::End]);
+        assert!(!loaded.iter().any(|scene| scene.name == "disabled"));
     }
 
     #[test]
