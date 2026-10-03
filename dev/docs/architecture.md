@@ -38,6 +38,9 @@ keine/
 
 ## 渲染与生命周期
 
+内建动画预设的纯 transform 计算归 `crates/core/src/runtime/animation.rs`；
+Action 入场初态与 Engine 每帧插值共用同一规则，计时、完成移除和渲染仍由各自生命周期负责。
+
 1920×1080 是唯一设计空间。viewport/letterbox 转换只有一个 owner。
 scene、normal UI、dialog camera 职责固定，特效不得改变合成顺序。
 Editor 通过显式开始/停止控制独立原生 Engine；Block 与执行位置双向同步。

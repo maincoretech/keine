@@ -9,7 +9,8 @@ use std::{collections::HashSet, fmt};
 
 use keine_loader::{
     Diagnostic, NativeToken, NativeTokenKind, SourceLineIndex, is_native_dotted_command,
-    is_native_structured_command, parse_native_document,
+    is_native_structured_command, native_command_argument_names, native_text_argument_names,
+    native_text_voice_allowed, native_tokens, parse_native_document,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -166,24 +167,25 @@ impl EiyashouProjection {
             .iter()
             .flat_map(|scene| scene.blocks.iter())
             .find(|block| block.source_range.start == block_start)?;
-        let text_range = block.text_range.as_ref()?;
-        let suffix = source
-            .get(text_range.end.saturating_add(1)..block.statement_range.end)
-            .unwrap_or("")
-            .trim();
-        let voice = suffix
-            .strip_prefix(',')
-            .and_then(|suffix| suffix.split(',').next())
-            .map(str::trim)
-            .filter(|value| valid_identifier(value))
-            .map(str::to_owned);
+        self.text_block_metadata_for_block(source, block)
+    }
+
+    pub fn text_block_metadata_for_block(
+        &self,
+        source: &str,
+        block: &BlockCard,
+    ) -> Option<TextBlockMetadata> {
+        let suffix = text_block_suffix(source, block)?;
         Some(TextBlockMetadata {
             speaker: match &block.kind {
                 BlockKind::Narration => None,
                 BlockKind::Dialogue { speaker } => Some(speaker.clone()),
                 _ => return None,
             },
-            voice,
+            voice: suffix
+                .voice_range
+                .and_then(|range| source.get(range))
+                .map(str::to_owned),
             stable_id: block.stable_id.clone(),
         })
     }
@@ -208,34 +210,8 @@ impl EiyashouProjection {
         let node = source.get(block.statement_range.clone())?;
         match block.kind {
             BlockKind::Narration | BlockKind::Dialogue { .. } => {
-                let text = block.text_range.as_ref()?;
-                let start = text.end + 1;
-                let suffix = source.get(start..block.statement_range.end)?;
-                let mut fields = Vec::new();
-                for span in split_source_ranges(suffix, ',') {
-                    let Some(full) =
-                        trimmed_source_range(source, start + span.start..start + span.end)
-                    else {
-                        continue;
-                    };
-                    let raw = source.get(full.clone())?;
-                    if let Some(colon) = top_level_position(raw, ':') {
-                        let key = raw[..colon].trim();
-                        if matches!(key, "volume" | "concat" | "auto" | "inherit_speaker") {
-                            let range =
-                                trimmed_source_range(source, full.start + colon + 1..full.end)?;
-                            fields.push(SourceField {
-                                key: key.into(),
-                                value: source[range.clone()].into(),
-                                range,
-                                quoted: false,
-                                insertion: None,
-                                insertion_suffix: None,
-                            });
-                        }
-                    }
-                }
-                for key in ["volume", "concat", "auto", "inherit_speaker"] {
+                let mut fields = text_block_suffix(source, block)?.fields;
+                for &key in native_text_argument_names() {
                     if !fields.iter().any(|field| field.key == key) {
                         let end = block.statement_range.end;
                         fields.push(SourceField {
@@ -348,7 +324,33 @@ impl EiyashouProjection {
                             })
                             .collect();
                     }
-                    let optional = command_argument_names(command);
+                    let known = native_command_argument_names(command);
+                    let parent = (block.depth > 0 && known.is_none())
+                        .then(|| {
+                            self.scenes
+                                .iter()
+                                .flat_map(|scene| &scene.blocks)
+                                .filter(|parent| {
+                                    parent.kind == BlockKind::Command
+                                        && parent.depth < block.depth
+                                        && parent.source_range.start < block.source_range.start
+                                        && parent.source_range.end >= block.source_range.end
+                                })
+                                .max_by_key(|parent| parent.depth)
+                        })
+                        .flatten();
+                    let optional = parent
+                        .and_then(|parent| {
+                            let header = source.get(parent.statement_range.clone())?;
+                            let parent_name = header.split('(').next()?.trim();
+                            let parent_fields = self.source_fields_for_block(source, parent)?;
+                            super::fields::child_argument_names(
+                                parent_name,
+                                command,
+                                &parent_fields,
+                            )
+                        })
+                        .unwrap_or_else(|| known.unwrap_or_default());
                     let insertion_point = argument_start + arguments.trim_end().len();
                     let has_arguments = !arguments.trim().is_empty();
                     for name in optional {
@@ -664,15 +666,72 @@ fn split_source_ranges(source: &str, separator: char) -> Vec<Range<usize>> {
     ranges
 }
 
+/// One token-based interpretation for metadata, Inspector ranges and suffix-preserving edits.
+struct TextBlockSuffix {
+    voice_range: Option<Range<usize>>,
+    voice_separator: Option<Range<usize>>,
+    fields: Vec<SourceField>,
+}
+
+fn text_block_suffix(source: &str, block: &BlockCard) -> Option<TextBlockSuffix> {
+    let start = block.text_range.as_ref()?.end.checked_add(1)?;
+    let suffix = source.get(start..block.statement_range.end)?;
+    let tokens = native_tokens(suffix)
+        .into_iter()
+        .filter(|token| {
+            !matches!(
+                token.kind,
+                NativeTokenKind::Whitespace | NativeTokenKind::Comment
+            )
+        })
+        .collect::<Vec<_>>();
+    let indices = (0..tokens.len()).collect::<Vec<_>>();
+    let text = |index: usize| &suffix[tokens[index].range.clone()];
+    let mut result = TextBlockSuffix {
+        voice_range: None,
+        voice_separator: None,
+        fields: Vec::new(),
+    };
+    if tokens
+        .first()
+        .is_none_or(|token| &suffix[token.range.clone()] != ",")
+    {
+        return Some(result);
+    }
+    let parts = split_top_level(&indices[1..], text, ",");
+    let mut option_part = 0;
+    if let Some(part) = parts.first()
+        && part.len() == 1
+        && tokens[part[0]].kind == NativeTokenKind::Identifier
+        && native_text_voice_allowed(text(part[0]))
+    {
+        let token = &tokens[part[0]];
+        result.voice_range = Some(start + token.range.start..start + token.range.end);
+        result.voice_separator = Some(start + tokens[0].range.start..start + tokens[0].range.end);
+        option_part = 1;
+    }
+    for part in &parts[option_part..] {
+        if part.len() < 3
+            || text(part[1]) != ":"
+            || !native_text_argument_names().contains(&text(part[0]))
+        {
+            continue;
+        }
+        let range = start + tokens[part[2]].range.start..start + tokens[*part.last()?].range.end;
+        result.fields.push(SourceField {
+            key: text(part[0]).to_owned(),
+            value: source.get(range.clone())?.to_owned(),
+            range,
+            quoted: false,
+            insertion: None,
+            insertion_suffix: None,
+        });
+    }
+    Some(result)
+}
+
 fn portrait_style_fields(source: &str, parent: &SourceField) -> Option<Vec<SourceField>> {
-    const STYLE_FIELDS: [&str; 6] = [
-        "scale",
-        "brightness",
-        "saturation",
-        "contrast",
-        "blur",
-        "alpha",
-    ];
+    let style_fields = command_argument_names("style");
     let style = source.get(parent.range.clone())?;
     if !style.starts_with("style(") || matching_parenthesis(style, 5)? != style.len() - 1 {
         return None;
@@ -692,7 +751,7 @@ fn portrait_style_fields(source: &str, parent: &SourceField) -> Option<Vec<Sourc
         let raw = source.get(full.clone())?;
         let colon = top_level_position(raw, ':')?;
         let name = raw[..colon].trim();
-        if !STYLE_FIELDS.contains(&name) {
+        if !style_fields.contains(&name) {
             return None;
         }
         let range = trimmed_source_range(source, full.start + colon + 1..full.end)?;
@@ -707,7 +766,7 @@ fn portrait_style_fields(source: &str, parent: &SourceField) -> Option<Vec<Sourc
     }
     let insertion_point = parent.range.end - 1;
     let has_fields = !body.trim().is_empty();
-    for name in STYLE_FIELDS {
+    for name in style_fields {
         let key = format!("{}.{}", parent.key, name);
         if fields.iter().any(|field| field.key == key) {
             continue;
@@ -880,12 +939,12 @@ fn split_top_level_with_voice<'a>(
                 let after_next = tokens.get(position + 2).copied();
                 let next_is_voice = next.is_some_and(|next| {
                     kind(next) == NativeTokenKind::Identifier
-                        && !matches!(text(next), "return" | "break")
+                        && native_text_voice_allowed(text(next))
                         && after_next.is_none_or(|after| text(after) == ",")
                 });
-                let next_is_option = next.is_some_and(|next| {
-                    matches!(text(next), "volume" | "concat" | "auto" | "inherit_speaker")
-                }) && after_next.is_some_and(|after| text(after) == ":");
+                let next_is_option = next
+                    .is_some_and(|next| native_text_argument_names().contains(&text(next)))
+                    && after_next.is_some_and(|after| text(after) == ":");
                 if (next_is_voice || next_is_option)
                     && starts_with_text_statement(&tokens[start..position], text, kind)
                 {
@@ -983,6 +1042,126 @@ fn read_only_diagnostic(diagnostic: &Diagnostic) -> ReadOnlyCard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn control_names_cannot_be_written_as_optional_voice_ids() {
+        let source = "scene start { \"Hello\" }";
+        let projection = EiyashouProjection::parse(source);
+        let start = projection.scenes[0].blocks[0].source_range.start;
+        let mut metadata = projection.text_block_metadata(source, start).unwrap();
+        for name in ["return", "break"] {
+            metadata.voice = Some(name.into());
+            assert_eq!(
+                projection.replace_text_block_metadata(source, start, &metadata),
+                Err(BlockEditError::InvalidIdentifier)
+            );
+        }
+    }
+
+    #[test]
+    fn metadata_and_option_ranges_ignore_comments_and_preserve_voice_tail() {
+        let source = "scene start { @line hero: \"Hi\", /* voice, \"note\" */ voice, /* options, keep */ auto: true, volume: 0.4, wait(1s) }";
+        let projection = EiyashouProjection::parse(source);
+        assert!(projection.read_only.is_empty());
+        let block = &projection.scenes[0].blocks[0];
+        let mut metadata = projection
+            .text_block_metadata_for_block(source, block)
+            .unwrap();
+        assert_eq!(metadata.voice.as_deref(), Some("voice"));
+        assert_eq!(metadata.stable_id.as_deref(), Some("line"));
+        let fields = projection.source_fields_for_block(source, block).unwrap();
+        for (key, value) in [("auto", "true"), ("volume", "0.4")] {
+            let field = fields.iter().find(|field| field.key == key).unwrap();
+            assert_eq!(&source[field.range.clone()], value);
+        }
+        metadata.voice = Some("other_voice".into());
+        let edited = projection
+            .replace_text_block_metadata(source, block.source_range.start, &metadata)
+            .unwrap();
+        assert_eq!(edited, source.replacen("*/ voice,", "*/ other_voice,", 1));
+        assert!(parse_native_document(&edited).diagnostics.is_empty());
+        metadata.voice = None;
+        let removed = projection
+            .replace_text_block_metadata(source, block.source_range.start, &metadata)
+            .unwrap();
+        assert!(removed.contains("/* voice, \"note\" */"));
+        assert!(removed.contains(", /* options, keep */ auto: true, volume: 0.4"));
+        assert!(parse_native_document(&removed).diagnostics.is_empty());
+        let projection = EiyashouProjection::parse(&removed);
+        let block = &projection.scenes[0].blocks[0];
+        assert_eq!(
+            projection
+                .text_block_metadata_for_block(&removed, block)
+                .unwrap()
+                .voice,
+            None
+        );
+    }
+
+    #[test]
+    fn child_inspector_fields_follow_their_own_parent() {
+        let source = "scene start { sprite.sequence(hero) { frame(face) }, sprite.sequence(other, fps: 12) { frame(face) }, sprite.keyframes(hero) { frame(duration: 300ms) }, assets.loading() { resource(room, kind: background) } }";
+        let projection = EiyashouProjection::parse(source);
+        assert!(projection.read_only.is_empty());
+        let frames = projection.scenes[0]
+            .blocks
+            .iter()
+            .filter(|block| block.summary.starts_with("frame("))
+            .collect::<Vec<_>>();
+        assert_eq!(frames.len(), 3);
+        let sequence = projection
+            .source_fields_for_block(source, frames[0])
+            .unwrap();
+        assert!(
+            sequence
+                .iter()
+                .any(|field| field.key == "duration" && field.insertion.is_some())
+        );
+        assert!(!sequence.iter().any(|field| field.key == "x"));
+        let fps = projection
+            .source_fields_for_block(source, frames[1])
+            .unwrap();
+        assert!(!fps.iter().any(|field| field.key == "duration"));
+        let keyframe = projection
+            .source_fields_for_block(source, frames[2])
+            .unwrap();
+        assert!(
+            keyframe
+                .iter()
+                .any(|field| field.key == "x" && field.insertion.is_some())
+        );
+        assert!(
+            keyframe
+                .iter()
+                .any(|field| field.key == "easing" && field.insertion.is_some())
+        );
+        assert!(!keyframe.iter().any(|field| field.key == "fps"));
+    }
+
+    #[test]
+    fn text_metadata_uses_full_source_even_when_summary_omits_voice() {
+        let source = format!(
+            "scene start {{ @opening hero: \"{}\\\"end\", voice, volume: 0.4, auto: true }}",
+            "长对白".repeat(100),
+        );
+        let projection = EiyashouProjection::parse(&source);
+        assert!(projection.read_only.is_empty());
+        let block = &projection.scenes[0].blocks[0];
+        assert!(!block.summary.contains("voice"));
+        let metadata = TextBlockMetadata {
+            speaker: Some("hero".into()),
+            voice: Some("voice".into()),
+            stable_id: Some("opening".into()),
+        };
+        assert_eq!(
+            projection.text_block_metadata_for_block(&source, block),
+            Some(metadata.clone())
+        );
+        assert_eq!(
+            projection.text_block_metadata(&source, block.source_range.start),
+            Some(metadata)
+        );
+    }
 
     #[test]
     fn dialogue_options_stay_on_one_block_and_survive_metadata_edits() {

@@ -5,6 +5,32 @@ const EXPLORER_ROW_GAP: f32 = 1.;
 
 impl Render for WorkbenchPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let PanelContent::Document {
+            root,
+            relative,
+            editor,
+            ..
+        } = &self.content
+            && relative
+                .extension()
+                .is_some_and(|extension| extension == "shou")
+        {
+            let index = cx.global::<EditorDocuments>().authoring(root);
+            if self
+                .diagnostic_index
+                .upgrade()
+                .is_none_or(|previous| !Arc::ptr_eq(&previous, &index))
+            {
+                self.diagnostic_index = Arc::downgrade(&index);
+                self.syntax_check = Some(completion::schedule_syntax_check(
+                    editor.clone(),
+                    self.syntax_marks.clone(),
+                    (index.clone(), relative.clone()),
+                    window,
+                    cx,
+                ));
+            }
+        }
         if self.document_mode == DocumentMode::Text && self.text_scroll_pending {
             self.text_scroll_pending = false;
             let panel = cx.entity().downgrade();
@@ -62,12 +88,40 @@ impl Render for WorkbenchPanel {
                 expanded,
             } => {
                 let project_root = root.clone();
-                let files = cx
+                let index = cx.global::<EditorDocuments>().authoring(root);
+                let mut errors = std::collections::BTreeMap::<PathBuf, usize>::new();
+                for problem in &index.problems {
+                    if problem.severity == ProblemSeverity::Error {
+                        for path in problem
+                            .path
+                            .ancestors()
+                            .filter(|path| !path.as_os_str().is_empty())
+                        {
+                            *errors.entry(path.to_owned()).or_default() += 1;
+                        }
+                    }
+                }
+                let used = index
+                    .assets
+                    .iter()
+                    .filter(|asset| asset.reference_count > 0)
+                    .map(|asset| &asset.path)
+                    .collect::<HashSet<_>>();
+                let unused = index
+                    .assets
+                    .iter()
+                    .filter(|asset| asset.exists && !used.contains(&asset.path))
+                    .map(|asset| &asset.path)
+                    .collect::<HashSet<_>>();
+                let mut files = cx
                     .global::<EditorDocuments>()
                     .workspaces
                     .get(root)
                     .map(|workspace| workspace.files.clone())
                     .unwrap_or_else(|| files.clone());
+                if index.native {
+                    index.order_script_files(&mut files);
+                }
                 let project_name = project_root
                     .file_name()
                     .and_then(|name| name.to_str())
@@ -493,6 +547,8 @@ impl Render for WorkbenchPanel {
                                                 .and_then(|name| name.to_str())
                                                 .unwrap_or("File")
                                                 .to_owned();
+                                            let error_count = errors.get(&relative).copied().unwrap_or(0);
+                                            let unused = unused.contains(&relative);
                                             let row_selected = selected.as_ref() == Some(&relative);
                                             let collapsed = !expanded.contains(&relative);
                                             let drop_target = relative.clone();
@@ -704,8 +760,11 @@ impl Render for WorkbenchPanel {
                                                         .overflow_hidden()
                                                         .whitespace_nowrap()
                                                         .text_ellipsis()
+                                                        .text_color(rgb(if error_count > 0 { 0xdb7780 } else if unused { 0xd2aa62 } else if row_selected { INK } else { MUTED }))
                                                         .child(name),
-                                                );
+                                                )
+                                                .when(error_count > 0, |row| row.child(div().flex_none().text_xs().font_weight(gpui_kit::FontWeight::BOLD).text_color(rgb(0xdb7780)).child(error_count.to_string())))
+                                                .when(unused && error_count == 0, |row| row.child(div().id(("unused-resource", index)).flex_none().text_xs().text_color(rgb(0xd2aa62)).tooltip(icon_hint("Unused resource · no script references")).child("U")));
                                             div()
                                                 .w_full()
                                                 .flex()

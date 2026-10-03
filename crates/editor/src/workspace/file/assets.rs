@@ -6,6 +6,8 @@ pub struct AssetMediaInfo {
     pub bytes: u64,
     pub modified: Option<std::time::SystemTime>,
     pub duration: Option<f64>,
+    /// Bounded header probe, not a full decode or a conversion history claim.
+    pub canonical_format: Option<&'static str>,
 }
 
 pub fn asset_media_info(root: &Path, path: &Path) -> Option<AssetMediaInfo> {
@@ -13,16 +15,45 @@ pub fn asset_media_info(root: &Path, path: &Path) -> Option<AssetMediaInfo> {
     let absolute = confined_existing(root, path).ok()?;
     let metadata = fs::metadata(&absolute).ok()?;
     let format_path = mapped_path(path).unwrap_or_else(|| path.to_owned());
-    if !matches!(extension(&format_path).as_str(), "ogg" | "opus" | "wav") {
+    let extension = extension(&format_path);
+    if !matches!(
+        extension.as_str(),
+        "webp" | "mp4" | "m4v" | "ogg" | "opus" | "wav"
+    ) {
         return Some(AssetMediaInfo {
             bytes: metadata.len(),
             modified: metadata.modified().ok(),
             duration: None,
+            canonical_format: None,
         });
     }
     let mut file = File::open(absolute).ok()?;
-    let mut head = vec![0; metadata.len().min(65_536) as usize];
+    let limit = match extension.as_str() {
+        "webp" => 32,
+        "mp4" | "m4v" => PROBE_BYTES as u64,
+        _ => 65_536,
+    };
+    let mut head = vec![0; metadata.len().min(limit) as usize];
     file.read_exact(&mut head).ok()?;
+    let canonical_format = match extension.as_str() {
+        "webp"
+            if head.starts_with(b"RIFF")
+                && head.get(8..12) == Some(b"WEBP")
+                && matches!(head.get(12..16), Some(b"VP8 " | b"VP8L" | b"VP8X")) =>
+        {
+            Some("WebP")
+        }
+        "ogg" | "opus" if head.starts_with(b"OggS") && contains_marker(&head, b"OpusHead") => {
+            Some("Opus")
+        }
+        "mp4" | "m4v"
+            if head.get(4..8) == Some(b"ftyp")
+                && (contains_marker(&head, b"avc1") || contains_marker(&head, b"avc3")) =>
+        {
+            Some("H.264 MP4")
+        }
+        _ => None,
+    };
     let duration = if head.starts_with(b"OggS") && head.get(28..36) == Some(b"OpusHead") {
         let skip = u16::from_le_bytes(head.get(38..40)?.try_into().ok()?) as u64;
         let serial = head.get(14..18)?;
@@ -88,6 +119,7 @@ pub fn asset_media_info(root: &Path, path: &Path) -> Option<AssetMediaInfo> {
         bytes: metadata.len(),
         modified: metadata.modified().ok(),
         duration,
+        canonical_format,
     })
 }
 
@@ -343,6 +375,29 @@ fn restore_trash(receipt: &Path, destination: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn format_status_checks_headers_instead_of_extensions() {
+        let root = std::env::temp_dir().join(format!("keine-format-probe-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let cases: &[(&str, &[u8], Option<&str>)] = &[
+            ("valid.webp", b"RIFF\x08\0\0\0WEBPVP8Lpayload", Some("WebP")),
+            ("fake.webp", b"not an image", None),
+            ("valid.opus", b"OggS\0OpusHead", Some("Opus")),
+            ("vorbis.ogg", b"OggS\0vorbis", None),
+            ("valid.mp4", b"\0\0\0\x18ftypisom\0avc1", Some("H.264 MP4")),
+            ("other.mp4", b"\0\0\0\x18ftypisom\0hvc1", None),
+            ("source.png", b"source", None),
+        ];
+        for (name, bytes, format) in cases {
+            fs::write(root.join(name), bytes).unwrap();
+            let info = asset_media_info(&root, Path::new(name)).unwrap();
+            assert_eq!(info.canonical_format, *format, "{name}");
+            assert_eq!(info.bytes, bytes.len() as u64);
+        }
+        assert!(asset_media_info(&root, Path::new("missing.opus")).is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn unmap_remap_preserves_manifest_neighbors_and_rejects_collisions() {

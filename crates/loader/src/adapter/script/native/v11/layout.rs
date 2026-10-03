@@ -1,6 +1,25 @@
 //! Grouped author positions and layouts; engine coordinates remain unchanged.
 use super::*;
 
+const POSITION_FIELDS: [&str; 2] = ["x", "y"];
+const SIZE_FIELDS: [&str; 2] = ["width", "height"];
+const VIEWPORT_FIELDS: [&str; 1] = ["height"];
+const SCENE_FIELDS: [&str; 6] = ["fit", "x", "y", "anchor", "width", "height"];
+const COMPOSITE_FIELDS: [&str; 3] = ["canvas", "rect", "height"];
+const RECT_FIELDS: [&str; 4] = ["x", "y", "width", "height"];
+
+pub(super) fn group_fields(name: &str) -> Option<&'static [&'static str]> {
+    Some(match name {
+        "left" | "center" | "right" | "point" => &POSITION_FIELDS,
+        "size" => &SIZE_FIELDS,
+        "viewport" => &VIEWPORT_FIELDS,
+        "scene" => &SCENE_FIELDS,
+        "composite" => &COMPOSITE_FIELDS,
+        "rect" => &RECT_FIELDS,
+        _ => return None,
+    })
+}
+
 impl<'a> Parser<'a> {
     pub(in crate::adapter::script::native) fn grouped_args(
         &self,
@@ -105,7 +124,7 @@ impl<'a> Parser<'a> {
                 None => self.grouped_args(argument, report)?,
             },
         };
-        self.checked_group(&name, &args, &["x", "y"], report)?;
+        self.checked_group(&name, &args, &POSITION_FIELDS, report)?;
         let offset = self.checked_number(&args, "x", report)?.unwrap_or(0.0);
         let y = self.checked_number(&args, "y", report)?.unwrap_or(0.0);
         let x = match name.as_str() {
@@ -171,7 +190,7 @@ impl<'a> Parser<'a> {
                 Some(SpriteLayout::Natural)
             }
             "viewport" => {
-                self.checked_group(&name, args, &["height"], report)?;
+                self.checked_group(&name, args, &VIEWPORT_FIELDS, report)?;
                 let height = self
                     .checked_number(args, "height", report)?
                     .filter(|height| *height > 0.0);
@@ -186,12 +205,7 @@ impl<'a> Parser<'a> {
                 }
             }
             "scene" => {
-                self.checked_group(
-                    &name,
-                    args,
-                    &["fit", "x", "y", "anchor", "width", "height"],
-                    report,
-                )?;
+                self.checked_group(&name, args, &SCENE_FIELDS, report)?;
                 let fit = match self.named_identifier(args, "fit").as_deref() {
                     None if self.named_arg(args, "fit").is_none() => keine_core::SceneFit::ByHeight,
                     Some("by_height") => keine_core::SceneFit::ByHeight,
@@ -217,7 +231,7 @@ impl<'a> Parser<'a> {
                 }
                 let anchor = match self.named_arg(args, "anchor") {
                     Some(arg) => {
-                        self.layout_pair(arg, "point", ["x", "y"], Some([0.5; 2]), report)?
+                        self.layout_pair(arg, "point", POSITION_FIELDS, Some([0.5; 2]), report)?
                     }
                     None => [0.5; 2],
                 };
@@ -232,14 +246,14 @@ impl<'a> Parser<'a> {
                 }))
             }
             "composite" => {
-                self.checked_group(&name, args, &["canvas", "rect", "height"], report)?;
+                self.checked_group(&name, args, &COMPOSITE_FIELDS, report)?;
                 let Some(canvas) = self.named_arg(args, "canvas") else {
                     report.diagnostics.push(
                         self.error("composite requires `canvas: size(width: ..., height: ...)`"),
                     );
                     return None;
                 };
-                let canvas = self.layout_pair(canvas, "size", ["width", "height"], None, report)?;
+                let canvas = self.layout_pair(canvas, "size", SIZE_FIELDS, None, report)?;
                 let rect = if let Some(arg) = self.named_arg(args, "rect") {
                     let (name, rect) = self.grouped_args(arg, report)?;
                     if name != "rect" {
@@ -248,7 +262,7 @@ impl<'a> Parser<'a> {
                         );
                         return None;
                     }
-                    self.checked_group(&name, &rect, &["x", "y", "width", "height"], report)?;
+                    self.checked_group(&name, &rect, &RECT_FIELDS, report)?;
                     let mut values = [0.0; 4];
                     for (index, field) in ["x", "y", "width", "height"].iter().enumerate() {
                         let Some(value) = self.checked_number(&rect, field, report)? else {

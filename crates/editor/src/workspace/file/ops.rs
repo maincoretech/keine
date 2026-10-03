@@ -139,6 +139,61 @@ pub fn import_external(root: &Path, target_dir: &Path, source: &Path) -> io::Res
     })
 }
 
+/// Normalize a registered file beside its read-only source, keeping IDs and tags.
+pub fn convert_asset(root: &Path, asset: &AssetEntry) -> io::Result<ImportResult> {
+    let writer = manifest_writer(root)?;
+    let _transaction = writer
+        .lock()
+        .map_err(|_| io::Error::other("manifest writer lock poisoned"))?;
+    let source = confined_existing(root, &asset.path)?;
+    let (manifest_relative, old_manifest) = manifest_source(root)?;
+    let manifest = EiyashouAssetManifest::from_yaml(&old_manifest)
+        .map_err(|error| invalid(error.to_string()))?;
+    if entries_for_kind(&manifest, asset.kind)
+        .get(&asset.id)
+        .is_none_or(|entry| entry.path() != slash_path(&asset.path))
+    {
+        return Err(invalid("Asset mapping changed; refresh before converting"));
+    }
+    let mut relative = asset
+        .path
+        .with_extension(media::output_extension(&source, asset.kind)?);
+    let stem = relative
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let extension = extension(&relative);
+    let mut suffix = 0;
+    while confined_destination(root, &relative)?.exists() {
+        suffix += 1;
+        relative.set_file_name(format!("{stem}-{suffix}.{extension}"));
+    }
+    let destination = confined_destination(root, &relative)?;
+    let new_manifest =
+        rewrite_manifest_paths(&old_manifest, &[(asset.path.clone(), relative.clone())])?;
+    media::import(&source, &destination, asset.kind)?;
+    let commit = (|| {
+        if fs::read_to_string(root.join(&manifest_relative))? != old_manifest {
+            return Err(invalid(
+                "Asset manifest changed during conversion; conversion cancelled",
+            ));
+        }
+        atomic_source(&root.join(&manifest_relative), new_manifest.as_bytes())
+    })();
+    if let Err(error) = commit {
+        fs::remove_file(&destination).map_err(|cleanup| {
+            io::Error::other(format!("{error}; output cleanup failed: {cleanup}"))
+        })?;
+        return Err(error);
+    }
+    Ok(ImportResult {
+        destination: relative,
+        manifest_update: Some((manifest_relative, new_manifest)),
+        registered: true,
+    })
+}
+
 pub fn move_entry(root: &Path, source: &Path, target_dir: &Path) -> io::Result<ImportResult> {
     let source = checked_relative(source)?;
     let target_dir = checked_relative_or_root(target_dir)?;
@@ -1199,6 +1254,65 @@ mod tests {
     }
 
     #[test]
+    fn convert_registered_image_preserves_original_ids_aliases_tags_and_collisions() {
+        let root = fixture();
+        let path = PathBuf::from("assets/background/room.png");
+        let image = image::RgbaImage::from_pixel(2, 2, image::Rgba([20, 40, 60, 80]));
+        image.save(root.join(&path)).unwrap();
+        let original = fs::read(root.join(&path)).unwrap();
+        write_webp(&root.join("assets/background/room.webp"));
+        let collision = fs::read(root.join("assets/background/room.webp")).unwrap();
+        let before = "# keep\nbackgrounds:\n  room:\n    path: assets/background/room.png # source\n    tags: [day]\nfigures:\n  alias: assets/background/room.png\n";
+        fs::write(root.join("assets.yaml"), before).unwrap();
+        let asset = AssetEntry {
+            kind: AssetKind::Background,
+            id: "room".into(),
+            path: path.clone(),
+            tags: vec!["day".into()],
+            exists: true,
+            reference_count: 1,
+        };
+        let result = convert_asset(&root, &asset).unwrap();
+        assert_eq!(
+            result.destination,
+            Path::new("assets/background/room-1.webp")
+        );
+        assert_eq!(fs::read(root.join(&path)).unwrap(), original);
+        assert_eq!(
+            fs::read(root.join("assets/background/room.webp")).unwrap(),
+            collision
+        );
+        let after = fs::read_to_string(root.join("assets.yaml")).unwrap();
+        let manifest = EiyashouAssetManifest::from_yaml(&after).unwrap();
+        assert_eq!(
+            manifest.backgrounds["room"].path(),
+            "assets/background/room-1.webp"
+        );
+        assert_eq!(manifest.backgrounds["room"].tags(), ["day"]);
+        assert_eq!(
+            manifest.figures["alias"].path(),
+            manifest.backgrounds["room"].path()
+        );
+        assert!(after.contains("# keep") && after.contains("# source"));
+        assert_eq!(
+            image::open(root.join(result.destination))
+                .unwrap()
+                .to_rgba8(),
+            image
+        );
+        assert!(convert_asset(&root, &asset).is_err());
+        fs::write(root.join("assets.yaml"), before).unwrap();
+        fs::write(root.join(&path), b"broken source").unwrap();
+        assert!(convert_asset(&root, &asset).is_err());
+        assert_eq!(
+            fs::read_to_string(root.join("assets.yaml")).unwrap(),
+            before
+        );
+        assert!(!root.join("assets/background/room-2.webp").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn canonical_image_import_registers_once() {
         let root = fixture();
         let source = root.parent().unwrap().join("morning.webp");
@@ -1423,8 +1537,14 @@ mod tests {
         let canonical = root.join("assets/bgm/tone_wav.opus");
         let copy = import_external(&root, Path::new("assets/voices"), &canonical).unwrap();
         assert_eq!(
-            fs::read(canonical).unwrap(),
+            fs::read(&canonical).unwrap(),
             fs::read(root.join(copy.destination)).unwrap()
+        );
+        let ogg = root.join("copy.ogg");
+        fs::copy(&canonical, &ogg).unwrap();
+        assert_eq!(
+            media::output_extension(&ogg, AssetKind::Bgm).unwrap(),
+            "opus"
         );
         let manifest = fs::read_to_string(root.join("assets.yaml")).unwrap();
         let corrupt = root.join("corrupt.wav");

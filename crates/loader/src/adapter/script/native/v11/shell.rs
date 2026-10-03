@@ -10,6 +10,42 @@ pub(super) const SHELL_COMMANDS: &[&str] = &[
     "ui.message",
 ];
 
+/// Syntax fields shared by lowering and source-based editor consumers.
+pub(super) fn signature(name: &str) -> Option<(usize, &'static [&'static str])> {
+    let signature: (usize, &[&str]) = match name {
+        "screen.curtain.show" | "screen.curtain.hide" => (0, &["color", "duration"]),
+        "text.float" => (
+            1,
+            &[
+                "x",
+                "y",
+                "font_size",
+                "color",
+                "fade_in",
+                "hold",
+                "fade_out",
+                "blocking",
+            ],
+        ),
+        "scene.parallax" => (
+            0,
+            &[
+                "amplitude_percent",
+                "edge_ease_percent",
+                "return_to_center_on_leave",
+                "scale",
+            ],
+        ),
+        "particle.show" => (2, &["texture", "count", "wind", "gravity", "fade_in"]),
+        "ui.message" => (
+            1,
+            &["title", "message", "confirm_text", "cancel_text", "result"],
+        ),
+        _ => return None,
+    };
+    Some(signature)
+}
+
 impl<'a> Parser<'a> {
     pub(super) fn parse_v11_shell_command(
         &self,
@@ -17,37 +53,7 @@ impl<'a> Parser<'a> {
         args: &[Argument],
         report: &mut ParseReport,
     ) -> Option<Action> {
-        let (positional, named): (usize, &[&str]) = match name {
-            "screen.curtain.show" | "screen.curtain.hide" => (0, &["color", "duration"]),
-            "text.float" => (
-                1,
-                &[
-                    "x",
-                    "y",
-                    "font_size",
-                    "color",
-                    "fade_in",
-                    "hold",
-                    "fade_out",
-                    "blocking",
-                ],
-            ),
-            "scene.parallax" => (
-                0,
-                &[
-                    "amplitude_percent",
-                    "edge_ease_percent",
-                    "return_to_center_on_leave",
-                    "scale",
-                ],
-            ),
-            "particle.show" => (2, &["texture", "count", "wind", "gravity", "fade_in"]),
-            "ui.message" => (
-                1,
-                &["title", "message", "confirm_text", "cancel_text", "result"],
-            ),
-            _ => return None,
-        };
+        let (positional, named) = signature(name)?;
         let before = report.diagnostics.len();
         self.validate_signature(name, args, positional, named, report);
         if report.diagnostics.len() != before {

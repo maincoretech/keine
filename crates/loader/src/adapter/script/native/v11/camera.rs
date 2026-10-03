@@ -19,6 +19,16 @@ pub(super) fn move_fields() -> &'static [&'static str] {
         .as_slice()
 }
 
+pub(super) const SHAKE_FIELDS: &[&str] = &[
+    "amplitude",
+    "frequency",
+    "duration",
+    "axis",
+    "falloff",
+    "amplitude_randomness",
+    "frequency_randomness",
+];
+
 impl<'a> Parser<'a> {
     pub(in crate::adapter::script::native) fn combined_camera_move(
         &self,
@@ -48,20 +58,7 @@ impl<'a> Parser<'a> {
                     .push(self.error("shake requires `shake(amplitude: ..., frequency: ...)`"));
                 return None;
             }
-            self.checked_group(
-                &name,
-                &values,
-                &[
-                    "amplitude",
-                    "frequency",
-                    "duration",
-                    "axis",
-                    "falloff",
-                    "amplitude_randomness",
-                    "frequency_randomness",
-                ],
-                report,
-            )?;
+            self.checked_group(&name, &values, SHAKE_FIELDS, report)?;
             if self.named_arg(&values, "duration").is_none()
                 && let Some(duration) = self.named_arg(args, "duration")
             {

@@ -280,6 +280,16 @@ pub(super) fn asset_drop_edit(
     index: &AuthoringIndex,
     insertion: bool,
 ) -> Result<String, String> {
+    asset_drop_edit_at(source, target_start, keys, index, insertion.then_some(true))
+}
+
+pub(super) fn asset_drop_edit_at(
+    source: &str,
+    target_start: usize,
+    keys: &[AssetKey],
+    index: &AuthoringIndex,
+    insertion: Option<bool>,
+) -> Result<String, String> {
     if keys.is_empty() {
         return Err("No asset selected".into());
     }
@@ -337,7 +347,7 @@ pub(super) fn asset_drop_edit(
             ),
             AssetKind::Voice => unreachable!(),
         };
-        if !insertion
+        if insertion.is_none()
             && position == 0
             && assets.len() == 1
             && matches!(target.kind, BlockKind::Command)
@@ -374,9 +384,13 @@ pub(super) fn asset_drop_edit(
             }
             return Err("Resource type is incompatible; drop between Blocks to insert".into());
         }
-        let (next, inserted) = EiyashouProjection::parse(&edited)
-            .insert_block_after(&edited, after_start, &statement)
-            .map_err(|error| error.to_string())?;
+        let projection = EiyashouProjection::parse(&edited);
+        let (next, inserted) = if position == 0 && insertion == Some(false) {
+            projection.insert_block_before(&edited, after_start, &statement)
+        } else {
+            projection.insert_block_after(&edited, after_start, &statement)
+        }
+        .map_err(|error| error.to_string())?;
         edited = next;
         after_start = inserted.start;
     }
@@ -667,6 +681,24 @@ pub(super) fn format_and_save(
             let _ = panel.update(cx, |panel, _| {
                 panel.selected_blocks = panel.selected_blocks.iter().copied().map(map).collect();
                 panel.block_selection_anchor = panel.block_selection_anchor.map(map);
+                // Formatting changes byte offsets, not Block geometry. Keep the
+                // measured heights under their new identities to avoid a relayout jump.
+                panel.block_heights = std::mem::take(&mut panel.block_heights)
+                    .into_iter()
+                    .map(|(start, height)| (map(start), height))
+                    .collect();
+                *panel.block_row_positions.borrow_mut() = panel
+                    .block_row_positions
+                    .take()
+                    .into_iter()
+                    .map(|(start, y)| (map(start), y))
+                    .collect();
+                *panel.block_row_bounds.borrow_mut() = panel
+                    .block_row_bounds
+                    .take()
+                    .into_iter()
+                    .map(|(start, bounds)| (map(start), bounds))
+                    .collect();
                 for row in &mut panel.block_text_editors {
                     row.text_start = map(row.text_start);
                 }
@@ -678,27 +710,55 @@ pub(super) fn format_and_save(
             });
         }
         if let Some(editor) = editor {
-            editor.update(cx, |editor, cx| {
-                let focused = editor.focus_handle(cx).is_focused(window);
-                let position = editor.cursor_position();
-                let offset = keine_loader::SourceLineIndex::new(&change.before).offset(
-                    &change.before,
-                    position.line as usize,
-                    position.character as usize,
-                );
-                let offset = map(offset);
-                editor.replace_all(change.after.clone(), window, cx);
-                editor.set_selected_range(offset..offset, cx);
-                if focused {
-                    let span = keine_loader::SourceLineIndex::new(&change.after)
-                        .span(&change.after, offset);
-                    editor.set_cursor_position(
-                        Position::new((span.line - 1) as u32, (span.column - 1) as u32),
-                        window,
-                        cx,
-                    );
+            let anchor = editor.update(cx, |editor, cx| {
+                let selection = editor.selected_range();
+                let mut scroll = editor.scroll_offset();
+                let anchor = std::iter::once(editor.cursor())
+                    .chain(original_tokens.iter().map(|token| token.range.start))
+                    .find_map(|offset| {
+                        let bounds = editor.range_to_bounds(&(offset..offset))?;
+                        let viewport = editor.input_bounds();
+                        (bounds.top() >= viewport.top() && bounds.top() < viewport.bottom())
+                            .then_some((offset, bounds.top()))
+                    });
+                if let Some((offset, _)) = anchor
+                    && let Some(height) = editor.line_height()
+                {
+                    let old_line = change.before[..offset]
+                        .bytes()
+                        .filter(|b| *b == b'\n')
+                        .count();
+                    let new_line = change.after[..map(offset)]
+                        .bytes()
+                        .filter(|b| *b == b'\n')
+                        .count();
+                    scroll.y -= height * (new_line as f32 - old_line as f32);
                 }
+                editor.replace_all(change.after.clone(), window, cx);
+                editor.set_selected_range(map(selection.start)..map(selection.end), cx);
+                // This overrides replace_all's reset and selection's reveal request.
+                editor.set_scroll_offset(scroll, cx);
+                anchor.map(|(offset, y)| (map(offset), y))
             });
+            if let Some((offset, y)) = anchor {
+                let expected = editor.read(cx).text().clone();
+                // Resolve soft wrapping against the new layout, without a timer
+                // or another cursor/focus change. Plain lines already stay put.
+                window.on_next_frame(move |_, cx| {
+                    editor.update(cx, |editor, cx| {
+                        if editor.text() == &expected
+                            && let Some(bounds) = editor.range_to_bounds(&(offset..offset))
+                        {
+                            let mut scroll = editor.scroll_offset();
+                            let delta = y - bounds.top();
+                            if delta.abs() > px(0.5) {
+                                scroll.y += delta;
+                                editor.set_scroll_offset(scroll, cx);
+                            }
+                        }
+                    });
+                });
+            }
         }
         schedule_authoring_refresh(root, Some(&change.path), cx);
         history.push(change);
@@ -739,6 +799,105 @@ fn formatted_offset(
 #[cfg(test)]
 mod formatting_tests {
     use super::*;
+
+    struct SaveView(Entity<EditorState>);
+
+    impl Render for SaveView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(Editor::new(&self.0).size_full())
+        }
+    }
+
+    #[gpui_kit::test]
+    fn save_preserves_selection_and_its_screen_position(cx: &mut gpui_kit::TestAppContext) {
+        let temporary = std::env::temp_dir().join(format!(
+            "keine-save-view-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = temporary.join("project");
+        fs::create_dir_all(root.join("scripts")).unwrap();
+        fs::write(
+            root.join("config.yaml"),
+            include_str!("../../../../tests/fixtures/native-smoke/config.yaml"),
+        )
+        .unwrap();
+        let source = format!(
+            "scene start {{wait(1s),\n{}\n}}",
+            (0..80)
+                .map(|i| format!("\"对白{i}中文\","))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let path = Path::new("scripts/main.shou");
+        fs::write(root.join(path), &source).unwrap();
+        let root = root.canonicalize().unwrap();
+        cx.update(gpui_kit::init);
+        let mut editor = None;
+        let window = cx.open_window(size(px(800.), px(300.)), |window, cx| {
+            let session = crate::workspace::WorkspaceSession::open(&root).unwrap();
+            let mut documents = EditorDocuments::new(crate::persistence::AppPersistence::new(
+                temporary.join("app-data"),
+            ));
+            documents
+                .ensure_workspace_with_files(session.root(), session.files())
+                .unwrap();
+            documents.open(session.root(), path).unwrap();
+            let state = cx.new(|cx| EditorState::new(window, cx).default_value(source.clone()));
+            documents.register_editor(session.root(), path.to_owned(), state.downgrade());
+            cx.set_global(documents);
+            editor = Some(state.clone());
+            SaveView(state)
+        });
+        cx.run_until_parked();
+        let editor = editor.unwrap();
+        window
+            .update(cx, |_, window, cx| {
+                editor.update(cx, |editor, cx| {
+                    let start = source.find("对白30中文").unwrap();
+                    editor.set_cursor_position(Position::new(31, 1), window, cx);
+                    editor.set_selected_range(start..start + "对白30中文".len(), cx);
+                    let height = editor.line_height().unwrap();
+                    editor.set_scroll_offset(gpui_kit::point(px(0.), -height * 25.), cx);
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let before = editor.read_with(cx, |editor, _| {
+            assert!(editor.scroll_offset().y < px(-100.));
+            editor
+                .range_to_bounds(&editor.selected_range())
+                .unwrap()
+                .top()
+        });
+        window
+            .update(cx, |_, window, cx| {
+                assert_eq!(format_and_save(&root, window, cx).unwrap(), 1);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let after = editor.read_with(cx, |editor, _| {
+            assert_eq!(editor.selected_value().as_ref(), "对白30中文");
+            let after = editor
+                .range_to_bounds(&editor.selected_range())
+                .unwrap()
+                .top();
+            assert!((after - before).abs() < px(0.5), "{before:?} -> {after:?}");
+            editor.scroll_offset()
+        });
+        window
+            .update(cx, |_, window, cx| {
+                assert!(editor.read(cx).focus_handle(cx).is_focused(window));
+                assert_eq!(format_and_save(&root, window, cx).unwrap(), 0);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        editor.read_with(cx, |editor, _| assert_eq!(editor.scroll_offset(), after));
+        fs::remove_dir_all(temporary).unwrap();
+    }
 
     #[gpui_kit::test]
     fn save_formats_shared_source_and_editor_before_writing(cx: &mut gpui_kit::TestAppContext) {
@@ -910,15 +1069,6 @@ pub(super) fn block_at_offset(
             .max_by_key(|block| block.depth)
             .map(|block| (scene, block))
     })
-}
-
-pub(super) fn text_voice(source: &str) -> Option<String> {
-    let quote = source.rfind('"')?;
-    source[quote + 1..]
-        .strip_prefix(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
 }
 
 #[cfg(test)]

@@ -107,11 +107,106 @@ impl BlockReorderMotion {
         }
         Some(motion)
     }
+
+    pub(in crate::app) fn for_insert(
+        before: &EiyashouProjection,
+        after: &EiyashouProjection,
+        target: BlockDropTarget,
+        positions: &HashMap<usize, f32>,
+        heights: &HashMap<usize, f32>,
+        gap_top: f32,
+    ) -> Option<Self> {
+        let old = before
+            .scenes
+            .iter()
+            .flat_map(|scene| &scene.blocks)
+            .collect::<Vec<_>>();
+        let new = after
+            .scenes
+            .iter()
+            .flat_map(|scene| &scene.blocks)
+            .collect::<Vec<_>>();
+        let added = new
+            .len()
+            .checked_sub(old.len())
+            .filter(|added| *added > 0)?;
+        let block = old
+            .iter()
+            .find(|block| block.source_range.start == target.row)?;
+        let insertion = if target.after {
+            block.source_range.end
+        } else {
+            block.source_range.start
+        };
+        let at = old.partition_point(|block| block.source_range.start < insertion);
+        let mut motion = Self {
+            positions: HashMap::new(),
+            heights: HashMap::new(),
+            started_at: None,
+            revision: None,
+        };
+        for (index, old) in old.iter().enumerate() {
+            let new = new[index + if index >= at { added } else { 0 }];
+            if old.kind != new.kind || old.summary != new.summary || old.depth != new.depth {
+                return None;
+            }
+            if let Some(position) = positions.get(&old.source_range.start) {
+                motion.positions.insert(new.source_range.start, *position);
+            }
+            if let Some(height) = heights.get(&old.source_range.start) {
+                motion.heights.insert(new.source_range.start, *height);
+            }
+        }
+        for (index, block) in new[at..at + added].iter().enumerate() {
+            motion
+                .positions
+                .insert(block.source_range.start, gap_top + index as f32 * 42.);
+            motion.heights.insert(block.source_range.start, 38.);
+        }
+        Some(motion)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn asset_insertion_preserves_duplicate_row_origins() {
+        let source = "scene start { wait(1s), wait(1s), wait(1s) }";
+        let before = EiyashouProjection::parse(source);
+        let blocks = &before.scenes[0].blocks;
+        let target = BlockDropTarget {
+            row: blocks[1].source_range.start,
+            after: false,
+        };
+        let positions = blocks
+            .iter()
+            .enumerate()
+            .map(|(i, block)| (block.source_range.start, [0., 84., 126.][i]))
+            .collect();
+        let (edited, _) = before
+            .insert_block_before(source, target.row, "background(room)")
+            .unwrap();
+        let after = EiyashouProjection::parse(&edited);
+        let motion = BlockReorderMotion::for_insert(
+            &before,
+            &after,
+            target,
+            &positions,
+            &HashMap::new(),
+            42.,
+        )
+        .unwrap();
+        assert_eq!(
+            after.scenes[0]
+                .blocks
+                .iter()
+                .map(|block| motion.positions[&block.source_range.start])
+                .collect::<Vec<_>>(),
+            [0., 42., 84., 126.]
+        );
+    }
 
     #[test]
     fn duplicate_rows_keep_their_own_origins_after_a_multiselection_drop() {

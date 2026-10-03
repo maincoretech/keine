@@ -123,6 +123,10 @@ impl WorkbenchPanel {
                     self.syntax_check = Some(completion::schedule_syntax_check(
                         editor.clone(),
                         self.syntax_marks.clone(),
+                        (
+                            cx.global::<EditorDocuments>().authoring(root),
+                            path.to_owned(),
+                        ),
                         window,
                         cx,
                     ));
@@ -1615,6 +1619,12 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.block_drag.session().is_some_and(|session| {
+            session.assets.is_some() && Rc::ptr_eq(&session.token, &drag.token)
+        }) {
+            self.finish_asset_drag(drag, window, cx);
+            return;
+        }
         let PanelContent::Document {
             root,
             document: Some(document),

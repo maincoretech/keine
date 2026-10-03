@@ -1,5 +1,10 @@
 use super::*;
 
+enum MediaJob {
+    Import { source: PathBuf, target: PathBuf },
+    Convert(crate::authoring::AssetEntry),
+}
+
 #[derive(Default)]
 pub(super) struct FileHistory {
     undo: VecDeque<FileEdit>,
@@ -245,8 +250,9 @@ impl WorkbenchPanel {
         if !self.focus.is_focused(window) {
             return;
         }
-        let Some(root) = self.explorer_root() else {
-            return;
+        let root = match &self.content {
+            PanelContent::Explorer { root, .. } | PanelContent::Assets { root } => root.clone(),
+            _ => return,
         };
         if self.file_history.next_requires_manifest(undo)
             && !self.manifest_mutation_ready(&root, window, cx)
@@ -758,14 +764,57 @@ impl WorkbenchPanel {
         let Some(root) = self.explorer_root() else {
             return;
         };
-        if paths.is_empty() || !self.manifest_mutation_ready(&root, window, cx) {
+        let jobs = paths
+            .into_iter()
+            .map(|source| MediaJob::Import {
+                source,
+                target: target.clone(),
+            })
+            .collect();
+        self.start_media_jobs(root, jobs, "Imported", window, cx);
+    }
+
+    pub(super) fn start_asset_conversion(
+        &mut self,
+        root: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus.focus(window, cx);
+        let index = cx.global::<EditorDocuments>().authoring(root);
+        let mut seen = HashSet::new();
+        let jobs = index
+            .assets
+            .iter()
+            .filter(|asset| {
+                asset.exists
+                    && asset
+                        .canonical_format(index.media.get(&asset.path))
+                        .is_none()
+                    && seen.insert(asset.path.clone())
+            })
+            .cloned()
+            .map(MediaJob::Convert)
+            .collect();
+        self.start_media_jobs(root.to_owned(), jobs, "Converted", window, cx);
+    }
+
+    fn start_media_jobs(
+        &mut self,
+        root: PathBuf,
+        jobs: Vec<MediaJob>,
+        verb: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if jobs.is_empty() || !self.manifest_mutation_ready(&root, window, cx) {
             return;
         }
         self.file_progress = Some(FileProgress {
             completed: 0,
-            total: paths.len(),
+            total: jobs.len(),
         });
-        let total = paths.len();
+        let total = jobs.len();
         let manifest_before = match file_ops::asset_manifest_source(&root) {
             Ok(source) => source,
             Err(error) => {
@@ -780,28 +829,36 @@ impl WorkbenchPanel {
         }
         cx.spawn_in(window, async move |this, cx| {
             let mut succeeded = 0;
-            let mut registered = 0;
             let mut failed = 0;
             let mut first_error = None;
             let mut last_manifest = None;
             let mut imported = Vec::new();
-            for (index, source) in paths.into_iter().enumerate() {
-                let source_name = source
+            for (index, job) in jobs.into_iter().enumerate() {
+                let source_path = match &job {
+                    MediaJob::Import { source, .. } => source,
+                    MediaJob::Convert(asset) => &asset.path,
+                };
+                let source_name = source_path
                     .file_name()
                     .unwrap_or_default()
                     .to_string_lossy()
                     .into_owned();
                 let root_for_task = root.clone();
-                let target_for_task = target.clone();
                 let result = background
                     .spawn(async move {
-                        file_ops::import_external(&root_for_task, &target_for_task, &source)
+                        match job {
+                            MediaJob::Import { source, target } => {
+                                file_ops::import_external(&root_for_task, &target, &source)
+                            }
+                            MediaJob::Convert(asset) => {
+                                file_ops::convert_asset(&root_for_task, &asset)
+                            }
+                        }
                     })
                     .await;
                 match result {
                     Ok(result) => {
                         succeeded += 1;
-                        registered += usize::from(result.registered);
                         imported.push((result.destination.clone(), None));
                         if result.manifest_update.is_some() {
                             last_manifest = result.manifest_update;
@@ -857,18 +914,16 @@ impl WorkbenchPanel {
                 }
                 if failed == 0 {
                     window.push_notification(
-                        Notification::success(format!(
-                            "Imported {succeeded} · Registered {registered} resource(s)"
-                        )),
+                        Notification::success(format!("{verb} {succeeded} resource(s)")),
                         cx,
                     );
                 } else {
                     let detail = first_error.unwrap_or_default();
                     cx.global_mut::<EditorDocuments>()
-                        .set_notice(&root, format!("Import: {detail}"));
+                        .set_notice(&root, format!("{verb}: {detail}"));
                     window.push_notification(
                         Notification::warning(format!(
-                            "Imported {succeeded} · Registered {registered} resource(s) · {failed} failed · {detail}"
+                            "{verb} {succeeded} · {failed} failed · {detail}"
                         )),
                         cx,
                     );

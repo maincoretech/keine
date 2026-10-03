@@ -1295,7 +1295,7 @@ mod tests {
                 sub_scenes: Vec::new(),
             };
             model.scene_ids.insert("a".into(), "a".into());
-            let generated = super::super::render_scenes(&[scene], &model).unwrap();
+            let generated = super::super::render_scenes(&[&scene], &model, false).unwrap();
             assert_eq!(generated.matches("camera.reset(").count(), 1);
             assert!(!generated.contains("camera.effect("));
             let flat = actions

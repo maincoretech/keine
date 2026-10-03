@@ -9,6 +9,63 @@ pub(super) const VISUAL_COMMANDS: &[&str] = &[
     "sprite.update",
 ];
 
+/// Syntax fields shared by lowering and source-based editor consumers.
+pub(super) fn signature(name: &str) -> Option<(usize, &'static [&'static str])> {
+    let signature: (usize, &[&str]) = match name {
+        "sprite.transform" => (
+            1,
+            &[
+                "light",
+                "x",
+                "y",
+                "alpha",
+                "scale",
+                "scale_x",
+                "scale_y",
+                "rotation",
+                "blur",
+                "width",
+                "height",
+                "brightness",
+                "contrast",
+                "saturation",
+                "duration",
+                "easing",
+            ],
+        ),
+        "background.transform" => (
+            0,
+            &[
+                "x",
+                "y",
+                "alpha",
+                "scale",
+                "scale_x",
+                "scale_y",
+                "rotation",
+                "blur",
+                "width",
+                "height",
+                "brightness",
+                "contrast",
+                "saturation",
+                "duration",
+                "easing",
+            ],
+        ),
+        "sprite.animate" => (2, &["duration"]),
+        "sprite.transition" => (1, &["enter", "exit", "duration"]),
+        "sprite.update" => (
+            2,
+            &[
+                "position", "layout", "scale", "duration", "easing", "blocking",
+            ],
+        ),
+        _ => return None,
+    };
+    Some(signature)
+}
+
 impl<'a> Parser<'a> {
     pub(super) fn parse_v11_visual_command(
         &self,
@@ -16,58 +73,7 @@ impl<'a> Parser<'a> {
         args: &[Argument],
         report: &mut ParseReport,
     ) -> Option<Action> {
-        let (positional, named): (usize, &[&str]) = match name {
-            "sprite.transform" => (
-                1,
-                &[
-                    "x",
-                    "y",
-                    "alpha",
-                    "scale",
-                    "scale_x",
-                    "scale_y",
-                    "rotation",
-                    "blur",
-                    "width",
-                    "height",
-                    "brightness",
-                    "contrast",
-                    "saturation",
-                    "light",
-                    "duration",
-                    "easing",
-                ],
-            ),
-            "background.transform" => (
-                0,
-                &[
-                    "x",
-                    "y",
-                    "alpha",
-                    "scale",
-                    "scale_x",
-                    "scale_y",
-                    "rotation",
-                    "blur",
-                    "width",
-                    "height",
-                    "brightness",
-                    "contrast",
-                    "saturation",
-                    "duration",
-                    "easing",
-                ],
-            ),
-            "sprite.animate" => (2, &["duration"]),
-            "sprite.transition" => (1, &["enter", "exit", "duration"]),
-            "sprite.update" => (
-                2,
-                &[
-                    "position", "layout", "scale", "duration", "easing", "blocking",
-                ],
-            ),
-            _ => return None,
-        };
+        let (positional, named) = signature(name)?;
         let before = report.diagnostics.len();
         self.validate_signature(name, args, positional, named, report);
         if report.diagnostics.len() != before {

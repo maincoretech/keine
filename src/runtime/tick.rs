@@ -2,6 +2,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use keine_core::Program;
 use keine_core::State;
+use keine_core::runtime::animation::{preset_final_transform, sample_preset};
 use keine_core::step;
 #[cfg(feature = "hot-reload")]
 use keine_loader::{Diagnostic, DiagnosticLevel};
@@ -2176,72 +2177,6 @@ fn advance_keyframes(
         }
     }
     false
-}
-
-fn sample_preset(
-    base: keine_core::SpriteTransform,
-    preset: &keine_core::AnimationPreset,
-    progress: f32,
-) -> keine_core::SpriteTransform {
-    use keine_core::AnimationPreset;
-    let progress = progress.clamp(0.0, 1.0);
-    let mut result = base;
-    let eased = 1.0 - (1.0 - progress).powi(3);
-    match preset {
-        AnimationPreset::Enter => result.alpha *= eased,
-        AnimationPreset::Exit => result.alpha *= 1.0 - progress * progress,
-        AnimationPreset::EnterFromBottom => {
-            result.offset_y += 220.0 * (1.0 - eased);
-            result.blur += 5.0 * (1.0 - eased);
-            result.alpha *= eased;
-        }
-        AnimationPreset::EnterFromLeft => {
-            result.offset_x -= 280.0 * (1.0 - eased);
-            result.blur += 5.0 * (1.0 - eased);
-            result.alpha *= eased;
-        }
-        AnimationPreset::EnterFromRight => {
-            result.offset_x += 280.0 * (1.0 - eased);
-            result.blur += 5.0 * (1.0 - eased);
-            result.alpha *= eased;
-        }
-        AnimationPreset::Shake => {
-            let offset = if progress < 0.25 {
-                -100.0 * (progress / 0.25)
-            } else if progress < 0.75 {
-                -100.0 + 200.0 * ((progress - 0.25) / 0.5)
-            } else {
-                100.0 * (1.0 - (progress - 0.75) / 0.25)
-            };
-            result.offset_x += offset;
-        }
-        AnimationPreset::MoveFrontAndBack => {
-            let scale = 1.0 + (progress * std::f32::consts::PI).sin() * 0.15;
-            result.scale_x *= scale;
-            result.scale_y *= scale;
-        }
-        AnimationPreset::Blur => {
-            result.blur += (progress * std::f32::consts::PI).sin() * 4.0;
-        }
-        AnimationPreset::ShockwaveIn
-        | AnimationPreset::ShockwaveOut
-        | AnimationPreset::OldFilm
-        | AnimationPreset::DotFilm
-        | AnimationPreset::ReflectionFilm
-        | AnimationPreset::GlitchFilm
-        | AnimationPreset::RgbFilm
-        | AnimationPreset::GodrayFilm
-        | AnimationPreset::RemoveFilm
-        | AnimationPreset::Custom(_) => {}
-    }
-    result
-}
-
-fn preset_final_transform(
-    base: keine_core::SpriteTransform,
-    _preset: &keine_core::AnimationPreset,
-) -> keine_core::SpriteTransform {
-    base
 }
 
 #[cfg(test)]

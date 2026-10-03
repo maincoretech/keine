@@ -2,7 +2,8 @@
 use super::{
     BlockCard, BlockEditError, BlockKind, EiyashouProjection, HashSet, MoveDirection,
     NativeTokenKind, Range, SceneSection, TextBlockMetadata, TextLifetime, disabled_body,
-    matching_parenthesis, parse_native_document, split_source_ranges, valid_identifier,
+    matching_parenthesis, native_text_voice_allowed, parse_native_document, split_source_ranges,
+    text_block_suffix, valid_identifier,
 };
 
 impl EiyashouProjection {
@@ -730,6 +731,13 @@ impl EiyashouProjection {
                 return Err(BlockEditError::InvalidIdentifier);
             }
         }
+        if metadata
+            .voice
+            .as_deref()
+            .is_some_and(|voice| !native_text_voice_allowed(voice))
+        {
+            return Err(BlockEditError::InvalidIdentifier);
+        }
         let literal = source
             .get(text_range.start.saturating_sub(1)..text_range.end.saturating_add(1))
             .ok_or(BlockEditError::StaleRange)?;
@@ -744,31 +752,33 @@ impl EiyashouProjection {
             replacement.push_str(": ");
         }
         replacement.push_str(literal);
-        if let Some(voice) = metadata.voice.as_deref() {
-            replacement.push_str(", ");
-            replacement.push_str(voice);
-        }
-        // Metadata edits preserve accepted dialogue options byte-for-byte.
-        if let Some(suffix) = source.get(text_range.end + 1..block.statement_range.end) {
-            let suffix = suffix
-                .trim_start()
-                .strip_prefix(',')
-                .unwrap_or("")
-                .trim_start();
-            let options = if suffix
-                .split(',')
-                .next()
-                .is_some_and(|first| valid_identifier(first.trim()))
-            {
-                suffix.split_once(',').map(|(_, options)| options)
-            } else {
-                Some(suffix)
-            };
-            if let Some(options) = options.filter(|options| !options.trim().is_empty()) {
-                replacement.push_str(", ");
-                replacement.push_str(options.trim());
+        // Metadata and field editing share the token ranges; comments and options
+        // remain byte-for-byte intact when a voice is changed or removed.
+        let suffix = text_block_suffix(source, block).ok_or(BlockEditError::StaleRange)?;
+        let suffix_start = text_range.end + 1;
+        let mut tail = source
+            .get(suffix_start..block.statement_range.end)
+            .ok_or(BlockEditError::StaleRange)?
+            .to_owned();
+        match (suffix.voice_range, metadata.voice.as_deref()) {
+            (Some(range), voice) => {
+                tail.replace_range(
+                    range.start - suffix_start..range.end - suffix_start,
+                    voice.unwrap_or(""),
+                );
+                if voice.is_none()
+                    && let Some(comma) = suffix.voice_separator
+                {
+                    tail.replace_range(comma.start - suffix_start..comma.end - suffix_start, "");
+                }
             }
+            (None, Some(voice)) => {
+                replacement.push_str(", ");
+                replacement.push_str(voice);
+            }
+            (None, None) => {}
         }
+        replacement.push_str(&tail);
         let mut edited = source.to_owned();
         if edited.get(block.source_range.clone()).is_none() {
             return Err(BlockEditError::StaleRange);

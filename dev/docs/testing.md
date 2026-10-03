@@ -12,6 +12,8 @@ sprite 引用背景及错误音频类型拒绝、Editor 增量引用计数和资
 已移动并更新清单，保持文件字节、ID 和剧本不变；新 Editor 的目录、预览和资源下拉已目测。
 完整剧情验收仍按下表安排。
 
+迁移文件名与 Explorer 排序：publisher workspace 856 passed / 8 ignored，fmt/check/Clippy、Editor 构建、native-smoke 与 tday validate 通过。回归覆盖源文件名/子目录保留、中文路径、大小写重名、路径隔离，以及入口优先、场景自然排序、多场景文件和增量更新。现有 tday 的 84 个资源恢复原名，168 个原素材/转换成品 SHA256 和 13 个剧本均未变，ID 与引用保留；新版 Editor 已目测原名缩略图、`bedroom.opus` 及全部 13 个剧本的排列。tday 保留 1 条未引用背景警告。
+
 ### 项目所有者（用户）
 
 | 何时 | 你要做什么 | 完成标准 |
@@ -152,6 +154,11 @@ physical footprint 1.1 GiB → 388.9 MiB，观测 peak 1.1 GiB → 465.5 MiB。
 
 Blocks 继续按源码版本缓存文本/索引/顺序/结束关联、几何与概览；普通滚动仅定位并挂载可见行，折叠、实测行高或源码变化使几何失效。当前行/执行行也复用索引。拖放和折叠动画保留原有冻结布局。Text 配色、原生换行与笔画构建移到后台，改宽复用配色；新任务取消旧任务并拒绝过期结果，不添加输入延迟。
 
+资源拖放的整窗采样（`sample <editor-pid> 45 2 -file target/authoring/performance/drag/after-confirmation.txt`）
+显示忙时热点在 GPUI 根视图 prepaint、Taffy 布局、元素 ID/样式复制与分配；字段缓存微基准不能代表 CPU 占用，试验改动已撤回。
+锁定 GPUI 的鼠标拖动路径调用 `Window::refresh`，绕过视图缓存；Blocks 拖放期间也禁用稳定几何路径。
+后续优化须以相同窗口/剧本/拖动操作的进程 CPU、帧耗时和松手后空闲占用对照，保留原始日志，不能据字段微基准宣称流畅。
+
 同主机 release 微基准（`tests/bench/editor/{blocks,text}.rs`）：Block 为 11 组 × 100 次，Text 为 11 次，取中位数；测试串行运行。
 
 | 路径 / 规模 | 原计算 ms | 新计算 ms |
@@ -221,7 +228,7 @@ cargo test -p keine --lib scene::assets::tests::speculative_budget_preserves_pri
 |---|---|
 | Editor → Engine | 协议版本、长度边界、启动握手、崩溃重开、不同工程隔离 |
 | Performance 采样 | 实际采样间隔、CPU >100%、计数回退、缺测、PID 重用、peak 重置、有界历史 |
-| 源码 → Parser → Block | 全部 70 个插入入口、EYS 旧入口拒绝、分组字段与精确写回、换图省略保留；保存格式化的 token/语义不变、幂等、共享文档写入与撤销、外部冲突保护；自动聚焦的角色别名、旁白与角色继承 |
+| 源码 → Parser → Block | 全部 70 个插入入口、EYS 旧入口拒绝、分组字段与精确写回、换图省略保留；保存格式化的 token/语义不变、幂等、共享文档写入与撤销、外部冲突保护；保存前后 Text 选区、焦点与屏幕纵坐标保持，重复保存视口不动；自动聚焦的角色别名、旁白与角色继承 |
 | 资源与文件 | 改名/类型迁移、映射/文件共同撤销、冲突与路径隔离、导入失败回滚 |
 | Editor 交互模型 | 拖放取消/过期版本/嵌套几何、概览两端和独立平移、失去文档容器后的开页落点 |
 | Audio / Video / Media | 循环 rewind/Opus pre-skip、BGM sink 交接、视频 EOF/rewind/损坏输入、队列与解码预算 |
@@ -302,9 +309,13 @@ unavailable 缺测和 Mach 换算边界；不新增验收工程。
 
 ## 当前验收边界
 
-当前唯一 demo 为 `projects/tday`：原工程 13 个章节加入口包装，共 14 scene / 3583 action。
+当前唯一 demo 为 `projects/tday`：按当前已修改剧本拆为 13 个章节文件与小型入口 `main.shou`，共 14 scene / 2644 action。拆分逐段字节可重组为原 main，Loader 前后完整动作内容摘要相同；源文件和资源/角色/对象清单未变。
 原工程 4403 个文件的路径与 SHA256 均未改变。副本跳过缺失的 equipment_power_down.wav、
 window_slam.wav、convenience_store_chime.wav，位置标注在脚本开头；旧本地 demo 已移入废纸篓。
+分文件迁移回归覆盖 LetsGal 同章多 fragment、独立入口、跨文件 call/goto、嵌套目录、文件名冲突、初始变量及跨文件聚焦规则；11 项通过。publisher workspace 845 项通过 / 8 项忽略，新增 LetsGal 分组用例另行通过；fmt、publisher Clippy、native-smoke 与当前 tday 校验通过，Editor 中入口及独立章节已打开检查。
+
+保存位置修复：格式化后恢复映射选区和滚动位置，Blocks 保留映射后的测量行高与编辑框。屏幕坐标回归通过；publisher workspace 847 项通过 / 8 项忽略（IPC 在沙箱外重跑），fmt、Clippy 与 Editor 构建通过。macOS 新 Editor 已打开，用户确认 Ctrl+S 保存位置验收成功。
+完整 `letsgal-timeline` fixture 的 migrate 因既有 `SelectSpriteImage` 不支持而拒绝发布目标；本轮未扩展该能力。
 震动振幅/频率补间、混合镜头原子动作、带 ID 单次/循环音效及淡入淡出、退格和点击等待的
 解析/执行/迁移 roundtrip 回归通过。IR schema v6，Editor–Engine 协议 v9，save 仍为 v11。
 fmt、workspace check/clippy/tests（publisher）、官方 LetsGal 外部示例验收、native-smoke 与 tday
@@ -323,6 +334,9 @@ Editor debug 构建与 native-smoke/tday 校验通过；Trash/IPC 测试在沙�
 本轮新导入的界面操作与主观媒体验收留给用户；存量 tday 素材仍保留迁移时的开发格式。
 后续资源状态提示已通过 workspace check/clippy/tests 与 Editor 构建；macOS 新 Editor
 打开 tday 的 Assets 已目测 `Resource · PNG` 信息行，保留完整缩略图及既有 ID/引用数。
+
+资源统计/转换：publisher workspace 854 passed / 8 ignored，fmt、Clippy、构建和 native-smoke 通过；FFmpeg 音频转换测试另行显式通过。回归覆盖文件头格式识别、别名体积去重、精确缺失引用范围、转换冲突/失败与原文件保护，以及发行副本排除未登记的兼容源素材。
+macOS Editor 实测图标统计卡、Convert all 和完成文件数进度条（收起卡片仍可见）：tday 50 张 WebP / 34 条 Opus 全部完成，登记资源从 757.1 MB 降至 169.1 MB；85 个原文件 SHA256 与 13 个脚本未变，清单仅改变资源路径和引号。转换后 tday validate 通过，保留 1 条未引用背景警告。源码红色波浪线与 Explorer 错误数已有模型回归，完整交互验收仍需用户确认。
 
 ```text
 0.12.0 / EYS v2.0

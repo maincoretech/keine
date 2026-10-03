@@ -14,6 +14,7 @@ mod media;
 mod shell;
 mod stage;
 mod structured;
+pub(super) use structured::child_signature;
 mod visual;
 
 pub(super) const SIMPLE_COMMANDS: &[&str] = &[
@@ -66,6 +67,36 @@ pub(super) fn is_structured_command(name: &str) -> bool {
     structured::STRUCTURED_COMMANDS.contains(&name) || stage::STAGE_COMMANDS.contains(&name)
 }
 
+pub(super) fn argument_names(name: &str) -> Option<Vec<&'static str>> {
+    if let Some(fields) = expanded_fields(name) {
+        return Some(fields.to_vec());
+    }
+    if let Some((_, fields)) = stage::event_signature(name) {
+        return Some(fields);
+    }
+    if let Some(fields) = layout::group_fields(name) {
+        return Some(fields.to_vec());
+    }
+    let fields = match name {
+        "stage.animate" => stage::ANIMATION_FIELDS,
+        "shake" => camera::SHAKE_FIELDS,
+        "track" => stage::TRACK_FIELDS,
+        "key" => stage::KEY_FIELDS,
+        "layer" => stage::LAYER_FIELDS,
+        "stage.mask.hide" => mask::HIDE_FIELDS,
+        _ => {
+            let (_, fields) = signature(name)
+                .or_else(|| visual::signature(name))
+                .or_else(|| media::signature(name))
+                .or_else(|| shell::signature(name))
+                .or_else(|| interaction::signature(name))
+                .or_else(|| structured::signature(name))?;
+            fields
+        }
+    };
+    Some(fields.to_vec())
+}
+
 pub(super) fn expanded_fields(name: &str) -> Option<&'static [&'static str]> {
     match name {
         "camera.move" => Some(camera::move_fields()),
@@ -73,6 +104,31 @@ pub(super) fn expanded_fields(name: &str) -> Option<&'static [&'static str]> {
         "stage.mask.show" => Some(mask::MASK_FIELDS),
         _ => None,
     }
+}
+
+/// Syntax fields shared by lowering and source-based editor consumers.
+pub(super) fn signature(name: &str) -> Option<(usize, &'static [&'static str])> {
+    let signature: (usize, &[&str]) = match name {
+        "story.end"
+        | "avatar.hide"
+        | "vocal.stop"
+        | "wait.advance"
+        | "particle.layers.clear"
+        | "scene.parallax.stop" => (0, &[]),
+        "avatar.show" | "screen.film" | "playback.auto" | "ui.show" | "ui.hide"
+        | "text.presentation" | "text.style" => (1, &[]),
+        "vocal.play" => (1, &["volume"]),
+        "text.box" => (0, &["visible", "auto"]),
+        "text.retract" => (0, &["source", "keep"]),
+        "text.float.configure" => (0, &["id", "infinite"]),
+        "particle.hide" => (1, &["duration"]),
+        "video.stop" => (1, &["fade"]),
+        "gallery.unlock" => (2, &["name"]),
+        "camera.bind" | "camera.unbind" => (1, &["distance"]),
+        "text.float.hide" => (0, &[]),
+        _ => return None,
+    };
+    Some(signature)
 }
 
 impl<'a> Parser<'a> {
@@ -111,36 +167,17 @@ impl<'a> Parser<'a> {
         args: &[Argument],
         report: &mut ParseReport,
     ) -> Option<Action> {
-        let (positional, named): (usize, &[&str]) = match name {
-            "story.end"
-            | "avatar.hide"
-            | "vocal.stop"
-            | "wait.advance"
-            | "particle.layers.clear"
-            | "scene.parallax.stop" => (0, &[]),
-            "avatar.show" | "screen.film" | "playback.auto" | "ui.show" | "ui.hide"
-            | "text.presentation" | "text.style" => (1, &[]),
-            "vocal.play" => (1, &["volume"]),
-            "text.box" => (0, &["visible", "auto"]),
-            "text.retract" => (0, &["source", "keep"]),
-            "text.float.configure" => (0, &["id", "infinite"]),
-            "particle.hide" => (1, &["duration"]),
-            "video.stop" => (1, &["fade"]),
-            "gallery.unlock" => (2, &["name"]),
-            "camera.bind" | "camera.unbind" => (1, &["distance"]),
-            // The active floating text may be hidden without naming an ID.
-            "text.float.hide" => {
-                let count = args.iter().filter(|arg| arg.name.is_none()).count();
-                if count > 1 {
-                    report
-                        .diagnostics
-                        .push(self.error("text.float.hide(...) accepts at most one ID"));
-                    return None;
-                }
-                (count, &[])
+        let (mut positional, named) = signature(name)?;
+        if name == "text.float.hide" {
+            let count = args.iter().filter(|arg| arg.name.is_none()).count();
+            if count > 1 {
+                report
+                    .diagnostics
+                    .push(self.error("text.float.hide(...) accepts at most one ID"));
+                return None;
             }
-            _ => return None,
-        };
+            positional = count;
+        }
         let before = report.diagnostics.len();
         self.validate_signature(name, args, positional, named, report);
         if report.diagnostics.len() != before {

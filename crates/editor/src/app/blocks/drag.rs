@@ -34,6 +34,8 @@ pub(in crate::app) struct DragSession {
     pub width: f32,
     pub height: f32,
     pub indent: f32,
+    pub assets: Option<Vec<AssetKey>>,
+    pub insertion: bool,
     hit_offset: f32,
     origins: HashMap<usize, f32>,
     destinations: HashMap<usize, f32>,
@@ -78,6 +80,8 @@ impl DragSession {
             width,
             height,
             indent,
+            assets: None,
+            insertion: false,
             hit_offset: 0.,
             origins: positions.clone(),
             destinations: positions,
@@ -115,8 +119,13 @@ impl DragSession {
         self.started.elapsed() < Duration::from_millis(200)
     }
 
-    pub fn retarget(&mut self, target: Option<BlockDropTarget>, reduce_motion: bool) -> bool {
-        if self.target == target {
+    pub fn retarget(
+        &mut self,
+        target: Option<BlockDropTarget>,
+        insertion: bool,
+        reduce_motion: bool,
+    ) -> bool {
+        if self.target == target && self.insertion == insertion {
             return false;
         }
         self.origins = self
@@ -129,7 +138,28 @@ impl DragSession {
                 )
             })
             .collect();
-        self.destinations = preview_positions(&self.rows, &self.moved, target);
+        self.insertion = insertion;
+        self.destinations = if self.assets.is_some() {
+            let top = target
+                .filter(|_| self.insertion)
+                .and_then(|target| self.insertion_top(target));
+            self.rows
+                .iter()
+                .map(|row| {
+                    (
+                        row.id,
+                        row.top
+                            + if top.is_some_and(|top| row.top >= top) {
+                                self.height + 4.
+                            } else {
+                                0.
+                            },
+                    )
+                })
+                .collect()
+        } else {
+            preview_positions(&self.rows, &self.moved, target)
+        };
         self.target = target;
         self.started = Instant::now();
         true
@@ -145,6 +175,38 @@ impl DragSession {
                 )
             })
             .collect()
+    }
+
+    fn insertion_top(&self, target: BlockDropTarget) -> Option<f32> {
+        let row = self.row(target.row)?;
+        if !target.after {
+            return Some(row.top);
+        }
+        Some(
+            self.rows
+                .iter()
+                .find(|next| next.id >= row.end)
+                .map_or_else(
+                    || {
+                        self.rows
+                            .last()
+                            .map_or(row.top, |last| last.top + last.height + 4.)
+                    },
+                    |next| next.top,
+                ),
+        )
+    }
+
+    pub fn preview_top(&self, reduce_motion: bool) -> Option<f32> {
+        if self.assets.is_some() {
+            self.target
+                .filter(|_| self.insertion)
+                .and_then(|target| self.insertion_top(target))
+        } else {
+            self.target?;
+            let first = self.rows.iter().find(|row| self.moved.contains(&row.id))?;
+            self.position(first.id, reduce_motion)
+        }
     }
 
     // Hit testing uses the original layout, never animated/transformed card bounds.
@@ -431,6 +493,67 @@ impl WorkbenchPanel {
         self.update_block_drag_target(event.event.position, cx);
     }
 
+    pub(in crate::app) fn track_asset_drag(
+        &mut self,
+        event: &DragMoveEvent<AssetDrag>,
+        row_id: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let drag = event.drag(cx);
+        let PanelContent::Document {
+            root,
+            document: Some(document),
+            ..
+        } = &self.content
+        else {
+            return;
+        };
+        if *root != drag.root
+            || self.document_mode != DocumentMode::Block
+            || self.block_drag.committing()
+        {
+            return;
+        }
+        let same = self.block_drag.session().is_some_and(|session| {
+            Rc::ptr_eq(&session.token, &drag.token) && session.row(row_id).is_some()
+        });
+        if !same {
+            let keys = drag.keys.clone();
+            let index = cx.global::<EditorDocuments>().authoring(root);
+            if keys.is_empty()
+                || keys.iter().any(|key| {
+                    !index
+                        .assets
+                        .iter()
+                        .any(|asset| asset.key() == *key && asset.exists)
+                })
+            {
+                return;
+            }
+            let payload = BlockDrag {
+                token: drag.token.clone(),
+                document: document.clone(),
+                revision: document.borrow().revision(),
+                selected: HashSet::new(),
+            };
+            let projection = document.borrow().projection();
+            let indent = projection
+                .scenes
+                .iter()
+                .flat_map(|scene| &scene.blocks)
+                .find(|block| block.source_range.start == row_id)
+                .map_or(0., |block| block.depth as f32 * 18.);
+            self.begin_block_drag(&payload, row_id, 300., 38., indent, window, cx);
+            if let BlockDragState::Dragging(session) = &mut self.block_drag {
+                session.height = keys.iter().collect::<HashSet<_>>().len() as f32 * 42. - 4.;
+                session.assets = Some(keys);
+                session.last_candidate = None;
+            }
+        }
+        self.update_block_drag_target(event.event.position, cx);
+    }
+
     pub(in crate::app) fn update_block_drag_target(
         &mut self,
         position: Point<Pixels>,
@@ -441,21 +564,74 @@ impl WorkbenchPanel {
         };
         session.pointer = Some(position);
         let viewport = self.view_scroll.bounds();
-        let y = f32::from(position.y - viewport.origin.y - self.view_scroll.offset().y)
+        let mut y = f32::from(position.y - viewport.origin.y - self.view_scroll.offset().y)
             - session.hit_offset;
-        let candidate = viewport
+        if viewport.contains(&position)
+            && session.assets.is_some()
+            && let Some(top) = session.preview_top(cx.reduce_motion())
+        {
+            let bottom = top + session.height + 4.;
+            // The external asset adds space to the layout. Keep its gap stable
+            // under the pointer, then map rows below it back to the snapshot.
+            if (top..bottom).contains(&y) {
+                return;
+            }
+            if y >= bottom {
+                y -= session.height + 4.;
+            }
+        }
+        let mut candidate = viewport
             .contains(&position)
             .then(|| session.candidate(y))
             .flatten();
-        if session.last_candidate == candidate {
+        let mut insertion = false;
+        let mut indent = session.indent;
+        if let Some(keys) = &session.assets
+            && let Some(target) = candidate.as_mut()
+            && let Some(row) = session.row(target.row)
+        {
+            let projection = session.document.borrow().projection();
+            if let Some(block) = projection
+                .scenes
+                .iter()
+                .flat_map(|scene| &scene.blocks)
+                .find(|block| block.source_range.start == target.row)
+            {
+                let voice = keys.iter().any(|key| key.kind == AssetKind::Voice);
+                insertion = !voice
+                    && (keys.len() > 1
+                        || !matches!(block.kind, BlockKind::Command)
+                        || y <= row.top + 6.
+                        || y >= row.top + row.height - 6.);
+                if !matches!(block.kind, BlockKind::Command) && keys.len() == 1 && y > row.top + 6.
+                {
+                    target.after = true;
+                }
+                indent = block.depth as f32 * 18.;
+                if block.read_only
+                    || voice
+                        && (!matches!(
+                            block.kind,
+                            BlockKind::Narration | BlockKind::Dialogue { .. }
+                        ) || keys.len() != 1)
+                    || insertion
+                        && !target.after
+                        && matches!(block.kind, BlockKind::ElseIf | BlockKind::Else)
+                {
+                    candidate = None;
+                }
+            }
+        }
+        if session.last_candidate == candidate && session.insertion == insertion {
             return;
         }
         session.last_candidate = candidate;
-        let target = candidate.filter(|target| matches!(&self.content, PanelContent::Document {document: Some(document), ..} if session.is_current(document) && document.borrow().projection().accepts_block_drop(&session.selected, target.row)));
-        if let BlockDragState::Dragging(session) = &mut self.block_drag
-            && session.retarget(target, cx.reduce_motion())
-        {
-            cx.notify();
+        let target = candidate.filter(|target| matches!(&self.content, PanelContent::Document {document: Some(document), ..} if session.is_current(document) && (session.assets.is_some() || document.borrow().projection().accepts_block_drop(&session.selected, target.row))));
+        if let BlockDragState::Dragging(session) = &mut self.block_drag {
+            session.indent = indent;
+            if session.retarget(target, insertion, cx.reduce_motion()) {
+                cx.notify();
+            }
         }
     }
 
@@ -527,6 +703,86 @@ impl WorkbenchPanel {
             Err(error) => {
                 self.cancel_block_drag(window, cx);
                 self.set_block_notice(format!("Move blocked: {error}"), cx);
+            }
+        }
+    }
+
+    pub(in crate::app) fn finish_asset_drag(
+        &mut self,
+        drag: &AssetDrag,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.block_drag.session().is_some_and(|session| {
+            session.assets.is_some() && Rc::ptr_eq(&session.token, &drag.token)
+        }) {
+            return;
+        }
+        self.update_block_drag_target(window.mouse_position(), cx);
+        let BlockDragState::Dragging(session) = &self.block_drag else {
+            return;
+        };
+        let Some(target) = session.target else {
+            self.cancel_block_drag(window, cx);
+            return;
+        };
+        let PanelContent::Document {
+            root,
+            document: Some(document),
+            ..
+        } = &self.content
+        else {
+            return;
+        };
+        if !session.is_current(document)
+            || self.document_mode != DocumentMode::Block
+            || *root != drag.root
+        {
+            self.cancel_block_drag(window, cx);
+            return;
+        }
+        let source = document.borrow().contents().to_owned();
+        let index = cx.global::<EditorDocuments>().authoring(root);
+        match super::super::edits::asset_drop_edit_at(
+            &source,
+            target.row,
+            &drag.keys,
+            &index,
+            session.insertion.then_some(target.after),
+        ) {
+            Ok(edited) if edited != source => {
+                let motion = session
+                    .insertion
+                    .then(|| {
+                        BlockReorderMotion::for_insert(
+                            &EiyashouProjection::parse(&source),
+                            &EiyashouProjection::parse(&edited),
+                            target,
+                            &session.painted_positions(cx.reduce_motion()),
+                            &session
+                                .rows
+                                .iter()
+                                .map(|row| (row.id, row.height))
+                                .collect(),
+                            session.preview_top(cx.reduce_motion()).unwrap_or(0.),
+                        )
+                    })
+                    .flatten();
+                let BlockDragState::Dragging(session) = std::mem::take(&mut self.block_drag) else {
+                    return;
+                };
+                self.block_drag = BlockDragState::Committing {
+                    session,
+                    source,
+                    edited: edited.clone(),
+                    motion,
+                };
+                self.apply_block_source(edited, "Assets inserted", window, cx);
+            }
+            Ok(_) => self.cancel_block_drag(window, cx),
+            Err(error) => {
+                self.cancel_block_drag(window, cx);
+                self.set_block_notice(format!("Asset drop blocked: {error}"), cx);
             }
         }
     }
@@ -619,9 +875,9 @@ mod tests {
             row: 3,
             after: true,
         });
-        assert!(session.retarget(target, true));
+        assert!(session.retarget(target, false, true));
         let started = session.started;
-        assert!(!session.retarget(target, true));
+        assert!(!session.retarget(target, false, true));
         assert_eq!(session.started, started);
         assert_eq!(session.position(2, true), Some(76.));
         assert_eq!(
@@ -632,10 +888,41 @@ mod tests {
             })
         );
         assert_eq!((session.width, session.height), (312., 100.));
-        assert!(session.retarget(None, true));
+        assert!(session.retarget(None, false, true));
         assert_eq!(session.position(2, true), Some(180.));
         assert_eq!(session.candidate(300.), None);
         assert!(session.is_current(&document));
+        // Incoming assets use the same fixed geometry and animation, but leave
+        // existing rows in place and open an insertion slot after descendants.
+        let mut incoming = DragSession::new(&drag, rows(), &[], 312., 18.);
+        incoming.assets = Some(vec![AssetKey {
+            kind: AssetKind::Background,
+            id: "room".into(),
+        }]);
+        incoming.height = 38.;
+        assert!(incoming.retarget(
+            Some(BlockDropTarget {
+                row: 0,
+                after: true
+            }),
+            true,
+            true
+        ));
+        assert_eq!(incoming.preview_top(true), Some(180.));
+        assert_eq!(incoming.position(1, true), Some(118.));
+        assert_eq!(incoming.position(2, true), Some(222.));
+        assert!(incoming.retarget(
+            Some(BlockDropTarget {
+                row: 2,
+                after: false
+            }),
+            true,
+            true
+        ));
+        assert_eq!(incoming.preview_top(true), Some(180.));
+        assert!(incoming.retarget(None, false, true));
+        assert_eq!(incoming.position(2, true), Some(180.));
+        assert_eq!(incoming.preview_top(true), None);
         let foreign = crate::document::DocumentManager::new(
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/native-smoke"),
             recovery.join("foreign"),

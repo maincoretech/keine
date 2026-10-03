@@ -406,11 +406,17 @@ pub(super) fn render_asset_filter_menu(
                 AssetStatus::Used,
                 AssetStatus::Unused,
                 AssetStatus::Missing,
+                AssetStatus::Canonical,
+                AssetStatus::NeedsConversion,
             ]
             .into_iter()
             .map(|value| {
                 (
-                    format!("{value:?}"),
+                    match value {
+                        AssetStatus::Canonical => "Canonical format".into(),
+                        AssetStatus::NeedsConversion => "Needs conversion".into(),
+                        _ => format!("{value:?}"),
+                    },
                     AssetFilterChoice::Status(value),
                     panel.asset_status == value,
                 )

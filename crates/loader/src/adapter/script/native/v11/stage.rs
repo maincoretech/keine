@@ -100,6 +100,79 @@ pub fn native_stage_property_names() -> impl Iterator<Item = &'static str> {
     STAGE_PROPERTIES.iter().map(|(name, _)| *name)
 }
 
+pub(super) fn event_signature(name: &str) -> Option<(usize, Vec<&'static str>)> {
+    let signature: (usize, Vec<&str>) = match name {
+        "event.camera.shake" => (
+            0,
+            vec![
+                "time",
+                "amplitude",
+                "frequency",
+                "amplitude_randomness",
+                "frequency_randomness",
+                "duration",
+                "axis",
+                "falloff",
+            ],
+        ),
+        "event.camera.patch" => (
+            0,
+            std::iter::once("time")
+                .chain(std::iter::once("targets"))
+                .chain(
+                    super::effects::PATCH_FIELDS
+                        .iter()
+                        .copied()
+                        .filter(|field| {
+                            !matches!(*field, "duration" | "easing" | "blocking" | "tween")
+                        }),
+                )
+                .collect(),
+        ),
+        "event.particle" => (
+            2,
+            vec![
+                "time", "texture", "count", "wind", "gravity", "fade_in", "duration", "fade_out",
+            ],
+        ),
+        "event.scene" => (
+            1,
+            vec![
+                "time",
+                "transition",
+                "reset_camera",
+                "fit",
+                "x",
+                "y",
+                "anchor_x",
+                "anchor_y",
+                "width",
+                "height",
+            ],
+        ),
+        "event.audio" => (
+            3,
+            vec!["time", "volume", "loop", "duration", "fade_in", "fade_out"],
+        ),
+        _ => return None,
+    };
+    Some(signature)
+}
+
+pub(super) const ANIMATION_FIELDS: &[&str] = &[
+    "duration",
+    "repeat",
+    "infinite",
+    "playback_rate",
+    "blocking",
+];
+
+pub(super) const TRACK_FIELDS: &[&str] = &["image", "muted"];
+
+pub(super) const KEY_FIELDS: &[&str] = &["time", "value", "easing"];
+
+pub(super) const LAYER_FIELDS: &[&str] = &["distance", "x", "y"];
+
 struct StageRow {
     name: String,
     args: Vec<Argument>,
@@ -114,19 +187,7 @@ impl<'a> Parser<'a> {
         report: &mut ParseReport,
     ) -> Option<Action> {
         let before = report.diagnostics.len();
-        self.validate_signature(
-            name,
-            args,
-            1,
-            &[
-                "duration",
-                "repeat",
-                "infinite",
-                "playback_rate",
-                "blocking",
-            ],
-            report,
-        );
+        self.validate_signature(name, args, 1, ANIMATION_FIELDS, report);
         let rows = self.take_stage_rows(0, report)?;
         if report.diagnostics.len() != before {
             return None;
@@ -270,7 +331,7 @@ impl<'a> Parser<'a> {
 
     fn v11_stage_track(&self, row: &StageRow, report: &mut ParseReport) -> Option<StageTrack> {
         let before = report.diagnostics.len();
-        self.validate_signature("track", &row.args, 2, &["image", "muted"], report);
+        self.validate_signature("track", &row.args, 2, TRACK_FIELDS, report);
         if report.diagnostics.len() != before {
             return None;
         }
@@ -291,7 +352,7 @@ impl<'a> Parser<'a> {
                     .push(self.error("track children must be key(...)"));
                 return None;
             }
-            self.validate_signature("key", &child.args, 0, &["time", "value", "easing"], report);
+            self.validate_signature("key", &child.args, 0, KEY_FIELDS, report);
             keyframes.push(StageKeyframe {
                 time: self.v11_stage_duration(&child.args, "time", report)?,
                 value: self.v11_named_number(&child.args, "value", report)?,
@@ -369,66 +430,11 @@ impl<'a> Parser<'a> {
 
     fn v11_stage_event(&self, row: &StageRow, report: &mut ParseReport) -> Option<StageEvent> {
         let before = report.diagnostics.len();
-        let (positional, fields): (usize, Vec<&str>) = match row.name.as_str() {
-            "event.camera.shake" => (
-                0,
-                vec![
-                    "time",
-                    "amplitude",
-                    "frequency",
-                    "amplitude_randomness",
-                    "frequency_randomness",
-                    "duration",
-                    "axis",
-                    "falloff",
-                ],
-            ),
-            "event.camera.patch" => (
-                0,
-                std::iter::once("time")
-                    .chain(std::iter::once("targets"))
-                    .chain(
-                        super::effects::PATCH_FIELDS
-                            .iter()
-                            .copied()
-                            .filter(|field| {
-                                !matches!(*field, "duration" | "easing" | "blocking" | "tween")
-                            }),
-                    )
-                    .collect(),
-            ),
-            "event.particle" => (
-                2,
-                vec![
-                    "time", "texture", "count", "wind", "gravity", "fade_in", "duration",
-                    "fade_out",
-                ],
-            ),
-            "event.scene" => (
-                1,
-                vec![
-                    "time",
-                    "transition",
-                    "reset_camera",
-                    "fit",
-                    "x",
-                    "y",
-                    "anchor_x",
-                    "anchor_y",
-                    "width",
-                    "height",
-                ],
-            ),
-            "event.audio" => (
-                3,
-                vec!["time", "volume", "loop", "duration", "fade_in", "fade_out"],
-            ),
-            _ => {
-                report
-                    .diagnostics
-                    .push(self.error("unknown stage event type"));
-                return None;
-            }
+        let Some((positional, fields)) = event_signature(&row.name) else {
+            report
+                .diagnostics
+                .push(self.error("unknown stage event type"));
+            return None;
         };
         self.validate_signature(&row.name, &row.args, positional, &fields, report);
         if report.diagnostics.len() != before {
@@ -575,7 +581,7 @@ impl<'a> Parser<'a> {
                     .push(self.error("scene event children must be layer(...)"));
                 return None;
             }
-            self.validate_signature("layer", &child.args, 2, &["distance", "x", "y"], report);
+            self.validate_signature("layer", &child.args, 2, LAYER_FIELDS, report);
             if report.diagnostics.len() != before {
                 return None;
             }

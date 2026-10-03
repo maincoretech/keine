@@ -1,7 +1,7 @@
 //! Shared Shou field metadata and source-value rules. No GPUI state or widgets.
 use super::projection::{BlockKind, EiyashouProjection, SourceField};
 use super::{AssetKind, AuthoringIndex, escape_eiyashou_string, valid_identifier};
-use keine_loader::native_expanded_fields;
+use keine_loader::{native_child_command_argument_names, native_command_argument_names};
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,248 +33,24 @@ pub(crate) fn scale_argument_conflicts(command: &str, name: &str, fields: &[Sour
 
 /// Shared named-argument inventory for Inspector and Text completions.
 pub fn command_argument_names(command: &str) -> Vec<&str> {
-    if command == "event.camera.patch" {
-        let mut fields = vec!["time", "targets"];
-        fields.extend(
-            native_expanded_fields("camera.effect")
-                .unwrap_or(&[])
-                .iter()
-                .copied()
-                .filter(|field| !matches!(*field, "duration" | "easing" | "blocking" | "tween")),
-        );
-        fields
-    } else {
-        let known: &[&str] = match command {
-            "left" | "center" | "right" | "point" => &["x", "y"],
-            "viewport" => &["height"],
-            "scene" => &["fit", "x", "y", "anchor", "width", "height"],
-            "composite" => &["canvas", "rect", "height"],
-            "size" => &["width", "height"],
-            "rect" => &["x", "y", "width", "height"],
-            "shake" => &[
-                "amplitude",
-                "frequency",
-                "duration",
-                "axis",
-                "falloff",
-                "amplitude_randomness",
-                "frequency_randomness",
-            ],
-            "text.box" => &["visible", "auto"],
-            "text.retract" => &["source", "keep"],
-            "text.float.configure" => &["id", "infinite"],
-            "particle.hide" => &["duration"],
-            "video.stop" => &["fade"],
-            "gallery.unlock" => &["name"],
-            "camera.bind" | "camera.unbind" => &["distance"],
-            "camera.reset" => &["duration", "easing", "blocking"],
-            "style" => &[
-                "scale",
-                "brightness",
-                "saturation",
-                "contrast",
-                "blur",
-                "alpha",
-            ],
-            "background" => &[
-                "blocking",
-                "transition",
-                "x",
-                "y",
-                "alpha",
-                "scale",
-                "scale_x",
-                "scale_y",
-                "rotation",
-                "blur",
-                "width",
-                "height",
-            ],
-            "hide" => &["transition", "blocking"],
-            "sprite" => &[
-                "blocking",
-                "position",
-                "transition",
-                "z",
-                "blend",
-                "layout",
-                "x",
-                "y",
-                "alpha",
-                "scale",
-                "scale_x",
-                "scale_y",
-                "rotation",
-                "blur",
-                "width",
-                "height",
-                "brightness",
-                "contrast",
-                "saturation",
-                "light",
-            ],
-            "move" => &["duration", "easing", "blocking"],
-            "bgm" => &["volume", "fade", "loop"],
-            "se" => &["volume", "id", "fade"],
-            "video" => &["skippable"],
-            "pop" => &["into"],
-            "camera.shake" => &[
-                "amplitude",
-                "frequency",
-                "amplitude_randomness",
-                "frequency_randomness",
-                "duration",
-                "axis",
-                "falloff",
-                "blocking",
-            ],
-            "sprite.focus.configure" => &[
-                "characters",
-                "speaking",
-                "others",
-                "narration",
-                "enabled",
-                "duration",
-                "easing",
-            ],
-            "sprite.transform" => &[
-                "light",
-                "x",
-                "y",
-                "alpha",
-                "scale",
-                "scale_x",
-                "scale_y",
-                "rotation",
-                "blur",
-                "width",
-                "height",
-                "brightness",
-                "contrast",
-                "saturation",
-                "duration",
-                "easing",
-            ],
-            "background.transform" => &[
-                "x",
-                "y",
-                "alpha",
-                "scale",
-                "scale_x",
-                "scale_y",
-                "rotation",
-                "blur",
-                "width",
-                "height",
-                "brightness",
-                "contrast",
-                "saturation",
-                "duration",
-                "easing",
-            ],
-            "sprite.animate" => &["duration"],
-            "sprite.transition" => &["enter", "exit", "duration"],
-            "se.loop" => &["volume", "fade"],
-            "se.stop" => &["fade"],
-            "vocal.play" => &["volume"],
-            "video.play" => &["loop", "muted", "alpha", "skippable", "wait", "mode"],
-            "screen.curtain.show" | "screen.curtain.hide" => &["color", "duration"],
-            "text.float" => &[
-                "x",
-                "y",
-                "font_size",
-                "color",
-                "fade_in",
-                "hold",
-                "fade_out",
-                "blocking",
-            ],
-            "scene.parallax" => &[
-                "amplitude_percent",
-                "edge_ease_percent",
-                "return_to_center_on_leave",
-                "scale",
-            ],
-            "particle.show" => &["texture", "count", "wind", "gravity", "fade_in"],
-            "ui.message" => &["title", "message", "confirm_text", "cancel_text", "result"],
-            "text.intro" => &["hold"],
-            "sprite.sequence" => &["fps", "loop"],
-            "sprite.select" => &["default"],
-            "sprite.select.when" => &["default"],
-            "sprite.keyframes" => &["repeat", "blocking"],
-            "sprite.update" => &[
-                "position", "layout", "scale", "duration", "easing", "blocking",
-            ],
-            "assets.loading" => &["mode", "lookahead", "blocking"],
-            "input.request" => &[
-                "type",
-                "title",
-                "description",
-                "placeholder",
-                "confirm_text",
-                "required_text",
-                "required",
-                "min_length",
-                "max_length",
-                "min_value",
-                "max_value",
-                "step",
-                "true_text",
-                "false_text",
-            ],
-            "text.paragraph.style" => &[
-                "typewriter_speed",
-                "reveal_duration",
-                "reveal_effect",
-                "reveal_distance",
-                "reveal_scale",
-                "reveal_rotation",
-                "reveal_blur",
-            ],
-            "camera.move" | "camera.effect" | "stage.mask.show" => {
-                native_expanded_fields(command).unwrap_or(&[])
-            }
-            "stage.mask.hide" => &["duration", "blocking"],
-            "stage.animate" => &[
-                "duration",
-                "repeat",
-                "infinite",
-                "playback_rate",
-                "blocking",
-            ],
-            "track" => &["image", "muted"],
-            "key" => &["time", "value", "easing"],
-            "event.camera.shake" => &[
-                "time",
-                "amplitude",
-                "frequency",
-                "amplitude_randomness",
-                "frequency_randomness",
-                "duration",
-                "axis",
-                "falloff",
-            ],
-            "event.particle" => &[
-                "time", "texture", "count", "wind", "gravity", "fade_in", "duration", "fade_out",
-            ],
-            "event.scene" => &[
-                "time",
-                "transition",
-                "reset_camera",
-                "fit",
-                "x",
-                "y",
-                "anchor_x",
-                "anchor_y",
-                "width",
-                "height",
-            ],
-            "event.audio" => &["time", "volume", "loop", "duration", "fade_in", "fade_out"],
-            "layer" => &["distance", "x", "y"],
-            _ => &[],
-        };
-        known.to_vec()
+    native_command_argument_names(command).unwrap_or_default()
+}
+
+/// Shared editor context filtering; parser signature ownership stays in Loader.
+pub(crate) fn child_argument_names(
+    parent: &str,
+    child: &str,
+    fields: &[SourceField],
+) -> Option<Vec<&'static str>> {
+    let mut names = native_child_command_argument_names(parent, child)?;
+    if parent == "sprite.sequence"
+        && fields
+            .iter()
+            .any(|field| field.key == "fps" && field.insertion.is_none())
+    {
+        names.retain(|name| *name != "duration");
     }
+    Some(names)
 }
 
 pub(crate) fn source_field_choices(

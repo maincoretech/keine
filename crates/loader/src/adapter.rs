@@ -25,8 +25,10 @@ pub(crate) use script::eiyashou_semantic_diagnostics;
 pub use script::{
     NativeDocument, NativeLanguage, NativeSceneSyntax, NativeToken, NativeTokenKind,
     SourceLineIndex, WebGalLanguage, format_native_source, is_native_dotted_command,
-    is_native_structured_command, native_expanded_fields, native_stage_property_names,
-    native_tokens, parse_native_document, parse_native_scenes, parse_webgal, parse_webgal_report,
+    is_native_structured_command, native_child_command_argument_names,
+    native_command_argument_names, native_expanded_fields, native_stage_property_names,
+    native_text_argument_names, native_text_voice_allowed, native_tokens, parse_native_document,
+    parse_native_scenes, parse_webgal, parse_webgal_report,
 };
 pub use store::{KeineStore, SavedState, StoreAdapter, StoreMetadata, StoreStatus};
 

@@ -12,6 +12,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::action::Action;
 use crate::action::ChoiceTarget;
 use crate::expression::{evaluate, interpolate};
+use crate::runtime::animation::preset_initial_transform;
 use crate::runtime::eiyashou::{
     EiyashouRuntimeError, assign as assign_eiyashou, evaluate as evaluate_eiyashou,
     mutate_list as mutate_eiyashou_list, render_text as render_eiyashou_text,
@@ -1989,34 +1990,6 @@ fn is_background_target(target: &str) -> bool {
 
 fn is_character_group_target(target: &str) -> bool {
     matches!(target, "characters" | "character-group")
-}
-
-fn preset_initial_transform(
-    base: crate::types::SpriteTransform,
-    preset: &crate::types::AnimationPreset,
-) -> crate::types::SpriteTransform {
-    use crate::types::AnimationPreset;
-    let mut initial = base;
-    match preset {
-        AnimationPreset::Enter => initial.alpha = 0.0,
-        AnimationPreset::EnterFromBottom => {
-            initial.offset_y += 220.0;
-            initial.blur += 5.0;
-            initial.alpha = 0.0;
-        }
-        AnimationPreset::EnterFromLeft => {
-            initial.offset_x -= 280.0;
-            initial.blur += 5.0;
-            initial.alpha = 0.0;
-        }
-        AnimationPreset::EnterFromRight => {
-            initial.offset_x += 280.0;
-            initial.blur += 5.0;
-            initial.alpha = 0.0;
-        }
-        _ => {}
-    }
-    initial
 }
 
 fn assign_value(

@@ -1,5 +1,6 @@
 //! Deterministic state-machine execution and transition math.
 
+pub mod animation;
 pub mod eiyashou;
 pub mod expression;
 pub mod step;

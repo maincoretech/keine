@@ -106,6 +106,7 @@ fn prepare_project(
     } = open_project(&source, loader)?;
     validate_shipping_identity(&config.project)?;
     println!("release project identity: {}", config.project.id);
+    exclude_native_source_media(&config, &content)?;
     validate_shipping_media(&content)?;
     let config_path = source.join("config.yaml");
     if !config_path.is_file() {
@@ -296,6 +297,87 @@ fn validate_shipping_identity(project: &keine_core::config::ProjectMetadata) -> 
         bail!(
             "project.bundle_identifier must be a valid reverse-DNS identifier, or be omitted to derive one from project.id"
         );
+    }
+    Ok(())
+}
+
+/// This operates only on the publisher's temporary source copy. Native IDs
+/// resolve through the manifest; retained unregistered originals are author data.
+fn exclude_native_source_media(
+    config: &keine_core::config::GameConfig,
+    content: &keine_loader::ContentProject,
+) -> Result<()> {
+    if !config.adapter.script.eq_ignore_ascii_case("keine") {
+        return Ok(());
+    }
+    let manifest = keine_core::config::EiyashouAssetManifest::from_yaml(&fs::read_to_string(
+        content.root.join(&config.script.assets),
+    )?)
+    .context("invalid native asset manifest")?;
+    let mut registered = [
+        manifest.backgrounds,
+        manifest.figures,
+        manifest.voices,
+        manifest.bgm,
+        manifest.effects,
+        manifest.videos,
+        manifest.particles,
+    ]
+    .into_iter()
+    .flat_map(|entries| entries.into_values())
+    .map(|entry| content.root.join(entry.path()).canonicalize())
+    .collect::<std::io::Result<std::collections::HashSet<_>>>()?;
+    // LUTs are configured separately; their files still require shipping validation.
+    for root in content
+        .asset_mounts()
+        .into_iter()
+        .filter_map(|mount| mount.filesystem_root())
+    {
+        for path in config.assets.luts.values() {
+            if let Ok(path) = root.join(path).canonicalize() {
+                registered.insert(path);
+            }
+        }
+    }
+    for root in content
+        .asset_mounts()
+        .into_iter()
+        .filter_map(|mount| mount.filesystem_root())
+    {
+        for file in walk_files(&root)? {
+            let extension = file
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let author_media = matches!(
+                extension.as_str(),
+                "png"
+                    | "jpg"
+                    | "jpeg"
+                    | "bmp"
+                    | "tif"
+                    | "tiff"
+                    | "gif"
+                    | "wav"
+                    | "wave"
+                    | "mp3"
+                    | "ogg"
+                    | "oga"
+                    | "spx"
+                    | "flac"
+                    | "aac"
+                    | "m4a"
+                    | "mov"
+                    | "webm"
+                    | "mkv"
+                    | "m4v"
+                    | "unmapped"
+            );
+            if author_media && !registered.contains(&file.canonicalize()?) {
+                fs::remove_file(file)?;
+            }
+        }
     }
     Ok(())
 }
@@ -970,6 +1052,51 @@ mod tests {
         let archive = publish_test_archive(&project);
 
         assert_compiled_release(&archive);
+    }
+
+    #[test]
+    fn native_release_excludes_retained_originals_but_rejects_registered_compatibility_media() {
+        let root = tempdir().unwrap();
+        let project = root.path().join("native");
+        write_config_project(&project, "release-converted", "keine");
+        fs::write(
+            project.join("scripts/start.shou"),
+            "scene start { \"Hello\" }",
+        )
+        .unwrap();
+        fs::write(project.join("assets/original.png"), b"read-only source").unwrap();
+        fs::write(project.join("assets/original.wav"), b"read-only audio").unwrap();
+        fs::write(project.join("assets/retained.webp.unmapped"), b"unmapped").unwrap();
+        fs::write(
+            project.join("assets.yaml"),
+            "backgrounds:\n  room: assets/runtime.webp\n",
+        )
+        .unwrap();
+        let archive = publish_test_archive(&project);
+        assert_compiled_release(&archive);
+        assert_eq!(
+            fs::read(project.join("assets/original.png")).unwrap(),
+            b"read-only source"
+        );
+        assert_eq!(
+            fs::read(project.join("assets/original.wav")).unwrap(),
+            b"read-only audio"
+        );
+        fs::write(
+            project.join("assets.yaml"),
+            "backgrounds:\n  room: assets/original.png\n",
+        )
+        .unwrap();
+        let error = match prepare_project(&project, &keine_loader::LoaderRegistry::default()) {
+            Ok(_) => panic!("registered PNG must not ship"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("release resources must use WebP"),
+            "{error:#}"
+        );
     }
 
     #[test]

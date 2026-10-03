@@ -187,6 +187,130 @@ pub fn native_expanded_fields(name: &str) -> Option<&'static [&'static str]> {
     v11::expanded_fields(name)
 }
 
+const PORTRAIT_STYLE_FIELDS: &[&str] = &[
+    "scale",
+    "brightness",
+    "saturation",
+    "contrast",
+    "blur",
+    "alpha",
+];
+
+/// Named options allowed after a text literal and optional voice ID.
+pub fn native_text_argument_names() -> &'static [&'static str] {
+    &["volume", "concat", "auto", "inherit_speaker"]
+}
+
+/// Control statements take precedence over a lexed identifier used as a voice ID.
+pub fn native_text_voice_allowed(identifier: &str) -> bool {
+    !matches!(identifier, "return" | "break")
+}
+
+/// Child rows require their parent's command rather than a global name table.
+pub fn native_child_command_argument_names(parent: &str, child: &str) -> Option<Vec<&'static str>> {
+    v11::child_signature(parent, child).map(|(_, fields)| fields.to_vec())
+}
+
+/// Named fields accepted by native commands, in source-editor presentation order.
+/// Context-dependent child rows and editor widgets are intentionally separate.
+pub fn native_command_argument_names(name: &str) -> Option<Vec<&'static str>> {
+    if name == "style" {
+        return Some(PORTRAIT_STYLE_FIELDS.to_vec());
+    }
+    if name == "pop" {
+        return Some(vec!["into"]);
+    }
+    command_signature(name)
+        .map(|(_, fields)| fields.to_vec())
+        .or_else(|| v11::argument_names(name))
+}
+
+fn command_signature(name: &str) -> Option<(usize, &'static [&'static str])> {
+    let signature: (usize, &[&str]) = match name {
+        "goto" | "call" | "wait" => (1, &[]),
+        "background" => (
+            1,
+            &[
+                "blocking",
+                "transition",
+                "x",
+                "y",
+                "alpha",
+                "scale",
+                "scale_x",
+                "scale_y",
+                "rotation",
+                "blur",
+                "width",
+                "height",
+            ],
+        ),
+        "sprite" => (
+            2,
+            &[
+                "blocking",
+                "position",
+                "transition",
+                "z",
+                "blend",
+                "layout",
+                "x",
+                "y",
+                "alpha",
+                "scale",
+                "scale_x",
+                "scale_y",
+                "rotation",
+                "blur",
+                "width",
+                "height",
+                "brightness",
+                "contrast",
+                "saturation",
+                "light",
+            ],
+        ),
+        "hide" => (1, &["transition", "blocking"]),
+        "camera.move" => (
+            1,
+            v11::expanded_fields("camera.move").expect("static camera command"),
+        ),
+        "camera.reset" => (1, &["duration", "easing", "blocking"]),
+        "camera.shake" => (
+            1,
+            &[
+                "amplitude",
+                "frequency",
+                "amplitude_randomness",
+                "frequency_randomness",
+                "duration",
+                "axis",
+                "falloff",
+                "blocking",
+            ],
+        ),
+        "sprite.focus" => (1, &[]),
+        "sprite.focus.configure" => (
+            0,
+            &[
+                "characters",
+                "speaking",
+                "others",
+                "narration",
+                "enabled",
+                "duration",
+                "easing",
+            ],
+        ),
+        "move" => (2, &["duration", "easing", "blocking"]),
+        "bgm" => (1, &["volume", "fade", "loop"]),
+        "se" => (1, &["volume", "id", "fade"]),
+        "video" => (1, &["skippable"]),
+        _ => return None,
+    };
+    Some(signature)
+}
+
 fn compile_native(source: &str, validate_semantics: bool) -> (NativeDocument, Vec<ParsedScene>) {
     let (tokens, lex_diagnostics) = lex(source);
     let mut parser = Parser::new(source, &tokens, lex_diagnostics);
@@ -1924,156 +2048,32 @@ impl<'a> Parser<'a> {
             return self.parse_v11_command(&name, &args, report);
         }
         let before = report.diagnostics.len();
-        match name.as_str() {
-            "goto" | "call" | "wait" => {
-                self.validate_signature(&name, &args, 1, &[], report);
+        if name == "video"
+            && (self.named_arg(&args, "loop").is_some() || self.named_arg(&args, "wait").is_some())
+        {
+            report.diagnostics.push(self.error(
+                "video v1 has no `loop` or `wait` parameter; playback is always non-looping and blocking",
+            ));
+        }
+        if let Some((positional, named)) = command_signature(&name) {
+            self.validate_signature(&name, &args, positional, named, report);
+        } else if name == "pop" {
+            let positional = args
+                .iter()
+                .filter(|argument| argument.name.is_none())
+                .count();
+            if !(1..=2).contains(&positional) {
+                report
+                    .diagnostics
+                    .push(self.error("`pop` requires a list and optional index"));
             }
-            "background" => {
-                self.validate_signature(
-                    &name,
-                    &args,
-                    1,
-                    &[
-                        "blocking",
-                        "transition",
-                        "x",
-                        "y",
-                        "alpha",
-                        "scale",
-                        "scale_x",
-                        "scale_y",
-                        "rotation",
-                        "blur",
-                        "width",
-                        "height",
-                    ],
-                    report,
-                );
-            }
-            "sprite" => {
-                self.validate_signature(
-                    &name,
-                    &args,
-                    2,
-                    &[
-                        "position",
-                        "blocking",
-                        "transition",
-                        "z",
-                        "blend",
-                        "layout",
-                        "x",
-                        "y",
-                        "alpha",
-                        "scale",
-                        "scale_x",
-                        "scale_y",
-                        "rotation",
-                        "blur",
-                        "width",
-                        "height",
-                        "brightness",
-                        "contrast",
-                        "saturation",
-                        "light",
-                    ],
-                    report,
-                );
-            }
-            "hide" => {
-                self.validate_signature(&name, &args, 1, &["transition", "blocking"], report);
-            }
-            "camera.move" => {
-                self.validate_signature(
-                    &name,
-                    &args,
-                    1,
-                    v11::expanded_fields("camera.move").expect("static camera command"),
-                    report,
-                );
-            }
-            "camera.shake" => {
-                self.validate_signature(
-                    &name,
-                    &args,
-                    1,
-                    &[
-                        "amplitude",
-                        "frequency",
-                        "amplitude_randomness",
-                        "frequency_randomness",
-                        "duration",
-                        "axis",
-                        "falloff",
-                        "blocking",
-                    ],
-                    report,
-                );
-            }
-            "sprite.focus" => {
-                self.validate_signature(&name, &args, 1, &[], report);
-            }
-            "sprite.focus.configure" => {
-                self.validate_signature(
-                    &name,
-                    &args,
-                    0,
-                    &[
-                        "enabled",
-                        "characters",
-                        "speaking",
-                        "others",
-                        "narration",
-                        "duration",
-                        "easing",
-                    ],
-                    report,
-                );
-            }
-            "move" => {
-                self.validate_signature(
-                    &name,
-                    &args,
-                    2,
-                    &["duration", "easing", "blocking"],
-                    report,
-                );
-            }
-            "bgm" => {
-                self.validate_signature(&name, &args, 1, &["volume", "fade", "loop"], report);
-            }
-            "se" => {
-                self.validate_signature(&name, &args, 1, &["volume", "id", "fade"], report);
-            }
-            "video" => {
-                if self.named_arg(&args, "loop").is_some()
-                    || self.named_arg(&args, "wait").is_some()
-                {
-                    report.diagnostics.push(self.error(
-                        "video v1 has no `loop` or `wait` parameter; playback is always non-looping and blocking",
-                    ));
-                }
-                self.validate_signature(&name, &args, 1, &["skippable"], report);
-            }
-            "pop" => {
-                let positional = args
-                    .iter()
-                    .filter(|argument| argument.name.is_none())
-                    .count();
-                if !(1..=2).contains(&positional) {
+            for name in args.iter().filter_map(|argument| argument.name.as_deref()) {
+                if name != "into" {
                     report
                         .diagnostics
-                        .push(self.error("`pop` requires a list and optional index"));
-                }
-                for name in args.iter().filter_map(|argument| argument.name.as_deref()) {
-                    if name != "into" {
-                        report
-                            .diagnostics
-                            .push(self.error(format!("unknown named argument `{name}` for `pop`")));
-                    }
+                        .push(self.error(format!("unknown named argument `{name}` for `pop`")));
                 }
             }
-            _ => {}
         }
         if report.diagnostics.len() != before {
             return None;
@@ -2455,7 +2455,7 @@ impl<'a> Parser<'a> {
                 .significant
                 .get(self.cursor + 1)
                 .map(|index| self.text(*index));
-            if !matches!(name, Some("volume" | "concat" | "auto" | "inherit_speaker"))
+            if !name.is_some_and(|name| native_text_argument_names().contains(&name))
                 || self
                     .significant
                     .get(self.cursor + 2)
@@ -2521,7 +2521,7 @@ impl<'a> Parser<'a> {
         let voice = self.take_identifier();
         // Standalone control statements take precedence over optional voice IDs.
         if voice.is_some()
-            && !matches!(voice.as_deref(), Some("return" | "break"))
+            && voice.as_deref().is_some_and(native_text_voice_allowed)
             && matches!(self.peek_text(), Some("," | "}") | None)
         {
             voice
@@ -2693,13 +2693,8 @@ impl<'a> Parser<'a> {
     fn parse_camera_reset(&mut self, report: &mut ParseReport) -> Option<Vec<Action>> {
         let before = report.diagnostics.len();
         let args = self.take_call_args(report);
-        self.validate_signature(
-            "camera.reset",
-            &args,
-            1,
-            &["duration", "easing", "blocking"],
-            report,
-        );
+        let (positional, named) = command_signature("camera.reset").expect("static camera command");
+        self.validate_signature("camera.reset", &args, positional, named, report);
         if report.diagnostics.len() != before {
             return None;
         }
@@ -2914,6 +2909,12 @@ impl<'a> Parser<'a> {
                     .push(self.error(format!("duplicate portrait style field `{name}`")));
                 return None;
             }
+            if !PORTRAIT_STYLE_FIELDS.contains(&name) {
+                report
+                    .diagnostics
+                    .push(self.error(format!("unknown portrait style field `{name}`")));
+                return None;
+            }
             match name {
                 "scale" => style.scale = value,
                 "brightness" => style.brightness = value,
@@ -2921,12 +2922,7 @@ impl<'a> Parser<'a> {
                 "contrast" => style.contrast = value,
                 "blur" => style.blur = value,
                 "alpha" => style.alpha = value,
-                _ => {
-                    report
-                        .diagnostics
-                        .push(self.error(format!("unknown portrait style field `{name}`")));
-                    return None;
-                }
+                _ => unreachable!("validated portrait style field"),
             }
             cursor += 3;
             if cursor < tokens.len() - 1 {

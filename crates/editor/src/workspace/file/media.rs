@@ -12,7 +12,11 @@ pub(super) fn output_extension(source: &Path, kind: AssetKind) -> io::Result<Str
     }
     let extension = extension(source);
     if validate_resource(source, kind, &extension).is_ok() {
-        return Ok(extension);
+        return Ok(match kind {
+            AssetKind::Voice | AssetKind::Bgm | AssetKind::Effect => "opus".into(),
+            AssetKind::Video => "mp4".into(),
+            _ => extension,
+        });
     }
     let supported = match kind {
         AssetKind::Background | AssetKind::Figure | AssetKind::Particle => {

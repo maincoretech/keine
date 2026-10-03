@@ -135,6 +135,12 @@ gpui_kit::assets::icon_assets!(
         Square,
         Volume2,
         Workflow,
+        Files,
+        RefreshCw,
+        Unplug,
+        FileX,
+        Package,
+        Link,
     ]
 );
 
@@ -712,6 +718,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(changed.as_str().matches("background(room)").count(), 1);
+        let before = edits::asset_drop_edit_at(
+            source,
+            command_start,
+            &[index.assets[0].key()],
+            &index,
+            Some(false),
+        )
+        .unwrap();
+        let projection = EiyashouProjection::parse(&before);
+        assert_eq!(projection.scenes[0].blocks[1].summary, "background(room)");
+        assert_eq!(projection.scenes[0].blocks[2].summary, "wait(500ms)");
     }
 
     #[test]
@@ -873,6 +890,28 @@ mod tests {
                     .is_some(),
                 "missing icon for {}",
                 kind.label()
+            );
+        }
+    }
+
+    #[test]
+    fn asset_status_icons_are_embedded() {
+        for icon in [
+            AssetIconName::Files,
+            AssetIconName::CircleCheck,
+            AssetIconName::RefreshCw,
+            AssetIconName::Unplug,
+            AssetIconName::FileX,
+            AssetIconName::Package,
+            AssetIconName::Link,
+            AssetIconName::TriangleAlert,
+        ] {
+            assert!(
+                gpui_kit::AssetSource::load(&EditorAssets, icon.path().as_ref())
+                    .unwrap()
+                    .is_some(),
+                "missing {}",
+                icon.path()
             );
         }
     }

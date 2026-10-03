@@ -158,14 +158,23 @@ pub(in crate::app) fn render_assets(
                         .rounded(px(7.))
                         .bg(rgb(if selected { SURFACE } else { PANEL }))
                         .tooltip(icon_hint(format!(
-                            "{}{} · {}",
+                            "{}{} · {}{}",
                             if !unmapped_mode && asset.exists {
                                 "Registered resource · "
                             } else {
                                 ""
                             },
                             asset.path.display(),
-                            asset.tags.join(", ")
+                            asset.tags.join(", "),
+                            if unmapped_mode {
+                                ""
+                            } else if !asset.exists {
+                                " · Missing file"
+                            } else if asset.reference_count == 0 {
+                                " · Unused resource"
+                            } else {
+                                ""
+                            }
                         )))
                         .cursor_pointer()
                         .hover(|style| style.bg(rgb(SURFACE_HOVER)))
@@ -204,14 +213,21 @@ pub(in crate::app) fn render_assets(
                         .when(!unmapped_mode, |this| {
                             this.on_drag(
                                 AssetDrag {
+                                    token: Rc::new(()),
                                     root: root.clone(),
                                     keys: if selected {
                                         selection.clone()
                                     } else {
                                         vec![key]
                                     },
+                                    preview_offset: Point::default(),
                                 },
-                                |_, _, _, cx| cx.new(|_| Empty),
+                                |drag, offset, _, cx| {
+                                    cx.new(|_| AssetDrag {
+                                        preview_offset: offset,
+                                        ..drag.clone()
+                                    })
+                                },
                             )
                         })
                         .child(asset_content(
@@ -244,6 +260,13 @@ pub(in crate::app) fn render_assets(
         .min_h_0()
         .flex()
         .flex_col()
+        .child(statistics_card(
+            &root,
+            &snapshot.statistics,
+            panel.asset_statistics_expanded,
+            panel.file_progress.as_ref(),
+            cx,
+        ))
         .child(controls.flex_none())
         .child(
             div()
@@ -368,11 +391,8 @@ fn asset_content(
         format!("{} · {} refs", asset.id, asset.reference_count)
     };
     let mut metadata = String::new();
-    if !asset.id.is_empty() && asset.exists {
-        metadata.push_str("Resource");
-        if let Some(extension) = asset.path.extension().and_then(|value| value.to_str()) {
-            metadata.push_str(&format!(" · {}", extension.to_ascii_uppercase()));
-        }
+    if let Some(extension) = asset.path.extension().and_then(|value| value.to_str()) {
+        metadata.push_str(&extension.to_ascii_uppercase());
     }
     if let Some(info) = media {
         if !metadata.is_empty() {
@@ -415,7 +435,45 @@ fn asset_content(
                         .text_size(px(12.))
                         .when(!grid, |this| this.line_height(px(12.)))
                         .text_color(rgb(INK))
-                        .child(name),
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .when(!asset.id.is_empty() && asset.exists, |line| {
+                            line.child(
+                                div()
+                                    .id(format!("asset-format-{}-{}", asset.kind.label(), asset.id))
+                                    .tooltip(icon_hint(
+                                        if asset.canonical_format(media).is_some() {
+                                            "Canonical resource format"
+                                        } else {
+                                            "Needs conversion to canonical format"
+                                        },
+                                    ))
+                                    .child(
+                                        Icon::new(if asset.canonical_format(media).is_some() {
+                                            AssetIconName::CircleCheck
+                                        } else {
+                                            AssetIconName::RefreshCw
+                                        })
+                                        .xsmall()
+                                        .text_color(rgb(
+                                            if asset.canonical_format(media).is_some() {
+                                                PRIMARY
+                                            } else {
+                                                MUTED
+                                            },
+                                        )),
+                                    ),
+                            )
+                        })
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .child(name),
+                        ),
                 )
                 .child(
                     div()
@@ -426,7 +484,20 @@ fn asset_content(
                         .text_size(px(10.))
                         .when(!grid, |this| this.line_height(px(10.)))
                         .text_color(rgb(if asset.exists { MUTED } else { 0xe68e98 }))
-                        .child(detail),
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(detail)
+                        .when(
+                            !asset.id.is_empty() && asset.exists && asset.reference_count == 0,
+                            |line| {
+                                line.child(
+                                    Icon::new(AssetIconName::Unplug)
+                                        .size(px(9.))
+                                        .text_color(rgb(0xd2aa62)),
+                                )
+                            },
+                        ),
                 )
                 .when(!metadata.is_empty(), |this| {
                     this.child(
@@ -460,6 +531,7 @@ struct Snapshot {
     ordered: Arc<Vec<AssetKey>>,
     folders: Vec<PathBuf>,
     rows: Vec<BrowseRow>,
+    statistics: AssetStatistics,
 }
 
 impl Cache {
@@ -526,6 +598,7 @@ impl Cache {
             ordered,
             folders,
             rows,
+            statistics: AssetStatistics::from_index(index),
         });
         self.index = Arc::downgrade(index);
         self.key = Some(key);
@@ -588,17 +661,220 @@ fn visible_rows(
     (start..end, before, total - bottom)
 }
 
+#[derive(Default)]
+struct AssetStatistics {
+    files: usize,
+    bytes: u64,
+    canonical: usize,
+    unused: usize,
+    missing: usize,
+    missing_references: usize,
+    unmapped: usize,
+    unmeasured: usize,
+}
+
+impl AssetStatistics {
+    fn from_index(index: &AuthoringIndex) -> Self {
+        let mut statistics = Self {
+            unmapped: index.unmapped.len(),
+            ..Default::default()
+        };
+        // Aliases share one file in the bundle. Count its bytes only once.
+        let mut files = std::collections::BTreeMap::<&Path, Vec<&AssetEntry>>::new();
+        for asset in &index.assets {
+            files.entry(&asset.path).or_default().push(asset);
+        }
+        statistics.files = files.len();
+        for (path, assets) in files {
+            if assets.iter().all(|asset| !asset.exists) {
+                statistics.missing += 1;
+                continue;
+            }
+            if assets.iter().all(|asset| asset.reference_count == 0) {
+                statistics.unused += 1;
+            }
+            let Some(media) = index.media.get(path) else {
+                statistics.unmeasured += 1;
+                continue;
+            };
+            statistics.bytes = statistics.bytes.saturating_add(media.bytes);
+            if assets
+                .iter()
+                .any(|asset| asset.canonical_format(Some(media)).is_some())
+            {
+                statistics.canonical += 1;
+            }
+        }
+        let keys = index
+            .assets
+            .iter()
+            .map(AssetEntry::key)
+            .collect::<std::collections::HashSet<_>>();
+        statistics.missing_references = index
+            .asset_references
+            .iter()
+            .filter(|reference| !keys.contains(&reference.key))
+            .map(|reference| &reference.key)
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        statistics
+    }
+
+    fn needs_conversion(&self) -> usize {
+        self.files.saturating_sub(self.canonical + self.missing)
+    }
+}
+
+fn statistic_filter(
+    icon: AssetIconName,
+    label: &str,
+    count: usize,
+    filter: crate::authoring::AssetStatus,
+    cx: &mut Context<WorkbenchPanel>,
+) -> AnyElement {
+    div()
+        .id(format!("asset-stat-{label}"))
+        .flex()
+        .items_center()
+        .gap_1()
+        .cursor_pointer()
+        .hover(|style| style.text_color(rgb(PRIMARY)))
+        .on_click(cx.listener(move |panel, _, _, cx| {
+            panel.asset_unmapped = false;
+            panel.asset_status = filter;
+            panel.view_scroll.set_offset(Point::default());
+            cx.notify();
+        }))
+        .child(Icon::new(icon).xsmall())
+        .child(format!("{label} {count}"))
+        .into_any_element()
+}
+
+fn statistics_card(
+    root: &Path,
+    statistics: &AssetStatistics,
+    expanded: bool,
+    progress: Option<&FileProgress>,
+    cx: &mut Context<WorkbenchPanel>,
+) -> AnyElement {
+    let root = root.to_owned();
+    let pending = statistics.needs_conversion();
+    let can_convert = pending > 0 && progress.is_none();
+    div().mx_2().mt_2().flex_none().rounded(px(7.)).bg(rgb(SURFACE))
+        .child(div().flex().items_center().gap_2().px_2().py_1()
+            .child(div().id("asset-statistics").flex_1().flex().items_center().gap_1()
+                .cursor_pointer().on_click(cx.listener(|panel, _, _, cx| {
+                    panel.asset_statistics_expanded = !panel.asset_statistics_expanded;
+                    cx.notify();
+                }))
+                .child(Icon::new(if expanded { IconName::ChevronDown } else { IconName::ChevronRight }).xsmall().text_color(rgb(MUTED)))
+                .child(Icon::new(AssetIconName::Files).xsmall().text_color(rgb(MUTED)))
+                .child(div().text_sm().text_color(rgb(INK)).child(format!("{} files", statistics.files))))
+            .child(div().text_xs().text_color(rgb(MUTED)).child(asset_bytes(statistics.bytes))))
+        .when(expanded, |card| card.child(div().px_2().pb_2().flex().flex_col().gap_2().text_xs().text_color(rgb(MUTED))
+            .child(div().flex().flex_wrap().gap_2()
+                .child(statistic_filter(AssetIconName::CircleCheck, "Ready", statistics.canonical, crate::authoring::AssetStatus::Canonical, cx))
+                .child(statistic_filter(AssetIconName::RefreshCw, "Pending", pending, crate::authoring::AssetStatus::NeedsConversion, cx))
+                .child(statistic_filter(AssetIconName::Unplug, "Unused", statistics.unused, crate::authoring::AssetStatus::Unused, cx)))
+            .child(div().flex().flex_wrap().gap_2()
+                .child(statistic_filter(AssetIconName::FileX, "Missing", statistics.missing, crate::authoring::AssetStatus::Missing, cx))
+                .child(div().flex().items_center().gap_1().child(Icon::new(AssetIconName::TriangleAlert).xsmall()).child(format!("Undefined {}", statistics.missing_references)))
+                .child(div().flex().items_center().gap_1().child(Icon::new(AssetIconName::Link).xsmall()).child(format!("Unmapped {}", statistics.unmapped))))
+            .child(div().id("asset-package-estimate").flex().items_center().gap_1()
+                .tooltip(icon_hint("Registered assets, counted once per file, including unused. Pending files use current size; conversion updates the estimate. Excludes runtime, scripts and package overhead."))
+                .child(Icon::new(AssetIconName::Package).xsmall())
+                .child(format!("Package ≈ {}{}", asset_bytes(statistics.bytes), if statistics.missing + statistics.unmeasured > 0 { " · incomplete" } else { "" })))
+            .child(div().id("convert-all-assets").flex().items_center().gap_1().px_2().py_1().rounded(px(5.))
+                .text_color(rgb(if can_convert { PRIMARY } else { MUTED }))
+                .when(can_convert, |button| button.cursor_pointer().hover(|style| style.bg(rgb(SURFACE_HOVER))))
+                .tooltip(icon_hint("Convert pending assets to WebP / Opus / H.264 MP4 beside originals. Keep IDs, tags and scripts. Original files stay unchanged."))
+                .on_click(cx.listener(move |panel, _, window, cx| { if can_convert { panel.start_asset_conversion(&root, window, cx); } }))
+                .child(Icon::new(AssetIconName::RefreshCw).xsmall())
+                .child(progress.map_or_else(|| "Convert all".to_owned(), |progress| format!("Converting {}/{}", progress.completed, progress.total))))))
+        .when_some(progress, |card, progress| card.child(
+            div().px_2().pb_2()
+                .child(div().w_full().h(px(4.)).rounded_full().overflow_hidden().bg(rgb(SURFACE_HOVER))
+                    .child(div().h_full().w(gpui_kit::relative(progress.completed as f32 / progress.total.max(1) as f32)).rounded_full().bg(rgb(PRIMARY))))
+        ))
+        .into_any_element()
+}
+
 fn asset_bytes(bytes: u64) -> String {
-    if bytes >= 1024 * 1024 {
+    if bytes >= 1024 * 1024 * 1024 {
+        format!("{:.2} GB", bytes as f64 / (1024. * 1024. * 1024.))
+    } else if bytes >= 1024 * 1024 {
         format!("{:.1} MB", bytes as f64 / (1024. * 1024.))
-    } else {
+    } else if bytes >= 1024 {
         format!("{:.1} KB", bytes as f64 / 1024.)
+    } else {
+        format!("{bytes} B")
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn statistics_deduplicate_files_and_separate_missing_from_unconverted() {
+        let mut index = AuthoringIndex::default();
+        let asset = |kind, id: &str, path: &str, exists, references| AssetEntry {
+            kind,
+            id: id.into(),
+            path: path.into(),
+            exists,
+            reference_count: references,
+            tags: vec![],
+        };
+        index.assets = vec![
+            asset(AssetKind::Background, "room", "room.webp", true, 2),
+            asset(AssetKind::Figure, "room-alias", "room.webp", true, 0),
+            asset(AssetKind::Bgm, "song", "song.wav", true, 0),
+            asset(AssetKind::Voice, "voice", "voice.opus", false, 1),
+        ];
+        for (path, bytes, format) in [("room.webp", 100, Some("WebP")), ("song.wav", 200, None)] {
+            index.media.insert(
+                path.into(),
+                file_ops::AssetMediaInfo {
+                    bytes,
+                    modified: None,
+                    duration: None,
+                    canonical_format: format,
+                },
+            );
+        }
+        let statistics = AssetStatistics::from_index(&index);
+        assert_eq!(
+            (
+                statistics.files,
+                statistics.bytes,
+                statistics.canonical,
+                statistics.unused,
+                statistics.missing,
+                statistics.needs_conversion()
+            ),
+            (3, 300, 1, 1, 1, 1)
+        );
+        let canonical = AssetQuery {
+            status: crate::authoring::AssetStatus::Canonical,
+            ..Default::default()
+        };
+        assert_eq!(
+            canonical
+                .results_with_media(&index.assets, &index.media)
+                .len(),
+            2
+        );
+        let convert = AssetQuery {
+            status: crate::authoring::AssetStatus::NeedsConversion,
+            ..Default::default()
+        };
+        assert_eq!(
+            convert.results_with_media(&index.assets, &index.media)[0].id,
+            "song"
+        );
+        assert_eq!(asset_bytes(1024 * 1024 * 1024), "1.00 GB");
+    }
 
     #[test]
     fn cached_browser_invalidates_on_source_query_and_layout_changes() {

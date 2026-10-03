@@ -44,6 +44,85 @@ mod tests {
     static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
 
     #[test]
+    fn explorer_scripts_follow_entry_and_scene_numbers_without_moving_folders() {
+        use crate::workspace::WorkspaceEntryKind;
+        let base = AuthoringIndex {
+            native: true,
+            entry_scene: "start".into(),
+            ..Default::default()
+        };
+        let sources = BTreeMap::from([
+            (PathBuf::from("scripts/a.shou"), "scene chapter10 {}".into()),
+            (PathBuf::from("scripts/b.shou"), "scene chapter2 {}".into()),
+            (
+                PathBuf::from("scripts/dual.shou"),
+                "scene chapter20 {} scene chapter1 {}".into(),
+            ),
+            (PathBuf::from("scripts/z.shou"), "scene start {}".into()),
+            (
+                PathBuf::from("scripts/sub/aa.shou"),
+                "scene chapter10 {}".into(),
+            ),
+            (
+                PathBuf::from("scripts/sub/zz.shou"),
+                "scene chapter2 {}".into(),
+            ),
+        ]);
+        let index = base.with_sources(&sources);
+        let mut files = [
+            "assets",
+            "scripts",
+            "scripts/a.shou",
+            "scripts/b.shou",
+            "scripts/dual.shou",
+            "scripts/sub",
+            "scripts/sub/aa.shou",
+            "scripts/sub/zz.shou",
+            "scripts/z.shou",
+            "config.yaml",
+        ]
+        .into_iter()
+        .map(|path| WorkspaceFile {
+            relative_path: path.into(),
+            size: 0,
+            kind: if path.contains('.') {
+                WorkspaceEntryKind::File
+            } else {
+                WorkspaceEntryKind::Directory
+            },
+        })
+        .collect::<Vec<_>>();
+        index.order_script_files(&mut files);
+        let ordered = files
+            .iter()
+            .map(|file| file.relative_path.to_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ordered,
+            [
+                "assets",
+                "scripts",
+                "scripts/z.shou",
+                "scripts/dual.shou",
+                "scripts/b.shou",
+                "scripts/sub",
+                "scripts/sub/zz.shou",
+                "scripts/sub/aa.shou",
+                "scripts/a.shou",
+                "config.yaml"
+            ]
+        );
+        let updated = index.with_sources(&BTreeMap::from([(
+            PathBuf::from("scripts/b.shou"),
+            "scene chapter30 {}".into(),
+        )]));
+        assert_eq!(updated.entry_scene, "start");
+        updated.order_script_files(&mut files);
+        assert_eq!(files[4].relative_path, Path::new("scripts/a.shou"));
+        assert_eq!(files[8].relative_path, Path::new("scripts/b.shou"));
+    }
+
+    #[test]
     fn checked_in_native_fixture_populates_editor_views() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/native-smoke");
         let workspace = crate::workspace::WorkspaceSession::open(&root).unwrap();
@@ -228,6 +307,56 @@ mod tests {
                 .problems
                 .iter()
                 .any(|problem| problem.message.contains("missing.webp"))
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn missing_resource_errors_follow_exact_tokens_and_incremental_repairs() {
+        let root = fixture();
+        let path = PathBuf::from("scripts/main.shou");
+        let source = "scene start {\n  \"中文\",\n  sprite(hero, rin),\n  background(\n    unknown\n  )\n}\n";
+        let files = vec![WorkspaceFile {
+            relative_path: path.clone(),
+            size: 0,
+            kind: crate::workspace::WorkspaceEntryKind::File,
+        }];
+        let index = AuthoringIndex::load(
+            &root,
+            &files,
+            &BTreeMap::from([(path.clone(), source.into())]),
+        );
+        let errors = index
+            .problems
+            .iter()
+            .filter(|problem| problem.path == path)
+            .collect::<Vec<_>>();
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        for (id, line, column) in [("rin", 3, 16), ("unknown", 5, 5)] {
+            let reference = index
+                .asset_references
+                .iter()
+                .find(|reference| reference.key.id == id)
+                .unwrap();
+            assert_eq!(source.get(reference.range.clone().unwrap()), Some(id));
+            assert_eq!((reference.line, reference.column), (line, column));
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| (error.line, error.column) == (line, column))
+            );
+        }
+        let repaired = index.with_sources(&BTreeMap::from([(
+            path.clone(),
+            "scene start { background(room) }".into(),
+        )]));
+        assert!(!repaired.problems.iter().any(|problem| problem.path == path));
+        assert!(
+            repaired
+                .problems
+                .iter()
+                .any(|problem| problem.path == Path::new("assets.yaml")
+                    && problem.message.contains("missing.webp"))
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -503,6 +632,20 @@ mod tests {
             let projection = EiyashouProjection::parse(&edited);
             let inserted = projection.scenes[0].blocks.last().unwrap();
             assert!(!inserted.read_only, "{kind:?}: {inserted:?}");
+            for block in &projection.scenes[0].blocks {
+                if block.kind != projection::BlockKind::Command {
+                    continue;
+                }
+                let command = block.summary.split('(').next().unwrap().trim();
+                if commands::is_native_command(command)
+                    || keine_loader::is_native_dotted_command(command)
+                {
+                    assert!(
+                        keine_loader::native_command_argument_names(command).is_some(),
+                        "{kind:?}: command must expose the Loader field inventory"
+                    );
+                }
+            }
             assert!(projection.scenes[0].blocks.len() > 1, "{kind:?}");
             if kind == InsertKind::Native("sprite.update") {
                 let parsed = keine_loader::parse_native_scenes(&edited);

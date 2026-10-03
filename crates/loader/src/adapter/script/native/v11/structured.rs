@@ -12,6 +12,41 @@ pub(super) const STRUCTURED_COMMANDS: &[&str] = &[
     "assets.loading",
 ];
 
+/// Syntax fields shared by lowering and source-based editor consumers.
+pub(super) fn signature(name: &str) -> Option<(usize, &'static [&'static str])> {
+    let signature: (usize, &[&str]) = match name {
+        "text.intro" => (0, &["hold"]),
+        "sprite.sequence" => (1, &["fps", "loop"]),
+        "sprite.select" => (2, &["default"]),
+        "sprite.select.when" => (1, &["default"]),
+        "sprite.keyframes" => (1, &["repeat", "blocking"]),
+        "assets.loading" => (0, &["mode", "lookahead", "blocking"]),
+        _ => return None,
+    };
+    Some(signature)
+}
+
+/// A child row's signature belongs to its structured parent command.
+pub(in crate::adapter::script::native) fn child_signature(
+    parent: &str,
+    child: &str,
+) -> Option<(usize, &'static [&'static str])> {
+    Some(match (parent, child) {
+        ("text.intro", "page") => (1, &[]),
+        ("sprite.sequence", "frame") => (1, &["duration"]),
+        ("sprite.select" | "sprite.select.when", "case") => (2, &[]),
+        ("sprite.keyframes", "frame") => (
+            0,
+            &[
+                "duration", "easing", "x", "y", "alpha", "scale_x", "scale_y", "rotation", "blur",
+                "width", "height",
+            ],
+        ),
+        ("assets.loading", "resource") => (1, &["kind"]),
+        _ => return None,
+    })
+}
+
 impl<'a> Parser<'a> {
     pub(super) fn parse_v11_structured_command(
         &mut self,
@@ -19,15 +54,7 @@ impl<'a> Parser<'a> {
         args: &[Argument],
         report: &mut ParseReport,
     ) -> Option<Action> {
-        let (positional, named): (usize, &[&str]) = match name {
-            "text.intro" => (0, &["hold"]),
-            "sprite.sequence" => (1, &["fps", "loop"]),
-            "sprite.select" => (2, &["default"]),
-            "sprite.select.when" => (1, &["default"]),
-            "sprite.keyframes" => (1, &["repeat", "blocking"]),
-            "assets.loading" => (0, &["mode", "lookahead", "blocking"]),
-            _ => return None,
-        };
+        let (positional, named) = signature(name)?;
         let before = report.diagnostics.len();
         self.validate_signature(name, args, positional, named, report);
         let rows = self.take_v11_rows(report)?;
@@ -45,7 +72,9 @@ impl<'a> Parser<'a> {
                 "text.intro" => {
                     let mut pages = Vec::new();
                     for (row, fields) in &rows {
-                        self.validate_signature(row, fields, 1, &[], report);
+                        let (positional, named) =
+                            child_signature(name, "page").expect("static structured child");
+                        self.validate_signature(row, fields, positional, named, report);
                         if row != "page" {
                             report
                                 .diagnostics
@@ -72,7 +101,9 @@ impl<'a> Parser<'a> {
                     let mut frames = Vec::new();
                     let mut frame_durations = Vec::new();
                     for (row, fields) in &rows {
-                        self.validate_signature(row, fields, 1, &["duration"], report);
+                        let (positional, named) =
+                            child_signature(name, "frame").expect("static structured child");
+                        self.validate_signature(row, fields, positional, named, report);
                         if row != "frame" {
                             report.diagnostics.push(self.error(
                                 "sprite.sequence children must be frame(asset, duration: ...)",
@@ -111,7 +142,9 @@ impl<'a> Parser<'a> {
                 "sprite.select" => {
                     let mut variants = Vec::new();
                     for (row, fields) in &rows {
-                        self.validate_signature(row, fields, 2, &[], report);
+                        let (positional, named) =
+                            child_signature(name, "case").expect("static structured child");
+                        self.validate_signature(row, fields, positional, named, report);
                         if row != "case" {
                             report.diagnostics.push(
                                 self.error("sprite.select children must be case(\"value\", asset)"),
@@ -137,7 +170,9 @@ impl<'a> Parser<'a> {
                 "sprite.select.when" => {
                     let mut variants = Vec::new();
                     for (row, fields) in &rows {
-                        self.validate_signature(row, fields, 2, &[], report);
+                        let (positional, named) =
+                            child_signature(name, "case").expect("static structured child");
+                        self.validate_signature(row, fields, positional, named, report);
                         if row != "case" {
                             report.diagnostics.push(self.error(
                                 "sprite.select.when children must be case(condition, asset)",
@@ -177,16 +212,9 @@ impl<'a> Parser<'a> {
                     }
                     let mut frames = Vec::new();
                     for (row, fields) in &rows {
-                        self.validate_signature(
-                            row,
-                            fields,
-                            0,
-                            &[
-                                "duration", "easing", "x", "y", "alpha", "scale_x", "scale_y",
-                                "rotation", "blur", "width", "height",
-                            ],
-                            report,
-                        );
+                        let (positional, named) =
+                            child_signature(name, "frame").expect("static structured child");
+                        self.validate_signature(row, fields, positional, named, report);
                         if row != "frame" {
                             report
                                 .diagnostics
@@ -249,7 +277,9 @@ impl<'a> Parser<'a> {
                     }
                     let mut resources = Vec::new();
                     for (row, fields) in &rows {
-                        self.validate_signature(row, fields, 1, &["kind"], report);
+                        let (positional, named) =
+                            child_signature(name, "resource").expect("static structured child");
+                        self.validate_signature(row, fields, positional, named, report);
                         if row != "resource" {
                             report.diagnostics.push(self.error(
                                 "assets.loading children must be resource(asset, kind: ...)",

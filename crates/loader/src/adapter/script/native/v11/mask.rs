@@ -45,6 +45,8 @@ pub(super) const MASK_FIELDS: &[&str] = &[
     "gradient_end",
 ];
 
+pub(super) const HIDE_FIELDS: &[&str] = &["duration", "blocking"];
+
 impl<'a> Parser<'a> {
     pub(super) fn parse_v11_mask_command(
         &self,
@@ -60,7 +62,7 @@ impl<'a> Parser<'a> {
             if name == "stage.mask.show" {
                 MASK_FIELDS
             } else {
-                &["duration", "blocking"]
+                HIDE_FIELDS
             },
             report,
         );

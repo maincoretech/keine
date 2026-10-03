@@ -1,7 +1,7 @@
 use super::*;
 use gpui_kit::Task;
 use gpui_kit::base::input::{CompletionProvider, Rope};
-use keine_loader::{NativeTokenKind, parse_native_document};
+use keine_loader::{NativeTokenKind, native_text_argument_names, parse_native_document};
 use lsp_types::{
     CompletionContext, CompletionResponse, InlineCompletionContext, InlineCompletionItem,
     InlineCompletionResponse,
@@ -15,6 +15,7 @@ pub(super) struct ShouCompletion {
 pub(super) fn schedule_syntax_check(
     editor: Entity<EditorState>,
     marks: Option<gpui_kit::base::input::TextDecorationCollection>,
+    project: (Arc<AuthoringIndex>, PathBuf),
     window: &mut Window,
     cx: &mut Context<WorkbenchPanel>,
 ) -> gpui_kit::Task<()> {
@@ -43,7 +44,21 @@ pub(super) fn schedule_syntax_check(
         let checked = source.clone();
         let diagnostics = cx
             .background_executor()
-            .spawn(async move { syntax_diagnostics(&checked) })
+            .spawn(async move {
+                let mut diagnostics = syntax_diagnostics(&checked);
+                diagnostics.extend(project_diagnostics(&checked, &project.0, &project.1));
+                diagnostics.sort_by(|a, b| {
+                    a.range
+                        .start
+                        .cmp(&b.range.start)
+                        .then(a.range.end.cmp(&b.range.end))
+                        .then(a.message.cmp(&b.message))
+                });
+                diagnostics.dedup_by(|a, b| {
+                    a.range == b.range && a.message == b.message && a.severity == b.severity
+                });
+                diagnostics
+            })
             .await;
         let decorations = editor
             .update_in(cx, |editor, window, cx| {
@@ -65,7 +80,11 @@ pub(super) fn schedule_syntax_check(
                             text.position_to_offset(&diagnostic.range.start)
                                 ..text.position_to_offset(&diagnostic.range.end),
                             gpui_kit::HighlightStyle {
-                                background_color: Some(color.opacity(0.18)),
+                                underline: Some(gpui_kit::UnderlineStyle {
+                                    thickness: px(1.),
+                                    color: Some(color),
+                                    wavy: true,
+                                }),
                                 ..Default::default()
                             },
                         )
@@ -84,6 +103,63 @@ pub(super) fn schedule_syntax_check(
             let _ = cx.update(|_, cx| marks.set(decorations, cx));
         }
     })
+}
+
+fn project_diagnostics(
+    source: &str,
+    index: &AuthoringIndex,
+    path: &Path,
+) -> Vec<gpui_kit::base::input::Diagnostic> {
+    use gpui_kit::base::input::{Diagnostic, DiagnosticSeverity};
+    let lines = keine_loader::SourceLineIndex::new(source);
+    index
+        .problems
+        .iter()
+        .filter(|problem| problem.path == path)
+        .map(|problem| {
+            let start = lines.offset(
+                source,
+                problem.line.saturating_sub(1),
+                problem.column.saturating_sub(1),
+            );
+            let end = index
+                .asset_references
+                .iter()
+                .find(|reference| {
+                    reference.path == path
+                        && reference.line == problem.line
+                        && reference.column == problem.column
+                })
+                .and_then(|reference| reference.range.as_ref())
+                .filter(|range| {
+                    range.start == start
+                        && range.end <= source.len()
+                        && source.is_char_boundary(range.end)
+                })
+                .map_or_else(
+                    || start + source[start..].chars().next().map_or(0, char::len_utf8),
+                    |range| range.end,
+                );
+            let end = lines.span(source, end);
+            let start = lines.span(source, start);
+            Diagnostic::new(
+                Position::new(
+                    start.line.saturating_sub(1) as u32,
+                    start.column.saturating_sub(1) as u32,
+                )
+                    ..Position::new(
+                        end.line.saturating_sub(1) as u32,
+                        end.column.saturating_sub(1) as u32,
+                    ),
+                problem.message.clone(),
+            )
+            .with_source("project")
+            .with_severity(match problem.severity {
+                ProblemSeverity::Error => DiagnosticSeverity::Error,
+                ProblemSeverity::Warning => DiagnosticSeverity::Warning,
+            })
+        })
+        .collect()
 }
 
 fn syntax_diagnostics(source: &str) -> Vec<gpui_kit::base::input::Diagnostic> {
@@ -260,8 +336,9 @@ fn suggestion(
                 }
                 return None;
             }
-            let mut candidates = ["volume", "concat", "auto", "inherit_speaker"]
-                .into_iter()
+            let mut candidates = native_text_argument_names()
+                .iter()
+                .copied()
                 .filter(|name| {
                     !parts[..parts.len().saturating_sub(1)]
                         .iter()
@@ -293,6 +370,7 @@ fn suggestion(
     // Each nested delimiter owns its argument cursor; a comma inside style(...)
     // or a list cannot become a parameter of the enclosing command.
     let mut stack: Vec<(char, String, usize, usize, Vec<SourceField>)> = Vec::new();
+    let mut closed_call = None;
     for (position, token) in tokens.iter().enumerate() {
         let raw = &prefix[token.range.clone()];
         match raw {
@@ -307,16 +385,25 @@ fn suggestion(
                     }
                     start = preceding.range.start;
                 }
-                stack.push((
-                    raw.chars().next()?,
-                    prefix[start..token.range.start].into(),
-                    token.range.end,
-                    0,
-                    Vec::new(),
-                ));
+                let (name, body_fields) = if raw == "{"
+                    && position
+                        .checked_sub(1)
+                        .is_some_and(|previous| &prefix[tokens[previous].range.clone()] == ")")
+                {
+                    closed_call.take().unwrap_or_default()
+                } else {
+                    (prefix[start..token.range.start].to_owned(), Vec::new())
+                };
+                stack.push((raw.chars().next()?, name, token.range.end, 0, body_fields));
             }
             ")" | "]" | "}" => {
-                stack.pop();
+                closed_call = stack.pop().filter(|frame| frame.0 == '(').map(|mut frame| {
+                    let last = &prefix[frame.2..token.range.start];
+                    if !last.trim().is_empty() {
+                        frame.4.push(argument_field(last, frame.3));
+                    }
+                    (frame.1, frame.4)
+                });
             }
             "," => {
                 if let Some((_, _, start, position, fields)) =
@@ -349,7 +436,14 @@ fn suggestion(
         if !raw.is_empty() && !raw.contains(':') {
             return suffix_for(
                 raw,
-                crate::authoring::fields::command_argument_names(&command)
+                stack
+                    .iter()
+                    .rev()
+                    .find(|frame| frame.0 == '{')
+                    .and_then(|frame| {
+                        crate::authoring::fields::child_argument_names(&frame.1, &command, &frame.4)
+                    })
+                    .unwrap_or_else(|| crate::authoring::fields::command_argument_names(&command))
                     .into_iter()
                     .filter(|name| {
                         !fields.iter().any(|field| field.key == *name)
@@ -475,6 +569,79 @@ mod tests {
             |_, _, _| Vec::new(),
         )
     }
+    #[test]
+    fn project_diagnostics_underline_whole_resource_token_with_unicode_columns() {
+        let source = "scene start { \"中文\", background(missing) }";
+        let path = PathBuf::from("scripts/chapter.shou");
+        let start = source.find("missing").unwrap();
+        let span = keine_loader::SourceLineIndex::new(source).span(source, start);
+        let mut index = AuthoringIndex::default();
+        index
+            .asset_references
+            .push(crate::authoring::AssetReference {
+                key: AssetKey {
+                    kind: AssetKind::Background,
+                    id: "missing".into(),
+                },
+                path: path.clone(),
+                line: span.line,
+                column: span.column,
+                range: Some(start..start + 7),
+            });
+        index.problems.push(crate::authoring::AuthoringProblem {
+            severity: ProblemSeverity::Error,
+            path: path.clone(),
+            line: span.line,
+            column: span.column,
+            message: "Missing asset".into(),
+        });
+        let diagnostics = project_diagnostics(source, &index, &path);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].range,
+            Position::new(0, span.column as u32 - 1)..Position::new(0, span.column as u32 + 6)
+        );
+        assert!(project_diagnostics(source, &index, Path::new("other.shou")).is_empty());
+    }
+
+    #[test]
+    fn child_completion_uses_parent_signature_and_sequence_mode() {
+        assert_eq!(
+            complete("scene start { sprite.keyframes(hero) { frame(dur"),
+            Some("ation: ".into())
+        );
+        assert_eq!(
+            complete("scene start { sprite.keyframes(hero) { frame(x"),
+            Some(": ".into())
+        );
+        assert_eq!(
+            complete("scene start { sprite.sequence(hero) { frame(face, dur"),
+            Some("ation: ".into())
+        );
+        assert_eq!(
+            complete("scene start { sprite.sequence(hero, fps: 12) { frame(face, dur"),
+            None
+        );
+        assert_eq!(
+            complete("scene start { sprite.sequence(hero) { frame(face, x"),
+            None
+        );
+        assert_eq!(
+            complete(
+                "scene start { sprite.sequence(hero) { frame(face) }, sprite.keyframes(hero) { frame(x"
+            ),
+            Some(": ".into())
+        );
+        assert_eq!(
+            complete("scene start { assets.loading() { resource(room, ki"),
+            Some("nd: ".into())
+        );
+        assert_eq!(
+            complete("scene start { sprite.focus.configure(speaking: style(bri"),
+            Some("ghtness: ".into())
+        );
+    }
+
     #[test]
     fn dotted_commands_and_current_arguments() {
         assert!(complete("sce").unwrap().starts_with("ne start {"));

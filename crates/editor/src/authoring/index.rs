@@ -87,6 +87,35 @@ pub struct AssetKey {
 }
 
 impl AssetEntry {
+    pub fn canonical_format(
+        &self,
+        media: Option<&crate::file_ops::AssetMediaInfo>,
+    ) -> Option<&'static str> {
+        let format = media?.canonical_format?;
+        match (self.kind, format) {
+            (AssetKind::Background | AssetKind::Figure | AssetKind::Particle, "WebP") => {
+                Some(format)
+            }
+            (AssetKind::Voice | AssetKind::Bgm | AssetKind::Effect, "Opus")
+                if self
+                    .path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("opus")) =>
+            {
+                Some(format)
+            }
+            (AssetKind::Video, "H.264 MP4")
+                if self
+                    .path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4")) =>
+            {
+                Some(format)
+            }
+            _ => None,
+        }
+    }
+
     pub fn key(&self) -> AssetKey {
         AssetKey {
             kind: self.kind,
@@ -124,6 +153,8 @@ pub enum AssetStatus {
     Used,
     Unused,
     Missing,
+    Canonical,
+    NeedsConversion,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AssetSize {
@@ -180,6 +211,12 @@ impl AssetQuery {
                 AssetStatus::Used => asset.reference_count > 0,
                 AssetStatus::Unused => asset.reference_count == 0,
                 AssetStatus::Missing => !asset.exists,
+                AssetStatus::Canonical => {
+                    asset.exists && asset.canonical_format(media.get(&asset.path)).is_some()
+                }
+                AssetStatus::NeedsConversion => {
+                    asset.exists && asset.canonical_format(media.get(&asset.path)).is_none()
+                }
             })
             .filter(|asset| {
                 let info = media.get(&asset.path);
@@ -313,6 +350,7 @@ pub struct AuthoringProblem {
 #[derive(Clone, Debug, Default)]
 pub struct AuthoringIndex {
     pub native: bool,
+    pub entry_scene: String,
     pub assets_manifest: Option<PathBuf>,
     pub characters_manifest: Option<PathBuf>,
     pub assets: Vec<AssetEntry>,
@@ -327,6 +365,64 @@ pub struct AuthoringIndex {
 }
 
 impl AuthoringIndex {
+    /// Reorder sibling scripts only; directory subtrees and other files keep
+    /// their positions. The entry scene wins, then scene names use numeric order.
+    pub(crate) fn order_script_files(&self, files: &mut [WorkspaceFile]) {
+        let mut ranks = BTreeMap::<&Path, (bool, &str)>::new();
+        for scene in &self.scenes {
+            let rank = (scene.name != self.entry_scene, scene.name.as_str());
+            let old = ranks.entry(&scene.path).or_insert(rank);
+            if !rank.0 && old.0 || rank.0 == old.0 && natural_cmp(rank.1, old.1).is_lt() {
+                *old = rank;
+            }
+        }
+        let mut siblings = BTreeMap::<PathBuf, Vec<usize>>::new();
+        for (position, file) in files.iter().enumerate() {
+            if !file.is_dir()
+                && file
+                    .relative_path
+                    .extension()
+                    .is_some_and(|ext| ext == "shou")
+            {
+                siblings
+                    .entry(
+                        file.relative_path
+                            .parent()
+                            .unwrap_or(Path::new(""))
+                            .to_owned(),
+                    )
+                    .or_default()
+                    .push(position);
+            }
+        }
+        for positions in siblings.values() {
+            let mut scripts = positions
+                .iter()
+                .map(|&position| files[position].clone())
+                .collect::<Vec<_>>();
+            scripts.sort_by(|left, right| {
+                let left_name = left.relative_path.to_string_lossy();
+                let right_name = right.relative_path.to_string_lossy();
+                let left_rank = ranks
+                    .get(left.relative_path.as_path())
+                    .copied()
+                    .unwrap_or((true, &left_name));
+                let right_rank = ranks
+                    .get(right.relative_path.as_path())
+                    .copied()
+                    .unwrap_or((true, &right_name));
+                left_rank
+                    .0
+                    .cmp(&right_rank.0)
+                    .then_with(|| natural_cmp(left_rank.1, right_rank.1))
+                    .then_with(|| left.relative_path.cmp(&right.relative_path))
+            });
+            for (&position, script) in positions.iter().zip(scripts) {
+                files[position] = script;
+            }
+        }
+    }
+
     /// Replace only changed script contributions; config/manifests invalidate
     /// the project namespace and use a full load instead.
     pub fn with_sources(&self, sources: &BTreeMap<PathBuf, String>) -> Self {
@@ -345,6 +441,7 @@ impl AuthoringIndex {
         // stays stable; replaced dialogue bodies are never cloned and discarded.
         let mut index = Self {
             native: self.native,
+            entry_scene: self.entry_scene.clone(),
             assets_manifest: self.assets_manifest.clone(),
             characters_manifest: self.characters_manifest.clone(),
             assets: self.assets.clone(),
@@ -462,6 +559,7 @@ impl AuthoringIndex {
             return index;
         }
         index.native = true;
+        index.entry_scene = config.script.entry.clone();
 
         let assets_path = confined_relative(&config.script.assets);
         let characters_path = confined_relative(&config.script.characters);
@@ -729,6 +827,38 @@ impl AuthoringIndex {
     }
 }
 
+fn natural_cmp(mut left: &str, mut right: &str) -> std::cmp::Ordering {
+    while !left.is_empty() && !right.is_empty() {
+        let l = left.chars().next().unwrap();
+        let r = right.chars().next().unwrap();
+        let order = if l.is_ascii_digit() && r.is_ascii_digit() {
+            let l_end = left
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(left.len());
+            let r_end = right
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(right.len());
+            let l_number = left[..l_end].trim_start_matches('0');
+            let r_number = right[..r_end].trim_start_matches('0');
+            let order = l_number
+                .len()
+                .cmp(&r_number.len())
+                .then_with(|| l_number.cmp(r_number));
+            left = &left[l_end..];
+            right = &right[r_end..];
+            order
+        } else {
+            left = &left[l.len_utf8()..];
+            right = &right[r.len_utf8()..];
+            l.cmp(&r)
+        };
+        if !order.is_eq() {
+            return order;
+        }
+    }
+    left.len().cmp(&right.len())
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum AuthoringSelection<'a> {
     Source,
@@ -868,12 +998,31 @@ fn index_source(
             {
                 kind = AssetKind::Background;
             }
+            let start = lines.offset(
+                source,
+                resource.span.line.saturating_sub(1),
+                resource.span.column.saturating_sub(1),
+            );
+            let end = parsed
+                .report
+                .spans
+                .iter()
+                .skip(resource.action_index + 1)
+                .map(|span| {
+                    lines.offset(
+                        source,
+                        span.line.saturating_sub(1),
+                        span.column.saturating_sub(1),
+                    )
+                })
+                .find(|offset| *offset > start)
+                .unwrap_or(scene_range.end);
             let first = document
                 .tokens
-                .partition_point(|token| line_column(token.range.start).0 < resource.span.line);
+                .partition_point(|token| token.range.start < start);
             let matches = document.tokens[first..]
                 .iter()
-                .take_while(|token| line_column(token.range.start).0 == resource.span.line)
+                .take_while(|token| token.range.start < end)
                 .filter(|token| {
                     matches!(
                         token.kind,
@@ -906,9 +1055,27 @@ fn index_source(
                 index.problems.push(problem(
                     ProblemSeverity::Error,
                     path.to_owned(),
-                    resource.span.line,
-                    resource.span.column,
+                    line,
+                    column,
                     format!("Unknown {} asset `{}`", kind.label(), resource.path),
+                ));
+            } else if let Some(asset) = index
+                .assets
+                .iter()
+                .find(|asset| asset.kind == kind && asset.id == resource.path)
+                && !asset.exists
+            {
+                index.problems.push(problem(
+                    ProblemSeverity::Error,
+                    path.to_owned(),
+                    line,
+                    column,
+                    format!(
+                        "{} asset `{}` has no file: {}",
+                        kind.label(),
+                        resource.path,
+                        asset.path.display()
+                    ),
                 ));
             }
         }

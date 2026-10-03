@@ -34,6 +34,45 @@ script:
 资源/角色/对象使用裸 ID；普通工程不需要对象映射。保留 `none`、`*` 等命令上下文哨兵。
 脚本 ID 中的下划线合法；仓库文件布局规则不限制作者 ID。
 
+### 多文件与章节连接
+
+Loader 递归读取 `scripts/` 下所有 `.shou`；scene ID 全项目唯一，不需要 import，
+不按文件名/目录顺序执行。`script.entry` 指定入口 scene，文件不必叫 `main.shou`。
+
+```shou
+// scripts/开场.shou；config.yaml 中 script.entry: opening
+scene opening {
+  "故事开始了。",
+  goto(chapter1)
+}
+```
+
+```shou
+// scripts/第一章.shou
+scene chapter1 {
+  call(aside),
+  "支线结束，继续第一章。",
+  goto(chapter2)
+}
+scene aside {
+  "一段可返回的支线。",
+  return
+}
+```
+
+```shou
+// scripts/第二章.shou
+scene chapter2 {
+  "故事结束了。",
+  story.end()
+}
+```
+
+- 顺序章节在尾部写 `goto(下一章场景)`；它替换当前场景，不压入返回栈。
+- 支线/公共片段用 `call(场景)`；`return` 或被调用场景到末尾会返回调用后的语句。
+- 普通入口场景到末尾不会自动进入其他文件；结局显式写 `story.end()`。
+- `migrate` 按实际源文件分组，保留原剧情的跳转和调用；拆文件本身不增加连接语句。
+
 ## 基础语法
 
 ```shou

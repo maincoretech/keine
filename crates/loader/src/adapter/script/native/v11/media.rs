@@ -2,6 +2,17 @@ use super::*;
 
 pub(super) const MEDIA_COMMANDS: &[&str] = &["se.loop", "se.stop", "video.play"];
 
+/// Syntax fields shared by lowering and source-based editor consumers.
+pub(super) fn signature(name: &str) -> Option<(usize, &'static [&'static str])> {
+    let signature: (usize, &[&str]) = match name {
+        "se.loop" => (2, &["volume", "fade"]),
+        "se.stop" => (1, &["fade"]),
+        "video.play" => (2, &["loop", "muted", "alpha", "skippable", "wait", "mode"]),
+        _ => return None,
+    };
+    Some(signature)
+}
+
 impl<'a> Parser<'a> {
     pub(super) fn parse_v11_media_command(
         &self,
@@ -9,12 +20,7 @@ impl<'a> Parser<'a> {
         args: &[Argument],
         report: &mut ParseReport,
     ) -> Option<Action> {
-        let (positional, named): (usize, &[&str]) = match name {
-            "se.loop" => (2, &["volume", "fade"]),
-            "se.stop" => (1, &["fade"]),
-            "video.play" => (2, &["loop", "muted", "alpha", "skippable", "wait", "mode"]),
-            _ => return None,
-        };
+        let (positional, named) = signature(name)?;
         let before = report.diagnostics.len();
         self.validate_signature(name, args, positional, named, report);
         if report.diagnostics.len() != before {

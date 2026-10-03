@@ -42,8 +42,9 @@ use super::inspector::{InlineBlockControl, SourceOption};
 use super::resource::ResourcePicker;
 use super::{
     ASSET_PREVIEW_PANEL, ASSETS_PANEL, CHARACTERS_PANEL, DOCUMENT_PANEL, EXPLORER_PANEL, INK,
-    INSPECTOR_PANEL, OUTPUT_PANEL, PERFORMANCE_PANEL, PREVIEW_SOURCE_DEBOUNCE, PROBLEMS_PANEL,
-    SCENES_PANEL, SEARCH_PANEL, SURFACE, SURFACE_HOVER, completion, minimap, search, text_minimap,
+    INSPECTOR_PANEL, OUTPUT_PANEL, PERFORMANCE_PANEL, PREVIEW_SOURCE_DEBOUNCE, PRIMARY,
+    PROBLEMS_PANEL, SCENES_PANEL, SEARCH_PANEL, SURFACE, SURFACE_HOVER, completion, minimap,
+    search, text_minimap,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -369,6 +370,7 @@ pub(super) struct WorkbenchPanel {
     pub(super) tool_inputs: Vec<Entity<InputState>>,
     pub(super) recovery_epoch: u64,
     pub(super) syntax_check: Option<gpui_kit::Task<()>>,
+    pub(super) diagnostic_index: std::sync::Weak<crate::authoring::AuthoringIndex>,
     pub(super) syntax_marks: Option<gpui_kit::base::input::TextDecorationCollection>,
     pub(super) _subscriptions: Vec<Subscription>,
     pub(super) visual_subscriptions: Vec<Subscription>,
@@ -424,6 +426,7 @@ pub(super) struct WorkbenchPanel {
     pub(super) asset_modified: Option<Duration>,
     pub(super) asset_grid: Option<bool>,
     pub(super) asset_large: bool,
+    pub(super) asset_statistics_expanded: bool,
     pub(super) asset_browser: RefCell<super::resource::browse::Cache>,
     pub(super) asset_thumbnails: Entity<super::resource::thumbnail::Thumbnails>,
     pub(super) asset_unmapped: bool,
@@ -648,23 +651,54 @@ impl Render for BlockDragPreview {
 
 #[derive(Clone)]
 pub(super) struct AssetDrag {
+    pub(super) token: Rc<()>,
     pub(super) root: PathBuf,
     pub(super) keys: Vec<AssetKey>,
+    pub(super) preview_offset: Point<Pixels>,
 }
 
 impl Render for AssetDrag {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
+            .relative()
+            .left(self.preview_offset.x + px(12.))
+            .top(self.preview_offset.y + px(12.))
+            .flex()
+            .items_center()
+            .gap_2()
+            .max_w(px(240.))
             .px_2()
             .py_1()
             .rounded(px(5.))
             .bg(rgb(SURFACE))
             .text_xs()
-            .child(if self.keys.len() == 1 {
-                self.keys[0].id.clone()
-            } else {
-                format!("{} assets", self.keys.len())
-            })
+            .text_color(rgb(INK))
+            .child(
+                Icon::new(match self.keys.first().map(|key| key.kind) {
+                    Some(AssetKind::Background | AssetKind::Figure | AssetKind::Particle) => {
+                        AssetIconName::Image
+                    }
+                    Some(AssetKind::Bgm | AssetKind::Voice | AssetKind::Effect) => {
+                        AssetIconName::Music
+                    }
+                    Some(AssetKind::Video) => AssetIconName::Film,
+                    None => AssetIconName::File,
+                })
+                .xsmall()
+                .text_color(rgb(PRIMARY)),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(if self.keys.len() == 1 {
+                        self.keys[0].id.clone()
+                    } else {
+                        format!("{} assets", self.keys.len())
+                    }),
+            )
     }
 }
 
@@ -780,6 +814,7 @@ impl WorkbenchPanel {
                 tool_inputs: Vec::new(),
                 recovery_epoch: 0,
                 syntax_check: None,
+                diagnostic_index: Default::default(),
                 syntax_marks,
                 _subscriptions: Vec::new(),
                 visual_subscriptions: Vec::new(),
@@ -836,6 +871,7 @@ impl WorkbenchPanel {
                 asset_modified: None,
                 asset_grid: None,
                 asset_large: false,
+                asset_statistics_expanded: false,
                 asset_browser: RefCell::new(super::resource::browse::Cache::default()),
                 asset_thumbnails: super::resource::thumbnail::Thumbnails::new(cx),
                 asset_unmapped: false,
@@ -998,6 +1034,10 @@ impl WorkbenchPanel {
                         panel.syntax_check = Some(completion::schedule_syntax_check(
                             editor.clone(),
                             panel.syntax_marks.clone(),
+                            (
+                                cx.global::<EditorDocuments>().authoring(&root),
+                                relative.clone(),
+                            ),
                             window,
                             cx,
                         ));
@@ -1052,6 +1092,10 @@ impl WorkbenchPanel {
                                 {
                                     let window_handle = syntax_window;
                                     let panel_entity = cx.weak_entity();
+                                    let project = (
+                                        cx.global::<EditorDocuments>().authoring(&root),
+                                        relative.clone(),
+                                    );
                                     cx.defer(move |cx| {
                                         let _ = cx.update_window(window_handle, |_, window, cx| {
                                             let _ = panel_entity.update(cx, |panel, cx| {
@@ -1059,6 +1103,7 @@ impl WorkbenchPanel {
                                                     Some(completion::schedule_syntax_check(
                                                         editor_entity,
                                                         panel.syntax_marks.clone(),
+                                                        project,
                                                         window,
                                                         cx,
                                                     ));

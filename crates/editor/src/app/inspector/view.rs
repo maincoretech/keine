@@ -356,14 +356,15 @@ impl SourceInspectorView<'_> {
 }
 
 pub(in crate::app) fn multi_block_summary(source: &str, starts: &[usize]) -> Option<AnyElement> {
-    let selected = EiyashouProjection::parse(source)
+    let projection = EiyashouProjection::parse(source);
+    let selected = projection
         .scenes
-        .into_iter()
+        .iter()
         .flat_map(|scene| {
-            let name = scene.name;
+            let name = &scene.name;
             scene
                 .blocks
-                .into_iter()
+                .iter()
                 .filter(|block| starts.contains(&block.source_range.start))
                 .map(move |block| (name.clone(), block))
         })
@@ -393,20 +394,25 @@ pub(in crate::app) fn multi_block_summary(source: &str, starts: &[usize]) -> Opt
         )
     });
     if all_text {
+        let metadata = selected
+            .iter()
+            .map(|(_, block)| projection.text_block_metadata_for_block(source, block))
+            .collect::<Option<Vec<_>>>()?;
         properties.push((
             "Speaker",
-            common_value(selected.iter().map(|(_, block)| match &block.kind {
-                BlockKind::Narration => "Narrator".to_owned(),
-                BlockKind::Dialogue { speaker } => speaker.clone(),
-                _ => unreachable!("guarded above"),
+            common_value(metadata.iter().map(|metadata| {
+                metadata
+                    .speaker
+                    .clone()
+                    .unwrap_or_else(|| "Narrator".into())
             })),
         ));
         properties.push((
             "Voice",
             common_value(
-                selected.iter().map(|(_, block)| {
-                    text_voice(&block.summary).unwrap_or_else(|| "None".to_owned())
-                }),
+                metadata
+                    .iter()
+                    .map(|metadata| metadata.voice.clone().unwrap_or_else(|| "None".into())),
             ),
         ));
     }

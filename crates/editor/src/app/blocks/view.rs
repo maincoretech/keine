@@ -537,6 +537,22 @@ pub(in crate::app) fn render_block_projection(
     let source = &snapshot.source;
     let projection = &snapshot.projection;
     let source_lines = &snapshot.lines;
+    let index = cx.global::<EditorDocuments>().authoring(root);
+    let errors = index
+        .problems
+        .iter()
+        .filter(|problem| problem.path == relative && problem.severity == ProblemSeverity::Error)
+        .map(|problem| {
+            (
+                source_lines.offset(
+                    source,
+                    problem.line.saturating_sub(1),
+                    problem.column.saturating_sub(1),
+                ),
+                problem.message.as_str(),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
     let line_number_width = snapshot.number_width;
     let line_number_gutter = line_number_width + 4.;
     let collapse_progresses = projection
@@ -864,6 +880,11 @@ pub(in crate::app) fn render_block_projection(
             }
             let block = block.clone();
             let row_id = block.source_range.start;
+            let resource_errors = errors
+                .range(block.source_range.clone())
+                .map(|(_, message)| *message)
+                .collect::<Vec<_>>()
+                .join("\n");
             let line = block.line;
             let column = block.column;
             let root = root.clone();
@@ -1305,6 +1326,19 @@ pub(in crate::app) fn render_block_projection(
                         .child(Icon::new(IconName::FileText).xsmall()),
                 );
             }
+            if !resource_errors.is_empty() {
+                row = row.child(
+                    div()
+                        .id(("block-errors", row_id))
+                        .flex_none()
+                        .tooltip(icon_hint(resource_errors))
+                        .child(
+                            Icon::new(AssetIconName::TriangleAlert)
+                                .xsmall()
+                                .text_color(rgb(0xdb7780)),
+                        ),
+                );
+            }
             let measured_bounds = row_bounds.clone();
             row = row.child(
                 canvas(
@@ -1325,6 +1359,13 @@ pub(in crate::app) fn render_block_projection(
                 .flex()
                 .flex_col()
                 .flex_none()
+                .on_drag_move(cx.listener(
+                    move |this, event: &DragMoveEvent<AssetDrag>, window, cx| {
+                        if event.bounds.contains(&event.event.position) {
+                            this.track_asset_drag(event, row_id, window, cx);
+                        }
+                    },
+                ))
                 .on_drop(cx.listener(move |this, drag: &AssetDrag, window, cx| {
                     cx.stop_propagation();
                     this.drop_assets(drag, row_id, false, window, cx);
@@ -1410,6 +1451,23 @@ pub(in crate::app) fn render_block_projection(
             || (scene_body_height - 4.).max(0.),
             |cached| cached.body_height,
         );
+        if let Some(session) = session.filter(|session| {
+            session.assets.is_some() && session.preview_top(cx.reduce_motion()).is_some()
+        }) && session.target.is_some_and(|target| {
+            scene
+                .blocks
+                .iter()
+                .any(|block| block.source_range.start == target.row)
+        }) {
+            let gap = session.height + 4.;
+            scene_body_height += gap;
+            scene_rows.push(
+                div()
+                    .h(px((gap - 4.).max(0.)))
+                    .flex_none()
+                    .into_any_element(),
+            );
+        }
         overview_offset += scene_body_height * collapse_progress + 4.;
         rows.push(
             div()
@@ -1542,18 +1600,13 @@ pub(in crate::app) fn render_block_projection(
                 .clear_block_selection(&root);
             cx.notify();
         }));
-    if let Some(session) = session.filter(|session| session.target.is_some())
-        && let Some(first) = session
-            .rows
-            .iter()
-            .find(|row| session.moved.contains(&row.id))
+    if let Some(session) = session
+        && let Some(top) = session.preview_top(cx.reduce_motion())
     {
         content = content.child(
             div()
                 .absolute()
-                .top(px(session
-                    .position(first.id, cx.reduce_motion())
-                    .unwrap_or(first.top)))
+                .top(px(top))
                 .left(px(line_number_gutter + session.indent))
                 .w(px(session.width))
                 .h(px(session.height))
@@ -1563,6 +1616,21 @@ pub(in crate::app) fn render_block_projection(
         );
     }
     content = content
+        .on_drag_move(
+            cx.listener(|this, event: &DragMoveEvent<AssetDrag>, _, cx| {
+                if this
+                    .block_drag
+                    .session()
+                    .is_some_and(|session| Rc::ptr_eq(&session.token, &event.drag(cx).token))
+                {
+                    this.update_block_drag_target(event.event.position, cx);
+                }
+            }),
+        )
+        .on_drop(cx.listener(|this, drag: &AssetDrag, window, cx| {
+            this.finish_asset_drag(drag, window, cx);
+            cx.stop_propagation();
+        }))
         .on_drag_move(
             cx.listener(|this, event: &DragMoveEvent<BlockDrag>, _, cx| {
                 this.track_block_drag(event, cx);

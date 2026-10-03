@@ -4,6 +4,45 @@ use keine_core::{InputValueType, UserInputSpec};
 
 pub(super) const INTERACTION_COMMANDS: &[&str] = &["input.request", "text.paragraph.style"];
 
+/// Syntax fields shared by lowering and source-based editor consumers.
+pub(super) fn signature(name: &str) -> Option<(usize, &'static [&'static str])> {
+    let signature: (usize, &[&str]) = match name {
+        "input.request" => (
+            1,
+            &[
+                "type",
+                "title",
+                "description",
+                "placeholder",
+                "confirm_text",
+                "required_text",
+                "required",
+                "min_length",
+                "max_length",
+                "min_value",
+                "max_value",
+                "step",
+                "true_text",
+                "false_text",
+            ],
+        ),
+        "text.paragraph.style" => (
+            1,
+            &[
+                "typewriter_speed",
+                "reveal_duration",
+                "reveal_effect",
+                "reveal_distance",
+                "reveal_scale",
+                "reveal_rotation",
+                "reveal_blur",
+            ],
+        ),
+        _ => return None,
+    };
+    Some(signature)
+}
+
 impl<'a> Parser<'a> {
     pub(super) fn parse_v11_interaction_command(
         &self,
@@ -11,40 +50,7 @@ impl<'a> Parser<'a> {
         args: &[Argument],
         report: &mut ParseReport,
     ) -> Option<Action> {
-        let (positional, named): (usize, &[&str]) = match name {
-            "input.request" => (
-                1,
-                &[
-                    "type",
-                    "title",
-                    "description",
-                    "placeholder",
-                    "confirm_text",
-                    "required_text",
-                    "required",
-                    "min_length",
-                    "max_length",
-                    "min_value",
-                    "max_value",
-                    "step",
-                    "true_text",
-                    "false_text",
-                ],
-            ),
-            "text.paragraph.style" => (
-                1,
-                &[
-                    "typewriter_speed",
-                    "reveal_duration",
-                    "reveal_effect",
-                    "reveal_distance",
-                    "reveal_scale",
-                    "reveal_rotation",
-                    "reveal_blur",
-                ],
-            ),
-            _ => return None,
-        };
+        let (positional, named) = signature(name)?;
         let before = report.diagnostics.len();
         self.validate_signature(name, args, positional, named, report);
         if report.diagnostics.len() != before {
