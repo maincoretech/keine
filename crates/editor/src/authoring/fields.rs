@@ -832,6 +832,16 @@ pub(crate) fn source_asset_kind(key: &SourceContext, field: &SourceField) -> Opt
     }
 }
 
+pub(crate) fn source_asset_accepts(
+    key: &SourceContext,
+    field: &SourceField,
+    kind: AssetKind,
+) -> bool {
+    source_asset_kind(key, field).is_some_and(|expected| {
+        expected == kind || (expected == AssetKind::Figure && kind == AssetKind::Background)
+    })
+}
+
 pub(crate) fn character_track(key: &SourceContext) -> bool {
     key.fields
         .iter()
@@ -1015,11 +1025,11 @@ pub(crate) fn field_options(
                 asset: None,
             })
             .collect()
-    } else if let Some(kind) = source_asset_kind(key, field) {
+    } else if source_asset_kind(key, field).is_some() {
         index
             .into_iter()
             .flat_map(|index| &index.assets)
-            .filter(|asset| asset.kind == kind)
+            .filter(|asset| source_asset_accepts(key, field, asset.kind))
             .map(|asset| FieldOption {
                 value: asset.id.clone(),
                 title: asset
@@ -1132,6 +1142,15 @@ mod tests {
                 AssetKind::Background,
                 "assets/庭院.webp".into()
             ))
+        );
+
+        let sprite = source_key("scene start { sprite(layer, 庭院) }");
+        let image = sprite.fields.iter().find(|field| field.key == "1").unwrap();
+        assert!(source_asset_accepts(&sprite, image, AssetKind::Background));
+        assert!(!source_asset_accepts(&sprite, image, AssetKind::Bgm));
+        assert_eq!(
+            field_options(root, &sprite, image, Some(&index), None)[0].value,
+            "庭院"
         );
 
         key.command = "track".into();

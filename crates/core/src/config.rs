@@ -796,8 +796,13 @@ impl GameConfig {
         })
     }
 
-    /// Resolve a figure asset name to its file path.
+    /// Resolve a sprite image. Backgrounds can also be drawn as scene layers.
     pub fn figure_path(&self, name: &str) -> String {
+        if !self.assets.figures.contains_key(name)
+            && let Some(path) = self.assets.backgrounds.get(name)
+        {
+            return path.clone();
+        }
         resolve_asset_path(&self.assets.figures, name, |name| format!("figure/{name}"))
     }
 
@@ -1222,6 +1227,19 @@ script:
             .insert("background/day.webp".into(), "packs/day.webp".into());
 
         assert_eq!(cfg.bg_path("background/day.webp"), "packs/day.webp");
+    }
+
+    #[test]
+    fn sprite_images_resolve_declared_backgrounds_without_overriding_figures() {
+        let mut cfg = GameConfig::default();
+        cfg.assets
+            .backgrounds
+            .insert("day".into(), "assets/backgrounds/day.webp".into());
+        assert_eq!(cfg.figure_path("day"), "assets/backgrounds/day.webp");
+        cfg.assets
+            .figures
+            .insert("day".into(), "assets/figures/day.webp".into());
+        assert_eq!(cfg.figure_path("day"), "assets/figures/day.webp");
     }
 
     #[test]

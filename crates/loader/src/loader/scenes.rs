@@ -146,10 +146,25 @@ fn apply_eiyashou_project(project: &ContentProject, scenes: &mut [LoadedScene]) 
             scene.action_spans.push(span);
         }
         for resource in &scene.resources {
-            used.insert((resource.kind, resource.path.clone()));
+            let mut kind = resource.kind;
+            // A scene layer's drawing command is a sprite, while the manifest
+            // still owns the image as a background. Match figure_path priority.
+            if kind == crate::ResourceKind::Figure
+                && !project_data
+                    .assets
+                    .get(&kind)
+                    .is_some_and(|ids| ids.contains(&resource.path))
+                && project_data
+                    .assets
+                    .get(&crate::ResourceKind::Background)
+                    .is_some_and(|ids| ids.contains(&resource.path))
+            {
+                kind = crate::ResourceKind::Background;
+            }
+            used.insert((kind, resource.path.clone()));
             if !project_data
                 .assets
-                .get(&resource.kind)
+                .get(&kind)
                 .is_some_and(|ids| ids.contains(&resource.path))
             {
                 pending.push((
@@ -1192,6 +1207,53 @@ scene ending {
                 .any(|resource| resource.path == "credits")
         );
         let _ = fs::remove_dir_all(project_root);
+    }
+
+    #[test]
+    fn native_sprite_accepts_background_images_but_not_audio() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("keine-background-sprite-{nonce}"));
+        fs::create_dir_all(&root).unwrap();
+        let mut content = project(&root);
+        content.eiyashou = Some(crate::loader::EiyashouProjectData {
+            assets: HashMap::from([
+                (
+                    crate::ResourceKind::Background,
+                    HashSet::from(["day".into()]),
+                ),
+                (crate::ResourceKind::Voice, HashSet::from(["voice".into()])),
+            ]),
+            ..Default::default()
+        });
+        let parsed = crate::adapter::parse_native_scenes(
+            "scene start { sprite(layer, day), sprite(hero, voice) }",
+        )
+        .remove(0);
+        let mut scenes = [LoadedScene {
+            name: "start".into(),
+            path: "main.shou".into(),
+            actions: parsed.report.actions,
+            action_spans: parsed.report.spans,
+            diagnostics: parsed.report.diagnostics,
+            resources: parsed.report.resources,
+            sub_scenes: parsed.report.sub_scenes,
+        }];
+        apply_eiyashou_project(&content, &mut scenes);
+        assert_eq!(scenes[0].diagnostics.len(), 2); // invalid image and unused voice
+        assert!(scenes[0].diagnostics.iter().any(|diagnostic| {
+            diagnostic.level == DiagnosticLevel::Error
+                && diagnostic.message == "undefined Figure resource id `voice`"
+        }));
+        assert!(
+            !scenes[0]
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("day"))
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

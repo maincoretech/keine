@@ -856,11 +856,17 @@ fn index_source(
             ));
         }
         for resource in parsed.report.resources {
-            let Some(kind) = AssetKind::from_resource(resource.kind) else {
+            let Some(mut kind) = AssetKind::from_resource(resource.kind) else {
                 continue;
             };
             if resource.is_dynamic() {
                 continue;
+            }
+            if kind == AssetKind::Figure
+                && !asset_lookup.contains(&(kind, resource.path.clone()))
+                && asset_lookup.contains(&(AssetKind::Background, resource.path.clone()))
+            {
+                kind = AssetKind::Background;
             }
             let first = document
                 .tokens

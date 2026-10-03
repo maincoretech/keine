@@ -46,6 +46,10 @@ bevy = { workspace = true, features = [
     "bevy_winit",
 ] }
 
+# Standalone Editor tests do not inherit the engine's Linux window backend.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+bevy = { workspace = true, features = ["x11"] }
+
 [[bench]]
 name = "browser"
 path = "../../tests/bench/editor/browser.rs"

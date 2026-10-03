@@ -243,25 +243,45 @@ fn build_model(
 
     let mut assets = AssetManifest::default();
     let mut asset_ids = HashMap::new();
-    for (index, key) in keys.into_iter().enumerate() {
+    let mut copied = HashMap::<(ResourceKind, String), String>::new();
+    for key in keys {
         let resolved = resolve_resource(config, key.kind, &key.source_name)?;
+        // ResourceKind describes the drawing command, not necessarily the
+        // source category: LetsGal renders background layers as sprites.
+        let stored_kind = if key.kind == ResourceKind::Figure
+            && config
+                .assets
+                .backgrounds
+                .values()
+                .any(|path| path == &resolved)
+        {
+            ResourceKind::Background
+        } else {
+            key.kind
+        };
+        let identity = (stored_kind, resolved.clone());
+        if let Some(id) = copied.get(&identity) {
+            asset_ids.insert(key, id.clone());
+            continue;
+        }
         let bytes = content
             .read_asset(Path::new(&resolved))
             .with_context(|| format!("failed to read source asset {resolved}"))?;
-        let id = format!("asset_{:05}", index + 1);
+        let id = format!("asset_{:05}", copied.len() + 1);
         let extension = Path::new(&resolved)
             .extension()
             .and_then(|value| value.to_str())
             .filter(|value| !value.is_empty())
             .map(|value| format!(".{value}"))
             .unwrap_or_default();
-        let namespace = resource_namespace(key.kind)?;
+        let namespace = resource_namespace(stored_kind)?;
         let relative = format!("assets/migrated/{namespace}/{id}{extension}");
         let destination = stage.join(&relative);
         fs::create_dir_all(destination.parent().expect("asset path has parent"))?;
         fs::write(&destination, bytes)
             .with_context(|| format!("failed to write {}", destination.display()))?;
-        manifest_namespace_mut(&mut assets, key.kind)?.insert(id.clone(), relative);
+        manifest_namespace_mut(&mut assets, stored_kind)?.insert(id.clone(), relative);
+        copied.insert(identity, id.clone());
         asset_ids.insert(key, id);
     }
     let initial = content.initial_state()?;
@@ -947,6 +967,94 @@ mod tests {
             &loaded[0].actions[3],
             Action::FocusPortrait { speaker_id: None }
         ));
+    }
+
+    #[test]
+    fn background_layers_keep_their_category_and_sprite_layout() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let stage = root.path().join("native");
+        fs::create_dir_all(source.join("assets/backgrounds")).unwrap();
+        fs::create_dir_all(source.join("assets/characters")).unwrap();
+        fs::create_dir_all(&stage).unwrap();
+        fs::write(source.join("assets/backgrounds/day.png"), b"background").unwrap();
+        fs::write(source.join("assets/characters/hero.png"), b"portrait").unwrap();
+        let mut config = GameConfig {
+            title_background: "day".into(),
+            ..Default::default()
+        };
+        config
+            .assets
+            .backgrounds
+            .insert("day".into(), "backgrounds/day.png".into());
+        // LetsGal also exposes background layers through sprite aliases.
+        config.assets.figures = HashMap::from([
+            ("layer_day".into(), "backgrounds/day.png".into()),
+            ("hero".into(), "characters/hero.png".into()),
+        ]);
+        let content = keine_loader::load_project(&source, &config.adapter.asset).unwrap();
+        let parsed = keine_loader::adapter::parse_native_scenes(
+            "scene start { sprite(layer, layer_day, layout: scene(fit: by_height, x: 960, y: 540), x: 80), sprite(hero, hero) }",
+        ).remove(0);
+        assert!(
+            parsed.report.diagnostics.is_empty(),
+            "{:?}",
+            parsed.report.diagnostics
+        );
+        let scenes = [LoadedScene {
+            name: "start".into(),
+            path: "start.json".into(),
+            actions: parsed.report.actions,
+            action_spans: Vec::new(),
+            diagnostics: Vec::new(),
+            resources: parsed.report.resources,
+            sub_scenes: Vec::new(),
+        }];
+        let model = build_model(&config, &content, &scenes, &stage).unwrap();
+        let background = asset_id(&model, ResourceKind::Figure, "layer_day").unwrap();
+        assert_eq!(
+            background,
+            asset_id(&model, ResourceKind::Background, "day").unwrap()
+        );
+        assert_eq!(model.assets.backgrounds.len(), 1);
+        assert_eq!(model.assets.figures.len(), 1);
+        assert!(model.assets.backgrounds[&background].contains("/backgrounds/"));
+        assert!(
+            model
+                .assets
+                .figures
+                .values()
+                .all(|path| path.contains("/figures/"))
+        );
+        write_project(&stage, config, &scenes, &model, &LoaderRegistry::default()).unwrap();
+        let opened = open_project(&stage, &LoaderRegistry::default()).unwrap();
+        let loaded = keine_loader::load_scenes(&opened.content).unwrap();
+        let Action::ShowSprite {
+            image,
+            layout,
+            transform,
+            ..
+        } = &loaded[0].actions[0]
+        else {
+            panic!("background layer must still use the sprite renderer");
+        };
+        assert_eq!(image, &background);
+        assert!(matches!(layout, SpriteLayout::Scene { .. }));
+        assert_eq!(transform.offset_x, 80.0);
+        assert_eq!(
+            opened.config.figure_path(image),
+            model.assets.backgrounds[image]
+                .strip_prefix("assets/")
+                .unwrap()
+        );
+        assert_eq!(
+            fs::read(stage.join("assets").join(opened.config.figure_path(image))).unwrap(),
+            b"background"
+        );
+        assert_eq!(
+            fs::read(source.join("assets/backgrounds/day.png")).unwrap(),
+            b"background"
+        );
     }
 
     #[test]

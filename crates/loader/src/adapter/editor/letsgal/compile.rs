@@ -203,8 +203,8 @@ pub(super) fn game_config(
             first_background.get_or_insert_with(|| path.clone());
             insert_aliases(&mut config.assets.backgrounds, hash, &path);
             // LetsGal scenes can compose several background assets as layers.
-            // The first layer uses keine's background renderer; later layers
-            // use the generic sprite path and need the same native asset map.
+            // Scene layers use the sprite renderer. Keep source background
+            // metadata distinct from that drawing command for migration.
             insert_aliases(&mut config.assets.figures, hash, &path);
         } else if is_figure(&path) {
             insert_aliases(&mut config.assets.figures, hash, &path);

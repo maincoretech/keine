@@ -358,10 +358,9 @@ pub(super) fn asset_drop_edit(
                 command: command.to_owned(),
                 fields: fields.clone(),
             };
-            if let Some(field) = fields
-                .iter()
-                .find(|field| source_asset_kind(&context, field) == Some(asset.kind))
-            {
+            if let Some(field) = fields.iter().find(|field| {
+                crate::authoring::fields::source_asset_accepts(&context, field, asset.kind)
+            }) {
                 if field.insertion.is_some() {
                     return Err("Asset field has no exact source range".into());
                 }

@@ -6,6 +6,12 @@
 Windows/Linux 新代码已交叉编译；三平台 CI 的运行结果须按本次推送的提交核对。
 下面列的是实际剩余动作；已通过的本机输入、拖放、音频循环和全屏目测无需重新整轮验收。
 
+迁移资源分类修复：workspace（publisher，含默认音频）835 项通过、8 项性能测试忽略；
+fmt/check/clippy、native-smoke 与 tday 校验通过。回归覆盖背景层分类、同路径别名去重、
+sprite 引用背景及错误音频类型拒绝、Editor 增量引用计数和资源选项。tday 的 45 张误分类背景
+已移动并更新清单，保持文件字节、ID 和剧本不变；新 Editor 的目录、预览和资源下拉已目测。
+完整剧情验收仍按下表安排。
+
 ### 项目所有者（用户）
 
 | 何时 | 你要做什么 | 完成标准 |
@@ -46,6 +52,11 @@ Feature 变更再检查相应 feature；发布者/媒体路径使用：
 ```sh
 cargo check --features hot-reload,video-native,video-ffmpeg,publisher
 ```
+
+Linux 单独运行 `cargo test --locked -p keine-editor --lib` 时，Editor 的测试依赖必须
+自行启用 Bevy `x11`，不能依赖 workspace 构建时引擎的 feature 合并。Linux 依赖树已确认
+包含 `winit/x11`；本机 fmt/check/clippy、publisher workspace 835 项测试通过（8 项忽略）。
+完整 Linux 交叉检查受本机缺少 `x86_64-linux-gnu-gcc` 限制，远程 CI 仍需重跑确认。
 
 ## 测试布局
 

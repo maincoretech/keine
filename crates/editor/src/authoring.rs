@@ -121,6 +121,50 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn background_sprite_references_keep_the_declared_category() {
+        let root = fixture();
+        let path = PathBuf::from("scripts/main.shou");
+        let source = "scene start { sprite(layer, room, layout: scene()), background(room) }";
+        fs::write(root.join(&path), source).unwrap();
+        let session = crate::workspace::WorkspaceSession::open(&root).unwrap();
+        let index = AuthoringIndex::load(&root, session.files(), &BTreeMap::new());
+        let room = index
+            .assets
+            .iter()
+            .find(|asset| asset.id == "room")
+            .unwrap();
+        assert_eq!(room.kind, AssetKind::Background);
+        assert_eq!(room.reference_count, 2);
+        assert!(
+            index
+                .asset_references
+                .iter()
+                .all(|reference| reference.key == room.key())
+        );
+        assert!(
+            !index
+                .problems
+                .iter()
+                .any(|problem| problem.message.contains("Unknown"))
+        );
+        let changes = BTreeMap::from([(path, "scene start { sprite(layer, room) }".into())]);
+        let incremental = index.with_sources(&changes);
+        let fresh = AuthoringIndex::load(&root, session.files(), &changes);
+        assert_eq!(incremental.asset_references, fresh.asset_references);
+        assert_eq!(incremental.assets, fresh.assets);
+        assert_eq!(
+            incremental
+                .assets
+                .iter()
+                .find(|asset| asset.id == "room")
+                .unwrap()
+                .reference_count,
+            1
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn fixture() -> PathBuf {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
