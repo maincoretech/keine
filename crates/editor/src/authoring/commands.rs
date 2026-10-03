@@ -60,7 +60,7 @@ impl InsertKind {
         })
     }
 
-    pub const ALL: [Self; 70] = [
+    pub const ALL: [Self; 71] = [
         Self::Narration,
         Self::Dialogue,
         Self::Background,
@@ -127,6 +127,7 @@ impl InsertKind {
         Self::Native("text.paragraph.style"),
         Self::Native("sprite.update"),
         Self::Native("camera.effect"),
+        Self::Native("camera.reset"),
         Self::Native("stage.mask.show"),
         Self::Native("stage.mask.hide"),
         Self::Native("sprite.select.when"),
@@ -202,6 +203,7 @@ impl InsertKind {
                 "text.paragraph.style" => "Paragraph style",
                 "sprite.update" => "Update sprite",
                 "camera.effect" => "Camera effect",
+                "camera.reset" => "Reset camera",
                 "stage.mask.show" => "Show stage mask",
                 "stage.mask.hide" => "Hide stage mask",
                 "sprite.select.when" => "Select sprite by condition",
@@ -275,7 +277,7 @@ impl InsertKind {
                 | "particle.show" => "Scene",
                 "sprite.sequence" | "sprite.select" | "sprite.select.when" | "stage.animate"
                 | "sprite.keyframes" | "assets.loading" | "sprite.update" => "Scene",
-                "camera.effect" | "stage.mask.show" | "stage.mask.hide" => "Scene",
+                "camera.reset" | "camera.effect" | "stage.mask.show" | "stage.mask.hide" => "Scene",
                 "vocal.play" | "vocal.stop" | "video.stop" | "se.loop" | "se.stop"
                 | "video.play" => "Media",
                 "text.box"
@@ -532,6 +534,7 @@ pub fn insertion_statement(
                 first_figure.ok_or(AuthoringEditError::MissingInsertionPoint)?,
                 first_figure.ok_or(AuthoringEditError::MissingInsertionPoint)?
             ),
+            "camera.reset" => "camera.reset(all)".to_owned(),
             "camera.effect" => "camera.effect(scene, bloom_intensity: 0.4, duration: 300ms)".to_owned(),
             "stage.mask.show" => "stage.mask.show(overlay, shape: rectangle, opacity: 0.5)".to_owned(),
             "stage.mask.hide" => "stage.mask.hide(overlay)".to_owned(),

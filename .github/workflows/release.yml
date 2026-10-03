@@ -46,7 +46,7 @@ jobs:
             cargo pack <project>
 
           The private file is then:
-            <project>/.keine/publisher.hakutaku-key
+            <project>/.keine/publisher.key
 
           Base64-encode that file and add the result under:
             Settings > Secrets and variables > Actions > Repository secrets
@@ -169,7 +169,7 @@ jobs:
           umask 077
           identity_dir="${RUNNER_TEMP//\\//}/keine-release-secrets"
           mkdir -p "$identity_dir"
-          echo "path=$identity_dir/publisher.hakutaku-key" >> "$GITHUB_OUTPUT"
+          echo "path=$identity_dir/publisher.key" >> "$GITHUB_OUTPUT"
           if [[ "${{ inputs.identity }}" == "temporary" ]]; then
             echo 'Using an isolated temporary publisher identity for this platform bundle'
           fi

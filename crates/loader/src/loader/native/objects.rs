@@ -14,8 +14,9 @@ pub(super) fn load(root: &Path, configured: &str) -> Result<ObjectAliases> {
         return Ok(ObjectAliases::default());
     }
     let path = confined_manifest_path(root, configured)?;
-    let source =
-        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+    let reader = crate::source_input::SourceReader::for_filesystem(root)?;
+    let source = String::from_utf8(reader.read_file(&path)?)
+        .with_context(|| format!("object manifest is not UTF-8: {}", path.display()))?;
     let manifest = EiyashouObjectManifest::from_yaml(&source)
         .with_context(|| format!("invalid object manifest {}", path.display()))?;
     let aliases = ObjectAliases {

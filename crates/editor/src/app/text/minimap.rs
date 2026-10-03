@@ -193,12 +193,16 @@ pub(super) fn render(
     window: &mut Window,
     cx: &mut Context<WorkbenchPanel>,
 ) -> AnyElement {
+    use gpui_kit::EntityInputHandler;
+    let composing = editor.update(cx, |editor, cx| {
+        editor.marked_text_range(window, cx).is_some()
+    });
     let width = editor
         .read(cx)
         .text_bounds()
         .map_or(px(600.), |bounds| bounds.size.width);
     let font = gpui_kit::font(Theme::global(cx).mono_font_family.clone());
-    if state.dirty || state.requested.as_ref() != Some(&(width, font.clone())) {
+    if !composing && (state.dirty || state.requested.as_ref() != Some(&(width, font.clone()))) {
         state.cancelled.store(true, Ordering::Relaxed);
         state.task.take();
         state.cancelled = Arc::new(AtomicBool::new(false));

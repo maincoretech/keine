@@ -19,6 +19,12 @@ crc32fast = { workspace = true }
 postcard = { workspace = true }
 hakutaku-core = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }
+
 [dev-dependencies]
 criterion = { workspace = true }
 hakutaku-pack = { workspace = true }

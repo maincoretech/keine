@@ -1,5 +1,6 @@
+use std::collections::HashSet;
 use std::fs;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -54,25 +55,22 @@ pub(crate) fn export(project_root: &Path, target: &Path) -> Result<()> {
                 if files.len() >= MAX_BACKUP_FILES {
                     bail!("save data contains too many files");
                 }
-                let file_size = usize::try_from(entry.metadata()?.len())
-                    .context("save data file size exceeds this platform")?;
-                total_bytes = total_bytes
-                    .checked_add(file_size)
-                    .context("backup size overflow")?;
-                if total_bytes > MAX_BACKUP_BYTES {
-                    bail!("save data exceeds the {MAX_BACKUP_BYTES}-byte backup limit");
+                let name = entry
+                    .file_name()
+                    .into_string()
+                    .map_err(|_| anyhow::anyhow!("save data contains a non-UTF-8 file name"))?;
+                if !safe_name(&name) {
+                    bail!("save data contains an unsafe file name");
                 }
-                let name = entry.file_name().to_string_lossy().into_owned();
-                files.push(BackupFile {
-                    name,
-                    bytes: super::read_limited(&entry.path(), MAX_BACKUP_FILE_BYTES)?,
-                });
+                let bytes = read_backup_file(&entry.path(), &mut total_bytes, MAX_BACKUP_BYTES)?;
+                files.push(BackupFile { name, bytes });
             }
         }
         Err(error) if error.kind() == ErrorKind::NotFound => {}
         Err(error) => return Err(error).context("failed to open save data directory"),
     }
     files.sort_unstable_by(|left, right| left.name.cmp(&right.name));
+    validate_names(files.iter().map(|file| file.name.as_str()))?;
     let bytes = postcard::to_stdvec(&BackupBundle {
         version: VERSION,
         files,
@@ -91,16 +89,14 @@ pub(crate) fn import(project_root: &Path, source: &Path) -> Result<()> {
 
     let bytes = super::read_limited(source, MAX_BACKUP_BYTES)?;
     let bundle: BorrowedBackupBundle<'_> =
-        postcard::from_bytes(&bytes).context("invalid backup file")?;
+        super::decode_postcard_exact(&bytes).context("invalid backup file")?;
     if bundle.version != VERSION {
         bail!("unsupported backup version {}", bundle.version);
     }
     if bundle.files.len() > MAX_BACKUP_FILES {
         bail!("backup contains too many files");
     }
-    if bundle.files.iter().any(|file| !safe_name(file.name)) {
-        bail!("backup contains an unsafe file name");
-    }
+    validate_names(bundle.files.iter().map(|file| file.name))?;
     if bundle
         .files
         .iter()
@@ -114,8 +110,19 @@ pub(crate) fn import(project_root: &Path, source: &Path) -> Result<()> {
     let previous = sibling(&target, "saves.previous");
     fs::create_dir_all(&incoming)?;
     for file in bundle.files {
-        super::write_atomically(&incoming.join(file.name), file.bytes)?;
+        let path = incoming.join(file.name);
+        // The entire incoming directory is uncommitted. Exclusive creation
+        // detects filesystem aliases and avoids temporary-name collisions
+        // between legitimate entries such as `slot` and `slot.tmp`.
+        let mut output = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .context("failed to create a unique imported save file")?;
+        output.write_all(file.bytes)?;
+        output.sync_all()?;
     }
+    super::sync_directory(&incoming)?;
     let parent = target.parent().context("save directory has no parent")?;
     if target.exists() {
         fs::rename(&target, &previous)?;
@@ -192,7 +199,51 @@ fn cleanup_previous_after_commit(previous: &Path, parent: &Path) {
 }
 
 fn safe_name(name: &str) -> bool {
-    !name.is_empty() && name != "." && name != ".." && !name.contains('/') && !name.contains('\\')
+    if name.is_empty()
+        || name.ends_with(['.', ' '])
+        || name
+            .chars()
+            .any(|ch| ch.is_control() || "<>:\"/\\|?*".contains(ch))
+    {
+        return false;
+    }
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches(' ')
+        .to_ascii_uppercase();
+    !matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        && !["COM", "LPT"].iter().any(|prefix| {
+            stem.strip_prefix(prefix).is_some_and(|suffix| {
+                matches!(
+                    suffix,
+                    "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+                )
+            })
+        })
+}
+
+fn validate_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Result<()> {
+    let mut unique = HashSet::new();
+    for name in names {
+        if !safe_name(name) {
+            bail!("backup contains an unsafe file name");
+        }
+        if !unique.insert(name.to_lowercase()) {
+            bail!("backup contains conflicting file names");
+        }
+    }
+    Ok(())
+}
+
+fn read_backup_file(path: &Path, total: &mut usize, maximum: usize) -> Result<Vec<u8>> {
+    let remaining = maximum
+        .checked_sub(*total)
+        .context("backup size overflow")?;
+    let bytes = super::read_limited(path, remaining.min(MAX_BACKUP_FILE_BYTES))?;
+    *total += bytes.len();
+    Ok(bytes)
 }
 
 fn sibling(path: &Path, name: &str) -> PathBuf {
@@ -247,6 +298,97 @@ mod tests {
     }
 
     #[test]
+    fn export_accounts_for_actual_payloads_within_the_remaining_budget() {
+        let root = test_root("budget");
+        let first = root.join("first");
+        let second = root.join("second");
+        fs::write(&first, b"1234").unwrap();
+        fs::write(&second, b"567").unwrap();
+        let mut total = 0;
+        assert_eq!(read_backup_file(&first, &mut total, 6).unwrap(), b"1234");
+        assert_eq!(total, 4);
+        assert!(read_backup_file(&second, &mut total, 6).is_err());
+        assert_eq!(total, 4);
+        fs::write(&second, b"56").unwrap();
+        assert_eq!(read_backup_file(&second, &mut total, 6).unwrap(), b"56");
+        assert_eq!(total, 6);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn malformed_backups_do_not_replace_existing_saves() {
+        let root = test_root("invalid-names");
+        write_save_set(&root.join("saves"), b"old");
+        let source = root.join("backup");
+        for names in [
+            vec!["../outside"],
+            vec!["C:outside"],
+            vec!["slot:stream"],
+            vec!["NUL.sav"],
+            vec!["COM¹"],
+            vec!["slot."],
+            vec!["slot "],
+            vec!["slot\0"],
+            vec!["slot", "slot"],
+            vec!["slot", "SLOT"],
+        ] {
+            let bytes = postcard::to_stdvec(&BackupBundle {
+                version: VERSION,
+                files: names
+                    .into_iter()
+                    .map(|name| BackupFile {
+                        name: name.into(),
+                        bytes: b"new".to_vec(),
+                    })
+                    .collect(),
+            })
+            .unwrap();
+            fs::write(&source, bytes).unwrap();
+            assert!(import(&root, &source).is_err());
+            assert_eq!(fs::read(root.join("saves/marker")).unwrap(), b"old");
+            assert!(!root.join("saves.importing").exists());
+        }
+        let mut bytes = postcard::to_stdvec(&BackupBundle {
+            version: VERSION,
+            files: vec![],
+        })
+        .unwrap();
+        bytes.push(0);
+        fs::write(&source, bytes).unwrap();
+        assert!(import(&root, &source).is_err());
+        assert_eq!(fs::read(root.join("saves/marker")).unwrap(), b"old");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn import_keeps_entries_that_overlap_atomic_temporary_names() {
+        let root = test_root("temporary-names");
+        let source = root.join("backup");
+        fs::write(
+            &source,
+            postcard::to_stdvec(&BackupBundle {
+                version: VERSION,
+                files: vec![
+                    BackupFile {
+                        name: "slot.tmp".into(),
+                        bytes: b"temporary".to_vec(),
+                    },
+                    BackupFile {
+                        name: "slot".into(),
+                        bytes: b"save".to_vec(),
+                    },
+                ],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        import(&root, &source).unwrap();
+        assert_eq!(fs::read(root.join("saves/slot.tmp")).unwrap(), b"temporary");
+        assert_eq!(fs::read(root.join("saves/slot")).unwrap(), b"save");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn round_trips_flat_save_data() {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -257,6 +399,7 @@ mod tests {
         fs::create_dir_all(root.join("saves")).unwrap();
         fs::write(root.join("saves/settings.bin"), b"settings").unwrap();
         fs::write(root.join("saves/slot_1.keine"), b"save").unwrap();
+        fs::write(root.join("saves/slot_1.keine.tmp"), b"temporary").unwrap();
 
         super::export(&root, &export).unwrap();
         fs::remove_dir_all(root.join("saves")).unwrap();
@@ -267,6 +410,10 @@ mod tests {
             b"settings"
         );
         assert_eq!(fs::read(root.join("saves/slot_1.keine")).unwrap(), b"save");
+        assert_eq!(
+            fs::read(root.join("saves/slot_1.keine.tmp")).unwrap(),
+            b"temporary"
+        );
         let _ = fs::remove_dir_all(root);
     }
 

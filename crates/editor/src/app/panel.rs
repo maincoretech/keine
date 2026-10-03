@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui_kit::assets::IconName as AssetIconName;
+use gpui_kit::base::input::RopeExt;
 use gpui_kit::component::dock::{
     BasePanel, Panel, PanelBuildContext, PanelEvent, PanelId, PanelInfo, PanelState, panel_handle,
     register_panel,
@@ -30,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use crate::authoring::{AssetKey, AssetKind, AssetSort};
 use crate::document::{DocumentHandle, is_eiyashou_authoring_document};
 use crate::preview::PreviewController;
-use crate::projection::{TextBlockMetadata, TextLifetime};
+use crate::projection::{EiyashouProjection, TextBlockMetadata, TextLifetime};
 use crate::syntax::editor_highlighter_factory;
 use crate::workspace::WorkspaceFile;
 
@@ -56,6 +57,8 @@ pub(super) enum PanelPayload {
     Document {
         root: PathBuf,
         relative: PathBuf,
+        #[serde(default)]
+        view: DocumentView,
     },
     Inspector {
         root: PathBuf,
@@ -84,6 +87,13 @@ pub(super) enum PanelPayload {
     Performance {
         root: PathBuf,
     },
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub(super) struct DocumentView {
+    mode: DocumentMode,
+    line: usize,
+    column: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -192,7 +202,7 @@ impl PanelContent {
                     expanded,
                 })
             }
-            PanelPayload::Document { root, relative } => {
+            PanelPayload::Document { root, relative, .. } => {
                 let document = if is_eiyashou_authoring_document(&root, &relative) {
                     Some(cx.global_mut::<EditorDocuments>().open(&root, &relative)?)
                 } else {
@@ -277,6 +287,7 @@ impl PanelContent {
             Self::Document { root, relative, .. } => PanelPayload::Document {
                 root: root.clone(),
                 relative: relative.clone(),
+                view: DocumentView::default(),
             },
             Self::Inspector { root, .. } => PanelPayload::Inspector { root: root.clone() },
             Self::Output { root, .. } => PanelPayload::Output { root: root.clone() },
@@ -333,6 +344,7 @@ pub(super) struct WorkbenchPanel {
     pub(super) focus: FocusHandle,
     pub(super) document_mode: DocumentMode,
     pub(super) last_text_cursor: Option<(usize, usize)>,
+    pub(super) text_scroll_pending: bool,
     pub(super) block_text_editors: Vec<BlockTextEditor>,
     pub(super) collapsed_scenes: HashSet<String>,
     pub(super) selected_blocks: HashSet<usize>,
@@ -420,7 +432,8 @@ pub(super) struct WorkbenchPanel {
     pub(super) asset_filter_epoch: u64,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(super) enum DocumentMode {
     #[default]
     Text,
@@ -691,6 +704,10 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut App,
     ) -> io::Result<Entity<Self>> {
+        let saved_view = match &payload {
+            PanelPayload::Document { view, .. } => Some(*view),
+            _ => None,
+        };
         let content = PanelContent::from_payload(payload, window, cx)?;
         let registration = match &content {
             PanelContent::Document { root, relative, .. } => Some((root.clone(), relative.clone())),
@@ -736,8 +753,9 @@ impl WorkbenchPanel {
             let mut panel = Self {
                 content,
                 focus: cx.focus_handle(),
-                document_mode: DocumentMode::Text,
+                document_mode: saved_view.map_or(DocumentMode::Text, |view| view.mode),
                 last_text_cursor: None,
+                text_scroll_pending: saved_view.is_some_and(|view| view.mode == DocumentMode::Text),
                 block_text_editors: Vec::new(),
                 collapsed_scenes: HashSet::new(),
                 selected_blocks: HashSet::new(),
@@ -913,12 +931,24 @@ impl WorkbenchPanel {
                 let editor_for_selection = editor.clone();
                 let root_for_selection = root.clone();
                 let relative_for_selection = relative.clone();
+                let selection_window = window.window_handle();
                 panel
                     ._subscriptions
                     .push(cx.observe(editor, move |panel, _, cx| {
                         // Blocks mode owns the source selection; the hidden
                         // text editor's stale caret must not seek Preview.
                         if panel.document_mode == DocumentMode::Block {
+                            return;
+                        }
+                        use gpui_kit::EntityInputHandler;
+                        let composing = cx
+                            .update_window(selection_window, |_, window, cx| {
+                                editor_for_selection.update(cx, |editor, cx| {
+                                    editor.marked_text_range(window, cx).is_some()
+                                })
+                            })
+                            .unwrap_or(false);
+                        if composing {
                             return;
                         }
                         let position = editor_for_selection.read(cx).cursor_position();
@@ -1155,6 +1185,48 @@ impl WorkbenchPanel {
                         .push(cx.new(|cx| InputState::new(window, cx).placeholder(placeholder)));
                 }
             }
+            if let Some(view) = saved_view
+                && let PanelContent::Document {
+                    root,
+                    relative,
+                    editor,
+                    ..
+                } = &panel.content
+            {
+                let position = editor.update(cx, |editor, cx| {
+                    let position = gpui_kit::base::input::Position::new(
+                        view.line.min(u32::MAX as usize) as u32,
+                        view.column.min(u32::MAX as usize) as u32,
+                    );
+                    editor.set_cursor_position(position, window, cx);
+                    editor.cursor_position()
+                });
+                cx.global_mut::<EditorDocuments>().set_selection(
+                    root,
+                    relative.clone(),
+                    position.line as usize,
+                    position.character as usize,
+                );
+                if view.mode == DocumentMode::Block {
+                    let source = editor.read(cx).value().to_string();
+                    let projection = EiyashouProjection::parse(&source);
+                    if let Some((_, block)) = block_at_position(
+                        &projection,
+                        &source,
+                        position.line as usize,
+                        position.character as usize,
+                    ) {
+                        panel.selected_blocks.insert(block.source_range.start);
+                        panel.block_selection_anchor = Some(block.source_range.start);
+                        panel.block_scroll_pending = true;
+                        cx.global_mut::<EditorDocuments>().set_block_selection(
+                            root,
+                            relative.clone(),
+                            vec![block.source_range.start],
+                        );
+                    }
+                }
+            }
             panel.rebuild_visual_editors(window, cx);
             panel
         });
@@ -1207,12 +1279,34 @@ impl BasePanel for WorkbenchPanel {
         self.content.panel_name()
     }
 
-    fn dump(&self, _: &App) -> PanelState {
+    fn dump(&self, cx: &App) -> PanelState {
+        let mut payload = self.content.payload();
+        if let PanelPayload::Document { view, .. } = &mut payload
+            && let PanelContent::Document { editor, .. } = &self.content
+        {
+            let editor = editor.read(cx);
+            let position = if self.document_mode == DocumentMode::Block {
+                self.block_selection_anchor
+                    .map(|offset| {
+                        editor
+                            .text()
+                            .offset_to_position(offset.min(editor.text().len()))
+                    })
+                    .unwrap_or_else(|| editor.cursor_position())
+            } else {
+                editor.cursor_position()
+            };
+            *view = DocumentView {
+                mode: self.document_mode,
+                line: position.line as usize,
+                column: position.character as usize,
+            };
+        }
         PanelState {
             panel_name: self.panel_name().to_owned(),
             children: Vec::new(),
             info: PanelInfo::panel(
-                serde_json::to_value(self.content.payload()).unwrap_or(serde_json::Value::Null),
+                serde_json::to_value(payload).unwrap_or(serde_json::Value::Null),
             ),
         }
     }
@@ -1349,6 +1443,245 @@ fn workbench_panel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn document_layout_restores_mode_and_position_and_accepts_old_layouts() {
+        let legacy: PanelPayload = serde_json::from_value(serde_json::json!({
+            "kind": "document", "root": "project", "relative": "scripts/main.shou"
+        }))
+        .unwrap();
+        assert!(
+            matches!(legacy, PanelPayload::Document { view, .. } if view == DocumentView::default())
+        );
+        let payload = PanelPayload::Document {
+            root: "project".into(),
+            relative: "scripts/main.shou".into(),
+            view: DocumentView {
+                mode: DocumentMode::Block,
+                line: 120,
+                column: 4,
+            },
+        };
+        let restored: PanelPayload =
+            serde_json::from_value(serde_json::to_value(payload).unwrap()).unwrap();
+        assert!(matches!(restored, PanelPayload::Document { view, .. }
+            if view == DocumentView { mode: DocumentMode::Block, line: 120, column: 4 }));
+    }
+
+    #[gpui_kit::test]
+    fn composition_and_text_continuation_keep_source_focus_and_position(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::base::input::Position;
+        use gpui_kit::{EntityInputHandler, VisualTestContext};
+        let temporary =
+            std::env::temp_dir().join(format!("keine-text-composition-{}", std::process::id()));
+        let root = temporary.join("project");
+        std::fs::create_dir_all(root.join("scripts")).unwrap();
+        std::fs::write(
+            root.join("config.yaml"),
+            include_str!("../../../../tests/fixtures/native-smoke/config.yaml"),
+        )
+        .unwrap();
+        let path = PathBuf::from("scripts/main.shou");
+        let source = "scene start {\n  \"before\",\n  \"middle\",\n  \"after\",\n}";
+        std::fs::write(root.join(&path), source).unwrap();
+        let window = cx.update(|cx| {
+            gpui_kit::init(cx);
+            let session = crate::workspace::WorkspaceSession::open(&root).unwrap();
+            let mut documents = EditorDocuments::new(crate::persistence::AppPersistence::new(
+                temporary.join("app-data"),
+            ));
+            documents
+                .ensure_workspace_with_files(session.root(), session.files())
+                .unwrap();
+            cx.set_global(documents);
+            cx.open_window(gpui_kit::WindowOptions::default(), |window, cx| {
+                WorkbenchPanel::from_payload(
+                    PanelPayload::Document {
+                        root: session.root().to_owned(),
+                        relative: path.clone(),
+                        view: DocumentView {
+                            mode: DocumentMode::Text,
+                            line: 2,
+                            column: 3,
+                        },
+                    },
+                    window,
+                    cx,
+                )
+                .unwrap()
+            })
+            .unwrap()
+        });
+        let panel = window.root(cx).unwrap();
+        let cx = &mut VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+        let (editor, document, root) = panel.read_with(cx, |panel, _| {
+            let PanelContent::Document {
+                editor,
+                document: Some(document),
+                root,
+                ..
+            } = &panel.content
+            else {
+                unreachable!()
+            };
+            (editor.clone(), document.clone(), root.clone())
+        });
+        let selection = cx.read(|cx| cx.global::<EditorDocuments>().selection(&root).cloned());
+        for preedit in ["n", "ni", "你"] {
+            cx.update(|window, cx| {
+                editor.update(cx, |editor, cx| {
+                    editor.replace_and_mark_text_in_range(None, preedit, None, window, cx);
+                })
+            });
+            cx.run_until_parked();
+            assert_eq!(document.borrow().contents(), source);
+            assert_eq!(
+                cx.read(|cx| cx.global::<EditorDocuments>().selection(&root).cloned()),
+                selection
+            );
+        }
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                editor.replace_text_in_range(None, "你", window, cx);
+            })
+        });
+        cx.run_until_parked();
+        assert!(document.borrow().contents().contains("\"你middle\""));
+        let saved = panel.read_with(cx, |panel, cx| panel.dump(cx));
+        let payload = serde_json::from_value::<PanelPayload>(match saved.info {
+            PanelInfo::Panel(value) => value,
+            _ => unreachable!(),
+        })
+        .unwrap();
+        cx.update(|window, cx| {
+            let restored = WorkbenchPanel::from_payload(payload, window, cx).unwrap();
+            let PanelContent::Document {
+                editor: restored_editor,
+                ..
+            } = &restored.read(cx).content
+            else {
+                unreachable!()
+            };
+            assert_eq!(
+                restored_editor.read(cx).cursor_position(),
+                Position::new(2, 4)
+            );
+        });
+        cx.update(|window, cx| {
+            cx.bind_keys([gpui_kit::KeyBinding::new(
+                "enter",
+                super::super::BeginTextBlock,
+                Some("KeineBlockView"),
+            )]);
+            panel.update(cx, |panel, cx| {
+                panel.switch_document_mode(DocumentMode::Block, window, cx);
+                panel.sync_visual_editors(window, cx);
+                let start = document.borrow().contents().find("你middle").unwrap();
+                let row = panel
+                    .block_text_editors
+                    .iter()
+                    .find(|row| row.text_start == start)
+                    .unwrap();
+                row.state.update(cx, |state, cx| state.focus(window, cx));
+            });
+        });
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        let draft = panel.read_with(cx, |panel, _| {
+            panel.draft_text.as_ref().unwrap().state.clone()
+        });
+        cx.simulate_input("inserted");
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(draft.read(cx).focus_handle(cx).is_focused(window));
+            assert!(
+                document
+                    .borrow()
+                    .contents()
+                    .contains("\"你middle\",\n  \"inserted\",\n  \"after\""),
+                "{}",
+                document.borrow().contents()
+            );
+        });
+        cx.simulate_keystrokes("shift-enter");
+        cx.simulate_input("second line");
+        cx.run_until_parked();
+        assert_eq!(
+            draft.read_with(cx, |state, _| state.value().to_string()),
+            "inserted\nsecond line"
+        );
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        panel.read_with(cx, |panel, _| {
+            assert_ne!(panel.draft_text.as_ref().unwrap().state, draft);
+            assert_eq!(document.borrow().contents().matches("inserted").count(), 1);
+        });
+        // Saving on close can reformat the file before the layout is dumped.
+        // Position memory must follow the same block through that rewrite.
+        let unformatted = document.borrow().contents().replace("\n  ", "\n    ");
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                editor.replace_all(unformatted.clone(), window, cx)
+            });
+            let documents = cx.global_mut::<EditorDocuments>();
+            documents.register_panel(
+                &root,
+                path.clone(),
+                PanelId::from(panel.entity_id()),
+                panel.downgrade(),
+            );
+            documents.register_editor(&root, path.clone(), editor.downgrade());
+            panel.update(cx, |panel, _| {
+                let start = unformatted.find("\"inserted").unwrap();
+                panel.selected_blocks = HashSet::from([start]);
+                panel.block_selection_anchor = Some(start);
+                panel.draft_text = None;
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                let offset = unformatted.find("inserted").unwrap();
+                editor.set_selected_range(offset..offset, cx);
+            });
+            let focus = panel.read(cx).focus.clone();
+            focus.focus(window, cx);
+            assert!(!editor.read(cx).focus_handle(cx).is_focused(window));
+            assert_eq!(
+                super::super::edits::format_and_save(&root, window, cx).unwrap(),
+                1
+            );
+            assert_eq!(
+                panel.read(cx).block_selection_anchor,
+                document.borrow().contents().find("\"inserted")
+            );
+            assert_eq!(
+                editor.read(cx).cursor(),
+                document.borrow().contents().find("inserted").unwrap()
+            );
+            assert!(!editor.read(cx).focus_handle(cx).is_focused(window));
+        });
+        let saved = panel.read_with(cx, |panel, cx| panel.dump(cx));
+        let payload = serde_json::from_value::<PanelPayload>(match saved.info {
+            PanelInfo::Panel(value) => value,
+            _ => unreachable!(),
+        })
+        .unwrap();
+        cx.update(|window, cx| {
+            let restored = WorkbenchPanel::from_payload(payload, window, cx).unwrap();
+            let restored = restored.read(cx);
+            assert_eq!(restored.document_mode, DocumentMode::Block);
+            assert_eq!(
+                restored.block_selection_anchor,
+                panel.read(cx).block_selection_anchor
+            );
+            assert!(restored.block_scroll_pending);
+        });
+        std::fs::remove_dir_all(temporary).unwrap();
+    }
 
     #[test]
     fn explorer_layout_restores_expansion_and_old_layouts_default_to_collapsed() {

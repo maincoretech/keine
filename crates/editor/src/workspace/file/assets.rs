@@ -138,7 +138,7 @@ impl AssetFileChange {
                 .as_ref()
                 .ok_or_else(|| invalid("Trash location unavailable"))?;
             let to = asset_destination(root, &self.from)?;
-            move_without_overwrite(trash, &to)
+            restore_trash(trash, &to)
         } else {
             self.trash = Some(trash_entry(root, &self.from)?);
             Ok(())
@@ -169,7 +169,32 @@ fn move_without_overwrite(from: &Path, to: &Path) -> io::Result<()> {
             )
             .map_err(|error| io::Error::other(error.to_string()))
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        let from = CString::new(from.as_os_str().as_bytes())
+            .map_err(|error| invalid(error.to_string()))?;
+        let to =
+            CString::new(to.as_os_str().as_bytes()).map_err(|error| invalid(error.to_string()))?;
+        // SAFETY: both paths are NUL-terminated and live for the call. The
+        // kernel prevents a concurrent destination from being overwritten.
+        let result = unsafe {
+            libc::renameat2(
+                libc::AT_FDCWD,
+                from.as_ptr(),
+                libc::AT_FDCWD,
+                to.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         fs::rename(from, to)
     }
@@ -283,30 +308,36 @@ pub fn remove_manifest_asset(source: &str, asset: &AssetEntry) -> io::Result<Str
     validate_manifest(restore_empty_namespace(edited, namespace(asset.kind)))
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
+#[path = "trash.rs"]
+mod trash;
+
 pub fn trash_entry(root: &Path, relative: &Path) -> io::Result<PathBuf> {
-    use objc2_foundation::{NSFileManager, NSString, NSURL};
-    let path = confined_existing(root, &checked_relative(relative)?)?;
-    let path = path
-        .to_str()
-        .ok_or_else(|| invalid("File path is not UTF-8"))?;
-    let url = NSURL::fileURLWithPath(&NSString::from_str(path));
-    let mut destination = None;
-    NSFileManager::defaultManager()
-        .trashItemAtURL_resultingItemURL_error(&url, Some(&mut destination))
-        .map_err(|error| io::Error::other(error.to_string()))?;
-    destination
-        .and_then(|url| url.path())
-        .map(|path| PathBuf::from(path.to_string()))
-        .ok_or_else(|| io::Error::other("System Trash did not return a recoverable location"))
+    let relative = checked_relative(relative)?;
+    if fs::symlink_metadata(root.join(&relative))?
+        .file_type()
+        .is_symlink()
+    {
+        return Err(invalid("Resource symlinks cannot be trashed"));
+    }
+    let path = confined_existing(root, &relative)?;
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+    return trash::trash(&path);
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
+        let _ = path;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "System Trash is unavailable",
+        ))
+    }
 }
 
-#[cfg(not(target_os = "macos"))]
-pub fn trash_entry(_: &Path, _: &Path) -> io::Result<PathBuf> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "System recoverable deletion is not available on this platform",
-    ))
+fn restore_trash(receipt: &Path, destination: &Path) -> io::Result<()> {
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+    return trash::restore(receipt, destination);
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    move_without_overwrite(receipt, destination)
 }
 
 #[cfg(test)]
@@ -339,7 +370,7 @@ mod tests {
         assert!(remap_manifest(source, asset.kind, &asset.path).is_err());
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     #[test]
     fn system_trash_is_recoverable_and_restoration_does_not_overwrite() {
         let root = std::env::temp_dir().join(format!("keine-trash-{}", std::process::id()));
@@ -348,6 +379,7 @@ mod tests {
         let mut change = AssetFileChange::delete("owned.txt".into());
         change.apply(&root, false).unwrap();
         assert!(!root.join("owned.txt").exists());
+        #[cfg(not(windows))]
         assert_eq!(
             fs::read(change.trash.as_ref().unwrap()).unwrap(),
             b"owned test file"

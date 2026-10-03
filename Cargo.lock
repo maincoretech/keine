@@ -5404,6 +5404,9 @@ dependencies = [
  "postcard",
  "serde",
  "serde_json",
+ "windows 0.61.3",
+ "windows-core 0.61.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5416,11 +5419,13 @@ dependencies = [
  "hakutaku-core",
  "hakutaku-pack",
  "keine-core",
+ "libc",
  "log",
  "notify 8.2.0",
  "postcard",
  "serde",
  "serde_json",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

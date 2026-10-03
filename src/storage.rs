@@ -14,7 +14,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use bevy::prelude::*;
 use keine_core::State;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::runtime::GameSystemSet;
 
@@ -77,6 +77,14 @@ pub(crate) fn encode_postcard_limited<T: Serialize>(
         );
     }
     Ok(bytes)
+}
+
+pub(crate) fn decode_postcard_exact<'a, T: Deserialize<'a>>(bytes: &'a [u8]) -> Result<T> {
+    let (value, remaining) = postcard::take_from_bytes(bytes)?;
+    if !remaining.is_empty() {
+        bail!("persistent data contains trailing bytes");
+    }
+    Ok(value)
 }
 
 pub(crate) fn sync_directory(path: &Path) -> Result<()> {
@@ -160,6 +168,10 @@ mod tests {
         );
         let error = encode_postcard_limited(&"too large", 4, "test data").unwrap_err();
         assert!(error.to_string().contains("encoded test data"));
+        let mut bytes = encode_postcard_limited(&"small", 6, "test data").unwrap();
+        assert_eq!(decode_postcard_exact::<&str>(&bytes).unwrap(), "small");
+        bytes.push(0);
+        assert!(decode_postcard_exact::<&str>(&bytes).is_err());
     }
 
     #[test]

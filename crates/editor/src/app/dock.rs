@@ -173,6 +173,27 @@ struct EditorTabGroupSkin {
 }
 
 impl EditorTabGroupSkin {
+    fn preview_controls(&self, group: &TabGroupContext, cx: &mut App) -> Option<Stateful<Div>> {
+        let dock = self.dock.borrow().as_ref()?.upgrade()?;
+        let dock = dock.read(cx);
+        let corner = dock.zoomed_group().or_else(|| {
+            [
+                DockPlacement::Right,
+                DockPlacement::Center,
+                DockPlacement::Left,
+            ]
+            .into_iter()
+            .filter(|&placement| {
+                (placement == DockPlacement::Center || dock.is_dock_open(placement))
+                    && !dock.is_empty(placement, cx)
+            })
+            .find_map(|placement| top_right_group(dock.layout(placement)?.root()))
+        });
+        (corner == Some(group.node()))
+            .then(|| super::controls::preview_window_controls(&self.root, cx))
+            .flatten()
+    }
+
     fn tab_scroll(&self, node: NodeId) -> ScrollHandle {
         self.tab_scrolls
             .borrow_mut()
@@ -407,15 +428,26 @@ impl EditorTabGroupSkin {
                 .text_sm()
                 .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                 .text_color(rgb(0xb8c2cc))
-                .child(title)
                 .child(
                     div()
-                        .w(ghost_width)
-                        .h(px(28.))
-                        .flex_none()
-                        .rounded(px(7.))
-                        .bg(rgb(SURFACE_HOVER)),
+                        .min_w_0()
+                        .flex_1()
+                        .flex()
+                        .items_center()
+                        .overflow_hidden()
+                        .child(title)
+                        .child(
+                            div()
+                                .w(ghost_width)
+                                .h(px(28.))
+                                .flex_none()
+                                .rounded(px(7.))
+                                .bg(rgb(SURFACE_HOVER)),
+                        ),
                 )
+                .when_some(self.preview_controls(group, cx), |bar, controls| {
+                    bar.child(controls)
+                })
                 .when(group.is_droppable(), |this| {
                     this.on_drag_move(move |event: &DragMoveEvent<EditorPanelDrag>, _, cx| {
                         if event.bounds.contains(&event.event.position) {
@@ -434,6 +466,19 @@ impl EditorTabGroupSkin {
                 })
                 .into_any_element(),
         )
+    }
+}
+
+fn top_right_group(node: &gpui_kit::component::dock::PaneNode) -> Option<NodeId> {
+    use gpui_kit::component::dock::PaneRef;
+    match node.kind() {
+        PaneRef::Tabs { panels, .. } => (!panels.is_empty()).then_some(node.id()),
+        PaneRef::Split {
+            axis: Axis::Horizontal,
+            children,
+            ..
+        } => children.iter().rev().find_map(top_right_group),
+        PaneRef::Split { children, .. } => children.iter().find_map(top_right_group),
     }
 }
 
@@ -1258,6 +1303,9 @@ impl TabGroupRenderer for EditorTabGroupSkin {
             .when_some(self.document_controls(group, cx), |bar, controls| {
                 bar.child(controls)
             })
+            .when_some(self.preview_controls(group, cx), |bar, controls| {
+                bar.child(controls)
+            })
             .into_any_element()
     }
 
@@ -1466,6 +1514,7 @@ pub(super) fn install_default_layout(
                 PanelPayload::Document {
                     root: session.root().to_owned(),
                     relative: document.relative_path.clone(),
+                    view: Default::default(),
                 },
                 window,
                 cx,

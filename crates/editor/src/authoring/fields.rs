@@ -67,6 +67,7 @@ pub fn command_argument_names(command: &str) -> Vec<&str> {
             "video.stop" => &["fade"],
             "gallery.unlock" => &["name"],
             "camera.bind" | "camera.unbind" => &["distance"],
+            "camera.reset" => &["duration", "easing", "blocking"],
             "style" => &[
                 "scale",
                 "brightness",
@@ -325,7 +326,7 @@ pub(crate) fn source_field_choices(
             "out_back",
             "out_bounce",
         ],
-        ("camera.move" | "camera.shake" | "camera.effect", "0") => {
+        ("camera.move" | "camera.shake" | "camera.effect" | "camera.reset", "0") => {
             &["scene", "characters", "all", "none"]
         }
         ("dialogue", "concat" | "auto" | "inherit_speaker") => &["true", "false"],
@@ -452,7 +453,7 @@ pub(crate) fn command_field_label(kind: &BlockKind, command: &str, field_key: &s
             ("case", 0) => "Value".into(),
             ("case", 1) => "Asset".into(),
             ("camera.bind" | "camera.unbind", 0) => "Target".into(),
-            ("camera.effect", 0) => "Targets".into(),
+            ("camera.effect" | "camera.reset", 0) => "Targets".into(),
             ("stage.animate", 0) => "Animation ID".into(),
             ("track", 0) => "Target".into(),
             ("track", 1) => "Property".into(),

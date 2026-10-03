@@ -700,6 +700,22 @@ fn sync_editor_position(
         scene_name,
         source_step
     );
+    // Replay counters are local to reconstruction. Keep an unchanged track
+    // playing across seeks, but allow explicitly selecting BGM to replay it.
+    let selected_bgm = preview.program.scene(scene_name).is_some_and(|actions| {
+        actions.get(selected_start..target).is_some_and(|actions| {
+            actions.iter().any(|action| {
+                matches!(
+                    action,
+                    keine_core::Action::Bgm { .. } | keine_core::Action::EiyashouBgm { .. }
+                )
+            })
+        })
+    });
+    preview.bgm.revision = state.bgm.revision;
+    if selected_bgm || preview.bgm != state.bgm {
+        preview.bgm.revision = state.bgm.revision.wrapping_add(1);
+    }
     preview.stage_revision = state.stage_revision.wrapping_add(1);
     *state = preview;
     true
@@ -753,11 +769,26 @@ pub(crate) fn seek_editor_state(
     selected_start: usize,
     target: usize,
 ) -> bool {
+    let mut selected = false;
     for _ in 0..MAX_EDITOR_REPLAY_STEPS {
-        if preview.current_scene == target_scene && preview.cursor >= target {
+        if !selected && preview.current_scene == target_scene && preview.cursor >= selected_start {
+            // Reconstruction restores persistent audio, not historical playback
+            // events. Stop old one-shots/voice before previewing this block.
+            preview.effect_queue.clear();
+            preview.effect_queue.push(keine_core::EffectEvent::Stop);
+            preview.vocal_event = Some(keine_core::VocalCue {
+                file: None,
+                volume: 1.0,
+                fade_in: 0.0,
+                fade_out: 0.0,
+            });
+            selected = true;
+        }
+        if selected && preview.current_scene == target_scene && preview.cursor >= target {
             return true;
         }
-        let result = step::step_until_cursor(preview, target_scene, target);
+        let stop = if selected { target } else { selected_start };
+        let result = step::step_until_cursor(preview, target_scene, stop);
         // A dialogue block may contain post-confirmation cleanup after `Say`
         // (for example LetsGal's `keepDialogue: false` textbox hide). Studio
         // selecting that block previews the line before confirmation, so do
@@ -767,12 +798,25 @@ pub(crate) fn seek_editor_state(
             && preview.cursor > selected_start
             && preview.cursor <= target
         {
+            if preview
+                .vocal_event
+                .as_ref()
+                .is_some_and(|cue| cue.file.is_none())
+                && let Some(dialogue) = &preview.dialogue
+            {
+                preview.vocal_event = Some(keine_core::VocalCue {
+                    file: dialogue.vocal.clone(),
+                    volume: dialogue.volume,
+                    fade_in: 0.0,
+                    fade_out: 0.0,
+                });
+            }
             return true;
         }
         // Replay prior blocks to completion, but preserve the selected block's
         // own yield. This lets its dialogue/typewriter, transition, timeline,
         // particle or video presentation run exactly once in the preview.
-        if preview.current_scene == target_scene && preview.cursor >= target {
+        if selected && preview.current_scene == target_scene && preview.cursor >= target {
             return true;
         }
         match result {
@@ -809,6 +853,12 @@ pub(crate) fn seek_editor_state(
                 step::select_choice(preview, index);
             }
             keine_core::StepResult::EndOfScene => {
+                if !selected
+                    && preview.current_scene == target_scene
+                    && preview.cursor >= selected_start
+                {
+                    continue;
+                }
                 return preview.current_scene == target_scene && preview.cursor >= target;
             }
             keine_core::StepResult::ExecutionLimit => return false,
@@ -2440,6 +2490,94 @@ mod tests {
     }
 
     #[test]
+    fn editor_seek_discards_historical_sound_events_but_keeps_selected_audio() {
+        let mut state = State::new();
+        state.install_program(Program::from_scenes([
+            (
+                "start".into(),
+                vec![
+                    Action::Bgm {
+                        file: "music.WAV".into(),
+                        volume: 0.5,
+                        fade_seconds: 1.0,
+                    },
+                    Action::SoundEffect {
+                        file: Some("old.wav".into()),
+                        id: None,
+                        volume: 1.0,
+                        looped: false,
+                        fade: 0.0,
+                    },
+                    Action::SoundEffect {
+                        file: Some("rain.wav".into()),
+                        id: Some("rain".into()),
+                        volume: 0.2,
+                        looped: true,
+                        fade: 1.0,
+                    },
+                    Action::Say {
+                        speaker: String::new(),
+                        text: "old".into(),
+                        options: keine_core::SayOptions {
+                            vocal: Some("old-voice.wav".into()),
+                            ..Default::default()
+                        },
+                    },
+                    Action::ChangeScene("main".into()),
+                ],
+            ),
+            (
+                "main".into(),
+                vec![
+                    Action::SoundEffect {
+                        file: Some("selected.wav".into()),
+                        id: None,
+                        volume: 1.0,
+                        looped: false,
+                        fade: 0.0,
+                    },
+                    Action::Say {
+                        speaker: String::new(),
+                        text: "selected".into(),
+                        options: Default::default(),
+                    },
+                    Action::Say {
+                        speaker: String::new(),
+                        text: "voiced".into(),
+                        options: keine_core::SayOptions {
+                            vocal: Some("selected-voice.wav".into()),
+                            ..Default::default()
+                        },
+                    },
+                ],
+            ),
+        ]));
+        state.current_scene = "start".into();
+        state.ended = false;
+        let initial = state.clone();
+
+        assert!(seek_editor_state(&mut state, "main", 1, 2));
+        assert_eq!(state.effect_queue, vec![keine_core::EffectEvent::Stop]);
+        assert_eq!(state.vocal_event.as_ref().unwrap().file, None);
+        assert_eq!(state.bgm.file.as_deref(), Some("music.WAV"));
+        assert_eq!(state.looping_effects["rain"].file, "rain.wav");
+
+        state = initial.clone();
+        assert!(seek_editor_state(&mut state, "main", 0, 1));
+        assert!(
+            matches!(state.effect_queue.as_slice(), [keine_core::EffectEvent::Stop, keine_core::EffectEvent::Play(cue)] if cue.file == "selected.wav")
+        );
+
+        state = initial;
+        assert!(seek_editor_state(&mut state, "main", 2, 3));
+        assert_eq!(state.effect_queue, vec![keine_core::EffectEvent::Stop]);
+        assert_eq!(
+            state.vocal_event.as_ref().unwrap().file.as_deref(),
+            Some("selected-voice.wav")
+        );
+    }
+
+    #[test]
     fn editor_seek_keeps_resources_inherited_from_an_earlier_fragment() {
         let mut state = State::new();
         state.install_program(Program::from_scenes([
@@ -2656,6 +2794,65 @@ mod tests {
         assert_eq!(state.dialogue.as_ref().unwrap().text, "fresh/2");
         assert_eq!(state.vars["route"], Value::Str("fresh".into()));
         assert_eq!(state.global_vars["ending"], Value::Int(2));
+    }
+
+    #[test]
+    fn editor_seek_keeps_bgm_playing_except_when_selecting_its_block() {
+        let mut state = State::new();
+        state.install_program(Program::from_scenes([(
+            "main".into(),
+            vec![
+                Action::Bgm {
+                    file: "music.WAV".into(),
+                    volume: 0.5,
+                    fade_seconds: 1.0,
+                },
+                Action::Say {
+                    speaker: String::new(),
+                    text: "first".into(),
+                    options: Default::default(),
+                },
+                Action::Say {
+                    speaker: String::new(),
+                    text: "second".into(),
+                    options: Default::default(),
+                },
+            ],
+        )]));
+        state.script_entry = Some("main".into());
+        let manifest = LocalAssetManifest(std::collections::HashMap::from([(
+            "main".into(),
+            LocalSceneAssets {
+                action_spans: (1..=3)
+                    .map(|line| keine_loader::SourceSpan { line, column: 1 })
+                    .collect(),
+                ..default()
+            },
+        )]));
+        assert!(sync_editor_position(
+            &mut state,
+            &manifest,
+            "main",
+            2,
+            Default::default()
+        ));
+        let revision = state.bgm.revision;
+        assert!(sync_editor_position(
+            &mut state,
+            &manifest,
+            "main",
+            3,
+            Default::default()
+        ));
+        assert_eq!(state.bgm.revision, revision);
+        assert!(sync_editor_position(
+            &mut state,
+            &manifest,
+            "main",
+            1,
+            Default::default()
+        ));
+        assert_eq!(state.bgm.revision, revision.wrapping_add(1));
     }
 
     #[test]

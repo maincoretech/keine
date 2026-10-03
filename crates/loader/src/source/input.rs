@@ -1,4 +1,3 @@
-use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -7,6 +6,7 @@ use anyhow::{Context, Result, bail};
 use crate::ContentMount;
 
 pub const MAX_SOURCE_FILE_BYTES: usize = 32 * 1024 * 1024;
+pub const MAX_PROJECT_CONFIG_BYTES: usize = 256 * 1024;
 
 /// Reads one source document without imposing an arbitrary project-wide scale
 /// limit. The filesystem variant also keeps direct adapter reads inside the
@@ -18,9 +18,13 @@ pub(crate) struct SourceReader {
 
 impl SourceReader {
     pub(crate) fn for_mounts() -> Self {
+        Self::with_limit(MAX_SOURCE_FILE_BYTES)
+    }
+
+    pub(crate) fn with_limit(maximum: usize) -> Self {
         Self {
             root: None,
-            maximum: MAX_SOURCE_FILE_BYTES,
+            maximum,
         }
     }
 
@@ -62,7 +66,8 @@ impl SourceReader {
                 resolved.display()
             );
         }
-        let file = File::open(&resolved)
+        let relative = resolved.strip_prefix(root)?;
+        let file = crate::loader::open_confined_file(root, relative)
             .with_context(|| format!("failed to open source {}", resolved.display()))?;
         let length = file
             .metadata()

@@ -5,6 +5,23 @@ const EXPLORER_ROW_GAP: f32 = 1.;
 
 impl Render for WorkbenchPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.document_mode == DocumentMode::Text && self.text_scroll_pending {
+            self.text_scroll_pending = false;
+            let panel = cx.entity().downgrade();
+            // Cursor scrolling needs the Text editor's first layout, including after
+            // switching from Blocks. Run once after that frame, without a timer.
+            window.on_next_frame(move |window, cx| {
+                let _ = panel.update(cx, |panel, cx| {
+                    if panel.document_mode == DocumentMode::Text
+                        && let PanelContent::Document { editor, .. } = &panel.content
+                    {
+                        editor.update(cx, |editor, cx| {
+                            editor.set_cursor_position(editor.cursor_position(), window, cx);
+                        });
+                    }
+                });
+            });
+        }
         self.refresh_block_drag(window, cx);
         if !cx.has_active_drag() {
             self.file_drop_target = None;

@@ -40,6 +40,8 @@ mkdir -p "$bundle_parent"
 cargo bundle "$project" --output "$package_output"
 
 staging="$(mktemp -d "$bundle_parent/.$name.app.staging.XXXXXX")"
+mv "$staging" "$staging.app"
+staging="$staging.app"
 backup="$bundle_parent/.$name.app.backup"
 cleanup() {
     [[ -n "${staging:-}" && -e "$staging" ]] && rm -rf -- "$staging"
@@ -67,6 +69,8 @@ sed -e "s/__NAME__/$name/g" -e "s/__VERSION__/$version/g" -e "s/__BUNDLE_IDENTIF
 PLIST
 
 chmod +x "$staging/Contents/MacOS/keine"
+plutil -lint "$staging/Contents/Info.plist" >/dev/null
+bash "$root/dev/scripts/sign-macos.sh" "$staging"
 
 if [[ -e "$backup" ]]; then
     echo "stale bundle backup blocks publication: $backup" >&2

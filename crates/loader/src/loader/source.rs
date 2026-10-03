@@ -9,6 +9,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use hakutaku_core::{AssetCursor, OpenPolicy, Package, ResourceBudget};
 
+mod open;
+
 fn packaged_hakutaku_keys() -> Result<([u8; 32], [u8; 32])> {
     let share_a = *include_bytes!(concat!(env!("OUT_DIR"), "/hakutaku-key-share-a.bin"));
     let share_b = *include_bytes!(concat!(env!("OUT_DIR"), "/hakutaku-key-share-b.bin"));
@@ -44,9 +46,10 @@ impl ContentBackend {
         match self {
             Self::FileSystem(root) => {
                 let root = canonical_filesystem_root(root)?;
-                let physical = confined_path(&root, &path)?;
-                fs::read(&physical)
-                    .with_context(|| format!("failed to read {}", physical.display()))
+                let mut file = open_confined_file(&root, &path)?;
+                let mut bytes = Vec::new();
+                file.read_to_end(&mut bytes)?;
+                Ok(bytes)
             }
             Self::Hakutaku(archive) => archive.read(&path),
         }
@@ -161,9 +164,10 @@ impl ContentMount {
     pub fn read(&self, path: &Path) -> Result<Vec<u8>> {
         match &self.backend {
             ContentBackend::FileSystem(_) => {
-                let physical = self.confined_filesystem_path(path)?;
-                fs::read(&physical)
-                    .with_context(|| format!("failed to read {}", physical.display()))
+                let mut file = self.open_file(path)?;
+                let mut bytes = Vec::new();
+                file.read_to_end(&mut bytes)?;
+                Ok(bytes)
             }
             ContentBackend::Hakutaku(archive) => archive.read(&self.resolve(path)?),
         }
@@ -173,11 +177,11 @@ impl ContentMount {
     pub fn open_file(&self, path: &Path) -> Result<ContentFile> {
         let inner = match &self.backend {
             ContentBackend::FileSystem(_) => {
-                let physical = self.confined_filesystem_path(path)?;
-                ContentFileInner::FileSystem(
-                    fs::File::open(&physical)
-                        .with_context(|| format!("failed to open {}", physical.display()))?,
-                )
+                let root = self
+                    .filesystem_root
+                    .as_deref()
+                    .context("filesystem mount has no root")?;
+                ContentFileInner::FileSystem(open_confined_file(root, path)?)
             }
             ContentBackend::Hakutaku(archive) => {
                 let path = self.resolve(path)?;
@@ -272,6 +276,12 @@ impl ContentMount {
 fn canonical_filesystem_root(root: &Path) -> Result<PathBuf> {
     root.canonicalize()
         .with_context(|| format!("failed to resolve content root {}", root.display()))
+}
+
+pub(crate) fn open_confined_file(root: &Path, path: &Path) -> Result<fs::File> {
+    let resolved = confined_path(root, path)?;
+    open::resolved_file(root, &resolved)
+        .with_context(|| format!("failed to open confined content {}", resolved.display()))
 }
 
 fn confined_path(root: &Path, path: &Path) -> Result<PathBuf> {
@@ -666,6 +676,84 @@ mod tests {
         assert!(mount.open_file(Path::new("escape.txt")).is_err());
         assert!(mount.read_directory(Path::new("")).unwrap().is_empty());
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn checked_paths_cannot_be_redirected_before_the_file_is_opened() {
+        use std::os::unix::fs::symlink;
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("keine-mount-race-{nonce}"));
+        let root = base.join("project");
+        let outside = base.join("outside");
+        fs::create_dir_all(root.join("chapter")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(root.join("chapter/scene.shou"), b"inside").unwrap();
+        fs::write(outside.join("scene.shou"), b"secret").unwrap();
+        let root = root.canonicalize().unwrap();
+        let resolved = confined_path(&root, Path::new("chapter/scene.shou")).unwrap();
+        let mut pinned = open::resolved_file(&root, &resolved).unwrap();
+
+        // Deterministically replace the ancestor in the check -> open window.
+        fs::rename(root.join("chapter"), root.join("original")).unwrap();
+        symlink(&outside, root.join("chapter")).unwrap();
+        assert_eq!(fs::read(&resolved).unwrap(), b"secret");
+        assert!(open::resolved_file(&root, &resolved).is_err());
+        let mut bytes = Vec::new();
+        pinned.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"inside");
+
+        fs::remove_file(root.join("chapter")).unwrap();
+        fs::rename(root.join("original"), root.join("chapter")).unwrap();
+        fs::remove_file(&resolved).unwrap();
+        symlink(outside.join("scene.shou"), &resolved).unwrap();
+        assert!(open::resolved_file(&root, &resolved).is_err());
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn confined_reads_keep_internal_links_but_reject_special_files() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("keine-mount-types-{nonce}"));
+        fs::create_dir_all(root.join("chapter")).unwrap();
+        fs::write(root.join("chapter/scene.shou"), b"inside").unwrap();
+        symlink(root.join("chapter"), root.join("alias")).unwrap();
+        let backend = ContentBackend::FileSystem(root.clone());
+        let mount = ContentMount::new(backend.clone(), "").unwrap();
+        assert_eq!(
+            backend.read(Path::new("alias/scene.shou")).unwrap(),
+            b"inside"
+        );
+        assert_eq!(
+            mount.read(Path::new("alias/scene.shou")).unwrap(),
+            b"inside"
+        );
+        assert!(mount.open_file(Path::new("chapter")).is_err());
+        fs::set_permissions(root.join("chapter"), fs::Permissions::from_mode(0o111)).unwrap();
+        assert_eq!(
+            mount.read(Path::new("chapter/scene.shou")).unwrap(),
+            b"inside"
+        );
+        fs::set_permissions(root.join("chapter"), fs::Permissions::from_mode(0o700)).unwrap();
+
+        let fifo = root.join("pipe");
+        let name = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: name is NUL-terminated and the parent is this test's directory.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        assert!(mount.open_file(Path::new("pipe")).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 

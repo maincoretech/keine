@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -169,7 +169,8 @@ impl SourceDocument {
         self.projection.get_mut().take();
         self.dialogues.get_mut().take();
         self.recovery_state = RecoveryState::None;
-        remove_if_present(&self.recovery_path)
+        self.cleanup_recovery_after_save();
+        Ok(())
     }
 
     pub fn replace_range(
@@ -240,7 +241,7 @@ impl SourceDocument {
         }
         if !self.is_dirty() {
             self.recovery_clock.fetch_add(1, Ordering::AcqRel);
-            remove_if_present(&self.recovery_path)?;
+            self.cleanup_recovery_after_save();
             self.recovery_state = RecoveryState::None;
             return Ok(());
         }
@@ -250,8 +251,14 @@ impl SourceDocument {
         self.recovery_clock.fetch_add(1, Ordering::AcqRel);
         self.disk_contents.clone_from(&self.contents);
         self.recovery_state = RecoveryState::None;
-        remove_if_present(&self.recovery_path)?;
+        self.cleanup_recovery_after_save();
         Ok(())
+    }
+
+    fn cleanup_recovery_after_save(&self) {
+        if let Err(error) = remove_if_present(&self.recovery_path) {
+            eprintln!("Kēne Editor: source synchronized; recovery cleanup failed: {error}");
+        }
     }
 }
 
@@ -505,14 +512,29 @@ fn checked_relative(path: &Path) -> io::Result<PathBuf> {
 }
 
 fn read_source(path: &Path) -> io::Result<Vec<u8>> {
-    let metadata = fs::metadata(path)?;
-    if metadata.len() > MAX_DOCUMENT_BYTES {
+    read_limited_file(File::open(path)?, MAX_DOCUMENT_BYTES)
+}
+
+fn read_limited_file(file: File, maximum: u64) -> io::Result<Vec<u8>> {
+    if file.metadata()?.len() > maximum {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "document exceeds the 1 MiB editor limit",
+            "file exceeds the editor read limit",
         ));
     }
-    fs::read(path)
+    read_limited_stream(file, maximum)
+}
+
+fn read_limited_stream(reader: impl Read, maximum: u64) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    reader.take(maximum + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > maximum {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "file grew beyond the editor read limit",
+        ));
+    }
+    Ok(bytes)
 }
 
 fn ensure_document_size(contents: &str) -> io::Result<()> {
@@ -557,15 +579,16 @@ fn load_recovery(
 }
 
 fn read_recovery(path: &Path) -> io::Result<Option<Vec<u8>>> {
-    let metadata = match fs::metadata(path) {
-        Ok(metadata) => metadata,
+    let file = match File::open(path) {
+        Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
-    if metadata.len() > MAX_RECOVERY_BYTES {
-        return Ok(None);
+    match read_limited_file(file, MAX_RECOVERY_BYTES) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == io::ErrorKind::InvalidData => Ok(None),
+        Err(error) => Err(error),
     }
-    fs::read(path).map(Some)
 }
 
 pub(crate) fn atomic_source(path: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -711,6 +734,27 @@ mod tests {
         drop(document);
         drop(manager);
         assert_eq!(fs::read(path).unwrap(), before);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_cleanup_failure_does_not_report_a_committed_save_as_failed() {
+        let (root, project, mut manager) = fixture();
+        let document = manager.open("scripts/main.shou").unwrap();
+        let mut document = document.borrow_mut();
+        let contents = "scene opening { \"saved\" }\n";
+        document.replace_contents(contents.into()).unwrap();
+        fs::create_dir_all(&document.recovery_path).unwrap();
+        fs::write(document.recovery_path.join("obstruction"), b"not a draft").unwrap();
+        document.save().unwrap();
+        assert!(!document.is_dirty());
+        assert_eq!(document.recovery_state(), RecoveryState::None);
+        assert_eq!(
+            fs::read_to_string(project.join("scripts/main.shou")).unwrap(),
+            contents
+        );
+        document.save().unwrap();
+        drop(document);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1005,6 +1049,33 @@ mod tests {
         fs::write(project.join("project.json"), "{}\n").unwrap();
         let error = manager.open("project.json").unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reads_stop_at_the_limit_even_when_the_stream_keeps_growing() {
+        use std::io::{Cursor, Seek};
+
+        let mut exact = Cursor::new(b"1234");
+        assert_eq!(read_limited_stream(&mut exact, 4).unwrap(), b"1234");
+        let mut growing = Cursor::new(b"123456789");
+        assert_eq!(
+            read_limited_stream(&mut growing, 4).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(growing.stream_position().unwrap(), 5);
+
+        let (root, project, mut manager) = fixture();
+        File::options()
+            .write(true)
+            .open(project.join("scripts/main.shou"))
+            .unwrap()
+            .set_len(MAX_DOCUMENT_BYTES + 1)
+            .unwrap();
+        assert_eq!(
+            manager.open("scripts/main.shou").unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

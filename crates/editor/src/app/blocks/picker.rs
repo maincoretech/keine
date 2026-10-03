@@ -188,7 +188,8 @@ pub(in crate::app) fn insert_kind_icon(kind: InsertKind) -> AssetIconName {
             | "camera.unbind"
             | "scene.parallax.stop"
             | "scene.parallax"
-            | "camera.effect" => AssetIconName::Move,
+            | "camera.effect"
+            | "camera.reset" => AssetIconName::Move,
             "stage.animate" => AssetIconName::Move,
             "sprite.transform" | "background.transform" => AssetIconName::Move,
             "sprite.animate" | "sprite.transition" | "stage.mask.show" | "stage.mask.hide" => {

@@ -181,12 +181,19 @@ pub(crate) struct ImageDimensions(HashMap<AssetId<Image>, ImageMetadata>);
 struct ImageMetadata {
     size: UVec2,
     environment: Option<super::lighting::EnvironmentSample>,
+    bytes: usize,
 }
 
 #[derive(Resource, Default)]
 pub(crate) struct PreparedImages(HashSet<AssetId<Image>>);
 
 impl ImageDimensions {
+    pub(crate) fn cached_bytes(&self, handle: &UntypedHandle) -> Option<usize> {
+        self.0
+            .get(&handle.id().typed::<Image>())
+            .map(|metadata| metadata.bytes)
+    }
+
     pub(crate) fn size(&self, handle: &Handle<Image>) -> Option<UVec2> {
         self.0.get(&handle.id()).map(|metadata| metadata.size)
     }
@@ -225,8 +232,8 @@ pub(crate) fn prepare(
         prepared.0.remove(&id);
         dimensions.0.remove(&id);
     }
-    let has_pending = cache.handles.iter().any(|(path, handle)| {
-        roles.resolve(path, ImageRole::default()).is_stage_art()
+    let has_pending = cache.handles.values().any(|handle| {
+        handle.type_id() == std::any::TypeId::of::<Image>()
             && !prepared.0.contains(&handle.id().typed::<Image>())
     });
     if !cache.is_changed() && !has_pending {
@@ -236,7 +243,7 @@ pub(crate) fn prepare(
     let active = cache
         .handles
         .iter()
-        .filter(|(path, _)| roles.resolve(path, ImageRole::default()).is_stage_art())
+        .filter(|(_, handle)| handle.type_id() == std::any::TypeId::of::<Image>())
         .map(|(_, handle)| handle.id().typed::<Image>())
         .collect::<HashSet<_>>();
     if cache.is_changed() {
@@ -250,7 +257,7 @@ pub(crate) fn prepare(
 
     for (path, handle) in &cache.handles {
         let role = roles.resolve(path, ImageRole::default());
-        if !role.is_stage_art() {
+        if handle.type_id() != std::any::TypeId::of::<Image>() {
             continue;
         }
         let id = handle.id().typed::<Image>();
@@ -265,16 +272,12 @@ pub(crate) fn prepare(
         };
         let original = image.size();
         let target = target_size(role, original, config.layout.sprite_height);
-        let environment = super::lighting::sample(image);
-        dimensions.0.insert(
-            id,
-            ImageMetadata {
-                size: target,
-                environment,
-            },
-        );
+        let environment = role
+            .is_stage_art()
+            .then(|| super::lighting::sample(image))
+            .flatten();
 
-        if target != original && is_resizeable(image) {
+        if role.is_stage_art() && target != original && is_resizeable(image) {
             // The image loader guarantees valid tightly packed RGBA8 here, so
             // transfer the pixel allocation instead of cloning a full-size
             // image before resizing it.
@@ -286,7 +289,7 @@ pub(crate) fn prepare(
                 true,
                 RenderAssetUsages::RENDER_WORLD,
             );
-        } else {
+        } else if role.is_stage_art() {
             if target != original {
                 log::debug!(
                     "keeping unsupported immutable image {path} at {}x{}",
@@ -296,6 +299,20 @@ pub(crate) fn prepare(
             }
             image.asset_usage = RenderAssetUsages::RENDER_WORLD;
         }
+        // Keep the decoded byte count after render extraction releases the
+        // main-world Image. This is a texture-payload estimate, not GPU RSS.
+        dimensions.0.insert(
+            id,
+            ImageMetadata {
+                size: if role.is_stage_art() {
+                    target
+                } else {
+                    image.size()
+                },
+                environment,
+                bytes: image.data.as_ref().map_or(usize::MAX, Vec::len),
+            },
+        );
         prepared.0.insert(id);
     }
 }
@@ -429,14 +446,36 @@ mod tests {
             RenderAssetUsages::RENDER_WORLD,
         );
         let handle = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+        let raw = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(Image::new_fill(
+                Extent3d {
+                    width: 2,
+                    height: 2,
+                    depth_or_array_layers: 1,
+                },
+                TextureDimension::D2,
+                &[255, 255, 255, 255],
+                TextureFormat::Rgba8UnormSrgb,
+                RenderAssetUsages::RENDER_WORLD,
+            ));
         let mut roles = ImageRoleRegistry::default();
         roles.register("room.webp".into(), ImageRole::BACKGROUND);
+        roles.register("texture.webp".into(), ImageRole::RAW);
         let mut cache = LocalAssetCache::default();
         cache
             .handles
             .insert("room.webp".into(), handle.clone().untyped());
+        cache
+            .handles
+            .insert("texture.webp".into(), raw.clone().untyped());
         app.insert_resource(roles).insert_resource(cache);
         app.update();
+        let dimensions = app.world().resource::<ImageDimensions>();
+        assert_eq!(dimensions.cached_bytes(&handle.clone().untyped()), Some(16));
+        assert_eq!(dimensions.cached_bytes(&raw.clone().untyped()), Some(16));
+        assert!(dimensions.environment(&raw).is_none());
         assert!(
             app.world()
                 .resource::<ImageDimensions>()
@@ -450,6 +489,12 @@ mod tests {
             .data
             .take();
         app.update();
+        assert_eq!(
+            app.world()
+                .resource::<ImageDimensions>()
+                .cached_bytes(&handle.clone().untyped()),
+            Some(16)
+        );
         assert!(
             app.world()
                 .resource::<ImageDimensions>()

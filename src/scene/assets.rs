@@ -8,11 +8,12 @@ use crate::runtime::resources::{
     AssetLoadingGate, GameConfigResource, GameState, LocalAssetCache, LocalAssetManifest,
 };
 use crate::scene::effects::material::active_lut_preset;
-use crate::scene::images::{ImageRole, ImageRoleRegistry};
+use crate::scene::images::{ImageDimensions, ImageRole, ImageRoleRegistry};
 use crate::ui::foundation::UiFonts;
 
 const MAX_PREDICTED_ASSETS: usize = 8;
 const MAX_SPECULATIVE_LOADS: usize = 1;
+const MAX_SPECULATIVE_BYTES: usize = 128 * 1024 * 1024;
 
 fn configured_action_window(cursor: usize, lookahead: usize) -> std::ops::RangeInclusive<usize> {
     cursor.saturating_sub(1)..=cursor.saturating_add(lookahead.clamp(1, 500))
@@ -24,6 +25,7 @@ struct AssetPlan {
     urgent: Vec<(String, ResourceKind)>,
     predicted: Vec<(String, ResourceKind)>,
     speculative: HashSet<String>,
+    budget_deferred: HashSet<String>,
 }
 
 impl AssetPlan {
@@ -59,6 +61,7 @@ impl AssetPlan {
         self.urgent.retain(|(candidate, _)| candidate != &path);
         self.predicted.retain(|(candidate, _)| candidate != &path);
         self.speculative.remove(&path);
+        self.budget_deferred.remove(&path);
         self.critical.insert(path, kind);
     }
 
@@ -79,7 +82,33 @@ impl AssetPlan {
         self.critical
             .keys()
             .chain(self.speculative_assets().map(|(path, _)| path))
-            .all(|path| cache.handles.contains_key(path))
+            .all(|path| cache.handles.contains_key(path) || self.budget_deferred.contains(path))
+    }
+
+    fn enforce_budget(
+        &mut self,
+        cache: &mut LocalAssetCache,
+        maximum: usize,
+        mut bytes: impl FnMut(&UntypedHandle) -> Option<usize>,
+    ) -> bool {
+        let mut remaining = maximum;
+        let mut unaccounted = false;
+        let mut deferred = Vec::new();
+        for (path, _) in self.speculative_assets() {
+            let Some(handle) = cache.handles.get(path) else {
+                continue;
+            };
+            match bytes(handle) {
+                Some(size) if size <= remaining => remaining -= size,
+                Some(_) => deferred.push(path.clone()),
+                None => unaccounted = true,
+            }
+        }
+        for path in deferred {
+            cache.handles.remove(&path);
+            self.budget_deferred.insert(path);
+        }
+        unaccounted
     }
 }
 
@@ -173,17 +202,25 @@ pub fn prefetch_local_assets(
     state: Res<GameState>,
     config: Res<GameConfigResource>,
     manifest: Res<LocalAssetManifest>,
-    image_roles: Res<ImageRoleRegistry>,
+    loaded_assets: (
+        Res<ImageRoleRegistry>,
+        Res<ImageDimensions>,
+        crate::runtime::audio::CachedAudioSizes,
+    ),
     asset_server: Res<AssetServer>,
     mut cache: ResMut<LocalAssetCache>,
     mut previous: Local<PrefetchState>,
 ) {
+    let (image_roles, image_sizes, audio_sizes) = loaded_assets;
     let rebuild = !previous.matches(&state) || manifest.is_changed() || config.is_changed();
     if rebuild {
         previous.capture(&state);
         previous.plan = build_asset_plan(&state, &config, &manifest);
         cache.handles.retain(|path, _| previous.plan.retains(path));
-    } else if previous.plan.fully_admitted(&cache) {
+    } else if previous.plan.fully_admitted(&cache)
+        && !image_sizes.is_changed()
+        && !audio_sizes.is_changed()
+    {
         return;
     }
 
@@ -198,13 +235,26 @@ pub fn prefetch_local_assets(
         cache.critical = critical;
     }
 
+    let unaccounted = previous
+        .plan
+        .enforce_budget(&mut cache, MAX_SPECULATIVE_BYTES, |handle| {
+            if matches!(asset_server.load_state(handle.id()), LoadState::Failed(_)) {
+                return Some(usize::MAX);
+            }
+            if handle.type_id() == std::any::TypeId::of::<Image>() {
+                image_sizes.cached_bytes(handle)
+            } else {
+                audio_sizes.bytes(handle)
+            }
+        });
+
     let pending = |handle: &UntypedHandle| {
         matches!(
             asset_server.load_state(handle.id()),
             LoadState::NotLoaded | LoadState::Loading
         )
     };
-    if cache.blocking_handles().any(pending) {
+    if cache.blocking_handles().any(pending) || unaccounted {
         return;
     }
     let speculative_in_flight = cache
@@ -218,7 +268,10 @@ pub fn prefetch_local_assets(
             previous
                 .plan
                 .speculative_assets()
-                .find(|(path, _)| !cache.handles.contains_key(path))
+                .find(|(path, _)| {
+                    !cache.handles.contains_key(path)
+                        && !previous.plan.budget_deferred.contains(path)
+                })
                 .cloned()
         })
         .flatten();
@@ -491,6 +544,59 @@ mod tests {
         assert_eq!(paths.len(), MAX_PREDICTED_ASSETS + 1);
         assert_eq!(paths[0], "figure/animation.webp");
         assert!(!paths.contains(&format!("voice/{}.opus", MAX_PREDICTED_ASSETS + 1).as_str()));
+    }
+
+    #[test]
+    fn speculative_budget_preserves_priority_and_never_evicts_current_assets() {
+        for (size, expected) in [(4 * 1024 * 1024, 8), (64 * 1024 * 1024, 2)] {
+            let mut images = Assets::<Image>::default();
+            let mut cache = LocalAssetCache::default();
+            let mut plan = AssetPlan::default();
+            plan.require("current".into(), ResourceKind::Background);
+            cache
+                .handles
+                .insert("current".into(), images.add(Image::default()).untyped());
+            for index in 0..8 {
+                let path = format!("predicted-{index}");
+                plan.warm_predicted(path.clone(), ResourceKind::Figure);
+                cache
+                    .handles
+                    .insert(path, images.add(Image::default()).untyped());
+            }
+            let before = (cache.handles.len() - 1) * size;
+            assert!(!plan.enforce_budget(&mut cache, MAX_SPECULATIVE_BYTES, |_| Some(size)));
+            assert!(cache.handles.contains_key("current"));
+            assert_eq!(cache.handles.len() - 1, expected);
+            for index in 0..8 {
+                assert_eq!(
+                    cache.handles.contains_key(&format!("predicted-{index}")),
+                    index < expected
+                );
+            }
+            assert!(plan.fully_admitted(&cache));
+            println!(
+                "speculative payload {size} bytes/asset: quantity-only {before} bytes -> budgeted {} bytes",
+                expected * size
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_sizes_hold_admission_and_oversized_assets_stay_deferred() {
+        let mut images = Assets::<Image>::default();
+        let mut cache = LocalAssetCache::default();
+        let mut plan = AssetPlan::default();
+        plan.warm_urgent("animation".into(), ResourceKind::Figure);
+        cache
+            .handles
+            .insert("animation".into(), images.add(Image::default()).untyped());
+        assert!(plan.enforce_budget(&mut cache, 4, |_| None));
+        assert_eq!(cache.handles.len(), 1);
+        assert!(!plan.enforce_budget(&mut cache, 4, |_| Some(5)));
+        assert!(cache.handles.is_empty());
+        assert!(plan.fully_admitted(&cache));
+        plan.require("animation".into(), ResourceKind::Figure);
+        assert!(!plan.fully_admitted(&cache));
     }
 
     #[test]

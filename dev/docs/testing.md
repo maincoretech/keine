@@ -1,5 +1,34 @@
 # 开发与验收
 
+## 剩余事项与分工
+
+本轮审计、预取预算、密钥文件改名、跨平台废纸篓与进程采样已实现。
+Windows/Linux 新代码已交叉编译；三平台 CI 的运行结果须按本次推送的提交核对。
+下面列的是实际剩余动作；已通过的本机输入、拖放、音频循环和全屏目测无需重新整轮验收。
+
+### 项目所有者（用户）
+
+| 何时 | 你要做什么 | 完成标准 |
+|---|---|---|
+| 后续剧情验收 | 在 Editor 打开 `projects/tday`，从入口播放完整剧情，检查分支、画面、字幕、BGM/SE/语音及自动/手动继续。问题反馈带章节、场景或 Block 编号、操作步骤和预期结果 | 确认剧情与视听效果符合原工程意图；缺失的 3 个 SE 按已批准方案跳过并标注 |
+| 有多屏设备后 | 提供可测试的显示器与缩放配置，协助跨屏移动 Editor/Preview、切换全屏并检查输入与坐标 | 开发者完成跨屏复验并记录配置与结果；此项继续延后 |
+| 正式发行前 | 决定发行平台与时机；备份游戏 `publisher.key`；发行 macOS 版时准备 Developer ID Application 证书与 notarytool Keychain profile，提供名称供打包使用 | 发行凭据就绪；具体准备步骤见 [发布](release.md#发行前的用户准备) |
+| 准备收尾时 | 审阅当前改动并明确授权提交/推送 | 开发者完成提交、推送及 CI 核对；不需要你手动修改引擎代码 |
+
+### 后续开发者 / 维护者
+
+| 工作 | 具体动作 | 完成标准 |
+|---|---|---|
+| 集成收尾 | 审查当前 diff，保留无关修改，按下方门禁复验；用户授权后提交推送，检查 Linux/macOS/Windows CI，修复真实失败 | 记录提交 SHA 与 CI 结果；不能把本机交叉编译当作远程 CI 通过 |
+| Windows/Linux 与显示验收 | 在对应系统原生运行 Editor/Engine；验证入篓→撤销→重做、同名冲突保护、CPU/内存采样与进程重启；检查保存重开、IME、Preview、音视频。用可用设备补测 1× DPI、Preview 极端比例；多屏设备到位后再测跨屏 | 各系统/显示配置分别记录通过、失败与未测；CI 单元测试不能替代 GUI/音视频实机验收 |
+| 独立性能阶段（仍延后） | 复用现有 bench、`cargo perf` 和 portable benchmark，测 Editor 滚动/大文档/搜索、启动与持续 CPU/RSS、Preview CPU/GPU 帧时、粒子全屏/瞬时峰值、媒体流与 Hakutaku I/O；先定位实际热点，再修改 | 同主机、同输入、同 release 配置保留前后原始命令/日志，报告 p99、最大帧时及超过刷新预算的帧数。以不掉帧为目标，窗口切换单独标记；平均 FPS 或 p99 单项不能证明零掉帧 |
+| 正式发行 | 在发行副本规范化存量 tday 媒体为 WebP/Opus 并保持 ID/引用，原工程只读；复用稳定 project.id 与 identity，验证并完整打包。macOS 在用户凭据就绪后执行正式签名/公证；测试解压、独立安装启动、Engine discovery、媒体播放、用户数据位置与更新 | 发行包满足生产格式，签名/公证检查通过，包中没有私有 identity；实际安装运行通过后才记录为发行验收完成 |
+
+维护者只按当前架构与已选政策收尾：Save 仍严格匹配 fingerprint，预取保持现有数量
+限制及 128 MiB 非关键预算，合法包版本回退允许，密钥仅显式轮换。
+不把跨版本存档迁移、自动轮换或额外框架列为欠缺功能。
+状态与证据更新本指南；密钥/发行步骤更新 `release.md`，不另建重复计划或阶段报告。
+
 ## 每次集成
 
 从当前 checkout 的分支、worktree list、status、diff 开始。保留未提交修改。
@@ -38,6 +67,19 @@ tests/
 各 crate 的私有 unit tests 贴近 owner；Editor 的真实单实例进程回归位于
 `crates/editor/tests/instance.rs`。不再保留只测试上游 Dock prototype 的 spike。
 保留格式边界、路径隔离、事务/恢复、协议、执行和资源回归；不为了界面目测新增测试工程。
+
+输入边界回归覆盖 Editor 文档/恢复草稿限量读取、三类原生清单超限拒绝、
+真实签名 Hakutaku 配置的 256 KiB 边界和编译 Program roundtrip；编译头超限/长度错配
+在读取正文前拒绝，读取中增长或截断也必须失败。Unix 路径回归在检查后确定性替换
+文件/父目录，验证外部链接拒绝、已打开句柄稳定、目录内链接与搜索权限保留、FIFO 不阻塞。
+这些不代替 Windows/Linux 上对应系统调用的运行态验收，也不证明整个进程的内存上限。
+
+持久化回归覆盖实际字节总量、备份危险/冲突文件名、包内 `.tmp` 名碰撞、
+有效 CRC 下 metadata/state 尾部垃圾拒绝、独立域严格解码、非有限设置恢复默认值，
+以及源文档已保存后的草稿清理失败。恶意备份拒绝时原存档保持不变；合法 v11/V2 格式不变。
+状态恢复沿用 fingerprint、游标/调用栈校正及独立域保留回归；WebP 补测损坏与截断输入。
+本轮 workspace 780 项通过、8 项显式忽略；publisher lib 320 项、video-native 无默认音频 8 项、文档 18 项通过。
+fmt/check/clippy、可选 feature 构建和 native-smoke validate 通过。IPC 沙箱权限失败后在放宽沙箱的同一 checkout 重跑通过。
 
 官方 LetsGal 示例验收和 loader benchmark 通过 `KEINE_LETSGAL_PROJECT` 指定外部原工程；
 不依赖本地 demo。`projects/tday` 是唯一忽略的开发 demo，CI 打包默认使用 tracked native-smoke。
@@ -142,6 +184,19 @@ KEINE_BENCH_IMAGE=/absolute/path/to/background.png cargo test -p keine-editor --
 第二条使用同一背景派生无损/有损 WebP，交替执行原解码与缩放解码；未指定图片时生成固定图案。计时不包含编码、任务排队或 GPU 绘制。回归涵盖索引错误恢复/未变文件/取消、浏览结果失效/时间筛选/Unmapped、解码并发上限、透明度与 EXIF 旋转。
 
 本轮 workspace 791 通过、8 个显式忽略的性能测试；fmt/check/clippy、关闭音频的视频构建及 audio-opus/audio-seekable 检查、native-smoke validate 通过。原生 tday 检查音频卡片紧凑行距/上下留白、同一 Asset Preview 的播放→暂停→继续、重播和列表按钮同步；暂停沿用当前 Player，继续不重建解码器。协议升至 v9，旧 Editor/Engine 必须成对更新。系统输出的听感未代替用户验收。
+
+### 运行时预取预算
+
+原数量限制继续保留；非关键图片纹理 payload 与内存音频另受 128 MiB 保留预算约束，当前显示/显式 blocking 不淘汰，流式 Opus 不按文件长度计费。尺寸未知时暂停追加，超限项延后到新计划，避免同计划重复解码。
+
+固定计费输入对照原来的 8 项数量保留与新增预算：8×4 MiB 为 32→32 MiB；8×64 MiB 为 512→128 MiB。命令/原始输出在 `target/authoring/performance/prefetch/policy.log`：
+
+```sh
+cargo test -p keine --lib scene::assets::tests::speculative_budget_preserves_priority_and_never_evicts_current_assets -- --nocapture
+```
+
+这是缓存计费合同回归，不是进程 RSS、GPU 实占或 FPS 测量；128 MiB 是初始政策，机器性能测量仍在独立阶段。回归覆盖优先级、当前资源保护、未知尺寸/延后、render extraction 后计费保留，以及流式/内存音频区分。
+当前 workspace 783 项通过、8 项显式忽略；publisher 324 项、无音频 video-native 8 项通过；fmt/check/clippy、可选功能构建、native-smoke 与发布 workflow YAML 解析通过。publisher.key 迁移验证身份、公钥与根密钥保持不变。
 
 ### 独立性能阶段（其余项目待测）
 
@@ -272,7 +327,7 @@ Editor debug 构建与 native-smoke/tday 校验通过；Trash/IPC 测试在沙�
 ├── 待显示验收：1× 与 Preview 极端比例；多显示器按用户要求延后
 ├── 独立性能阶段（暂缓）：实际 Preview FPS/GPU 帧时、持续 CPU/RSS、粒子与其他热点
 ├── Windows x64 / Linux：构建 CI 与运行态验收分别看待；运行态暂缓
-└── 暂缓：正式签名/notarization；Windows/Linux 系统废纸篓尚未实现
+└── 发行：正式签名/notarization 脚本已接入；实际公证待证书与凭据
 ```
 
 当前代码已通过 fmt、workspace check、clippy、Editor debug 构建与 native-smoke validate；默认 workspace tests 729 passed / 1 ignored，no-default-features + publisher workspace tests 763 passed / 1 ignored。无默认 feature 与 bundled-opus 的音频边界各 2 项及 video-native 视频 8 项回归通过。audio-opus 单独配置的 check 通过，测试链接因本机缺少系统 libopus 未完成；bundled-opus 覆盖相同的无 seekable 路径。组合 hot-reload/video-native/video-ffmpeg/publisher 的 check 通过。
@@ -284,7 +339,14 @@ Editor debug 构建与 native-smoke/tday 校验通过；Trash/IPC 测试在沙�
 无解码器配置的 Preview 曾因 AudioSource 未注册而 SIGABRT；现在由音频配置入口补齐类型注册，并保留已有音频资源。回归覆盖普通/图库播放及已有 registry 不被重建；无音频构建原生 Preview 已验证缺少 Opus 时不崩溃、对白仍能继续。Preview 失败长提示改为固定尺寸图标，详情留在 tooltip/Output；最小窗口已检查图标不遮挡 Text/Blocks 标签。
 宽矮 Editor 的 Text/Blocks、概览、资源框和 Inspector 滚动已目测。按用户确认，极窄窗口通过调整分隔线或关闭一列 View 使用，不要求三列同时保留的极限布局适配；撤销专为此添加的类型标识收缩/裁剪，不再列为本轮待修复项。
 音频复验复用临时环境工程，播放无首尾静音的两秒 Opus 纯音；用户确认循环无停顿/爆音、第一首→第二首→第一首的 1 秒淡入淡出均正常。停止指令后脚本继续到下一句。此结果只覆盖本机该输入，不推定所有设备/素材已通过。临时新增脚本/音频已移除；环境工程 53 个文件和 letsgal-native 95 个文件的路径与 SHA256 均恢复基线。
-明确未完成的功能仍为 Windows/Linux 系统废纸篓与进程指标；正式签名/notarization 属发行工作，跨平台/显示适配/主观音频属运行态验收。它们不计为本机核心功能已完成，也不混入性能阶段。
+Windows/Linux 系统废纸篓与进程指标已实现，CI 对三平台增加实际进程查询与系统入篓/撤销测试；本机交叉编译只证明平台代码可编译，不代替 Windows/Linux 原生运行态验收。正式签名/notarization 已有可选脚本入口，实际执行仍需用户证书和 Keychain profile。跨平台/显示适配、完整 tday 剧情及主观媒体保持独立验收，不混入性能阶段。
+平台补齐验证：fmt/check、publisher clippy、默认 workspace 787 passed / 8 ignored、
+无默认功能 + publisher workspace 821 passed / 8 ignored；macOS 系统 Trash 与 IPC
+在沙箱放行后通过。CPU/RSS 查询与单位/非法计数回归、Linux 恢复记录/冲突/不安全
+Trash 拒绝回归通过；新增平台 owner 与测试在 Windows GNU、Linux GNU 目标交叉编译。
+平台编译隔离依赖 GPUI，实际 Editor 原生测试接入三平台 CI；该 CI 本轮未远程执行。
+macOS 新 Editor debug 构建与开发包签名通过，ZIP 解压后的两个 app 严格验签通过；
+正式 Developer ID 公证、Windows/Linux GUI 与显示验收未执行。
 
 EYS v2.0 的配置版本为 2；默认值、显式旧版/未知版拒绝及迁移输出版本已通过回归。0.12.0 的 Editor/Engine 构建与版本输出、fmt/check/clippy、workspace tests、可选 feature 和 native-smoke/letsgal-native 校验通过。
 统一入口的解析、执行、迁移及旧入口拒绝已通过回归；IR schema 为 v6。

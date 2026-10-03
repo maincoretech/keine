@@ -185,6 +185,7 @@ impl WorkbenchPanel {
         }
         self.minimap_navigation = minimap::Navigation::default();
         self.document_mode = mode;
+        self.text_scroll_pending = mode == DocumentMode::Text;
         cx.notify();
         cx.refresh_windows();
     }
@@ -730,6 +731,17 @@ impl WorkbenchPanel {
                 .map(|index| &dialogues[index])
                 .filter(|dialogue| dialogue.editable)
         }) {
+            // A draft becomes source on its first committed input. Keep its
+            // focused textarea until submit; creating a second row state here
+            // would replace the visible input and lose subsequent keystrokes.
+            if self.draft_text.as_ref().is_some_and(|draft| {
+                draft
+                    .text_range
+                    .as_ref()
+                    .is_some_and(|range| range.start == dialogue.text_range.start)
+            }) {
+                continue;
+            }
             if self
                 .block_text_editors
                 .iter()
@@ -1218,7 +1230,6 @@ impl WorkbenchPanel {
                 .submit_on_enter(true)
         });
         let state_for_change = state.clone();
-        let document = document.clone();
         let source_editor = editor.clone();
         let root = root.clone();
         let window_handle = window.window_handle();
@@ -1243,7 +1254,10 @@ impl WorkbenchPanel {
             }
             let value = state_for_change.read(cx).value().to_string();
             let escaped = escape_eiyashou_string(&value);
-            let source = document.borrow().contents().to_owned();
+            // Change events can be queued before SourceDocument receives the
+            // preceding write. Match the draft range against the live source.
+            let source = source_editor.read(cx).value().to_string();
+            let source_len = source.len();
             let Some(draft) = panel
                 .draft_text
                 .as_mut()
@@ -1251,6 +1265,7 @@ impl WorkbenchPanel {
             else {
                 return;
             };
+            let changed_end = draft.text_range.as_ref().map(|range| range.end);
             let edit = if let Some(range) = draft.text_range.clone() {
                 if source.get(range.clone()) != Some(draft.last_escaped.as_str()) {
                     Err("source changed; refresh the Block view".to_owned())
@@ -1290,6 +1305,14 @@ impl WorkbenchPanel {
             };
             match edit {
                 Ok(edited) => {
+                    let delta = edited.len() as isize - source_len as isize;
+                    let changed_end =
+                        changed_end.unwrap_or_else(|| draft.text_range.as_ref().unwrap().start);
+                    for row in &mut panel.block_text_editors {
+                        if row.text_start >= changed_end {
+                            row.text_start = row.text_start.saturating_add_signed(delta);
+                        }
+                    }
                     let result = cx.update_window(window_handle, |_, window, cx| {
                         source_editor.update(cx, |editor, cx| {
                             editor.replace_all(edited, window, cx);
@@ -1331,7 +1354,7 @@ impl WorkbenchPanel {
         let PanelContent::Document {
             root,
             relative,
-            document: Some(document),
+            document: Some(_),
             editor,
         } = &self.content
         else {
@@ -1339,9 +1362,8 @@ impl WorkbenchPanel {
         };
         let root = root.clone();
         let relative = relative.clone();
-        let document = document.clone();
         let editor = editor.clone();
-        let source = document.borrow().contents().to_owned();
+        let source = editor.read(cx).value().to_string();
         let projection = EiyashouProjection::parse(&source);
         let draft = self
             .draft_text

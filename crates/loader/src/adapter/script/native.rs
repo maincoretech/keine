@@ -1283,6 +1283,9 @@ impl<'a> Parser<'a> {
             && is_native_dotted_command(&dotted)
         {
             self.cursor = dotted_end;
+            if dotted == "camera.reset" {
+                return self.parse_camera_reset(report).unwrap_or_default();
+            }
             return self.parse_command(dotted, report).into_iter().collect();
         }
         if self.peek_text() == Some(".")
@@ -2685,6 +2688,28 @@ impl<'a> Parser<'a> {
             }
         }
         Some(transform)
+    }
+
+    fn parse_camera_reset(&mut self, report: &mut ParseReport) -> Option<Vec<Action>> {
+        let before = report.diagnostics.len();
+        let args = self.take_call_args(report);
+        self.validate_signature(
+            "camera.reset",
+            &args,
+            1,
+            &["duration", "easing", "blocking"],
+            report,
+        );
+        if report.diagnostics.len() != before {
+            return None;
+        }
+        let targets = self.camera_targets(&args, report)?;
+        let duration = self.named_duration_checked(&args, "duration", report)?;
+        let easing = self.named_easing(&args, "easing", report)?;
+        let blocking = self.checked_bool(&args, "blocking", true, report)?;
+        Some(crate::adapter::camera::reset(
+            targets, duration, easing, blocking,
+        ))
     }
 
     fn camera_targets(&self, args: &[Argument], report: &mut ParseReport) -> Option<CameraTargets> {

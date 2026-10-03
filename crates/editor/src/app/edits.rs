@@ -648,9 +648,36 @@ pub(super) fn format_and_save(
     }
     let mut history = Vec::new();
     for (document, editor, change) in changes {
+        let original_tokens = keine_loader::native_tokens(&change.before);
+        let formatted_tokens = keine_loader::native_tokens(&change.after);
+        let map = |offset| {
+            formatted_offset(
+                &original_tokens,
+                &formatted_tokens,
+                change.after.len(),
+                offset,
+            )
+        };
         document
             .borrow_mut()
             .replace_contents(change.after.clone())?;
+        if let Some(panel) = cx
+            .global::<EditorDocuments>()
+            .panel_entity_for(root, &change.path)
+        {
+            let _ = panel.update(cx, |panel, _| {
+                panel.selected_blocks = panel.selected_blocks.iter().copied().map(map).collect();
+                panel.block_selection_anchor = panel.block_selection_anchor.map(map);
+                for row in &mut panel.block_text_editors {
+                    row.text_start = map(row.text_start);
+                }
+                if let Some(draft) = &mut panel.draft_text
+                    && let Some(range) = &mut draft.text_range
+                {
+                    *range = map(range.start)..map(range.end);
+                }
+            });
+        }
         if let Some(editor) = editor {
             editor.update(cx, |editor, cx| {
                 let focused = editor.focus_handle(cx).is_focused(window);
@@ -660,8 +687,9 @@ pub(super) fn format_and_save(
                     position.line as usize,
                     position.character as usize,
                 );
-                let offset = formatted_offset(&change.before, &change.after, offset);
+                let offset = map(offset);
                 editor.replace_all(change.after.clone(), window, cx);
+                editor.set_selected_range(offset..offset, cx);
                 if focused {
                     let span = keine_loader::SourceLineIndex::new(&change.after)
                         .span(&change.after, offset);
@@ -681,10 +709,13 @@ pub(super) fn format_and_save(
     cx.global_mut::<EditorDocuments>().save_all(root)
 }
 
-fn formatted_offset(before: &str, after: &str, offset: usize) -> usize {
-    use keine_loader::{NativeTokenKind, native_tokens};
-    let original = native_tokens(before);
-    let formatted = native_tokens(after);
+fn formatted_offset(
+    original: &[keine_loader::NativeToken],
+    formatted: &[keine_loader::NativeToken],
+    after_len: usize,
+    offset: usize,
+) -> usize {
+    use keine_loader::NativeTokenKind;
     let mut previous = 0;
     for (old, new) in original
         .iter()
@@ -703,7 +734,7 @@ fn formatted_offset(before: &str, after: &str, offset: usize) -> usize {
         }
         previous = new.range.end;
     }
-    after.len()
+    after_len
 }
 
 #[cfg(test)]

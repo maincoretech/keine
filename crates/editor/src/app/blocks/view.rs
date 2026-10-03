@@ -85,27 +85,7 @@ pub(in crate::app) fn block_card_summary(kind: &BlockKind, source: &str, line: u
             .next()
             .unwrap_or_default()
             .to_owned(),
-        BlockKind::Command => {
-            let name = source.split('(').next().unwrap_or_default().trim();
-            let args = source
-                .split_once('(')
-                .and_then(|(_, tail)| tail.rsplit_once(')'))
-                .map(|(args, _)| args)
-                .unwrap_or_default();
-            let values = args.split(',').map(str::trim).collect::<Vec<_>>();
-            match name {
-                "sprite" => values.get(1).copied().unwrap_or_default(),
-                "move" => values.get(1).copied().unwrap_or_default(),
-                "pop" => values.first().copied().unwrap_or_default(),
-                "camera.move" | "camera.shake" | "sprite.focus" => {
-                    values.first().copied().unwrap_or_default()
-                }
-                "sprite.focus.configure" => "Sprite focus styles",
-                method if method.contains('.') => values.first().copied().unwrap_or_default(),
-                _ => values.first().copied().unwrap_or_default(),
-            }
-            .to_owned()
-        }
+        BlockKind::Command => String::new(),
         BlockKind::Unsupported => format!("Unsupported syntax · L{}", line + 1),
     }
 }
@@ -127,10 +107,12 @@ fn block_card_headline(
             .map(|field| field.value.as_str())
     };
     match command {
-        // Parameter-rich commands may have a truncated projection summary. The
-        // bounded positional source field retains the actual target on reopen.
-        "camera.move" | "camera.shake" | "camera.effect" => {
-            value("0").unwrap_or(fallback.as_str()).to_owned()
+        // Summaries are truncated and commas can belong to nested calls or text.
+        // Source fields already retain complete, token-bounded argument values.
+        "sprite" | "move" => value("1").unwrap_or_default().to_owned(),
+        "sprite.focus.configure" => "Sprite focus styles".to_owned(),
+        "screen.curtain.show" | "screen.curtain.hide" => {
+            value("color").unwrap_or_default().to_owned()
         }
         "text.retract" => format!(
             "{}  →  {}",
@@ -151,7 +133,15 @@ fn block_card_headline(
         event if event.starts_with("event.") => value("time")
             .map(|time| format!("at {time}"))
             .unwrap_or(fallback),
-        _ => fallback,
+        _ => value("0")
+            .or_else(|| {
+                fields
+                    .iter()
+                    .find(|field| field.insertion.is_none())
+                    .map(|field| field.value.as_str())
+            })
+            .unwrap_or_default()
+            .to_owned(),
     }
 }
 
@@ -273,6 +263,7 @@ pub(in crate::app) fn draft_text_row(draft: &DraftTextBlock, indent: f32, id: us
                 .px_2()
                 .rounded(px(7.))
                 .bg(rgb(SURFACE))
+                .on_action(|_: &gpui_kit::base::input::Enter, _, cx| cx.stop_propagation())
                 .child(
                     Icon::new(AssetIconName::MessageSquarePlus)
                         .xsmall()
@@ -488,13 +479,21 @@ fn render_block_text(
             .into_any_element();
     }
     // The row owns the complete-node menu; preserve ordinary IME, undo and source editing.
-    Textarea::new(state)
-        .context_menu(|menu, _, _| menu)
-        .appearance(false)
-        .bordered(false)
+    div()
+        // Submit is handled by PressEnter. Do not let the propagated native
+        // action fall through to the workbench's new-Text key binding.
+        .on_action(|_: &gpui_kit::base::input::Enter, _, cx| cx.stop_propagation())
         .w_full()
-        .text_size(px(13.))
-        .text_color(rgb(INK))
+        .min_w_0()
+        .child(
+            Textarea::new(state)
+                .context_menu(|menu, _, _| menu)
+                .appearance(false)
+                .bordered(false)
+                .w_full()
+                .text_size(px(13.))
+                .text_color(rgb(INK)),
+        )
         .into_any_element()
 }
 
@@ -879,19 +878,19 @@ pub(in crate::app) fn render_block_projection(
             let label = block_card_label(&block.kind, &block.summary);
             let type_color = block_type_color(&block.kind, &block.summary);
             let text_state = block.text_range.as_ref().and_then(|range| {
-                editors
-                    .iter()
-                    .find(|editor| editor.text_start == range.start)
-                    .map(|editor| &editor.state)
+                draft_text
+                    .filter(|draft| {
+                        draft
+                            .text_range
+                            .as_ref()
+                            .is_some_and(|draft_range| draft_range.start == range.start)
+                    })
+                    .map(|draft| &draft.state)
                     .or_else(|| {
-                        draft_text
-                            .filter(|draft| {
-                                draft
-                                    .text_range
-                                    .as_ref()
-                                    .is_some_and(|draft_range| draft_range.start == range.start)
-                            })
-                            .map(|draft| &draft.state)
+                        editors
+                            .iter()
+                            .find(|editor| editor.text_start == range.start)
+                            .map(|editor| &editor.state)
                     })
             });
             let is_structure = matches!(
@@ -1629,5 +1628,43 @@ mod inline_wait_tests {
         let invalid = inline_wait_preview("前[wait=bad]後", None);
         assert!(invalid.waits.is_empty());
         assert_eq!(invalid.text, "前[wait=bad]後");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_headlines_use_complete_nested_and_quoted_source_fields() {
+        for (command, expected) in [
+            (
+                "screen.curtain.hide(color: rgba(0, 0, 0, 1), duration: 2200ms)",
+                "rgba(0, 0, 0, 1)",
+            ),
+            (
+                "screen.curtain.show(duration: 300ms, color: rgba(0.1, 0.2, 0.3, 1))",
+                "rgba(0.1, 0.2, 0.3, 1)",
+            ),
+            ("sprite(hero, face, position: right(x: 20, y: 10))", "face"),
+            ("move(hero, point(20, 10), duration: 1s)", "point(20, 10)"),
+            (
+                "text.float(\"你好，世界, hello\", font_size: 48)",
+                "你好，世界, hello",
+            ),
+            ("camera.reset(all)", "all"),
+            ("scene.parallax.stop()", ""),
+        ] {
+            let source = format!("scene a {{ {command} }}");
+            let projection = EiyashouProjection::parse(&source);
+            let block = &projection.scenes[0].blocks[0];
+            let fields = projection.source_fields_for_block(&source, block).unwrap();
+            let fallback = block_card_summary(&block.kind, &block.summary, block.line);
+            assert_eq!(
+                block_card_headline(&block.kind, &block.summary, &fields, fallback),
+                expected,
+                "{command}"
+            );
+        }
     }
 }

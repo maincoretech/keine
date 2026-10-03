@@ -635,6 +635,59 @@ pub(super) fn render(action: &Action, model: &MigrationModel) -> Result<Option<S
     Ok(Some(source))
 }
 
+/// Collapse only a complete reset group whose lowered actions are unchanged.
+pub(super) fn render_camera_reset(
+    actions: &[Action],
+    model: &MigrationModel,
+) -> Result<Option<String>> {
+    let Some(group) = actions.get(..4) else {
+        return Ok(None);
+    };
+    let first = match &group[0] {
+        Action::Flow {
+            action, when: None, ..
+        } => action.as_ref(),
+        action => action,
+    };
+    if !matches!(first, Action::ShakeCamera { shake, .. } if shake.amplitude == 0.0 && shake.frequency == 0.0 && shake.duration == 0.0)
+    {
+        return Ok(None);
+    }
+    let last = expected_action(&group[3], model)?;
+    let (targets, seconds, easing, blocking) = match last {
+        Action::SetPostProcess {
+            targets,
+            duration,
+            easing,
+            blocking,
+            ..
+        } => (targets, duration, easing, blocking),
+        _ => return Ok(None),
+    };
+    let timing = if seconds == 0.0 && easing == Easing::Linear {
+        if blocking {
+            String::new()
+        } else {
+            ", blocking: false".into()
+        }
+    } else {
+        timing(seconds, easing, blocking)
+    };
+    let source = format!("camera.reset({}{timing})", camera_target(targets));
+    let parsed = keine_loader::adapter::parse_native_scenes(&format!("scene reset {{ {source} }}"));
+    let report = &parsed[0].report;
+    let expected = group
+        .iter()
+        .map(|action| expected_action(action, model))
+        .collect::<Result<Vec<_>>>()?;
+    let actual = report
+        .actions
+        .iter()
+        .map(|action| expected_action(action, model))
+        .collect::<Result<Vec<_>>>()?;
+    Ok((report.diagnostics.is_empty() && expected == actual).then_some(source))
+}
+
 pub(super) fn verify(action: &Action, source: &str, model: &MigrationModel) -> Result<()> {
     if matches!(action, Action::Set { .. }) {
         // Assignment is intentionally lowered to the native typed evaluator;
@@ -1220,6 +1273,48 @@ mod tests {
                 characters: BTreeMap::new(),
             },
         };
+        // A logical reset is one authoring command, including animated waits.
+        for command in [
+            "camera.reset(all)",
+            "camera.reset(all, blocking: false)",
+            "camera.reset(scene, duration: 500ms, easing: ease_out)",
+            "camera.reset(characters, duration: 750ms, blocking: false)",
+        ] {
+            let parsed = keine_loader::parse_native_scenes(&format!("scene a {{ {command} }}"));
+            let actions = &parsed[0].report.actions;
+            let source = render_camera_reset(actions, &model).unwrap().unwrap();
+            let compact = keine_loader::parse_native_scenes(&format!("scene a {{ {source} }}"));
+            assert_eq!(actions, &compact[0].report.actions);
+            let scene = LoadedScene {
+                name: "a".into(),
+                path: "a.json".into(),
+                actions: actions.clone(),
+                action_spans: Vec::new(),
+                diagnostics: Vec::new(),
+                resources: Vec::new(),
+                sub_scenes: Vec::new(),
+            };
+            model.scene_ids.insert("a".into(), "a".into());
+            let generated = super::super::render_scenes(&[scene], &model).unwrap();
+            assert_eq!(generated.matches("camera.reset(").count(), 1);
+            assert!(!generated.contains("camera.effect("));
+            let flat = actions
+                .iter()
+                .map(|action| expected_action(action, &model).unwrap())
+                .collect::<Vec<_>>();
+            assert!(render_camera_reset(&flat, &model).unwrap().is_some());
+            let mut changed = flat.clone();
+            if let Action::SetPostProcess { effect, .. } = &mut changed[2] {
+                effect.bloom_intensity = Some(0.5);
+            }
+            assert!(render_camera_reset(&changed, &model).unwrap().is_none());
+            let mut changed = flat.clone();
+            if let Action::SetCameraTransform { blocking, .. } = &mut changed[1] {
+                *blocking = true;
+            }
+            assert!(render_camera_reset(&changed, &model).unwrap().is_none());
+            assert!(render_camera_reset(&flat[..3], &model).unwrap().is_none());
+        }
         model.asset_ids.insert(
             AssetKey {
                 kind: ResourceKind::Effect,

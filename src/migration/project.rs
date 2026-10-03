@@ -462,21 +462,27 @@ fn render_scenes(scenes: &[LoadedScene], model: &MigrationModel) -> Result<Strin
         output.push_str(&model.scene_ids[&scene.name]);
         output.push_str(" {\n");
         let mut statements = Vec::new();
-        for (action_index, action) in scene.actions.iter().enumerate() {
+        let mut action_index = 0;
+        while action_index < scene.actions.len() {
+            if let Some(reset) = v11::render_camera_reset(&scene.actions[action_index..], model)? {
+                statements.push(reset);
+                action_index += 4;
+                continue;
+            }
+            let action = &scene.actions[action_index];
+            action_index += 1;
             if matches!(action, Action::Comment)
                 || (matches!(action, Action::FocusPortrait { .. })
                     && (!uses_focus
-                        || matches!(
-                            scene.actions.get(action_index + 1),
-                            Some(Action::Say { .. })
-                        )))
+                        || matches!(scene.actions.get(action_index), Some(Action::Say { .. }))))
             {
                 continue;
             }
             statements.push(render_action(action, model).with_context(|| {
                 format!(
                     "unsupported action in scene {:?} at index {}",
-                    scene.name, action_index
+                    scene.name,
+                    action_index - 1
                 )
             })?);
         }

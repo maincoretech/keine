@@ -24,7 +24,6 @@ use crate::preview::PreviewLifecycle;
 use crate::project_key::ProjectKey;
 use crate::workspace::WorkspaceSession;
 
-use super::controls::preview_transport_button;
 use super::dock::{ProjectWorkspace, install_default_layout};
 use super::documents::EditorDocuments;
 use super::edits::{follow_preview_position, format_and_save, replay_source_history};
@@ -33,7 +32,7 @@ use super::{
     ACTIVITY_BRAND_SIZE_PX, ACTIVITY_ICON_SIZE_PX, ACTIVITY_ITEM_SIZE_PX, ACTIVITY_RAIL_WIDTH_PX,
     ASSET_PREVIEW_PANEL, ASSETS_PANEL, CANVAS, CHARACTERS_PANEL, CHROME, EXPLORER_PANEL, INK,
     INSPECTOR_PANEL, MUTED, MigrateEiyashou, OpenFolder, PERFORMANCE_PANEL, PRIMARY, PRIMARY_DIM,
-    PROBLEMS_PANEL, RedoSources, ResetLayout, SEARCH_PANEL, SURFACE, SURFACE_HOVER, Save, SaveAll,
+    PROBLEMS_PANEL, RedoSources, ResetLayout, SEARCH_PANEL, SURFACE_HOVER, Save, SaveAll,
     ShowAssetPreview, ShowAssets, ShowSearch, ToggleEngine, UndoSources, VIEW_INSET_PX,
     VIEW_RADIUS_PX, activity_divider, activity_tool, dock, icon_hint,
 };
@@ -580,18 +579,6 @@ impl WorkbenchWindow {
             self.preview_lifecycle = PreviewLifecycle::Starting;
         }
         cx.refresh_windows();
-    }
-
-    fn show_engine(&mut self, cx: &mut Context<Self>) {
-        let Some(workspace) = self.workspace.as_ref() else {
-            return;
-        };
-        if let Ok(controller) = cx
-            .global_mut::<EditorDocuments>()
-            .preview(workspace.session.root())
-        {
-            controller.show();
-        }
     }
 
     fn show_tool(&mut self, kind: ToolKind, window: &mut Window, cx: &mut Context<Self>) {
@@ -1309,68 +1296,6 @@ impl Render for WorkbenchWindow {
                     .child(self.render_activity_rail(cx))
                     .child(main),
             )
-            .when(self.workspace.is_some(), |this| {
-                let running = matches!(
-                    self.preview_lifecycle,
-                    PreviewLifecycle::Running | PreviewLifecycle::Starting
-                );
-                this.child(
-                    div()
-                        .id("preview-window-control")
-                        .absolute()
-                        .top(px(6.))
-                        .right(px(4.))
-                        .p(px(3.))
-                        .rounded(px(10.))
-                        .bg(rgb(CHROME))
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .when(
-                            matches!(self.preview_lifecycle, PreviewLifecycle::Failed(_)),
-                            |this| {
-                                this.child(
-                                    div()
-                                        .id("preview-failure-hint")
-                                        .size(px(28.))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .tooltip(icon_hint("Preview failed · see Output"))
-                                        .child(
-                                            Icon::new(IconName::TriangleAlert)
-                                                .with_size(px(16.))
-                                                .text_color(rgb(0xdb7780)),
-                                        ),
-                                )
-                            },
-                        )
-                        .when(running, |this| {
-                            this.child(
-                                div()
-                                    .id("preview-show")
-                                    .size(px(28.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(px(8.))
-                                    .bg(rgb(SURFACE))
-                                    .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-                                    .cursor_pointer()
-                                    .tooltip(icon_hint("Show engine window"))
-                                    .child(
-                                        Icon::new(AssetIconName::ExternalLink)
-                                            .xsmall()
-                                            .text_color(rgb(INK)),
-                                    )
-                                    .on_click(cx.listener(|this, _, _, cx| this.show_engine(cx))),
-                            )
-                        })
-                        .child(preview_transport_button(running).on_click(cx.listener(
-                            |this, _, window, cx| this.toggle_engine(&ToggleEngine, window, cx),
-                        ))),
-                )
-            })
     }
 }
 

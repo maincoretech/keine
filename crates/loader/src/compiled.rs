@@ -23,6 +23,7 @@
 
 use std::collections::HashSet;
 use std::fmt;
+use std::io::Read;
 
 use keine_core::{Action, Program};
 use serde::{Deserialize, Serialize};
@@ -57,6 +58,31 @@ struct Header {
 }
 
 impl Header {
+    fn encoded_len(&self, expected_schema: u32) -> Result<usize, CompiledError> {
+        if self.envelope_version != ENVELOPE_VERSION {
+            return Err(CompiledError::UnsupportedEnvelope(self.envelope_version));
+        }
+        if self.flags != 0 {
+            return Err(CompiledError::UnsupportedFlags(self.flags));
+        }
+        if self.ir_schema_version != expected_schema {
+            return Err(CompiledError::UnsupportedSchema {
+                expected: expected_schema,
+                found: self.ir_schema_version,
+            });
+        }
+        if self.metadata_len as usize > MAX_METADATA_LEN {
+            return Err(CompiledError::MetadataTooLarge(self.metadata_len as usize));
+        }
+        if self.payload_len > MAX_PAYLOAD_LEN {
+            return Err(CompiledError::PayloadTooLarge(self.payload_len));
+        }
+        FIXED_HEADER_LEN
+            .checked_add(self.metadata_len as usize)
+            .and_then(|len| len.checked_add(self.payload_len as usize))
+            .ok_or(CompiledError::PayloadTooLarge(self.payload_len))
+    }
+
     fn write(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&PROGRAM_MAGIC);
         out.extend_from_slice(&self.envelope_version.to_le_bytes());
@@ -345,33 +371,40 @@ pub fn encode(input: &EncodeInput) -> Result<Vec<u8>, CompiledError> {
     Ok(out)
 }
 
+/// Read only the fixed header before validating section budgets and logical
+/// length. Authentication is owned by the content stream, decode by this codec.
+pub(crate) fn read_encoded(
+    mut reader: impl Read,
+    length: u64,
+    expected_schema: u32,
+) -> anyhow::Result<Vec<u8>> {
+    let mut header = [0; FIXED_HEADER_LEN];
+    reader.read_exact(&mut header)?;
+    let expected = Header::read(&header)?.encoded_len(expected_schema)?;
+    let found = usize::try_from(length)?;
+    if found != expected {
+        return Err(CompiledError::TrailingBytes { expected, found }.into());
+    }
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(expected)?;
+    bytes.extend_from_slice(&header);
+    reader
+        .take((expected - FIXED_HEADER_LEN) as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() != expected {
+        return Err(CompiledError::TrailingBytes {
+            expected,
+            found: bytes.len(),
+        }
+        .into());
+    }
+    Ok(bytes)
+}
+
 /// Decode and validate a program.bin produced by [`encode`].
 pub fn decode(bytes: &[u8], expected_schema: u32) -> Result<DecodedProgram, CompiledError> {
     let header = Header::read(bytes)?;
-    if header.envelope_version != ENVELOPE_VERSION {
-        return Err(CompiledError::UnsupportedEnvelope(header.envelope_version));
-    }
-    if header.flags != 0 {
-        return Err(CompiledError::UnsupportedFlags(header.flags));
-    }
-    if header.ir_schema_version != expected_schema {
-        return Err(CompiledError::UnsupportedSchema {
-            expected: expected_schema,
-            found: header.ir_schema_version,
-        });
-    }
-    if header.metadata_len as usize > MAX_METADATA_LEN {
-        return Err(CompiledError::MetadataTooLarge(
-            header.metadata_len as usize,
-        ));
-    }
-    if header.payload_len > MAX_PAYLOAD_LEN {
-        return Err(CompiledError::PayloadTooLarge(header.payload_len));
-    }
-    let expected = FIXED_HEADER_LEN
-        .checked_add(header.metadata_len as usize)
-        .and_then(|len| len.checked_add(header.payload_len as usize))
-        .ok_or(CompiledError::PayloadTooLarge(header.payload_len))?;
+    let expected = header.encoded_len(expected_schema)?;
     if bytes.len() != expected {
         return Err(CompiledError::TrailingBytes {
             expected,
@@ -569,6 +602,60 @@ mod tests {
         let bytes = encode(&input).unwrap();
         let decoded = decode(&bytes, IR_SCHEMA_VERSION).unwrap();
         assert_eq!(decoded.scenes, input.scenes);
+    }
+
+    #[test]
+    fn compiled_stream_validates_section_budgets_before_reading_the_body() {
+        use std::io::Cursor;
+
+        let encoded = encode(&fixture_input()).unwrap();
+        for (offset, size) in [
+            (20, (MAX_METADATA_LEN as u32 + 1).to_le_bytes().to_vec()),
+            (24, (MAX_PAYLOAD_LEN + 1).to_le_bytes().to_vec()),
+        ] {
+            let mut malformed = encoded.clone();
+            malformed[offset..offset + size.len()].copy_from_slice(&size);
+            let mut reader = Cursor::new(malformed);
+            let error =
+                read_encoded(&mut reader, encoded.len() as u64, IR_SCHEMA_VERSION).unwrap_err();
+            assert!(matches!(
+                error.downcast_ref::<CompiledError>(),
+                Some(CompiledError::MetadataTooLarge(_) | CompiledError::PayloadTooLarge(_))
+            ));
+            assert_eq!(reader.position(), FIXED_HEADER_LEN as u64);
+        }
+        let mut reader = Cursor::new(&encoded);
+        assert!(read_encoded(&mut reader, encoded.len() as u64 + 1, IR_SCHEMA_VERSION).is_err());
+        assert_eq!(reader.position(), FIXED_HEADER_LEN as u64);
+    }
+
+    #[test]
+    fn compiled_stream_roundtrips_and_rejects_growth_or_truncation() {
+        use std::io::Cursor;
+
+        let encoded = encode(&fixture_input()).unwrap();
+        assert_eq!(
+            read_encoded(
+                Cursor::new(&encoded),
+                encoded.len() as u64,
+                IR_SCHEMA_VERSION
+            )
+            .unwrap(),
+            encoded
+        );
+        let mut growing = encoded.clone();
+        growing.extend_from_slice(&[0; 16]);
+        let mut reader = Cursor::new(growing);
+        assert!(read_encoded(&mut reader, encoded.len() as u64, IR_SCHEMA_VERSION).is_err());
+        assert_eq!(reader.position(), encoded.len() as u64 + 1);
+        assert!(
+            read_encoded(
+                Cursor::new(&encoded[..encoded.len() - 1]),
+                encoded.len() as u64,
+                IR_SCHEMA_VERSION,
+            )
+            .is_err()
+        );
     }
 
     #[test]

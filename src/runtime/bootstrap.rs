@@ -44,7 +44,7 @@ use crate::runtime::resources::{
 use crate::runtime::resources::{HotReloadSession, ScriptWatcherResource};
 use crate::ui::performance::{BenchmarkCameras, BenchmarkTarget};
 
-pub(crate) const MAX_PROJECT_CONFIG_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_PROJECT_CONFIG_BYTES: usize = keine_loader::MAX_PROJECT_CONFIG_BYTES;
 type BenchmarkWorkload = (&'static str, &'static str);
 type BenchmarkSection = (&'static str, &'static [BenchmarkWorkload]);
 

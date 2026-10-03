@@ -38,6 +38,7 @@ pub(super) const SIMPLE_COMMANDS: &[&str] = &[
     "particle.hide",
     "video.stop",
     "gallery.unlock",
+    "camera.reset",
     "camera.bind",
     "camera.unbind",
 ];

@@ -102,6 +102,12 @@ jobs:
         run: >-
           cargo run --locked --no-default-features --features publisher,video-native
           --bin keine-video-acceptance -- tests/fixtures/video/playback.mp4
+      - name: Check Editor process metrics
+        run: >-
+          cargo test --locked -p keine-editor --lib preview::performance::
+      - name: Check recoverable system Trash
+        run: >-
+          cargo test --locked -p keine-editor --lib file_ops::assets::
       - name: Build platform release backend
         run: >-
           cargo build --release --locked --no-default-features

@@ -93,7 +93,7 @@ pub(crate) fn persist(
 }
 
 fn decode(bytes: &[u8]) -> anyhow::Result<GalleryFileWire> {
-    let file: GalleryFileWire = postcard::from_bytes(bytes)?;
+    let file: GalleryFileWire = super::decode_postcard_exact(bytes)?;
     if file.cg.len().saturating_add(file.bgm.len()) > MAX_GALLERY_ENTRIES {
         anyhow::bail!("gallery contains too many entries");
     }

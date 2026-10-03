@@ -136,6 +136,7 @@ scene name { ... }
 │   └── scene.parallax.stop()
 ├── 镜头、特效与舞台
 │   ├── camera.move(scene | characters | all | none, transform..., optional_effect_fields..., tween: [...], duration: ..., easing: ..., blocking: ...)
+│   ├── camera.reset(targets, duration: 0ms, easing: linear, blocking: true)
 │   ├── camera.shake(targets, amplitude: ..., frequency: ..., amplitude_randomness: ..., frequency_randomness: ..., duration: ..., axis: ..., falloff: ..., blocking: ...)
 │   ├── camera.bind(id, distance: ...) / camera.unbind(id, distance: ...)
 │   ├── camera.effect(targets, sparse_effect_fields..., tween: [...], duration: ..., easing: ..., blocking: ...)
@@ -201,6 +202,10 @@ sprite.focus.configure(...)
 ├── speaking、others、narration 均为 style(...)
 │   └── 各有 scale、brightness、saturation、contrast、blur、alpha 六个可选字段
 └── Block Inspector 将三组 style 的字段分别编辑，写回原有 style(...) 源码
+
+camera.reset(...)
+├── 一条 Block 恢复镜头位置/缩放和全部特效，立即停止震动；不修改场景视差或镜头绑定
+└── duration/easing 控制位置与特效同步恢复；blocking 仅在组尾等待一次，省略时立即恢复
 
 camera.effect(...)
 ├── 与 camera.move 使用同一 PostProcessPatch；包含镜面破碎与速度线，所有效果均可稀疏更新

@@ -173,7 +173,7 @@ jobs:
           umask 077
           identity_dir="$RUNNER_TEMP/keine-project-release/identity"
           mkdir -p "$identity_dir"
-          identity_path="$identity_dir/publisher.hakutaku-key"
+          identity_path="$identity_dir/publisher.key"
           printf '%s' "$HAKUTAKU_IDENTITY_BASE64" | openssl base64 -d -A -out "$identity_path"
           if [[ ! -s "$identity_path" ]]; then
             echo 'Decoded publisher identity is empty.' >&2
@@ -189,7 +189,7 @@ jobs:
           PROJECT_PATH: ${{ steps.project.outputs.path }}
         run: |
           set -euo pipefail
-          export KEINE_HAKUTAKU_IDENTITY="$RUNNER_TEMP/keine-project-release/identity/publisher.hakutaku-key"
+          export KEINE_HAKUTAKU_IDENTITY="$RUNNER_TEMP/keine-project-release/identity/publisher.key"
           output_root="target/project-release"
           output_path="$output_root/$ARTIFACT_NAME"
           mkdir -p "$output_root"
@@ -201,7 +201,7 @@ jobs:
         shell: bash
         run: |
           identity_dir="$RUNNER_TEMP/keine-project-release/identity"
-          rm -f -- "$identity_dir/publisher.hakutaku-key"
+          rm -f -- "$identity_dir/publisher.key"
           rmdir "$identity_dir" 2>/dev/null || true
 
       - name: Verify runnable Linux artifact

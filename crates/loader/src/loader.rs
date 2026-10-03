@@ -8,7 +8,6 @@ mod watcher;
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -26,6 +25,7 @@ pub use scenes::{
     LoadedScene, load_scenes, load_scenes_with, load_startup_scenes_with,
     validate_native_entry_flow,
 };
+pub(crate) use source::open_confined_file;
 pub use source::{ContentBackend, ContentFile, ContentMount, HakutakuArchive};
 #[cfg(feature = "hot-reload")]
 pub use watcher::ScriptWatcher;
@@ -198,10 +198,11 @@ impl ContentProject {
         }
         let assets_path = confined_manifest_path(&self.root, &config.script.assets)?;
         let characters_path = confined_manifest_path(&self.root, &config.script.characters)?;
-        let assets_yaml = fs::read_to_string(&assets_path)
-            .with_context(|| format!("failed to read {}", assets_path.display()))?;
-        let characters_yaml = fs::read_to_string(&characters_path)
-            .with_context(|| format!("failed to read {}", characters_path.display()))?;
+        let reader = crate::source_input::SourceReader::for_filesystem(&self.root)?;
+        let assets_yaml = String::from_utf8(reader.read_file(&assets_path)?)
+            .with_context(|| format!("manifest is not UTF-8: {}", assets_path.display()))?;
+        let characters_yaml = String::from_utf8(reader.read_file(&characters_path)?)
+            .with_context(|| format!("manifest is not UTF-8: {}", characters_path.display()))?;
         let assets = EiyashouAssetManifest::from_yaml(&assets_yaml)
             .with_context(|| format!("invalid Eiyashou manifest {}", assets_path.display()))?;
         let characters = EiyashouCharacterManifest::from_yaml(&characters_yaml)
@@ -647,6 +648,38 @@ mod tests {
         assert!(load_project(&project, &[source]).is_err());
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn native_manifests_reject_oversize_files_before_parsing() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("keine-manifest-limit-{nonce}"));
+        fs::create_dir_all(root.join("assets")).unwrap();
+        fs::create_dir_all(root.join("scripts")).unwrap();
+        for name in ["assets.yaml", "characters.yaml", "objects.yaml"] {
+            fs::write(root.join(name), "{}\n").unwrap();
+        }
+        let mut config = GameConfig::default();
+        config.adapter.script = "keine".into();
+        config.script.objects = "objects.yaml".into();
+        let mut project = load_project(&root, &config.adapter.asset).unwrap();
+        for name in ["assets.yaml", "characters.yaml", "objects.yaml"] {
+            let path = root.join(name);
+            fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_len(crate::MAX_SOURCE_FILE_BYTES as u64 + 1)
+                .unwrap();
+            let error = project.prepare_eiyashou(&mut config).unwrap_err();
+            assert!(format!("{error:#}").contains("per-file limit"), "{error:#}");
+            fs::write(&path, "{}\n").unwrap();
+        }
+        project.prepare_eiyashou(&mut config).unwrap();
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

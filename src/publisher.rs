@@ -367,9 +367,28 @@ fn publish_prepared(
 }
 
 fn load_or_create_identity(project: &Path) -> Result<Identity> {
-    let path = env::var_os("KEINE_HAKUTAKU_IDENTITY")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| project.join(".keine/publisher.hakutaku-key"));
+    if let Some(path) = env::var_os("KEINE_HAKUTAKU_IDENTITY") {
+        return load_or_create_identity_at(Path::new(&path));
+    }
+    default_identity(project)
+}
+
+fn default_identity(project: &Path) -> Result<Identity> {
+    let path = project.join(".keine/publisher.key");
+    let legacy = project.join(".keine/publisher.hakutaku-key");
+    if !path.exists() && legacy.is_file() {
+        let identity =
+            Identity::load(&legacy).context("failed to load the previous publisher identity")?;
+        // Identity::save publishes exclusively: never overwrite an identity
+        // created concurrently, and retain the old copy if publishing fails.
+        identity
+            .save(&path)
+            .context("failed to migrate the publisher identity file name")?;
+        if let Err(error) = fs::remove_file(&legacy) {
+            eprintln!("warning: publisher.key installed; old identity cleanup failed: {error}");
+        }
+        return Identity::load(&path).context("failed to load the migrated publisher identity");
+    }
     load_or_create_identity_at(&path)
 }
 
@@ -1211,16 +1230,28 @@ mod tests {
     #[test]
     fn publisher_identity_is_created_once_and_reused() {
         let project = tempdir().unwrap();
-        let path = project.path().join(".keine/publisher.hakutaku-key");
+        let path = project.path().join(".keine/publisher.key");
         let first = load_or_create_identity_at(&path).unwrap();
         let second = load_or_create_identity_at(&path).unwrap();
         assert_eq!(first.project_id(), second.project_id());
-        assert!(
-            project
-                .path()
-                .join(".keine/publisher.hakutaku-key")
-                .is_file()
-        );
+        assert!(project.path().join(".keine/publisher.key").is_file());
+    }
+
+    #[test]
+    fn shortened_identity_name_preserves_existing_keys_and_prefers_the_new_file() {
+        let project = tempdir().unwrap();
+        let legacy = project.path().join(".keine/publisher.hakutaku-key");
+        let old = load_or_create_identity_at(&legacy).unwrap();
+        let migrated = default_identity(project.path()).unwrap();
+        assert_eq!(old.project_id(), migrated.project_id());
+        assert_eq!(old.public_key(), migrated.public_key());
+        assert!(old.root_key() == migrated.root_key());
+        assert!(!legacy.exists());
+        assert!(project.path().join(".keine/publisher.key").is_file());
+        let other = load_or_create_identity_at(&legacy).unwrap();
+        let reused = default_identity(project.path()).unwrap();
+        assert_eq!(old.project_id(), reused.project_id());
+        assert_ne!(other.project_id(), reused.project_id());
     }
 
     #[test]
@@ -1265,12 +1296,7 @@ mod tests {
         .unwrap();
 
         assert!(prepare_project(project.path(), &keine_loader::LoaderRegistry::default()).is_err());
-        assert!(
-            !project
-                .path()
-                .join(".keine/publisher.hakutaku-key")
-                .exists()
-        );
+        assert!(!project.path().join(".keine/publisher.key").exists());
     }
 
     #[test]

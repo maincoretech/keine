@@ -142,7 +142,7 @@ fn save(values: &HashMap<String, Value>, project_root: &Path) -> Result<()> {
 }
 
 fn decode(bytes: &[u8]) -> Result<ProfileFileWire> {
-    let file: ProfileFileWire = postcard::from_bytes(bytes)?;
+    let file: ProfileFileWire = super::decode_postcard_exact(bytes)?;
     if file.global_vars.len() > MAX_PROFILE_ENTRIES {
         anyhow::bail!("profile contains too many variables");
     }

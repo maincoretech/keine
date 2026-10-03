@@ -231,3 +231,64 @@ where
         .vertical_scrollbar(handle)
         .into_any_element()
 }
+
+pub(super) fn preview_window_controls(root: &Path, cx: &mut App) -> Option<Stateful<Div>> {
+    use crate::preview::PreviewLifecycle;
+    let controller = cx.global_mut::<EditorDocuments>().preview(root).ok()?;
+    let lifecycle = controller.snapshot().lifecycle;
+    let running = matches!(
+        lifecycle,
+        PreviewLifecycle::Running | PreviewLifecycle::Starting
+    );
+    Some(
+        div()
+            .id("preview-window-control")
+            .flex_none()
+            .p(px(3.))
+            .rounded(px(10.))
+            .bg(rgb(CHROME))
+            .flex()
+            .items_center()
+            .gap_1()
+            .when(matches!(lifecycle, PreviewLifecycle::Failed(_)), |this| {
+                this.child(
+                    div()
+                        .id("preview-failure-hint")
+                        .size(px(28.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .tooltip(icon_hint("Preview failed · see Output"))
+                        .child(
+                            Icon::new(IconName::TriangleAlert)
+                                .with_size(px(16.))
+                                .text_color(rgb(0xdb7780)),
+                        ),
+                )
+            })
+            .when(running, |this| {
+                this.child(
+                    div()
+                        .id("preview-show")
+                        .size(px(28.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(8.))
+                        .bg(rgb(SURFACE))
+                        .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                        .cursor_pointer()
+                        .tooltip(icon_hint("Show engine window"))
+                        .child(
+                            Icon::new(AssetIconName::ExternalLink)
+                                .xsmall()
+                                .text_color(rgb(INK)),
+                        )
+                        .on_click(move |_, _, _| controller.show()),
+                )
+            })
+            .child(preview_transport_button(running).on_click(|_, window, cx| {
+                window.dispatch_action(Box::new(ToggleEngine), cx);
+            })),
+    )
+}

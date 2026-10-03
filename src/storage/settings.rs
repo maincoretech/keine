@@ -104,20 +104,30 @@ pub fn persist(settings: &RuntimeSettings, project_root: &Path) -> Result<()> {
 
 pub(crate) fn load(project_root: &Path) -> Option<RuntimeSettings> {
     let bytes = super::read_limited(&path(project_root), MAX_SETTINGS_BYTES).ok()?;
-    let file: SettingsFile = postcard::from_bytes(&bytes).ok()?;
+    let file: SettingsFile = super::decode_postcard_exact(&bytes).ok()?;
     (file.version == SETTINGS_VERSION).then_some(file.settings)
 }
 
 pub(crate) fn sanitize(settings: &mut RuntimeSettings) {
-    settings.master_volume = settings.master_volume.clamp(0.0, 1.0);
-    settings.vocal_volume = settings.vocal_volume.clamp(0.0, 1.0);
-    settings.bgm_volume = settings.bgm_volume.clamp(0.0, 1.0);
-    settings.se_volume = settings.se_volume.clamp(0.0, 1.0);
-    settings.ui_se_volume = settings.ui_se_volume.clamp(0.0, 1.0);
-    settings.typewriter_speed = settings.typewriter_speed.clamp(10.0, 120.0);
-    settings.auto_delay = settings.auto_delay.clamp(0.5, 5.0);
+    let defaults = RuntimeSettings::default();
+    macro_rules! clamp {
+        ($field:ident, $min:expr, $max:expr) => {
+            settings.$field = if settings.$field.is_finite() {
+                settings.$field.clamp($min, $max)
+            } else {
+                defaults.$field
+            };
+        };
+    }
+    clamp!(master_volume, 0.0, 1.0);
+    clamp!(vocal_volume, 0.0, 1.0);
+    clamp!(bgm_volume, 0.0, 1.0);
+    clamp!(se_volume, 0.0, 1.0);
+    clamp!(ui_se_volume, 0.0, 1.0);
+    clamp!(typewriter_speed, 10.0, 120.0);
+    clamp!(auto_delay, 0.5, 5.0);
     settings.text_size = settings.text_size.min(2);
-    settings.textbox_opacity = settings.textbox_opacity.clamp(0.0, 1.0);
+    clamp!(textbox_opacity, 0.0, 1.0);
 }
 
 pub(super) fn reset_memory(settings: &mut RuntimeSettings) {
@@ -134,6 +144,31 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
+
+    #[test]
+    fn non_finite_settings_use_defaults_and_finite_values_are_clamped() {
+        let mut settings = RuntimeSettings {
+            master_volume: f32::NAN,
+            vocal_volume: f32::INFINITY,
+            bgm_volume: f32::NEG_INFINITY,
+            se_volume: -1.0,
+            ui_se_volume: 2.0,
+            typewriter_speed: f64::NAN,
+            auto_delay: f64::INFINITY,
+            textbox_opacity: f32::NAN,
+            text_size: 255,
+            ..Default::default()
+        };
+        sanitize(&mut settings);
+        assert_eq!(
+            settings,
+            RuntimeSettings {
+                se_volume: 0.0,
+                text_size: 2,
+                ..Default::default()
+            }
+        );
+    }
 
     #[test]
     fn persists_runtime_settings() {

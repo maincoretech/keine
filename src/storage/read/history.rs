@@ -115,7 +115,7 @@ fn save(history: &HashSet<DialogueKey>, project_root: &Path) -> Result<()> {
 }
 
 fn decode(bytes: &[u8]) -> Result<HistoryFileWire> {
-    let file: HistoryFileWire = postcard::from_bytes(bytes)?;
+    let file: HistoryFileWire = super::decode_postcard_exact(bytes)?;
     if file.entries.len() > MAX_HISTORY_ENTRIES {
         anyhow::bail!("read history contains too many entries");
     }

@@ -72,6 +72,63 @@ pub(crate) fn configure_audio(app: &mut App, _mounts: Vec<keine_loader::ContentM
 #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
 pub(crate) const MAX_IN_MEMORY_AUDIO_BYTES: usize = 128 * 1024 * 1024;
 
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct CachedAudioSizes<'w> {
+    #[cfg(feature = "audio-opus")]
+    opus: Res<'w, Assets<OpusAudio>>,
+    #[cfg(feature = "audio-seekable")]
+    seekable: Res<'w, Assets<SeekableAudio>>,
+    #[cfg(not(feature = "audio-seekable"))]
+    fallback: Res<'w, Assets<AudioSource>>,
+}
+
+impl CachedAudioSizes<'_> {
+    pub(crate) fn is_changed(&self) -> bool {
+        let mut changed = false;
+        #[cfg(feature = "audio-opus")]
+        {
+            changed |= self.opus.is_changed();
+        }
+        #[cfg(feature = "audio-seekable")]
+        {
+            changed |= self.seekable.is_changed();
+        }
+        #[cfg(not(feature = "audio-seekable"))]
+        {
+            changed |= self.fallback.is_changed();
+        }
+        changed
+    }
+
+    pub(crate) fn bytes(&self, handle: &UntypedHandle) -> Option<usize> {
+        #[cfg(feature = "audio-opus")]
+        if handle.type_id() == std::any::TypeId::of::<OpusAudio>() {
+            return self
+                .opus
+                .get(handle.id().typed::<OpusAudio>())
+                .map(|audio| match &audio.source {
+                    OpusSource::Mounted { .. } => 0,
+                    OpusSource::Memory(bytes) => bytes.len(),
+                });
+        }
+        #[cfg(feature = "audio-seekable")]
+        if handle.type_id() == std::any::TypeId::of::<SeekableAudio>() {
+            return self
+                .seekable
+                .get(handle.id().typed::<SeekableAudio>())
+                .map(|audio| audio.bytes.len());
+        }
+        #[cfg(not(feature = "audio-seekable"))]
+        if handle.type_id() == std::any::TypeId::of::<AudioSource>() {
+            return self
+                .fallback
+                .get(handle.id().typed::<AudioSource>())
+                .map(|audio| audio.bytes.len());
+        }
+        None
+    }
+}
+
 #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
 async fn read_in_memory_audio(reader: &mut dyn Reader, maximum: usize) -> io::Result<Vec<u8>> {
     crate::runtime::bounded_input::read_to_end(reader, maximum, "audio").await
@@ -228,7 +285,10 @@ impl AssetLoader for OpusAudioLoader {
     }
 
     fn extensions(&self) -> &[&str] {
-        &["opus"]
+        &[
+            "opus", "opuS", "opUs", "opUS", "oPus", "oPuS", "oPUs", "oPUS", "Opus", "OpuS", "OpUs",
+            "OpUS", "OPus", "OPuS", "OPUs", "OPUS",
+        ]
     }
 }
 
@@ -332,20 +392,27 @@ impl AssetLoader for SeekableAudioLoader {
     }
 
     fn extensions(&self) -> &[&str] {
-        &[
+        // Labeled assets are resolved by extension rather than parent asset
+        // type. Preserve the filename while accepting every case variant.
+        static EXTENSIONS: OnceLock<Vec<&'static str>> = OnceLock::new();
+        EXTENSIONS.get_or_init(|| {
+            let mut extensions = Vec::new();
             #[cfg(feature = "audio-wav")]
-            "wav",
+            extensions.extend(["wav", "waV", "wAv", "wAV", "Wav", "WaV", "WAv", "WAV"]);
             #[cfg(feature = "audio-mp3")]
-            "mp3",
+            extensions.extend(["mp3", "mP3", "Mp3", "MP3"]);
             #[cfg(feature = "audio-vorbis")]
-            "ogg",
-            #[cfg(feature = "audio-vorbis")]
-            "oga",
-            #[cfg(feature = "audio-vorbis")]
-            "spx",
+            extensions.extend([
+                "ogg", "ogG", "oGg", "oGG", "Ogg", "OgG", "OGg", "OGG", "oga", "ogA", "oGa", "oGA",
+                "Oga", "OgA", "OGa", "OGA", "spx", "spX", "sPx", "sPX", "Spx", "SpX", "SPx", "SPX",
+            ]);
             #[cfg(feature = "audio-flac")]
-            "flac",
-        ]
+            extensions.extend([
+                "flac", "flaC", "flAc", "flAC", "fLac", "fLaC", "fLAc", "fLAC", "Flac", "FlaC",
+                "FlAc", "FlAC", "FLac", "FLaC", "FLAc", "FLAC",
+            ]);
+            extensions
+        })
     }
 }
 
@@ -656,6 +723,47 @@ fn is_opus(path: &str) -> bool {
         .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("opus"))
 }
 
+#[cfg(all(test, feature = "audio-opus", feature = "audio-seekable"))]
+mod cached_size_tests {
+    use super::*;
+
+    #[test]
+    fn cache_accounts_for_memory_audio_without_charging_streamed_file_size() {
+        let mut opus = Assets::<OpusAudio>::default();
+        let streamed = opus
+            .add(OpusAudio {
+                source: OpusSource::Mounted {
+                    mounts: [].into(),
+                    path: "large.opus".into(),
+                },
+                duration: None,
+            })
+            .untyped();
+        let memory = opus
+            .add(OpusAudio {
+                source: OpusSource::Memory([1, 2, 3].into()),
+                duration: None,
+            })
+            .untyped();
+        let mut seekable = Assets::<SeekableAudio>::default();
+        let compatibility = seekable
+            .add(SeekableAudio {
+                bytes: [1, 2, 3, 4].into(),
+                duration: OnceLock::new(),
+                hint: "wav",
+            })
+            .untyped();
+        let mut world = World::new();
+        world.insert_resource(opus);
+        world.insert_resource(seekable);
+        let mut state = bevy::ecs::system::SystemState::<CachedAudioSizes>::new(&mut world);
+        let sizes = state.get(&world).unwrap();
+        assert_eq!(sizes.bytes(&streamed), Some(0));
+        assert_eq!(sizes.bytes(&memory), Some(3));
+        assert_eq!(sizes.bytes(&compatibility), Some(4));
+    }
+}
+
 #[cfg(all(test, not(feature = "audio-seekable")))]
 mod unavailable_tests {
     use super::*;
@@ -722,6 +830,56 @@ mod unavailable_tests {
 #[cfg(all(test, feature = "audio-seekable", feature = "audio-wav"))]
 mod seekable_tests {
     use super::*;
+
+    #[test]
+    fn uppercase_wav_loads_for_looping_story_playback() {
+        use bevy::asset::{
+            AssetPlugin, LoadState,
+            io::{
+                AssetSourceBuilder,
+                memory::{Dir, MemoryAssetReader},
+            },
+        };
+
+        let dir = Dir::default();
+        dir.insert_asset(
+            std::path::Path::new("track.WAV"),
+            silent_pcm_wav(8_000, 80).to_vec(),
+        );
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .register_asset_source(
+                "test",
+                AssetSourceBuilder::new(move || Box::new(MemoryAssetReader { root: dir.clone() })),
+            )
+            .add_plugins(AssetPlugin::default())
+            .init_asset::<SeekableAudio>()
+            .init_asset::<LoopingSeekableAudio>()
+            .register_asset_loader(SeekableAudioLoader);
+        let handle = app
+            .world()
+            .resource::<AssetServer>()
+            .load::<LoopingSeekableAudio>("test://track.WAV#looping");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            app.update();
+            match app
+                .world()
+                .resource::<AssetServer>()
+                .load_state(handle.id())
+            {
+                LoadState::Loaded => break,
+                LoadState::Failed(error) => panic!("looping WAV did not load: {error}"),
+                _ => assert!(std::time::Instant::now() < deadline, "audio load timed out"),
+            }
+            std::thread::yield_now();
+        }
+        let assets = app.world().resource::<Assets<LoopingSeekableAudio>>();
+        assert_eq!(
+            assets.get(&handle).unwrap().decoder().take(200).count(),
+            200
+        );
+    }
 
     fn silent_pcm_wav(sample_rate: u32, sample_count: u32) -> Arc<[u8]> {
         let data_len = sample_count * 2;

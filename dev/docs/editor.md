@@ -21,9 +21,11 @@ Text、Blocks、Inspector 共用源文档。Block 编辑只替换准确 source r
 保留周围空白、注释和未知语法；不通过重新序列化整个工程写回。
 无法理解的语法仍可见且只读。兼容 JSON 保持只读；转换必须显式 `migrate`。
 未保存文档覆盖磁盘内容参与索引、搜索和 Preview。关闭/保存冲突走现有保护与恢复流程。
+定位 Block 重建持久舞台、BGM 和循环音效；历史单次音效/语音不重播，只播放选中 Block 的音频。相同 BGM 保持播放，显式选择 BGM Block 才重新播放。
 保存 `.shou` 时自动使用两空格缩进，长调用按 100 列拆分参数；字符串和注释原样保留。
 Text 行号旁悬浮箭头可折叠多行调用、数组与嵌套块；收起后保留首尾行，不修改源码。
 搜索结果或从 Blocks 跳回隐藏行时自动展开对应范围。
+输入法组词期间只显示原生候选文本，源码选择、Preview 定位和 Text 概览等提交后更新，不使用延迟判断。Blocks 的 Enter 在当前对白后插入 Text，Shift+Enter 在同一块内换行；草稿首次写回后仍保留焦点与相邻块范围。正常关闭项目保存每个文档的 Text/Blocks 模式和编辑位置，重开定位到原光标或 Block。
 Text、Blocks 及关闭窗口时的保存共用此流程，格式化可撤销；未闭合或有词法错误的源码保持原样保存。
 关闭最后一个源码页后，再开页优先复用存活文档组或 Output 所在组；无可用组才新建，避免落进 Explorer 窄栏。
 
@@ -59,7 +61,7 @@ crates/editor/src/
 
 面板持有交互状态，源文档仍由 `EditorDocuments` 统一管理；投影与索引均可从源码重建。
 补全、Block、Inspector 共用 `commands` / `fields`，字段规则不依赖 GPUI 控件。
-插入模板覆盖全部 70 个入口的解析与可编辑 Block 回归；sprite.update 模板只换图，不隐式重设位置或缩放。
+插入模板覆盖全部 71 个入口的解析与可编辑 Block 回归；sprite.update 模板只换图，不隐式重设位置或缩放。
 立绘、移动、隐藏及聚焦规则模板优先共用已有角色 ID，使聚焦能够自动跟随对白。
 源码层只返回修改结果；应用修改、冲突保护与撤销仍由 `app/edits.rs` 负责。
 中文等 Unicode 标识符沿用 Loader 的字母/数字规则，编辑器不另设 ASCII 限制。
@@ -71,6 +73,7 @@ Text 概览的配色、换行与笔画在后台生成；改宽复用配色，新
 ## 交互
 
 - 卡片背景与圆角由外框绘制，标签滚动层保持透明；Dock 内容与 drop overlay 共用定位容器。
+- Preview 控件参与最右上方标题栏的排版，单标签页、多标签页与视图缩放共用，不覆盖文档工具按钮。
 - 淡色行内补全用右方向键/Tab 接受；回车保留缩进，智能处理引号/括号。
 - 不按输入法语言分支：组合文字确认后触发补全和语法检查，无固定等待；语法检查在后台执行，新修改取消旧任务，结果写回前复核源码和组合状态。
 - 空 Text Block 用 Delete/Backspace 删除；关键帧使用紧凑单行，嵌套结构保持层级。
@@ -150,12 +153,20 @@ CPU baseline 并分开折线。历史只在内存，工程/Editor session 结束
 
 macOS 复用锁定的 `libc`，通过 `proc_pid_rusage(RUSAGE_INFO_V2)` 查询 owned child；
 `ri_user_time + ri_system_time` 由 Mach timebase 转换为 CPU 时间，`ri_resident_size` 为 RSS。
-接口失败显示 Unavailable；Windows/Linux 暂未实现进程指标。Peak 仅为采样到的最高 RSS。
+Linux 从有界 `/proc/<pid>/stat` 读取 user/system ticks 与 RSS 页数，按 sysconf 单位换算；
+Windows 用 query-only 句柄读取 GetProcessTimes 与 working set，查询后关闭句柄。
+退出/查询失败显示 Unavailable；Peak 仅为采样到的最高常驻内存。
+平台单位依据 [Linux proc stat](https://man7.org/linux/man-pages/man5/proc_pid_stat.5.html)
+和 [Windows process times](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getprocesstimes)。
 数据口径以 [Apple libproc](https://github.com/apple-oss-distributions/xnu/blob/main/libsyscall/wrappers/libproc/libproc.h)
 与 [XNU task/rusage](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/bsd_kern.c) 为准。
 独立 Engine 不提供帧传输：不保留 Publish rate、overwrite、Paused 或 profiler/Capture 功能。
 
-系统废纸篓已实现 macOS；Windows/Linux 目前明确拒绝删除，不回退永久删除。
+系统废纸篓支持 macOS、Linux 和 Windows；不回退永久删除。Linux 使用 freedesktop
+files/info 恢复记录与同卷私人 Trash（外部卷 `.Trash-uid`），无法安全创建时拒绝移动；
+Windows 使用 Shell 回收站 namespace 项恢复。撤销不覆盖同名新文件，重做重新入篓。
+格式/API 依据 [freedesktop Trash](https://specifications.freedesktop.org/trash/latest/)
+和 [Shell PostDeleteItem](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ifileoperationprogresssink-postdeleteitem)。
 媒体时长只读取有界 Ogg Opus/WAV 头尾；其他格式显示未知。
 IME、多显示器、1× DPI、主观音频和实际 Preview FPS 见 [验收](testing.md)。
 

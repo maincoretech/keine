@@ -29,8 +29,10 @@ keine/
 
 - 挂载为只读、有序的 `ContentMount` / `ContentFile`；后挂载覆盖先挂载。
 - 路径必须受挂载根目录约束；绝对路径、`..` 逃逸、符号链接逃逸和发行 special files 被拒绝。
+- 文件打开不能只依赖先前的 canonical 路径检查：Unix 逐级按目录句柄打开并拒绝新出现的符号链接；Windows 在读取前核对已打开句柄的实际路径。目录内合法链接仍可使用。
 - 工程所有资源引用在 Loader 中解析；运行时不会依赖当前工作目录寻找工程资源。
 - 当前画面资源优先加载；普通预取只保留前 8 个不同资源，最多 1 个投机加载。
+- 非关键预取另有 128 MiB 保留预算，按图片解码数据/纹理 payload 估算和音频内存字节计费，流式 Opus 不计整文件；按 urgent/预测顺序淘汰，当前显示与作者显式 blocking 资源不淘汰。尺寸未确认时暂停追加加载，超限项在当前计划中延后。
 - 视频独立流式播放；挂载中的 Opus 通过可重开的内容流解码。
 - PNG/JPEG、WAV/MP3/Vorbis/FLAC 是开发兼容输入；正式打包拒绝非 WebP/Opus 独立媒体。
 
@@ -49,8 +51,13 @@ profile、read history、gallery、settings 不随 slot rollback 回滚。
 Preview 使用子进程临时数据根，子进程退出后清理。
 
 读写共用大小上限；读取先检查长度并使用 bounded read，写入先编码验证再原子替换。
-Backup import 与 publisher 正式目录 rename/同步是提交点；之后清理旧副本失败报告 warning，
-不将已经安装的结果报告为整体失败。源文档保存另检查外部修改和恢复数据。
+Editor 文档/恢复草稿及 Loader 作者清单使用限量读取；Hakutaku 配置与目录配置共用 256 KiB 上限，编译文件先验证固定头中的 metadata/payload 长度，再分配、读取正文。
+Save 与独立持久化数据均拒绝 postcard 尾部多余字节；设置中的非有限数回到默认值。
+Backup 按实际读取字节限制总量；拒绝路径/设备名、重复及大小写冲突，并在未提交目录中独占创建文件，避免临时名与文件系统别名覆盖。
+解码按 [postcard 剩余字节接口](https://docs.rs/postcard/1.1.3/postcard/fn.take_from_bytes.html) 检查完整消费；跨平台文件名约束依据 [Windows 命名规则](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file)。
+Backup import 同步待提交目录后切换正式目录；publisher 在安装失败时恢复旧目录，
+提交后的旧副本清理失败报告 warning。源文档保存另检查外部修改；保存/刷新完成后的草稿清理失败只报告 warning。
+Backup 有启动恢复；publisher 两次 rename 之间被强制终止时，旧发布可能仍在 `.名称.backup-PID`，需手动恢复。现有测试不保证真实断电下的全平台持久性。
 
 ## 编译与发行格式
 
@@ -88,6 +95,7 @@ Hakutaku 的字节布局以锁定依赖自身 `FORMAT.md` 为准；Kēne 不维�
 Hakutaku 另有 catalog、page、block、数量和路径限制，由锁定依赖分配前验证。
 运行时使用 `memory_constrained()`：block-map cache 512 KiB、plaintext cache 16 MiB、
 prefetch cache 512 KiB、4 个 idle handles。缓存预算不等于整个进程的内存上限。
+128 MiB 预取预算也不包含当前画面、codec/GPU 开销、其他 owner 的强引用或淘汰前的一项在途解码；释放 cache handle 不代表资源立即从整个进程消失。
 视频 surface 预算也不包含后端 codec working set。
 
 实现入口：[`core`](../../crates/core/src/lib.rs)、[`loader`](../../crates/loader/src/lib.rs)、

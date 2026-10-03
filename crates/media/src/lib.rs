@@ -261,6 +261,16 @@ mod tests {
     }
 
     #[test]
+    fn rejects_malformed_and_truncated_webp() {
+        assert!(decode_webp(b"not a WebP", |size| size).is_err());
+        let encoded = encode_webp_rgba(&[127; 4 * 8 * 8], 8, 8, 80.0).unwrap();
+        for length in [1, 11, encoded.len() / 2] {
+            assert!(decode_webp(&encoded[..length], |size| size).is_err());
+        }
+        assert!(decode_webp(&encoded, |size| size).is_ok());
+    }
+
+    #[test]
     fn round_trips_and_scales_rgba() {
         let rgba = [
             255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255, 0, 0, 0, 255, 64,

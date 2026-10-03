@@ -1,6 +1,7 @@
 //! Adapter categories consumed by the content loader and storage layer.
 
 mod asset;
+mod camera;
 mod editor;
 mod script;
 mod store;

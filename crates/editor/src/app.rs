@@ -413,6 +413,7 @@ fn open_workspace_document(root: &Path, relative: &Path, window: &mut Window, cx
         PanelPayload::Document {
             root: root.to_owned(),
             relative: relative.to_owned(),
+            view: Default::default(),
         },
         window,
         cx,

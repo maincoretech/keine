@@ -53,8 +53,8 @@ mod keine {
                 bail!("save state failed its integrity check");
             }
             let _metadata: SerializedMetadata =
-                postcard::from_bytes(metadata).context("invalid save metadata")?;
-            postcard::from_bytes(state)
+                decode_exact(metadata).context("invalid save metadata")?;
+            decode_exact(state)
                 .map(SavedState::new)
                 .context("failed to deserialize game state")
         }
@@ -74,11 +74,19 @@ mod keine {
             if crc32fast::hash(metadata) != header.metadata_checksum {
                 return StoreStatus::Corrupt;
             }
-            match postcard::from_bytes::<SerializedMetadata>(metadata) {
+            match decode_exact::<SerializedMetadata>(metadata) {
                 Ok(metadata) => StoreStatus::Ready(metadata.into()),
                 Err(_) => StoreStatus::Corrupt,
             }
         }
+    }
+
+    fn decode_exact<'a, T: Deserialize<'a>>(bytes: &'a [u8]) -> Result<T> {
+        let (value, remaining) = postcard::take_from_bytes(bytes)?;
+        if !remaining.is_empty() {
+            bail!("save section contains trailing bytes");
+        }
+        Ok(value)
     }
 
     fn encode_at(state: &State, saved_at_unix: u64) -> Result<Vec<u8>> {
@@ -315,6 +323,36 @@ mod keine {
 
             assert_eq!(inspect(&corrupt), StoreStatus::Corrupt);
             assert!(KeineStore.decode(&corrupt).is_err());
+        }
+
+        #[test]
+        fn rejects_trailing_section_bytes_even_with_valid_lengths_and_checksums() {
+            let bytes = KeineStore.encode(&State::new()).unwrap();
+            let (_, metadata, state) = sections(&bytes).unwrap();
+            for extra_in_metadata in [true, false] {
+                let mut metadata = metadata.to_vec();
+                let mut state = state.to_vec();
+                if extra_in_metadata {
+                    metadata.push(0);
+                } else {
+                    state.push(0);
+                }
+                let mut altered = encode_header(
+                    metadata.len(),
+                    state.len(),
+                    crc32fast::hash(&metadata),
+                    crc32fast::hash(&state),
+                )
+                .to_vec();
+                altered.extend_from_slice(&metadata);
+                altered.extend_from_slice(&state);
+                assert!(KeineStore.decode(&altered).is_err());
+                if extra_in_metadata {
+                    assert_eq!(inspect(&altered), StoreStatus::Corrupt);
+                } else {
+                    assert!(matches!(inspect(&altered), StoreStatus::Ready(_)));
+                }
+            }
         }
 
         #[test]
