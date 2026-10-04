@@ -569,7 +569,8 @@ pub fn toggle_settings(
     mut page_transition: ResMut<SettingsPageTransition>,
 ) {
     let previous_route = active_route(&save_load, &ui);
-    if input.pressed(ButtonAction::System) {
+    let toggled = input.pressed(ButtonAction::System);
+    if toggled {
         ui.open = !ui.open;
         if ui.open {
             save_load.mode = None;
@@ -578,7 +579,7 @@ pub fn toggle_settings(
     let next_route = active_route(&save_load, &ui);
     begin_route_change(&mut route_transition, previous_route, next_route);
     if ui.open
-        && (keys.just_pressed(KeyCode::Escape)
+        && ((keys.just_pressed(KeyCode::Escape) && !toggled)
             || back
                 .iter()
                 .any(|interaction| *interaction == Interaction::Pressed))
@@ -2162,7 +2163,19 @@ pub(crate) fn reset_runtime_settings(
 pub fn apply_pending_window_mode(
     mut pending: ResMut<PendingWindowMode>,
     mut windows: Query<&mut Window>,
+    actions: Res<crate::runtime::platform::InputActions>,
+    mut settings: ResMut<RuntimeSettings>,
 ) {
+    if actions.toggle_fullscreen
+        && let Ok(window) = windows.single()
+    {
+        let fullscreen = pending
+            .target
+            .unwrap_or(window.mode != WindowMode::Windowed);
+        settings.fullscreen = !fullscreen;
+        pending.target = Some(!fullscreen);
+        pending.delay_frames = 0;
+    }
     let Some(value) = pending.target else {
         return;
     };
@@ -2476,6 +2489,74 @@ pub fn update_settings_pages(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::input_scope::UiInputScope;
+
+    #[test]
+    fn fullscreen_shortcut_toggles_the_actual_window_and_pending_target() {
+        let mut app = App::new();
+        app.init_resource::<PendingWindowMode>()
+            .init_resource::<RuntimeSettings>()
+            .insert_resource(crate::runtime::platform::InputActions {
+                toggle_fullscreen: true,
+                ..default()
+            })
+            .add_systems(Update, apply_pending_window_mode);
+        let window = app.world_mut().spawn(Window::default()).id();
+        app.update();
+        assert_eq!(
+            app.world().get::<Window>(window).unwrap().mode,
+            WindowMode::BorderlessFullscreen(MonitorSelection::Current)
+        );
+        assert!(app.world().resource::<RuntimeSettings>().fullscreen);
+        app.world_mut()
+            .resource_mut::<crate::runtime::platform::InputActions>()
+            .toggle_fullscreen = false;
+        app.update();
+        assert!(app.world().resource::<RuntimeSettings>().fullscreen);
+        app.world_mut()
+            .resource_mut::<crate::runtime::platform::InputActions>()
+            .toggle_fullscreen = true;
+        app.update();
+        assert_eq!(
+            app.world().get::<Window>(window).unwrap().mode,
+            WindowMode::Windowed
+        );
+        assert!(!app.world().resource::<RuntimeSettings>().fullscreen);
+        // A pending UI request is the state the shortcut should invert.
+        app.world_mut().resource_mut::<PendingWindowMode>().target = Some(true);
+        app.update();
+        assert_eq!(
+            app.world().get::<Window>(window).unwrap().mode,
+            WindowMode::Windowed
+        );
+        assert!(app.world().resource::<PendingWindowMode>().target.is_none());
+    }
+
+    #[test]
+    fn stage_escape_opens_settings_and_the_next_escape_closes_it() {
+        let mut app = App::new();
+        let mut keys = ButtonInput::default();
+        keys.press(KeyCode::Escape);
+        app.insert_resource(keys)
+            .insert_resource(crate::runtime::platform::InputActions {
+                shortcut: Some(ButtonAction::System),
+                ..default()
+            })
+            .init_resource::<UiInputScope>()
+            .init_resource::<SettingsUi>()
+            .init_resource::<SaveLoadUi>()
+            .init_resource::<MenuRouteTransition>()
+            .init_resource::<SettingsPageTransition>()
+            .add_systems(Update, toggle_settings);
+        app.update();
+        assert!(app.world().resource::<SettingsUi>().open);
+        *app.world_mut().resource_mut::<UiInputScope>() = UiInputScope::Menu;
+        app.world_mut()
+            .resource_mut::<crate::runtime::platform::InputActions>()
+            .shortcut = None;
+        app.update();
+        assert!(!app.world().resource::<SettingsUi>().open);
+    }
 
     #[test]
     fn language_refresh_has_distinct_fade_out_and_fade_in_phases() {

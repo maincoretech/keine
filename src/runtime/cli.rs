@@ -375,15 +375,30 @@ fn packaged_project_path(executable: &Path) -> PathBuf {
     if sibling.is_file() {
         return sibling;
     }
+    // Temporary Editor exports reuse the development Engine and carry native
+    // sources. Hardened distribution builds continue to require Hakutaku.
+    #[cfg(not(feature = "hardened"))]
+    if executable_dir.join("project/config.yaml").is_file() {
+        return executable_dir.join("project");
+    }
     // A native macOS app launches Contents/MacOS/keine directly while its
     // signed content belongs in Contents/Resources. Keeping this fallback in
     // the executable removes the need for an app-bundle shell launcher.
     let app_resource = executable_dir
         .parent()
         .map(|contents| contents.join("Resources/game.haku"));
-    app_resource
-        .filter(|path| path.is_file())
-        .unwrap_or(sibling)
+    if let Some(path) = app_resource.filter(|path| path.is_file()) {
+        return path;
+    }
+    #[cfg(not(feature = "hardened"))]
+    if let Some(project) = executable_dir
+        .parent()
+        .map(|contents| contents.join("Resources/project"))
+        .filter(|project| project.join("config.yaml").is_file())
+    {
+        return project;
+    }
+    sibling
 }
 
 fn run(project: PathBuf, mode: InteractiveMode) -> CliCommand {
@@ -692,6 +707,38 @@ mod tests {
             benchmark_output_path(Path::new("target/game-benchmark")).unwrap(),
             Path::new("target/game-benchmark")
         );
+    }
+
+    #[test]
+    fn playtest_discovery_is_development_only_and_keeps_hakutaku_priority() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("keine-playtest-discovery-{nonce}"));
+        for directory in [&root, &root.join("Game.app/Contents/MacOS")] {
+            let project = if directory == &root {
+                directory.join("project")
+            } else {
+                root.join("Game.app/Contents/Resources/project")
+            };
+            std::fs::create_dir_all(&project).unwrap();
+            std::fs::create_dir_all(directory).unwrap();
+            std::fs::write(project.join("config.yaml"), b"test").unwrap();
+            let executable = directory.join("keine");
+            assert_eq!(
+                packaged_project_path(&executable),
+                if cfg!(feature = "hardened") {
+                    directory.join("game.haku")
+                } else {
+                    project
+                }
+            );
+            let package = directory.join("game.haku");
+            std::fs::write(&package, b"package").unwrap();
+            assert_eq!(packaged_project_path(&executable), package);
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

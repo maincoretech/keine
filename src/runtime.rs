@@ -51,7 +51,9 @@ impl Plugin for RuntimePlugin {
         // after the input scope has already returned to Stage.
         app.add_systems(
             PreUpdate,
-            platform::collect_input.after(bevy::input::InputSystems),
+            platform::collect_input
+                .after(bevy::input::InputSystems)
+                .after(crate::ui::input_scope::sync),
         );
         app.add_systems(Update, tick::tick.in_set(GameSystemSet::Input));
         app.add_systems(Update, host::dispatch_shell.in_set(GameSystemSet::Sync));

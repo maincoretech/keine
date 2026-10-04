@@ -1563,6 +1563,7 @@ impl Render for WorkbenchPanel {
             PanelContent::Performance { controller, .. } => {
                 performance::render(controller, &self.view_scroll)
             }
+            PanelContent::Build { root } => build::render(root, &self.view_scroll, cx),
             PanelContent::Output { root, file_count } => {
                 let content = div()
                     .flex()

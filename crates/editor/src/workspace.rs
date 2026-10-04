@@ -1,5 +1,6 @@
 #[path = "workspace/app/data.rs"]
 pub mod app_data;
+pub(crate) mod build;
 pub mod document;
 #[path = "workspace/file/ops.rs"]
 pub(crate) mod file_ops;

@@ -47,6 +47,7 @@ pub(super) struct WorkspaceDocuments {
     pub(super) preview: Arc<PreviewController>,
     tools: HashMap<&'static str, PanelId>,
     pub(super) file_operation_active: bool,
+    pub(super) build: super::build::BuildState,
 }
 
 impl Drop for WorkspaceDocuments {
@@ -266,6 +267,7 @@ impl EditorDocuments {
                     preview: PreviewController::new(key),
                     tools: HashMap::new(),
                     file_operation_active: false,
+                    build: super::build::BuildState::default(),
                 },
             );
         }

@@ -41,10 +41,10 @@ use super::files::FileHistory;
 use super::inspector::{InlineBlockControl, SourceOption};
 use super::resource::ResourcePicker;
 use super::{
-    ASSET_PREVIEW_PANEL, ASSETS_PANEL, CHARACTERS_PANEL, DOCUMENT_PANEL, EXPLORER_PANEL, INK,
-    INSPECTOR_PANEL, OUTPUT_PANEL, PERFORMANCE_PANEL, PREVIEW_SOURCE_DEBOUNCE, PRIMARY,
-    PROBLEMS_PANEL, SCENES_PANEL, SEARCH_PANEL, SURFACE, SURFACE_HOVER, completion, minimap,
-    search, text_minimap,
+    ASSET_PREVIEW_PANEL, ASSETS_PANEL, BUILD_PANEL, CHARACTERS_PANEL, DOCUMENT_PANEL,
+    EXPLORER_PANEL, INK, INSPECTOR_PANEL, OUTPUT_PANEL, PERFORMANCE_PANEL, PREVIEW_SOURCE_DEBOUNCE,
+    PRIMARY, PROBLEMS_PANEL, SCENES_PANEL, SEARCH_PANEL, SURFACE, SURFACE_HOVER, completion,
+    minimap, search, text_minimap,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -88,6 +88,9 @@ pub(super) enum PanelPayload {
     Performance {
         root: PathBuf,
     },
+    Build {
+        root: PathBuf,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -105,6 +108,7 @@ pub(super) enum ToolKind {
     Characters,
     Problems,
     Performance,
+    Build,
 }
 
 impl ToolKind {
@@ -116,6 +120,7 @@ impl ToolKind {
             Self::Characters => CHARACTERS_PANEL,
             Self::Problems => PROBLEMS_PANEL,
             Self::Performance => PERFORMANCE_PANEL,
+            Self::Build => BUILD_PANEL,
         }
     }
 
@@ -130,6 +135,7 @@ impl ToolKind {
             Self::Characters => PanelPayload::Characters { root },
             Self::Problems => PanelPayload::Problems { root },
             Self::Performance => PanelPayload::Performance { root },
+            Self::Build => PanelPayload::Build { root },
         }
     }
 }
@@ -176,6 +182,9 @@ pub(super) enum PanelContent {
     Performance {
         root: PathBuf,
         controller: Arc<PreviewController>,
+    },
+    Build {
+        root: PathBuf,
     },
 }
 
@@ -268,6 +277,7 @@ impl PanelContent {
             PanelPayload::Characters { root } => Ok(Self::Characters { root }),
             PanelPayload::Scenes { root } => Ok(Self::Scenes { root }),
             PanelPayload::Problems { root } => Ok(Self::Problems { root }),
+            PanelPayload::Build { root } => Ok(Self::Build { root }),
             PanelPayload::Performance { root } => {
                 let controller = cx.global_mut::<EditorDocuments>().preview(&root)?;
                 Ok(Self::Performance { root, controller })
@@ -299,6 +309,7 @@ impl PanelContent {
             Self::Scenes { root } => PanelPayload::Scenes { root: root.clone() },
             Self::Problems { root } => PanelPayload::Problems { root: root.clone() },
             Self::Performance { root, .. } => PanelPayload::Performance { root: root.clone() },
+            Self::Build { root } => PanelPayload::Build { root: root.clone() },
         }
     }
 
@@ -315,6 +326,7 @@ impl PanelContent {
             Self::Scenes { .. } => SCENES_PANEL,
             Self::Problems { .. } => PROBLEMS_PANEL,
             Self::Performance { .. } => PERFORMANCE_PANEL,
+            Self::Build { .. } => BUILD_PANEL,
         }
     }
 
@@ -336,6 +348,7 @@ impl PanelContent {
             Self::Scenes { .. } => "Scenes".into(),
             Self::Problems { .. } => "Problems".into(),
             Self::Performance { .. } => "Performance".into(),
+            Self::Build { .. } => "Build".into(),
         }
     }
 }
@@ -757,6 +770,7 @@ impl WorkbenchPanel {
             PanelContent::Scenes { root } => Some((root.clone(), SCENES_PANEL)),
             PanelContent::Problems { root } => Some((root.clone(), PROBLEMS_PANEL)),
             PanelContent::Performance { root, .. } => Some((root.clone(), PERFORMANCE_PANEL)),
+            PanelContent::Build { root } => Some((root.clone(), BUILD_PANEL)),
             PanelContent::Output { root, .. } => Some((root.clone(), OUTPUT_PANEL)),
             _ => None,
         };
@@ -1396,6 +1410,10 @@ impl BasePanel for WorkbenchPanel {
                 cx.global_mut::<EditorDocuments>()
                     .set_tool_panel(root, PROBLEMS_PANEL, None)
             }
+            PanelContent::Build { root } => {
+                cx.global_mut::<EditorDocuments>()
+                    .set_tool_panel(root, BUILD_PANEL, None)
+            }
             PanelContent::Performance { root, .. } => cx
                 .global_mut::<EditorDocuments>()
                 .set_tool_panel(root, PERFORMANCE_PANEL, None),
@@ -1449,6 +1467,7 @@ pub(super) fn register_workbench_panels(cx: &mut App) {
         SCENES_PANEL,
         PROBLEMS_PANEL,
         PERFORMANCE_PANEL,
+        BUILD_PANEL,
     ] {
         register_panel(cx, name, |context, window, cx| {
             let panel = workbench_panel(context, window, cx).unwrap_or_else(|error| {

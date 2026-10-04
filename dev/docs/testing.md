@@ -18,6 +18,37 @@ sprite 引用背景及错误音频类型拒绝、Editor 增量引用计数和资
 
 tday 图片复用清理：逐文件 SHA256 与解码后 RGBA 核对，50 张登记图片中 15 份完全重复；合并 19 处引用后为 35 张图片、69 个资源，保留场景参数和当前正文。重复原素材/成品移到 `projects/.backups/tday-image-merge-20261004`，保留文件哈希未变。validate 为 13 scene / 2659 action / 0 warning；Editor 已显示 69 files / 136.6 MB。登记媒体由 177,273,165 降至 143,211,885 bytes；使用隔离测试密钥执行 `target/debug/keine pack projects/tday --output target/authoring/tday-image-merge-{before,after}`，两次成功，实际 `.haku`/`.taku` 合计由 143,371,230 降至 143,369,230 bytes，仅减少 2,000 bytes：现有 Hakutaku 已按内容去重，此次没有修改引擎。
 
+Build 临时试玩导出：`cargo check --workspace --features publisher`、
+`cargo clippy --workspace --all-targets --features publisher -- -D warnings`、
+`cargo test --workspace --features publisher`（862 passed / 8 ignored；IPC 放行沙箱重跑）、
+Editor 与含 publisher/video-native 的 Engine debug 构建通过；native-smoke 与 tday validate
+分别为 1 scene / 1 action、13 scene / 2659 action，均无警告。
+macOS 新 Editor 从 Build 选择目录导出 tday，显示 Export ready；输出 13 个剧本、69 个媒体及
+4 个 YAML，86 个项目文件均与源文件 SHA256 一致，未复制原素材或私有文件。
+导出的 Game.app 独立启动，标题菜单、Start 后的排练室背景与对白已目测。
+目录冲突、越界路径、失败清理和开发版默认工程查找有回归；Windows/Linux 实机导出、
+音视频与完整剧情未验收。临时试玩不使用发行密钥，正式发行仍按 release.md 的 bundle 流程。
+
+背景转换 Q80：`cargo test --workspace --features publisher` 为 862 passed / 8 ignored，
+Clippy、fmt、Editor 构建以及 native-smoke/tday validate 通过。导入回归覆盖 Q80 有损编码、
+尺寸/透明度/ICC/EXIF 保留、只读原文件和立绘/粒子无损编码；已有合规 WebP 仍直接复制。
+tday 的 31 张背景用 `cwebp -q 80 -m 4 -alpha_q 100 -metadata icc` 从匹配的原 PNG 转换，
+登记背景由 70,275,364 降至 4,444,576 bytes，全部媒体为 77,381,097 bytes。
+124 个其他项目文件哈希未变，原 WebP 备份在 `projects/.backups/tday-background-q80`。
+新版 macOS Editor 已显示 69 files / 73.8 MB（界面使用二进制单位），夕阳背景预览正常。
+检查时误触重置布局产生重复栏目，已修复重置遗漏外围 dock 的问题，并恢复三列布局。
+旧试玩导出仍保留旧资源，需重新导出；本轮没有新 release 包或完整剧情验收。
+
+引擎快捷键：publisher workspace 868 passed / 8 ignored，无默认功能 + video-native
+的 Engine lib 282 passed / 1 ignored；fmt、workspace Clippy、含 publisher/video-native/hot-reload
+的 workspace check 与 Engine debug 构建通过。Ctrl 按住自动播放、松开停止，保留正常打字
+速度与自动播放间隔；A/Ctrl+A 快捷键取消，画面自动播放按钮保留。回归覆盖持续按键不重启
+自动播放计时、组合键抑制、输入框/弹窗/加载隔离、失焦后不恢复自动播放、弹窗中的停止，
+右键只在舞台切换文本框且不推进对白，以及 Esc 和全屏状态切换。
+macOS 新 Preview 已目测右键隐藏/恢复文本框、A 不激活自动播放；此前已目测 H 文本框开关、
+B 历史、Esc 设置与关闭、F5/F9 确认框及取消、F11 全屏往返。Ctrl 持续按住与输入框边界由回归测试验证，
+未执行物理键盘持续按键及 Windows/Linux 原生快捷键验收；键位见 readme.zh.md。
+
 ### 项目所有者（用户）
 
 | 何时 | 你要做什么 | 完成标准 |
@@ -119,6 +150,36 @@ Linux 使用 `video-ffmpeg`；CI 另跑 FFmpeg ASan。fuzz 的目录参数由
 合法文件必须读到 EOF 并可 rewind，损坏头在 FS/加密包中均必须拒绝。
 
 ## 性能
+
+### Engine 静止 CPU
+
+本机 macOS ARM64、`publisher,video-native` debug 优化构建，tday 的夕阳背景和
+“虽然已经过去很久了”对白停稳，BGM 继续播放，同一窗口尺寸、无操作。
+每 5 秒读取 `ps` 的累计 CPU 时间，四次读数跨度约 15 秒：旧版增加 7.36 CPU 秒
+（49.02%），新版增加 0.23 CPU 秒（1.53%）。这是整个 Engine 进程的时间增量，
+包含 Opus 解码和系统音频线程；不使用瞬时 `%CPU` 的 0.0 读数替代它。
+移除临时诊断后的最终构建复测增加 0.24 CPU 秒 / 15.02 秒（1.60%），见 `final.cpu.json`。
+
+锁定的 Bevy 0.19 窗口循环用 `Instant::checked_add(wait)` 安排唤醒，
+`Duration::MAX` 溢出时保留旧的动画 deadline/control flow，导致静态画面继续跑整帧。
+Runtime 的静止/后台等待改用最多 60 秒的有限 deadline；输入与 IPC 仍可立即唤醒，
+控制栏淡出和光标闪烁仍用更近的 deadline，动画/粒子/视频/自动播放保持原有节奏。
+新版 10 秒调用栈中，主线程 8,130/8,139 个样本等待系统事件，持续非等待工作主要为
+Opus；此次结果不能外推为动态画面提速或其他平台的实测结果。
+
+原始数据及旧二进制在 `target/authoring/performance/idle/`；采样命令：
+
+```sh
+cargo build --features publisher,video-native
+# Editor 启动 Preview，定位到上述对白，等画面停稳；前后使用各自 Engine PID。
+python3 target/authoring/performance/idle/measure.py <PID> <before-or-after>.cpu.json
+sample <PID> 10 1 -file <before-or-after>.sample.txt
+```
+
+fmt/check/Clippy、publisher workspace 869 passed / 8 ignored（IPC 放行沙箱重跑）、
+无默认音频的 video-native 生命周期 21 项回归及最终 Engine 构建通过。
+原生 Preview 已检查休眠后的空格推进、Textbox 隐藏/恢复及菜单唤醒。
+Windows/Linux 静止 CPU 尚未实测。
 
 性能修改必须提供同主机、同输入、同 release 配置的前后命令与原始结果。
 `cargo perf --startup` 测隔离启动；`cargo bundle <project> --benchmark` 生成独立 portable 发行基准。

@@ -7,7 +7,7 @@
 │   ├── Assets：映射资源 / Unmapped、搜索、类型/目录/标签过滤、List/Grid
 │   ├── Characters
 │   ├── Search：全文搜索，⌘/Ctrl+Shift+F；位于角色下方、分隔线上方
-│   └── 分隔线 → Problems / Performance
+│   └── 分隔线 → Problems / Performance / Build
 ├── 中央文档
 │   ├── Text：补全、语法着色、诊断、智能缩进/配对、右侧概览
 │   └── Blocks：同一份源码的结构投影、拖动、行内编辑、右侧概览
@@ -106,6 +106,17 @@ Text 概览的配色、换行与笔画在后台生成；改宽复用配色，新
 - Search 按文件显示高亮结果，Up/Down 选择、Enter/点击跳到准确源码或 Block。
   后台搜索有取消、120 ms 输入合并、2,000 条结果上限；会提示截断与跳过文件。
 
+## Build
+
+侧栏 Package 图标打开 Build view；点击 `Export game…` 选择父目录，生成新的
+`<工程名>-playtest` 文件夹（重名追加数字），完成后提供 `Play` / `Open folder`。
+导出前复用现有保存、格式化和冲突保护；复制在后台运行，导出期间禁止其他文件操作。
+当前支持原生 Eiyashou 工程的本机试玩：复用已安装的开发 Engine，无需编译或 publisher key；
+复制登记资源、全部 `.shou` 和配置/清单，不复制原格式副本、未登记素材、存档、缓存或私钥。
+源工程和导出副本分别校验，失败清理本次新目录；工程的 scene ID、引用和布局保持不变。
+macOS 输出 `Game.app`，Windows/Linux 输出 `keine.exe` / `keine`；均可直接启动。
+试玩副本包含可读源码，只针对当前操作系统；正式 Hakutaku 发行仍使用 [bundle](release.md)。
+
 ## 资源
 
 `assets.yaml` 是资源 ID、类型、路径与 tags 的唯一来源；派生缩略图与使用次数不写回清单。
@@ -128,7 +139,8 @@ Assets
 
 一个映射资源对应一个物理文件；资源重命名/移动与引用变更必须一起验证。
 拖入资源目录时立即转换并登记，成品保留原文件主名，只改扩展名；已有合规文件直接复制。
-PNG/JPEG/BMP/TIFF/静态 GIF 转为无损 RGBA8 WebP（保留透明度、应用图片方向）；
+PNG/JPEG/BMP/TIFF/静态 GIF：背景转为 Q80 WebP，立绘/粒子保留无损 WebP；
+保留原分辨率、透明度和 ICC 色彩配置，应用图片方向；已有合规 WebP 直接复制，不反复有损编码。
 WAV/MP3/FLAC/Vorbis/AAC 转为 48 kHz、192 kb/s VBR Opus；视频转为 H.264 MP4。
 动态 GIF/APNG 明确拒绝，不静默丢帧。音视频转换需要带 libopus/libx264 的 FFmpeg，
 从 Editor 旁、Resources、PATH 或 macOS Homebrew 目录查找；缺少工具时显示错误。

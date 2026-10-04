@@ -4,6 +4,7 @@ use image::{AnimationDecoder, DynamicImage, ImageDecoder, ImageEncoder};
 use std::process::{Command, Stdio};
 
 const MAX_IMAGE_PIXELS: u64 = 16 * 1024 * 1024;
+const BACKGROUND_WEBP_QUALITY: f32 = 80.0;
 
 pub(super) fn output_extension(source: &Path, kind: AssetKind) -> io::Result<String> {
     let size = fs::metadata(source)?.len();
@@ -63,21 +64,32 @@ pub(super) fn import(source: &Path, destination: &Path, kind: AssetKind) -> io::
                 AssetKind::Background | AssetKind::Figure | AssetKind::Particle => {
                     let (image, profile) = decode_image(source)?;
                     let mut writer = io::BufWriter::new(&mut output);
-                    let mut encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut writer);
-                    if let Some(profile) = profile {
-                        encoder
-                            .set_icc_profile(profile)
-                            .map_err(|error| invalid(error.to_string()))?;
-                    }
-                    encoder
-                        .write_image(
+                    use io::Write;
+                    if kind == AssetKind::Background {
+                        writer.write_all(&keine_media::encode_webp_rgba_with_icc(
                             image.as_bytes(),
                             image.width(),
                             image.height(),
-                            image::ExtendedColorType::Rgba8,
-                        )
-                        .map_err(|error| invalid(format!("WebP encoding failed: {error}")))?;
-                    use io::Write;
+                            BACKGROUND_WEBP_QUALITY,
+                            profile.as_deref(),
+                        )?)?;
+                    } else {
+                        let mut encoder =
+                            image::codecs::webp::WebPEncoder::new_lossless(&mut writer);
+                        if let Some(profile) = profile {
+                            encoder
+                                .set_icc_profile(profile)
+                                .map_err(|error| invalid(error.to_string()))?;
+                        }
+                        encoder
+                            .write_image(
+                                image.as_bytes(),
+                                image.width(),
+                                image.height(),
+                                image::ExtendedColorType::Rgba8,
+                            )
+                            .map_err(|error| invalid(format!("WebP encoding failed: {error}")))?;
+                    }
                     writer.flush()?;
                 }
                 _ => {
@@ -142,7 +154,7 @@ fn decode_image(source: &Path) -> io::Result<(DynamicImage, Option<Vec<u8>>)> {
     let profile = decoder.icc_profile().map_err(image_error)?;
     let mut image = DynamicImage::from_decoder(decoder).map_err(image_error)?;
     image.apply_orientation(orientation);
-    // WebP's lossless encoder accepts RGB8/RGBA8; alpha remains intact.
+    // Both background and lossless sprite encoders consume tightly packed RGBA8.
     Ok((DynamicImage::ImageRgba8(image.into_rgba8()), profile))
 }
 

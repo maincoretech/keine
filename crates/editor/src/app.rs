@@ -74,6 +74,7 @@ use panel::{
 use window::{EditorApp, EditorAppOwner, WorkbenchWindow, listen_for_secondary_launches};
 
 mod blocks;
+mod build;
 mod completion;
 mod controls;
 mod dock;
@@ -194,6 +195,7 @@ const CHARACTERS_PANEL: &str = "keine.editor.characters";
 const SCENES_PANEL: &str = "keine.editor.scenes";
 const PROBLEMS_PANEL: &str = "keine.editor.problems";
 const PERFORMANCE_PANEL: &str = "keine.editor.performance";
+const BUILD_PANEL: &str = "keine.editor.build";
 
 actions!(
     keine_editor,

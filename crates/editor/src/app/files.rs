@@ -936,7 +936,7 @@ impl WorkbenchPanel {
     }
 }
 
-fn open_in_file_manager(path: &Path) -> io::Result<()> {
+pub(super) fn open_in_file_manager(path: &Path) -> io::Result<()> {
     #[cfg(target_os = "macos")]
     {
         let mut command = std::process::Command::new("open");

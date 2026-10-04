@@ -89,9 +89,10 @@ pub(crate) struct InputActions {
     pub shortcut: Option<ButtonAction>,
     pub toggle_auto: bool,
     pub toggle_skip: bool,
-    pub skip_held: bool,
-    pub skip_released: bool,
+    pub auto_held: bool,
+    pub auto_released: bool,
     pub skip_video: bool,
+    pub toggle_fullscreen: bool,
     pub(crate) control_chord_used: bool,
 }
 
@@ -123,27 +124,91 @@ pub(crate) fn request_graceful_exit(
     }
 }
 
-pub(crate) fn collect_input(
-    keys: Res<ButtonInput<KeyCode>>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    touches: Res<Touches>,
-    gamepads: Query<&Gamepad>,
-    time: Res<Time>,
-    mut click_history: ResMut<PointerClickHistory>,
-    mut actions: ResMut<InputActions>,
-) {
-    let gamepad_advance = gamepads
-        .iter()
-        .any(|pad| pad.just_pressed(GamepadButton::South));
+#[derive(SystemParam)]
+pub(crate) struct InputContext<'w, 's> {
+    keys: Res<'w, ButtonInput<KeyCode>>,
+    mouse: Res<'w, ButtonInput<MouseButton>>,
+    touches: Res<'w, Touches>,
+    gamepads: Query<'w, 's, &'static Gamepad>,
+    windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
+    scope: Res<'w, crate::ui::input_scope::UiInputScope>,
+    time: Res<'w, Time>,
+    click_history: ResMut<'w, PointerClickHistory>,
+    actions: ResMut<'w, InputActions>,
+}
+
+pub(crate) fn collect_input(context: InputContext) {
+    let InputContext {
+        keys,
+        mouse,
+        touches,
+        gamepads,
+        windows,
+        scope,
+        time,
+        mut click_history,
+        mut actions,
+    } = context;
+    let was_held = actions.auto_held;
+    if windows.single().is_ok_and(|window| !window.focused) {
+        *actions = InputActions {
+            auto_released: was_held,
+            // Regaining focus while Ctrl is still down must not resume autoplay.
+            control_chord_used: true,
+            ..default()
+        };
+        click_history.last_click = None;
+        return;
+    }
+    let gameplay_input = matches!(
+        *scope,
+        crate::ui::input_scope::UiInputScope::Stage | crate::ui::input_scope::UiInputScope::Title
+    );
+    let gamepad_advance = gameplay_input
+        && gamepads
+            .iter()
+            .any(|pad| pad.just_pressed(GamepadButton::South));
     let gamepad_skip = gamepads
         .iter()
         .any(|pad| pad.just_pressed(GamepadButton::RightTrigger2));
-    let pointer_pressed = mouse.just_pressed(MouseButton::Left) || touches.any_just_pressed();
+    let pointer_pressed =
+        gameplay_input && (mouse.just_pressed(MouseButton::Left) || touches.any_just_pressed());
     let control_pressed = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
-    actions.shortcut = keyboard_shortcut(&keys);
+    actions.shortcut = if matches!(
+        *scope,
+        crate::ui::input_scope::UiInputScope::Stage
+            | crate::ui::input_scope::UiInputScope::Title
+            | crate::ui::input_scope::UiInputScope::Menu
+            | crate::ui::input_scope::UiInputScope::Backlog
+    ) {
+        keyboard_shortcut(&keys)
+            .or_else(|| {
+                (*scope == crate::ui::input_scope::UiInputScope::Stage
+                    && !control_pressed
+                    && !shortcut_modifier_pressed(&keys)
+                    && keys.just_pressed(KeyCode::Escape))
+                .then_some(ButtonAction::System)
+            })
+            .or_else(|| {
+                (*scope == crate::ui::input_scope::UiInputScope::Stage
+                    && mouse.just_pressed(MouseButton::Right))
+                .then_some(ButtonAction::Hide)
+            })
+    } else {
+        None
+    };
+    if *scope != crate::ui::input_scope::UiInputScope::Stage && control_pressed {
+        // Do not begin hold-to-autoplay by closing a modal with Ctrl still held.
+        actions.control_chord_used = true;
+    }
     update_control_hold(&keys, &mut actions);
+    actions.auto_held &= *scope == crate::ui::input_scope::UiInputScope::Stage;
+    actions.auto_released = was_held && !actions.auto_held;
     actions.pointer_advance = pointer_pressed;
-    actions.advance = (!control_pressed && keys.any_just_pressed([KeyCode::Space, KeyCode::Enter]))
+    actions.advance = (gameplay_input
+        && !control_pressed
+        && !shortcut_modifier_pressed(&keys)
+        && keys.any_just_pressed([KeyCode::Space, KeyCode::Enter]))
         || pointer_pressed
         || gamepad_advance;
     actions.skip_video = false;
@@ -155,14 +220,29 @@ pub(crate) fn collect_input(
         click_history.last_click = Some(now);
     }
     actions.toggle_auto = actions.shortcut == Some(ButtonAction::Auto)
-        || gamepads
-            .iter()
-            .any(|pad| pad.just_pressed(GamepadButton::West));
-    actions.toggle_skip = actions.shortcut == Some(ButtonAction::Skip) || gamepad_skip;
+        || (gameplay_input
+            && gamepads
+                .iter()
+                .any(|pad| pad.just_pressed(GamepadButton::West)));
+    actions.toggle_skip =
+        actions.shortcut == Some(ButtonAction::Skip) || (gameplay_input && gamepad_skip);
+    actions.toggle_fullscreen =
+        !control_pressed && !shortcut_modifier_pressed(&keys) && keys.just_pressed(KeyCode::F11);
+}
+
+fn shortcut_modifier_pressed(keys: &ButtonInput<KeyCode>) -> bool {
+    keys.any_pressed([
+        KeyCode::AltLeft,
+        KeyCode::AltRight,
+        KeyCode::SuperLeft,
+        KeyCode::SuperRight,
+        KeyCode::ShiftLeft,
+        KeyCode::ShiftRight,
+    ])
 }
 
 fn update_control_hold(keys: &ButtonInput<KeyCode>, actions: &mut InputActions) {
-    let was_held = actions.skip_held;
+    let was_held = actions.auto_held;
     let control_pressed = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     let chord_key_pressed = keys
         .get_pressed()
@@ -171,35 +251,45 @@ fn update_control_hold(keys: &ButtonInput<KeyCode>, actions: &mut InputActions) 
     if !control_pressed {
         actions.control_chord_used = false;
     } else if chord_key_pressed {
-        // Once Ctrl participates in any chord, suppress hold-to-skip until the
+        // Once Ctrl participates in any chord, suppress hold-to-autoplay until the
         // modifier is released. Releasing the letter before Ctrl must not
-        // unexpectedly start fast-forwarding.
+        // unexpectedly start autoplaying.
         actions.control_chord_used = true;
     }
 
-    actions.skip_held = control_pressed && !actions.control_chord_used;
-    actions.skip_released = was_held && !actions.skip_held;
+    actions.auto_held = control_pressed && !actions.control_chord_used;
+    actions.auto_released = was_held && !actions.auto_held;
 }
 
 fn keyboard_shortcut(keys: &ButtonInput<KeyCode>) -> Option<ButtonAction> {
-    if !keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]) {
+    if shortcut_modifier_pressed(keys) {
         return None;
     }
-    [
-        (KeyCode::KeyA, ButtonAction::Auto),
+    let common = [
         (KeyCode::KeyK, ButtonAction::Skip),
         (KeyCode::KeyB, ButtonAction::Backlog),
         (KeyCode::KeyR, ButtonAction::Replay),
         (KeyCode::KeyH, ButtonAction::Hide),
-        (KeyCode::KeyQ, ButtonAction::QuickSave),
-        (KeyCode::KeyL, ButtonAction::QuickLoad),
-        (KeyCode::KeyS, ButtonAction::Save),
-        (KeyCode::KeyO, ButtonAction::Load),
-        (KeyCode::Comma, ButtonAction::System),
-        (KeyCode::KeyT, ButtonAction::Title),
-    ]
-    .into_iter()
-    .find_map(|(key, action)| keys.just_pressed(key).then_some(action))
+    ];
+    let specific = if keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]) {
+        &[
+            (KeyCode::KeyQ, ButtonAction::QuickSave),
+            (KeyCode::KeyL, ButtonAction::QuickLoad),
+            (KeyCode::KeyS, ButtonAction::Save),
+            (KeyCode::KeyO, ButtonAction::Load),
+            (KeyCode::Comma, ButtonAction::System),
+            (KeyCode::KeyT, ButtonAction::Title),
+        ][..]
+    } else {
+        &[
+            (KeyCode::F5, ButtonAction::QuickSave),
+            (KeyCode::F9, ButtonAction::QuickLoad),
+        ][..]
+    };
+    common
+        .into_iter()
+        .chain(specific.iter().copied())
+        .find_map(|(key, action)| keys.just_pressed(key).then_some(action))
 }
 
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -272,6 +362,12 @@ pub(crate) struct LifecycleContext<'w, 's> {
     authoring_preview: Option<Res<'w, super::preview::AuthoringPreviewSession>>,
 }
 
+// Bevy 0.19's reactive runner uses Instant::checked_add(wait). Duration::MAX
+// overflows, leaving the previous animation deadline/control flow in place.
+// A finite idle deadline lets it sleep; input and authoring messages still wake
+// immediately, and nearer UI deadlines (auto-hide/caret) retain their timing.
+const IDLE_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+
 pub(crate) fn update_lifecycle(
     context: LifecycleContext,
     mut activity: ResMut<RuntimeActivity>,
@@ -297,7 +393,7 @@ pub(crate) fn update_lifecycle(
     let auto_hide = context
         .auto_hide
         .lifecycle(context.real_time.elapsed_secs(), &context.toggles);
-    let reactive_wait = auto_hide.1.min(
+    let reactive_wait = auto_hide.1.min(IDLE_WAIT).min(
         context
             .input_caret
             .next_toggle_in(context.real_time.elapsed_secs()),
@@ -347,7 +443,7 @@ pub(crate) fn update_lifecycle(
     } else if companion_preview {
         focused_mode
     } else {
-        UpdateMode::reactive_low_power(std::time::Duration::MAX)
+        UpdateMode::reactive_low_power(IDLE_WAIT)
     };
     if winit.unfocused_mode != unfocused_mode {
         winit.unfocused_mode = unfocused_mode;
@@ -688,19 +784,22 @@ mod tests {
     }
 
     #[test]
-    fn application_shortcuts_require_control() {
+    fn save_shortcuts_require_control_and_gameplay_letters_do_not() {
         let mut keys = ButtonInput::default();
+        keys.press(KeyCode::KeyS);
+        assert_eq!(keyboard_shortcut(&keys), None);
+        keys.press(KeyCode::ControlLeft);
+        assert_eq!(keyboard_shortcut(&keys), Some(ButtonAction::Save));
+        keys.reset_all();
         keys.press(KeyCode::KeyA);
         assert_eq!(keyboard_shortcut(&keys), None);
-
         keys.press(KeyCode::ControlLeft);
-        assert_eq!(keyboard_shortcut(&keys), Some(ButtonAction::Auto));
+        assert_eq!(keyboard_shortcut(&keys), None);
     }
 
     #[test]
     fn common_shortcuts_have_one_central_mapping() {
         let expected = [
-            (KeyCode::KeyA, ButtonAction::Auto),
             (KeyCode::KeyK, ButtonAction::Skip),
             (KeyCode::KeyB, ButtonAction::Backlog),
             (KeyCode::KeyR, ButtonAction::Replay),
@@ -718,6 +817,159 @@ mod tests {
             keys.press(key);
             assert_eq!(keyboard_shortcut(&keys), Some(action));
         }
+        for (key, action) in [
+            (KeyCode::KeyK, ButtonAction::Skip),
+            (KeyCode::KeyB, ButtonAction::Backlog),
+            (KeyCode::KeyR, ButtonAction::Replay),
+            (KeyCode::KeyH, ButtonAction::Hide),
+            (KeyCode::F5, ButtonAction::QuickSave),
+            (KeyCode::F9, ButtonAction::QuickLoad),
+        ] {
+            let mut keys = ButtonInput::default();
+            keys.press(key);
+            assert_eq!(keyboard_shortcut(&keys), Some(action));
+            keys.clear();
+            assert_eq!(
+                keyboard_shortcut(&keys),
+                None,
+                "holding a key must not retrigger"
+            );
+        }
+    }
+
+    #[test]
+    fn operating_system_chords_do_not_trigger_gameplay_shortcuts() {
+        for modifier in [KeyCode::AltLeft, KeyCode::SuperLeft, KeyCode::ShiftLeft] {
+            let mut keys = ButtonInput::default();
+            keys.press(modifier);
+            keys.press(KeyCode::KeyH);
+            keys.press(KeyCode::F5);
+            assert_eq!(keyboard_shortcut(&keys), None);
+        }
+    }
+
+    #[test]
+    fn right_click_toggles_textbox_only_on_stage_without_advancing() {
+        use crate::ui::input_scope::UiInputScope;
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<Touches>()
+            .init_resource::<Time>()
+            .init_resource::<InputActions>()
+            .init_resource::<PointerClickHistory>()
+            .init_resource::<UiInputScope>()
+            .init_resource::<ToggleStates>()
+            .init_resource::<crate::storage::settings::RuntimeSettings>()
+            .add_systems(
+                Update,
+                (collect_input, crate::ui::control_bar::handle_button_click).chain(),
+            );
+        for expected_hidden in [true, false] {
+            app.world_mut()
+                .resource_mut::<ButtonInput<MouseButton>>()
+                .reset_all();
+            app.world_mut()
+                .resource_mut::<ButtonInput<MouseButton>>()
+                .press(MouseButton::Right);
+            app.update();
+            assert_eq!(app.world().resource::<ToggleStates>().hide, expected_hidden);
+            assert!(!app.world().resource::<InputActions>().advance);
+            app.world_mut()
+                .resource_mut::<ButtonInput<MouseButton>>()
+                .clear();
+            app.update();
+            assert_eq!(app.world().resource::<ToggleStates>().hide, expected_hidden);
+        }
+        for scope in [
+            UiInputScope::Title,
+            UiInputScope::Menu,
+            UiInputScope::Backlog,
+            UiInputScope::Dialog,
+            UiInputScope::UserInput,
+            UiInputScope::Loading,
+        ] {
+            *app.world_mut().resource_mut::<UiInputScope>() = scope;
+            app.world_mut()
+                .resource_mut::<ButtonInput<MouseButton>>()
+                .reset_all();
+            app.world_mut()
+                .resource_mut::<ButtonInput<MouseButton>>()
+                .press(MouseButton::Right);
+            app.update();
+            assert!(!app.world().resource::<ToggleStates>().hide);
+            assert!(app.world().resource::<InputActions>().shortcut.is_none());
+        }
+    }
+
+    #[test]
+    fn input_modal_and_focus_boundaries_cancel_control_without_restarting_it() {
+        use crate::ui::input_scope::UiInputScope;
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<Touches>()
+            .init_resource::<Time>()
+            .init_resource::<InputActions>()
+            .init_resource::<PointerClickHistory>()
+            .init_resource::<UiInputScope>()
+            .add_systems(Update, collect_input);
+        let window = app
+            .world_mut()
+            .spawn((Window::default(), PrimaryWindow))
+            .id();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::ControlLeft);
+        app.update();
+        assert!(app.world().resource::<InputActions>().auto_held);
+
+        app.world_mut().get_mut::<Window>(window).unwrap().focused = false;
+        app.update();
+        let actions = app.world().resource::<InputActions>();
+        assert!(actions.auto_released);
+        assert!(!actions.auto_held);
+        assert!(actions.shortcut.is_none());
+        app.world_mut().get_mut::<Window>(window).unwrap().focused = true;
+        app.update();
+        assert!(!app.world().resource::<InputActions>().auto_held);
+
+        for scope in [
+            UiInputScope::UserInput,
+            UiInputScope::Dialog,
+            UiInputScope::Loading,
+        ] {
+            *app.world_mut().resource_mut::<UiInputScope>() = scope;
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.reset_all();
+            keys.press(KeyCode::ControlRight);
+            keys.press(KeyCode::KeyA);
+            keys.press(KeyCode::Space);
+            app.update();
+            let actions = app.world().resource::<InputActions>();
+            assert!(!actions.advance);
+            assert!(!actions.toggle_auto);
+            assert!(!actions.auto_held);
+            assert!(actions.shortcut.is_none());
+        }
+        *app.world_mut().resource_mut::<UiInputScope>() = UiInputScope::Stage;
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .release(KeyCode::KeyA);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .release(KeyCode::Space);
+        app.update();
+        assert!(!app.world().resource::<InputActions>().auto_held);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::ControlRight);
+        app.update();
+        assert!(app.world().resource::<InputActions>().auto_held);
     }
 
     #[test]
@@ -727,24 +979,24 @@ mod tests {
 
         keys.press(KeyCode::ControlLeft);
         update_control_hold(&keys, &mut actions);
-        assert!(actions.skip_held);
-        assert!(!actions.skip_released);
+        assert!(actions.auto_held);
+        assert!(!actions.auto_released);
 
         update_control_hold(&keys, &mut actions);
         assert!(
-            actions.skip_held,
+            actions.auto_held,
             "holding Ctrl must remain active every frame"
         );
 
         keys.press(KeyCode::KeyA);
         update_control_hold(&keys, &mut actions);
-        assert!(!actions.skip_held);
-        assert!(actions.skip_released);
+        assert!(!actions.auto_held);
+        assert!(actions.auto_released);
 
         keys.release(KeyCode::KeyA);
         update_control_hold(&keys, &mut actions);
         assert!(
-            !actions.skip_held,
+            !actions.auto_held,
             "a completed chord stays suppressed until Ctrl is released"
         );
 
@@ -752,7 +1004,7 @@ mod tests {
         update_control_hold(&keys, &mut actions);
         keys.press(KeyCode::ControlLeft);
         update_control_hold(&keys, &mut actions);
-        assert!(actions.skip_held);
+        assert!(actions.auto_held);
     }
 
     #[test]
@@ -761,6 +1013,7 @@ mod tests {
         app.add_plugins((MinimalPlugins, InputPlugin))
             .init_resource::<InputActions>()
             .init_resource::<PointerClickHistory>()
+            .init_resource::<crate::ui::input_scope::UiInputScope>()
             .add_systems(PreUpdate, collect_input.after(InputSystems));
         let window = app.world_mut().spawn_empty().id();
         app.world_mut().write_message(MouseButtonInput {
@@ -852,6 +1105,80 @@ mod tests {
             assert_eq!(winit.unfocused_mode, winit.focused_mode);
             assert!(!app.world().resource::<Time<Virtual>>().is_paused());
         }
+    }
+
+    #[test]
+    fn settled_frames_sleep_with_a_valid_deadline_and_resume_for_work() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        let mut timing = AutoHideTiming::default();
+        timing.hide_btn_alpha = 0.0;
+        app.insert_resource(GameState(keine_core::State::new()))
+            .insert_resource(AssetLoadingGate { blocked: false })
+            .init_resource::<UiAnimationActivity>()
+            .init_resource::<AudioAnimationActivity>()
+            .init_resource::<ToggleStates>()
+            .insert_resource(timing)
+            .init_resource::<UserInputCaretBlink>()
+            .init_resource::<Time<Real>>()
+            .init_resource::<Time<Virtual>>()
+            .init_resource::<RuntimeActivity>()
+            .insert_resource(WinitSettings::desktop_app());
+        app.world_mut()
+            .resource_mut::<Time<Real>>()
+            .advance_by(std::time::Duration::from_secs(10));
+        let window = app.world_mut().spawn(Window::default()).id();
+
+        for preview in [false, true] {
+            if preview {
+                app.init_resource::<super::super::preview::AuthoringPreviewSession>();
+            }
+            for focused in [true, false] {
+                app.world_mut().get_mut::<Window>(window).unwrap().focused = focused;
+                app.world_mut().run_system_once(update_lifecycle).unwrap();
+                assert!(app.world().resource::<Time<Virtual>>().is_paused());
+                let winit = app.world().resource::<WinitSettings>();
+                for mode in [winit.focused_mode, winit.unfocused_mode] {
+                    let UpdateMode::Reactive {
+                        wait,
+                        react_to_user_events,
+                        react_to_window_events,
+                        ..
+                    } = mode
+                    else {
+                        panic!("settled frames must sleep")
+                    };
+                    assert!(wait > std::time::Duration::ZERO);
+                    assert!(Instant::now().checked_add(wait).is_some());
+                    assert!(react_to_user_events && react_to_window_events);
+                }
+            }
+        }
+
+        app.world_mut().resource_mut::<GameState>().wait_remaining = 0.5;
+        app.world_mut().run_system_once(update_lifecycle).unwrap();
+        assert_eq!(
+            *app.world().resource::<RuntimeActivity>(),
+            RuntimeActivity::Active
+        );
+        assert!(!app.world().resource::<Time<Virtual>>().is_paused());
+        app.world_mut().resource_mut::<GameState>().wait_remaining = 0.0;
+        app.world_mut().run_system_once(update_lifecycle).unwrap();
+        assert_eq!(
+            *app.world().resource::<RuntimeActivity>(),
+            RuntimeActivity::Idle
+        );
+        {
+            let mut timing = app.world_mut().resource_mut::<AutoHideTiming>();
+            timing.last_move = 9.5;
+            timing.hide_btn_alpha = 1.0;
+        }
+        app.world_mut().run_system_once(update_lifecycle).unwrap();
+        assert_eq!(
+            app.world().resource::<WinitSettings>().focused_mode,
+            UpdateMode::reactive_low_power(std::time::Duration::from_millis(500)),
+            "idle sleep must still honor the control-bar fade deadline"
+        );
     }
 
     #[test]

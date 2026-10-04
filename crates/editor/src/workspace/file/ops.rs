@@ -1294,12 +1294,17 @@ mod tests {
             manifest.backgrounds["room"].path()
         );
         assert!(after.contains("# keep") && after.contains("# source"));
-        assert_eq!(
-            image::open(root.join(result.destination))
-                .unwrap()
-                .to_rgba8(),
-            image
-        );
+        let decoded = image::open(root.join(result.destination))
+            .unwrap()
+            .to_rgba8();
+        assert_eq!(decoded.dimensions(), image.dimensions());
+        assert!(decoded.pixels().zip(image.pixels()).all(|(a, b)| {
+            a[3] == b[3]
+                && a.0[..3]
+                    .iter()
+                    .zip(&b.0[..3])
+                    .all(|(a, b)| a.abs_diff(*b) <= 8)
+        }));
         assert!(convert_asset(&root, &asset).is_err());
         fs::write(root.join("assets.yaml"), before).unwrap();
         fs::write(root.join(&path), b"broken source").unwrap();
@@ -1356,6 +1361,7 @@ mod tests {
 
     #[test]
     fn png_import_in_its_original_folder_preserves_source_and_alpha() {
+        use image::{ImageDecoder, ImageEncoder};
         let root = fixture();
         let source = root.join("assets/background/portrait.png");
         let image = image::RgbaImage::from_raw(
@@ -1364,7 +1370,12 @@ mod tests {
             vec![240, 80, 30, 255, 10, 40, 90, 128, 90, 10, 40, 0, 1, 2, 3, 1],
         )
         .unwrap();
-        image.save(&source).unwrap();
+        let profile = b"source ICC profile".to_vec();
+        let mut encoder = image::codecs::png::PngEncoder::new(File::create(&source).unwrap());
+        encoder.set_icc_profile(profile.clone()).unwrap();
+        encoder
+            .write_image(image.as_raw(), 2, 2, image::ExtendedColorType::Rgba8)
+            .unwrap();
         let before = fs::read(&source).unwrap();
         let original_permissions = fs::metadata(&source).unwrap().permissions();
         let mut readonly = original_permissions.clone();
@@ -1375,12 +1386,32 @@ mod tests {
             result.destination,
             Path::new("assets/background/portrait.webp")
         );
+        let destination = root.join(&result.destination);
+        let decoded = image::open(&destination).unwrap().into_rgba8();
+        assert_eq!(decoded.dimensions(), image.dimensions());
         assert_eq!(
-            image::open(root.join(&result.destination))
-                .unwrap()
-                .into_rgba8(),
-            image
+            decoded.pixels().map(|p| p[3]).collect::<Vec<_>>(),
+            image.pixels().map(|p| p[3]).collect::<Vec<_>>()
         );
+        let mut decoder = ImageReader::open(&destination)
+            .unwrap()
+            .with_guessed_format()
+            .unwrap()
+            .into_decoder()
+            .unwrap();
+        assert_eq!(decoder.icc_profile().unwrap(), Some(profile));
+        assert!(
+            fs::read(&destination)
+                .unwrap()
+                .windows(4)
+                .any(|tag| tag == b"VP8 ")
+        );
+        // The same PNG remains pixel-exact when imported as a sprite/particle.
+        for kind in [AssetKind::Figure, AssetKind::Particle] {
+            let target = root.join(format!("{}.webp", kind.label()));
+            media::import(&source, &target, kind).unwrap();
+            assert_eq!(image::open(target).unwrap().into_rgba8(), image);
+        }
         assert_eq!(fs::read(&source).unwrap(), before);
         assert!(fs::metadata(&source).unwrap().permissions().readonly());
         let manifest = EiyashouAssetManifest::from_yaml(
@@ -1404,7 +1435,7 @@ mod tests {
     }
 
     #[test]
-    fn jpeg_import_applies_orientation_before_lossless_encoding() {
+    fn jpeg_background_import_applies_orientation_before_encoding() {
         use image::ImageEncoder;
         let root = fixture();
         let source = root.join("photo.jpg");
@@ -1423,11 +1454,16 @@ mod tests {
         let mut expected = image::open(&source).unwrap();
         expected.apply_orientation(image::metadata::Orientation::Rotate90);
         let result = import_external(&root, Path::new("assets/background"), &source).unwrap();
-        assert_eq!(
-            image::open(root.join(result.destination))
-                .unwrap()
-                .into_rgba8(),
-            expected.into_rgba8()
+        let decoded = image::open(root.join(result.destination))
+            .unwrap()
+            .into_rgba8();
+        let expected = expected.into_rgba8();
+        assert_eq!(decoded.dimensions(), expected.dimensions());
+        assert!(
+            decoded
+                .iter()
+                .zip(expected.iter())
+                .all(|(a, b)| a.abs_diff(*b) <= 8)
         );
         assert_eq!(fs::read(source).unwrap(), before);
         fs::remove_dir_all(root).unwrap();

@@ -6,8 +6,10 @@
 use std::io;
 
 use libwebp_sys::{
-    VP8StatusCode, WEBP_CSP_MODE, WebPDecode, WebPDecoderConfig, WebPEncodeRGBA, WebPFree,
-    WebPFreeDecBuffer, WebPGetFeatures, WebPInitDecoderConfig, WebPRGBABuffer,
+    VP8StatusCode, WEBP_CSP_MODE, WebPData, WebPDataClear, WebPDecode, WebPDecoderConfig,
+    WebPEncodeRGBA, WebPFree, WebPFreeDecBuffer, WebPGetFeatures, WebPInitDecoderConfig,
+    WebPMuxAssemble, WebPMuxDelete, WebPMuxError, WebPMuxNew, WebPMuxSetChunk, WebPMuxSetImage,
+    WebPRGBABuffer,
 };
 
 pub const MAX_WEBP_FILE_BYTES: usize = 64 * 1024 * 1024;
@@ -203,6 +205,62 @@ pub fn encode_webp_rgba(rgba: &[u8], width: u32, height: u32, quality: f32) -> i
     // SAFETY: The allocation was returned by libwebp and has been copied.
     unsafe { WebPFree(encoded.cast()) };
     Ok(bytes)
+}
+
+/// Encode RGBA8 at the requested quality, retaining the source ICC profile.
+pub fn encode_webp_rgba_with_icc(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    quality: f32,
+    icc: Option<&[u8]>,
+) -> io::Result<Vec<u8>> {
+    let bytes = encode_webp_rgba(rgba, width, height, quality)?;
+    let Some(icc) = icc.filter(|profile| !profile.is_empty()) else {
+        return Ok(bytes);
+    };
+    if icc.len() > MAX_WEBP_FILE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "ICC profile is too large",
+        ));
+    }
+    let mux = WebPMuxNew();
+    if mux.is_null() {
+        return Err(io::Error::other("libwebp mux allocation failed"));
+    }
+    let image = WebPData {
+        bytes: bytes.as_ptr(),
+        size: bytes.len(),
+    };
+    let profile = WebPData {
+        bytes: icc.as_ptr(),
+        size: icc.len(),
+    };
+    let mut assembled = WebPData::default();
+    // SAFETY: mux is owned here. Both borrowed input buffers remain alive until
+    // assembly and deletion; copy_data=0 does not transfer their ownership.
+    // Assemble allocates the returned buffer independently of the mux.
+    let result = unsafe {
+        (|| {
+            if WebPMuxSetImage(mux, &image, 0) != WebPMuxError::WEBP_MUX_OK
+                || WebPMuxSetChunk(mux, c"ICCP".as_ptr(), &profile, 0) != WebPMuxError::WEBP_MUX_OK
+                || WebPMuxAssemble(mux, &mut assembled) != WebPMuxError::WEBP_MUX_OK
+                || assembled.bytes.is_null()
+                || assembled.size > MAX_WEBP_FILE_BYTES
+            {
+                return Err(io::Error::other("libwebp ICC assembly failed"));
+            }
+            Ok(std::slice::from_raw_parts(assembled.bytes, assembled.size).to_vec())
+        })()
+    };
+    // SAFETY: delete only this owned mux; clear only the assembly output,
+    // initialized empty above. Borrowed Rust buffers are never freed by us.
+    unsafe {
+        WebPMuxDelete(mux);
+        WebPDataClear(&mut assembled);
+    }
+    result
 }
 
 #[cfg(test)]

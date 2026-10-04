@@ -139,6 +139,11 @@ pub fn tick(mut context: TickContext) {
     let mut state_changed = reload_scripts_if_changed(&mut context, delta_seconds as f32);
     #[cfg(not(feature = "hot-reload"))]
     let mut state_changed = false;
+    // A modal or loading gate can consume the frame on which Ctrl is released.
+    if context.actions.auto_released {
+        context.toggles.auto = false;
+        *context.auto_timer = 0.0;
+    }
     if context.loading.blocked {
         if context.toggles.skip {
             context.toggles.skip = false;
@@ -222,10 +227,13 @@ pub fn tick(mut context: TickContext) {
         if progress.return_to_title {
             request_return_to_title(&mut context.commands);
         }
-        if state_changed {
-            context.state.set_changed();
+        // Keep the typewriter running when read-only skip stops at an unread line.
+        if context.toggles.skip || progress.changed || progress.return_to_title {
+            if state_changed {
+                context.state.set_changed();
+            }
+            return;
         }
-        return;
     }
 
     state_changed |= update_typewriter(
@@ -327,11 +335,9 @@ fn update_toggle_shortcuts(
     toggles: &mut ToggleStates,
     auto_timer: &mut f64,
 ) {
-    if actions.skip_held && !toggles.skip {
-        toggles.skip = true;
-    }
-    if actions.skip_released && toggles.skip {
-        toggles.skip = false;
+    if actions.auto_released {
+        toggles.auto = false;
+        *auto_timer = 0.0;
     }
     if actions.toggle_auto {
         toggles.auto = !toggles.auto;
@@ -339,6 +345,13 @@ fn update_toggle_shortcuts(
     }
     if actions.toggle_skip {
         toggles.skip = !toggles.skip;
+    }
+    if actions.auto_held {
+        if !toggles.auto {
+            *auto_timer = 0.0;
+            toggles.auto = true;
+        }
+        toggles.skip = false;
     }
 }
 
@@ -2333,28 +2346,42 @@ mod tests {
     }
 
     #[test]
-    fn held_control_reasserts_skip_until_release() {
-        let mut toggles = ToggleStates::default();
+    fn held_control_autoplays_without_skipping_and_stops_on_release() {
+        let mut toggles = ToggleStates {
+            skip: true,
+            ..default()
+        };
+        let mut timer = 5.0;
         let held = InputActions {
-            skip_held: true,
+            auto_held: true,
             ..default()
         };
 
-        update_toggle_shortcuts(&held, &mut toggles, &mut 0.0);
-        assert!(toggles.skip);
+        update_toggle_shortcuts(&held, &mut toggles, &mut timer);
+        assert!(toggles.auto);
+        assert!(!toggles.skip);
+        assert_eq!(timer, 0.0);
+        timer = 0.25;
+        update_toggle_shortcuts(&held, &mut toggles, &mut timer);
+        assert_eq!(
+            timer, 0.25,
+            "holding Ctrl must not restart the autoplay timer"
+        );
 
         // Any runtime boundary that clears the effective toggle cannot cancel
         // a physical key that is still held on the next tick.
-        toggles.skip = false;
+        toggles.auto = false;
         update_toggle_shortcuts(&held, &mut toggles, &mut 0.0);
-        assert!(toggles.skip);
+        assert!(toggles.auto);
+        assert!(!toggles.skip);
 
         let released = InputActions {
-            skip_released: true,
+            auto_released: true,
             ..default()
         };
-        update_toggle_shortcuts(&released, &mut toggles, &mut 0.0);
-        assert!(!toggles.skip);
+        update_toggle_shortcuts(&released, &mut toggles, &mut timer);
+        assert!(!toggles.auto);
+        assert_eq!(timer, 0.0);
     }
 
     #[test]
@@ -2362,7 +2389,7 @@ mod tests {
         let mut toggles = ToggleStates::default();
         let chord = InputActions {
             toggle_skip: true,
-            skip_released: true,
+            auto_released: true,
             ..default()
         };
         update_toggle_shortcuts(&chord, &mut toggles, &mut 0.0);
@@ -3061,6 +3088,57 @@ mod tests {
 
         assert!(!toggles.skip);
         assert_eq!(state.dialogue.unwrap().visible_chars, 0);
+    }
+
+    #[test]
+    #[cfg(not(feature = "hot-reload"))]
+    fn held_autoplay_reveals_unread_text_at_normal_speed_and_cancels_at_a_modal() {
+        let mut app = App::new();
+        let mut time = Time::<()>::default();
+        time.advance_by(std::time::Duration::from_millis(50));
+        app.insert_resource(time)
+            .insert_resource(GameState(dialogue_state()))
+            .init_resource::<crate::storage::save::ContinuationCheckpoint>()
+            .init_resource::<RuntimeSettings>()
+            .insert_resource(InputActions {
+                auto_held: true,
+                ..default()
+            })
+            .init_resource::<ToggleStates>()
+            .init_resource::<UiInputScope>()
+            .insert_resource(AssetLoadingGate { blocked: false })
+            .add_systems(Update, tick);
+        app.update();
+        let first = app
+            .world()
+            .resource::<GameState>()
+            .dialogue
+            .as_ref()
+            .unwrap()
+            .visible_chars;
+        assert!(first > 0 && first < 10);
+        app.update();
+        let second = app
+            .world()
+            .resource::<GameState>()
+            .dialogue
+            .as_ref()
+            .unwrap()
+            .visible_chars;
+        assert!(second > first && second < 10);
+        assert!(app.world().resource::<ToggleStates>().auto);
+        assert!(!app.world().resource::<ToggleStates>().skip);
+        *app.world_mut().resource_mut::<UiInputScope>() = UiInputScope::Dialog;
+        *app.world_mut().resource_mut::<InputActions>() = InputActions {
+            auto_released: true,
+            ..default()
+        };
+        app.update();
+        assert!(!app.world().resource::<ToggleStates>().auto);
+        *app.world_mut().resource_mut::<UiInputScope>() = UiInputScope::Stage;
+        *app.world_mut().resource_mut::<InputActions>() = InputActions::default();
+        app.update();
+        assert!(!app.world().resource::<ToggleStates>().auto);
     }
 
     #[test]

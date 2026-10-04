@@ -30,11 +30,11 @@ use super::edits::{follow_preview_position, format_and_save, replay_source_histo
 use super::panel::{ToolKind, WorkbenchPanel};
 use super::{
     ACTIVITY_BRAND_SIZE_PX, ACTIVITY_ICON_SIZE_PX, ACTIVITY_ITEM_SIZE_PX, ACTIVITY_RAIL_WIDTH_PX,
-    ASSET_PREVIEW_PANEL, ASSETS_PANEL, CANVAS, CHARACTERS_PANEL, CHROME, EXPLORER_PANEL, INK,
-    INSPECTOR_PANEL, MUTED, MigrateEiyashou, OpenFolder, PERFORMANCE_PANEL, PRIMARY, PRIMARY_DIM,
-    PROBLEMS_PANEL, RedoSources, ResetLayout, SEARCH_PANEL, SURFACE_HOVER, Save, SaveAll,
-    ShowAssetPreview, ShowAssets, ShowSearch, ToggleEngine, UndoSources, VIEW_INSET_PX,
-    VIEW_RADIUS_PX, activity_divider, activity_tool, dock, icon_hint,
+    ASSET_PREVIEW_PANEL, ASSETS_PANEL, BUILD_PANEL, CANVAS, CHARACTERS_PANEL, CHROME,
+    EXPLORER_PANEL, INK, INSPECTOR_PANEL, MUTED, MigrateEiyashou, OpenFolder, PERFORMANCE_PANEL,
+    PRIMARY, PRIMARY_DIM, PROBLEMS_PANEL, RedoSources, ResetLayout, SEARCH_PANEL, SURFACE_HOVER,
+    Save, SaveAll, ShowAssetPreview, ShowAssets, ShowSearch, ToggleEngine, UndoSources,
+    VIEW_INSET_PX, VIEW_RADIUS_PX, activity_divider, activity_tool, dock, icon_hint,
 };
 
 struct WindowRegistry<W> {
@@ -520,6 +520,15 @@ impl WorkbenchWindow {
             eprintln!("Kēne Editor could not reset layout: {error}");
             return;
         }
+        workspace.dock.update(cx, |dock, cx| {
+            for placement in [
+                DockPlacement::Left,
+                DockPlacement::Right,
+                DockPlacement::Bottom,
+            ] {
+                dock.remove_dock(placement, window, cx);
+            }
+        });
         install_default_layout(&workspace.dock, &workspace.session, window, cx);
         cx.notify();
     }
@@ -932,6 +941,7 @@ impl WorkbenchWindow {
             characters_open,
             problems_open,
             performance_open,
+            build_open,
         ) = self
             .workspace
             .as_ref()
@@ -945,6 +955,7 @@ impl WorkbenchWindow {
                     documents.tool_panel(root, CHARACTERS_PANEL).is_some(),
                     documents.tool_panel(root, PROBLEMS_PANEL).is_some(),
                     documents.tool_panel(root, PERFORMANCE_PANEL).is_some(),
+                    documents.tool_panel(root, BUILD_PANEL).is_some(),
                 )
             })
             .unwrap_or_default();
@@ -1044,6 +1055,17 @@ impl WorkbenchWindow {
                     )
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.show_tool(ToolKind::Performance, window, cx)
+                    })),
+                )
+                .child(
+                    activity_tool(
+                        "activity-build",
+                        AssetIconName::Package,
+                        build_open,
+                        "Build",
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.show_tool(ToolKind::Build, window, cx)
                     })),
                 )
             })
