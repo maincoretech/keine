@@ -1,5 +1,4 @@
-# Keep this gate focused on RustSec advisories for the all-features workspace
-# graph. License and duplicate-version policy are separate decisions.
+# Check the complete workspace graph, including development and build tooling.
 
 [advisories]
 # Upstream UI/media stacks currently carry unmaintained transitive crates with
@@ -7,3 +6,71 @@
 # vulnerability advisories still fail for the entire dependency graph.
 unmaintained = "workspace"
 ignore = []
+
+[licenses]
+include-dev = true
+confidence-threshold = 0.95
+allow = [
+    "0BSD", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "CC0-1.0",
+    "ISC", "MIT", "MIT-0", "MPL-2.0", "NCSA", "Unicode-3.0", "Zlib",
+    "bzip2-1.0.6",
+]
+# These are the Rust wrappers; the linked FFmpeg libraries have separate terms.
+exceptions = [
+    { crate = "ffmpeg-next@9.0.0", allow = ["WTFPL"] },
+    { crate = "ffmpeg-sys-next@9.0.0", allow = ["WTFPL"] },
+    { crate = "keine", allow = ["LicenseRef-Defold-1.0"] },
+    { crate = "keine-core", allow = ["LicenseRef-Defold-1.0"] },
+    { crate = "keine-loader", allow = ["LicenseRef-Defold-1.0"] },
+    { crate = "keine-authoring", allow = ["LicenseRef-Defold-1.0"] },
+    { crate = "keine-editor", allow = ["LicenseRef-Defold-1.0"] },
+    { crate = "keine-media", allow = ["LicenseRef-Defold-1.0"] },
+]
+
+# DL1 is similar to Apache text but adds an engine commercialisation restriction.
+# Pin its actual contents so automatic text matching cannot erase that restriction.
+[[licenses.clarify]]
+crate = "keine"
+expression = "LicenseRef-Defold-1.0"
+license-files = [{ path = "LICENSE", hash = 0x9b6c701a }]
+
+[[licenses.clarify]]
+crate = "keine-core"
+expression = "LicenseRef-Defold-1.0"
+license-files = [{ path = "../../LICENSE", hash = 0x9b6c701a }]
+
+[[licenses.clarify]]
+crate = "keine-loader"
+expression = "LicenseRef-Defold-1.0"
+license-files = [{ path = "../../LICENSE", hash = 0x9b6c701a }]
+
+[[licenses.clarify]]
+crate = "keine-authoring"
+expression = "LicenseRef-Defold-1.0"
+license-files = [{ path = "../../LICENSE", hash = 0x9b6c701a }]
+
+[[licenses.clarify]]
+crate = "keine-editor"
+expression = "LicenseRef-Defold-1.0"
+license-files = [{ path = "../../LICENSE", hash = 0x9b6c701a }]
+
+[[licenses.clarify]]
+crate = "keine-media"
+expression = "LicenseRef-Defold-1.0"
+license-files = [{ path = "../../LICENSE", hash = 0x9b6c701a }]
+
+[bans]
+# Upstream Bevy/GPUI/media versions differ; don't force dependency upgrades.
+multiple-versions = "warn"
+wildcards = "warn" # Existing local path dependencies omit registry versions.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = [
+    "https://github.com/maincoretech/hakutaku",
+    "https://github.com/maincoretech/keine", # pinned Bevy window backend patch
+]
+required-git-spec = "rev"

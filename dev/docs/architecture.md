@@ -68,6 +68,8 @@ Backup 有启动恢复；publisher 两次 rename 之间被强制终止时，旧�
 release/
 ├── keine[.exe]        hardened runtime
 ├── game.haku          完整、签名、加密的 Hakutaku v1 快照
+├── LICENSE / NOTICE   引擎许可与署名
+├── FONT-LICENSES.txt  内嵌字体许可
 └── data/*.taku        不可变密文内容段
 ```
 

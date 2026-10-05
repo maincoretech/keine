@@ -154,6 +154,22 @@ fn assemble(
     config: &GameConfig,
 ) -> Result<ExportedGame> {
     let (executable, project) = export_layout(directory);
+    let notices = if cfg!(target_os = "macos") {
+        directory.join("Game.app/Contents/Resources")
+    } else {
+        directory.to_owned()
+    };
+    fs::create_dir_all(&notices)?;
+    for (name, text) in [
+        ("LICENSE", include_str!("../../../../LICENSE")),
+        ("NOTICE", include_str!("../../../../NOTICE")),
+        (
+            "FONT-LICENSES.txt",
+            include_str!("../../../../src/assets/fonts/FONT-LICENSES.txt"),
+        ),
+    ] {
+        fs::write(notices.join(name), text)?;
+    }
     fs::create_dir_all(executable.parent().context("Engine has no parent")?)?;
     fs::create_dir_all(&project)?;
     for source in content
@@ -166,7 +182,9 @@ fn assemble(
             .context("Resource source is not a directory")?;
         fs::create_dir_all(project.join(source.strip_prefix(&content.root)?))?;
     }
-    let mut bytes = 0;
+    let mut bytes = include_str!("../../../../LICENSE").len() as u64
+        + include_str!("../../../../NOTICE").len() as u64
+        + include_str!("../../../../src/assets/fonts/FONT-LICENSES.txt").len() as u64;
     for relative in files {
         safe_relative(relative)?;
         let target = project.join(relative);

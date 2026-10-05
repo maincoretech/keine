@@ -22,6 +22,7 @@
 - WebGAL is frozen: maintain safety and clear regressions, add no new semantics or parity goals.
 - Keep identities/keys out of logs, commits, caches and unrelated child builds.
 - No speculative abstraction, new dependency, theme/plugin/backend framework without demonstrated need.
+- Original code/docs use Defold License 1.0; contributions use the same terms. Preserve third-party notices. New dependencies must pass the all-features cargo-deny policy; don't widen the allowlist or ignore private crates just to hide a failure. Assets/native library redistribution needs separate source and license evidence.
 
 ## Layout
 

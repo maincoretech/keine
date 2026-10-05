@@ -18,6 +18,39 @@ Cargo aliases 与 executable 使用同名动词；具体参数以 `--help` 为�
 正式内容先验证/编译，再加载或创建 publisher identity；失败保留已有可运行发布目录。
 identity 与内嵌 key 不记录、不提交、不缓存，也不传给无需它的 child build。
 
+## 许可证与发行署名
+
+Kēne 原创代码与文档采用 [Defold License 1.0](https://defold.com/license/)，
+完整条款见根目录 `LICENSE`；允许商业发行游戏，限制将引擎/Editor 本身作为游戏引擎产品商业化。
+游戏剧本和素材可使用作者自己的许可。第三方组件保持各自许可；提交贡献默认遵循 DL1，
+不要求转让贡献者的著作权。Cargo 使用 `license-file` 声明这个非标准 SPDX 许可证。
+
+用户仍按原流程导出/打包，保留输出中的 `LICENSE`、`NOTICE`、`FONT-LICENSES.txt` 即可；
+macOS app 内放在 `Contents/Resources`。这些文件由打包器写入，不需要手动复制。
+试玩导出不等于正式发行许可审查完成。
+
+维护者每次升级或加入依赖时运行（CI 使用 cargo-deny 0.20.2）：
+
+```sh
+cargo deny --locked --all-features check advisories licenses bans sources
+```
+
+未知许可/来源与未固定 revision 的 Git 依赖会失败；上游重复版本和现有路径依赖的
+通配声明仅警告。DL1 只在本工程六个 crate 上按原文哈希识别，不能误判为 Apache；
+修改许可或允许列表必须核对完整上游条款，不能用宽泛 ignore 绕过。
+
+正式发行前，维护者按实际目标平台与 features 补齐第三方依赖的完整版权/许可文本，
+为 MPL 组件提供实际使用版本的源代码获取方式及必要的修改源码；`NOTICE` 是概览，
+不是全部依赖的许可文本集合。外部 FFmpeg 的 LGPL/GPL 和 codec 义务由实际构建配置决定，
+不能套用 Rust wrapper 的 WTFPL；目前 app 打包脚本不附带 FFmpeg。
+`cargo-deny` 检查声明，不证明所有二进制与素材的发行义务已满足。
+
+合成字体来源与完整 OFL/MIT 文本见 `src/assets/fonts/FONT-LICENSES.txt`。
+Maven Pro 合成版内部名称已改为 Kene Text，字形与排版数据未变；CJK 来源由项目所有者确认
+为 HanaMinAFDKO，作者仓库声明遵循 GlyphWiki 数据许可。已附 Mozilla 分发的 GlyphWiki 历史许可原文；
+当前上游页面返回 403，未验证其当前版本。原始合成/图标转换配方和确切源版本未保存，
+不声称已重建来源链。
+
 ## 密钥与更新
 
 默认身份文件为 `<project>/.keine/publisher.key`，首次有效打包时生成，后续自动复用；旧 `.hakutaku-key` 名自动迁移并保留相同身份。`KEINE_HAKUTAKU_IDENTITY` 可指定工程外的身份路径。

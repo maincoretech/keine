@@ -81,6 +81,15 @@ macOS 原生实测自动候选、Enter 接受、Esc 关闭及 Alt+/ 手动菜单
 组词验收，组合态保护由 GPUI 事件路径和回归覆盖。blink/talk 的新界面入口有解析/参数联动回归，
 动态画面尚未目测；场景构图、时间轴和变量调试按用户要求暂缓。
 
+DL1 与依赖许可门禁：cargo-deny 0.20.2 的 `--locked --all-features check advisories licenses bans sources`
+通过，保留上游重复版本/路径依赖警告；DL1 条款与官方原文一致，仅替换版权主体。
+fmt/check/Clippy、publisher workspace 889 passed / 8 ignored、无默认功能 + video-native
+284 passed / 1 ignored 通过；IPC/Trash 测试在沙箱外执行。最新 publisher 组装回归、workspace
+bins 构建与 native-smoke 零警告通过。macOS Editor/Engine 开发 app 的三份许可文件逐字节匹配，
+ad hoc codesign 验证通过；未执行正式签名/公证、远程 CI 或跨平台发行验收。
+合成字体只改变 name/head 表，其余 13 个表的 SHA256 未变；没有主张新的 GUI 目测验收。
+第三方正式发行许可清单和字体来源验证边界见 [发布](release.md#许可证与发行署名)。tday 未改动。
+
 ### 项目所有者（用户）
 
 | 何时 | 你要做什么 | 完成标准 |

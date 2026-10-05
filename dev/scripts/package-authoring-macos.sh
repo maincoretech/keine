@@ -43,6 +43,8 @@ make_app() {
     cp "$source" "$bundle/Contents/MacOS/$executable"
     chmod +x "$bundle/Contents/MacOS/$executable"
     cp "$repo_root/src/assets/icons/keine.icns" "$bundle/Contents/Resources/keine.icns"
+    cp "$repo_root/LICENSE" "$repo_root/NOTICE" "$bundle/Contents/Resources/"
+    cp "$repo_root/src/assets/fonts/FONT-LICENSES.txt" "$bundle/Contents/Resources/"
     printf '%s\n' \
         '<?xml version="1.0" encoding="UTF-8"?>' \
         '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \

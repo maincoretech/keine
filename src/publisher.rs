@@ -778,6 +778,12 @@ fn link_or_copy(source: &Path, target: &Path) -> Result<()> {
 
 fn assemble(output: &Path, _features: &str, engine: &Path, benchmark: bool) -> Result<()> {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    fs::write(output.join("LICENSE"), include_str!("../LICENSE"))?;
+    fs::write(output.join("NOTICE"), include_str!("../NOTICE"))?;
+    fs::write(
+        output.join("FONT-LICENSES.txt"),
+        include_str!("assets/fonts/FONT-LICENSES.txt"),
+    )?;
     #[cfg(windows)]
     {
         fs::copy(engine, output.join("keine.exe"))?;
@@ -1310,6 +1316,18 @@ mod tests {
         assert!(!output.join("run.sh").exists());
         assert!(!output.join("run.bat").exists());
         assert!(output.join(crate::runtime::BENCHMARK_MARKER).is_file());
+        assert_eq!(
+            fs::read_to_string(output.join("LICENSE")).unwrap(),
+            include_str!("../LICENSE")
+        );
+        assert_eq!(
+            fs::read_to_string(output.join("NOTICE")).unwrap(),
+            include_str!("../NOTICE")
+        );
+        assert_eq!(
+            fs::read_to_string(output.join("FONT-LICENSES.txt")).unwrap(),
+            include_str!("assets/fonts/FONT-LICENSES.txt")
+        );
     }
 
     #[test]

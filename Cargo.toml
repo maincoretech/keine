@@ -9,6 +9,7 @@ default-members = ["."]
 name = "keine"
 version.workspace = true
 edition.workspace = true
+license-file.workspace = true
 description = "Kēne, a native visual-novel engine with WebGAL and LetsGal compatibility"
 repository = "https://github.com/maincoretech/keine"
 default-run = "keine"
@@ -80,6 +81,7 @@ video-native = [
 ]
 
 [workspace.package]
+license-file = "LICENSE"
 version = "0.13.0"
 edition = "2024"
 rust-version = "1.97.1"

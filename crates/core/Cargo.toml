@@ -2,6 +2,7 @@
 name = "keine-core"
 version.workspace = true
 edition.workspace = true
+license-file.workspace = true
 description = "Language-neutral visual-novel model and deterministic state machine"
 
 [dependencies]

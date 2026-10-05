@@ -43,3 +43,11 @@ dev/scripts/  build and fixture scripts
 
 Current version: 0.13.0. macOS is the current acceptance focus; Windows/Linux runtime acceptance is deferred.
 Build/test success and manual input/display/media acceptance are separate gates.
+
+## License
+
+Original Kēne code and documentation use the [Defold License 1.0](LICENSE).
+Commercial games are allowed; commercialisation of the engine or Editor as a
+Game Engine Product is restricted. This is source-available software.
+Third-party dependencies and assets retain their own licenses; see [NOTICE](NOTICE).
+Contributions are accepted under the same license unless separately agreed.

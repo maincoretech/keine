@@ -1,0 +1,31 @@
+Kēne Engine and Editor
+Copyright 2026 Kēne contributors
+https://github.com/maincoretech/keine
+
+Original Kēne source code and documentation are distributed under the Defold
+License, Version 1.0. See LICENSE for the complete terms. The license permits
+commercial games; it restricts commercialisation as a Game Engine Product.
+Use of this license does not imply affiliation with the Defold Foundation.
+
+Third-party code, fonts, icons, audio, artwork and game content retain their
+respective owners and licenses. They are not relicensed by Kēne's LICENSE.
+See FONT-LICENSES.txt for the embedded Maven Pro / HanaMin merged text font
+and Bootstrap Icons notices. In the source tree this file is in src/assets/fonts.
+Cargo.lock identifies the exact Rust dependency revisions. deny.toml checks
+their declared licenses, including development and build dependencies.
+
+Major components include Bevy (MIT/Apache-2.0), GPUI (Apache-2.0), Hakutaku
+(MIT/Apache-2.0), Symphonia (MPL-2.0), libwebp (BSD-3-Clause), and Opus
+(BSD-3-Clause). MPL-covered dependency source remains available from its
+upstream repository at the revision identified in Cargo.lock; modifications
+to those files must be provided under MPL when distributing them.
+
+The optional FFmpeg Rust wrappers use WTFPL. FFmpeg libraries and external
+codecs have separate licenses depending on their build configuration; the
+wrapper license does not authorize redistribution of those libraries.
+
+This attribution overview is not a complete third-party license bundle.
+Distributors must also include the applicable upstream license/copyright
+notices, source offers where required, and the notices for their actual
+native libraries and embedded assets. See dev/docs/release.md for the release
+checklist. Game scripts and assets can use their own licenses.

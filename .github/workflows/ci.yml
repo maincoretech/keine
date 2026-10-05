@@ -9,8 +9,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  dependency-advisories:
-    name: Dependency advisories
+  dependencies:
+    name: Dependency policy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -22,8 +22,8 @@ jobs:
         with:
           tool: cargo-deny@0.20.2
           fallback: none
-      - name: Check RustSec advisories and yanked dependencies
-        run: cargo deny --locked --all-features check advisories
+      - name: Check advisories, licenses, dependency versions and sources
+        run: cargo deny --locked --all-features check advisories licenses bans sources
 
   rust:
     name: ${{ matrix.name }}
