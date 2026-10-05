@@ -393,7 +393,8 @@ pub(crate) fn update_lifecycle(
     let auto_hide = context
         .auto_hide
         .lifecycle(context.real_time.elapsed_secs(), &context.toggles);
-    let reactive_wait = auto_hide.1.min(IDLE_WAIT).min(
+    let blink_wait = blink_idle_wait(&context.state, virtual_time.max_delta());
+    let reactive_wait = auto_hide.1.min(IDLE_WAIT).min(blink_wait).min(
         context
             .input_caret
             .next_toggle_in(context.real_time.elapsed_secs()),
@@ -451,7 +452,8 @@ pub(crate) fn update_lifecycle(
     if *activity != next {
         *activity = next;
     }
-    let should_pause_time = matches!(next, RuntimeActivity::Idle | RuntimeActivity::Background);
+    let should_pause_time = next == RuntimeActivity::Background
+        || (next == RuntimeActivity::Idle && blink_wait == IDLE_WAIT);
     if virtual_time.is_paused() != should_pause_time {
         if should_pause_time {
             virtual_time.pause();
@@ -520,6 +522,26 @@ const fn should_scan_background_audio(activity: RuntimeActivity, changed: bool) 
     changed || matches!(activity, RuntimeActivity::Background)
 }
 
+// Virtual time clamps long idle deltas. Wake no later than that bound while a
+// blink timer is pending, then resume normal frame pacing for the blink itself.
+fn blink_idle_wait(state: &GameState, max_delta: std::time::Duration) -> std::time::Duration {
+    state
+        .sprite_sequences
+        .values()
+        .filter_map(|sequence| {
+            let keine_core::SequencePlayback::Blink { interval } = sequence.playback.as_ref()?
+            else {
+                return None;
+            };
+            (sequence.frames.len() > 1 && sequence.elapsed < *interval).then(|| {
+                std::time::Duration::from_secs_f32((*interval - sequence.elapsed).max(0.001))
+                    .min(max_delta)
+            })
+        })
+        .min()
+        .unwrap_or(IDLE_WAIT)
+}
+
 fn core_is_animating(state: &GameState, dialogue_length: &mut DialogueLengthCache) -> bool {
     state
         .dialogue
@@ -550,7 +572,20 @@ fn core_is_animating(state: &GameState, dialogue_length: &mut DialogueLengthCach
         || state.camera_effect.is_time_varying()
         || state.sprite_sequences.values().any(|sequence| {
             sequence.frames.len() > 1
-                && (sequence.looped || sequence.frame + 1 < sequence.frames.len())
+                && match &sequence.playback {
+                    Some(keine_core::SequencePlayback::Talk { speaker }) => {
+                        sequence.frame != 0
+                            || state.dialogue.as_ref().is_some_and(|dialogue| {
+                                &dialogue.speaker == speaker
+                                    && dialogue.visible_chars
+                                        < dialogue_length.count(&dialogue.text)
+                            })
+                    }
+                    Some(keine_core::SequencePlayback::Blink { interval }) => {
+                        sequence.elapsed >= *interval || sequence.frame != 0
+                    }
+                    _ => sequence.looped || sequence.frame + 1 < sequence.frames.len(),
+                }
         })
         || state.sprites.values().any(|sprite| {
             sprite.films.is_time_varying()
@@ -1108,6 +1143,40 @@ mod tests {
     }
 
     #[test]
+    fn blink_rest_keeps_a_bounded_wake_deadline_without_continuous_rendering() {
+        let mut state = GameState(keine_core::State::new());
+        state.sprite_sequences.insert(
+            "eyes".into(),
+            keine_core::SpriteSequenceState {
+                frames: vec!["open".into(), "closed".into()],
+                fps: 10.0,
+                looped: true,
+                elapsed: 0.0,
+                frame: 0,
+                frame_durations: Vec::new(),
+                playback: Some(keine_core::SequencePlayback::Blink { interval: 3.0 }),
+            },
+        );
+        let mut length = DialogueLengthCache::default();
+        assert!(!core_is_animating(&state, &mut length));
+        assert_eq!(
+            blink_idle_wait(&state, std::time::Duration::from_millis(250)),
+            std::time::Duration::from_millis(250)
+        );
+        state.sprite_sequences.get_mut("eyes").unwrap().elapsed = 3.0;
+        assert!(core_is_animating(&state, &mut length));
+        state.sprite_sequences.get_mut("eyes").unwrap().playback =
+            Some(keine_core::SequencePlayback::Talk {
+                speaker: "Hero".into(),
+            });
+        assert!(!core_is_animating(&state, &mut length));
+        assert_eq!(
+            blink_idle_wait(&state, std::time::Duration::from_millis(250)),
+            IDLE_WAIT
+        );
+    }
+
+    #[test]
     fn settled_frames_sleep_with_a_valid_deadline_and_resume_for_work() {
         use bevy::ecs::system::RunSystemOnce;
         let mut app = App::new();
@@ -1154,6 +1223,39 @@ mod tests {
                 }
             }
         }
+
+        app.world_mut()
+            .resource_mut::<GameState>()
+            .sprite_sequences
+            .insert(
+                "eyes".into(),
+                keine_core::SpriteSequenceState {
+                    frames: vec!["open".into(), "closed".into()],
+                    fps: 10.0,
+                    looped: true,
+                    elapsed: 0.0,
+                    frame: 0,
+                    frame_durations: Vec::new(),
+                    playback: Some(keine_core::SequencePlayback::Blink { interval: 3.0 }),
+                },
+            );
+        app.world_mut().run_system_once(update_lifecycle).unwrap();
+        assert_eq!(
+            *app.world().resource::<RuntimeActivity>(),
+            RuntimeActivity::Idle
+        );
+        assert!(
+            !app.world().resource::<Time<Virtual>>().is_paused(),
+            "blink rest must advance its clock"
+        );
+        assert_eq!(
+            app.world().resource::<WinitSettings>().focused_mode,
+            UpdateMode::reactive_low_power(std::time::Duration::from_millis(250))
+        );
+        app.world_mut()
+            .resource_mut::<GameState>()
+            .sprite_sequences
+            .clear();
 
         app.world_mut().resource_mut::<GameState>().wait_remaining = 0.5;
         app.world_mut().run_system_once(update_lifecycle).unwrap();

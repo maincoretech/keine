@@ -115,12 +115,28 @@ fn collect_references(
             resource(image, ResourceKind::Figure);
         }
         Action::ConfigureSpriteSequence { frames, .. }
-        | Action::ConfigureTimedSpriteSequence { frames, .. } => {
+        | Action::ConfigureTimedSpriteSequence { frames, .. }
+        | Action::ConfigureDynamicSpriteSequence { frames, .. } => {
             for frame in frames {
                 resource(frame, ResourceKind::Figure);
             }
         }
-        Action::SelectSpriteImageByCondition {
+        Action::SelectSpriteImage {
+            default_image,
+            variants,
+            ..
+        }
+        | Action::SelectSpriteImageByCondition {
+            default_image,
+            variants,
+            ..
+        } => {
+            resource(default_image, ResourceKind::Figure);
+            for (_, image) in variants {
+                resource(image, ResourceKind::Figure);
+            }
+        }
+        Action::EiyashouSelectSpriteImageByCondition {
             default_image,
             variants,
             ..
@@ -153,7 +169,7 @@ fn collect_references(
         Action::Vocal {
             file: Some(file), ..
         } => resource(file, ResourceKind::Voice),
-        Action::ShowParticles { effect, .. } => {
+        Action::ShowParticles { effect, .. } | Action::ShowParticlesWithOptions { effect, .. } => {
             if let Some(texture) = &effect.texture {
                 resource(texture, ResourceKind::Particle);
             }
@@ -231,6 +247,19 @@ fn collect_references(
                 keine_core::UnlockKind::Bgm => ResourceKind::Bgm,
             },
         ),
+        Action::ConditionalCall {
+            then_scene,
+            else_scene,
+            ..
+        } => {
+            for scene in std::iter::once(then_scene).chain(else_scene.iter()) {
+                report.sub_scenes.push(SceneRef {
+                    scene: scene.clone(),
+                    action_index,
+                    span,
+                });
+            }
+        }
         Action::ChangeScene(scene) | Action::CallScene(scene) => {
             report.sub_scenes.push(SceneRef {
                 scene: scene.clone(),

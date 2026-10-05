@@ -163,7 +163,8 @@ scene name { ... }
 │   ├── sprite.transition(id, enter: preset, exit: preset, duration: ...)
 │   ├── sprite.keyframes(id, repeat: ..., blocking: ...) { frame(duration: ..., easing: ..., transform...), ... }
 │   ├── sprite.sequence(id, fps: ..., loop: ...) { frame(asset), ... }
-│   │   └── 或省略 fps，每帧写 frame(asset, duration: ...)，所有帧必须有时长
+│   │   ├── 或省略 fps，每帧写 frame(asset, duration: ...)，所有帧必须有时长
+│   │   └── mode: blink, interval: 3s / mode: talk, speaker: "角色名"
 │   ├── sprite.select(id, variable, default: asset) { case("value", asset), ... }
 │   ├── sprite.select.when(id, default: asset) { case(strict_bool_expression, asset), ... }
 │   ├── sprite.focus.configure(characters: [...], speaking: style(...), others: style(...), narration: style(...), ...)
@@ -196,7 +197,7 @@ scene name { ... }
 │   ├── vocal.play(asset, volume: ...) / vocal.stop()
 │   ├── video.play(id, asset, loop: ..., muted: ..., alpha: ..., skippable: ..., wait: ..., mode: fullscreen | mixed)
 │   ├── video.stop(id | *, fade: ...)
-│   ├── particle.show(id, preset, texture: ..., count: ..., wind: ..., gravity: ..., fade_in: ...)
+│   ├── particle.show(id, preset, texture: ..., count: ..., wind: ..., gravity: ..., fade_in: ..., size: ..., speed: ..., alpha: ..., spin: ..., drift: ..., drag: ..., color: ...)
 │   ├── particle.hide(id | *, duration: ...)
 │   └── particle.layers.clear()
 └── 交互、系统与资源
@@ -310,6 +311,31 @@ input.request(...)
     └── 两项为 0 时保持原采样；不提供逐字 blip
 ```
 
+## 常用动态效果
+
+```shou
+sprite(eyes, eyes_open),
+sprite.sequence(eyes, mode: blink, interval: 3s, fps: 10) {
+  frame(eyes_open), frame(eyes_closed), frame(eyes_open)
+},
+sprite(mouth, mouth_closed),
+sprite.sequence(mouth, mode: talk, speaker: "少女", fps: 12) {
+  frame(mouth_closed), frame(mouth_open)
+},
+particle.show(snow, LIGHT_SNOW, count: 80, size: 12, speed: 100,
+  alpha: 0.7, spin: 20, drift: 10, color: rgba(1, 0.95, 0.9, 1)),
+```
+
+眼睛、嘴等部件使用普通 sprite，可复用已有位置、布局、层级和变换；不引入第二套立绘模型。
+动态序列至少两帧，第一帧是静止帧；眨眼在间隔后播放一遍，说话帧跟随指定角色 ID（或显示姓名）的逐字显示，
+不是音频口型识别。对白完成后回到第一帧。换图或隐藏沿用 sprite 的序列清理规则。
+动态模式自行控制重复，不能同时写 `loop`；仍可用统一的每帧 `duration` 替代 `fps`。
+
+粒子省略字段沿用预设：size 是设计像素，speed 是像素/秒，spin 是度/秒，
+drift 是横向摆动幅度，drag 是阻力，alpha 为 0–1，color 使用 rgba。
+速度和大小保留预设的透视层差异；数量仍有每个发射器 256 的上限。
+新粒子参数和动态模式不改变 Save v11 的状态布局，存档走现有剧本回放恢复路径。
+
 ## 迁移映射
 
 `objects.yaml` 的 `objects` 将新裸 ID 映射到原引擎 ID，`prefixes` 保留
@@ -363,3 +389,36 @@ config.yaml → layout.environment_light
 取色不包含镜头调色，避免反馈式重复染色；已有强手工调色可将该配置设为 0。
 已发布的旧编译包需要重新编译为 IR schema v6；Save v11 的状态布局不变，
 修改脚本后的存档仍受 Program fingerprint 检查。
+
+## Editor 补全与角色维护
+
+Text 输入命令或参数时显示原生候选菜单；↑/↓ 选择，Enter 插入，Esc 关闭。
+Ctrl+Space 或 Alt+/（macOS Option+/）手动打开候选；灰色补全仍可用右方向键接受。
+若 Ctrl+Space 被系统输入法快捷键占用，使用 Alt+/。候选支持命令、上下文参数、
+合法枚举、资源 ID/原文件名、角色、章节和已索引的变量；右侧显示签名、值提示与例子，
+命令/参数也可悬停查看。中文组词期间不查询补全或诊断，提交输入后才更新。
+Inspector 切换 blink/talk 会原子移除冲突的 loop/interval/speaker；talk 默认选当前目标对应角色，
+否则第一位角色。每帧 duration 与 fps 互斥，已有 duration 的序列不显示可新增 fps。
+
+Characters 可新增、修改姓名/颜色、删除并定位对白引用；角色 ID 保持稳定。
+选注册的立绘图片建立表情，多个图片 ID 按顺序作为帧列表；Assets 多选图片后，可一次登记多个表情。
+头像也是注册的立绘图片。维护数据写入 characters.yaml 的可撤销源文档，Ctrl+S 保存：
+
+```yaml
+characters:
+  hero:
+    name: 少女
+    color: '#BAEBFF'
+    avatar: hero_avatar
+    expressions:
+      smile: [hero_smile]
+      blink: [eyes_open, eyes_closed, eyes_open]
+```
+
+先在剧本选择插入位置，再点表情 Show/Change（多帧还可 Blink/Talk）或 Insert avatar。
+Show 创建 sprite，Change/Blink/Talk 修改已有同 ID sprite；没有该 sprite 时应先 Show。
+帧序列默认 10 fps，blink 默认间隔 3s，插入后通过 Text/Inspector 调整。
+这些清单字段仅是作者预设；按钮插入显式 EYS，清单改动不会重写已插入的剧本。
+资源 ID 重命名同步更新头像/表情预设；缺失图片显示问题。仅关联清单但未插入剧本的素材，
+仍属于剧情未使用资源，不扩大正式打包 allowlist。非标准 flow-style 角色 YAML 可在 Text 编辑，
+界面无法精确定位时拒绝修改。画面构图、时间轴和变量调试本轮暂缓。

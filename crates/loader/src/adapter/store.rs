@@ -444,6 +444,7 @@ mod keine {
                     elapsed: 1.25,
                     frame: 1,
                     frame_durations: Vec::new(),
+                    playback: None,
                 },
             );
             state.record_dialogue(1);

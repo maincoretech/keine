@@ -7,8 +7,9 @@ pub mod syntax;
 
 pub use commands::{InsertKind, insertion_statement};
 pub use edit::{
-    AuthoringEditError, append_character, append_scene, delete_scene, escape_eiyashou_string,
-    insert_statement, move_scene, rename_scene, rename_scene_references, replace_dialogue_text,
+    AuthoringEditError, append_character, append_scene, delete_character, delete_scene,
+    edit_character, escape_eiyashou_string, insert_source_statement, insert_statement, move_scene,
+    rename_character_asset, rename_scene, rename_scene_references, replace_dialogue_text,
     scene_references,
 };
 pub(crate) use index::confined_existing_file;
@@ -152,6 +153,7 @@ mod tests {
         let fresh = AuthoringIndex::load(&root, session.files(), &changes);
         assert_eq!(next.scenes, fresh.scenes);
         assert_eq!(next.dialogues, fresh.dialogues);
+        assert_eq!(next.variables, fresh.variables);
         assert_eq!(next.assets, fresh.assets);
         assert_eq!(next.asset_references, fresh.asset_references);
         assert_eq!(next.problems, fresh.problems);
@@ -178,6 +180,7 @@ mod tests {
             let fresh = AuthoringIndex::load(&root, session.files(), &changes);
             assert_eq!(next.scenes, fresh.scenes);
             assert_eq!(next.dialogues, fresh.dialogues);
+            assert_eq!(next.variables, fresh.variables);
             assert_eq!(next.assets, fresh.assets);
             assert_eq!(next.problems, fresh.problems);
             // Resource references are queried by location, not contribution insertion order.
@@ -492,6 +495,83 @@ mod tests {
     }
 
     #[test]
+    fn character_edits_preserve_unknown_fields_comments_and_other_roles() {
+        let source = "# keep\ncharacters:\n  hero:\n    name: \"Old\" # author note\n    color: \"#BAEBFF\"\n    custom: keep\n    # between\n  friend:\n    name: \"Friend\"\nmetadata: keep\n";
+        let character = CharacterEntry {
+            id: "hero".into(),
+            name: "少女".into(),
+            avatar: Some("portrait".into()),
+            expressions: BTreeMap::from([
+                ("smile".into(), vec!["face".into()]),
+                ("blink".into(), vec!["rest".into(), "closed".into()]),
+            ]),
+            ..Default::default()
+        };
+        let edited = edit_character(source, &character).unwrap();
+        assert!(
+            edited.contains("# author note")
+                && edited.contains("custom: keep")
+                && edited.contains("# between")
+        );
+        assert!(edited.ends_with("  friend:\n    name: \"Friend\"\nmetadata: keep\n"));
+        let manifest = keine_core::config::EiyashouCharacterManifest::from_yaml(&edited).unwrap();
+        assert_eq!(
+            manifest.characters["hero"].expressions["blink"],
+            ["rest", "closed"]
+        );
+        assert!(manifest.characters["hero"].color.is_none());
+        let renamed = rename_character_asset(&edited, "rest", "neutral").unwrap();
+        let parsed = keine_core::config::EiyashouCharacterManifest::from_yaml(&renamed).unwrap();
+        assert_eq!(
+            parsed.characters["hero"].expressions["blink"],
+            ["neutral", "closed"]
+        );
+        assert!(renamed.contains("custom: keep") && renamed.contains("# author note"));
+        let deleted = delete_character(&edited, "hero").unwrap();
+        assert!(deleted.starts_with("# keep\ncharacters:\n"));
+        assert!(deleted.contains("friend:") && !deleted.contains("hero:"));
+        assert_eq!(
+            delete_character(
+                "characters:\n  hero:\n    name: Hero\nmetadata: keep\n",
+                "hero"
+            )
+            .unwrap(),
+            "characters: {}\nmetadata: keep\n"
+        );
+        assert!(edit_character("characters: { hero: { name: Hero } }", &character).is_err());
+    }
+
+    #[test]
+    fn character_insertion_after_nested_block_preserves_following_sibling() {
+        let source = "scene start {\n  if (true) {\n    \"inside\"\n  },\n  \"after\"\n}\n";
+        let edited = insert_source_statement(source, 3, "sprite(hero, face)").unwrap();
+        assert!(edited.contains("  },\n  sprite(hero, face),\n  \"after\""));
+        assert!(
+            parse_native_document(&edited).diagnostics.is_empty(),
+            "{edited}: {:?}",
+            parse_native_document(&edited).diagnostics
+        );
+        assert!(insert_source_statement(source, 5, "sprite(hero, face)").is_err());
+    }
+
+    #[test]
+    fn character_creation_accepts_an_empty_root_manifest() {
+        let source = append_character("{}\n", "hero", "Hero", None).unwrap();
+        let source = edit_character(
+            &source,
+            &CharacterEntry {
+                id: "hero".into(),
+                name: "Hero".into(),
+                avatar: Some("face".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let manifest = keine_core::config::EiyashouCharacterManifest::from_yaml(&source).unwrap();
+        assert_eq!(manifest.characters["hero"].avatar.as_deref(), Some("face"));
+    }
+
+    #[test]
     fn character_and_scene_creation_preserve_surrounding_source() {
         let characters = "characters:\n  rin:\n    name: \"Rin\"\nmetadata: keep\n";
         let edited = append_character(characters, "yui", "Yui", Some("#BAEBFF")).unwrap();
@@ -538,6 +618,7 @@ mod tests {
             id: "rin".into(),
             name: "Rin".into(),
             color: None,
+            ..Default::default()
         });
         let edited = insert_statement(source, 1, InsertKind::Dialogue, &index).unwrap();
         assert_eq!(
@@ -593,6 +674,7 @@ mod tests {
             id: "rin".into(),
             name: "Rin".into(),
             color: None,
+            ..Default::default()
         });
         index.scenes.push(SceneEntry {
             path: "scripts/main.shou".into(),

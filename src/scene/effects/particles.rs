@@ -85,7 +85,7 @@ pub(crate) struct ParticleAssets<'w> {
 
 #[derive(Resource, Default)]
 pub(crate) struct ParticleRuntime {
-    effects: HashMap<String, ParticleEffect>,
+    effects: HashMap<String, (ParticleEffect, keine_core::ParticleOptions)>,
     native_textures: HashMap<ParticleKind, Handle<Image>>,
 }
 
@@ -190,17 +190,18 @@ pub(crate) fn sync(
     mut commands: Commands,
 ) {
     let unchanged = runtime.effects.len() == state.particle_effects.len()
-        && state
-            .particle_effects
-            .iter()
-            .all(|(id, active)| runtime.effects.get(id) == Some(&active.effect));
+        && state.particle_effects.iter().all(|(id, active)| {
+            runtime.effects.get(id).is_some_and(|(effect, options)| {
+                effect == &active.effect && *options == active.options
+            })
+        });
     if unchanged {
         return;
     }
     let desired = state
         .particle_effects
         .iter()
-        .map(|(id, active)| (id.clone(), active.effect.clone()))
+        .map(|(id, active)| (id.clone(), (active.effect.clone(), active.options)))
         .collect::<HashMap<_, _>>();
 
     let changed = runtime
@@ -232,10 +233,31 @@ pub(crate) fn sync(
     }
 
     for id in &changed {
-        let Some(effect) = desired.get(id) else {
+        let Some((effect, options)) = desired.get(id) else {
             continue;
         };
-        let style = ParticleStyle::from_effect(effect);
+        let mut style = ParticleStyle::from_effect(effect);
+        if let Some(size) = options.size {
+            style.size = size;
+        }
+        if let Some(speed) = options.speed {
+            style.speed = speed;
+        }
+        if let Some(alpha) = options.alpha {
+            style.alpha = alpha;
+        }
+        if let Some(spin) = options.spin {
+            style.angular_velocity = spin.to_radians();
+        }
+        if let Some(drift) = options.drift {
+            style.drift = drift;
+        }
+        if let Some(drag) = options.drag {
+            style.drag = drag;
+        }
+        if let Some(color) = options.color {
+            style.color = Color::srgba(color[0], color[1], color[2], color[3]);
+        }
         let texture = if let Some(path) = effect.texture.as_ref().filter(|path| !path.is_empty()) {
             asset_server.load::<Image>(path.clone())
         } else if let Some(texture) = runtime.native_textures.get(&style.kind) {
@@ -259,7 +281,7 @@ pub(crate) fn sync(
                 let size = style.size * perspective.size;
                 let speed = style.speed * perspective.speed;
                 let horizontal = if style.kind == ParticleKind::Rain {
-                    effect.wind.unwrap_or(style.wind) * (speed / style.speed)
+                    effect.wind.unwrap_or(style.wind) * perspective.speed
                 } else {
                     let horizontal =
                         effect.wind.unwrap_or(style.wind) + (random(index, 4) - 0.5) * style.spread;
@@ -550,7 +572,7 @@ impl ParticleGpu {
                 linear[0],
                 linear[1],
                 linear[2],
-                (particle.base_alpha * opacity * pulse).clamp(0.0, 1.0),
+                (particle.base_alpha * linear[3] * opacity * pulse).clamp(0.0, 1.0),
             ),
         }
     }
@@ -983,7 +1005,7 @@ mod tests {
             ParticleKind::Ambient,
         ] {
             for opacity in [0.0, 0.3, 1.0] {
-                let gpu = ParticleGpu::new(&particle, kind, [0.7, 0.8, 1.0, 1.0], opacity, frame);
+                let gpu = ParticleGpu::new(&particle, kind, [0.7, 0.8, 1.0, 0.5], opacity, frame);
                 let buffer = ShaderBuffer::from(vec![gpu]);
                 assert_eq!(buffer.data.as_ref().unwrap().len(), 64);
                 assert!((gpu.size_depth.z - particle.depth * 0.001).abs() < f32::EPSILON);
@@ -992,7 +1014,7 @@ mod tests {
                 } else {
                     1.0
                 };
-                assert!((gpu.color.w - particle.base_alpha * opacity * pulse).abs() < 1e-6);
+                assert!((gpu.color.w - particle.base_alpha * 0.5 * opacity * pulse).abs() < 1e-6);
                 for corner in [
                     Vec2::new(-0.5, -0.5),
                     Vec2::new(0.5, -0.5),
@@ -1050,10 +1072,13 @@ mod tests {
         app.world_mut()
             .resource_mut::<GameState>()
             .particle_effects
-            .insert(
-                "snow".into(),
-                ActiveParticleEffect::new(ParticleEffect::preset("HEAVY_SNOW")),
-            );
+            .insert("snow".into(), {
+                let mut active = ActiveParticleEffect::new(ParticleEffect::preset("HEAVY_RAIN"));
+                active.effect.count = u16::MAX;
+                active.options.speed = Some(0.0);
+                active.options.size = Some(20.0);
+                active
+            });
         app.update();
         app.update();
         let (mesh, buffer, material) = {
@@ -1061,6 +1086,12 @@ mod tests {
             let batch = world.query::<&ParticleBatch>().single(world).unwrap();
             (batch.mesh.id(), batch.buffer.id(), batch.material.id())
         };
+        {
+            let world = app.world_mut();
+            let batch = world.query::<&ParticleBatch>().single(world).unwrap();
+            assert_eq!(batch.particles.len(), MAX_PARTICLE_COUNT);
+            assert!(batch.particles.iter().all(|p| p.velocity.is_finite()));
+        }
         app.world_mut()
             .resource_mut::<Messages<AssetEvent<Mesh>>>()
             .drain()

@@ -16,7 +16,7 @@ pub(super) const STRUCTURED_COMMANDS: &[&str] = &[
 pub(super) fn signature(name: &str) -> Option<(usize, &'static [&'static str])> {
     let signature: (usize, &[&str]) = match name {
         "text.intro" => (0, &["hold"]),
-        "sprite.sequence" => (1, &["fps", "loop"]),
+        "sprite.sequence" => (1, &["fps", "loop", "mode", "interval", "speaker"]),
         "sprite.select" => (2, &["default"]),
         "sprite.select.when" => (1, &["default"]),
         "sprite.keyframes" => (1, &["repeat", "blocking"]),
@@ -118,6 +118,85 @@ impl<'a> Parser<'a> {
                     }
                     let id = self.v11_identifier(args.first(), "sprite ID", report)?;
                     let looped = self.v11_optional_bool(args, "loop", false, report)?;
+                    let mode = match self.named_arg(args, "mode") {
+                        Some(arg) => {
+                            Some(self.v11_identifier(Some(arg), "sequence mode", report)?)
+                        }
+                        None => None,
+                    };
+                    if let Some(mode) = mode {
+                        if self.named_arg(args, "loop").is_some() || frames.len() < 2 {
+                            report.diagnostics.push(self.error(
+                            "dynamic sequences need at least two frames and control their own loop",
+                        ));
+                            return None;
+                        }
+                        let playback = match mode.as_str() {
+                            "blink" => {
+                                if self.named_arg(args, "speaker").is_some() {
+                                    report
+                                        .diagnostics
+                                        .push(self.error("blink sequences do not use speaker"));
+                                    return None;
+                                }
+                                let interval = if self.named_arg(args, "interval").is_some() {
+                                    self.named_duration_checked(args, "interval", report)?
+                                } else {
+                                    3.0
+                                };
+                                if interval <= 0.0 {
+                                    report
+                                        .diagnostics
+                                        .push(self.error("blink interval must be positive"));
+                                    return None;
+                                }
+                                keine_core::SequencePlayback::Blink { interval }
+                            }
+                            "talk" => {
+                                if self.named_arg(args, "interval").is_some() {
+                                    report
+                                        .diagnostics
+                                        .push(self.error("talk sequences do not use interval"));
+                                    return None;
+                                }
+                                keine_core::SequencePlayback::Talk {
+                                    speaker: self.v11_string(
+                                        self.named_arg(args, "speaker"),
+                                        "speaker",
+                                        report,
+                                    )?,
+                                }
+                            }
+                            _ => {
+                                report
+                                    .diagnostics
+                                    .push(self.error("sequence mode must be blink or talk"));
+                                return None;
+                            }
+                        };
+                        let fps = self.v11_optional_number(args, "fps", 12.0, report)?;
+                        if fps <= 0.0 {
+                            report.diagnostics.push(self.error("fps must be positive"));
+                            return None;
+                        }
+                        return (report.diagnostics.len() == before).then_some(
+                            Action::ConfigureDynamicSpriteSequence {
+                                id,
+                                frames,
+                                fps,
+                                frame_durations,
+                                playback,
+                            },
+                        );
+                    }
+                    if self.named_arg(args, "interval").is_some()
+                        || self.named_arg(args, "speaker").is_some()
+                    {
+                        report
+                            .diagnostics
+                            .push(self.error("interval/speaker require a sequence mode"));
+                        return None;
+                    }
                     if timed {
                         Some(Action::ConfigureTimedSpriteSequence {
                             id,

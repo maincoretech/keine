@@ -142,11 +142,23 @@ fn apply_eiyashou_project(project: &ContentProject, scenes: &mut [LoadedScene]) 
                     )),
                 }
             }
+            if let Action::ConfigureDynamicSpriteSequence {
+                playback: keine_core::SequencePlayback::Talk { speaker },
+                ..
+            } = &mut action
+                && let Some(character) = project_data.characters.get(speaker)
+            {
+                speaker.clone_from(&character.name);
+            }
             scene.actions.push(action);
             scene.action_spans.push(span);
         }
         for resource in &scene.resources {
-            let mut kind = resource.kind;
+            let mut kind = if resource.kind == crate::ResourceKind::MiniAvatar {
+                crate::ResourceKind::Figure
+            } else {
+                resource.kind
+            };
             // A scene layer's drawing command is a sprite, while the manifest
             // still owns the image as a background. Match figure_path priority.
             if kind == crate::ResourceKind::Figure
@@ -237,7 +249,9 @@ fn resolve_particle_textures(action: &mut Action, paths: &HashMap<String, String
         }
     };
     match action {
-        Action::ShowParticles { effect, .. } => resolve(&mut effect.texture),
+        Action::ShowParticles { effect, .. } | Action::ShowParticlesWithOptions { effect, .. } => {
+            resolve(&mut effect.texture)
+        }
         Action::Flow { action, .. } | Action::SpriteVisual { action, .. } => {
             resolve_particle_textures(action, paths)
         }
@@ -450,7 +464,9 @@ pub fn validate_native_entry_flow(scenes: &mut [LoadedScene], entry: &str) {
                                 }
                                 can_resume = true;
                             }
-                            ChoiceTarget::Label(_) => can_resume = true,
+                            ChoiceTarget::Label(_)
+                            | ChoiceTarget::Continue
+                            | ChoiceTarget::Assign(_) => can_resume = true,
                         }
                     }
                     if !can_resume {
@@ -472,7 +488,9 @@ pub fn validate_native_entry_flow(scenes: &mut [LoadedScene], entry: &str) {
                                 }
                                 can_resume = true;
                             }
-                            ChoiceTarget::Label(_) => can_resume = true,
+                            ChoiceTarget::Label(_)
+                            | ChoiceTarget::Continue
+                            | ChoiceTarget::Assign(_) => can_resume = true,
                         }
                     }
                     if !can_resume {
@@ -676,6 +694,7 @@ fn project_successors(
                     Some(target(scene, 0, stack))
                 }
                 ChoiceTarget::CallScene(_) => None,
+                ChoiceTarget::Continue | ChoiceTarget::Assign(_) => Some(next()),
             })
             .collect(),
         Action::End => Vec::new(),
@@ -1121,6 +1140,38 @@ mod tests {
     }
 
     #[test]
+    fn talk_sequences_resolve_stable_character_ids_to_the_same_speaker_as_dialogue() {
+        let mut content = project(Path::new("."));
+        content.eiyashou = Some(crate::loader::EiyashouProjectData {
+            characters: HashMap::from([(
+                "hero".into(),
+                crate::loader::EiyashouCharacterData {
+                    name: "少女".into(),
+                    color: None,
+                },
+            )]),
+            ..Default::default()
+        });
+        let parsed = crate::adapter::parse_native_scenes("scene start { sprite.sequence(mouth, fps: 10, mode: talk, speaker: \"hero\") { frame(rest), frame(open) }, hero: \"你好\" }").remove(0);
+        let mut scenes = [LoadedScene {
+            name: "start".into(),
+            path: "main.shou".into(),
+            actions: parsed.report.actions,
+            action_spans: parsed.report.spans,
+            diagnostics: parsed.report.diagnostics,
+            resources: parsed.report.resources,
+            sub_scenes: parsed.report.sub_scenes,
+        }];
+        apply_eiyashou_project(&content, &mut scenes);
+        assert!(
+            matches!(&scenes[0].actions[0], Action::ConfigureDynamicSpriteSequence { playback: keine_core::SequencePlayback::Talk { speaker }, .. } if speaker == "少女")
+        );
+        assert!(
+            matches!(&scenes[0].actions[1], Action::EiyashouSay(dialogue) if dialogue.speaker == "少女")
+        );
+    }
+
+    #[test]
     fn detects_supported_languages() {
         let languages = ScriptLanguageRegistry::default();
         assert!(languages.supports(Path::new("scene.txt")));
@@ -1229,7 +1280,7 @@ scene ending {
             ..Default::default()
         });
         let parsed = crate::adapter::parse_native_scenes(
-            "scene start { sprite(layer, day), sprite(hero, voice) }",
+            "scene start { sprite(layer, day), avatar.show(day), sprite(hero, voice) }",
         )
         .remove(0);
         let mut scenes = [LoadedScene {

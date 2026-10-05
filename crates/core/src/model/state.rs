@@ -614,6 +614,7 @@ pub enum PersistenceHazard {
     SceneMouseParallax,
     PostProcessV2,
     TimedSpriteSequence,
+    ParticleOptions,
 }
 
 impl fmt::Display for RestoreError {
@@ -694,6 +695,59 @@ pub struct SpriteSequenceState {
     pub frame: usize,
     #[serde(skip, default)]
     pub frame_durations: Vec<f32>,
+    #[serde(skip, default)]
+    pub playback: Option<crate::SequencePlayback>,
+}
+
+impl SpriteSequenceState {
+    /// Advance a sequence without host state. Dynamic sequences rest on frame zero.
+    pub fn advance(&mut self, delta: f32, speaking: bool) -> usize {
+        if self.frames.len() < 2 {
+            return 0;
+        }
+        let duration = if self.frame_durations.len() == self.frames.len() {
+            self.frame_durations.iter().sum::<f32>()
+        } else {
+            self.frames.len() as f32 / self.fps.max(f32::EPSILON)
+        };
+        let elapsed = match &self.playback {
+            Some(crate::SequencePlayback::Talk { .. }) if !speaking => {
+                self.elapsed = 0.0;
+                return 0;
+            }
+            Some(crate::SequencePlayback::Blink { interval }) => {
+                self.elapsed = (self.elapsed + delta) % (interval + duration).max(f32::EPSILON);
+                if self.elapsed < *interval {
+                    return 0;
+                }
+                self.elapsed - interval
+            }
+            _ => {
+                self.elapsed = if self.looped {
+                    (self.elapsed + delta) % duration.max(f32::EPSILON)
+                } else {
+                    (self.elapsed + delta).min(duration)
+                };
+                self.elapsed
+            }
+        };
+        if self.frame_durations.len() == self.frames.len() {
+            let mut remaining = elapsed;
+            self.frame_durations
+                .iter()
+                .position(|duration| {
+                    if remaining < *duration {
+                        true
+                    } else {
+                        remaining -= duration;
+                        false
+                    }
+                })
+                .unwrap_or(self.frames.len() - 1)
+        } else {
+            ((elapsed * self.fps).floor() as usize).min(self.frames.len() - 1)
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -863,6 +917,8 @@ pub struct ActiveParticleEffect {
     pub elapsed: f32,
     pub fading_out: bool,
     pub fade_out: f32,
+    #[serde(skip, default)]
+    pub options: crate::ParticleOptions,
 }
 
 impl ActiveParticleEffect {
@@ -872,6 +928,7 @@ impl ActiveParticleEffect {
             elapsed: 0.0,
             fading_out: false,
             fade_out: 0.0,
+            options: Default::default(),
         }
     }
 
@@ -1061,8 +1118,16 @@ impl State {
             .or_else(|| {
                 self.sprite_sequences
                     .values()
-                    .any(|sequence| !sequence.frame_durations.is_empty())
+                    .any(|sequence| {
+                        !sequence.frame_durations.is_empty() || sequence.playback.is_some()
+                    })
                     .then_some(Hazard::TimedSpriteSequence)
+            })
+            .or_else(|| {
+                self.particle_effects
+                    .values()
+                    .any(|effect| effect.options != crate::ParticleOptions::default())
+                    .then_some(Hazard::ParticleOptions)
             });
 
         hazard.map_or(PersistenceSafety::Exact, PersistenceSafety::ActiveTransient)
@@ -1438,6 +1503,58 @@ fn reconcile_backlog_entry(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn dynamic_sequences_rest_and_repeat_at_the_authored_boundaries() {
+        let mut sequence = SpriteSequenceState {
+            frames: vec!["open".into(), "closed".into()],
+            fps: 10.0,
+            looped: true,
+            elapsed: 0.0,
+            frame: 0,
+            frame_durations: Vec::new(),
+            playback: Some(crate::SequencePlayback::Blink { interval: 2.0 }),
+        };
+        assert_eq!(sequence.advance(1.9, false), 0);
+        assert_eq!(sequence.advance(0.25, false), 1);
+        assert_eq!(sequence.advance(0.1, false), 0);
+        sequence.playback = Some(crate::SequencePlayback::Talk {
+            speaker: "Hero".into(),
+        });
+        sequence.elapsed = 0.0;
+        assert_eq!(sequence.advance(1.0, false), 0);
+        assert_eq!(sequence.advance(0.15, true), 1);
+        assert_eq!(sequence.advance(0.0, false), 0);
+        assert_eq!(sequence.elapsed, 0.0);
+        // Variable frame durations share exactly the same sampler.
+        sequence.frame_durations = vec![0.3, 0.7];
+        assert_eq!(sequence.advance(0.31, true), 1);
+        assert_eq!(sequence.advance(0.71, true), 0);
+    }
+
+    #[test]
+    fn custom_particle_state_requires_replay_and_rollback_preserves_options() {
+        let mut state = State::default();
+        let mut effect = ActiveParticleEffect::new(ParticleEffect::preset("snow"));
+        effect.options.size = Some(24.0);
+        state.particle_effects.insert("snow".into(), effect);
+        assert_eq!(
+            state.persistence_safety(),
+            PersistenceSafety::ActiveTransient(PersistenceHazard::ParticleOptions)
+        );
+        state.dialogue = Some(dialogue("line"));
+        state.record_dialogue(0);
+        assert_eq!(
+            state.backlog.last().unwrap().snapshot.particle_effects["snow"]
+                .options
+                .size,
+            Some(24.0)
+        );
+        let serialized = postcard::to_allocvec(&state).unwrap();
+        let decoded: State = postcard::from_bytes(&serialized).unwrap();
+        assert_eq!(decoded.particle_effects["snow"].options, Default::default());
+    }
+
     use super::*;
     use crate::{Action, Program};
 
@@ -2021,6 +2138,7 @@ mod tests {
                 elapsed: 2.0,
                 frame: 1,
                 frame_durations: Vec::new(),
+                playback: None,
             },
         );
 

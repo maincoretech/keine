@@ -64,6 +64,15 @@ pub fn insert_statement(
     kind: InsertKind,
     index: &AuthoringIndex,
 ) -> Result<String, AuthoringEditError> {
+    let statement = insertion_statement(source, kind, index, "")?;
+    insert_source_statement(source, line, &statement)
+}
+
+pub fn insert_source_statement(
+    source: &str,
+    line: usize,
+    statement: &str,
+) -> Result<String, AuthoringEditError> {
     let line_start =
         line_start_offset(source, line).ok_or(AuthoringEditError::MissingInsertionPoint)?;
     let line_end = source[line_start..]
@@ -74,7 +83,12 @@ pub fn insert_statement(
         line_end > line_start && source.as_bytes().get(line_end - 1) == Some(&b'\n'),
     ));
     let current = source[line_start..content_end].trim();
-    if current.starts_with('}') {
+    if current.starts_with('}')
+        && !parse_native_document(source)
+            .scenes
+            .iter()
+            .any(|scene| scene.range.start < line_start && scene.range.end > content_end)
+    {
         return Err(AuthoringEditError::MissingInsertionPoint);
     }
     let next = source[line_end..].trim_start();
@@ -92,13 +106,13 @@ pub fn insert_statement(
     } else {
         indent
     };
-    let statement = insertion_statement(source, kind, index, &statement_indent)?;
     let mut edited = source.to_owned();
     let mut insertion = line_end;
     if current_needs_separator {
         edited.insert(content_end, ',');
         insertion += 1;
     }
+    let statement = statement.replace('\n', &format!("\n{statement_indent}"));
     let trailing = if statement_has_follower { "," } else { "" };
     edited.insert_str(
         insertion,
@@ -270,7 +284,9 @@ pub fn append_character(
         entry.push_str(&format!("    color: \"{}\"\n", escape_yaml_string(color)));
     }
     let mut edited = source.to_owned();
-    if let Some(empty_mapping) = source.find("characters: {}") {
+    if source.trim() == "{}" {
+        edited = format!("characters:\n{entry}");
+    } else if let Some(empty_mapping) = source.find("characters: {}") {
         let range = empty_mapping..empty_mapping + "characters: {}".len();
         edited.replace_range(range, &format!("characters:\n{entry}"));
     } else {
@@ -281,6 +297,259 @@ pub fn append_character(
     EiyashouCharacterManifest::from_yaml(&edited)
         .map_err(|_| AuthoringEditError::InvalidManifest)?;
     Ok(edited)
+}
+
+/// Patch known properties instead of serializing the manifest, preserving other roles,
+/// unknown fields and comments. Flow-style role entries stay source-editable only.
+pub fn edit_character(
+    source: &str,
+    character: &super::CharacterEntry,
+) -> Result<String, AuthoringEditError> {
+    if !valid_identifier(&character.id) {
+        return Err(AuthoringEditError::InvalidIdentifier);
+    }
+    if character.name.trim().is_empty() {
+        return Err(AuthoringEditError::EmptyName);
+    }
+    if character
+        .color
+        .as_deref()
+        .is_some_and(|color| !valid_color(color))
+    {
+        return Err(AuthoringEditError::InvalidColor);
+    }
+    let original = EiyashouCharacterManifest::from_yaml(source)
+        .map_err(|_| AuthoringEditError::InvalidManifest)?;
+    let original = original
+        .characters
+        .get(&character.id)
+        .ok_or(AuthoringEditError::StaleRange)?;
+    let mut edited = source.to_owned();
+    for (key, value) in [
+        (
+            "name",
+            Some(format!("\"{}\"", escape_yaml_string(&character.name))),
+        ),
+        (
+            "color",
+            character
+                .color
+                .as_ref()
+                .map(|value| format!("\"{}\"", escape_yaml_string(value))),
+        ),
+        (
+            "avatar",
+            character
+                .avatar
+                .as_ref()
+                .map(|value| format!("\"{}\"", escape_yaml_string(value))),
+        ),
+        (
+            "expressions",
+            (!character.expressions.is_empty()).then(|| {
+                let entries = character
+                    .expressions
+                    .iter()
+                    .map(|(name, frames)| {
+                        format!(
+                            "      {}: {}",
+                            serde_json::to_string(name).expect("string"),
+                            serde_json::to_string(frames).expect("strings")
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                format!("\n{}", entries.join("\n"))
+            }),
+        ),
+    ] {
+        let unchanged = match key {
+            "name" => original.name == character.name,
+            "color" => original.color == character.color,
+            "avatar" => original.avatar == character.avatar,
+            "expressions" => original.expressions == character.expressions,
+            _ => false,
+        };
+        if unchanged {
+            continue;
+        }
+        let range = character_range(&edited, &character.id)?;
+        let mut offset = range.start;
+        let mut property = None;
+        for line in edited[range.clone()].split_inclusive('\n').skip(1) {
+            // Skip the role header once, while retaining absolute offsets.
+            if offset == range.start {
+                offset += edited[range.clone()]
+                    .split_inclusive('\n')
+                    .next()
+                    .unwrap_or("")
+                    .len();
+            }
+            if line.starts_with(&format!("    {key}:")) {
+                let start = offset;
+                let mut end = offset + line.len();
+                for following in edited[end..range.end].split_inclusive('\n') {
+                    if following.trim().is_empty()
+                        || following.trim_start().starts_with('#')
+                        || following.chars().take_while(|ch| *ch == ' ').count() <= 4
+                    {
+                        break;
+                    }
+                    end += following.len();
+                }
+                property = Some(start..end);
+                break;
+            }
+            offset += line.len();
+        }
+        let comment = property
+            .as_ref()
+            .and_then(|range| edited[range.clone()].lines().next())
+            .and_then(yaml_comment)
+            .unwrap_or("");
+        let replacement = value
+            .map(|value| {
+                format!(
+                    "    {key}: {value}{}\n",
+                    if comment.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" {comment}")
+                    }
+                )
+            })
+            .unwrap_or_else(|| {
+                if comment.is_empty() {
+                    String::new()
+                } else {
+                    format!("    {comment}\n")
+                }
+            });
+        if let Some(property) = property {
+            edited.replace_range(property, &replacement);
+        } else if !replacement.is_empty() {
+            let prefix = if range.end > 0 && edited.as_bytes()[range.end - 1] != b'\n' {
+                "\n"
+            } else {
+                ""
+            };
+            edited.insert_str(range.end, &format!("{prefix}{replacement}"));
+        }
+    }
+    EiyashouCharacterManifest::from_yaml(&edited)
+        .map_err(|_| AuthoringEditError::InvalidManifest)?;
+    Ok(edited)
+}
+
+/// Keep character presets intact when a registered resource is renamed.
+pub fn rename_character_asset(
+    source: &str,
+    old: &str,
+    new: &str,
+) -> Result<String, AuthoringEditError> {
+    let manifest = EiyashouCharacterManifest::from_yaml(source)
+        .map_err(|_| AuthoringEditError::InvalidManifest)?;
+    let mut edited = source.to_owned();
+    for (id, character) in manifest.characters {
+        let mut entry = super::CharacterEntry {
+            id,
+            name: character.name,
+            color: character.color,
+            avatar: character.avatar,
+            expressions: character.expressions,
+        };
+        let mut changed = false;
+        for value in entry
+            .avatar
+            .iter_mut()
+            .chain(entry.expressions.values_mut().flatten())
+        {
+            if value == old {
+                *value = new.into();
+                changed = true;
+            }
+        }
+        if changed {
+            edited = edit_character(&edited, &entry)?;
+        }
+    }
+    Ok(edited)
+}
+
+pub fn delete_character(source: &str, id: &str) -> Result<String, AuthoringEditError> {
+    let range = character_range(source, id)?;
+    let mut edited = source.to_owned();
+    edited.replace_range(range, "");
+    if !edited
+        .lines()
+        .skip_while(|line| *line != "characters:")
+        .skip(1)
+        .take_while(|line| line.trim().is_empty() || line.starts_with(char::is_whitespace))
+        .any(|line| line.starts_with("  ") && !line.trim_start().starts_with('#'))
+    {
+        edited = edited.replacen("characters:", "characters: {}", 1);
+    }
+    EiyashouCharacterManifest::from_yaml(&edited)
+        .map_err(|_| AuthoringEditError::InvalidManifest)?;
+    Ok(edited)
+}
+
+fn yaml_comment(line: &str) -> Option<&str> {
+    let mut quote = None;
+    let mut escaped = false;
+    for (offset, ch) in line.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && quote == Some('"') {
+            escaped = true;
+            continue;
+        }
+        if let Some(active) = quote {
+            if ch == active {
+                quote = None;
+            }
+        } else if matches!(ch, '\'' | '"') {
+            quote = Some(ch);
+        } else if ch == '#' && line[..offset].ends_with(char::is_whitespace) {
+            return Some(&line[offset..]);
+        }
+    }
+    None
+}
+
+fn character_range(source: &str, id: &str) -> Result<Range<usize>, AuthoringEditError> {
+    let manifest = EiyashouCharacterManifest::from_yaml(source)
+        .map_err(|_| AuthoringEditError::InvalidManifest)?;
+    if !manifest.characters.contains_key(id) {
+        return Err(AuthoringEditError::StaleRange);
+    }
+    let mut offset = 0;
+    let mut in_characters = false;
+    let mut start = None;
+    for line in source.split_inclusive('\n') {
+        let text = line.trim_end();
+        if text == "characters:" {
+            in_characters = true;
+        } else if in_characters && !text.is_empty() && !text.trim_start().starts_with('#') {
+            let indent = text.chars().take_while(|ch| *ch == ' ').count();
+            if indent <= 2 {
+                if let Some(start) = start {
+                    return Ok(start..offset);
+                }
+                if indent == 0 {
+                    break;
+                }
+                if text.trim() == format!("{id}:") || text.trim() == format!("\"{id}\":") {
+                    start = Some(offset);
+                }
+            }
+        }
+        offset += line.len();
+    }
+    start
+        .map(|start| start..source.len())
+        .ok_or(AuthoringEditError::MissingInsertionPoint)
 }
 
 pub fn escape_eiyashou_string(value: &str) -> String {

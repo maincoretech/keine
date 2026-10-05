@@ -36,7 +36,13 @@ pub(super) fn signature(name: &str) -> Option<(usize, &'static [&'static str])> 
                 "scale",
             ],
         ),
-        "particle.show" => (2, &["texture", "count", "wind", "gravity", "fade_in"]),
+        "particle.show" => (
+            2,
+            &[
+                "texture", "count", "wind", "gravity", "fade_in", "size", "speed", "alpha", "spin",
+                "drift", "drag", "color",
+            ],
+        ),
         "ui.message" => (
             1,
             &["title", "message", "confirm_text", "cancel_text", "result"],
@@ -128,23 +134,55 @@ impl<'a> Parser<'a> {
                         .push(self.error("`count` requires an integer between 0 and 65535"));
                     return None;
                 }
-                Some(Action::ShowParticles {
-                    id: self.v11_identifier(args.first(), "particle ID", report)?,
-                    effect: ParticleEffect {
-                        preset: self.v11_identifier(args.get(1), "particle preset", report)?,
-                        texture: match self.named_arg(args, "texture") {
-                            Some(arg) => {
-                                Some(self.v11_identifier(Some(arg), "particle texture", report)?)
-                            }
-                            None => None,
-                        },
-                        count: count as u16,
-                        wind: self.checked_number(args, "wind", report)?,
-                        gravity: self.checked_number(args, "gravity", report)?,
-                        fade_in: self.named_duration_checked(args, "fade_in", report)?,
+                let id = self.v11_identifier(args.first(), "particle ID", report)?;
+                let effect = ParticleEffect {
+                    preset: self.v11_identifier(args.get(1), "particle preset", report)?,
+                    texture: match self.named_arg(args, "texture") {
+                        Some(arg) => {
+                            Some(self.v11_identifier(Some(arg), "particle texture", report)?)
+                        }
+                        None => None,
                     },
+                    count: count as u16,
+                    wind: self.checked_number(args, "wind", report)?,
+                    gravity: self.checked_number(args, "gravity", report)?,
+                    fade_in: self.named_duration_checked(args, "fade_in", report)?,
+                };
+                let options = keine_core::ParticleOptions {
+                    size: self.checked_number(args, "size", report)?,
+                    speed: self.checked_number(args, "speed", report)?,
+                    alpha: self.checked_number(args, "alpha", report)?,
+                    spin: self.checked_number(args, "spin", report)?,
+                    drift: self.checked_number(args, "drift", report)?,
+                    drag: self.checked_number(args, "drag", report)?,
+                    color: if self.named_arg(args, "color").is_some() {
+                        Some(self.v11_optional_color(args, "color", [1.0; 4], report)?)
+                    } else {
+                        None
+                    },
+                };
+                if options.size.is_some_and(|value| value <= 0.0)
+                    || options.speed.is_some_and(|value| value < 0.0)
+                    || options.drag.is_some_and(|value| value < 0.0)
+                    || options.drift.is_some_and(|value| value < 0.0)
+                    || options
+                        .alpha
+                        .is_some_and(|value| !(0.0..=1.0).contains(&value))
+                {
+                    report.diagnostics.push(self.error("particle size must be positive; speed/drift/drag nonnegative; alpha between 0 and 1"));
+                    return None;
+                }
+                Some(if options == Default::default() {
+                    Action::ShowParticles { id, effect }
+                } else {
+                    Action::ShowParticlesWithOptions {
+                        id,
+                        effect,
+                        options,
+                    }
                 })
             }
+
             "ui.message" => {
                 let mode = match self
                     .v11_identifier(args.first(), "message mode", report)?

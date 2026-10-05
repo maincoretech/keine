@@ -853,7 +853,9 @@ pub(crate) fn seek_editor_state(
                                 | keine_core::ChoiceTarget::CallScene(scene) => {
                                     scene == target_scene
                                 }
-                                keine_core::ChoiceTarget::Label(_) => false,
+                                keine_core::ChoiceTarget::Label(_)
+                                | keine_core::ChoiceTarget::Continue
+                                | keine_core::ChoiceTarget::Assign(_) => false,
                             }
                     })
                 });
@@ -1401,34 +1403,16 @@ fn advance_sprite_transitions(state: &mut State, delta_seconds: f32) -> bool {
         if sequence.frames.len() < 2 || !state.sprites.contains_key(id) {
             continue;
         }
-        sequence.elapsed += delta_seconds;
-        let sampled = if sequence.frame_durations.len() == sequence.frames.len() {
-            let cycle = sequence.frame_durations.iter().sum::<f32>();
-            let mut remaining = if sequence.looped {
-                sequence.elapsed % cycle.max(f32::EPSILON)
-            } else {
-                sequence.elapsed.min(cycle)
-            };
-            sequence
-                .frame_durations
-                .iter()
-                .position(|duration| {
-                    if remaining < *duration {
-                        true
-                    } else {
-                        remaining -= *duration;
-                        false
-                    }
+        let speaking = match &sequence.playback {
+            Some(keine_core::SequencePlayback::Talk { speaker }) => {
+                state.dialogue.as_ref().is_some_and(|dialogue| {
+                    &dialogue.speaker == speaker
+                        && dialogue.visible_chars < dialogue.text.chars().count()
                 })
-                .unwrap_or(sequence.frames.len() - 1)
-        } else {
-            (sequence.elapsed * sequence.fps).floor() as usize
+            }
+            _ => false,
         };
-        let frame = if sequence.looped && sequence.frame_durations.is_empty() {
-            sampled % sequence.frames.len()
-        } else {
-            sampled.min(sequence.frames.len() - 1)
-        };
+        let frame = sequence.advance(delta_seconds, speaking);
         if frame != sequence.frame {
             sequence.frame = frame;
             if let Some(sprite) = state.sprites.get_mut(id) {

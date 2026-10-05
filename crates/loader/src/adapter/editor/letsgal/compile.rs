@@ -1123,7 +1123,59 @@ fn compile_dialogue(
     span: SourceSpan,
     report: &mut ParseReport,
 ) {
-    if character(block, context).is_some()
+    if !prop_string(&block.props, "nameVariantId").is_empty() {
+        logic_error(
+            report,
+            span,
+            "name variants need an explicit native speaker name",
+        );
+        return;
+    }
+    let avatar_only = prop_bool(&block.props, "dialoguePortraitOnly", false);
+    if avatar_only {
+        let Some(character) = character(block, context) else {
+            logic_error(report, span, "avatar-only dialogue has no character");
+            return;
+        };
+        let expression_name = prop_string(&block.props, "expression");
+        let expression = character
+            .expressions
+            .iter()
+            .find(|expression| expression.name == expression_name)
+            .or_else(|| character.expressions.first());
+        let Some(expression) = expression.filter(|expression| {
+            !expression.asset_path.is_empty() && expression.extras.get("presentation").is_none()
+        }) else {
+            logic_error(
+                report,
+                span,
+                "composite avatars require an explicit native avatar asset",
+            );
+            return;
+        };
+        let skin = prop_string(&block.props, "skin");
+        let skin = if skin.is_empty() {
+            character
+                .portrait_skin_config
+                .as_ref()
+                .map(|config| config.default_skin.as_str())
+                .unwrap_or_default()
+        } else {
+            skin.as_str()
+        };
+        let image = expression
+            .skin_assets
+            .get(skin)
+            .unwrap_or(&expression.asset_path);
+        report.push(
+            Action::MiniAvatar {
+                image: image.clone(),
+            },
+            span,
+        );
+    }
+    if !avatar_only
+        && character(block, context).is_some()
         && prop_bool(&block.props, "showCharacter", true)
         && prop_bool(&block.props, "isFirst", true)
     {
@@ -1147,6 +1199,9 @@ fn compile_dialogue(
         span,
     );
     push_dialogue_lifetime(block, span, report);
+    if avatar_only {
+        report.push(Action::HideMiniAvatar, span);
+    }
     if prop_bool(&block.props, "isLast", true) && !prop_bool(&block.props, "keepCharacter", true) {
         report.push(
             Action::HideSprites {
@@ -2063,9 +2118,24 @@ fn compile_scene(
     }
     for layer in scene.layers.iter().filter(|layer| layer.kind == "particle") {
         let particle = layer.particle.as_ref();
-        let options = particle
-            .and_then(|particle| serde_json::from_str(&particle.options_json).ok())
-            .unwrap_or_default();
+        let options = match particle.map(|particle| particle.options_json.trim()) {
+            None | Some("") => StudioParticleOverrides::default(),
+            Some(source) => match serde_json::from_str::<StudioParticleOverrides>(source) {
+                Ok(options) => options,
+                Err(_) => {
+                    logic_error(report, span, "invalid scene particle options JSON");
+                    continue;
+                }
+            },
+        };
+        if !options.unsupported.is_empty() {
+            logic_error(
+                report,
+                span,
+                "scene particle overrides require explicit native controls",
+            );
+            continue;
+        }
         report.push(
             Action::ShowParticles {
                 id: format!("scene-particle:{}", layer.id),
@@ -2163,65 +2233,228 @@ struct BranchChoice {
     fragment_id: String,
     #[serde(default)]
     visible_if: Option<String>,
+    #[serde(default)]
+    var_ops: Vec<Map<String, Value>>,
+}
+
+fn logic_error(report: &mut ParseReport, span: SourceSpan, message: impl Into<String>) {
+    report.diagnostics.push(Diagnostic {
+        level: DiagnosticLevel::Error,
+        span,
+        message: message.into(),
+    });
+}
+
+fn studio_conditions(value: &Value, logic: &str) -> Result<String, String> {
+    let (conditions, logic) = if let Some(object) = value.as_object() {
+        (
+            object.get("conditions").and_then(Value::as_array),
+            object
+                .get("logicOp")
+                .and_then(Value::as_str)
+                .unwrap_or(logic),
+        )
+    } else {
+        (value.as_array(), logic)
+    };
+    let conditions = conditions.ok_or("LetsGal conditions must be an array")?;
+    let join = match logic {
+        "and" => " && ",
+        "or" => " || ",
+        _ => return Err(format!("unsupported condition logic {logic:?}")),
+    };
+    let mut expressions = Vec::new();
+    for condition in conditions {
+        let condition = condition.as_object().ok_or("invalid LetsGal condition")?;
+        let text = |key: &str| {
+            condition
+                .get(key)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+        };
+        if !matches!(text("sourceKind"), "" | "variable") {
+            return Err("extension conditions need a native implementation".into());
+        }
+        let left = text("left");
+        let operator = text("op");
+        if operator == "custom" {
+            expressions.push(format!("({})", text("rightLiteral")));
+            continue;
+        }
+        if left.is_empty() {
+            return Err("condition has no variable".into());
+        }
+        let expression = match operator {
+            "isEmpty" => format!("{left} == \"\""),
+            "isNotEmpty" => format!("{left} != \"\""),
+            "==" | "!=" | ">" | ">=" | "<" | "<=" => {
+                let right = match text("rightKind") {
+                    "" | "literal" => expression_literal(text("rightLiteral")),
+                    "variable" if !text("rightRef").is_empty() => text("rightRef").into(),
+                    _ => return Err("invalid condition operand".into()),
+                };
+                format!("{left} {operator} {right}")
+            }
+            _ => return Err(format!("unsupported condition operator {operator:?}")),
+        };
+        expressions.push(format!("({expression})"));
+    }
+    Ok(if expressions.is_empty() {
+        "false".into()
+    } else {
+        expressions.join(join)
+    })
+}
+
+fn studio_visibility(source: &str) -> Result<Option<String>, String> {
+    if source.trim().is_empty() {
+        return Ok(None);
+    }
+    if source.trim_start().starts_with(['[', '{']) {
+        let value =
+            serde_json::from_str(source).map_err(|_| "invalid structured choice condition")?;
+        studio_conditions(&value, "and").map(Some)
+    } else {
+        Ok(Some(source.into()))
+    }
 }
 
 fn compile_branch(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport) {
-    let choices = json_string::<Vec<BranchChoice>>(&block.props, "choices").unwrap_or_default();
+    let Some(source_choices) = (if block.props.contains_key("choices") {
+        json_string::<Vec<BranchChoice>>(&block.props, "choices")
+    } else {
+        Some(Vec::new())
+    }) else {
+        logic_error(report, span, "invalid LetsGal branch choices");
+        return;
+    };
+    let mut choices = Vec::new();
+    for choice in source_choices {
+        let target = match choice.mode.as_str() {
+            "" | "jump" if choice.fragment_id.is_empty() => ChoiceTarget::Continue,
+            "" | "jump" => ChoiceTarget::CallScene(choice.fragment_id),
+            "change" if !choice.fragment_id.is_empty() => {
+                ChoiceTarget::ChangeScene(choice.fragment_id)
+            }
+            "call" if !choice.fragment_id.is_empty() => ChoiceTarget::CallScene(choice.fragment_id),
+            "vars" => {
+                let mut assignments = Vec::new();
+                for props in choice.var_ops {
+                    if prop_string(&props, "key").is_empty() {
+                        logic_error(report, span, "choice assignment has no variable");
+                        return;
+                    }
+                    let mut assignment_report = ParseReport::default();
+                    let assignment = StoryBlock {
+                        props,
+                        ..block.clone()
+                    };
+                    compile_set_variable(&assignment, span, &mut assignment_report);
+                    if !assignment_report.diagnostics.is_empty() {
+                        report.diagnostics.extend(assignment_report.diagnostics);
+                        return;
+                    }
+                    if let Some(Action::Set {
+                        name, expression, ..
+                    }) = assignment_report.actions.pop()
+                    {
+                        assignments.push((name, expression));
+                    }
+                }
+                ChoiceTarget::Assign(assignments)
+            }
+            _ => {
+                logic_error(
+                    report,
+                    span,
+                    format!("unsupported branch mode {:?}", choice.mode),
+                );
+                return;
+            }
+        };
+        let show_when = match choice
+            .visible_if
+            .as_deref()
+            .map(studio_visibility)
+            .transpose()
+        {
+            Ok(value) => value.flatten(),
+            Err(error) => {
+                logic_error(report, span, error);
+                return;
+            }
+        };
+        choices.push(Choice {
+            text: choice.text,
+            target,
+            show_when,
+            enable_when: None,
+        });
+    }
     report.push(
         Action::Menu {
             prompt: prop_string(&block.props, "title"),
-            choices: choices
-                .into_iter()
-                .filter(|choice| !choice.fragment_id.is_empty())
-                .map(|choice| Choice {
-                    text: choice.text,
-                    target: if choice.mode == "call" {
-                        ChoiceTarget::CallScene(choice.fragment_id)
-                    } else {
-                        ChoiceTarget::ChangeScene(choice.fragment_id)
-                    },
-                    show_when: choice.visible_if,
-                    enable_when: None,
-                })
-                .collect(),
+            choices,
         },
         span,
     );
 }
 
 fn compile_if(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport) {
-    let expression = prop_string_or(&block.props, "expression", "false");
+    let expression = if block.props.contains_key("conditions") {
+        let Some(value) = json_value(&block.props, "conditions") else {
+            logic_error(report, span, "invalid LetsGal conditions JSON");
+            return;
+        };
+        match studio_conditions(&value, &prop_string_or(&block.props, "logicOp", "and")) {
+            Ok(value) => value,
+            Err(error) => {
+                logic_error(report, span, error);
+                return;
+            }
+        }
+    } else {
+        prop_string_or(&block.props, "expression", "false")
+    };
     let then_scene = prop_string(&block.props, "thenFragmentId");
     let else_scene = prop_string(&block.props, "elseFragmentId");
-    if !then_scene.is_empty() {
-        report.push(
-            Action::Flow {
-                action: Box::new(Action::ChangeScene(then_scene)),
-                when: Some(expression.clone()),
-                next: false,
-            },
-            span,
-        );
+    if then_scene.is_empty() {
+        logic_error(report, span, "if has no then fragment");
+        return;
     }
-    if !else_scene.is_empty() {
-        report.push(
-            Action::Flow {
-                action: Box::new(Action::ChangeScene(else_scene)),
-                when: Some(format!("!({expression})")),
-                next: false,
-            },
-            span,
-        );
-    }
+    report.push(
+        Action::ConditionalCall {
+            condition: expression,
+            then_scene,
+            else_scene: non_empty(else_scene),
+        },
+        span,
+    );
 }
 
 fn compile_set_variable(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport) {
     let name = prop_string(&block.props, "key");
     if name.is_empty() {
+        logic_error(report, span, "assignment has no variable");
+        return;
+    }
+    let op = prop_string_or(&block.props, "op", "=");
+    let binary = prop_string_or(&block.props, "binOp", "+");
+    let a_kind = prop_string_or(&block.props, "aKind", "lit");
+    let b_kind = prop_string_or(&block.props, "bKind", "none");
+    if !matches!(op.as_str(), "=" | "+=" | "-=" | "*=" | "/=" | "%=")
+        || !matches!(binary.as_str(), "+" | "-" | "*" | "/" | "%")
+        || !matches!(a_kind.as_str(), "lit" | "var")
+        || !matches!(b_kind.as_str(), "none" | "lit" | "var")
+        || (op != "=" && b_kind != "none")
+        || (a_kind == "var" && prop_string(&block.props, "aVar").is_empty())
+        || (b_kind == "var" && prop_string(&block.props, "bVar").is_empty())
+    {
+        logic_error(report, span, "invalid assignment operands or operator");
         return;
     }
     let operand = studio_operand(block, "a");
-    let operand = if prop_string(&block.props, "bKind") == "none" {
+    let operand = if prop_string_or(&block.props, "bKind", "none") == "none" {
         operand
     } else {
         let right = studio_operand(block, "b");
@@ -2260,7 +2493,17 @@ fn compile_sound(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport)
     let kind = prop_string_or(&block.props, "soundType", "SE").to_ascii_uppercase();
     let file = prop_string(&block.props, "uri");
     let volume = prop_f32(&block.props, "volume", 100.0) / 100.0;
-    if kind == "BGM" {
+    if kind == "BGM" && !prop_bool(&block.props, "loop", true) {
+        report.push(
+            Action::EiyashouBgm {
+                file: (!file.is_empty()).then_some(file),
+                volume,
+                fade_seconds: prop_f32(&block.props, "fadeDuration", 0.0) / 1000.0,
+                looped: false,
+            },
+            span,
+        );
+    } else if kind == "BGM" {
         report.push(
             Action::Bgm {
                 file,
@@ -2270,6 +2513,16 @@ fn compile_sound(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport)
             span,
         );
     } else if kind == "VOCAL" || kind == "VOICE" {
+        if prop_bool(&block.props, "loop", false)
+            || prop_f32(&block.props, "fadeDuration", 0.0) != 0.0
+        {
+            logic_error(
+                report,
+                span,
+                "standalone voice loop/fade is unsupported; use a dialogue voice or a named sound effect",
+            );
+            return;
+        }
         report.push(
             Action::Vocal {
                 file: (!file.is_empty()).then_some(file),
@@ -2722,7 +2975,18 @@ fn push_camera_reset(
 
 fn compile_curtain(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport) {
     let closed = prop_string(&block.props, "op") == "close";
-    if prop_string(&block.props, "mode") == "letterbox" {
+    let mode = prop_string(&block.props, "mode");
+    if matches!(mode.as_str(), "pillarbox" | "windowbox")
+        || (mode == "letterbox" && prop_f32(&block.props, "curtainSize", 100.0) != 100.0)
+    {
+        logic_error(
+            report,
+            span,
+            "custom curtain bars require native stage masks",
+        );
+        return;
+    }
+    if mode == "letterbox" {
         report.push(Action::FilmMode { enabled: closed }, span);
         return;
     }
@@ -2802,7 +3066,8 @@ fn compile_stage_mask(block: &StoryBlock, span: SourceSpan, report: &mut ParseRe
             _ => StageMaskPlane::Bottom,
         },
         scope: match prop_string_or(&block.props, "scope", "stage").as_str() {
-            "stage" | "scene" => StageMaskScope::Scene,
+            "scene" => StageMaskScope::Scene,
+            "stage" => StageMaskScope::All,
             "characters" | "character" => StageMaskScope::Characters,
             "selected" => StageMaskScope::Selected,
             _ => StageMaskScope::All,
@@ -3148,6 +3413,8 @@ struct StudioParticleOverrides {
     count: Option<u32>,
     wind: Option<f32>,
     gravity: Option<f32>,
+    #[serde(flatten)]
+    unsupported: BTreeMap<String, Value>,
 }
 
 fn studio_particle_effect(
@@ -3188,8 +3455,34 @@ fn compile_particle(block: &StoryBlock, span: SourceSpan, report: &mut ParseRepo
     }
 
     let texture = prop_string(&block.props, "textureUri");
-    let options =
-        json_string::<StudioParticleOverrides>(&block.props, "optionsJson").unwrap_or_default();
+    let options = if !block.props.contains_key("optionsJson")
+        || prop_string(&block.props, "optionsJson").trim().is_empty()
+    {
+        StudioParticleOverrides::default()
+    } else {
+        let Some(options) = json_string::<StudioParticleOverrides>(&block.props, "optionsJson")
+        else {
+            logic_error(report, span, "invalid particle overrides");
+            return;
+        };
+        options
+    };
+    if !options.unsupported.is_empty() {
+        logic_error(
+            report,
+            span,
+            format!(
+                "unsupported particle overrides: {}; use native particle.show controls",
+                options
+                    .unsupported
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        );
+        return;
+    }
     report.push(
         Action::ShowParticles {
             id,
@@ -3313,21 +3606,45 @@ fn compile_stage_animation(
         return;
     };
 
-    let mut tracks = clip
-        .tracks
-        .into_iter()
-        .filter_map(|track| compile_stage_track(track, context))
-        .collect::<Vec<_>>();
+    let mut tracks = Vec::new();
+    for track in clip.tracks {
+        let property = track.property.clone();
+        let muted = track.muted;
+        match compile_stage_track(track, context) {
+            Some(track) => tracks.push(track),
+            None if muted => {}
+            None => logic_error(
+                report,
+                span,
+                format!("unsupported stage track target/property {property:?}"),
+            ),
+        }
+    }
     for track in &mut tracks {
         track
             .keyframes
             .sort_by(|left, right| left.time.total_cmp(&right.time));
     }
-    let mut events = clip
-        .events
-        .iter()
-        .filter_map(|event| compile_stage_event(event, context))
-        .collect::<Vec<_>>();
+    let mut events = Vec::new();
+    for event in &clip.events {
+        match compile_stage_event(event, context) {
+            Some(event) => events.push(event),
+            None if event.get("muted").and_then(Value::as_bool) == Some(true)
+                || event
+                    .get("data")
+                    .and_then(|data| data.get("muted"))
+                    .and_then(Value::as_bool)
+                    == Some(true) => {}
+            None => logic_error(
+                report,
+                span,
+                format!(
+                    "unsupported or invalid stage event {:?}",
+                    event.get("type").or_else(|| event.get("kind"))
+                ),
+            ),
+        }
+    }
     events.sort_by(|left, right| left.time.total_cmp(&right.time));
 
     let loop_value = prop_string_or(&block.props, "loop", "0");
@@ -3577,16 +3894,21 @@ fn compile_stage_event(event: &Value, context: &CompileContext<'_>) -> Option<St
             }
         }
         "particleCue" => {
-            let options: StudioParticleOverrides = payload
-                .get("options")
-                .and_then(|value| serde_json::from_value(value.clone()).ok())
-                .or_else(|| {
-                    payload
-                        .get("optionsJson")
-                        .and_then(Value::as_str)
-                        .and_then(|value| serde_json::from_str(value).ok())
-                })
-                .unwrap_or_default();
+            let options: StudioParticleOverrides = if let Some(options) = payload.get("options") {
+                serde_json::from_value(options.clone()).ok()?
+            } else if let Some(source) = payload.get("optionsJson") {
+                let source = source.as_str()?;
+                if source.trim().is_empty() {
+                    StudioParticleOverrides::default()
+                } else {
+                    serde_json::from_str(source).ok()?
+                }
+            } else {
+                StudioParticleOverrides::default()
+            };
+            if !options.unsupported.is_empty() {
+                return None;
+            }
             StageEventKind::Particle {
                 id: non_empty_value(payload, &["id", "effectId"])
                     .unwrap_or("particle")
@@ -3972,7 +4294,36 @@ struct StudioInlineStyle {
 }
 
 fn studio_dialogue_markup(value: &Value) -> String {
-    let source = plain_text(value);
+    let source = if let Some(runs) = value.as_array() {
+        let mut source = String::new();
+        for run in runs {
+            let mut style = StudioInlineStyle::default();
+            if let Some(styles) = run.get("styles").and_then(Value::as_object) {
+                for (field, value) in styles {
+                    let name = match field.as_str() {
+                        "textColor" => "color",
+                        "backgroundColor" => "bg",
+                        "fontSize" => "size",
+                        "strikethrough" => "del",
+                        _ => normalize_studio_tag(field),
+                    };
+                    if matches!(value, Value::Bool(false)) {
+                        continue;
+                    }
+                    let raw = value
+                        .as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| value.to_string());
+                    apply_studio_style(&mut style, name, &raw);
+                }
+            }
+            let mut text = plain_text(run);
+            flush_studio_run(&mut source, &mut text, &style);
+        }
+        source
+    } else {
+        plain_text(value)
+    };
     let chars = source.chars().collect::<Vec<_>>();
     let mut output = String::new();
     let mut plain = String::new();
@@ -4060,7 +4411,7 @@ fn apply_studio_style(style: &mut StudioInlineStyle, tag: &str, value: &str) {
     match tag {
         "color" => style.color = Some(value.to_owned()),
         "bg" => style.background = Some(value.to_owned()),
-        "size" => style.size = Some(value.to_owned()),
+        "size" => style.size = Some(value.trim_end_matches("px").trim().to_owned()),
         "rt" => style.ruby = Some(value.to_owned()),
         "bold" => style.bold = true,
         "italic" => style.italic = true,
@@ -4232,7 +4583,10 @@ fn json_value(props: &Map<String, Value>, key: &str) -> Option<Value> {
 }
 
 fn expression_literal(value: &str) -> String {
-    if value.parse::<f64>().is_ok() || matches!(value, "true" | "false") {
+    if value.parse::<f64>().is_ok()
+        || matches!(value, "true" | "false")
+        || matches!(serde_json::from_str::<Value>(value), Ok(Value::String(_)))
+    {
         value.to_owned()
     } else {
         serde_json::to_string(value).unwrap_or_else(|_| "\"\"".into())
@@ -4241,6 +4595,129 @@ fn expression_literal(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn conditions_and_variable_choices_keep_native_logic_and_continue_options() {
+        let props = json!({"conditions": "[{\"left\":\"score\",\"op\":\">=\",\"rightLiteral\":\"5\"}]", "thenFragmentId":"yes", "elseFragmentId":"no"});
+        let block = StoryBlock {
+            id: None,
+            kind: "if".into(),
+            content: Value::Null,
+            props: props.as_object().unwrap().clone(),
+            children: Vec::new(),
+            extras: Map::new(),
+        };
+        let span = SourceSpan { line: 1, column: 1 };
+        let mut report = ParseReport::default();
+        compile_if(&block, span, &mut report);
+        assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+        assert!(
+            matches!(&report.actions[0], Action::ConditionalCall { condition, then_scene, .. } if condition == "(score >= 5)" && then_scene == "yes")
+        );
+        let choices = json!([
+            {"mode":"jump","text":"Continue","fragmentId":""},
+            {"mode":"vars","text":"Add","varOps":[{"key":"score","op":"+=","aKind":"lit","aLit":"5","bKind":"none"}],"visibleIf":"[{\"left\":\"score\",\"op\":\">=\",\"rightLiteral\":\"0\"}]"},
+            {"mode":"jump","text":"Substory","fragmentId":"sub"}]);
+        let mut block = block;
+        block.props = Map::from_iter([("choices".into(), Value::String(choices.to_string()))]);
+        let mut report = ParseReport::default();
+        compile_branch(&block, span, &mut report);
+        assert!(report.diagnostics.is_empty());
+        let Action::Menu { choices, .. } = &report.actions[0] else {
+            panic!("menu");
+        };
+        assert_eq!(choices[0].target, ChoiceTarget::Continue);
+        assert_eq!(
+            choices[1].target,
+            ChoiceTarget::Assign(vec![("score".into(), "score + (5)".into())])
+        );
+        assert_eq!(choices[1].show_when.as_deref(), Some("(score >= 0)"));
+        assert_eq!(choices[2].target, ChoiceTarget::CallScene("sub".into()));
+        assert!(
+            studio_conditions(
+                &json!([{"left":"x","op":"contains","rightLiteral":"y"}]),
+                "and"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn avatar_only_dialogue_uses_the_avatar_and_clears_it_afterwards() {
+        let character: CharacterDefinition = serde_json::from_value(json!({
+            "id":"alice", "name":"Alice",
+            "expressions":[{"name":"smile","assetPath":"alice.webp"}]
+        }))
+        .unwrap();
+        let characters = HashMap::from([("alice", &character)]);
+        let context = CompileContext {
+            entry: "entry",
+            chapter_next: &HashMap::new(),
+            characters: &characters,
+            scenes: &HashMap::new(),
+            voices: &HashMap::new(),
+            positions: &HashMap::new(),
+            portrait_height_ratio: None,
+        };
+        let block: StoryBlock = serde_json::from_value(json!({
+            "type":"dialogue", "content":"Hello",
+            "props":{"characterId":"alice","expression":"smile","dialoguePortraitOnly":true}
+        }))
+        .unwrap();
+        let mut report = ParseReport::default();
+        compile_dialogue(
+            &block,
+            &context,
+            SourceSpan { line: 1, column: 1 },
+            &mut report,
+        );
+        assert!(report.diagnostics.is_empty());
+        assert!(
+            matches!(&report.actions[0], Action::MiniAvatar { image } if image == "alice.webp")
+        );
+        assert!(
+            !report
+                .actions
+                .iter()
+                .any(|action| matches!(action, Action::ShowSprite { .. }))
+        );
+        assert!(
+            report
+                .actions
+                .iter()
+                .any(|action| matches!(action, Action::HideMiniAvatar))
+        );
+    }
+
+    #[test]
+    fn structured_dialogue_styles_and_nonlooping_music_are_not_lost() {
+        let text = studio_dialogue_markup(
+            &json!([{ "type":"text", "text":"Hello", "styles":{"bold":true,"textColor":"#ff8800"} }]),
+        );
+        assert_eq!(text, "[Hello](color=#ff8800;bold)");
+        assert_eq!(
+            studio_dialogue_markup(&json!([{"text":"Hi","styles":{"fontSize":"20px"}}])),
+            "[Hi](size=20px)"
+        );
+        let block = StoryBlock {
+            id: None,
+            kind: "sound".into(),
+            content: Value::Null,
+            props: json!({"soundType":"BGM","uri":"theme.opus","loop":false})
+                .as_object()
+                .unwrap()
+                .clone(),
+            children: Vec::new(),
+            extras: Map::new(),
+        };
+        let mut report = ParseReport::default();
+        compile_sound(&block, SourceSpan { line: 1, column: 1 }, &mut report);
+        assert!(matches!(
+            &report.actions[0],
+            Action::EiyashouBgm { looped: false, .. }
+        ));
+    }
+
     use super::*;
 
     #[test]
@@ -4930,6 +5407,12 @@ mod tests {
             props.insert("aLit".into(), json!("1"));
             props.insert("thenFragmentId".into(), json!("entry"));
             props.insert("url".into(), json!("https://example.com"));
+            if *kind == "branch" {
+                props.insert(
+                    "choices".into(),
+                    json!([{"mode":"jump", "text":"Continue", "fragmentId":""}]),
+                );
+            }
             if *kind == "stageAnimation" {
                 props.insert(
                     "clipJson".into(),

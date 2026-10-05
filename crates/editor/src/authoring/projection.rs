@@ -353,8 +353,36 @@ impl EiyashouProjection {
                         .unwrap_or_else(|| known.unwrap_or_default());
                     let insertion_point = argument_start + arguments.trim_end().len();
                     let has_arguments = !arguments.trim().is_empty();
+                    let timed_sequence = command == "sprite.sequence"
+                        && self
+                            .scenes
+                            .iter()
+                            .flat_map(|scene| &scene.blocks)
+                            .filter(|child| {
+                                child.depth == block.depth + 1
+                                    && child.source_range.start > block.source_range.start
+                                    && child.source_range.end <= block.source_range.end
+                            })
+                            .any(|child| {
+                                let tokens = native_tokens(
+                                    source
+                                        .get(child.statement_range.clone())
+                                        .unwrap_or_default(),
+                                );
+                                let child_source = source
+                                    .get(child.statement_range.clone())
+                                    .unwrap_or_default();
+                                tokens.iter().any(|token| {
+                                    token.kind == NativeTokenKind::Identifier
+                                        && child_source.get(token.range.clone()) == Some("duration")
+                                })
+                            });
                     for name in optional {
-                        if super::fields::scale_argument_conflicts(command, name, &fields)
+                        if timed_sequence && name == "fps" {
+                            continue;
+                        }
+                        if super::fields::argument_conflicts(command, name, &fields)
+                            && !(command == "sprite.sequence" && name == "mode")
                             || fields.iter().any(|field| {
                                 field.key == name || field.key.starts_with(&format!("{name}."))
                             })

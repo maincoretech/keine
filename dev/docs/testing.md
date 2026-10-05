@@ -49,6 +49,38 @@ macOS 新 Preview 已目测右键隐藏/恢复文本框、A 不激活自动播�
 B 历史、Esc 设置与关闭、F5/F9 确认框及取消、F11 全屏往返。Ctrl 持续按住与输入框边界由回归测试验证，
 未执行物理键盘持续按键及 Windows/Linux 原生快捷键验收；键位见 readme.zh.md。
 
+### 常用创作能力收尾
+
+原生粒子稀疏控制、blink/talk 帧序列、角色清单编辑入口，以及迁移的条件/选项、
+候选素材登记、静态头像、BGM loop、富文本和未知时间轴诊断已实现。
+本轮 `cargo test --workspace --features publisher` 为 879 passed / 8 ignored；
+Unix socket 测试先被沙箱阻断，放行后完整重跑通过。
+`cargo check --workspace --features publisher,video-native,hot-reload`、workspace Clippy 和 fmt 通过；
+`cargo test -p keine --no-default-features --features video-native --lib` 为 284 passed / 1 ignored，
+最终粒子颜色 alpha 修正后 10 项粒子回归通过；native-smoke validate 零警告。
+回归包含分支内变量改变不执行 else、有序赋值失败不部分提交、空选项继续、
+迁移→原生解析→执行、动态帧边界、blink 休息保持低频计时、粒子数量上限/零速有限值、
+GPU 颜色透明度与缓冲更新、Save v11 瞬态回放标记及回滚保留参数。
+
+Editor debug 构建与本地 app 组装通过。Computer Use 两次读取新版 app 超时，
+本轮未完成原生界面及动画目测；此限制不算 GUI 验收通过。
+未做新的 CPU/帧时采样、完整剧情或 Windows/Linux 原生运行验收；不主张性能提速或完整上游兼容。
+`projects/tday` 未改动。新能力使用方式及明确的导入边界见 language.md / compatibility.md。
+
+Editor 补全与角色维护已补齐：复用 Loader 命令/参数表，原生候选支持命令、上下文参数、
+资源原文件名/ID、角色、章节、变量及合法值；悬停提供参数提示。Inspector 原子切换动态序列模式，
+角色面板支持增改删、对白引用、头像/表情帧关联、批量图片登记和显式剧本插入。
+0.13.0 的 `cargo test --workspace --features publisher` 为 889 passed / 8 ignored，IPC/Trash 测试在沙箱外执行；
+`cargo check --workspace --features publisher,video-native,hot-reload`、
+`cargo clippy --workspace --all-targets --features publisher -- -D warnings` 与 fmt 通过。
+Editor debug 构建和 app 组装通过；`keine validate tests/fixtures/native-smoke` 为 1 scene / 1 action / 0 warnings。
+macOS 原生实测自动候选、Enter 接受、Esc 关闭及 Alt+/ 手动菜单；Ctrl+Space 在本机未触发，
+可能受到输入法快捷键拦截，保留 Alt+/ 备用入口。实测角色新增、改名、删除确认，以及空根清单 `{}`
+的首次新增；在既有临时工程中选图登记表情/头像并在记忆的剧本位置插入 Show，原文保持完整。
+验收输入已丢弃，fixture 和 `projects/tday` 未改动。中文已提交文字输入正常；本轮未重做物理 IME
+组词验收，组合态保护由 GPUI 事件路径和回归覆盖。blink/talk 的新界面入口有解析/参数联动回归，
+动态画面尚未目测；场景构图、时间轴和变量调试按用户要求暂缓。
+
 ### 项目所有者（用户）
 
 | 何时 | 你要做什么 | 完成标准 |
@@ -404,7 +436,7 @@ Editor debug 构建与 native-smoke/tday 校验通过；Trash/IPC 测试在沙�
 macOS Editor 实测图标统计卡、Convert all 和完成文件数进度条（收起卡片仍可见）：tday 50 张 WebP / 34 条 Opus 全部完成，登记资源从 757.1 MB 降至 169.1 MB；85 个原文件 SHA256 与 13 个脚本未变，清单仅改变资源路径和引号。转换后 tday validate 通过，保留 1 条未引用背景警告。源码红色波浪线与 Explorer 错误数已有模型回归，完整交互验收仍需用户确认。
 
 ```text
-0.12.0 / EYS v2.0
+0.13.0 / EYS v2.0
 ├── macOS：原生 Engine、Text/Block/Inspector 写回、保存重开、故障恢复已有运行态证据
 ├── 最新工作台：下拉框、Text 概览、全文搜索、Asset Preview 关闭/重开已目测
 ├── 每句文本结束开关：灰/蓝状态、增删关联指令、Inspector 同步及 Cmd+Z 恢复已目测

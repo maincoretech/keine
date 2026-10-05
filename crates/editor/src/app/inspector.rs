@@ -419,8 +419,34 @@ impl WorkbenchPanel {
                 )
             },
         );
-        let mut edited = source;
-        edited.replace_range(field.range.clone(), &replacement);
+        let speaker = cx
+            .global::<EditorDocuments>()
+            .authoring_ref(root)
+            .and_then(|index| {
+                index
+                    .characters
+                    .iter()
+                    .find(|character| {
+                        key.fields
+                            .iter()
+                            .any(|field| field.key == "0" && field.value == character.id)
+                    })
+                    .or_else(|| index.characters.first())
+                    .map(|character| character.id.as_str())
+            });
+        let edited = if let Some(updates) =
+            crate::authoring::fields::sequence_parameter_updates(key, &field.key, &value, speaker)
+        {
+            let Ok(edited) = current.replace_block_fields(&source, key.block_start, &updates)
+            else {
+                return false;
+            };
+            edited
+        } else {
+            let mut edited = source;
+            edited.replace_range(field.range.clone(), &replacement);
+            edited
+        };
         let checked = EiyashouProjection::parse(&edited);
         let block_intact = checked
             .scenes

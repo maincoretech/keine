@@ -158,11 +158,7 @@ pub(super) fn tool_input(state: &Entity<InputState>) -> impl IntoElement {
 
 pub(super) fn tool_action(label: &'static str) -> Stateful<Div> {
     div()
-        .id(if label == "Add character" {
-            "add-character"
-        } else {
-            "add-scene"
-        })
+        .id(label)
         .h(px(28.))
         .px_3()
         .flex()

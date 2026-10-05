@@ -262,10 +262,19 @@ impl EiyashouProjection {
             }
         }
         for (name, value) in updates {
-            let field = fields
-                .iter()
-                .find(|field| &field.key == name)
-                .ok_or(BlockEditError::StaleRange)?;
+            let field = fields.iter().find(|field| &field.key == name);
+            let Some(field) = field else {
+                let command = node[..open].trim();
+                if !keine_loader::native_command_argument_names(command)
+                    .is_some_and(|names| names.contains(&name.as_str()))
+                {
+                    return Err(BlockEditError::StaleRange);
+                }
+                if let Some(value) = value {
+                    kept.push(format!(" {name}: {value}"));
+                }
+                continue;
+            };
             if name.contains('.') || name.chars().all(|character| character.is_ascii_digit()) {
                 return Err(BlockEditError::StaleRange);
             }

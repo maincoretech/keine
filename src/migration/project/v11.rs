@@ -62,6 +62,71 @@ pub(super) fn render(action: &Action, model: &MigrationModel) -> Result<Option<S
     let normalized = normalize_camera(action);
     let action = normalized.as_ref();
     let source = match action {
+        Action::Flow {
+            action,
+            when: Some(condition),
+            next: false,
+        } => format!(
+            "if ({}) {{ {} }}",
+            expression_source(condition, model)?,
+            super::render_action(action, model)?
+        ),
+        Action::SelectSpriteImage {
+            id,
+            variable,
+            default_image,
+            variants,
+        } => format!(
+            "sprite.select({}, {}, default: {}) {{ {} }}",
+            object_id(model, id)?,
+            model
+                .variable_ids
+                .get(variable)
+                .context("missing selector variable mapping")?,
+            asset_id(model, ResourceKind::Figure, default_image)?,
+            variants
+                .iter()
+                .map(|(value, image)| Ok(format!(
+                    "case({}, {})",
+                    string_literal(value),
+                    asset_id(model, ResourceKind::Figure, image)?
+                )))
+                .collect::<Result<Vec<_>>>()?
+                .join(", ")
+        ),
+        Action::SelectSpriteImageByCondition {
+            id,
+            default_image,
+            variants,
+        } => format!(
+            "sprite.select.when({}, default: {}) {{ {} }}",
+            object_id(model, id)?,
+            asset_id(model, ResourceKind::Figure, default_image)?,
+            variants
+                .iter()
+                .map(|(condition, image)| Ok(format!(
+                    "case({}, {})",
+                    expression_source(condition, model)?,
+                    asset_id(model, ResourceKind::Figure, image)?
+                )))
+                .collect::<Result<Vec<_>>>()?
+                .join(", ")
+        ),
+        Action::EiyashouBgm {
+            file,
+            volume,
+            fade_seconds,
+            looped,
+        } => format!(
+            "bgm({}, volume: {}, fade: {}, loop: {})",
+            file.as_ref()
+                .map(|file| asset_id(model, ResourceKind::Bgm, file))
+                .transpose()?
+                .unwrap_or("none".into()),
+            number(*volume),
+            duration(*fade_seconds),
+            looped
+        ),
         Action::WaitForAdvance => "wait.advance()".into(),
         Action::RetractDialogue { source, keep } => format!(
             "text.retract(source: {}, keep: {})",
@@ -368,6 +433,101 @@ pub(super) fn render(action: &Action, model: &MigrationModel) -> Result<Option<S
             None => "scene.parallax.stop()".into(),
         },
         Action::HideParticleLayers => "particle.layers.clear()".into(),
+        Action::MiniAvatar { image } => format!(
+            "avatar.show({})",
+            asset_id(model, ResourceKind::MiniAvatar, image)?
+        ),
+        Action::HideMiniAvatar => "avatar.hide()".into(),
+        Action::ConditionalCall {
+            condition,
+            then_scene,
+            else_scene,
+        } => {
+            let otherwise = else_scene
+                .as_deref()
+                .map(|scene| -> Result<String> {
+                    Ok(format!(" else {{ call({}) }}", scene_id(model, scene)?))
+                })
+                .transpose()?
+                .unwrap_or_default();
+            format!(
+                "if ({}) {{ call({}) }}{otherwise}",
+                expression_source(condition, model)?,
+                scene_id(model, then_scene)?
+            )
+        }
+        Action::ConfigureDynamicSpriteSequence {
+            id,
+            frames,
+            fps,
+            frame_durations,
+            playback,
+        } => {
+            let mode = match playback {
+                keine_core::SequencePlayback::Blink { interval } => {
+                    format!("mode: blink, interval: {}", duration(*interval))
+                }
+                keine_core::SequencePlayback::Talk { speaker } => {
+                    format!("mode: talk, speaker: {}", string_literal(speaker))
+                }
+            };
+            let timing = if frame_durations.is_empty() {
+                format!(", fps: {}", number(*fps))
+            } else {
+                String::new()
+            };
+            let rows = frames
+                .iter()
+                .enumerate()
+                .map(|(index, frame)| {
+                    let time = frame_durations
+                        .get(index)
+                        .map(|seconds| format!(", duration: {}", duration(*seconds)))
+                        .unwrap_or_default();
+                    Ok(format!(
+                        "frame({}{time})",
+                        asset_id(model, ResourceKind::Figure, frame)?
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?
+                .join(", ");
+            format!(
+                "sprite.sequence({}, {mode}{timing}) {{ {rows} }}",
+                object_id(model, id)?
+            )
+        }
+        Action::ShowParticlesWithOptions {
+            id,
+            effect,
+            options,
+        } => {
+            let mut source = render(
+                &Action::ShowParticles {
+                    id: id.clone(),
+                    effect: effect.clone(),
+                },
+                model,
+            )?
+            .expect("particle command");
+            source.pop();
+            for (name, value) in [
+                ("size", options.size),
+                ("speed", options.speed),
+                ("alpha", options.alpha),
+                ("spin", options.spin),
+                ("drift", options.drift),
+                ("drag", options.drag),
+            ] {
+                if let Some(value) = value {
+                    source.push_str(&format!(", {name}: {}", number(value)));
+                }
+            }
+            if let Some(value) = options.color {
+                source.push_str(&format!(", color: {}", rgba(&value)));
+            }
+            source.push(')');
+            source
+        }
         Action::ShowParticles { id, effect } => {
             let mut args = format!(
                 "{}, {}, count: {}, fade_in: {}",
@@ -690,15 +850,51 @@ pub(super) fn render_camera_reset(
 
 pub(super) fn verify(action: &Action, source: &str, model: &MigrationModel) -> Result<()> {
     if matches!(action, Action::Set { .. }) {
-        // Assignment is intentionally lowered to the native typed evaluator;
-        // whole-project validation checks the generated declaration/type scope.
         return Ok(());
     }
     let expected = expected_action(action, model)?;
+    let control_flow = matches!(
+        action,
+        Action::ConditionalCall { .. }
+            | Action::Flow { when: Some(_), .. }
+            | Action::SelectSpriteImageByCondition { .. }
+    );
+    let declarations = if control_flow {
+        model
+            .initial_variables
+            .iter()
+            .map(|(name, initial)| {
+                Ok(format!(
+                    "let {} = {}, ",
+                    model.variable_ids[name],
+                    value(initial)?
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?
+            .concat()
+    } else {
+        String::new()
+    };
     let parsed = keine_loader::adapter::parse_native_scenes(&format!(
-        "scene migration_verify {{ {source} }}"
+        "scene migration_verify {{ {declarations}{source} }}"
     ));
     let report = &parsed[0].report;
+    if control_flow {
+        if report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.level == DiagnosticLevel::Error)
+        {
+            bail!(
+                "generated native control flow is invalid: {source}: {:?}",
+                report.diagnostics
+            );
+        }
+        // These compatibility expressions lower into typed native control flow;
+        // runtime round-trip tests and whole-project validation cover their scope.
+        return Ok(());
+    }
+
     if report
         .diagnostics
         .iter()
@@ -864,11 +1060,14 @@ fn expected_action(action: &Action, model: &MigrationModel) -> Result<Action> {
         Action::SetTransform { id, .. }
         | Action::ConfigureSpriteSequence { id, .. }
         | Action::ConfigureTimedSpriteSequence { id, .. }
+        | Action::SelectSpriteImage { id, .. }
         | Action::ShowSprite { id, .. }
         | Action::MoveSprite { id, .. }
         | Action::UpdateSprite { id, .. }
         | Action::PatchSprite { id, .. }
         | Action::HideSprite { id, .. }
+        | Action::ShowParticlesWithOptions { id, .. }
+        | Action::ConfigureDynamicSpriteSequence { id, .. }
         | Action::ShowParticles { id, .. } => *id = object_id(model, id)?.into(),
         Action::SetCameraBinding { target, .. } | Action::AnimateKeyframes { target, .. } => {
             *target = object_id(model, target)?.into()
@@ -898,8 +1097,25 @@ fn expected_action(action: &Action, model: &MigrationModel) -> Result<Action> {
         _ => {}
     }
     match &mut expected {
+        Action::SelectSpriteImage {
+            variable,
+            default_image,
+            variants,
+            ..
+        } => {
+            *variable = model
+                .variable_ids
+                .get(variable)
+                .context("missing selector variable mapping")?
+                .clone();
+            *default_image = asset_id(model, ResourceKind::Figure, default_image)?;
+            for (_, image) in variants {
+                *image = asset_id(model, ResourceKind::Figure, image)?;
+            }
+        }
         Action::ConfigureSpriteSequence { frames, .. }
-        | Action::ConfigureTimedSpriteSequence { frames, .. } => {
+        | Action::ConfigureTimedSpriteSequence { frames, .. }
+        | Action::ConfigureDynamicSpriteSequence { frames, .. } => {
             for frame in frames {
                 *frame = asset_id(model, ResourceKind::Figure, frame)?;
             }
@@ -913,6 +1129,9 @@ fn expected_action(action: &Action, model: &MigrationModel) -> Result<Action> {
         Action::PlayVideo { video } => {
             video.file = asset_id(model, ResourceKind::Video, &video.file)?
         }
+        Action::EiyashouBgm {
+            file: Some(file), ..
+        } => *file = asset_id(model, ResourceKind::Bgm, file)?,
         Action::Vocal {
             file: Some(file), ..
         } => *file = asset_id(model, ResourceKind::Voice, file)?,
@@ -922,7 +1141,8 @@ fn expected_action(action: &Action, model: &MigrationModel) -> Result<Action> {
         | Action::SoundEffect {
             file: Some(file), ..
         } => *file = asset_id(model, ResourceKind::Effect, file)?,
-        Action::ShowParticles { effect, .. } => {
+        Action::MiniAvatar { image } => *image = asset_id(model, ResourceKind::MiniAvatar, image)?,
+        Action::ShowParticles { effect, .. } | Action::ShowParticlesWithOptions { effect, .. } => {
             if let Some(texture) = &mut effect.texture {
                 *texture = asset_id(model, ResourceKind::Particle, texture)?;
             }
@@ -1250,6 +1470,107 @@ fn effect_fields(effect: &keine_core::PostProcessPatch, model: &MigrationModel) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn selectors_particles_and_dynamic_sequences_survive_migration_round_trip() {
+        let model = MigrationModel {
+            scene_ids: HashMap::from([("yes".into(), "yes".into()), ("no".into(), "no".into())]),
+            speaker_ids: HashMap::new(),
+            asset_ids: ["open.webp", "closed.webp"]
+                .into_iter()
+                .enumerate()
+                .map(|(index, name)| {
+                    (
+                        AssetKey {
+                            kind: ResourceKind::Figure,
+                            source_name: name.into(),
+                        },
+                        format!("frame_{index}"),
+                    )
+                })
+                .collect(),
+            object_ids: BTreeMap::from([
+                ("eyes".into(), "eyes".into()),
+                ("snow".into(), "snow".into()),
+            ]),
+            prefix_ids: BTreeMap::new(),
+            objects: objects::ObjectManifest::default(),
+            variable_ids: BTreeMap::from([("score".into(), "score".into())]),
+            initial_variables: BTreeMap::from([("score".into(), Value::Int(0))]),
+            assets: AssetManifest::default(),
+            characters: CharacterManifest {
+                characters: BTreeMap::new(),
+            },
+        };
+        for action in [
+            Action::SelectSpriteImage {
+                id: "eyes".into(),
+                variable: "score".into(),
+                default_image: "open.webp".into(),
+                variants: vec![("1".into(), "closed.webp".into())],
+            },
+            Action::ShowParticlesWithOptions {
+                id: "snow".into(),
+                effect: keine_core::ParticleEffect::preset("LIGHT_SNOW"),
+                options: keine_core::ParticleOptions {
+                    size: Some(24.0),
+                    speed: Some(100.0),
+                    alpha: Some(0.7),
+                    spin: Some(30.0),
+                    drift: Some(12.0),
+                    drag: Some(0.2),
+                    color: Some([1.0, 0.9, 0.8, 1.0]),
+                },
+            },
+            Action::ConfigureDynamicSpriteSequence {
+                id: "eyes".into(),
+                frames: vec!["open.webp".into(), "closed.webp".into()],
+                fps: 10.0,
+                frame_durations: Vec::new(),
+                playback: keine_core::SequencePlayback::Blink { interval: 3.0 },
+            },
+            Action::ConfigureDynamicSpriteSequence {
+                id: "eyes".into(),
+                frames: vec!["open.webp".into(), "closed.webp".into()],
+                fps: 12.0,
+                frame_durations: vec![0.1, 0.2],
+                playback: keine_core::SequencePlayback::Talk {
+                    speaker: "Hero".into(),
+                },
+            },
+        ] {
+            let source = render(&action, &model).unwrap().unwrap();
+            verify(&action, &source, &model).unwrap();
+        }
+        // A called fragment mutates the condition: only the selected arm may run.
+        let action = Action::ConditionalCall {
+            condition: "score == 0".into(),
+            then_scene: "yes".into(),
+            else_scene: Some("no".into()),
+        };
+        let command = render(&action, &model).unwrap().unwrap();
+        verify(&action, &command, &model).unwrap();
+        let source = format!(
+            "scene main {{ let score = 0, let wrong = false, {command}, \"After\" }}\nscene yes {{ score = 1 }}\nscene no {{ wrong = true }}"
+        );
+        let scenes = keine_loader::parse_native_scenes(&source);
+        assert!(
+            scenes.iter().all(|s| s.report.diagnostics.is_empty()),
+            "{scenes:?}"
+        );
+        let mut state = keine_core::State::new();
+        state.install_program(keine_core::Program::from_scenes(
+            scenes
+                .into_iter()
+                .filter_map(|s| s.name.map(|name| (name, s.report.actions))),
+        ));
+        state.current_scene = "main".into();
+        assert_eq!(
+            keine_core::step::step(&mut state),
+            keine_core::StepResult::AwaitClick
+        );
+        assert_eq!(state.dialogue.as_ref().unwrap().text, "After");
+        assert_eq!(state.vars["wrong"], Value::Bool(false));
+    }
 
     #[test]
     fn dotted_output_preserves_sparse_clear_parallel_and_hold_semantics() {

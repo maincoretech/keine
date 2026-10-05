@@ -5,6 +5,17 @@
 
 ## LetsGal
 
+Kēne 独立定义原生语法与交互；参考上游的常用创作能力，不以完整兼容为目标。
+结构化比较条件与 and/or、空目标选项继续、选项内有序赋值及 fragment 返回已接入。
+条件只在选择分支前求值一次，分支内改变量不会再触发另一分支。
+差分/条件换图会登记所有候选素材；常用 JSON 富文本样式、非循环 BGM、静态头像对白
+和 stage 全舞台幕布保留对应语义。未知时间轴轨道/事件（未静音）明确报错。
+原生粒子控制和 blink/talk 帧序列见 [语言](language.md#常用动态效果)。
+
+明确边界：扩展函数条件、contains 等未支持操作、角色名称变体、复合头像、
+上游高级粒子随机/空间参数及独立语音 loop/fade 不作静默近似，迁移会要求显式改写。
+原生 talk 跟随逐字显示，不承诺音频驱动口型或上游差分部件共享状态。
+
 - 检测 Studio project，读取 chapters/scenes/characters、资源清单与默认壳配置。
 - 已接入舞台 track/key/event、镜头、场景层/分层立绘、皮肤/视口高度、对焦、音频和退格。
 - 时间轴共用一个时钟；camera、character、sceneLayer 与 79 个 StageProperty 的回归在 fixtures。

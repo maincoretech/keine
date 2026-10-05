@@ -352,6 +352,11 @@ pub struct EiyashouCharacter {
     pub name: String,
     #[serde(default)]
     pub color: Option<String>,
+    /// Authoring presets only; the Editor inserts explicit sprite/avatar commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub expressions: std::collections::BTreeMap<String, Vec<String>>,
     #[serde(flatten)]
     unknown: HashMap<String, noyalib::Value>,
 }

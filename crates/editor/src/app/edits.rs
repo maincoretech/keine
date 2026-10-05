@@ -541,6 +541,28 @@ pub(super) fn prepare_asset_edits(
         file_ops::edit_manifest_asset(&manifest_source, asset, new_id, new_kind, tags)
             .map_err(|error| error.to_string())?;
     let mut edits = BTreeMap::new();
+    if let Some(path) = &index.characters_manifest {
+        let references = index.characters.iter().any(|character| {
+            character.avatar.as_deref() == Some(asset.id.as_str())
+                || character
+                    .expressions
+                    .values()
+                    .flatten()
+                    .any(|id| id == &asset.id)
+        });
+        if references && retyped && new_kind != AssetKind::Figure {
+            return Err(
+                "Remove this image from character expressions/avatars before changing its type"
+                    .into(),
+            );
+        }
+        if references && renamed {
+            let source = source_for(path).ok_or("Character manifest unavailable")?;
+            let updated = crate::authoring::rename_character_asset(&source, &asset.id, new_id)
+                .map_err(|error| error.to_string())?;
+            edits.insert(path.clone(), updated);
+        }
+    }
     if renamed {
         let references = index
             .asset_references

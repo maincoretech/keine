@@ -82,6 +82,10 @@ fn collect(action: &Action, names: &mut Names) {
     let id = match action {
         Action::ShowSprite { id, .. }
         | Action::HideSprite { id, .. }
+        | Action::SelectSpriteImage { id, .. }
+        | Action::SelectSpriteImageByCondition { id, .. }
+        | Action::ShowParticlesWithOptions { id, .. }
+        | Action::ConfigureDynamicSpriteSequence { id, .. }
         | Action::ShowParticles { id, .. } => Some(id),
         Action::SetCameraBinding { target, .. } | Action::AnimateKeyframes { target, .. } => {
             Some(target)

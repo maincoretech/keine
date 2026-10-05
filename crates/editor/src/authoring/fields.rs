@@ -13,8 +13,26 @@ pub(crate) struct SourceContext {
     pub(crate) fields: Vec<SourceField>,
 }
 
-/// Keep optional Inspector fields and Text suggestions consistent with scale exclusivity.
-pub(crate) fn scale_argument_conflicts(command: &str, name: &str, fields: &[SourceField]) -> bool {
+/// Filter optional fields using the same model in Inspector and Text completion.
+pub(crate) fn argument_conflicts(command: &str, name: &str, fields: &[SourceField]) -> bool {
+    let supplied = |key: &str| {
+        fields
+            .iter()
+            .any(|field| field.key == key && field.insertion.is_none())
+    };
+    if command == "sprite.sequence" {
+        let mode = fields
+            .iter()
+            .find(|field| field.key == "mode" && field.insertion.is_none())
+            .map(|field| field.value.as_str());
+        return match name {
+            "loop" => mode.is_some(),
+            "mode" => supplied("loop"),
+            "interval" => mode != Some("blink"),
+            "speaker" => mode != Some("talk"),
+            _ => false,
+        };
+    }
     if !matches!(
         command,
         "sprite" | "background" | "sprite.transform" | "background.transform"
@@ -29,6 +47,45 @@ pub(crate) fn scale_argument_conflicts(command: &str, name: &str, fields: &[Sour
             "scale_x" | "scale_y" => field.key == "scale",
             _ => false,
         })
+}
+
+/// Mode changes are one source transaction, including fields invalid in the new mode.
+pub(crate) fn sequence_parameter_updates(
+    key: &SourceContext,
+    name: &str,
+    value: &str,
+    speaker: Option<&str>,
+) -> Option<Vec<(String, Option<String>)>> {
+    if key.command != "sprite.sequence" || name != "mode" {
+        return None;
+    }
+    let mut updates = vec![("mode".into(), Some(value.into())), ("loop".into(), None)];
+    match value {
+        "blink" => updates.push(("speaker".into(), None)),
+        "talk" => {
+            updates.push(("interval".into(), None));
+            if !key
+                .fields
+                .iter()
+                .any(|field| field.key == "speaker" && field.insertion.is_none())
+            {
+                let speaker = speaker
+                    .or_else(|| {
+                        key.fields
+                            .iter()
+                            .find(|field| field.key == "0")
+                            .map(|field| field.value.as_str())
+                    })
+                    .unwrap_or("speaker");
+                updates.push((
+                    "speaker".into(),
+                    Some(format!("\"{}\"", escape_eiyashou_string(speaker))),
+                ));
+            }
+        }
+        _ => return None,
+    }
+    Some(updates)
 }
 
 /// Shared named-argument inventory for Inspector and Text completions.
@@ -131,6 +188,7 @@ pub(crate) fn source_field_choices(
             &["rect(x: 0, y: 0, width: 1920, height: 1080)"]
         }
         (_, "fit") => &["contain", "cover", "fill"],
+        ("sprite.sequence", "mode") => &["blink", "talk"],
         (_, "blend") => &["alpha", "add", "multiply", "screen"],
         ("event.audio", "1") => &["bgm", "effect", "vocal"],
         ("resource", "kind") => &["background", "figure"],
@@ -463,9 +521,18 @@ pub(crate) fn source_number(key: &SourceContext, field: &SourceField) -> Option<
         "amplitude" => (0., 60., 1., 0., "px"),
         "amplitude_randomness" | "frequency_randomness" => (0., 100., 5., 0., "%"),
         "frequency" => (0., 30., 0.5, 12., "Hz"),
+        "interval" => (100., 10000., 100., 3000., "ms"),
         "fps" => (1., 60., 1., 12., "fps"),
+        "size" if command == "particle.show" => (1., 256., 1., 16., "px"),
+        "speed" if command == "particle.show" => (0., 1000., 1., 100., "px/s"),
+        "spin" if command == "particle.show" => (-360., 360., 1., 0., "°/s"),
+        "drift" if command == "particle.show" => (0., 256., 1., 16., "px"),
+        "drag" if command == "particle.show" => (0., 10., 0.01, 0., ""),
         "width" | "height" if field.key.starts_with("layout.") => (1., 4096., 1., 1080., "px"),
         "font_size" => (8., 128., 1., 32., "px"),
+        "count" if matches!(command, "particle.show" | "event.particle") => {
+            (1., 256., 1., 100., "")
+        }
         "count" => (1., 1000., 1., 100., ""),
         "playback_rate" => (0.1, 4., 0.1, 1., "×"),
         "repeat" => (0., 20., 1., 0., ""),
@@ -985,5 +1052,60 @@ mod tests {
             (control.min, control.max, control.step, control.unit),
             (0., 100., 5., "%")
         );
+    }
+}
+
+#[cfg(test)]
+mod sequence_tests {
+    use super::*;
+    #[test]
+    fn inspector_sequence_mode_changes_are_atomic_and_remove_incompatible_parameters() {
+        for (source, mode) in [
+            (
+                "scene start { sprite.sequence(hero, fps: 10, loop: true) { frame(rest), frame(closed) } }",
+                "blink",
+            ),
+            (
+                "scene start { sprite.sequence(hero, fps: 10, mode: blink, interval: 2s) { frame(rest), frame(closed) } }",
+                "talk",
+            ),
+            (
+                "scene start { sprite.sequence(hero, fps: 10, mode: talk, speaker: \"hero\") { frame(rest), frame(closed) } }",
+                "blink",
+            ),
+        ] {
+            let projection = EiyashouProjection::parse(source);
+            let start = source.find("sprite.sequence").unwrap();
+            let fields = projection.source_fields(source, start).unwrap();
+            let key = SourceContext {
+                path: PathBuf::new(),
+                block_start: start,
+                kind: BlockKind::Command,
+                command: "sprite.sequence".into(),
+                fields,
+            };
+            let updates = sequence_parameter_updates(&key, "mode", mode, Some("hero")).unwrap();
+            let edited = projection
+                .replace_block_fields(source, start, &updates)
+                .unwrap();
+            let parsed = keine_loader::parse_native_document(&edited);
+            assert!(
+                parsed.diagnostics.is_empty(),
+                "{edited}: {:?}",
+                parsed.diagnostics
+            );
+            assert!(!edited.contains("loop:"));
+            if mode == "talk" {
+                assert!(!edited.contains("interval:"));
+            } else {
+                assert!(!edited.contains("speaker:"));
+            }
+        }
+        let source = "scene start { sprite.sequence(hero) { frame(rest, duration: 100ms), frame(closed, duration: 100ms) } }";
+        let projection = EiyashouProjection::parse(source);
+        let fields = projection
+            .source_fields(source, source.find("sprite.sequence").unwrap())
+            .unwrap();
+        assert!(!fields.iter().any(|field| field.key == "fps"));
     }
 }

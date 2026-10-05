@@ -150,8 +150,8 @@ mod tests {
                 sub_scenes: vec![],
             }],
             metadata: crate::ProgramMetadataV1 {
-                compiler_version: "0.12.0".into(),
-                engine_version: "0.12.0".into(),
+                compiler_version: env!("CARGO_PKG_VERSION").into(),
+                engine_version: env!("CARGO_PKG_VERSION").into(),
                 source_adapter: "keine".into(),
                 scene_count: 1,
                 action_count: 0,

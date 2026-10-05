@@ -303,11 +303,13 @@ impl AssetQuery {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct CharacterEntry {
     pub id: String,
     pub name: String,
     pub color: Option<String>,
+    pub avatar: Option<String>,
+    pub expressions: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -361,6 +363,7 @@ pub struct AuthoringIndex {
     pub characters: Vec<CharacterEntry>,
     pub scenes: Vec<SceneEntry>,
     pub dialogues: Vec<DialogueEntry>,
+    pub variables: Vec<(PathBuf, String)>,
     pub problems: Vec<AuthoringProblem>,
 }
 
@@ -460,6 +463,12 @@ impl AuthoringIndex {
                 .filter(|entry| !sources.contains_key(&entry.path))
                 .cloned()
                 .collect(),
+            variables: self
+                .variables
+                .iter()
+                .filter(|(path, _)| !sources.contains_key(path))
+                .cloned()
+                .collect(),
             asset_references: self
                 .asset_references
                 .iter()
@@ -514,6 +523,8 @@ impl AuthoringIndex {
                 .cmp(&b.path)
                 .then_with(|| a.source_range.start.cmp(&b.source_range.start))
         });
+        index.variables.sort();
+        index.variables.dedup();
         index.problems.sort_by(|a, b| {
             a.path
                 .cmp(&b.path)
@@ -706,11 +717,44 @@ impl AuthoringIndex {
                             id,
                             name: character.name,
                             color: character.color,
+                            avatar: character.avatar,
+                            expressions: character.expressions,
                         })
                         .collect();
                     index
                         .characters
                         .sort_by(|left, right| left.id.cmp(&right.id));
+                    for character in &index.characters {
+                        for id in character
+                            .avatar
+                            .iter()
+                            .chain(character.expressions.values().flatten())
+                        {
+                            if !index.assets.iter().any(|asset| {
+                                &asset.id == id && asset.kind == AssetKind::Figure && asset.exists
+                            }) {
+                                index.problems.push(problem(
+                                    ProblemSeverity::Error,
+                                    path.clone(),
+                                    1,
+                                    1,
+                                    format!(
+                                        "Character `{}` references missing figure `{id}`",
+                                        character.id
+                                    ),
+                                ));
+                            }
+                        }
+                        if character.expressions.values().any(Vec::is_empty) {
+                            index.problems.push(problem(
+                                ProblemSeverity::Error,
+                                path.clone(),
+                                1,
+                                1,
+                                format!("Character `{}` has an empty expression", character.id),
+                            ));
+                        }
+                    }
                     for field in unknown_fields {
                         index.problems.push(problem(
                             ProblemSeverity::Warning,
@@ -800,6 +844,8 @@ impl AuthoringIndex {
                 .cmp(&right.path)
                 .then_with(|| left.source_range.start.cmp(&right.source_range.start))
         });
+        index.variables.sort();
+        index.variables.dedup();
         index.problems.sort_by(|left, right| {
             left.path
                 .cmp(&right.path)
@@ -874,6 +920,25 @@ fn index_source(
     asset_lookup: &HashSet<(AssetKind, String)>,
 ) {
     let document = parse_native_document(source);
+    let tokens = document
+        .tokens
+        .iter()
+        .filter(|token| {
+            !matches!(
+                token.kind,
+                NativeTokenKind::Whitespace | NativeTokenKind::Comment
+            )
+        })
+        .collect::<Vec<_>>();
+    index.variables.extend(
+        tokens
+            .windows(2)
+            .filter(|pair| {
+                source.get(pair[0].range.clone()) == Some("let")
+                    && pair[1].kind == NativeTokenKind::Identifier
+            })
+            .map(|pair| (path.to_owned(), source[pair[1].range.clone()].to_owned())),
+    );
     let lines = keine_loader::SourceLineIndex::new(source);
     let line_column = |offset| {
         let span = lines.span(source, offset);

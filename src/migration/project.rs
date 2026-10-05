@@ -256,7 +256,9 @@ fn build_model(
         let resolved = resolve_resource(config, key.kind, &key.source_name)?;
         // ResourceKind describes the drawing command, not necessarily the
         // source category: LetsGal renders background layers as sprites.
-        let stored_kind = if key.kind == ResourceKind::Figure
+        let stored_kind = if key.kind == ResourceKind::MiniAvatar {
+            ResourceKind::Figure
+        } else if key.kind == ResourceKind::Figure
             && config
                 .assets
                 .backgrounds
@@ -300,6 +302,17 @@ fn build_model(
             } = action
             {
                 variable_names.push(name.clone());
+            }
+            match action {
+                Action::Menu { choices, .. } => {
+                    for choice in choices {
+                        if let ChoiceTarget::Assign(assignments) = &choice.target {
+                            variable_names.extend(assignments.iter().map(|(name, _)| name.clone()));
+                        }
+                    }
+                }
+                Action::SelectSpriteImage { variable, .. } => variable_names.push(variable.clone()),
+                _ => {}
             }
         }
     }
@@ -734,6 +747,23 @@ fn render_menu(
             ChoiceTarget::ChangeScene(scene) => format!("goto({})", scene_id(model, scene)?),
             ChoiceTarget::CallScene(scene) => format!("call({})", scene_id(model, scene)?),
             ChoiceTarget::Label(_) => bail!("label choices require manual migration"),
+            ChoiceTarget::Continue => "{}".into(),
+            ChoiceTarget::Assign(assignments) => {
+                let statements = assignments
+                    .iter()
+                    .map(|(name, expression)| {
+                        Ok(format!(
+                            "{} = {}",
+                            model
+                                .variable_ids
+                                .get(name)
+                                .context("missing choice variable mapping")?,
+                            v11::expression_source(expression, model)?
+                        ))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                format!("{{ {} }}", statements.join(", "))
+            }
         };
         output.push_str("    ");
         output.push_str(&string_literal(&choice.text));
@@ -855,13 +885,13 @@ fn number(value: f32) -> String {
 fn resolve_resource(config: &GameConfig, kind: ResourceKind, name: &str) -> Result<String> {
     Ok(match kind {
         ResourceKind::Background => config.bg_path(name),
-        ResourceKind::Figure => config.figure_path(name),
+        ResourceKind::Figure | ResourceKind::MiniAvatar => config.figure_path(name),
         ResourceKind::Voice => config.voice_path(name),
         ResourceKind::Bgm => config.bgm_path(name),
         ResourceKind::Effect => config.effect_path(name),
         ResourceKind::Video => config.video_path(name),
         ResourceKind::Particle => name.to_owned(),
-        ResourceKind::MiniAvatar | ResourceKind::Lut => {
+        ResourceKind::Lut => {
             bail!("{kind:?} resources require manual migration")
         }
     })
@@ -884,13 +914,13 @@ fn resource_order(kind: ResourceKind) -> u8 {
 fn resource_namespace(kind: ResourceKind) -> Result<&'static str> {
     Ok(match kind {
         ResourceKind::Background => "backgrounds",
-        ResourceKind::Figure => "figures",
+        ResourceKind::Figure | ResourceKind::MiniAvatar => "figures",
         ResourceKind::Voice => "voices",
         ResourceKind::Bgm => "bgm",
         ResourceKind::Effect => "se",
         ResourceKind::Video => "videos",
         ResourceKind::Particle => "particles",
-        ResourceKind::MiniAvatar | ResourceKind::Lut => {
+        ResourceKind::Lut => {
             bail!("{kind:?} resources require manual migration")
         }
     })
@@ -902,13 +932,13 @@ fn manifest_namespace_mut(
 ) -> Result<&mut BTreeMap<String, String>> {
     Ok(match kind {
         ResourceKind::Background => &mut manifest.backgrounds,
-        ResourceKind::Figure => &mut manifest.figures,
+        ResourceKind::Figure | ResourceKind::MiniAvatar => &mut manifest.figures,
         ResourceKind::Voice => &mut manifest.voices,
         ResourceKind::Bgm => &mut manifest.bgm,
         ResourceKind::Effect => &mut manifest.effects,
         ResourceKind::Video => &mut manifest.videos,
         ResourceKind::Particle => &mut manifest.particles,
-        ResourceKind::MiniAvatar | ResourceKind::Lut => {
+        ResourceKind::Lut => {
             bail!("{kind:?} resources require manual migration")
         }
     })

@@ -63,6 +63,8 @@ impl ObjectAliases {
             Action::ShowSprite { id, .. }
             | Action::HideSprite { id, .. }
             | Action::SetTransform { id, .. }
+            | Action::ShowParticlesWithOptions { id, .. }
+            | Action::ConfigureDynamicSpriteSequence { id, .. }
             | Action::ShowParticles { id, .. }
             | Action::SelectSpriteImage { id, .. }
             | Action::SelectSpriteImageByCondition { id, .. }

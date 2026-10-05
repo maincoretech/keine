@@ -1470,53 +1470,8 @@ impl Render for WorkbenchPanel {
                 render_asset_preview(root, selection, count, cx)
             }
             PanelContent::Characters { root } => {
-                let index = cx.global::<EditorDocuments>().authoring(root);
-                let inputs = self.tool_inputs.clone();
-                let content =
-                    div()
-                        .flex()
-                        .flex_col()
-                        .p_2()
-                        .gap_2()
-                        .child(section_label("CHARACTER MANIFEST"))
-                        .when(inputs.len() == 3, |this| {
-                            this.child(tool_input(&inputs[0]))
-                                .child(tool_input(&inputs[1]))
-                                .child(tool_input(&inputs[2]))
-                                .child(tool_action("Add character").on_click(cx.listener(
-                                    |this, _, window, cx| this.add_character(window, cx),
-                                )))
-                        })
-                        .child(
-                            div().flex().flex_col().gap_1().children(
-                                index.characters.iter().cloned().enumerate().map(
-                                    |(row, character)| {
-                                        div()
-                                            .id(("character-row", row))
-                                            .p_2()
-                                            .rounded(px(7.))
-                                            .bg(rgb(PANEL))
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .text_color(rgb(INK))
-                                                    .child(character.name),
-                                            )
-                                            .child(div().text_xs().text_color(rgb(MUTED)).child(
-                                                format!(
-                                                    "{}{}",
-                                                    character.id,
-                                                    character
-                                                        .color
-                                                        .map(|color| format!(" · {color}"))
-                                                        .unwrap_or_default()
-                                                ),
-                                            ))
-                                    },
-                                ),
-                            ),
-                        );
-                vertical_overflow_view("character-scroll", &self.view_scroll, content)
+                let root = root.clone();
+                characters::render(&root, self, window, cx)
             }
             PanelContent::Scenes { root } => {
                 let index = cx.global::<EditorDocuments>().authoring(root);
@@ -1602,6 +1557,7 @@ impl Render for WorkbenchPanel {
                 }),
             )
             .capture_action(cx.listener(Self::accept_source_suggestion))
+            .capture_action(cx.listener(Self::show_source_completions))
             .capture_action(cx.listener(Self::backspace_empty_text))
             .capture_action(cx.listener(Self::delete_empty_text))
             .when(self.resource_picker.is_some(), |this| {

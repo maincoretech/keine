@@ -425,6 +425,7 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                             elapsed: 0.0,
                             frame: 0,
                             frame_durations: Vec::new(),
+                            playback: None,
                         },
                     );
                 }
@@ -1508,7 +1509,72 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                     return StepResult::AwaitPresentation;
                 }
             }
-            Action::ShowParticles { id, effect } => {
+            Action::ConditionalCall {
+                condition,
+                then_scene,
+                else_scene,
+            } => {
+                let matched = match evaluate(condition, &state.vars, &state.global_vars) {
+                    Ok(value) => value.truthy(),
+                    Err(error) => {
+                        log::error!("invalid conditional call: {error}");
+                        continue;
+                    }
+                };
+                let target = if matched {
+                    Some(then_scene.as_str())
+                } else {
+                    else_scene.as_deref()
+                };
+                if let Some(target) = target {
+                    let target = interpolate(target, &state.vars, &state.global_vars);
+                    if state.program.scene(&target).is_some() {
+                        state.scene_stack.push(crate::state::SceneFrame {
+                            scene: state.current_scene.clone(),
+                            cursor: state.cursor,
+                        });
+                        enter_scene(state, &target);
+                    } else {
+                        log::warn!("conditional call target is missing");
+                    }
+                }
+            }
+            Action::ConfigureDynamicSpriteSequence {
+                id,
+                frames,
+                fps,
+                frame_durations,
+                playback,
+            } => {
+                let id = interpolate(id, &state.vars, &state.global_vars);
+                let frames = frames
+                    .iter()
+                    .map(|frame| interpolate(frame, &state.vars, &state.global_vars))
+                    .collect::<Vec<_>>();
+                if let Some(first) = frames.first()
+                    && let Some(sprite) = state.sprites.get_mut(&id)
+                {
+                    sprite.image.clone_from(first);
+                    let mut playback = playback.clone();
+                    if let crate::SequencePlayback::Talk { speaker } = &mut playback {
+                        *speaker = interpolate(speaker, &state.vars, &state.global_vars);
+                    }
+                    state.sprite_sequences.insert(
+                        id,
+                        crate::state::SpriteSequenceState {
+                            frames,
+                            fps: fps.max(f32::EPSILON),
+                            looped: true,
+                            elapsed: 0.0,
+                            frame: 0,
+                            frame_durations: frame_durations.clone(),
+                            playback: Some(playback),
+                        },
+                    );
+                }
+            }
+            Action::ShowParticles { id, effect }
+            | Action::ShowParticlesWithOptions { id, effect, .. } => {
                 let id = interpolate(id, &state.vars, &state.global_vars);
                 let mut effect = effect.clone();
                 effect.preset = interpolate(&effect.preset, &state.vars, &state.global_vars);
@@ -1516,9 +1582,11 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                     .texture
                     .as_deref()
                     .map(|texture| interpolate(texture, &state.vars, &state.global_vars));
-                state
-                    .particle_effects
-                    .insert(id, crate::state::ActiveParticleEffect::new(effect));
+                let mut active = crate::state::ActiveParticleEffect::new(effect);
+                if let Action::ShowParticlesWithOptions { options, .. } = &action {
+                    active.options = *options;
+                }
+                state.particle_effects.insert(id, active);
             }
             Action::HideParticles { id, duration } => {
                 let duration = duration.max(0.0);
@@ -1965,6 +2033,7 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                                 .iter()
                                 .map(|seconds| seconds.max(f32::EPSILON))
                                 .collect(),
+                            playback: None,
                         },
                     );
                 }
@@ -2270,6 +2339,21 @@ pub fn select_choice(state: &mut State, index: usize) {
         return;
     };
 
+    if let ChoiceTarget::Assign(assignments) = &target {
+        // A bad expression must not commit half of a choice's effects.
+        let mut variables = state.vars.clone();
+        for (name, expression) in assignments {
+            let name = interpolate(name, &variables, &state.global_vars);
+            match evaluate(expression, &variables, &state.global_vars) {
+                Ok(value) => assign_value(&mut variables, &name, value),
+                Err(error) => {
+                    log::error!("failed choice assignment {name}: {error}");
+                    return;
+                }
+            }
+        }
+        state.vars = variables;
+    }
     state.menu = None;
     match target {
         ChoiceTarget::Label(label) => {
@@ -2289,6 +2373,7 @@ pub fn select_choice(state: &mut State, index: usize) {
                 enter_scene(state, &scene);
             }
         }
+        ChoiceTarget::Continue | ChoiceTarget::Assign(_) => {}
     }
 }
 
@@ -2311,6 +2396,8 @@ fn interpolate_choice_target(target: &ChoiceTarget, state: &State) -> ChoiceTarg
         ChoiceTarget::Label(value) => ChoiceTarget::Label(interpolate_target(value)),
         ChoiceTarget::ChangeScene(value) => ChoiceTarget::ChangeScene(interpolate_target(value)),
         ChoiceTarget::CallScene(value) => ChoiceTarget::CallScene(interpolate_target(value)),
+        ChoiceTarget::Continue => ChoiceTarget::Continue,
+        ChoiceTarget::Assign(assignments) => ChoiceTarget::Assign(assignments.clone()),
     }
 }
 
@@ -2325,6 +2412,75 @@ fn resolve_speaker(source: &str, state: &State) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn selected_assignments_commit_in_order_and_failure_keeps_menu() {
+        let menu = |assignments| Action::Menu {
+            prompt: String::new(),
+            choices: vec![crate::action::Choice {
+                text: "Choose".into(),
+                target: crate::ChoiceTarget::Assign(assignments),
+                show_when: None,
+                enable_when: None,
+            }],
+        };
+        let mut state = state_with(vec![menu(vec![
+            ("score".into(), "score + 1".into()),
+            ("total".into(), "score * 2".into()),
+        ])]);
+        state.vars.insert("score".into(), crate::Value::Int(2));
+        assert_eq!(step(&mut state), StepResult::AwaitChoice);
+        select_choice(&mut state, 0);
+        assert!(state.menu.is_none());
+        assert_eq!(state.vars["score"], crate::Value::Int(3));
+        assert_eq!(state.vars["total"], crate::Value::Int(6));
+        let mut failed = state_with(vec![menu(vec![
+            ("score".into(), "3".into()),
+            ("total".into(), "1 / 0".into()),
+        ])]);
+        failed.vars.insert("score".into(), crate::Value::Int(2));
+        assert_eq!(step(&mut failed), StepResult::AwaitChoice);
+        select_choice(&mut failed, 0);
+        assert_eq!(failed.vars["score"], crate::Value::Int(2));
+        assert!(failed.menu.is_some());
+    }
+
+    #[test]
+    fn conditional_calls_evaluate_once_then_return_to_the_next_statement() {
+        let mut state = state_with(vec![
+            Action::ConditionalCall {
+                condition: "score == 1".into(),
+                then_scene: "then".into(),
+                else_scene: Some("else".into()),
+            },
+            Action::Set {
+                name: "continued".into(),
+                expression: "true".into(),
+                global: false,
+            },
+        ]);
+        state.vars.insert("score".into(), crate::Value::Int(1));
+        state.insert_scene(
+            "then".into(),
+            vec![Action::Set {
+                name: "score".into(),
+                expression: "0".into(),
+                global: false,
+            }],
+        );
+        state.insert_scene(
+            "else".into(),
+            vec![Action::Set {
+                name: "wrong".into(),
+                expression: "true".into(),
+                global: false,
+            }],
+        );
+        assert_eq!(step(&mut state), StepResult::EndOfScene);
+        assert_eq!(state.vars["continued"], crate::Value::Bool(true));
+        assert!(!state.vars.contains_key("wrong"));
+    }
+
     #[test]
     fn native_visual_patch_is_atomic_and_preserves_other_channels() {
         use crate::{Action, PostProcessPatch, State, VisualFilterPatch};

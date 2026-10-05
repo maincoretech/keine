@@ -770,6 +770,24 @@ pub enum Action {
         looped: bool,
         fade: f32,
     },
+    ShowParticlesWithOptions {
+        id: String,
+        effect: crate::ParticleEffect,
+        options: crate::ParticleOptions,
+    },
+    ConfigureDynamicSpriteSequence {
+        id: String,
+        frames: Vec<String>,
+        fps: f32,
+        frame_durations: Vec<f32>,
+        playback: crate::SequencePlayback,
+    },
+    /// Evaluate a compatibility branch once, then call at most one fragment.
+    ConditionalCall {
+        condition: String,
+        then_scene: String,
+        else_scene: Option<String>,
+    },
 }
 
 /// Fixed system surfaces owned by the engine shell, never by a script adapter.
@@ -798,6 +816,11 @@ pub enum ChoiceTarget {
     Label(String),
     ChangeScene(String),
     CallScene(String),
+    /// Resume the statement after the menu without a jump.
+    Continue,
+    /// Apply variable assignments in order, then resume after the menu.
+    /// Kept at the tail to preserve existing serialized target tags.
+    Assign(Vec<(String, String)>),
 }
 
 /// Immutable, adapter-neutral script program shared by every runtime snapshot.

@@ -236,11 +236,13 @@ impl PanelContent {
                         });
                     editor.set_highlighter_factory(editor_highlighter_factory(), cx);
                     if document.is_some() && language == "eiyashou" {
-                        editor.lsp_mut().completion_provider =
-                            Some(Rc::new(completion::ShouCompletion {
-                                root: root.clone(),
-                                relative: relative.clone(),
-                            }));
+                        let provider = Rc::new(completion::ShouCompletion {
+                            root: root.clone(),
+                            relative: relative.clone(),
+                        });
+                        editor.lsp_mut().completion_provider = Some(provider.clone());
+                        editor.lsp_mut().hover_provider = Some(provider);
+                        editor.lsp_mut().completion_menu.max_width = px(400.);
                     }
                     editor
                 });
@@ -381,6 +383,11 @@ pub(super) struct WorkbenchPanel {
     pub(super) text_minimap: text_minimap::TextMinimap,
     pub(super) project_search: Option<search::ProjectSearch>,
     pub(super) tool_inputs: Vec<Entity<InputState>>,
+    pub(super) character_id: Option<String>,
+    pub(super) character_expression: Option<String>,
+    pub(super) character_script: Option<(PathBuf, usize)>,
+    pub(super) character_images: Option<Entity<SelectState<Vec<SourceOption>>>>,
+    pub(super) character_image_options: Vec<SourceOption>,
     pub(super) recovery_epoch: u64,
     pub(super) syntax_check: Option<gpui_kit::Task<()>>,
     pub(super) diagnostic_index: std::sync::Weak<crate::authoring::AuthoringIndex>,
@@ -826,6 +833,11 @@ impl WorkbenchPanel {
                 text_minimap: text_minimap::TextMinimap::default(),
                 project_search: None,
                 tool_inputs: Vec::new(),
+                character_id: None,
+                character_expression: None,
+                character_script: None,
+                character_images: None,
+                character_image_options: Vec::new(),
                 recovery_epoch: 0,
                 syntax_check: None,
                 diagnostic_index: Default::default(),
@@ -1238,7 +1250,14 @@ impl WorkbenchPanel {
                 }
             }
             if let PanelContent::Characters { .. } = &panel.content {
-                for placeholder in ["Character id", "Display name", "Color (optional)"] {
+                for placeholder in [
+                    "Character id",
+                    "Display name",
+                    "Color (optional)",
+                    "Expression name",
+                    "Frame asset IDs, comma separated",
+                    "Avatar asset ID (optional)",
+                ] {
                     panel
                         .tool_inputs
                         .push(cx.new(|cx| InputState::new(window, cx).placeholder(placeholder)));

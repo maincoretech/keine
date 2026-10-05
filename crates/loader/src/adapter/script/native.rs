@@ -954,6 +954,7 @@ fn action_successors(
             .iter()
             .filter_map(|choice| match &choice.target {
                 ChoiceTarget::Label(label) => labels.get(label).copied(),
+                ChoiceTarget::Continue | ChoiceTarget::Assign(_) => next,
                 _ => None,
             })
             .collect(),
@@ -1570,19 +1571,21 @@ impl<'a> Parser<'a> {
             } else {
                 self.parse_statement(report)
             };
-            let target = (!actions.is_empty()).then(|| ChoiceTarget::Label(label.clone()));
+            let target = if actions.is_empty() {
+                ChoiceTarget::Label(merge_label.clone())
+            } else {
+                ChoiceTarget::Label(label.clone())
+            };
             if !actions.is_empty() {
                 branches.push((label, actions));
             }
-            if let Some(target) = target {
-                let source_id = self.source_id(option_id, "choice", &text);
-                choices.push(EiyashouChoice {
-                    text,
-                    target,
-                    show_when,
-                    source_id,
-                });
-            }
+            let source_id = self.source_id(option_id, "choice", &text);
+            choices.push(EiyashouChoice {
+                text,
+                target,
+                show_when,
+                source_id,
+            });
             if self.peek_text() == Some("}") {
                 break;
             }
@@ -1620,9 +1623,7 @@ impl<'a> Parser<'a> {
                 actions.append(&mut branch);
                 actions.push(Action::Jump(merge_label.clone()));
             }
-            if actions.len() > 1 {
-                actions.push(Action::Label(merge_label));
-            }
+            actions.push(Action::Label(merge_label));
             actions
         }
     }
@@ -3679,6 +3680,71 @@ fn error_at(source: &str, offset: usize, message: impl Into<String>) -> Diagnost
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn empty_choice_options_continue_and_dynamic_assets_are_collected() {
+        let parsed = parse_native_scenes(
+            "scene a { choice { \"Continue\": {}, \"Other\": {} }, \"After\" }",
+        );
+        assert!(
+            !parsed[0]
+                .report
+                .diagnostics
+                .iter()
+                .any(|d| d.level == DiagnosticLevel::Error),
+            "{:?}",
+            parsed[0].report.diagnostics
+        );
+        let mut state = keine_core::State::default();
+        state.install_program(keine_core::Program::from_scenes([(
+            "a".into(),
+            parsed[0].report.actions.clone(),
+        )]));
+        state.current_scene = "a".into();
+        assert_eq!(
+            keine_core::step::step(&mut state),
+            keine_core::StepResult::AwaitChoice
+        );
+        assert_eq!(state.menu.as_ref().unwrap().choices.len(), 2);
+        keine_core::step::select_choice(&mut state, 0);
+        assert!(state.menu.is_none());
+        assert_eq!(
+            keine_core::step::step(&mut state),
+            keine_core::StepResult::AwaitClick
+        );
+        assert_eq!(state.dialogue.as_ref().unwrap().text, "After");
+        let parsed = parse_native_scenes(
+            "scene a { sprite.sequence(eyes, mode: blink, interval: 3s, fps: 10) { frame(open), frame(closed) }, particle.show(snow, LIGHT_SNOW, size: 20, speed: 80, alpha: 0.6, color: rgba(1, 0.9, 0.8, 1)) }",
+        );
+        assert!(
+            parsed[0].report.diagnostics.is_empty(),
+            "{:?}",
+            parsed[0].report.diagnostics
+        );
+        assert!(
+            matches!(&parsed[0].report.actions[0], Action::ConfigureDynamicSpriteSequence { playback: keine_core::SequencePlayback::Blink { interval }, .. } if *interval == 3.0)
+        );
+        assert_eq!(parsed[0].report.resources.len(), 2);
+        assert!(
+            matches!(&parsed[0].report.actions[1], Action::ShowParticlesWithOptions { options, .. } if options.size == Some(20.0))
+        );
+        for command in [
+            "particle.show(snow, snow, size: 0)",
+            "sprite.sequence(eyes, mode: talk) { frame(open), frame(closed) }",
+            "sprite.sequence(eyes, interval: 3s) { frame(open) }",
+        ] {
+            let report = parse_native_scenes(&format!("scene a {{ {command} }}"));
+            assert!(
+                report[0]
+                    .report
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.level == DiagnosticLevel::Error),
+                "{command}"
+            );
+        }
+    }
+
     use super::*;
 
     #[test]

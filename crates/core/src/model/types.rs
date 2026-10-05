@@ -663,6 +663,29 @@ pub struct ParticleEffect {
     pub fade_in: f32,
 }
 
+/// Optional author controls layered over a bounded weather preset.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct ParticleOptions {
+    pub size: Option<f32>,
+    pub speed: Option<f32>,
+    pub alpha: Option<f32>,
+    pub spin: Option<f32>,
+    pub drift: Option<f32>,
+    pub drag: Option<f32>,
+    pub color: Option<[f32; 4]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum SequencePlayback {
+    Blink {
+        interval: f32,
+    },
+    /// Text-driven mouth animation; first frame is the closed mouth.
+    Talk {
+        speaker: String,
+    },
+}
+
 impl ParticleEffect {
     pub fn preset(name: impl Into<String>) -> Self {
         Self {

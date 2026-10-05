@@ -47,10 +47,10 @@ use crate::authoring::fields::{
 };
 use crate::authoring::{
     AssetKey, AssetKind, AssetQuery, AssetSort, AuthoringIndex, AuthoringSelection, InsertKind,
-    ProblemSeverity, append_character, append_scene, confined_existing_file, delete_scene,
-    dialogues_for_source, escape_eiyashou_string, insert_statement, insertion_statement,
-    move_scene, rename_scene, rename_scene_references, replace_dialogue_text, scene_references,
-    valid_identifier,
+    ProblemSeverity, append_character, append_scene, confined_existing_file, delete_character,
+    delete_scene, dialogues_for_source, edit_character, escape_eiyashou_string,
+    insert_source_statement, insert_statement, insertion_statement, move_scene, rename_scene,
+    rename_scene_references, replace_dialogue_text, scene_references, valid_identifier,
 };
 use crate::document::DocumentHandle;
 use crate::file_ops::{self, ImportResult};
@@ -75,6 +75,7 @@ use window::{EditorApp, EditorAppOwner, WorkbenchWindow, listen_for_secondary_la
 
 mod blocks;
 mod build;
+mod characters;
 mod completion;
 mod controls;
 mod dock;
@@ -232,7 +233,8 @@ actions!(
         RedoFiles,
         UndoSources,
         RedoSources,
-        ReloadDocument
+        ReloadDocument,
+        ShowSourceCompletions
     ]
 );
 
@@ -529,6 +531,8 @@ pub fn run() -> ExitCode {
             cx.set_global(EditorDocuments::new(persistence.clone()));
             register_workbench_panels(cx);
             cx.bind_keys([
+                KeyBinding::new("ctrl-space", ShowSourceCompletions, Some("Input")),
+                KeyBinding::new("alt-/", ShowSourceCompletions, Some("Input")),
                 KeyBinding::new("cmd-o", OpenFolder, Some("KeineWorkbench")),
                 KeyBinding::new("ctrl-o", OpenFolder, Some("KeineWorkbench")),
                 KeyBinding::new("cmd-s", Save, Some("KeineWorkbench")),
