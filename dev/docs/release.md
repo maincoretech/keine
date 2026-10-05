@@ -14,6 +14,18 @@ remap ...                  高级资源引用迁移
 perf <project> [--startup]  开发测量
 ```
 
+`bundle --benchmark` 使用与 release 相同优化的 `profiling` 构建，保留符号，并关闭
+阻止系统 profiler 附加的反调试措施；普通发行仍使用 hardened release。
+测试包使用临时 identity。包内 `BENCHMARK.txt` 写明运行和采样步骤。
+
+仓库 Actions 的 **Release** 工作流手动勾选 `benchmark` 后，自动构建 Linux、macOS、
+Windows 包并更新 `benchmark-latest` 下载；它不在 CI 主机上执行 GPU 性能验收。
+默认 native-smoke 是基本检查，完整特效压力覆盖必须由所选项目提供相应时间轴。
+每个测试包包含 `profile-runtime.py`；直接运行 Engine 无需 Python，额外采集调用栈时
+需要 Python 3 和平台采样工具。Windows 包附 PDB，macOS 有 dSYM 时一并附带。
+工作流保存 Cargo 缓存前按 package 清理 Engine/Loader 的 release/profiling 产物，
+避免内嵌运行密钥份额进入缓存；其他依赖和不含发行密钥的 publisher runner 保留。
+
 Cargo aliases 与 executable 使用同名动词；具体参数以 `--help` 为准。
 正式内容先验证/编译，再加载或创建 publisher identity；失败保留已有可运行发布目录。
 identity 与内嵌 key 不记录、不提交、不缓存，也不传给无需它的 child build。

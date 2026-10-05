@@ -12,7 +12,7 @@
 
 ## Architecture
 
-- Rust 2024 / Bevy 0.19; dependency flow `keine-core ← keine-loader ← keine`.
+- Rust 2024 / Bevy 0.19.1; dependency flow `keine-core ← keine-loader ← keine`.
 - Core, loader and authoring protocol remain Bevy-free. Runtime consumes typed Program/State.
 - Editor-specific behavior stays in its adapter; ordered read-only mounts stay confined to their roots.
 - 1920×1080 design space and viewport conversion have one owner; preserve scene/UI/dialog composition.

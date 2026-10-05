@@ -24,7 +24,7 @@ pub(crate) fn build_program(
     config: &GameConfig,
     content: &ContentProject,
     languages: &ScriptLanguageRegistry,
-) -> Result<()> {
+) -> Result<Vec<LoadedScene>> {
     let mut scenes =
         load_scenes_with(content, languages).context("failed to compile project scenes")?;
     if config.adapter.script.eq_ignore_ascii_case("keine") {
@@ -68,7 +68,7 @@ pub(crate) fn build_program(
         scenes.len(),
         output.display()
     );
-    Ok(())
+    Ok(scenes)
 }
 
 /// Reject the same conditions as `cargo validate`: error diagnostics and

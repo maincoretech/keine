@@ -589,9 +589,25 @@ fn physical_memory_bytes() -> Option<u64> {
 fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) -> Result<()> {
     let executable = std::env::current_exe().context("failed to locate benchmark executable")?;
     let mut report = run_startup_suite(project_path, runs)?;
-    let mut raw_frames = String::from(
-        "RAWFRAME\tworkload\trun\ttotal_runs\ttarget\tcamera_profile\telapsed_seconds\tframe_ms\n",
+    let mut raw_frames = format!(
+        "RAWFRAME\tworkload\trun\ttotal_runs\ttarget\tcamera_profile\t{}\n",
+        crate::ui::performance::TRACE_FIELDS,
     );
+    // Measure real sleep/wake behavior separately from continuous throughput.
+    run_benchmark_workload(
+        BenchmarkWorkloadCapture {
+            executable: &executable,
+            project_path,
+            label: "opening composition · runtime sleep/wake",
+            target: None,
+            cameras: BenchmarkCameras::Runtime,
+            continuous: false,
+            run: 1,
+            total_runs: 1,
+        },
+        &mut report,
+        &mut raw_frames,
+    )?;
     emit_report_line(&mut report, "");
     emit_report_line(
         &mut report,
@@ -599,7 +615,7 @@ fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) ->
     );
     emit_report_line(
         &mut report,
-        "camera policy · runtime follows production sleep/wake · decomposition profiles pin explicit cameras",
+        "portable render coverage · continuous window loop · runtime cameras auto-disable empty overlays · decomposition pins cameras",
     );
     let timeline_inventory = run_benchmark_workload(
         BenchmarkWorkloadCapture {
@@ -608,6 +624,7 @@ fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) ->
             label: "opening composition · runtime composition",
             target: None,
             cameras: BenchmarkCameras::Runtime,
+            continuous: true,
             run: 1,
             total_runs: 1,
         },
@@ -628,6 +645,7 @@ fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) ->
                 label,
                 target: None,
                 cameras: *cameras,
+                continuous: true,
                 run: 1,
                 total_runs: 1,
             },
@@ -652,6 +670,7 @@ fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) ->
                                 label,
                                 target: Some(target),
                                 cameras: BenchmarkCameras::Runtime,
+                                continuous: true,
                                 run,
                                 total_runs,
                             },
@@ -723,6 +742,7 @@ struct BenchmarkWorkloadCapture<'a> {
     label: &'a str,
     target: Option<&'a str>,
     cameras: BenchmarkCameras,
+    continuous: bool,
     run: usize,
     total_runs: usize,
 }
@@ -738,6 +758,7 @@ fn run_benchmark_workload(
         label,
         target,
         cameras,
+        continuous,
         run,
         total_runs,
     } = capture;
@@ -753,10 +774,17 @@ fn run_benchmark_workload(
         },
     );
     let mut command = Command::new(executable);
+    let mode = if continuous { "continuous" } else { "runtime" };
     command
         .arg("perf")
         .arg(project_path)
-        .args(["--seconds", "5"]);
+        .args(["--seconds", "5", "--mode", mode, "--raw"]);
+    // Reactive redraws require a real window; a hidden window cannot measure idle behavior.
+    if continuous {
+        command.env(RUNTIME_BENCHMARK_CHILD_ENV, "1");
+    } else {
+        command.env_remove(RUNTIME_BENCHMARK_CHILD_ENV);
+    }
     if let Some(target) = target {
         command.arg("--timeline").arg(target);
     }
@@ -764,7 +792,6 @@ fn run_benchmark_workload(
         command.arg("--camera").arg(cameras.id());
     }
     let output = command
-        .env(RUNTIME_BENCHMARK_CHILD_ENV, "1")
         .output()
         .with_context(|| format!("failed to start {label} benchmark"))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -784,7 +811,7 @@ fn run_benchmark_workload(
     let mut summary = None;
     for line in stdout.lines().chain(stderr.lines()) {
         let line = line.trim();
-        if let Some(frame) = crate::ui::performance::FrameSample::parse(line) {
+        if let Some(frame) = line.strip_prefix("KEINE_TRACE\t") {
             append_raw_frame(raw_frames, label, run, total_runs, target, cameras, frame);
             continue;
         }
@@ -860,7 +887,7 @@ fn append_raw_frame(
     total_runs: usize,
     target: Option<&str>,
     cameras: BenchmarkCameras,
-    frame: crate::ui::performance::FrameSample,
+    frame: &str,
 ) {
     output.push_str("RAWFRAME\t");
     output.push_str(&tsv_text(label));
@@ -868,10 +895,11 @@ fn append_raw_frame(
     output.push_str(&tsv_text(target.unwrap_or("opening")));
     output.push('\t');
     output.push_str(&tsv_text(cameras.id()));
-    output.push_str(&format!(
-        "\t{:.6}\t{:.6}\n",
-        frame.elapsed_seconds, frame.frame_ms
-    ));
+    // Already sanitized by the shared capture owner. Preserve all fields,
+    // including excluded intervals, so a report can be independently audited.
+    output.push('\t');
+    output.push_str(frame);
+    output.push('\n');
 }
 
 fn tsv_text(value: &str) -> String {
@@ -898,6 +926,11 @@ fn benchmark_report_line(line: &str) -> bool {
         "START    |",
         "CAPTURE  |",
         "FRAME    |",
+        "BUDGET   |",
+        "PROCESS  |",
+        "SAMPLING |",
+        "EXCLUDED |",
+        "GPU_TIME |",
         "SLOW     |",
         "SCENE    |",
         "ASSETS   |",
@@ -934,7 +967,16 @@ fn benchmark_timelines(state: &State) -> Vec<(String, usize, String)> {
 
 fn resolve_benchmark_target(state: &State, target: &BenchmarkTarget) -> Option<(String, usize)> {
     match target {
-        BenchmarkTarget::Cursor(cursor) => Some((state.current_scene.clone(), *cursor)),
+        BenchmarkTarget::Cursor(cursor) => state
+            .program
+            .scene_len(&state.current_scene)
+            .filter(|len| *cursor < *len)
+            .map(|_| (state.current_scene.clone(), *cursor)),
+        BenchmarkTarget::SceneCursor(scene, cursor) => state
+            .program
+            .scene_len(scene)
+            .filter(|len| *cursor < *len)
+            .map(|_| (scene.clone(), *cursor)),
         BenchmarkTarget::Timeline(wanted) => {
             let mut matches = benchmark_timelines(state)
                 .into_iter()
@@ -1271,6 +1313,9 @@ fn build_opened_app(
             benchmark.seconds,
             benchmark.target.clone(),
             benchmark.cameras,
+            benchmark.continuous,
+            benchmark.refresh_hz,
+            benchmark.raw,
         );
     }
     if let Some(capture) = options.startup_capture {
@@ -1611,6 +1656,17 @@ fn bootstrap_project(
         Err(error) => log::error!("failed to load scripts: {error:#}"),
     }
     ensure_playable_scene(&mut state);
+    #[cfg(feature = "startup-metrics")]
+    if mode.benchmark.is_some()
+        && let Err(error) = crate::ui::performance::source_map::restore(
+            &content,
+            state.program_fingerprint,
+            &mut manifest,
+        )
+    {
+        log::error!(target: "keine::performance", "invalid benchmark source map: {error:#}");
+        commands.insert_resource(crate::ui::performance::InvalidCaptureTarget);
+    }
     if mode.editor_sync.is_some() {
         // An editor is already the outer shell. Enter its current selected block directly
         // so the native overlay never flashes keine's title screen first.
@@ -1635,13 +1691,9 @@ fn bootstrap_project(
             .and_then(|capture| capture.target.as_ref());
         let resolved_target =
             requested_target.and_then(|target| resolve_benchmark_target(&state, target));
-        if let Some(BenchmarkTarget::Timeline(name)) = requested_target
-            && resolved_target.is_none()
-        {
-            log::error!(
-                target: "keine::performance",
-                "benchmark timeline {name:?} does not exist; available timelines: {timelines}",
-            );
+        if requested_target.is_some() && resolved_target.is_none() {
+            log::error!(target: "keine::performance", "benchmark target {requested_target:?} does not exist or is ambiguous; available timelines: {timelines}");
+            commands.insert_resource(crate::ui::performance::InvalidCaptureTarget);
         }
         if let Some((target_scene, cursor)) = &resolved_target {
             let new_preview = || State {
@@ -1677,9 +1729,12 @@ fn bootstrap_project(
             } {
                 state = preview;
             } else {
-                log::warn!(target: "keine::performance", "benchmark cursor {cursor} could not be replayed in {target_scene:?}");
+                log::error!(target: "keine::performance", "benchmark cursor {cursor} could not be replayed in {target_scene:?}");
+                commands.insert_resource(crate::ui::performance::InvalidCaptureTarget);
             }
-            if let Some(animation) = state.stage_animation.as_mut() {
+            if mode.benchmark.as_ref().is_some_and(|c| c.continuous)
+                && let Some(animation) = state.stage_animation.as_mut()
+            {
                 // A selected timeline is looped only inside the benchmark so
                 // the sample measures its sustained cost instead of mostly
                 // measuring the static frame after a short authored clip.
@@ -1969,14 +2024,11 @@ mod tests {
             3,
             Some("10-04 blur family"),
             BenchmarkCameras::Runtime,
-            crate::ui::performance::FrameSample {
-                elapsed_seconds: 3.5,
-                frame_ms: 16.75,
-            },
+            "3.500000\t121\t16.750000\t6\t8.33\tchapter2\t8\tscripts/2.shou\tIdle\t12\tfalse\t1920\t1080\tsleep",
         );
         assert_eq!(
             output,
-            "RAWFRAME\tblur family\t2\t3\t10-04 blur family\truntime\t3.500000\t16.750000\n"
+            "RAWFRAME\tblur family\t2\t3\t10-04 blur family\truntime\t3.500000\t121\t16.750000\t6\t8.33\tchapter2\t8\tscripts/2.shou\tIdle\t12\tfalse\t1920\t1080\tsleep\n"
         );
     }
 
@@ -2035,6 +2087,9 @@ mod tests {
         assert!(
             !InteractiveMode::Benchmark(BenchmarkOptions {
                 seconds: 1.0,
+                continuous: false,
+                raw: false,
+                refresh_hz: None,
                 target: None,
                 cameras: crate::ui::performance::BenchmarkCameras::Runtime,
             })
@@ -2114,6 +2169,65 @@ mod tests {
     }
 
     #[test]
+    fn benchmark_runtime_defaults_and_invalid_modes_do_not_change_workload() {
+        let CliCommand::Run {
+            mode: InteractiveMode::Benchmark(options),
+            ..
+        } = parse_cli(&args(&[
+            "perf",
+            "/tmp/project",
+            "--scene",
+            "chapter2",
+            "--cursor",
+            "7",
+            "--hz",
+            "120",
+        ]))
+        .unwrap()
+        else {
+            panic!("benchmark");
+        };
+        assert!(!options.continuous);
+        assert_eq!(options.refresh_hz, Some(120.0));
+        assert_eq!(
+            options.target,
+            Some(BenchmarkTarget::SceneCursor("chapter2".into(), 7))
+        );
+        for invalid in [
+            vec!["--hz", "NaN"],
+            vec!["--hz", "0"],
+            vec!["--seconds", "3601"],
+            vec!["--mode", "unknown"],
+            vec!["--camera", "scene"],
+            vec!["--startup", "--mode", "runtime"],
+            vec!["--scene", "x", "--timeline", "y"],
+        ] {
+            let mut command = vec!["perf", "/tmp/project"];
+            command.extend(invalid);
+            assert!(parse_cli(&args(&command)).is_err(), "{command:?}");
+        }
+    }
+
+    #[test]
+    fn benchmark_missing_scene_or_out_of_range_cursor_is_rejected() {
+        let mut state = State::new();
+        state.insert_scene("first".into(), vec![Action::Wait { seconds: 1.0 }]);
+        state.current_scene = "first".into();
+        assert_eq!(
+            resolve_benchmark_target(&state, &BenchmarkTarget::SceneCursor("first".into(), 0)),
+            Some(("first".into(), 0))
+        );
+        assert_eq!(
+            resolve_benchmark_target(&state, &BenchmarkTarget::SceneCursor("missing".into(), 0)),
+            None
+        );
+        assert_eq!(
+            resolve_benchmark_target(&state, &BenchmarkTarget::Cursor(1)),
+            None
+        );
+    }
+
+    #[test]
     fn benchmark_command_accepts_duration_and_cursor() {
         let CliCommand::Run {
             mode: InteractiveMode::Benchmark(options),
@@ -2173,6 +2287,8 @@ mod tests {
             "7.5",
             "--cursor",
             "25",
+            "--mode",
+            "continuous",
             "--camera",
             "scene-ui",
         ]))
@@ -2196,6 +2312,8 @@ mod tests {
             "/tmp/project",
             "--seconds",
             "7.5",
+            "--mode",
+            "continuous",
             "--camera",
             "scene-dialog",
         ]))

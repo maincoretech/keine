@@ -1,6 +1,6 @@
 # Kēne
 
-原生视觉小说引擎与编辑器，Rust 2024 / Bevy 0.19 / GPUI。
+原生视觉小说引擎与编辑器，Rust 2024 / Bevy 0.19.1 / GPUI。
 原生项目使用 Eiyashou `.shou`；支持 LetsGal Studio 工程与冻结的 WebGAL 兼容输入。
 正式发行只使用 Hakutaku v1、WebP 图片与 Ogg Opus 音频。
 

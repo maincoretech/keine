@@ -71,6 +71,5 @@ unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
     "https://github.com/maincoretech/hakutaku",
-    "https://github.com/maincoretech/keine", # pinned Bevy window backend patch
 ]
 required-git-spec = "rev"

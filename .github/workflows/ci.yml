@@ -79,6 +79,9 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - if: matrix.quality
         run: cargo test --workspace
+      - name: Check benchmark collector boundaries
+        if: matrix.quality
+        run: python3 -m unittest discover -s tests/bench/runtime -p 'test_*.py'
       - name: Check publisher pipeline
         if: matrix.quality
         run: cargo test --workspace --no-default-features --features publisher

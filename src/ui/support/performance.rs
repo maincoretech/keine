@@ -2,7 +2,9 @@ use bevy::app::AppExit;
 use bevy::diagnostic::{DiagnosticsStore, EntityCountDiagnosticsPlugin};
 use bevy::ecs::system::{NonSendMarker, SystemParam};
 use bevy::prelude::*;
-use bevy::render::renderer::RenderAdapterInfo;
+use bevy::render::extract_resource::ExtractResourcePlugin;
+use bevy::render::renderer::{RenderAdapterInfo, RenderDevice};
+use bevy::render::settings::WgpuFeatures;
 use bevy::render::{Render, RenderApp, RenderSystems};
 use bevy::window::{PrimaryWindow, WindowCloseRequested};
 use bevy::winit::{WINIT_WINDOWS, WinitSettings};
@@ -15,9 +17,20 @@ use crate::runtime::GameSystemSet;
 use crate::runtime::resources::AssetLoadingGate;
 use crate::ui::title::TitleRoot;
 
+mod frame;
+pub(crate) use frame::TRACE_FIELDS;
+#[cfg(any(feature = "publisher", feature = "startup-metrics"))]
+pub(crate) mod source_map;
+use frame::{BudgetSummary, CapturedFrame, FrameContext};
+const MAX_CAPTURE_FRAMES: usize = 240_000;
+
+#[derive(Resource)]
+pub(crate) struct InvalidCaptureTarget;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BenchmarkTarget {
     Cursor(usize),
+    SceneCursor(String, usize),
     Timeline(String),
 }
 
@@ -28,6 +41,42 @@ pub(crate) struct RuntimeCaptureConfig {
     machine_output: bool,
     pub(crate) target: Option<BenchmarkTarget>,
     pub(crate) cameras: BenchmarkCameras,
+    pub(crate) continuous: bool,
+    refresh_hz: Option<f64>,
+    samples: RenderCaptureSamples,
+}
+
+impl RuntimeCaptureConfig {
+    /// Wake only at warm-up/sample boundaries, retaining normal idle sleep.
+    pub(crate) fn next_wake(&self, idle: bool) -> std::time::Duration {
+        let mut samples = self.samples.0.lock().expect("render capture lock poisoned");
+        if !idle {
+            samples.idle_wake = None;
+            return std::time::Duration::from_secs(60);
+        }
+        let Some(first) = samples.first_frame else {
+            return std::time::Duration::from_secs(60);
+        };
+        let elapsed = first.elapsed().as_secs_f32();
+        let boundary = if samples.sample_started {
+            self.warmup_seconds + self.sample_seconds
+        } else {
+            self.warmup_seconds
+        };
+        let wait = std::time::Duration::from_secs_f32((boundary - elapsed).max(0.001));
+        // Changing Reactive.wait forces another redraw in Bevy. Hold the wait
+        // stable; only shorten it after meaningful progress. Winit starts its
+        // timer before app.update(), so its boundary wake can arrive slightly
+        // early. Reusing the entire old wait then would double the sample.
+        if let Some((phase, scheduled)) = samples.idle_wake
+            && phase == samples.sample_started
+            && wait >= scheduled / 2
+        {
+            return scheduled;
+        }
+        samples.idle_wake = Some((samples.sample_started, wait));
+        wait
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -74,6 +123,27 @@ impl BenchmarkCameras {
 #[derive(Resource, Default)]
 struct RuntimeCaptureState {
     finished: bool,
+    cpu_baseline: Option<(Instant, f64)>,
+    render_timings: std::collections::HashMap<String, PassSamples>,
+}
+
+#[derive(Default)]
+struct PassSamples {
+    last: Option<Instant>,
+    suffix: String,
+    values: Vec<f64>,
+}
+
+impl PassSamples {
+    fn record(&mut self, time: Instant, value: f64) {
+        if self.last == Some(time) || !value.is_finite() || value < 0.0 {
+            return;
+        }
+        self.last = Some(time);
+        if self.values.len() < MAX_CAPTURE_FRAMES {
+            self.values.push(value);
+        }
+    }
 }
 
 type CaptureCameraQuery<'w, 's> = Query<
@@ -90,6 +160,7 @@ type CaptureCameraQuery<'w, 's> = Query<
 #[derive(SystemParam)]
 struct RuntimeCaptureDiagnostics<'w, 's> {
     diagnostics: Res<'w, DiagnosticsStore>,
+    render_device: Res<'w, RenderDevice>,
     images: Res<'w, Assets<Image>>,
     fonts: Res<'w, Assets<Font>>,
     cameras: CaptureCameraQuery<'w, 's>,
@@ -118,8 +189,13 @@ impl BenchmarkExit<'_, '_> {
 #[derive(Default)]
 struct RenderSampleData {
     first_frame: Option<Instant>,
+    sample_started: bool,
+    idle_wake: Option<(bool, std::time::Duration)>,
     previous_frame: Option<Instant>,
-    frame_ms: Vec<(f32, f64)>,
+    frame_ms: Vec<CapturedFrame>,
+    previous_context: Option<FrameContext>,
+    continuous: bool,
+    omitted: usize,
     adapter: Option<String>,
 }
 
@@ -237,6 +313,7 @@ impl FrameSample {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn parse(line: &str) -> Option<Self> {
         let line = line.strip_prefix("KEINE_FRAME_SAMPLE ")?;
         let mut elapsed_seconds = None;
@@ -437,28 +514,97 @@ fn peak_rss_bytes() -> Option<u64> {
     None
 }
 
+// OS contracts: getrusage(2), GetProcessTimes; aggregate all process threads.
+#[cfg(all(feature = "startup-metrics", unix))]
+fn process_cpu_seconds() -> Option<f64> {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    // SAFETY: getrusage writes this ABI structure on a successful return.
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    // SAFETY: the successful call initialized the complete structure.
+    let usage = unsafe { usage.assume_init() };
+    Some(
+        (usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) as f64
+            + (usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) as f64 / 1_000_000.0,
+    )
+}
+
+#[cfg(all(feature = "startup-metrics", windows))]
+fn process_cpu_seconds() -> Option<f64> {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+    let mut creation = FILETIME::default();
+    let mut exit = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    // SAFETY: this process handle and all writable FILETIME buffers are valid.
+    if unsafe {
+        GetProcessTimes(
+            GetCurrentProcess(),
+            &mut creation,
+            &mut exit,
+            &mut kernel,
+            &mut user,
+        )
+    } == 0
+    {
+        return None;
+    }
+    let ticks =
+        |t: FILETIME| u128::from((u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime));
+    Some((ticks(kernel) + ticks(user)) as f64 / 10_000_000.0)
+}
+
+#[cfg(not(any(
+    all(feature = "startup-metrics", unix),
+    all(feature = "startup-metrics", windows)
+)))]
+fn process_cpu_seconds() -> Option<f64> {
+    None
+}
+
 pub(crate) fn install_runtime_capture(
     app: &mut App,
     sample_seconds: f32,
     target: Option<BenchmarkTarget>,
     cameras: BenchmarkCameras,
+    continuous: bool,
+    refresh_hz: Option<f64>,
+    raw: bool,
 ) {
+    log::info!(target: "keine::performance", "build identity · commit {} · built {} · features {}",
+        env!("KEINE_BUILD_COMMIT"), env!("KEINE_BUILD_TIME"), env!("KEINE_BUILD_FEATURES"));
     let render_samples = RenderCaptureSamples::default();
+    render_samples
+        .0
+        .lock()
+        .expect("render capture lock poisoned")
+        .continuous = continuous;
     app.insert_resource(RuntimeCaptureConfig {
         warmup_seconds: 3.0,
         sample_seconds,
-        machine_output: std::env::var_os(crate::runtime::bootstrap::RUNTIME_BENCHMARK_CHILD_ENV)
-            .is_some(),
+        machine_output: raw
+            || std::env::var_os(crate::runtime::bootstrap::RUNTIME_BENCHMARK_CHILD_ENV).is_some(),
         target,
         cameras,
+        continuous,
+        refresh_hz,
+        samples: render_samples.clone(),
     })
-    // Captures commonly run behind a terminal or on a second display. Start
-    // continuously before winit gets a chance to enter its unfocused wait so
-    // the benchmark never depends on mouse or window events.
-    .insert_resource(WinitSettings::continuous())
     .insert_resource(render_samples.clone())
+    .init_resource::<FrameContext>()
+    .add_plugins(ExtractResourcePlugin::<FrameContext>::default())
+    .add_systems(First, frame::begin_update)
+    .add_systems(
+        Last,
+        frame::attribute_frame.after(crate::runtime::platform::update_lifecycle),
+    )
     .init_resource::<RuntimeCaptureState>()
     .add_systems(Update, capture_runtime_performance);
+    if continuous {
+        app.insert_resource(WinitSettings::continuous());
+    }
     if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
         render_app.insert_resource(render_samples).add_systems(
             Render,
@@ -467,7 +613,11 @@ pub(crate) fn install_runtime_capture(
     }
 }
 
-fn capture_render_frame(samples: Res<RenderCaptureSamples>, adapter: Res<RenderAdapterInfo>) {
+fn capture_render_frame(
+    samples: Res<RenderCaptureSamples>,
+    adapter: Res<RenderAdapterInfo>,
+    context: Res<FrameContext>,
+) {
     let now = Instant::now();
     let mut samples = samples.0.lock().expect("render capture lock poisoned");
     samples.adapter.get_or_insert_with(|| {
@@ -477,13 +627,27 @@ fn capture_render_frame(samples: Res<RenderCaptureSamples>, adapter: Res<RenderA
         )
     });
     let first_frame = *samples.first_frame.get_or_insert(now);
-    if let Some(previous) = samples.previous_frame {
-        samples.frame_ms.push((
-            now.duration_since(first_frame).as_secs_f32(),
-            now.duration_since(previous).as_secs_f64() * 1_000.0,
-        ));
+    if let (Some(previous), Some(previous_context)) =
+        (samples.previous_frame, &samples.previous_context)
+    {
+        let frame = CapturedFrame {
+            elapsed_seconds: now.duration_since(first_frame).as_secs_f32(),
+            frame_ms: now.duration_since(previous).as_secs_f64() * 1000.0,
+            latency_ms: now
+                .saturating_duration_since(context.update_started)
+                .as_secs_f64()
+                * 1000.0,
+            exclusion: CapturedFrame::exclusion(previous_context, &context, samples.continuous),
+            context: context.clone(),
+        };
+        if samples.frame_ms.len() < MAX_CAPTURE_FRAMES {
+            samples.frame_ms.push(frame);
+        } else {
+            samples.omitted += 1;
+        }
     }
     samples.previous_frame = Some(now);
+    samples.previous_context = Some(context.clone());
 }
 
 fn capture_runtime_performance(
@@ -492,31 +656,93 @@ fn capture_runtime_performance(
     capture: RuntimeCaptureDiagnostics,
     mut state: ResMut<RuntimeCaptureState>,
     mut exit: BenchmarkExit,
+    invalid_target: Option<Res<InvalidCaptureTarget>>,
 ) {
+    if invalid_target.is_some() && !state.finished {
+        state.finished = true;
+        exit.exits.write(AppExit::error());
+        return;
+    }
     if state.finished {
         return;
     }
     let now = Instant::now();
-    let samples = samples.0.lock().expect("render capture lock poisoned");
+    let mut samples = samples.0.lock().expect("render capture lock poisoned");
     let Some(first_frame) = samples.first_frame else {
         return;
     };
+    if now.duration_since(first_frame).as_secs_f32() >= config.warmup_seconds
+        && !samples.sample_started
+    {
+        samples.sample_started = true;
+        state.cpu_baseline = process_cpu_seconds().map(|cpu| (now, cpu));
+    }
+    if now.duration_since(first_frame).as_secs_f32() >= config.warmup_seconds {
+        // Bevy's recorder requires both encoder and pass timestamp writes.
+        // Encoder-only zero results cannot establish shader/pass cost.
+        let gpu_pass_timing = capture.render_device.features().contains(
+            WgpuFeatures::TIMESTAMP_QUERY
+                | WgpuFeatures::TIMESTAMP_QUERY_INSIDE_ENCODERS
+                | WgpuFeatures::TIMESTAMP_QUERY_INSIDE_PASSES,
+        );
+        for diagnostic in capture.diagnostics.iter() {
+            let path = diagnostic.path().as_str();
+            if !path.starts_with("render/")
+                || !(path.ends_with("/elapsed_cpu") || path.ends_with("/elapsed_gpu"))
+            {
+                continue;
+            }
+            if path.ends_with("/elapsed_gpu") && !gpu_pass_timing {
+                continue;
+            }
+            if let Some(measurement) = diagnostic.measurement() {
+                // Do not import the last warm-up result into the sample window.
+                if measurement
+                    .time
+                    .saturating_duration_since(first_frame)
+                    .as_secs_f32()
+                    < config.warmup_seconds
+                {
+                    continue;
+                }
+                if !state.render_timings.contains_key(path) {
+                    state.render_timings.insert(
+                        path.to_owned(),
+                        PassSamples {
+                            suffix: diagnostic.suffix.to_string(),
+                            ..Default::default()
+                        },
+                    );
+                }
+                let pass = state.render_timings.get_mut(path).expect("pass installed");
+                pass.record(measurement.time, measurement.value);
+            }
+        }
+    }
     if now.duration_since(first_frame).as_secs_f32() < config.warmup_seconds + config.sample_seconds
     {
         return;
     }
 
-    let sampled_frames = samples
+    let mut sampled_frames = samples
         .frame_ms
         .iter()
-        .filter(|(elapsed, _)| *elapsed >= config.warmup_seconds)
-        .copied()
+        .filter(|frame| frame.elapsed_seconds >= config.warmup_seconds)
+        .cloned()
         .collect::<Vec<_>>();
+    for frame in &mut sampled_frames {
+        frame.exclude_sample_boundary(
+            config.warmup_seconds,
+            config.warmup_seconds + config.sample_seconds,
+        );
+    }
     let adapter = samples.adapter.clone();
+    let omitted = samples.omitted;
     drop(samples);
     let mut frame_ms = sampled_frames
         .iter()
-        .map(|(_, frame_ms)| *frame_ms)
+        .filter(|frame| frame.exclusion == "none")
+        .map(|frame| frame.frame_ms)
         .collect::<Vec<_>>();
     frame_ms.sort_by(f64::total_cmp);
     let summary = RenderSummary::from_sorted_frame_ms(&frame_ms);
@@ -525,35 +751,60 @@ fn capture_runtime_performance(
         .get(&EntityCountDiagnosticsPlugin::ENTITY_COUNT)
         .and_then(|value| value.smoothed())
         .unwrap_or_default();
-    log::info!(
-        target: "keine::performance",
-        "CAPTURE  | {:.1}s · {} frames · {:.1} FPS avg · {:.1} FPS 1% low · {:.1} FPS p99-equivalent",
-        config.sample_seconds,
-        summary.frames,
-        summary.average_fps,
-        summary.one_percent_low_fps,
-        summary.p99_equivalent_fps,
-    );
-    log::info!(
-        target: "keine::performance",
-        "FRAME    | avg {:.2} ms · p50 {:.2} · p95 {:.2} · p99 {:.2} · max {:.2}",
-        summary.average_ms,
-        summary.p50_ms,
-        summary.p95_ms,
-        summary.p99_ms,
-        summary.maximum_ms,
-    );
-    let mut slow_frames = sampled_frames
-        .iter()
-        .copied()
-        .filter(|(_, frame_ms)| *frame_ms >= 1_000.0 / 30.0)
-        .collect::<Vec<_>>();
-    slow_frames.sort_by(|left, right| right.1.total_cmp(&left.1));
-    for (elapsed, frame_ms) in slow_frames.into_iter().take(5) {
+    if summary.frames == 0 {
+        log::info!(target: "keine::performance", "CAPTURE  | {:.1}s · no eligible active render intervals", config.sample_seconds);
+        log::info!(target: "keine::performance", "FRAME    | FPS and frame-time statistics unavailable; inspect excluded intervals");
+    } else {
         log::info!(
             target: "keine::performance",
-            "SLOW     | t={elapsed:.3}s · {frame_ms:.2} ms",
+            "CAPTURE  | {:.1}s · {} frames · {:.1} FPS avg · {:.1} FPS 1% low · {:.1} FPS p99-equivalent",
+            config.sample_seconds,
+            summary.frames,
+            summary.average_fps,
+            summary.one_percent_low_fps,
+            summary.p99_equivalent_fps,
         );
+        log::info!(
+            target: "keine::performance",
+            "FRAME    | avg {:.2} ms · p50 {:.2} · p95 {:.2} · p99 {:.2} · max {:.2}",
+            summary.average_ms,
+            summary.p50_ms,
+            summary.p95_ms,
+            summary.p99_ms,
+            summary.maximum_ms,
+        );
+    }
+    let budget = BudgetSummary::from_frames(&sampled_frames);
+    log::info!(target: "keine::performance", "SAMPLING | mode {} · render submission intervals, not display presentation · retained {} · omitted {omitted}",
+        if config.continuous { "continuous" } else { "runtime" }, sampled_frames.len());
+    log::info!(target: "keine::performance", "BUDGET   | measured {} · unknown {} · over budget {} · estimated missed refresh slots {} · longest over-budget run {}",
+        budget.measured, budget.unknown, budget.over_budget, budget.missed_slots, budget.longest_run);
+    for reason in ["sleep", "unfocused", "display-change", "sample-boundary"] {
+        log::info!(target: "keine::performance", "EXCLUDED | {reason}: {}", sampled_frames.iter().filter(|f| f.exclusion == reason).count());
+    }
+    if let Some((at, before)) = state.cpu_baseline
+        && let Some(after) = process_cpu_seconds()
+        && after >= before
+        && now > at
+    {
+        log::info!(target: "keine::performance", "PROCESS  | {:.3} CPU seconds / {:.3} wall seconds · {:.2}% CPU (one core = 100%)",
+            after - before, now.duration_since(at).as_secs_f64(), (after - before) / now.duration_since(at).as_secs_f64() * 100.0);
+    } else {
+        log::info!(target: "keine::performance", "PROCESS  | CPU counters unavailable");
+    }
+    let mut slow_frames = sampled_frames
+        .iter()
+        .filter(|f| {
+            f.exclusion == "none"
+                && f.context
+                    .budget_ms
+                    .is_some_and(|budget| f.frame_ms > budget)
+        })
+        .collect::<Vec<_>>();
+    slow_frames.sort_by(|left, right| right.frame_ms.total_cmp(&left.frame_ms));
+    for frame in slow_frames.into_iter().take(10) {
+        log::info!(target: "keine::performance", "SLOW     | t={:.3}s · {:.2} ms · scene {:?} next-cursor {} · {}:{} · {:?}",
+            frame.elapsed_seconds, frame.frame_ms, frame.context.scene, frame.context.cursor, frame.context.source, frame.context.line, frame.context.activity);
     }
     log::info!(
         target: "keine::performance",
@@ -608,39 +859,52 @@ fn capture_runtime_performance(
             bytes as f64 / 1_048_576.0,
         );
     }
-    let mut render_passes = capture
-        .diagnostics
-        .iter()
-        .filter_map(|diagnostic| {
-            let path = diagnostic.path().as_str();
-            (path.starts_with("render/")
-                && (path.ends_with("/elapsed_cpu") || path.ends_with("/elapsed_gpu")))
-            .then(|| {
-                diagnostic
-                    .average()
-                    .map(|value| (diagnostic.path().to_string(), value, &diagnostic.suffix))
-            })
-            .flatten()
+    let mut render_passes = state
+        .render_timings
+        .iter_mut()
+        .filter_map(|(path, pass)| {
+            if pass.values.is_empty() {
+                return None;
+            }
+            pass.values.sort_by(f64::total_cmp);
+            let average = pass.values.iter().sum::<f64>() / pass.values.len() as f64;
+            Some((
+                path,
+                average,
+                percentile(&pass.values, 0.99),
+                *pass.values.last().unwrap(),
+                pass.values.len(),
+                &pass.suffix,
+            ))
         })
         .collect::<Vec<_>>();
     render_passes.sort_by(|left, right| right.1.total_cmp(&left.1));
-    for (path, value, suffix) in render_passes.into_iter().take(8) {
-        log::info!(
-            target: "keine::performance",
-            "RENDER   | {path} {value:.3}{suffix}",
-        );
+    for kind in ["elapsed_cpu", "elapsed_gpu"] {
+        let passes = render_passes
+            .iter()
+            .filter(|(path, ..)| path.ends_with(kind))
+            .collect::<Vec<_>>();
+        if kind == "elapsed_gpu" && passes.is_empty() {
+            log::info!(target: "keine::performance", "GPU_TIME | no samples recorded (backend support/activity); unavailable is not zero");
+        }
+        for (path, average, p99, maximum, count, suffix) in passes.into_iter().take(8) {
+            log::info!(target: "keine::performance", "RENDER   | {path} avg {average:.3}{suffix} · p99 {p99:.3}{suffix} · max {maximum:.3}{suffix} · {count} samples");
+        }
     }
     if config.machine_output {
         eprintln!("{}", summary.machine_line());
-        for (elapsed_seconds, frame_ms) in sampled_frames {
-            eprintln!(
-                "{}",
-                FrameSample {
-                    elapsed_seconds,
-                    frame_ms,
-                }
-                .machine_line()
-            );
+        for frame in &sampled_frames {
+            eprintln!("{}", frame.raw_line());
+            if frame.exclusion == "none" {
+                eprintln!(
+                    "{}",
+                    FrameSample {
+                        elapsed_seconds: frame.elapsed_seconds,
+                        frame_ms: frame.frame_ms
+                    }
+                    .machine_line()
+                );
+            }
         }
     }
     state.finished = true;
@@ -688,18 +952,42 @@ fn slowest_percent_average_fps(sorted_frame_ms: &[f64], fraction: f64) -> f64 {
     }
     let count =
         ((sorted_frame_ms.len() as f64 * fraction).ceil() as usize).clamp(1, sorted_frame_ms.len());
-    sorted_frame_ms
-        .iter()
-        .rev()
-        .take(count)
-        .map(|frame_ms| 1_000.0 / frame_ms.max(f64::EPSILON))
-        .sum::<f64>()
-        / count as f64
+    let mean_ms = sorted_frame_ms.iter().rev().take(count).sum::<f64>() / count as f64;
+    1_000.0 / mean_ms.max(f64::EPSILON)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crossing_warmup_does_not_skip_the_cpu_baseline_wake() {
+        let samples = RenderCaptureSamples::default();
+        samples.0.lock().unwrap().first_frame =
+            Some(Instant::now() - std::time::Duration::from_secs(4));
+        let config = RuntimeCaptureConfig {
+            warmup_seconds: 3.0,
+            sample_seconds: 10.0,
+            machine_output: false,
+            target: None,
+            cameras: BenchmarkCameras::Runtime,
+            continuous: false,
+            refresh_hz: None,
+            samples: samples.clone(),
+        };
+        assert!(config.next_wake(true) <= std::time::Duration::from_millis(1));
+        samples.0.lock().unwrap().sample_started = true;
+        let wake = config.next_wake(true);
+        assert!(wake > std::time::Duration::from_secs(1));
+        samples.0.lock().unwrap().first_frame =
+            Some(Instant::now() - std::time::Duration::from_secs(5));
+        assert_eq!(config.next_wake(true), wake);
+        samples.0.lock().unwrap().first_frame =
+            Some(Instant::now() - std::time::Duration::from_millis(12_998));
+        assert!(config.next_wake(true) < std::time::Duration::from_millis(10));
+        config.next_wake(false);
+        assert!(config.next_wake(true) < wake);
+    }
 
     fn finish_capture(mut exit: BenchmarkExit) {
         exit.request();
@@ -769,6 +1057,18 @@ mod tests {
         assert_eq!(summary.one_percent_low_fps, 10.0);
         assert_eq!(summary.p99_equivalent_fps, 100.0);
         assert_eq!(RenderSummary::parse(&summary.machine_line()), Some(summary));
+    }
+
+    #[test]
+    fn tail_fps_uses_mean_duration_and_render_passes_deduplicate_idle_polls() {
+        assert_eq!(slowest_percent_average_fps(&[50.0, 150.0], 1.0), 10.0);
+        let mut pass = PassSamples::default();
+        let time = Instant::now();
+        pass.record(time, 1.0);
+        pass.record(time, 1.0);
+        pass.record(time + std::time::Duration::from_millis(16), 3.0);
+        pass.record(time + std::time::Duration::from_millis(32), f64::NAN);
+        assert_eq!(pass.values, [1.0, 3.0]);
     }
 
     #[test]

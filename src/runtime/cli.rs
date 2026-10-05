@@ -16,6 +16,9 @@ pub(crate) const BENCHMARK_REPORT_FILE: &str = "keine-benchmark-report.txt";
 #[derive(Debug, Clone)]
 pub(super) struct BenchmarkOptions {
     pub(super) seconds: f32,
+    pub(super) continuous: bool,
+    pub(super) raw: bool,
+    pub(super) refresh_hz: Option<f64>,
     pub(super) target: Option<BenchmarkTarget>,
     pub(super) cameras: crate::ui::performance::BenchmarkCameras,
 }
@@ -428,19 +431,28 @@ fn parse_development(args: &[OsString]) -> Result<CliCommand> {
 }
 
 fn parse_perf(args: &[OsString]) -> Result<CliCommand> {
-    const USAGE: &str = "keine perf <project> [--seconds N] [--timeline ID | --cursor N] [--camera PROFILE] | --startup [--runs N]";
+    const USAGE: &str = "keine perf <project> [--seconds N] [--timeline ID | --cursor N] [--camera PROFILE] [--mode runtime|continuous] [--hz N] [--scene ID] [--raw] | --startup [--runs N]";
     let project = required_path(args, 1, USAGE)?;
     let mut seconds = None;
     let mut target = None;
     let mut cameras = None;
     let mut startup = false;
     let mut runs = None;
+    let mut continuous = None;
+    let mut raw = false;
+    let mut refresh_hz = None;
+    let mut scene = None;
     let mut index = 2;
     while index < args.len() {
         let option = args[index]
             .to_str()
             .with_context(|| format!("perf option is not UTF-8; usage: {USAGE}"))?;
         match option {
+            "--raw" if !raw => {
+                raw = true;
+                index += 1;
+                continue;
+            }
             "--startup" if !startup => {
                 startup = true;
                 index += 1;
@@ -449,8 +461,8 @@ fn parse_perf(args: &[OsString]) -> Result<CliCommand> {
             "--seconds" if seconds.is_none() => {
                 let value = required_utf8(args, index + 1, USAGE)?;
                 let parsed = value.parse::<f32>().context("--seconds must be a number")?;
-                if !parsed.is_finite() || parsed < 1.0 {
-                    anyhow::bail!("--seconds must be at least 1");
+                if !parsed.is_finite() || !(1.0..=3600.0).contains(&parsed) {
+                    anyhow::bail!("--seconds must be between 1 and 3600");
                 }
                 seconds = Some(parsed);
             }
@@ -479,6 +491,23 @@ fn parse_perf(args: &[OsString]) -> Result<CliCommand> {
                     }
                 });
             }
+            "--mode" if continuous.is_none() => {
+                continuous = Some(match required_utf8(args, index + 1, USAGE)?.as_str() {
+                    "runtime" => false,
+                    "continuous" => true,
+                    _ => anyhow::bail!("--mode expects runtime or continuous"),
+                });
+            }
+            "--hz" if refresh_hz.is_none() => {
+                let hz = required_utf8(args, index + 1, USAGE)?.parse::<f64>()?;
+                if !hz.is_finite() || !(1.0..=1000.0).contains(&hz) {
+                    anyhow::bail!("--hz must be between 1 and 1000");
+                }
+                refresh_hz = Some(hz);
+            }
+            "--scene" if scene.is_none() => {
+                scene = Some(required_utf8(args, index + 1, USAGE)?);
+            }
             "--runs" if runs.is_none() => {
                 let parsed = required_utf8(args, index + 1, USAGE)?
                     .parse::<usize>()
@@ -493,7 +522,14 @@ fn parse_perf(args: &[OsString]) -> Result<CliCommand> {
         index += 2;
     }
     if startup {
-        if seconds.is_some() || target.is_some() || cameras.is_some() {
+        if seconds.is_some()
+            || target.is_some()
+            || cameras.is_some()
+            || continuous.is_some()
+            || refresh_hz.is_some()
+            || scene.is_some()
+            || raw
+        {
             anyhow::bail!("--startup cannot be combined with frame sampling options");
         }
         return Ok(run(
@@ -506,10 +542,26 @@ fn parse_perf(args: &[OsString]) -> Result<CliCommand> {
     if runs.is_some() {
         anyhow::bail!("--runs requires --startup");
     }
+    if let Some(scene) = scene {
+        target = Some(match target {
+            None => BenchmarkTarget::SceneCursor(scene, 0),
+            Some(BenchmarkTarget::Cursor(cursor)) => BenchmarkTarget::SceneCursor(scene, cursor),
+            _ => anyhow::bail!("--scene cannot be combined with --timeline"),
+        });
+    }
+    let continuous = continuous.unwrap_or(false);
+    if !continuous
+        && cameras.is_some_and(|c| c != crate::ui::performance::BenchmarkCameras::Runtime)
+    {
+        anyhow::bail!("camera decomposition requires --mode continuous");
+    }
     Ok(run(
         project,
         InteractiveMode::Benchmark(BenchmarkOptions {
             seconds: seconds.unwrap_or(15.0),
+            continuous,
+            raw,
+            refresh_hz,
             target,
             cameras: cameras.unwrap_or(crate::ui::performance::BenchmarkCameras::Runtime),
         }),
@@ -613,6 +665,10 @@ fn print_command_help(name: &str) {
         println!("  --seconds N       Sample duration (default: 15)");
         println!("  --timeline ID     Authored timeline name");
         println!("  --cursor N        Numeric cursor instead of a timeline");
+        println!("  --raw             Write attributed per-frame TSV records to stderr");
+        println!("  --mode MODE       runtime (normal sleep/wake) or continuous (render stress)");
+        println!("  --hz N            Frame budget override; otherwise use monitor refresh rate");
+        println!("  --scene ID        Start in this scene; optionally add --cursor N");
         println!("  --camera PROFILE  runtime, scene-ui, scene-dialog, or scene");
         println!("\nStartup options:");
         println!("  --startup         Measure isolated launches instead of frames");

@@ -184,16 +184,22 @@ fn document_rank(path: &Path) -> (u8, String) {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
 
     fn fixture() -> PathBuf {
+        static NEXT_FIXTURE: AtomicUsize = AtomicUsize::new(0);
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("keine-editor-workspace-{nonce}"));
+        let serial = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "keine-editor-workspace-{}-{nonce}-{serial}",
+            std::process::id(),
+        ));
         fs::create_dir_all(root.join("scripts")).unwrap();
         fs::create_dir_all(root.join("target")).unwrap();
         fs::write(root.join("scripts/02.shou"), "second").unwrap();

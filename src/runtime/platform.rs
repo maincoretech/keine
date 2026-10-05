@@ -394,12 +394,13 @@ pub(crate) fn update_lifecycle(
         .auto_hide
         .lifecycle(context.real_time.elapsed_secs(), &context.toggles);
     let blink_wait = blink_idle_wait(&context.state, virtual_time.max_delta());
-    let reactive_wait = auto_hide.1.min(IDLE_WAIT).min(blink_wait).min(
+    let mut reactive_wait = auto_hide.1.min(IDLE_WAIT).min(blink_wait).min(
         context
             .input_caret
             .next_toggle_in(context.real_time.elapsed_secs()),
     );
-    let benchmark_active = context.benchmark.is_some() || context.startup_capture.is_some();
+    let benchmark_active = context.benchmark.as_ref().is_some_and(|c| c.continuous)
+        || context.startup_capture.is_some();
     let next = if benchmark_active || (studio_sync && !focused && !companion_preview) {
         // A benchmark must keep measuring the render loop even when the
         // current visual-novel frame itself is static. Studio synchronization
@@ -421,6 +422,12 @@ pub(crate) fn update_lifecycle(
     } else {
         RuntimeActivity::Idle
     };
+    if let Some(capture) = &context.benchmark {
+        reactive_wait = reactive_wait.min(capture.next_wake(matches!(
+            next,
+            RuntimeActivity::Idle | RuntimeActivity::Background
+        )));
+    }
 
     let refresh_rate = context
         .windows
@@ -444,7 +451,7 @@ pub(crate) fn update_lifecycle(
     } else if companion_preview {
         focused_mode
     } else {
-        UpdateMode::reactive_low_power(IDLE_WAIT)
+        UpdateMode::reactive_low_power(reactive_wait)
     };
     if winit.unfocused_mode != unfocused_mode {
         winit.unfocused_mode = unfocused_mode;
@@ -1115,7 +1122,15 @@ mod tests {
             .init_resource::<Time<Virtual>>()
             .init_resource::<RuntimeActivity>()
             .insert_resource(WinitSettings::desktop_app());
-        install_runtime_capture(&mut app, 12.0, None, BenchmarkCameras::Runtime);
+        install_runtime_capture(
+            &mut app,
+            12.0,
+            None,
+            BenchmarkCameras::Runtime,
+            true,
+            None,
+            false,
+        );
         let monitor = app
             .world_mut()
             .spawn(Monitor {
@@ -1140,6 +1155,27 @@ mod tests {
             assert_eq!(winit.unfocused_mode, winit.focused_mode);
             assert!(!app.world().resource::<Time<Virtual>>().is_paused());
         }
+        app.world_mut()
+            .resource_mut::<crate::ui::performance::RuntimeCaptureConfig>()
+            .continuous = false;
+        app.world_mut().resource_mut::<AssetLoadingGate>().blocked = false;
+        app.world_mut().get_mut::<Window>(entity).unwrap().focused = true;
+        app.world_mut().run_system_once(update_lifecycle).unwrap();
+        assert_eq!(
+            *app.world().resource::<RuntimeActivity>(),
+            RuntimeActivity::Idle
+        );
+        let UpdateMode::Reactive {
+            wait,
+            react_to_user_events,
+            react_to_window_events,
+            ..
+        } = app.world().resource::<WinitSettings>().focused_mode
+        else {
+            panic!("normal capture must sleep");
+        };
+        assert!(wait > std::time::Duration::ZERO && wait <= IDLE_WAIT);
+        assert!(react_to_user_events && react_to_window_events);
     }
 
     #[test]

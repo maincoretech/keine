@@ -148,6 +148,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target/${{ matrix.engine_target_dir }}
+            target/${{ matrix.target }}/profiling
             target/runner
           key: release-rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ env.KEINE_RELEASE_FEATURES }}-${{ github.sha }}
           restore-keys: |
@@ -226,6 +227,16 @@ jobs:
           path: target/${{ steps.artifact.outputs.name }}/
           if-no-files-found: error
           retention-days: 14
+      - name: Remove key-bearing compiler outputs before cache save
+        if: always()
+        shell: bash
+        run: |
+          args=(--locked --target-dir target -p keine -p keine-loader)
+          if [[ -n "${{ matrix.target }}" ]]; then
+            args+=(--target "${{ matrix.target }}")
+          fi
+          cargo clean "${args[@]}" --profile release
+          cargo clean "${args[@]}" --profile profiling
 
   publish-benchmark:
     name: Publish benchmark release

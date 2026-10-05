@@ -192,6 +192,196 @@ Linux 使用 `video-ffmpeg`；CI 另跑 FFmpeg ASan。fuzz 的目录参数由
 
 ## 性能
 
+### 实际运行热点采样
+
+`tests/bench` 保留调用真实模块的基准；真实热点使用同一个 `perf` 入口与系统调用栈。
+原 `runtime-hotspots` 只测了复制的算法和空操作，无法反映现有引擎，已由本采集流程替换。
+默认 `--mode runtime` 保留正常休眠/失焦策略，采集只在预热结束和测量结束增加唤醒；
+`--mode continuous` 才持续绘制，并允许 camera 分解和循环选中的时间轴。
+`--scene ID --cursor N` 可定位原生章节的实际 action，cursor 从 0 开始；不存在或无法
+重放的目标报错退出，不能悄悄改测开场。不会修改项目或保存用户状态。
+
+```sh
+# macOS：与 release 相同优化，保留符号供系统 profiler 解析。
+# Linux 视频改用 video-ffmpeg；需安装对应开发库。
+cargo build --profile profiling --no-default-features --features bundled-opus,ui-sounds,startup-metrics,video-native --bin keine
+python3 dev/scripts/profile-runtime.py projects/tday --output target/performance/baseline --seconds 30 --stacks off
+python3 dev/scripts/profile-runtime.py projects/tday --output target/performance/stacks --seconds 30
+# 动态场景/全屏粒子用实际章节和 action；先由 Editor 核对目标。
+python3 dev/scripts/profile-runtime.py projects/tday --scene scene_0002 --cursor 10 --mode continuous --output target/performance/scene --seconds 30
+python3 -m unittest discover -s tests/bench/runtime -p 'test_*.py'
+```
+
+输出目录必须不存在，旧结果不会覆盖。`metadata.json` 保留命令、主机、构建工作区状态、
+二进制和源码清单哈希、退出状态及引擎汇总；`frames.json` 保留每帧 scene、next cursor、
+源码行、窗口物理尺寸、刷新预算、活动/焦点状态与排除原因；`slow-locations.json` 按超预算
+时间定位剧本位置，它是相关性，不能替代调用栈或宣称该 block 本身耗时。
+next cursor 是 Core 下一条指令的位置，源码行对应刚执行的 action；不是 Editor 视觉序号。
+活动状态来自本帧更新后的 lifecycle；是否经历休眠以上一帧安排的活动状态为准。
+源码增删改、非零退出、引擎 ERROR 或缺少逐帧输出均使采集失败；结果不能冒充有效基线。
+哈希清单覆盖项目目录内的剧本/配置；外部 mount、素材和用户设置须保持相同，不能宣称已冻结全部输入。
+运行窗口需保持前台；若全程失焦，保留排除记录及进程 CPU，但没有活跃帧时结论。
+
+系统调用栈在 macOS 用 `sample` 的 10 ms 间隔与 `-mayDie`，Linux 用 `perf record`
+的 99 Hz DWARF 栈；未安装/权限失败明确记录，Windows 自动调用栈采集尚未实现。
+采样涵盖进程启动，需区分初始化、活跃函数和系统等待；macOS `sample` 是所有线程的栈
+命中次数，不能当作函数的精确 CPU 百分比。安装了支持 Rust 的 `c++filt`/`llvm-cxxfilt`
+时另输出 `stacks-readable.txt`，原始符号和源码位置保留；缺少工具明确记录。
+Linux 在本机用 `perf report -i <输出目录>/perf.data` 阅读调用栈。
+系统采样会扰动被测进程，性能门槛以
+`--stacks off` 同条件基线为准，另一次栈采样用于定位。
+
+独立 benchmark 包完整复用上述采集 owner：增加单独的正常 runtime 休眠/唤醒样本，
+连续负载和 camera 分解另测；报告 RAWFRAME 附录保留全部 14 项逐帧字段及 workload/run。
+被排除的间隔同样保留。benchmark 单独附加源码文件名/行列映射，与 Program 指纹和 action
+数量校验匹配；有界读取上限 4 MiB，拒绝尾部字节、绝对路径与不匹配表。它不包含剧本正文，
+不改变正式 Program envelope/schema。没有映射的普通发行包不冒用 Loader 的合成 line 1。
+包内附同一 `profile-runtime.py`，省略 project/binary 时自动使用旁边的 Engine 和 Hakutaku
+包，不要求 Git 或作者工程；采集前后验证 game.haku 与所有 .taku 内容哈希。
+
+```sh
+# 在解压后的 benchmark 目录中；output 必须尚不存在。
+python3 profile-runtime.py --output baseline --seconds 30 --mode continuous --stacks off
+python3 profile-runtime.py --output stacks --seconds 30 --mode continuous
+# 将自运行 suite 的完整逐帧报告转为 JSON，不重复跑分。
+python3 profile-runtime.py --report keine-benchmark-report.txt --output report-json
+```
+
+benchmark 用 profiling 优化/符号构建，不启用阻断系统采样的 hardened；普通发行不变。
+自运行 suite 无需 Python，调用栈作为单独受扰动采样；Windows 自动栈采样和不支持的 GPU
+阶段计时仍明确缺测。完整渲染 coverage 依赖所选项目已有时间轴，缺少时不得声称全覆盖。
+正常 runtime 样本使用可见窗口，持续负载可使用隐藏窗口；保持各自模式，不能混合比较。
+采样的 reactive wait 在同一休眠阶段保持稳定，避免递减倒计时不断触发 Bevy 重排程；
+临近边界时有界缩短等待，避免 winit 的提前唤醒重复等待整个测量区间。
+
+Bevy 组件统一为 0.19.1；Core/Loader/authoring 仍不依赖 Bevy。版本修复覆盖文字测量/性能、2D 保留绘制项
+闪烁、UI 裁剪/颜色/相机、窗口 resolution 与缩放、mesh 重新分配和 MP4 音频解码。
+依据 [官方差异](https://github.com/bevyengine/bevy/compare/v0.19.0...v0.19.1)。
+0.19.1 未修复 macOS reactive 空闲循环；`dev/vendor/bevy_winit` 使用官方同版完整源码，
+只保留 `about_to_wait` 的待办/定时判断，包含新版 DPI/窗口修复。来源和单一改动见该目录
+KEINE-PATCH.md；上游许可随源码保留。无需求的 3D/光追等 feature 不自动扩大引擎范围。
+
+刷新预算优先取 `--hz`，否则取所在 Monitor；未知刷新率明确缺测，不假定 60 Hz。
+严格超过预算的次数、最长连续次数与估算错过刷新槽分别报告；提交间隔不是屏幕实际呈现，
+VSync 的微小抖动也可能超预算，不能把这些次数直接说成实际掉帧。跨越预热/结束边界的
+活跃间隔单独标记 `sample-boundary`，保留原始记录，不混入有效区间统计。正常模式排除有意休眠、
+失焦及窗口尺寸/刷新率改变的跨界间隔。CPU 是测量区间全进程累计时间之差，1 个核心为 100%；
+CPU 实际计数跨度见 PROCESS 的 wall seconds，唤醒偏晚时不能宣称覆盖整个名义采样区间。
+RSS 是进程生存期峰值，不能称作采样区间内峰值。逐帧记录最多 240,000 条，超限报告 omitted。
+CPU/GPU 渲染阶段分别排名，不相加嵌套 span；GPU 排名要求实际设备同时支持 encoder/pass
+时间戳写入。不满足时明确缺测，省略不足以证明渲染阶段成本的 encoder 零值。
+本机 Metal 不满足该条件；shader 热点需要另用 Instruments Metal GPU trace。
+阶段排名只覆盖已经记录 diagnostic span 的渲染工作，不能当作整个 Renderer 的成本清单。
+没有有效活跃间隔时，帧时/FPS 明确不可用；旧 portable 数值协议仍保留 frames=0 哨兵。
+
+设计/ABI 依据：[Cargo profiles](https://doc.rust-lang.org/cargo/reference/profiles.html)、
+[getrusage](https://man7.org/linux/man-pages/man2/getrusage.2.html)、
+[GetProcessTimes](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getprocesstimes)，
+以及锁定 `bevy_render 0.19.1/src/diagnostic/mod.rs` 的 Supported platforms。
+
+采集工具验证使用 Apple M5 Pro / 24 GiB / macOS 27.0.1、1920×1080、120 Hz、
+上述 profiling 构建，缓存未控制。原始命令：
+
+```sh
+python3 dev/scripts/profile-runtime.py tests/fixtures/native-smoke --output target/performance/verified-runtime-cpu --seconds 3 --stacks off
+python3 dev/scripts/profile-runtime.py projects/tday --scene start --cursor 16 --mode continuous --output target/performance/verified-stacks-cpu --seconds 3
+```
+
+静止/失焦采集保留 1 条排除记录，CPU 为 0.006 秒 / 3.000 秒，FPS 不可用；
+修复前同一命令的 `verified-runtime/` 漏记 CPU 起始计数，报告不可用。
+tday 采集保留 360 条，359 条有效、1 条 sample-boundary，调用栈已解析 Rust 函数和源码位置，
+CPU 区间为 3.000 秒；两个项目源码清单均未变化。该验证证明采集路径可用，
+不是引擎提速或“不掉帧”验收。日志/哈希见各输出目录；901 项 workspace 测试、
+3 项 Python 边界测试、clippy 与 `video-native` 无默认 feature 检查通过。
+Windows/Linux 交叉检查分别缺少 `x86_64-w64-mingw32-gcc` / `x86_64-linux-gnu-gcc`，
+未完成目标平台编译及实机采样；不标为通过。
+
+#### Bevy 0.19.1 与独立包验证
+
+同一 M5 Pro / 24 GiB / 120 Hz，profiling 优化构建，缓存未控制。三次 tday 命令均为：
+
+```sh
+python3 dev/scripts/profile-runtime.py projects/tday --scene start --cursor 16 --mode continuous --output target/performance/bevy0190-before --seconds 3 --stacks off
+# 更新后 output 分别为 bevy0191-after 和 bevy0191-after-repeat。
+```
+
+旧 0.19.0 记录平均 8.33 ms / p99 8.89 ms / CPU 26.76%；试开 multi_threaded 的
+0.19.1 两次为平均 8.36 ms / p99 8.79、8.77 ms / CPU 50.53%、54.06%，平均 FPS
+都约 120。试验期间有后台编译，这组记录不用于选择线程配置；下面补做同配置对照。
+未开多线程的独立 profiling Engine 只读复测 tday，记录平均 8.38 ms / p99 8.82 ms /
+max 24.88 ms / CPU 24.25%，源码哈希不变。此包没有 video-native feature，与前两组不同，
+不能宣称同配置提速；原始记录见 `target/performance/bevy0191-single-final/`。
+
+多线程复核：两版均为当前代码、Bevy 0.19.1、profiling、
+`--no-default-features --features bundled-opus,ui-sounds,startup-metrics`；实验版额外使用
+`bevy/multi_threaded`。关闭该 feature 指 Bevy 的并行调度开关，不表示整个 Engine
+没有渲染线程或其他工作线程。两版使用各自的内嵌 key，但只读加载明文项目，未使用 key。
+采样期间没有后台编译，不采集调用栈；三轮交替运行，持续画面每轮 8 秒、静止 5 秒，
+各预热 3 秒，缓存未控制。复现构建与采样命令：
+
+```sh
+cargo build --locked --profile profiling --no-default-features --features bundled-opus,ui-sounds,startup-metrics --bin keine
+# 将结果复制到 target/performance/threading-ab/binaries/single 后，再构建实验版：
+cargo build --locked --profile profiling --no-default-features --features bundled-opus,ui-sounds,startup-metrics,bevy/multi_threaded --bin keine
+# 将结果复制到 target/performance/threading-ab/binaries/multi。
+python3 dev/scripts/profile-runtime.py projects/tday --scene start --cursor 16 --mode continuous --binary target/performance/threading-ab/binaries/single --output target/performance/threading-ab/opening-r1-single --seconds 8 --stacks off
+python3 dev/scripts/profile-runtime.py tests/fixtures/letsgal-timeline --timeline 'benchmark stress composition' --mode continuous --binary target/performance/threading-ab/binaries/single --output target/performance/threading-ab/stress-r1-single --seconds 8 --stacks off
+python3 dev/scripts/profile-runtime.py tests/fixtures/native-smoke --mode runtime --binary target/performance/threading-ab/binaries/single --output target/performance/threading-ab/idle-r1-single --seconds 5 --stacks off
+# 每种负载再测试 multi；三轮顺序为 single/multi、multi/single、single/multi。
+```
+
+| 负载 | feature 关闭 CPU，三轮 | feature 开启 CPU，三轮 | 帧间隔 p99 关闭 / 开启，中位数 |
+| --- | --- | --- | --- |
+| tday start:16 | 13.32 / 15.12 / 13.67% | 48.65 / 44.74 / 52.78% | 9.30 / 10.22 ms |
+| 256 粒子与镜头特效 | 25.20 / 14.80 / 14.66% | 60.27 / 47.77 / 45.45% | 9.34 / 9.72 ms |
+| native-smoke 静止 | 0.62 / 0.40 / 0.28% | 0.35 / 0.40 / 0.36% | 休眠，无有效 FPS |
+
+CPU 按一个核心 100% 计算。持续画面多数平均约 120 FPS；特效开启版第二轮有一次
+1007.22 ms 停顿，该记录处于失焦状态，continuous 模式按约定保留，未确定原因，
+不能归因为多线程。静止关闭版第一轮的 CPU 计数区间为 4.183 秒，其余接近 5 秒；
+比例使用各自实际区间，不将其当作完整 5 秒。所有原始记录、命令、二进制 SHA256、
+输入前后哈希和比较 JSON 均在 `target/performance/threading-ab/`；33 个输入文件未改变，
+其中外层清单覆盖 LetsGal fixture 的 JSON 和素材，弥补采集工具原清单只包含本地剧本格式的范围。
+当前机器/负载下，开启 feature 未显示稳定帧时收益而持续 CPU 成本较高，默认继续关闭；
+Bevy 版本保持 0.19.1。这不是 Windows/Linux 或更大 ECS 负载的结论，也没有证明根因。
+
+采集自身的定时回归另用 debug 优化构建隔离验证：
+
+```sh
+target/debug/keine perf tests/fixtures/native-smoke --seconds 5 --mode runtime --raw
+```
+
+两次 CPU 为 0.018 / 5.000 秒（0.37%）与 0.016 / 4.999 秒（0.32%）；各保留
+2 条休眠记录，无有效活跃 FPS。验证的是采样器不再制造忙循环/重复等待，不能当作
+动态画面提速或跨平台性能验收。原始日志保存在 `target/performance/bevy0191-gates/`。
+
+独立包使用临时 identity 构建；自运行、报告转换与包内调用栈采集均从工程目录外运行：
+
+```sh
+# identity 仅用临时目录，结束后清理；不写 native-smoke 或 tday。
+(
+    umask 077
+    task_identity_dir="$(mktemp -d /private/tmp/keine-benchmark-identity.XXXXXX)"
+    trap 'rm -rf "$task_identity_dir"' EXIT
+    KEINE_HAKUTAKU_IDENTITY="$task_identity_dir/test.key" target/debug/keine bundle tests/fixtures/native-smoke --output target/performance/portable-0191-complete --benchmark
+)
+cd /private/tmp
+/Users/shiftz/dev/keine/target/performance/portable-0191-complete-benchmark/keine
+python3 /Users/shiftz/dev/keine/target/performance/portable-0191-complete-benchmark/profile-runtime.py --report /Users/shiftz/dev/keine/target/performance/portable-0191-complete-benchmark/keine-benchmark-report.txt --output /Users/shiftz/dev/keine/target/performance/portable-0191-complete-json
+python3 /Users/shiftz/dev/keine/target/performance/portable-0191-complete-benchmark/profile-runtime.py --output /Users/shiftz/dev/keine/target/performance/portable-0191-complete-stacks --seconds 3 --mode continuous
+```
+
+本机没有 GPU 阶段时间戳数据，报告明确 unavailable；native-smoke 没有作者特效时间轴，
+相应项明确 skipped。Windows/Linux 的 CI 构建定义已接入同一采集链路，尚未执行远端
+构建和目标平台实机采样。构建/接口回归、系统采样和视觉验收分别记录。
+最终独立包 suite 正常退出，JSON 保留 2,402 条记录、5 个 workload，源码均正确定位
+到 `main.shou:2`。其 runtime 区间为 0.018 CPU 秒 / 5.000 秒（0.37%），两条休眠记录
+不参与 FPS；包内独立采样脚本还能输出 native Rust 调用栈，采集前后包内容哈希一致。
+903 项 workspace 回归通过 / 8 ignored，6 项 Python 边界回归通过；fmt、Clippy、
+无默认 feature 的 video-native/publisher 检查和 cargo-deny 的四项审计通过。
+CI 缓存清理脚本已检查 native/Windows 参数语法，Cargo dry-run 覆盖 Engine/Loader
+产物及密钥份额 OUT_DIR；未实际删除本机编译缓存，远端执行尚未验证。
+
 ### Engine 静止 CPU
 
 本机 macOS ARM64、`publisher,video-native` debug 优化构建，tday 的夕阳背景和

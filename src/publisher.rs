@@ -34,6 +34,7 @@ struct PreparedProject {
     _staging: TempDir,
     staged: PathBuf,
     identity: Identity,
+    benchmark_map: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,7 +50,7 @@ pub fn pack_project(
     output: &Path,
 ) -> Result<()> {
     let output = publisher_output_path(output)?;
-    let prepared = prepare_project(project, loader)?;
+    let prepared = prepare_project(project, loader, false)?;
     publish_prepared(&prepared.staged, &prepared.identity, &output, |_| Ok(()))?;
     println!("{}", output.display());
     Ok(())
@@ -62,10 +63,20 @@ pub fn bundle_project(
     benchmark: bool,
 ) -> Result<()> {
     let output = publisher_output_path(output)?;
-    let prepared = prepare_project(project, loader)?;
+    let prepared = prepare_project(project, loader, benchmark)?;
     let mut features = detect_features(&prepared.staged)?;
     if benchmark {
         crate::runtime::package_benchmark::stage_payload(&prepared.staged)?;
+        fs::write(
+            prepared
+                .staged
+                .join("assets")
+                .join(crate::ui::performance::source_map::MAP_PATH),
+            prepared
+                .benchmark_map
+                .as_ref()
+                .context("benchmark source map missing")?,
+        )?;
         if !features.is_empty() {
             features.push(',');
         }
@@ -79,7 +90,13 @@ pub fn bundle_project(
     fs::write(&key_share_a, runtime_keys.key_share_a)?;
     fs::write(&key_share_b, runtime_keys.key_share_b)?;
     fs::write(&public_key, runtime_keys.public_key)?;
-    let engine = build_engine(&features, &key_share_a, &key_share_b, &public_key)?;
+    let engine = build_engine(
+        &features,
+        &key_share_a,
+        &key_share_b,
+        &public_key,
+        benchmark,
+    )?;
     publish_prepared(&prepared.staged, &prepared.identity, &output, |assembled| {
         assemble(assembled, &features, &engine, benchmark)
     })?;
@@ -90,6 +107,7 @@ pub fn bundle_project(
 fn prepare_project(
     project: &Path,
     loader: &keine_loader::LoaderRegistry,
+    benchmark: bool,
 ) -> Result<PreparedProject> {
     if !project.join("config.yaml").is_file() && !project.join("project.json").is_file() {
         bail!("{}", project_manifest_error(project));
@@ -120,7 +138,11 @@ fn prepare_project(
     let languages = loader
         .languages(&config.adapter.script)
         .context("failed to select script adapter")?;
-    build_program(&config, &content, &languages)?;
+    let scenes = build_program(&config, &content, &languages)?;
+    let benchmark_map = benchmark
+        .then(|| crate::ui::performance::source_map::encode(&content.root, &scenes))
+        .transpose()?;
+    drop(scenes);
     let staged = staging.path().join("project");
     materialize_release_payload(&source, &staged, &config, &content)?;
     // Do not create or load publisher secrets until every project-owned
@@ -130,6 +152,7 @@ fn prepare_project(
         _staging: staging,
         staged,
         identity,
+        benchmark_map,
     })
 }
 
@@ -640,6 +663,11 @@ fn detect_features(project: &Path) -> Result<String> {
 
 fn walk_files(root: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
+    // Resource-free projects may omit the asset directory. Registered missing
+    // files are still rejected by compilation and manifest validation.
+    if !root.try_exists()? {
+        return Ok(files);
+    }
     collect_files(root, &mut files)?;
     Ok(files)
 }
@@ -664,18 +692,32 @@ fn build_engine(
     key_share_a: &Path,
     key_share_b: &Path,
     public_key: &Path,
+    benchmark: bool,
 ) -> Result<PathBuf> {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let mut command = Command::new(cargo);
-    let mut all_features = String::from("hardened");
+    // Native samplers must be able to attach to benchmark engines.
+    let mut all_features = if benchmark {
+        String::new()
+    } else {
+        String::from("hardened")
+    };
     if !features.is_empty() {
-        all_features.push(',');
+        if !all_features.is_empty() {
+            all_features.push(',');
+        }
         all_features.push_str(features);
     }
     command
         .current_dir(repo_root)
-        .args(["build", "--release", "--locked", "--no-default-features"])
+        .args([
+            "build",
+            "--profile",
+            engine_profile(benchmark),
+            "--locked",
+            "--no-default-features",
+        ])
         .args(["--features", &all_features])
         .arg("--target-dir")
         .arg(repo_root.join("target"));
@@ -695,10 +737,19 @@ fn build_engine(
         bail!("engine build failed with status {status}");
     }
     let release = build_target.map_or_else(
-        || repo_root.join("target/release"),
-        |target| repo_root.join("target").join(target).join("release"),
+        || repo_root.join("target").join(engine_profile(benchmark)),
+        |target| {
+            repo_root
+                .join("target")
+                .join(target)
+                .join(engine_profile(benchmark))
+        },
     );
     Ok(release.join(format!("keine{}", env::consts::EXE_SUFFIX)))
+}
+
+fn engine_profile(benchmark: bool) -> &'static str {
+    if benchmark { "profiling" } else { "release" }
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -810,6 +861,21 @@ fn assemble(output: &Path, _features: &str, engine: &Path, benchmark: bool) -> R
     if benchmark {
         fs::write(output.join(crate::runtime::BENCHMARK_MARKER), b"7\n")?;
         fs::write(output.join("BENCHMARK.txt"), BENCHMARK_README)?;
+        fs::write(
+            output.join("profile-runtime.py"),
+            include_str!("../dev/scripts/profile-runtime.py"),
+        )?;
+        // Windows keeps the compiler's debug symbols in an adjacent PDB.
+        #[cfg(windows)]
+        fs::copy(engine.with_extension("pdb"), output.join("keine.pdb"))
+            .context("benchmark engine debug symbols missing")?;
+        #[cfg(target_os = "macos")]
+        {
+            let symbols = engine.with_extension("dSYM");
+            if symbols.is_dir() {
+                copy_tree(&symbols, &output.join("keine.dSYM"))?;
+            }
+        }
     }
     Ok(())
 }
@@ -939,7 +1005,40 @@ fn has_feature(features: &str, wanted: &str) -> bool {
     features.split(',').any(|feature| feature == wanted)
 }
 
-const BENCHMARK_README: &str = "Kēne performance benchmark\n\nWindows: double-click keine.exe once.\nmacOS/Linux: run ./keine once in a terminal.\n\nFor an external-drive first-touch sample, extract or copy the complete directory\nto that drive, safely eject and reconnect it, then run the executable once from\nthe drive. The report never claims that operating-system or drive caches are\nforcibly cold. Package I/O is reported as warm Hakutaku/cache throughput, not\nas the physical throughput of the selected disk.\n\nThe package measures seven isolated startup runs, the actual packaged opening\ncomposition, a three-pass camera decomposition of that opening, three daily\nworkloads, all eight feature-coverage timelines, and a combined render stress\nworkload. The seven known low-end hotspots run in three isolated processes;\nordinary 60 Hz acceptance paths run once. The runtime samples preserve\nproduction camera sleep/wake behavior; only decomposition samples pin explicit\ncameras. It then reads real project assets and an isolated 204.2 MiB encrypted\npayload covering Hakutaku Hot, Normal/CLOCK admission, Transient, sequential\nStreaming, random seeks, and four parallel streams. The synthetic payload\nmeasures package I/O rather than codec decoding; valid project WebP/Opus\nresources remain part of the rendered workloads.\n\nIt uses an invisible real window and GPU surface, not a headless renderer, so\nrendering costs remain in the results without interrupting normal desktop use.\nPersistence is disabled. The single keine-benchmark-report.txt records the\nsource commit, build time, compiled Cargo features, host/display metadata, true\nslowest-1% average FPS, P99-equivalent FPS, benchmark-only render-pass\ndiagnostics, and a bounded tab-separated raw-frame appendix. When complete,\nsend that report from this directory to the developer. Do not move the\nexecutable away from game.haku or the data directory.\n";
+const BENCHMARK_README: &str = r"Kēne performance benchmark
+
+Windows: double-click keine.exe. macOS/Linux: run ./keine in a terminal.
+The self-running suite writes keine-benchmark-report.txt beside the executable.
+No Python installation is needed for this suite.
+
+The report includes startup, normal runtime sleep/wake, continuous opening
+composition, camera decomposition, authored daily/feature/stress timelines,
+and warm Hakutaku/cache I/O. Missing authored timelines are explicitly skipped.
+RAWFRAME rows retain all frame fields: scene, next cursor, source line, update
+to render latency, refresh budget, focus, surface size, and exclusion reason.
+Render submission intervals are not display presentation or proof of drops.
+Unavailable GPU timing is reported as unavailable, never zero.
+
+For source-attributed JSON and native call stacks, install Python 3 and run:
+  python3 profile-runtime.py --output capture --seconds 30 --mode continuous
+Add --scene ID --cursor N or --timeline ID to target authored work.
+To convert the suite report without rerunning:
+  python3 profile-runtime.py --report keine-benchmark-report.txt --output report-json
+For undisturbed comparisons add --stacks off; sample stacks in a separate run.
+Normal runtime mode is the script default and opens a visible window. Leave it
+focused when measuring active frames. Deliberate idle sleep is excluded from FPS.
+macOS uses sample; Linux uses perf if installed and permitted. Windows automatic
+native stack collection is unavailable; frame, process and render metrics work.
+Symbols are retained with release optimization. Native tools may need platform
+permissions, and stack sampling perturbs measurements. No bundled sampler exists.
+Benchmark packages omit anti-debug hardening; use temporary test identities.
+
+The encrypted deterministic 204.2 MiB stress payload measures package I/O,
+not codec decoding or physical disk speed. Operating-system/drive caches are
+not forcibly cold. GPU shader analysis may require platform GPU tools.
+Persistence is disabled. Keep the executable, symbols, game.haku and data
+folder together. Send the report and, if captured, the capture directory.
+";
 
 #[cfg(test)]
 mod tests {
@@ -971,7 +1070,8 @@ mod tests {
             "{}-release",
             project.file_name().unwrap().to_string_lossy()
         ));
-        let prepared = prepare_project(project, &keine_loader::LoaderRegistry::default()).unwrap();
+        let prepared =
+            prepare_project(project, &keine_loader::LoaderRegistry::default(), false).unwrap();
         publish_prepared(&prepared.staged, &prepared.identity, &output, |_| Ok(())).unwrap();
         HakutakuArchive::open_with_keys(
             &output.join("game.haku"),
@@ -980,6 +1080,29 @@ mod tests {
             OpenPolicy::TrustFirstRelease,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn resource_free_benchmark_preserves_source_map_without_author_scripts() {
+        let temp = tempdir().unwrap();
+        let project = temp.path().join("source");
+        copy_tree(Path::new("tests/fixtures/native-smoke"), &project).unwrap();
+        assert!(!project.join("assets").exists());
+        let prepared =
+            prepare_project(&project, &keine_loader::LoaderRegistry::default(), true).unwrap();
+        assert!(
+            prepared
+                .benchmark_map
+                .as_ref()
+                .is_some_and(|map| !map.is_empty())
+        );
+        assert!(!prepared.staged.join("scripts").exists());
+        assert!(
+            prepared
+                .staged
+                .join(".keine/compiled/program.bin")
+                .is_file()
+        );
     }
 
     fn archive_files(archive: &HakutakuArchive) -> Vec<PathBuf> {
@@ -1093,7 +1216,8 @@ mod tests {
             "backgrounds:\n  room: assets/original.png\n",
         )
         .unwrap();
-        let error = match prepare_project(&project, &keine_loader::LoaderRegistry::default()) {
+        let error = match prepare_project(&project, &keine_loader::LoaderRegistry::default(), false)
+        {
             Ok(_) => panic!("registered PNG must not ship"),
             Err(error) => error,
         };
@@ -1310,12 +1434,18 @@ mod tests {
         let engine = root.path().join("engine");
         fs::create_dir(&output).unwrap();
         fs::write(&engine, b"engine").unwrap();
+        #[cfg(windows)]
+        fs::write(engine.with_extension("pdb"), b"symbols").unwrap();
 
         assemble(&output, "", &engine, true).unwrap();
 
         assert!(!output.join("run.sh").exists());
         assert!(!output.join("run.bat").exists());
         assert!(output.join(crate::runtime::BENCHMARK_MARKER).is_file());
+        assert_eq!(
+            fs::read_to_string(output.join("profile-runtime.py")).unwrap(),
+            include_str!("../dev/scripts/profile-runtime.py"),
+        );
         assert_eq!(
             fs::read_to_string(output.join("LICENSE")).unwrap(),
             include_str!("../LICENSE")
@@ -1440,7 +1570,14 @@ mod tests {
         )
         .unwrap();
 
-        assert!(prepare_project(project.path(), &keine_loader::LoaderRegistry::default()).is_err());
+        assert!(
+            prepare_project(
+                project.path(),
+                &keine_loader::LoaderRegistry::default(),
+                false
+            )
+            .is_err()
+        );
         assert!(!project.path().join(".keine/publisher.key").exists());
     }
 

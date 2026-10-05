@@ -4,6 +4,7 @@ members = [
     "crates/*",
 ]
 default-members = ["."]
+exclude = ["dev/vendor/bevy_winit"]
 
 [package]
 name = "keine"
@@ -49,7 +50,7 @@ ui-sounds = ["bundled-opus"]
 # fully debuggable. Raises the cost of runtime key extraction (debugger
 # attach, core dumps), see `platform::apply_hardening`.
 hardened = ["dep:libc", "dep:windows-sys"]
-# Benchmark-only process memory counters. Normal game builds do not include
+# Benchmark-only process CPU/memory counters. Normal game builds do not include
 # the platform APIs or execute their sampling path.
 startup-metrics = ["dep:libc", "dep:windows-sys"]
 # Publisher-only compiler and Hakutaku packer. Release game engines deliberately
@@ -110,6 +111,13 @@ strip = true
 codegen-units = 1
 panic = "abort"
 
+# Same optimizer as shipping, with symbols retained for system profilers.
+# Cargo profile contract: https://doc.rust-lang.org/cargo/reference/profiles.html
+[profile.profiling]
+inherits = "release"
+debug = 1
+strip = false
+
 [workspace.dependencies]
 keine-core = { path = "crates/core" }
 keine-loader = { path = "crates/loader" }
@@ -131,7 +139,7 @@ hakutaku-core = { git = "https://github.com/maincoretech/hakutaku", rev = "ce8fe
 hakutaku-pack = { git = "https://github.com/maincoretech/hakutaku", rev = "ce8fe3c" }
 libc = "0.2"
 windows-sys = { version = "0.61.2", default-features = false, features = ["Win32_System_Diagnostics_Debug", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading"] }
-bevy = { version = "0.19", default-features = false }
+bevy = { version = "0.19.1", default-features = false }
 libwebp-sys = "0.14.4"
 futures-lite = "2"
 rfd = { version = "0.17.2", default-features = false }
@@ -147,11 +155,11 @@ fs2 = "0.4"
 gpui-kit = { version = "=0.6.4" }
 image = "0.25.10"
 
-# Bevy 0.19 requests synthetic macOS redraws from `about_to_wait`. The pinned
+# Bevy 0.19.1 requests synthetic macOS redraws from `about_to_wait`. The local
 # fix keeps reactive idle asleep while preserving redraw-driven continuous
 # animation. Drop this override once upstream provides equivalent behavior.
 [patch.crates-io]
-bevy_winit = { git = "https://github.com/maincoretech/keine", rev = "916ee960f9cf571a3fe6c009aaa6f0667f69a060" }
+bevy_winit = { path = "dev/vendor/bevy_winit" }
 
 [dependencies]
 keine-core = { workspace = true }
@@ -202,11 +210,6 @@ harness = false
 [[bench]]
 name = "video-queue"
 path = "tests/bench/video/queue.rs"
-harness = false
-
-[[bench]]
-name = "runtime-hotspots"
-path = "tests/bench/runtime/hotspots.rs"
 harness = false
 
 [target.'cfg(target_os = "macos")'.dependencies]
