@@ -257,6 +257,14 @@ benchmark 用 profiling 优化/符号构建，不启用阻断系统采样的 har
 Bevy 组件统一为 0.19.1；Core/Loader/authoring 仍不依赖 Bevy。版本修复覆盖文字测量/性能、2D 保留绘制项
 闪烁、UI 裁剪/颜色/相机、窗口 resolution 与缩放、mesh 重新分配和 MP4 音频解码。
 依据 [官方差异](https://github.com/bevyengine/bevy/compare/v0.19.0...v0.19.1)。
+Windows DX12 锁文件约束：`wgpu-hal 29.0.4` 与 `gpu-allocator 0.28.0` 必须
+共同使用 `windows 0.62.2` 的 D3D12 类型。后者的宽版本范围可能在依赖更新时选中
+`0.57`/`0.58`；即使图中其他依赖合法使用旧版本，也不能让这两个 crate 的接口分裂。
+本次修复只对齐 Cargo.lock 中 gpu-allocator 的一条依赖，不新增 shim、依赖或关闭 DX12。
+`cargo check --locked --target x86_64-pc-windows-gnu -p wgpu-hal` 已通过，实际启用 dx12/vulkan；
+它验证后端 Rust 编译，不代替 Windows MSVC 完整 CI、链接与 benchmark 实机验收。
+修复后 publisher workspace check/Clippy、898 项测试（8 ignored）、fmt 与四项 cargo-deny 审计通过。
+
 0.19.1 未修复 macOS reactive 空闲循环；`dev/vendor/bevy_winit` 使用官方同版完整源码，
 只保留 `about_to_wait` 的待办/定时判断，包含新版 DPI/窗口修复。来源和单一改动见该目录
 KEINE-PATCH.md；上游许可随源码保留。无需求的 3D/光追等 feature 不自动扩大引擎范围。
