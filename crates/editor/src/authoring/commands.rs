@@ -60,7 +60,7 @@ impl InsertKind {
         })
     }
 
-    pub const ALL: [Self; 71] = [
+    pub const ALL: [Self; 70] = [
         Self::Narration,
         Self::Dialogue,
         Self::Background,
@@ -109,7 +109,6 @@ impl InsertKind {
         Self::Native("background.transform"),
         Self::Native("sprite.animate"),
         Self::Native("sprite.transition"),
-        Self::Native("se.loop"),
         Self::Native("se.stop"),
         Self::Native("video.play"),
         Self::Native("screen.curtain.show"),
@@ -185,7 +184,6 @@ impl InsertKind {
                 "background.transform" => "Background transform",
                 "sprite.animate" => "Animate sprite",
                 "sprite.transition" => "Sprite transition",
-                "se.loop" => "Loop sound",
                 "se.stop" => "Stop sound",
                 "video.play" => "Play video",
                 "screen.curtain.show" => "Show curtain",
@@ -278,8 +276,7 @@ impl InsertKind {
                 "sprite.sequence" | "sprite.select" | "sprite.select.when" | "stage.animate"
                 | "sprite.keyframes" | "assets.loading" | "sprite.update" => "Scene",
                 "camera.reset" | "camera.effect" | "stage.mask.show" | "stage.mask.hide" => "Scene",
-                "vocal.play" | "vocal.stop" | "video.stop" | "se.loop" | "se.stop"
-                | "video.play" => "Media",
+                "vocal.play" | "vocal.stop" | "video.stop" | "se.stop" | "video.play" => "Media",
                 "text.box"
                 | "text.presentation"
                 | "text.retract"
@@ -478,15 +475,6 @@ pub fn insertion_statement(
             "sprite.transition" => format!(
                 "sprite.transition({}_slot, enter: enter, duration: 300ms)",
                 first_figure.ok_or(AuthoringEditError::MissingInsertionPoint)?
-            ),
-            "se.loop" => format!(
-                "se.loop(ambient, {})",
-                index
-                    .assets
-                    .iter()
-                    .find(|entry| entry.kind == AssetKind::Effect)
-                    .map(|entry| entry.id.as_str())
-                    .ok_or(AuthoringEditError::MissingInsertionPoint)?
             ),
             "se.stop" => "se.stop(*)".to_owned(),
             "video.play" => format!(

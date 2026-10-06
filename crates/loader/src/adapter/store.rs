@@ -466,6 +466,7 @@ mod keine {
                 file: "bell.opus".into(),
                 volume: 0.4,
                 fade_in: 0.0,
+                fade_out: 0.0,
             }));
 
             let decoded = KeineStore

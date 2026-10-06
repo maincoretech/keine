@@ -1,11 +1,10 @@
 use super::*;
 
-pub(super) const MEDIA_COMMANDS: &[&str] = &["se.loop", "se.stop", "video.play"];
+pub(super) const MEDIA_COMMANDS: &[&str] = &["se.stop", "video.play"];
 
 /// Syntax fields shared by lowering and source-based editor consumers.
 pub(super) fn signature(name: &str) -> Option<(usize, &'static [&'static str])> {
     let signature: (usize, &[&str]) = match name {
-        "se.loop" => (2, &["volume", "fade"]),
         "se.stop" => (1, &["fade"]),
         "video.play" => (2, &["loop", "muted", "alpha", "skippable", "wait", "mode"]),
         _ => return None,
@@ -27,37 +26,16 @@ impl<'a> Parser<'a> {
             return None;
         }
         match name {
-            "se.loop" => {
-                let id = Some(self.v11_identifier(args.first(), "effect ID", report)?);
-                let file = Some(self.v11_identifier(args.get(1), "effect asset", report)?);
-                let volume = self.v11_volume(args, report)?;
-                Some(if self.named_arg(args, "fade").is_some() {
-                    Action::SoundEffect {
-                        id,
-                        file,
-                        volume,
-                        looped: true,
-                        fade: self.named_duration_checked(args, "fade", report)?,
-                    }
-                } else {
-                    Action::Effect { id, file, volume }
-                })
-            }
             "se.stop" => {
                 let id = self.v11_optional_star_id(args.first(), "effect ID", report)?;
                 let fade = self.named_duration_checked(args, "fade", report)?;
-                if id.is_none() && fade > 0.0 {
-                    report
-                        .diagnostics
-                        .push(self.error("se.stop(*) is immediate; fade requires an effect ID"));
-                    return None;
-                }
                 Some(Action::SoundEffect {
                     file: None,
                     volume: 1.0,
                     id,
                     looped: false,
                     fade,
+                    fade_out: 0.0,
                 })
             }
             "video.play" => {

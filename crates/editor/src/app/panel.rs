@@ -106,6 +106,7 @@ pub(super) enum ToolKind {
     Search,
     Assets,
     Characters,
+    Inspector,
     Problems,
     Performance,
     Build,
@@ -118,6 +119,7 @@ impl ToolKind {
             Self::Search => SEARCH_PANEL,
             Self::Assets => ASSETS_PANEL,
             Self::Characters => CHARACTERS_PANEL,
+            Self::Inspector => INSPECTOR_PANEL,
             Self::Problems => PROBLEMS_PANEL,
             Self::Performance => PERFORMANCE_PANEL,
             Self::Build => BUILD_PANEL,
@@ -133,6 +135,7 @@ impl ToolKind {
             Self::Search => PanelPayload::Search { root },
             Self::Assets => PanelPayload::Assets { root },
             Self::Characters => PanelPayload::Characters { root },
+            Self::Inspector => PanelPayload::Inspector { root },
             Self::Problems => PanelPayload::Problems { root },
             Self::Performance => PanelPayload::Performance { root },
             Self::Build => PanelPayload::Build { root },
@@ -404,6 +407,7 @@ pub(super) struct WorkbenchPanel {
     pub(super) block_heights: HashMap<usize, f32>,
     pub(super) block_layout: RefCell<super::blocks::layout::Cache>,
     pub(super) block_height_revision: u64,
+    pub(super) block_text_refresh_pending: bool,
     pub(super) resource_picker: Option<ResourcePicker>,
     pub(super) source_inspector_key: Option<SourceInspectorKey>,
     pub(super) source_inspector_inputs: Vec<Entity<InputState>>,
@@ -854,6 +858,7 @@ impl WorkbenchPanel {
                 block_heights: HashMap::new(),
                 block_layout: RefCell::new(super::blocks::layout::Cache::default()),
                 block_height_revision: 0,
+                block_text_refresh_pending: false,
                 resource_picker: None,
                 source_inspector_key: None,
                 source_inspector_inputs: Vec::new(),
@@ -1102,19 +1107,23 @@ impl WorkbenchPanel {
                                     return;
                                 }
                             };
-                            document_for_change
-                                .borrow_mut()
-                                .set_selection(position.line as usize, position.character as usize);
-                            cx.global_mut::<EditorDocuments>().set_selection(
-                                &root,
-                                relative.clone(),
-                                position.line as usize,
-                                position.character as usize,
-                            );
+                            if !panel.block_text_refresh_pending {
+                                document_for_change.borrow_mut().set_selection(
+                                    position.line as usize,
+                                    position.character as usize,
+                                );
+                                cx.global_mut::<EditorDocuments>().set_selection(
+                                    &root,
+                                    relative.clone(),
+                                    position.line as usize,
+                                    position.character as usize,
+                                );
+                            }
                             if changed {
-                                if relative
-                                    .extension()
-                                    .is_some_and(|extension| extension == "shou")
+                                if !panel.block_text_refresh_pending
+                                    && relative
+                                        .extension()
+                                        .is_some_and(|extension| extension == "shou")
                                 {
                                     let window_handle = syntax_window;
                                     let panel_entity = cx.weak_entity();
@@ -1137,7 +1146,9 @@ impl WorkbenchPanel {
                                         });
                                     });
                                 }
-                                schedule_authoring_refresh(&root, Some(&relative), cx);
+                                if !panel.block_text_refresh_pending {
+                                    schedule_authoring_refresh(&root, Some(&relative), cx);
+                                }
                                 panel.recovery_epoch = panel.recovery_epoch.wrapping_add(1);
                                 let epoch = panel.recovery_epoch;
                                 let document = document_for_change.clone();
@@ -1161,10 +1172,11 @@ impl WorkbenchPanel {
                                 }
                                 .to_owned();
                                 cx.global_mut::<EditorDocuments>().set_notice(&root, notice);
-                                if relative
-                                    .extension()
-                                    .and_then(|extension| extension.to_str())
-                                    == Some("shou")
+                                if !panel.block_text_refresh_pending
+                                    && relative
+                                        .extension()
+                                        .and_then(|extension| extension.to_str())
+                                        == Some("shou")
                                 {
                                     let preview_root = root.clone();
                                     let preview_relative = relative.clone();
@@ -1233,7 +1245,9 @@ impl WorkbenchPanel {
                                                     };
                                                     cx.global_mut::<EditorDocuments>()
                                                         .set_notice(&write_root, notice);
-                                                    cx.refresh_windows();
+                                                    if !panel.block_text_refresh_pending {
+                                                        cx.refresh_windows();
+                                                    }
                                                 });
                                             })
                                             .detach();
@@ -1243,7 +1257,9 @@ impl WorkbenchPanel {
                                 .detach();
                             }
                             cx.notify();
-                            cx.refresh_windows();
+                            if !panel.block_text_refresh_pending {
+                                cx.refresh_windows();
+                            }
                         },
                     );
                     panel._subscriptions.push(change_subscription);
@@ -1671,8 +1687,61 @@ mod tests {
                 row.state.update(cx, |state, cx| state.focus(window, cx));
             });
         });
+        cx.run_until_parked();
+        let row = panel.read_with(cx, |panel, cx| {
+            panel
+                .block_text_editors
+                .iter()
+                .find(|row| row.state.read(cx).value() == "你middle")
+                .unwrap()
+                .state
+                .clone()
+        });
+        cx.update(|_, cx| {
+            row.update(cx, |state, cx| {
+                let end = state.value().len();
+                state.set_selected_range(end..end, cx);
+            })
+        });
+        let selection = cx.read(|cx| cx.global::<EditorDocuments>().selection(&root).cloned());
+        let index_epoch =
+            cx.read(|cx| cx.global::<EditorDocuments>().workspaces[&root].index_epoch);
+        let source_selection = editor.read_with(cx, |editor, _| editor.selected_range());
+        for expected in ["你middl", "你midd", "你mid"] {
+            cx.simulate_keystrokes("backspace");
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                assert!(row.read(cx).focus_handle(cx).is_focused(window));
+                assert_eq!(row.read(cx).value(), expected);
+                assert!(
+                    document
+                        .borrow()
+                        .contents()
+                        .contains(&format!("\"{expected}\""))
+                );
+                assert_eq!(editor.read(cx).selected_range(), source_selection);
+                let documents = cx.global::<EditorDocuments>();
+                assert_eq!(documents.selection(&root).cloned(), selection);
+                assert_eq!(documents.workspaces[&root].index_epoch, index_epoch);
+                let panel = panel.read(cx);
+                assert!(panel.block_text_refresh_pending);
+                assert!(
+                    panel
+                        .block_text_editors
+                        .iter()
+                        .any(|editor| editor.state == row)
+                );
+            });
+        }
+        cx.simulate_input("dle");
+        cx.run_until_parked();
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
+        assert!(!panel.read_with(cx, |panel, _| panel.block_text_refresh_pending));
+        assert!(
+            cx.read(|cx| cx.global::<EditorDocuments>().workspaces[&root].index_epoch)
+                > index_epoch
+        );
         let draft = panel.read_with(cx, |panel, _| {
             panel.draft_text.as_ref().unwrap().state.clone()
         });
@@ -1696,6 +1765,22 @@ mod tests {
             draft.read_with(cx, |state, _| state.value().to_string()),
             "inserted\nsecond line"
         );
+        cx.update(|window, cx| {
+            let documents = cx.global_mut::<EditorDocuments>();
+            documents.register_panel(
+                &root,
+                path.clone(),
+                PanelId::from(panel.entity_id()),
+                panel.downgrade(),
+            );
+            documents.register_editor(&root, path.clone(), editor.downgrade());
+            assert!(panel.read(cx).block_text_refresh_pending);
+            super::super::edits::format_and_save(&root, window, cx).unwrap();
+            assert!(!panel.read(cx).block_text_refresh_pending);
+            assert!(draft.read(cx).focus_handle(cx).is_focused(window));
+            assert!(!document.borrow().is_dirty());
+        });
+        cx.run_until_parked();
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         panel.read_with(cx, |panel, _| {
@@ -1735,7 +1820,8 @@ mod tests {
             assert!(!editor.read(cx).focus_handle(cx).is_focused(window));
             assert_eq!(
                 super::super::edits::format_and_save(&root, window, cx).unwrap(),
-                1
+                // Formatting restores the version already saved above.
+                0
             );
             assert_eq!(
                 panel.read(cx).block_selection_anchor,

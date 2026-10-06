@@ -939,6 +939,7 @@ impl WorkbenchWindow {
             search_open,
             assets_open,
             characters_open,
+            inspector_open,
             problems_open,
             performance_open,
             build_open,
@@ -953,6 +954,7 @@ impl WorkbenchWindow {
                     documents.tool_panel(root, SEARCH_PANEL).is_some(),
                     documents.tool_panel(root, ASSETS_PANEL).is_some(),
                     documents.tool_panel(root, CHARACTERS_PANEL).is_some(),
+                    documents.tool_panel(root, INSPECTOR_PANEL).is_some(),
                     documents.tool_panel(root, PROBLEMS_PANEL).is_some(),
                     documents.tool_panel(root, PERFORMANCE_PANEL).is_some(),
                     documents.tool_panel(root, BUILD_PANEL).is_some(),
@@ -1035,6 +1037,17 @@ impl WorkbenchWindow {
                     })),
                 )
                 .child(activity_divider())
+                .child(
+                    activity_tool(
+                        "activity-inspector",
+                        AssetIconName::SlidersHorizontal,
+                        inspector_open,
+                        "Inspector",
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.show_tool(ToolKind::Inspector, window, cx)
+                    })),
+                )
                 .child(
                     activity_tool(
                         "activity-problems",

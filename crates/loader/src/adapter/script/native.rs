@@ -304,7 +304,7 @@ fn command_signature(name: &str) -> Option<(usize, &'static [&'static str])> {
         ),
         "move" => (2, &["duration", "easing", "blocking"]),
         "bgm" => (1, &["volume", "fade", "loop"]),
-        "se" => (1, &["volume", "id", "fade"]),
+        "se" => (1, &["id", "loop", "volume", "fade", "fade_out"]),
         "video" => (1, &["skippable"]),
         _ => return None,
     };
@@ -2247,46 +2247,55 @@ impl<'a> Parser<'a> {
                 }
             }
             "bgm" => {
-                let file = first.and_then(|arg| self.argument_identifier(arg));
-                let volume = self.named_number(&args, "volume").unwrap_or(1.0);
-                if !(0.0..=1.0).contains(&volume) {
-                    report
-                        .diagnostics
-                        .push(self.error("bgm volume must be between 0 and 1"));
-                    return None;
-                }
-                file.map(|file| Action::EiyashouBgm {
+                let file = self.v11_identifier(first, "BGM asset", report)?;
+                Some(Action::EiyashouBgm {
                     file: (file != "none").then_some(file),
-                    volume: volume as f32,
-                    fade_seconds: self.named_duration(&args, "fade").unwrap_or(0.0),
-                    looped: self.named_bool(&args, "loop").unwrap_or(true),
+                    volume: self.v11_volume(&args, report)?,
+                    fade_seconds: self.named_duration_checked(&args, "fade", report)?,
+                    looped: self.checked_bool(&args, "loop", true, report)?,
                 })
             }
             "se" => {
-                let file = first.and_then(|arg| self.argument_identifier(arg))?;
+                let file = self.v11_identifier(first, "effect asset", report)?;
                 let volume = self.v11_volume(&args, report)?;
-                if file == "none"
-                    && self.named_arg(&args, "id").is_none()
-                    && self.named_duration_checked(&args, "fade", report)? > 0.0
-                {
+                let looped = self.checked_bool(&args, "loop", false, report)?;
+                let id = match self.named_arg(&args, "id") {
+                    Some(arg) => Some(self.v11_identifier(Some(arg), "effect ID", report)?),
+                    None => None,
+                };
+                let fade = self.named_duration_checked(&args, "fade", report)?;
+                let fade_out = self.named_duration_checked(&args, "fade_out", report)?;
+                if looped && (id.is_none() || file == "none") {
                     report
                         .diagnostics
-                        .push(self.error("se(none) is immediate; fade requires an effect ID"));
+                        .push(self.error("looping se requires an asset and an explicit `id`"));
                     return None;
                 }
-                if self.named_arg(&args, "id").is_some() || self.named_arg(&args, "fade").is_some()
+                if self.named_arg(&args, "fade_out").is_some() && (looped || file == "none") {
+                    report
+                        .diagnostics
+                        .push(self.error("`fade_out` requires a non-looping effect asset"));
+                    return None;
+                }
+                // Basic effects keep compact IR; envelopes use SoundEffect.
+                if looped && self.named_arg(&args, "fade").is_none() {
+                    Some(Action::Effect {
+                        file: Some(file),
+                        volume,
+                        id,
+                    })
+                } else if file == "none"
+                    || id.is_some()
+                    || self.named_arg(&args, "fade").is_some()
+                    || self.named_arg(&args, "fade_out").is_some()
                 {
                     Some(Action::SoundEffect {
                         file: (file != "none").then_some(file),
-                        id: match self.named_arg(&args, "id") {
-                            Some(arg) => {
-                                Some(self.v11_identifier(Some(arg), "effect ID", report)?)
-                            }
-                            None => None,
-                        },
+                        id,
                         volume,
-                        looped: false,
-                        fade: self.named_duration_checked(&args, "fade", report)?,
+                        looped,
+                        fade,
+                        fade_out,
                     })
                 } else {
                     Some(Action::Effect {
@@ -2636,11 +2645,6 @@ impl<'a> Parser<'a> {
     fn named_bool(&self, args: &[Argument], name: &str) -> Option<bool> {
         self.named_arg(args, name)
             .and_then(|argument| self.argument_bool(argument))
-    }
-
-    fn named_duration(&self, args: &[Argument], name: &str) -> Option<f32> {
-        self.named_arg(args, name)
-            .and_then(|argument| self.argument_duration(argument))
     }
 
     fn named_duration_checked(
@@ -4292,7 +4296,7 @@ scene ending { "Done" }
     #[test]
     fn named_effects_keep_single_use_loop_and_fade_distinct() {
         let scenes = parse_native_scenes(
-            "scene a { se(door, id: hit, fade: 100ms), se.loop(rain, rain_asset, fade: 200ms), se.stop(hit, fade: 300ms) }",
+            "scene a { se(door, id: hit, fade: 100ms), se(rain_asset, id: rain, loop: true, fade: 200ms), se.stop(hit, fade: 300ms) }",
         );
         assert!(
             errors(&scenes[0]).is_empty(),
@@ -4310,12 +4314,43 @@ scene ending { "Done" }
         );
         for source in [
             "scene a { se(door, volume: 2) }",
-            "scene a { se.stop(*, fade: 1s) }",
+            "scene a { se(door, loop: true) }",
+            "scene a { se(none, id: rain, loop: true) }",
+            "scene a { se(door, id: rain, loop: maybe) }",
+            "scene a { se(door, fade: -1s) }",
+            "scene a { bgm(song, fade: -1s) }",
+            "scene a { bgm(song, fade: 450) }",
+            "scene a { bgm(song, volume: invalid) }",
+            "scene a { bgm(song, loop: maybe) }",
+            "scene a { se.loop(rain, rain_asset) }",
+            "scene a { se(click, fade_out: -1s) }",
+            "scene a { se(click, loop: true, id: rain, fade_out: 1s) }",
         ] {
             let scenes = parse_native_scenes(source);
             assert!(!errors(&scenes[0]).is_empty());
             assert!(scenes[0].report.actions.is_empty());
         }
+    }
+
+    #[test]
+    fn unified_se_accepts_named_argument_order_and_rejects_old_loop_command() {
+        let canonical = parse_native_scenes(
+            "scene a { se(rain_asset, volume: 0.5, loop: true, id: rain), se(click, fade_out: 200ms), se.stop(*, fade: 1s) }",
+        );
+        assert!(
+            errors(&canonical[0]).is_empty(),
+            "{:?}",
+            canonical[0].report.diagnostics
+        );
+        assert!(
+            matches!(&canonical[0].report.actions[1], Action::SoundEffect { fade_out, .. } if *fade_out == 0.2)
+        );
+        assert!(
+            matches!(&canonical[0].report.actions[2], Action::SoundEffect { file: None, id: None, fade, .. } if *fade == 1.0)
+        );
+        let old = parse_native_scenes("scene a { se.loop(rain, rain_asset) }");
+        assert!(!errors(&old[0]).is_empty());
+        assert!(old[0].report.actions.is_empty());
     }
 
     #[test]
@@ -4357,7 +4392,7 @@ scene ending { "Done" }
     #[test]
     fn lowers_v11_visual_and_media_commands_without_changing_v1() {
         let scenes = parse_native_scenes(
-            "scene a { sprite.transform(hero, x: -24, duration: 300ms), sprite.transform(hero, alpha: 0.5), background.transform(scale_x: 1.1), sprite.transform(hero, brightness: 0.7), sprite.animate(hero, shake, duration: 300ms), sprite.transition(hero, enter: enter, duration: 300ms), se.loop(rain, rain_sound, volume: 0.5), se.stop(rain), video.play(cutscene, movie, loop: true, muted: true, alpha: 0.8, skippable: false, wait: false, mode: mixed), background(room), sprite(hero, face) }",
+            "scene a { sprite.transform(hero, x: -24, duration: 300ms), sprite.transform(hero, alpha: 0.5), background.transform(scale_x: 1.1), sprite.transform(hero, brightness: 0.7), sprite.animate(hero, shake, duration: 300ms), sprite.transition(hero, enter: enter, duration: 300ms), se(rain_sound, id: rain, loop: true, volume: 0.5), se.stop(rain), video.play(cutscene, movie, loop: true, muted: true, alpha: 0.8, skippable: false, wait: false, mode: mixed), background(room), sprite(hero, face) }",
         );
         assert!(
             errors(&scenes[0]).is_empty(),

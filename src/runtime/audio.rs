@@ -1,4 +1,7 @@
 #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+mod tail;
+
+#[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
 use std::io::{self, Cursor};
 #[cfg(feature = "audio-opus")]
 use std::io::{Read, Seek, SeekFrom};
@@ -64,6 +67,8 @@ pub(crate) fn configure_audio(app: &mut App, _mounts: Vec<keine_loader::ContentM
     app.add_plugins(OpusAudioPlugin::new(_mounts));
     #[cfg(feature = "audio-seekable")]
     app.add_plugins(SeekableAudioPlugin);
+    #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+    tail::configure(app);
 }
 
 /// Compatibility formats are retained in compressed form for seek/loop.
@@ -594,6 +599,23 @@ pub(crate) fn authoring_audio_source(
         io::ErrorKind::Unsupported,
         "audio format is unavailable in this Engine build",
     ))
+}
+
+pub(crate) fn insert_effect_player(
+    entity: &mut EntityCommands<'_>,
+    asset_server: &AssetServer,
+    path: String,
+    settings: PlaybackSettings,
+    fade_out: f32,
+) {
+    #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+    if fade_out > f32::EPSILON {
+        tail::insert(entity, asset_server, path, settings, fade_out);
+        return;
+    }
+    #[cfg(not(any(feature = "audio-opus", feature = "audio-seekable")))]
+    let _ = fade_out;
+    insert_player(entity, asset_server, path, settings);
 }
 
 pub(crate) fn insert_player(

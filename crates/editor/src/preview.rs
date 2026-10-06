@@ -681,12 +681,12 @@ impl Worker {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct SourcePatch {
-    range: std::ops::Range<usize>,
-    replacement: Vec<u8>,
+pub(crate) struct SourcePatch {
+    pub(crate) range: std::ops::Range<usize>,
+    pub(crate) replacement: Vec<u8>,
 }
 
-fn source_patch(previous: &[u8], current: &[u8]) -> Option<SourcePatch> {
+pub(crate) fn source_patch(previous: &[u8], current: &[u8]) -> Option<SourcePatch> {
     if previous == current {
         return None;
     }

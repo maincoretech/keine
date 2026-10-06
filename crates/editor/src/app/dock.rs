@@ -1,4 +1,5 @@
 use super::*;
+use gpui_kit::base::ElementExt as _;
 
 pub(super) fn document_insert_target(
     dock: &DockArea,
@@ -106,11 +107,53 @@ struct EditorDockSkin {
 
 impl DockAreaRenderer for EditorDockSkin {
     fn frame(&self, window: &mut Window, cx: &mut App) -> Stateful<Div> {
+        let area = self.dock.clone();
         DockAreaRenderer::frame(self.inner.as_ref(), window, cx)
+            .min_w_0()
+            .on_prepaint(move |bounds, window, cx| {
+                let Some(area) = area.borrow().as_ref().and_then(WeakEntity::upgrade) else {
+                    return;
+                };
+                let sides = [DockPlacement::Left, DockPlacement::Right].map(|placement| {
+                    let dock = area.read(cx);
+                    let extent = if dock.is_dock_open(placement) && !dock.is_empty(placement, cx) {
+                        dock.dock_size(placement).unwrap_or_default()
+                    } else {
+                        px(0.)
+                    };
+                    (placement, extent)
+                });
+                let total = sides.iter().map(|(_, extent)| *extent).sum::<Pixels>();
+                let previous_width = area.read(cx).bounds().size.width;
+                let filled_host =
+                    previous_width > px(0.) && (total - previous_width).abs() <= px(0.5);
+                // Outer docks retain pixel widths after dragging or restoring a
+                // layout. Constrain them to the actual host when the window shrinks.
+                if bounds.size.width > px(0.)
+                    && total > px(0.)
+                    && (total > bounds.size.width + px(0.5)
+                        || filled_host && (bounds.size.width - previous_width).abs() > px(0.5))
+                {
+                    window.defer(cx, move |window, cx| {
+                        area.update(cx, |dock, cx| {
+                            for (placement, extent) in sides {
+                                if extent > px(0.) {
+                                    dock.set_dock_size(
+                                        placement,
+                                        extent * (bounds.size.width / total),
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            }
+                        });
+                    });
+                }
+            })
     }
 
     fn center_frame(&self, window: &mut Window, cx: &mut App) -> Stateful<Div> {
-        DockAreaRenderer::center_frame(self.inner.as_ref(), window, cx)
+        DockAreaRenderer::center_frame(self.inner.as_ref(), window, cx).min_w_0()
     }
 
     fn split_frame(&self, node: NodeId, _: Axis, _: &mut Window, _: &mut App) -> Stateful<Div> {
@@ -1685,5 +1728,115 @@ mod tab_motion_tests {
     fn drag_slot_width_stays_bounded() {
         assert_eq!(tab_drag_width("A", true), 72.);
         assert_eq!(tab_drag_width(&"Long document ".repeat(30), true), 240.);
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::super::panel::DocumentView;
+    use super::*;
+
+    struct DockHost(Entity<DockArea>);
+
+    impl Render for DockHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().flex().child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(self.0.clone()),
+            )
+        }
+    }
+
+    #[gpui_kit::test]
+    fn document_controls_stay_visible_beside_preview(cx: &mut gpui_kit::TestAppContext) {
+        let temporary =
+            std::env::temp_dir().join(format!("keine-header-layout-{}", std::process::id()));
+        let root = temporary.join("project");
+        fs::create_dir_all(root.join("scripts")).unwrap();
+        fs::write(
+            root.join("config.yaml"),
+            include_str!("../../../../tests/fixtures/native-smoke/config.yaml"),
+        )
+        .unwrap();
+        for name in ["start", "1", "2", "3", "4", "5"] {
+            fs::write(
+                root.join(format!("scripts/{name}.shou")),
+                format!("scene chapter_{name} {{ \"text\", }}"),
+            )
+            .unwrap();
+        }
+        let handle = cx.update(|cx| {
+            gpui_kit::init(cx);
+            let session = WorkspaceSession::open(&root).unwrap();
+            let mut documents =
+                EditorDocuments::new(AppPersistence::new(temporary.join("app-data")));
+            documents
+                .ensure_workspace_with_files(session.root(), session.files())
+                .unwrap();
+            cx.set_global(documents);
+            cx.open_window(gpui_kit::WindowOptions::default(), |window, cx| {
+                let dock_ref = Rc::new(RefCell::new(None));
+                let tab_motion = cx.new(|_| EditorTabMotion::default());
+                let dock = cx.new(|cx| {
+                    DockArea::new("header-test", None, window, cx).with_renderer(Rc::new(
+                        EditorDockSkin {
+                            inner: DockSkin::new(cx),
+                            root: session.root().to_owned(),
+                            dock: dock_ref.clone(),
+                            drop_overlays: Rc::default(),
+                            tab_scrolls: Rc::default(),
+                            tab_motion,
+                        },
+                    ))
+                });
+                *dock_ref.borrow_mut() = Some(dock.downgrade());
+                let mut layout = DockLayout::tabs();
+                for name in ["start", "1", "2", "3", "4", "5"] {
+                    let panel = WorkbenchPanel::from_payload(
+                        PanelPayload::Document {
+                            root: session.root().to_owned(),
+                            relative: format!("scripts/{name}.shou").into(),
+                            view: DocumentView::default(),
+                        },
+                        window,
+                        cx,
+                    )
+                    .unwrap();
+                    layout = layout.panel_view(panel_handle(panel), cx);
+                }
+                dock.update(cx, |dock, cx| {
+                    dock.set_dock(DockPlacement::Right, layout, window, cx);
+                    dock.set_dock_size(DockPlacement::Right, px(1222.), window, cx);
+                });
+                cx.new(|_| DockHost(dock))
+            })
+            .unwrap()
+        });
+        let cx = &mut gpui_kit::VisualTestContext::from_window(handle.into(), cx);
+        for width in [1200., 640., 480., 900.] {
+            cx.simulate_resize(size(px(width), px(800.)));
+            cx.run_until_parked();
+            for selector in [
+                "document-mode-Text",
+                "document-mode-Blocks",
+                "preview-window-control",
+            ] {
+                let bounds = cx
+                    .debug_bounds(selector)
+                    .unwrap_or_else(|| panic!("missing {selector} at {width}"));
+                assert!(
+                    bounds.left() >= px(0.) && bounds.right() <= px(width),
+                    "{selector} at {width}: {bounds:?}"
+                );
+                assert!(
+                    bounds.size.width > px(20.),
+                    "collapsed {selector}: {bounds:?}"
+                );
+            }
+        }
+        fs::remove_dir_all(temporary).unwrap();
     }
 }

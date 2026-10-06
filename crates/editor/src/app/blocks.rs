@@ -10,7 +10,92 @@ pub(super) use motion::BlockReorderMotion;
 pub(super) use picker::*;
 pub(super) use view::*;
 
+fn replace_inline_source(
+    editor: &mut EditorState,
+    edited: &str,
+    window: &mut Window,
+    cx: &mut Context<EditorState>,
+) {
+    let source = editor.value();
+    let Some(patch) = crate::preview::source_patch(source.as_bytes(), edited.as_bytes()) else {
+        return;
+    };
+    let selection = editor.selected_range();
+    let scroll = editor.scroll_offset();
+    let delta = patch.replacement.len() as isize - patch.range.len() as isize;
+    let map = |offset: usize| {
+        if offset <= patch.range.start {
+            offset
+        } else if offset >= patch.range.end {
+            offset.saturating_add_signed(delta)
+        } else {
+            patch.range.start + patch.replacement.len()
+        }
+    };
+    editor.set_selected_range(patch.range.clone(), cx);
+    editor.replace(
+        std::str::from_utf8(&patch.replacement).expect("UTF-8 source patch"),
+        window,
+        cx,
+    );
+    editor.set_selected_range(map(selection.start)..map(selection.end), cx);
+    editor.set_scroll_offset(scroll, cx);
+}
+
 impl WorkbenchPanel {
+    fn shift_text_offsets(&mut self, end: usize, delta: isize) {
+        if delta == 0 {
+            return;
+        }
+        let map = |offset: usize| {
+            if offset >= end {
+                offset.saturating_add_signed(delta)
+            } else {
+                offset
+            }
+        };
+        for row in &mut self.block_text_editors {
+            row.text_start = map(row.text_start);
+        }
+        self.block_heights = std::mem::take(&mut self.block_heights)
+            .into_iter()
+            .map(|(start, height)| (map(start), height))
+            .collect();
+        self.selected_blocks = self.selected_blocks.iter().copied().map(map).collect();
+        self.block_selection_anchor = self.block_selection_anchor.map(map);
+    }
+    pub(super) fn finish_block_text_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !std::mem::take(&mut self.block_text_refresh_pending) {
+            return;
+        }
+        let PanelContent::Document {
+            root,
+            relative,
+            editor,
+            document: Some(document),
+        } = &self.content
+        else {
+            return;
+        };
+        self.syntax_check = Some(completion::schedule_syntax_check(
+            editor.clone(),
+            self.syntax_marks.clone(),
+            (
+                cx.global::<EditorDocuments>().authoring(root),
+                relative.clone(),
+            ),
+            window,
+            cx,
+        ));
+        schedule_authoring_refresh(root, Some(relative), cx);
+        if let Ok(preview) = cx.global_mut::<EditorDocuments>().preview(root) {
+            preview.apply_snapshot(
+                relative.clone(),
+                document.borrow().contents().as_bytes().to_vec(),
+            );
+        }
+        cx.refresh_windows();
+    }
     pub(super) fn toggle_text_ending(
         &mut self,
         root: &Path,
@@ -324,7 +409,15 @@ impl WorkbenchPanel {
         self.block_scroll_pending = true;
         cx.global_mut::<EditorDocuments>()
             .set_block_selection(root, relative.clone(), vec![start]);
-        set_authoring_selection(root, relative.clone(), block.line, block.column, cx);
+        // Inline fields and source edits select the Inspector target without
+        // replaying a wait, sound or other command while the user edits it.
+        cx.global_mut::<EditorDocuments>().set_selection(
+            root,
+            relative.clone(),
+            block.line,
+            block.column,
+        );
+        cx.refresh_windows();
     }
     pub(super) fn insert_text_at(
         &mut self,
@@ -546,7 +639,9 @@ impl WorkbenchPanel {
             .snapshot(document_handle, None);
         let projection = &snapshot.projection;
         if self.block_height_revision != document.revision() {
-            self.block_heights.clear();
+            if !self.block_text_refresh_pending {
+                self.block_heights.clear();
+            }
             self.block_height_revision = document.revision();
         }
         if self.block_drag.session().is_none()
@@ -678,6 +773,7 @@ impl WorkbenchPanel {
     }
 
     pub(super) fn rebuild_visual_editors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.finish_block_text_edit(window, cx);
         self.block_text_editors.clear();
         self.visual_subscriptions.clear();
         self.draft_text = None;
@@ -773,6 +869,15 @@ impl WorkbenchPanel {
                 if matches!(event, InputEvent::Focus | InputEvent::Blur) {
                     cx.notify();
                 }
+                if matches!(event, InputEvent::Blur) {
+                    let panel = cx.weak_entity();
+                    cx.defer(move |cx| {
+                        let _ = cx.update_window(window_handle, |_, window, cx| {
+                            let _ = panel
+                                .update(cx, |panel, cx| panel.finish_block_text_edit(window, cx));
+                        });
+                    });
+                }
                 if matches!(event, InputEvent::PressEnter { shift: false, .. }) {
                     let panel = cx.weak_entity();
                     let state = state_for_change.clone();
@@ -819,22 +924,18 @@ impl WorkbenchPanel {
                     });
                 match result {
                     Ok(edited) => {
+                        panel.block_text_refresh_pending = true;
                         let delta = edited.len() as isize - source.len() as isize;
                         let changed_end = current
                             .as_ref()
                             .map_or(usize::MAX, |dialogue| dialogue.text_range.end);
                         let result = cx.update_window(window_handle, |_, window, cx| {
                             source_editor.update(cx, |editor, cx| {
-                                editor.replace_all(edited, window, cx);
+                                replace_inline_source(editor, &edited, window, cx);
                             });
                         });
-                        if result.is_ok() && delta != 0 {
-                            for editor in &mut panel.block_text_editors {
-                                if editor.text_start >= changed_end {
-                                    editor.text_start =
-                                        editor.text_start.saturating_add_signed(delta);
-                                }
-                            }
+                        if result.is_ok() {
+                            panel.shift_text_offsets(changed_end, delta);
                         }
                         let notice = match result {
                             Ok(()) => "Text updated from Blocks".to_owned(),
@@ -846,7 +947,7 @@ impl WorkbenchPanel {
                         .global_mut::<EditorDocuments>()
                         .set_notice(&root, format!("Block text edit blocked: {error}")),
                 }
-                cx.refresh_windows();
+                cx.notify();
             });
             self.block_text_editors.push(BlockTextEditor {
                 text_start: dialogue.text_range.start,
@@ -1243,6 +1344,15 @@ impl WorkbenchPanel {
             if panel.block_drag.committing() {
                 return;
             }
+            if matches!(event, InputEvent::Blur) {
+                let panel = cx.weak_entity();
+                cx.defer(move |cx| {
+                    let _ = cx.update_window(window_handle, |_, window, cx| {
+                        let _ =
+                            panel.update(cx, |panel, cx| panel.finish_block_text_edit(window, cx));
+                    });
+                });
+            }
             if matches!(event, InputEvent::PressEnter { shift: false, .. }) {
                 let panel = cx.weak_entity();
                 let state = state_for_change.clone();
@@ -1311,17 +1421,14 @@ impl WorkbenchPanel {
             };
             match edit {
                 Ok(edited) => {
+                    panel.block_text_refresh_pending = true;
                     let delta = edited.len() as isize - source_len as isize;
                     let changed_end =
                         changed_end.unwrap_or_else(|| draft.text_range.as_ref().unwrap().start);
-                    for row in &mut panel.block_text_editors {
-                        if row.text_start >= changed_end {
-                            row.text_start = row.text_start.saturating_add_signed(delta);
-                        }
-                    }
+                    panel.shift_text_offsets(changed_end, delta);
                     let result = cx.update_window(window_handle, |_, window, cx| {
                         source_editor.update(cx, |editor, cx| {
-                            editor.replace_all(edited, window, cx);
+                            replace_inline_source(editor, &edited, window, cx);
                         });
                     });
                     let notice = match result {
@@ -1335,7 +1442,6 @@ impl WorkbenchPanel {
                     .set_notice(&root, format!("Text edit blocked: {error}")),
             }
             cx.notify();
-            cx.refresh_windows();
         });
         self.visual_subscriptions.push(subscription);
         self.draft_text = Some(DraftTextBlock {
@@ -1354,6 +1460,7 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.finish_block_text_edit(window, cx);
         if self.document_mode != DocumentMode::Block {
             return;
         }

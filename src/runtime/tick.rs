@@ -2023,6 +2023,7 @@ fn start_stage_audio(state: &mut State, cue: &keine_core::StageAudioCue, runtime
                     file: cue.file.clone(),
                     volume: cue.volume.clamp(0.0, 1.0),
                     fade_in: cue.fade_in.max(0.0),
+                    fade_out: 0.0,
                 }));
         }
         StageAudioKind::Vocal => {
@@ -2215,6 +2216,18 @@ mod tests {
     #[test]
     fn selected_effect_fields_tween_through_runtime_and_instant_fields_stay_fixed() {
         let mut state = State::new();
+        state.camera_shake = Some(keine_core::CameraShakeState::new(
+            CameraShakeSpec {
+                amplitude: 2.0,
+                frequency: 1.0,
+                duration: 2.0,
+                axis: CameraShakeAxis::Both,
+                falloff: CameraShakeFalloff::Linear,
+            },
+            Default::default(),
+            42,
+            false,
+        ));
         let spec = keine_core::CameraTweenSpec {
             targets: keine_core::CameraTargets::SCENE,
             transform: None,
@@ -2251,7 +2264,7 @@ mod tests {
         assert!(advance_camera_transitions(&mut state, 0.5));
         assert_eq!(state.camera_effect.v2.speed_lines_intensity, 0.8);
         let shake = state.camera_shake.as_ref().unwrap();
-        assert_eq!((shake.spec.amplitude, shake.spec.frequency), (2.0, 1.0));
+        assert_eq!((shake.spec.amplitude, shake.spec.frequency), (3.0, 1.5));
         assert!((state.camera_effect.v2.speed_lines_density - 0.75).abs() < 0.00001);
         assert_eq!(state.camera_effect.v2.speed_lines_region_width, 1.5);
         assert!(advance_camera_transitions(&mut state, 0.5));
@@ -2453,6 +2466,7 @@ mod tests {
                         volume: 1.0,
                         looped: false,
                         fade: 0.0,
+                        fade_out: 0.0,
                     },
                     Action::SoundEffect {
                         file: Some("rain.wav".into()),
@@ -2460,6 +2474,7 @@ mod tests {
                         volume: 0.2,
                         looped: true,
                         fade: 1.0,
+                        fade_out: 0.0,
                     },
                     Action::Say {
                         speaker: String::new(),
@@ -2481,6 +2496,7 @@ mod tests {
                         volume: 1.0,
                         looped: false,
                         fade: 0.0,
+                        fade_out: 0.0,
                     },
                     Action::Say {
                         speaker: String::new(),
@@ -2616,6 +2632,29 @@ mod tests {
                 .map(|dialogue| dialogue.text.as_str()),
             Some("视频之后")
         );
+    }
+
+    #[test]
+    fn editor_seek_keeps_the_bus_dialogue_shaking_at_its_authored_strength() {
+        let scenes = keine_loader::parse_native_scenes(
+            "scene main { camera.move(all, shake: shake(amplitude: 1.6, frequency: 1.15, duration: 600000ms, amplitude_randomness: 0.8, frequency_randomness: 0.7), tween: [shake_amplitude, shake_frequency], duration: 600000ms, blocking: false), \"公交车的路程并不远\" }",
+        );
+        assert!(scenes[0].report.diagnostics.is_empty());
+        let mut state = State::new();
+        state.install_program(Program::from_scenes(
+            scenes
+                .into_iter()
+                .map(|scene| (scene.name.unwrap(), scene.report.actions)),
+        ));
+        state.current_scene = "main".into();
+        state.ended = false;
+        assert!(seek_editor_state(&mut state, "main", 1, 2));
+        assert_eq!(state.dialogue.as_ref().unwrap().text, "公交车的路程并不远");
+        assert!(advance_camera_transitions(&mut state, 0.25));
+        let shake = state.camera_shake.as_ref().unwrap();
+        assert_eq!((shake.spec.amplitude, shake.spec.frequency), (1.6, 1.15));
+        assert!(shake.offset_x.abs().max(shake.offset_y.abs()) > 0.1);
+        assert!(!state.presentation_blocked());
     }
 
     #[test]

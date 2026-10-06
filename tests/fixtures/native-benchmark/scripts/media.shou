@@ -3,7 +3,7 @@ scene audio_loop {
   sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
   sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
   bgm(music, volume: 0.03),
-  se.loop(ambience, click, volume: 0.03),
+  se(click, id: ambience, loop: true, volume: 0.03),
   stage.animate(bench_audio_loop, duration: 8s, infinite: true, blocking: false) {
     track(camera, x) { key(time: 0ms, value: 0) }
   },

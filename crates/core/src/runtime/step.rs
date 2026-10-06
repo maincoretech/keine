@@ -976,6 +976,7 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                                 file,
                                 volume: volume.clamp(0.0, 1.0),
                                 fade_in: 0.0,
+                                fade_out: 0.0,
                             },
                         ));
                     }
@@ -988,6 +989,7 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                 volume,
                 looped,
                 fade,
+                fade_out,
             } => {
                 let id = id
                     .as_ref()
@@ -1017,6 +1019,7 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                                 file,
                                 volume: volume.clamp(0.0, 1.0),
                                 fade_in: fade,
+                                fade_out: fade_out.max(0.0),
                             }))
                     }
                     (None, Some(id)) => {
@@ -1029,7 +1032,12 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
                             .effect_queue
                             .push(crate::EffectEvent::StopOneShot { id, fade_out: fade });
                     }
-                    (None, None) => state.effect_queue.push(crate::EffectEvent::Stop),
+                    (None, None) => {
+                        state.looping_effects.clear();
+                        state
+                            .effect_queue
+                            .push(crate::EffectEvent::StopAll { fade_out: fade });
+                    }
                 }
             }
             Action::Vocal { file, volume } => {
@@ -3257,6 +3265,44 @@ mod tests {
     }
 
     #[test]
+    fn global_effect_stop_clears_loops_and_preserves_requested_tail_fade() {
+        let mut state = state_with(vec![
+            Action::SoundEffect {
+                file: Some("rain.opus".into()),
+                id: Some("rain".into()),
+                volume: 0.4,
+                looped: true,
+                fade: 0.3,
+                fade_out: 0.0,
+            },
+            Action::SoundEffect {
+                file: Some("click.opus".into()),
+                id: None,
+                volume: 1.0,
+                looped: false,
+                fade: 0.1,
+                fade_out: 0.2,
+            },
+            Action::SoundEffect {
+                file: None,
+                id: None,
+                volume: 1.0,
+                looped: false,
+                fade: 0.5,
+                fade_out: 0.0,
+            },
+        ]);
+        assert_eq!(step(&mut state), StepResult::EndOfScene);
+        assert!(state.looping_effects.is_empty());
+        assert!(
+            matches!(&state.effect_queue[1], crate::EffectEvent::Play(cue) if cue.fade_out == 0.2)
+        );
+        assert!(
+            matches!(&state.effect_queue[2], crate::EffectEvent::StopAll { fade_out } if *fade_out == 0.5)
+        );
+    }
+
+    #[test]
     fn named_single_effects_do_not_loop_and_named_stop_preserves_envelopes() {
         let mut state = state_with(vec![
             Action::SoundEffect {
@@ -3265,6 +3311,7 @@ mod tests {
                 volume: 0.4,
                 looped: false,
                 fade: 0.2,
+                fade_out: 0.0,
             },
             Action::SoundEffect {
                 file: Some("rain.wav".into()),
@@ -3272,6 +3319,7 @@ mod tests {
                 volume: 0.3,
                 looped: true,
                 fade: 0.5,
+                fade_out: 0.0,
             },
             Action::Wait { seconds: 1.0 },
             Action::SoundEffect {
@@ -3280,6 +3328,7 @@ mod tests {
                 volume: 1.0,
                 looped: false,
                 fade: 0.1,
+                fade_out: 0.0,
             },
             Action::SoundEffect {
                 file: None,
@@ -3287,6 +3336,7 @@ mod tests {
                 volume: 1.0,
                 looped: false,
                 fade: 0.4,
+                fade_out: 0.0,
             },
         ]);
         assert_eq!(step(&mut state), StepResult::AwaitPresentation);

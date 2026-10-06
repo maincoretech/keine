@@ -7,7 +7,7 @@
 │   ├── Assets：映射资源 / Unmapped、搜索、类型/目录/标签过滤、List/Grid
 │   ├── Characters
 │   ├── Search：全文搜索，⌘/Ctrl+Shift+F；位于角色下方、分隔线上方
-│   └── 分隔线 → Problems / Performance / Build
+│   └── 分隔线 → Inspector / Problems / Performance / Build
 ├── 中央文档
 │   ├── Text：补全、语法着色、诊断、智能缩进/配对、右侧概览
 │   └── Blocks：同一份源码的结构投影、拖动、行内编辑、右侧概览
@@ -66,6 +66,7 @@ crates/editor/src/
 补全、Block、Inspector 共用 `commands` / `fields`，字段规则不依赖 GPUI 控件。
 原生命令及舞台事件的合法字段由 Loader 的各命令族 signature/字段表定义，
 通过 `native_command_argument_names` 供 Inspector 与补全使用；新增参数只改对应命令族。
+音效统一使用 `se(asset, id: ..., loop: true, volume: ..., fade: ...)`；Inspector/补全提供 Loop、Fade 和 Fade out 字段；旧 `se.loop` 不再解析，现有剧本须改为统一写法。
 显示顺序保留，标签、候选值、分组提示与特殊控件仍归 Editor。
 `style` 及对白尾部选项也复用 Loader 的字段表。`frame` 等子行通过
 `native_child_command_argument_names(parent, child)` 按父命令查询；Inspector 与补全
@@ -73,7 +74,7 @@ crates/editor/src/
 文本的 speaker/voice/stable ID 查询共用投影元数据；语音和尾部选项范围共用基于 Loader token
 的查询，由元数据、字段编辑及写回共同消费。多选摘要读取完整源码范围，
 Voice 修改保留尾部注释和选项；return/break 仍按 Loader 规则作为控制语句。
-插入模板覆盖全部 71 个入口的解析与可编辑 Block 回归；sprite.update 模板只换图，不隐式重设位置或缩放。
+插入模板覆盖全部 70 个入口的解析与可编辑 Block 回归；sprite.update 模板只换图，不隐式重设位置或缩放。
 立绘、移动、隐藏及聚焦规则模板优先共用已有角色 ID，使聚焦能够自动跟随对白。
 源码层只返回修改结果；应用修改、冲突保护与撤销仍由 `app/edits.rs` 负责。
 中文等 Unicode 标识符沿用 Loader 的字母/数字规则，编辑器不另设 ASCII 限制。
@@ -86,9 +87,11 @@ Text 概览的配色、换行与笔画在后台生成；改宽复用配色，新
 
 - 卡片背景与圆角由外框绘制，标签滚动层保持透明；Dock 内容与 drop overlay 共用定位容器。
 - Preview 控件参与最右上方标题栏的排版，单标签页、多标签页与视图缩放共用，不覆盖文档工具按钮。
+- 外侧 Dock 的保存宽度受当前工作区宽度约束；Editor 与 Preview 并排时，文档工具和 Preview 控件保持在窗口内，标签过多时滚动标签栏。
 - 淡色行内补全用右方向键/Tab 接受；回车保留缩进，智能处理引号/括号。
 - 不按输入法语言分支：组合文字确认后触发补全和语法检查，无固定等待；语法检查在后台执行，新修改取消旧任务，结果写回前复核源码和组合状态。
 - 空 Text Block 用 Delete/Backspace 删除；关键帧使用紧凑单行，嵌套结构保持层级。
+- Text Block 输入/退格只替换源码中的变化范围，保留输入实体、焦点、选中位置和行高；源码与恢复草稿持续同步，离开输入框、Enter 或保存时更新诊断、项目索引和 Preview，不逐字执行 Preview 或引入输入延迟。
 - 行内 `[wait=1000]` 在原位置显示 Wait 标签，选中直接编辑毫秒，不切回整行原始语法。
 - Block 类型标识着色；卡片不增加轮廓、左侧树形线或多余上下移动按钮。
 - Block 右键菜单取得面板焦点，点击外部、Esc 或执行菜单项关闭；滚动不关闭菜单，菜单内鼠标与滚动不穿透到下方卡片。
@@ -100,6 +103,7 @@ Text 概览的配色、换行与笔画在后台生成；改宽复用配色，新
 - 同命令 Block 多选可批量编辑共同的普通字段；不同命令/资源身份不混改，非法值整组拒绝。
 - Text/Blocks 概览显示语法/类型颜色、视口与选中位置，支持点击、拖动和独立滚动。
 - Inspector 分开 Position 锚点偏移、Transform 变换偏移和 Layout 分组；组内字段与批量修改保留未改参数。镜头补间选择 ◆ 随时长变化 / ◇ 立即应用。
+- 点击 Block 字段编辑只更新选中态与 Inspector，不触发 Preview 执行；显式 Replay 仍可执行选中指令。
 - Block 资源下拉框按内容宽度靠左，最长 320 px；参数紧跟资源，Inspector 保持字段宽度。
 - 极窄窗口由用户拖动分隔线或关闭一列 View 腾出文档空间；不为三列同时保留的极限布局裁剪类型标识或增加特殊适配。
 - 下拉框使用统一无描边触发器与淡入淡出 popup，支持搜索和键盘选择；减少动态效果时立即切换。

@@ -3,7 +3,7 @@
 当前原生脚本为 UTF-8 `.shou`，命令按对象职责分组。
 sprite.update、transform 与 camera 稀疏修改中省略的字段保留当前值；创建使用默认值。
 每条作者命令 lower 为 typed Engine Action，Editor 只编辑同一份源码。
-EYS v2.0 对应 `script.version: 2`；省略时默认 2，显式旧版本会被拒绝。已合并的旧命令不提供别名。
+EYS v2.0 对应 `script.version: 2`；省略时默认 2，显式旧版本会被拒绝。已合并的旧命令不提供别名；`se.loop` 已移除，循环音效统一写为 `se(asset, id: ..., loop: true)`。
 
 ## 工程
 
@@ -193,7 +193,7 @@ scene name { ... }
 │       └── event.audio(id, bgm | effect | vocal, asset, time: ..., volume: ..., loop: ..., ...)
 │   }
 ├── 音视频与粒子
-│   ├── se.loop(id, asset, volume: ..., fade: ...) / se.stop(id | *, fade: ...)
+│   ├── se(asset, id: ..., loop: ..., volume: ..., fade: ..., fade_out: ...) / se.stop(id | *, fade: ...)
 │   ├── vocal.play(asset, volume: ...) / vocal.stop()
 │   ├── video.play(id, asset, loop: ..., muted: ..., alpha: ..., skippable: ..., wait: ..., mode: fullscreen | mixed)
 │   ├── video.stop(id | *, fade: ...)
@@ -212,6 +212,10 @@ scene name { ... }
         └── resource(asset, kind: background | figure)
     }
 ```
+
+### 导入角色位置
+
+LetsGal `characters.json` v2 的 `left/top` 是画布坐标百分比，默认中心锚点；迁移将水平位置转换为 `center(x: ...)`，将从顶部向下的 Y 转换为 Kēne 从底部向上的偏移，并扣除当前表情/角色/全局基准高度的一半。显示、更新和序列帧使用同一换算，距离缩放保持中心不动。无版本的旧基线格式保持原行为；非中心的 v2 角色锚点显式报错，不猜测位置。场景图层保留自己的 `scene(...)` 坐标和锚点。
 
 ## 字段
 
@@ -283,7 +287,23 @@ input.request(...)
 
 `sprite.select.when` 使用严格 Eiyashou bool 表达式，运行时也按严格类型求值。`sprite.select` 的变量未赋值时使用 `default` 资源。`sprite.animate` 与 `sprite.transition` 的内建 preset 可写标识符；自定义 preset 写带引号的 ID。`text.style` 与段落 style 的自定义 ID 也可写带引号的字符串。
 
-`se.stop(id, fade: 200ms)` 按 ID 淡出并停止单次或循环音效；`se.stop(*)` 立即停止所有单次音效，不接受非零 fade；循环音效按 ID 停止。`hide(prefix*)` 匹配所有相同前缀的立绘 ID；`hide(*)` 匹配全部。此处的 `*` 不泛化到其他命令参数。
+`se.stop(id, fade: 200ms)` 按 ID 淡出并停止单次或循环音效；`se.stop(*, fade: 500ms)` 淡出所有音效，省略 fade 则立即停止。`hide(prefix*)` 匹配所有相同前缀的立绘 ID；`hide(*)` 匹配全部。此处的 `*` 不泛化到其他命令参数。
+
+## 音效的播放与停止
+
+```shou
+se(click, fade: 100ms, fade_out: 200ms),
+se(rain_sound, id: rain, loop: true, volume: 0.6, fade: 450ms),
+se.stop(rain, fade: 350ms),
+se.stop(*, fade: 500ms),
+```
+
+- 统一以资源为第一个参数；`id`、`loop`、`volume`、`fade`、`fade_out` 为命名参数，顺序任意。`loop: true` 必须提供 ID，不能与 `none` 同用。
+- 播放时 `fade` 是淡入；停止时是淡出；省略或 `0ms` 表示立即。淡入从实际音频播放开始计时，加载等待和暂停不消耗淡入时间。
+- 单次音效的 `fade_out` 在自然结尾前按解码样本渐隐，省略则保留原音频结尾；只能用于非循环资源。尾部长度超过音频长度时覆盖整个音频，不截断样本。生产 Opus 的时长来自资源元数据；开发用音频若解码器无法提供时长，会警告并保留原音频。
+- 单次音效也可以有 ID，用于提前停止。同 ID 循环音效换资源或音量时，旧音效保持播放，等新音效实际准备好后按新 `fade` 交叉淡入淡出；新音效暂停时不触发切换。显式停止仍可清理暂停或尚未加载的音效。
+- `se(none, fade: ...)` 同样停止全部音效；`se.stop(id | *, fade: ...)` 是明确的停止写法。停止与随后播放在同一帧发生时保留剧本顺序。
+- 旧 `se.loop(id, asset, ...)` 会报错，必须改为 `se(asset, id: id, loop: true, ...)`；迁移输出、Editor 插入、补全和 Inspector 均使用统一写法。
 
 ## 默认值与补间
 
@@ -294,13 +314,13 @@ input.request(...)
 ├── hide(id | prefix* | *)：前缀或全部立绘共用 hide
 ├── move：省略 duration 为瞬移；easing 为 linear / ease_in / ease_out / ease_in_out
 ├── bgm(asset, volume: 1, fade: 0ms, loop: true)：新曲 crossfade；bgm(none, fade: ...) 停止
-├── se(asset, volume: 1, id: optional_id, fade: 0ms)：一次性音效；ID 不使其循环；se(none) 停止
+├── se(asset, id: optional_id, loop: false, volume: 1, fade: 0ms, fade_out: 0ms)：循环需显式 ID；ID 本身不使其循环；se(none) 停止全部音效
 └── video(asset, skippable: true)：简写，非循环、fullscreen、阻塞到完成/跳过；video.play(id, asset, ...) 用于带 ID 的视频层
 过渡与补间
 ├── background / sprite / hide：blocking 默认 true；false 允许过渡时继续
 ├── camera.move 可同时设置变换、特效与 shake: shake(amplitude: 4, frequency: 2)，仍为一个原子 Action / Block
 │   ├── shake 的 duration 省略时沿用外层 duration；振幅、频率和时长必须齐全
-│   ├── tween: [shake_amplitude, shake_frequency] 控制从当前震动值补间；没有正在震动时从 0 开始
+│   ├── tween: [shake_amplitude, shake_frequency] 控制从当前震动值补间；没有正在震动时直接以指定振幅/频率启动，duration 为持续时长
 │   └── shake 内还可写 axis、falloff、amplitude_randomness、frequency_randomness；频率变化时连续积累相位
 ├── tween: [x, blur_amount]：仅列出的数值字段补间，其余立即生效
 │   ├── 省略：原整条命令补间；[]：立即生效且不额外阻塞
@@ -310,6 +330,18 @@ input.request(...)
     ├── 平滑变化；按程序、执行位置与时间确定，可重复预览
     └── 两项为 0 时保持原采样；不提供逐字 blip
 ```
+
+## 特效过渡的时间语义
+
+```shou
+camera.effect(all, fog_intensity: 0.55, duration: 500ms, blocking: false),
+"雾气逐渐升起",
+camera.effect(all, fog_intensity: 0, duration: 350ms, blocking: false),
+```
+
+`duration` 控制数值从当前值到目标值的过渡，不是效果寿命；完成后保持目标值。省略或显式 `0ms` 都是立即切换，迁移保留原作者时长。`blocking: false` 仍执行补间，但不阻止后续命令；后续相同目标的镜头命令会替换当前补间，不能靠连续两条非阻塞命令串联动画。需要顺序演出时使用阻塞、`wait` 或舞台时间线。
+
+`tween: [...]` 只补间列出的已提供数值，其他字段立即生效；`tween: []` 全部立即生效。LUT/色调预设及布尔开关是离散值，不自动交叉混合。关闭连续效果需把对应强度补间到 0。Editor 新建默认值和原剧本中的即时切换不能替代作者明确安排的淡入/淡出时长。
 
 ## 常用动态效果
 
@@ -387,7 +419,7 @@ config.yaml → layout.environment_light
 这是温和的背景色调适配，不产生方向光、阴影或法线重照明。
 现有立绘滤镜/说话者聚焦仍生效，镜头效果和 LUT 再按原渲染顺序处理。
 取色不包含镜头调色，避免反馈式重复染色；已有强手工调色可将该配置设为 0。
-已发布的旧编译包需要重新编译为 IR schema v6；Save v11 的状态布局不变，
+已发布的旧编译包需要重新编译为 IR schema v7；Save v11 的状态布局不变，
 修改脚本后的存档仍受 Program fingerprint 检查。
 
 ## Editor 补全与角色维护

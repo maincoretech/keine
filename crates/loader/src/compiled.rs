@@ -32,7 +32,7 @@ use crate::{LoadedScene, ResourceRef, SceneRef};
 
 pub const PROGRAM_MAGIC: [u8; 8] = *b"KEINEPG\0";
 pub const ENVELOPE_VERSION: u32 = 1;
-pub const IR_SCHEMA_VERSION: u32 = 6;
+pub const IR_SCHEMA_VERSION: u32 = 7;
 pub const FIXED_HEADER_LEN: usize = 64;
 
 /// Upper bounds for the envelope. Values follow the v2 plan; they are
@@ -568,6 +568,36 @@ mod tests {
     }
 
     #[test]
+    fn roundtrip_preserves_effect_tail_and_rejects_previous_schema() {
+        let mut input = fixture_input();
+        input.scenes[0].actions[0] = Action::SoundEffect {
+            file: Some("click.opus".into()),
+            id: Some("click".into()),
+            volume: 0.6,
+            looped: false,
+            fade: 0.1,
+            fade_out: 0.25,
+        };
+        input.fingerprint = Program::from_scenes(
+            input
+                .scenes
+                .iter()
+                .map(|scene| (scene.name.clone(), scene.actions.clone())),
+        )
+        .fingerprint();
+        let mut bytes = encode(&input).unwrap();
+        assert_eq!(
+            decode(&bytes, IR_SCHEMA_VERSION).unwrap().scenes,
+            input.scenes
+        );
+        bytes[12..16].copy_from_slice(&(IR_SCHEMA_VERSION - 1).to_le_bytes());
+        assert!(matches!(
+            decode(&bytes, IR_SCHEMA_VERSION),
+            Err(CompiledError::UnsupportedSchema { .. })
+        ));
+    }
+
+    #[test]
     fn roundtrip_distinguishes_omitted_sprite_fields_from_explicit_defaults() {
         let mut input = fixture_input();
         input.scenes[0].actions = vec![
@@ -797,7 +827,7 @@ mod tests {
     }
 
     fn const_hex() -> Vec<u8> {
-        const HEX: &str = "4b45494e45504700010000000600000000000000160000001900000000000000200f16e1d813f0f720c8f62ed624edd80000000000000000000000000000000005302e382e3105302e382e310677656267616c01020001057374617274021c0f0573636f72650531202b2031000000";
+        const HEX: &str = "4b45494e45504700010000000700000000000000160000001900000000000000200f16e1d813f0f720c8f62ed624edd80000000000000000000000000000000005302e382e3105302e382e310677656267616c01020001057374617274021c0f0573636f72650531202b2031000000";
         (0..HEX.len())
             .step_by(2)
             .map(|index| u8::from_str_radix(&HEX[index..index + 2], 16).unwrap())

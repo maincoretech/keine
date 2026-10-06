@@ -127,6 +127,9 @@ pub(super) fn document_mode_button(label: &'static str, selected: bool) -> State
         } else {
             "document-mode-block"
         })
+        .when(cfg!(test), |button| {
+            button.debug_selector(move || format!("document-mode-{label}"))
+        })
         .h(px(25.))
         .px_2()
         .flex()
@@ -239,6 +242,9 @@ pub(super) fn preview_window_controls(root: &Path, cx: &mut App) -> Option<State
     Some(
         div()
             .id("preview-window-control")
+            .when(cfg!(test), |controls| {
+                controls.debug_selector(|| "preview-window-control".into())
+            })
             .flex_none()
             .p(px(3.))
             .rounded(px(10.))

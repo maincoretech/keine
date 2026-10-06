@@ -442,12 +442,14 @@ pub struct EffectCue {
     pub file: String,
     pub volume: f32,
     pub fade_in: f32,
+    pub fade_out: f32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EffectEvent {
     Play(EffectCue),
     Stop,
+    StopAll { fade_out: f32 },
     StopOneShot { id: String, fade_out: f32 },
     StartLoop { id: String, fade_in: f32 },
     StopLoop { id: String, fade_out: f32 },
@@ -1744,6 +1746,7 @@ mod tests {
             file: "stale.wav".into(),
             volume: 1.0,
             fade_in: 0.0,
+            fade_out: 0.0,
         }));
 
         assert!(state.restore_backlog(0));

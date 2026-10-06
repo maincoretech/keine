@@ -230,6 +230,8 @@ const fn default_distance() -> f32 {
 #[serde(rename_all = "camelCase")]
 pub(super) struct CharactersDocument {
     #[serde(default)]
+    pub version: u32,
+    #[serde(default)]
     pub global_settings: CharacterGlobalSettings,
     #[serde(default)]
     pub attribute_template: Vec<CharacterAttribute>,
@@ -249,6 +251,8 @@ pub(super) struct CharacterAttribute {
 #[serde(rename_all = "camelCase")]
 pub(super) struct CharacterGlobalSettings {
     #[serde(default)]
+    pub default_anchor: String,
+    #[serde(default)]
     pub positions: Vec<CharacterPosition>,
     #[serde(default)]
     pub distance_presets: Vec<PortraitDistancePreset>,
@@ -261,6 +265,8 @@ pub(super) struct CharacterGlobalSettings {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct CharacterPortraitLayout {
+    #[serde(default)]
+    pub default_anchor: String,
     #[serde(default)]
     pub distance_presets: Vec<PortraitDistancePreset>,
     #[serde(default)]

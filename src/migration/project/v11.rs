@@ -139,26 +139,28 @@ pub(super) fn render(action: &Action, model: &MigrationModel) -> Result<Option<S
             volume,
             looped,
             fade,
+            fade_out,
         } => match file {
             Some(file) if *looped => format!(
-                "se.loop({}, {}, volume: {}, fade: {})",
+                "se({}, id: {}, loop: true, volume: {}, fade: {})",
+                asset_id(model, ResourceKind::Effect, file)?,
                 object_id(
                     model,
                     id.as_deref().context("looping effect requires an ID")?
                 )?,
-                asset_id(model, ResourceKind::Effect, file)?,
                 number(*volume),
                 duration(*fade)
             ),
             Some(file) => format!(
-                "se({}{}, volume: {}, fade: {})",
+                "se({}{}, volume: {}, fade: {}, fade_out: {})",
                 asset_id(model, ResourceKind::Effect, file)?,
                 id.as_ref()
                     .map(|id| object_id(model, id).map(|id| format!(", id: {id}")))
                     .transpose()?
                     .unwrap_or_default(),
                 number(*volume),
-                duration(*fade)
+                duration(*fade),
+                duration(*fade_out)
             ),
             None => format!(
                 "se.stop({}, fade: {})",
@@ -169,15 +171,22 @@ pub(super) fn render(action: &Action, model: &MigrationModel) -> Result<Option<S
                 duration(*fade)
             ),
         },
+        Action::Effect { file: None, id, .. } => format!(
+            "se.stop({})",
+            id.as_ref()
+                .map(|id| object_id(model, id))
+                .transpose()?
+                .unwrap_or("*")
+        ),
         Action::Effect {
             file,
             volume,
             id: Some(id),
         } => match file {
             Some(file) => format!(
-                "se.loop({}, {}, volume: {})",
-                object_id(model, id)?,
+                "se({}, id: {}, loop: true, volume: {})",
                 asset_id(model, ResourceKind::Effect, file)?,
+                object_id(model, id)?,
                 number(*volume)
             ),
             None => format!("se.stop({})", object_id(model, id)?),
@@ -989,16 +998,13 @@ fn expected_action(action: &Action, model: &MigrationModel) -> Result<Action> {
     }
     let normalized = normalize_camera(action);
     let mut expected = match normalized.as_ref() {
-        Action::Effect {
+        Action::Effect { file: None, id, .. } => Action::SoundEffect {
             file: None,
-            id: Some(id),
-            ..
-        } => Action::SoundEffect {
-            file: None,
-            id: Some(id.clone()),
+            id: id.clone(),
             volume: 1.0,
             looped: false,
             fade: 0.0,
+            fade_out: 0.0,
         },
         Action::UpdateSprite {
             id,
@@ -1650,6 +1656,36 @@ mod tests {
         patch.set_offset_x(0.0);
         patch.set_scale_x(1.02);
         let actions = [
+            // Long ambient shakes must retain their lifetime, mask and initial strength
+            // through migration; the duration is not a fade from an absent shake.
+            Action::SetCameraTween {
+                spec: Box::new(keine_core::CameraTweenSpec {
+                    targets: CameraTargets::ALL,
+                    transform: None,
+                    effect: None,
+                    v2: None,
+                    shake: Some(keine_core::CameraShakeTweenSpec {
+                        shake: keine_core::CameraShakeSpec {
+                            amplitude: 1.6,
+                            frequency: 1.15,
+                            duration: 600.0,
+                            axis: keine_core::CameraShakeAxis::Both,
+                            falloff: keine_core::CameraShakeFalloff::Linear,
+                        },
+                        randomness: keine_core::CameraShakeRandomness {
+                            amplitude: 0.8,
+                            frequency: 0.7,
+                        },
+                    }),
+                    fields: vec![
+                        keine_core::CameraTweenField::ShakeAmplitude,
+                        keine_core::CameraTweenField::ShakeFrequency,
+                    ],
+                    duration: 600.0,
+                    easing: Easing::Linear,
+                    blocking: false,
+                }),
+            },
             Action::WaitForAdvance,
             Action::RetractDialogue {
                 source: "我还蛮喜欢她的".into(),
@@ -1661,6 +1697,7 @@ mod tests {
                 volume: 0.3,
                 looped: false,
                 fade: 0.2,
+                fade_out: 0.3,
             },
             Action::SoundEffect {
                 file: Some("sound.wav".into()),
@@ -1668,6 +1705,7 @@ mod tests {
                 volume: 0.3,
                 looped: true,
                 fade: 0.2,
+                fade_out: 0.0,
             },
             Action::SoundEffect {
                 file: None,
@@ -1675,6 +1713,7 @@ mod tests {
                 volume: 1.0,
                 looped: false,
                 fade: 0.4,
+                fade_out: 0.0,
             },
             Action::Effect {
                 file: Some("sound.wav".into()),
@@ -1685,6 +1724,19 @@ mod tests {
                 file: None,
                 id: Some("electric-buzz".into()),
                 volume: 0.0,
+            },
+            Action::Effect {
+                file: None,
+                id: None,
+                volume: 0.0,
+            },
+            Action::SoundEffect {
+                file: None,
+                id: None,
+                volume: 1.0,
+                looped: false,
+                fade: 0.5,
+                fade_out: 0.0,
             },
             Action::SetCameraTransform {
                 targets: CameraTargets::ALL,
@@ -1862,6 +1914,18 @@ mod tests {
         ];
         for action in actions {
             let source = render(&action, &model).unwrap().unwrap();
+            if matches!(
+                &action,
+                Action::SoundEffect { looped: true, .. }
+                    | Action::Effect {
+                        file: Some(_),
+                        id: Some(_),
+                        ..
+                    }
+            ) {
+                assert!(source.starts_with("se(sound, id: "), "{source}");
+                assert!(source.contains("loop: true"), "{source}");
+            }
             let parsed = keine_loader::adapter::parse_native_scenes(&format!(
                 "scene example {{ {source} }}"
             ));
@@ -1875,6 +1939,16 @@ mod tests {
                 vec![expected_action(&action, &model).unwrap()],
                 "{source}"
             );
+            if let Action::SetCameraTween { spec } = &parsed[0].report.actions[0]
+                && spec.duration == 600.0
+            {
+                let mut state = keine_core::State::new();
+                assert!(!spec.start(&mut state, false));
+                let shake = state.camera_shake.as_mut().unwrap();
+                assert_eq!((shake.spec.amplitude, shake.spec.frequency), (1.6, 1.15));
+                shake.advance(0.25);
+                assert!(shake.offset_x.abs().max(shake.offset_y.abs()) > 0.5);
+            }
         }
     }
 }

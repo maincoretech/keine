@@ -642,6 +642,10 @@ pub(super) fn format_and_save(
     };
     let mut changes = Vec::new();
     for document in documents {
+        let path = document.borrow().relative_path().to_owned();
+        if let Some(panel) = cx.global::<EditorDocuments>().panel_entity_for(root, &path) {
+            let _ = panel.update(cx, |panel, cx| panel.finish_block_text_edit(window, cx));
+        }
         let (path, before) = {
             let document = document.borrow();
             (

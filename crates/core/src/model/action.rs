@@ -769,6 +769,7 @@ pub enum Action {
         volume: f32,
         looped: bool,
         fade: f32,
+        fade_out: f32,
     },
     ShowParticlesWithOptions {
         id: String,

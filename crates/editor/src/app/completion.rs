@@ -491,6 +491,20 @@ fn parameter_help(command: &str, name: &str) -> String {
         ("sprite.sequence", "fps") => {
             "Frames per second. Omit when every frame specifies duration."
         }
+        ("se", "loop") => "Repeat playback. true requires an explicit id; default false.",
+        ("se", "id") => "Playback ID for se.stop(id). An ID alone does not enable looping.",
+        ("se" | "bgm", "fade") => {
+            "Fade in when playing; fade out when stopping. Starts with actual playback; default 0ms."
+        }
+        ("se", "fade_out") => {
+            "Natural one-shot tail fade before the audio ends. Not valid for loops; default 0ms."
+        }
+        ("se.stop", "fade") => {
+            "Fade out this playback ID before stopping. * stops every effect, including loops; default 0ms."
+        }
+        ("camera.effect" | "camera.move" | "camera.reset", "duration") => {
+            "Transition time, not effect lifetime. 0ms is immediate; nonblocking transitions can be replaced by a later camera command."
+        }
         (_, "light") => "Enable background-derived lighting for this sprite. false disables it.",
         (_, "scale") => "Uniform scale; omit scale_x and scale_y when using scale.",
         (_, "blocking") => "Wait for completion before running the next command.",
@@ -1049,6 +1063,18 @@ mod tests {
             );
             values
         })
+    }
+
+    #[test]
+    fn unified_se_completes_loop_and_hides_legacy_command() {
+        assert_eq!(complete("scene start { se(click, lo"), Some("op: ".into()));
+        let source = "scene start { se(click, loop: tr";
+        let set = menu(source, source.len(), &AuthoringIndex::default()).unwrap();
+        assert_eq!(set.values, ["true"]);
+        let source = "scene start { se.";
+        let set = menu(source, source.len(), &AuthoringIndex::default()).unwrap();
+        assert!(set.values.iter().any(|value| value.starts_with("se.stop")));
+        assert!(!set.values.iter().any(|value| value.starts_with("se.loop")));
     }
 
     #[test]

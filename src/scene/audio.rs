@@ -5,7 +5,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use keine_core::{BgmState, EffectCue, EffectEvent, EffectState};
 
-use crate::runtime::audio::insert_player;
+use crate::runtime::audio::{insert_effect_player, insert_player};
 use crate::runtime::resources::{GameConfigResource, GameState};
 use crate::storage::settings::RuntimeSettings;
 use crate::ui::control_bar::{ButtonAction, ControlInput};
@@ -40,6 +40,7 @@ enum FadeDirection {
 pub struct EffectPlayer {
     id: Option<String>,
     looping: bool,
+    current: bool,
     base_volume: f32,
     applied_volume: Option<f32>,
 }
@@ -52,6 +53,7 @@ pub(crate) struct PlaybackEnvelope {
     elapsed: f32,
     duration: f32,
     despawn_on_finish: bool,
+    waiting_handoff: bool,
 }
 
 impl PlaybackEnvelope {
@@ -64,6 +66,7 @@ impl PlaybackEnvelope {
             elapsed: 0.0,
             duration,
             despawn_on_finish: false,
+            waiting_handoff: false,
         }
     }
 
@@ -74,6 +77,7 @@ impl PlaybackEnvelope {
         self.elapsed = 0.0;
         self.duration = duration;
         self.despawn_on_finish = true;
+        self.waiting_handoff = false;
         if duration <= f32::EPSILON {
             self.gain = 0.0;
         }
@@ -116,6 +120,7 @@ pub struct AudioAnimationActivity(pub bool);
 struct EffectEventBatch {
     plays: Vec<EffectCue>,
     stop_all_one_shots: bool,
+    stop_all: Option<f32>,
     one_shot_fade_outs: HashMap<String, f32>,
     loop_fade_ins: HashMap<String, f32>,
     loop_fade_outs: HashMap<String, f32>,
@@ -133,6 +138,14 @@ impl EffectEventBatch {
                     // later plays in their authored order.
                     batch.plays.clear();
                     batch.stop_all_one_shots = true;
+                }
+                EffectEvent::StopAll { fade_out } => {
+                    batch.plays.clear();
+                    batch.stop_all_one_shots = false;
+                    batch.stop_all = Some(fade_out.max(0.0));
+                    batch.one_shot_fade_outs.clear();
+                    batch.loop_fade_ins.clear();
+                    batch.loop_fade_outs.clear();
                 }
                 EffectEvent::StopOneShot { id, fade_out } => {
                     batch
@@ -229,12 +242,24 @@ pub fn sync_bgm(
     context.activity.0 = true;
 }
 
+type EnvelopeQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static mut PlaybackEnvelope,
+        Option<&'static AudioSink>,
+        Option<&'static EffectPlayer>,
+    ),
+    Without<BgmPlayer>,
+>;
+
 pub fn animate_audio(
     time: Res<Time>,
     settings: Res<RuntimeSettings>,
     state: Res<GameState>,
     mut bgm_players: Query<(Entity, &mut BgmPlayer, Option<&mut AudioSink>)>,
-    mut envelopes: Query<(Entity, &mut PlaybackEnvelope), Without<BgmPlayer>>,
+    mut envelopes: EnvelopeQuery,
     mut activity: ResMut<AudioAnimationActivity>,
     mut commands: Commands,
 ) {
@@ -316,7 +341,41 @@ pub fn animate_audio(
         }
         animating |= player.direction != FadeDirection::Settled;
     }
-    for (entity, mut envelope) in &mut envelopes {
+    // Keep the outgoing loop audible until its replacement actually starts.
+    let ready: Vec<_> = envelopes
+        .iter()
+        .filter_map(|(_, envelope, sink, player)| {
+            let player = player?;
+            (player.looping
+                && player.current
+                && envelope.waiting_handoff
+                && sink.is_some_and(|sink| !sink.is_paused()))
+            .then(|| (player.id.clone(), envelope.duration))
+        })
+        .collect();
+    for (entity, mut envelope, sink, player) in &mut envelopes {
+        if let Some(player) = player.filter(|player| player.looping)
+            && let Some((_, duration)) = ready.iter().find(|(id, _)| *id == player.id)
+        {
+            if player.current {
+                envelope.waiting_handoff = false;
+            } else if !envelope.despawn_on_finish {
+                if sink.is_none() || *duration <= f32::EPSILON {
+                    commands.entity(entity).despawn();
+                    continue;
+                }
+                envelope.fade_out(*duration);
+            }
+        }
+
+        // Audio assets load asynchronously. A fade-in must measure audible
+        // playback time, not spend its duration waiting for a sink or while paused.
+        // Stops can still retire a pending/paused player without ever playing it.
+        if !envelope.despawn_on_finish && sink.is_none_or(AudioSinkPlayback::is_paused) {
+            // A paused sink resumes through input; it does not need active frames.
+            animating |= sink.is_none() && (envelope.is_animating() || envelope.waiting_handoff);
+            continue;
+        }
         let finished = envelope.advance(time.delta_secs());
         if finished && envelope.despawn_on_finish {
             commands.entity(entity).despawn();
@@ -335,7 +394,7 @@ pub fn sync_effects(
     settings: Res<RuntimeSettings>,
     asset_server: Res<AssetServer>,
     mut playback: ResMut<EffectPlayback>,
-    mut players: Query<(Entity, &EffectPlayer, &mut PlaybackEnvelope)>,
+    mut players: Query<(Entity, &mut EffectPlayer, &mut PlaybackEnvelope)>,
     mut commands: Commands,
 ) {
     let has_event = !state.effect_queue.is_empty();
@@ -357,6 +416,7 @@ pub fn sync_effects(
     let EffectEventBatch {
         plays,
         stop_all_one_shots,
+        stop_all,
         one_shot_fade_outs,
         loop_fade_ins,
         loop_fade_outs,
@@ -373,42 +433,59 @@ pub fn sync_effects(
                 file: &cue.file,
                 volume: cue.volume,
                 fade_in: cue.fade_in,
+                fade_out: cue.fade_out,
             },
         );
     }
 
-    for (entity, player, mut envelope) in &mut players {
-        if !player.looping {
-            let fade_out = player
+    for (entity, mut player, mut envelope) in &mut players {
+        if envelope.despawn_on_finish {
+            continue;
+        }
+        let fade_out = if player.looping {
+            player
+                .id
+                .as_ref()
+                .and_then(|id| loop_fade_outs.get(id))
+                .copied()
+        } else {
+            player
                 .id
                 .as_ref()
                 .and_then(|id| one_shot_fade_outs.get(id))
-                .copied();
-            if stop_all_one_shots || fade_out == Some(0.0) {
+                .copied()
+        }
+        .or(stop_all)
+        .or((!player.looping && stop_all_one_shots).then_some(0.0));
+        if let Some(seconds) = fade_out {
+            player.current = false;
+            if seconds > f32::EPSILON {
+                envelope.fade_out(seconds);
+            } else {
                 commands.entity(entity).despawn();
-            } else if let Some(fade_out) = fade_out {
-                envelope.fade_out(fade_out);
             }
             continue;
         }
-
+        if !player.looping {
+            continue;
+        }
         let Some(id) = &player.id else { continue };
         let current = state.looping_effects.get(id);
-        let changed = current.is_some_and(|effect| {
-            effect.file != playback.loops.get(id).map_or("", |old| old.file.as_str())
-                || (effect.volume - player.base_volume).abs() > f32::EPSILON
-        });
-        if config_changed || changed {
+        let changed = current.is_some_and(|effect| playback.loops.get(id) != Some(effect));
+        if config_changed {
             commands.entity(entity).despawn();
+        } else if changed {
+            player.current = false;
         } else if current.is_none() {
-            match loop_fade_outs.get(id).copied().unwrap_or(0.0) {
-                fade_out if fade_out > f32::EPSILON => envelope.fade_out(fade_out),
-                _ => commands.entity(entity).despawn(),
-            }
+            commands.entity(entity).despawn();
         }
     }
     for (id, effect) in &state.looping_effects {
-        if !config_changed && playback.loops.get(id) == Some(effect) {
+        if !config_changed
+            && playback.loops.get(id) == Some(effect)
+            && stop_all.is_none()
+            && !loop_fade_outs.contains_key(id)
+        {
             continue;
         }
         spawn_effect(
@@ -422,6 +499,7 @@ pub fn sync_effects(
                 file: &effect.file,
                 volume: effect.volume,
                 fade_in: loop_fade_ins.get(id).copied().unwrap_or(0.0),
+                fade_out: 0.0,
             },
         );
     }
@@ -434,6 +512,7 @@ struct EffectSpawn<'a> {
     file: &'a str,
     volume: f32,
     fade_in: f32,
+    fade_out: f32,
 }
 
 fn spawn_effect(
@@ -443,7 +522,8 @@ fn spawn_effect(
     settings: &RuntimeSettings,
     effect: EffectSpawn<'_>,
 ) {
-    let envelope = PlaybackEnvelope::fade_in(effect.fade_in);
+    let mut envelope = PlaybackEnvelope::fade_in(effect.fade_in);
+    envelope.waiting_handoff = effect.looping;
     let mut entity = commands.spawn((
         Name::new(match &effect.id {
             Some(id) => format!("effect::{id}::{}", effect.file),
@@ -452,12 +532,13 @@ fn spawn_effect(
         EffectPlayer {
             id: effect.id,
             looping: effect.looping,
+            current: true,
             base_volume: effect.volume,
             applied_volume: None,
         },
         envelope,
     ));
-    insert_player(
+    insert_effect_player(
         &mut entity,
         asset_server,
         config.effect_path(effect.file),
@@ -479,6 +560,7 @@ fn spawn_effect(
             ),
             ..default()
         },
+        effect.fade_out,
     );
 }
 
@@ -661,6 +743,110 @@ mod tests {
 
     #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
     #[test]
+    fn loop_handoff_waits_for_new_sink_then_crossfades_without_restarting_outgoing_fade() {
+        let mut app = App::new();
+        app.init_resource::<Time>()
+            .init_resource::<RuntimeSettings>()
+            .insert_resource(GameState(keine_core::State::new()))
+            .init_resource::<AudioAnimationActivity>()
+            .add_systems(Update, animate_audio);
+        let player = |current| EffectPlayer {
+            id: Some("rain".into()),
+            looping: true,
+            current,
+            base_volume: 1.0,
+            applied_volume: None,
+        };
+        let (old_sink, _) = rodio::Player::new();
+        let outgoing = app
+            .world_mut()
+            .spawn((
+                player(false),
+                PlaybackEnvelope::fade_in(0.0),
+                AudioSink::new(old_sink),
+            ))
+            .id();
+        let mut envelope = PlaybackEnvelope::fade_in(1.0);
+        envelope.waiting_handoff = true;
+        let incoming = app.world_mut().spawn((player(true), envelope)).id();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs(2));
+        app.update();
+        assert_eq!(
+            app.world().get::<PlaybackEnvelope>(outgoing).unwrap().gain,
+            1.0
+        );
+        assert_eq!(
+            app.world().get::<PlaybackEnvelope>(incoming).unwrap().gain,
+            0.0
+        );
+        let (new_sink, _) = rodio::Player::new();
+        app.world_mut()
+            .entity_mut(incoming)
+            .insert(AudioSink::new(new_sink));
+        for _ in 0..4 {
+            app.world_mut()
+                .resource_mut::<Time>()
+                .advance_by(std::time::Duration::from_millis(250));
+            app.update();
+        }
+        assert!(app.world().get_entity(outgoing).is_err());
+        assert_eq!(
+            app.world().get::<PlaybackEnvelope>(incoming).unwrap().gain,
+            1.0
+        );
+        assert!(!app.world().resource::<AudioAnimationActivity>().0);
+    }
+
+    #[test]
+    fn global_fade_keeps_only_new_plays_and_restarts_loop_with_same_id() {
+        let mut queue = vec![
+            EffectEvent::Stop,
+            EffectEvent::StopOneShot {
+                id: "rain".into(),
+                fade_out: 0.1,
+            },
+            EffectEvent::StopLoop {
+                id: "rain".into(),
+                fade_out: 0.1,
+            },
+            EffectEvent::StartLoop {
+                id: "rain".into(),
+                fade_in: 0.0,
+            },
+            EffectEvent::Play(EffectCue {
+                id: None,
+                file: "old.opus".into(),
+                volume: 1.0,
+                fade_in: 0.0,
+                fade_out: 0.0,
+            }),
+            EffectEvent::StopAll { fade_out: 0.5 },
+            EffectEvent::StartLoop {
+                id: "rain".into(),
+                fade_in: 1.0,
+            },
+            EffectEvent::Play(EffectCue {
+                id: None,
+                file: "new.opus".into(),
+                volume: 1.0,
+                fade_in: 0.0,
+                fade_out: 0.0,
+            }),
+        ];
+        let batch = EffectEventBatch::drain(&mut queue);
+        assert_eq!(batch.stop_all, Some(0.5));
+        assert!(!batch.stop_all_one_shots);
+        assert!(batch.one_shot_fade_outs.is_empty());
+        assert!(batch.loop_fade_outs.is_empty());
+        assert_eq!(batch.plays.len(), 1);
+        assert_eq!(batch.plays[0].file, "new.opus");
+        assert_eq!(batch.loop_fade_ins["rain"], 1.0);
+    }
+
+    #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+    #[test]
     fn bgm_handoff_keeps_old_track_until_new_sink_exists() {
         let mut app = App::new();
         app.init_resource::<Time>()
@@ -721,6 +907,71 @@ mod tests {
         assert!(!app.world().get::<AudioSink>(incoming).unwrap().is_paused());
     }
 
+    #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+    #[test]
+    fn effect_fade_waits_for_playback_and_pause_but_pending_stop_finishes() {
+        let mut app = App::new();
+        app.init_resource::<Time>()
+            .init_resource::<RuntimeSettings>()
+            .insert_resource(GameState(keine_core::State::new()))
+            .init_resource::<AudioAnimationActivity>()
+            .add_systems(Update, animate_audio);
+        let incoming = app.world_mut().spawn(PlaybackEnvelope::fade_in(1.0)).id();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs(2));
+        app.update();
+        assert_eq!(
+            app.world().get::<PlaybackEnvelope>(incoming).unwrap().gain,
+            0.0
+        );
+        let (sink, _) = rodio::Player::new();
+        app.world_mut()
+            .entity_mut(incoming)
+            .insert(AudioSink::new(sink));
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_millis(250));
+        app.update();
+        assert_eq!(
+            app.world().get::<PlaybackEnvelope>(incoming).unwrap().gain,
+            0.25
+        );
+        app.world().get::<AudioSink>(incoming).unwrap().pause();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs(2));
+        app.update();
+        assert_eq!(
+            app.world().get::<PlaybackEnvelope>(incoming).unwrap().gain,
+            0.25
+        );
+        assert!(!app.world().resource::<AudioAnimationActivity>().0);
+        app.world().get::<AudioSink>(incoming).unwrap().play();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_millis(250));
+        app.update();
+        assert_eq!(
+            app.world().get::<PlaybackEnvelope>(incoming).unwrap().gain,
+            0.5
+        );
+        app.world().get::<AudioSink>(incoming).unwrap().pause();
+        app.world_mut()
+            .get_mut::<PlaybackEnvelope>(incoming)
+            .unwrap()
+            .fade_out(0.25);
+        let mut pending = PlaybackEnvelope::fade_in(1.0);
+        pending.fade_out(0.25);
+        let pending = app.world_mut().spawn(pending).id();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_millis(250));
+        app.update();
+        assert!(app.world().get_entity(incoming).is_err());
+        assert!(app.world().get_entity(pending).is_err());
+    }
+
     #[test]
     fn playback_envelope_fades_in_and_then_out_from_its_current_gain() {
         let mut envelope = PlaybackEnvelope::fade_in(2.0);
@@ -755,6 +1006,7 @@ mod tests {
                 file: "click.opus".into(),
                 volume: 1.0,
                 fade_in: 0.0,
+                fade_out: 0.0,
             }),
         ];
 
@@ -773,6 +1025,7 @@ mod tests {
                 file: "old.opus".into(),
                 volume: 1.0,
                 fade_in: 0.0,
+                fade_out: 0.0,
             }),
             EffectEvent::Stop,
         ];
@@ -791,12 +1044,14 @@ mod tests {
                 file: "first.opus".into(),
                 volume: 0.5,
                 fade_in: 0.1,
+                fade_out: 0.0,
             }),
             EffectEvent::Play(EffectCue {
                 id: Some("timeline:second".into()),
                 file: "second.opus".into(),
                 volume: 0.7,
                 fade_in: 0.2,
+                fade_out: 0.0,
             }),
             EffectEvent::Stop,
             EffectEvent::Play(EffectCue {
@@ -804,6 +1059,7 @@ mod tests {
                 file: "third.opus".into(),
                 volume: 0.9,
                 fade_in: 0.0,
+                fade_out: 0.0,
             }),
         ];
 
@@ -828,6 +1084,7 @@ mod tests {
                 file: "replacement.opus".into(),
                 volume: 0.7,
                 fade_in: 0.2,
+                fade_out: 0.0,
             }),
         ];
 

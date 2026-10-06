@@ -916,3 +916,15 @@ macOS 新 Editor 在现有 letsgal-native 验收 Keep files → Unmapped → Rem
 视觉验收直接操作当前构建的原生应用；不得为采证新增 screenshot hook、环境变量协议或自动化。
 输入检测由确认文字的 Change 事件触发，取消补全 120 ms、语法检查 180 ms 与派生索引 60 ms 固定等待；后台任务保留取消和过期结果保护，语法诊断写回前检查组合状态。fmt、workspace check/clippy/tests（727 passed、1 ignored）和 Editor debug 构建通过；macOS 新构建已目测淡色补全、右方向键接受、错误提示及撤销恢复。用户按本轮验证步骤反馈通过，中文 IME 组合/候选及确认后检测记为本机验收通过；不扩展为所有输入法或其他平台通过。
 构建、测试、包签名和 UI/音视频验收必须分别报告。历史一次通过不替代当前代码复验。
+
+Editor 输入与窄窗回归：`cargo test --workspace --features publisher,video-native` 为 910 passed / 8 ignored（IPC/Trash 在沙箱外运行）；fmt、workspace check（另含 hot-reload）、all-targets Clippy 和 Editor debug 构建通过。GPUI 回归覆盖 1222 px 右侧文档 Dock 在 1200/640/480/900 px 窗口中的控件边界，以及连续退格保持输入实体/焦点/选择、不逐字刷新索引、Enter 提交和输入中保存。新原生窗口的并排布局与退格手感尚待重启后目测；这些正确性回归不代表 CPU/帧时性能采样。
+
+镜头首次晃动修复：已有晃动之间仍按选定振幅/频率补间；无前序晃动时直接采用指定值，避免公交场景的 600 秒持续时长变成从零渐强。`cargo test --workspace --features publisher,video-native` 为 912 passed / 8 ignored（沙箱外运行），fmt、workspace check（含 hot-reload）、all-targets Clippy 和 Engine debug 构建通过。回归覆盖首次启动一秒内的非零位移、持续时长终点、外层等待边界、既有震动补间、迁移→原生解析→启动，以及 Preview 跳到公交对白后继续晃动；无默认功能 + video-native 的公交 Preview 回归另行通过。native-smoke 与当前 tday validate 均为零警告。tday 文件未改写，实际公交场景仍待新 Preview 目测。
+
+音效统一与自然尾部淡出：`se(asset, id: ..., loop: true, volume: ..., fade: ...)` 为唯一循环写法，旧 `se.loop` 已移除；Parser、迁移、Editor 补全与 Inspector 同步。单次 `fade_out` 按解码样本在结尾渐隐，不截断音频；循环换资源等新 sink 实际就绪后交叉淡化，`se.stop(*, fade: ...)` 清理单次和循环音效。回归覆盖立体声一致增益、短音频、seek、加载/暂停时序、全局停止顺序、同 ID 重新播放与迁移 round-trip。IR schema 为 v7，旧编译包须重新编译；Save v11 布局与 authoring 协议 v9 不变。BGM 无效 fade/loop/volume 报错，不再静默采用默认值。
+
+`cargo test --workspace --features publisher,video-native` 为 924 passed / 8 ignored（IPC/Trash 在沙箱外运行）；fmt、workspace check（含 hot-reload）、all-targets Clippy 通过。无默认音频的 video-native check、仅 bundled-opus 与仅 audio-wav 的尾部淡出专项测试通过；Engine/Editor debug 构建及 native-smoke、native-benchmark、tday validate 均通过、零警告。tday 按磁盘内容局部修复：替换 32 条旧音效语句，按用户确认将 4 处开水阀改单次播放，补回缺失播放 ID、删除无对应播放的停止，浴室雾气/水波淡入为 450ms，7750ms 镜头补间等待完成后再重置，8 处单次音效显式添加尾部淡出。13 章连接、立绘目标和音效停止目标检查通过，979 条对白与修改前逐字一致，结束时没有遗留循环音效；资源和其他演出参数保留。当前修改前剧本及哈希记录保存在 `projects/.backups/tday-script-audio`。原生全剧情视听与 Windows/Linux 运行尚未验收；代码回归不代表这些验收通过。
+
+LetsGal v2 角色位置修复：画布中心百分比转换为 Kēne 的水平中心偏移与底部基线，基准高度按表情→角色→全局优先级计算；旧无版本基线 fixture 保持原行为。登场/更新、局部距离方案覆盖、表情高度覆盖、原生渲染中心和缩放边界回归通过。当前 tday 的 6 个章节共 45 个位置字段已修正，逐字比较确认其余内容不变，修改前副本在 `/tmp/keine-portrait-position-backup`；不重新迁移或替换资源。`cargo test --workspace --features publisher,video-native` 为 917 passed / 8 ignored（IPC/Trash 在沙箱外运行）；fmt、check（含 hot-reload）、all-targets Clippy、无默认功能 + video-native check 和 Engine/Editor debug 构建通过。native-smoke、native-benchmark、tday validate 均为零警告。新版 Editor 已启动；Computer Use 无法定位未打包的 `target/debug/editor`，未记为画面验收通过。
+
+Backlog 旧记录透明度修复：逐条错开入场仅用于最近 14 条，较早记录跟随面板淡入，避免动画停止后仍透明但能滚动/回跳。100 条实际记录生成的对白、姓名、回跳和语音图标在动画结束后全部可见，关闭时一致淡出；原有滚动方向和弹性边界回归保持通过。workspace（publisher/video-native）918 passed / 8 ignored；fmt、check（含 hot-reload）与 all-targets Clippy 通过。记录内容及回跳边界未改动；当前未打包 Preview 无法由 Computer Use 定位，实际画面验收待重启新版 Preview。

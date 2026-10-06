@@ -495,7 +495,7 @@ pub(crate) fn sync_sprites(
 mod tests {
     use super::{SpriteRenderCache, scene_layer_size, sprite_center_y, sprite_geometry};
     use bevy::prelude::*;
-    use keine_core::{Position, SceneFit, SceneLayerLayout, SpriteLayout, State};
+    use keine_core::{Anchor, Position, SceneFit, SceneLayerLayout, SpriteLayout, State};
 
     use crate::runtime::resources::GameState;
 
@@ -522,6 +522,32 @@ mod tests {
     #[test]
     fn script_transform_remains_relative_to_the_project_offset() {
         assert_eq!(sprite_center_y(12.0, 1080.0, -90.0, 24.0), 486.0);
+    }
+
+    #[test]
+    fn migrated_portrait_center_is_not_a_bottom_offset_or_left_edge() {
+        for (ratio, x, y, expected) in [
+            (0.8, -574.08, -328.32, Vec2::new(385.92, 103.68)),
+            (0.9, 668.16, -378.0, Vec2::new(1628.16, 108.0)),
+        ] {
+            let (size, center) = sprite_geometry(
+                SpriteLayout::ViewportHeight(ratio),
+                0.7,
+                Vec2::new(756.0, 1080.0),
+                1080.0,
+                Position {
+                    x: Anchor::Center(x),
+                    y,
+                },
+                0.0,
+                0.0,
+            );
+            assert!((center - expected).length() < 0.001);
+            // Distance scaling acts about this center, without moving the
+            // authored anchor. The portrait's top remains inside the scene.
+            let top = center.y + size.y * 1.32 * 0.5;
+            assert!((0.0..1080.0).contains(&top));
+        }
     }
 
     #[test]

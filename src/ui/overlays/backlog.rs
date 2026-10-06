@@ -572,8 +572,8 @@ pub fn animate_backlog(
         );
     }
     for (marker, mut color, shadow) in &mut item_texts {
-        let delay = marker.order as f32 * ITEM_STAGGER_SECONDS;
-        let progress = if context.ui.open {
+        let progress = if context.ui.open && marker.order < ANIMATED_ITEM_LIMIT {
+            let delay = marker.order as f32 * ITEM_STAGGER_SECONDS;
             ((root.elapsed - delay) / ITEM_ANIMATION_SECONDS).clamp(0.0, 1.0)
         } else {
             panel
@@ -726,6 +726,77 @@ pub fn handle_backlog_action(mut context: BacklogActionContext) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn older_history_stays_visible_after_entry_animation_stops() {
+        fn spawn(mut commands: Commands, state: Res<GameState>, fonts: Res<UiFonts>) {
+            commands
+                .spawn((
+                    BacklogRoot {
+                        elapsed: 0.0,
+                        was_open: true,
+                    },
+                    BackgroundColor(Color::NONE),
+                ))
+                .with_children(|root| spawn_content(root, &state, &fonts));
+        }
+
+        let mut state = keine_core::State::new();
+        for index in 0..100 {
+            state.dialogue = Some(keine_core::state::Dialogue {
+                speaker: "Speaker".into(),
+                speaker_color: None,
+                text: format!("Line {index}"),
+                markup: format!("Line {index}"),
+                visible_chars: 0,
+                pauses: Vec::new(),
+                vocal: Some("voice.opus".into()),
+                volume: 1.0,
+                auto_advance: false,
+            });
+            state.record_dialogue(index);
+        }
+        let mut app = App::new();
+        app.init_resource::<Time>()
+            .insert_resource(BacklogUiState { open: true })
+            .insert_resource(GameState(state))
+            .insert_resource(UiFonts {
+                text: Handle::default(),
+                icons: Handle::default(),
+            })
+            .add_systems(Startup, spawn)
+            .add_systems(Update, animate_backlog);
+        for _ in 0..90 {
+            app.world_mut()
+                .resource_mut::<Time>()
+                .advance_by(std::time::Duration::from_millis(10));
+            app.update();
+        }
+        let world = app.world_mut();
+        // Every row includes dialogue, speaker, rollback and replay text.
+        let mut texts = world.query::<(&BacklogItemText, &TextColor)>();
+        assert_eq!(texts.iter(world).count(), 400);
+        for (marker, color) in texts.iter(world) {
+            assert_eq!(color.0.alpha(), 1.0, "history order {}", marker.order);
+        }
+        assert!(
+            world
+                .query::<&BacklogRoot>()
+                .iter(world)
+                .all(|root| { !root.is_animating(true) })
+        );
+
+        world.resource_mut::<BacklogUiState>().open = false;
+        app.update();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_millis(160));
+        app.update();
+        let world = app.world_mut();
+        for (_, color) in texts.iter(world) {
+            assert!((color.0.alpha() - 0.5).abs() < 0.001);
+        }
+    }
 
     #[test]
     fn wheel_up_moves_towards_older_lines_and_down_returns_to_newest() {

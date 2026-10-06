@@ -172,7 +172,7 @@ pub(in crate::app) fn insert_kind_icon(kind: InsertKind) -> AssetIconName {
             | "video.play"
             | "screen.curtain.show"
             | "screen.curtain.hide" => AssetIconName::Film,
-            "se.loop" | "se.stop" => AssetIconName::Volume2,
+            "se.stop" => AssetIconName::Volume2,
             "text.box"
             | "text.presentation"
             | "text.retract"

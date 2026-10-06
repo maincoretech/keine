@@ -243,19 +243,31 @@ impl CameraTweenSpec {
             let previous = state.camera_shake.as_ref();
             let from_amplitude = if timed && self.fields.contains(&CameraTweenField::ShakeAmplitude)
             {
-                previous.map_or(0.0, |value| value.spec.amplitude)
+                // A first shake starts at its authored strength. Tweening only has
+                // a source value when a preceding shake is still active.
+                previous.map_or(shake.shake.amplitude, |value| value.spec.amplitude)
             } else {
                 shake.shake.amplitude
             };
             let from_frequency = if timed && self.fields.contains(&CameraTweenField::ShakeFrequency)
             {
-                previous.map_or(0.0, |value| value.spec.frequency)
+                previous.map_or(shake.shake.frequency, |value| value.spec.frequency)
             } else {
                 shake.shake.frequency
             };
+            let first_timed_shake = previous.is_none()
+                && timed
+                && (self.fields.contains(&CameraTweenField::ShakeAmplitude)
+                    || self.fields.contains(&CameraTweenField::ShakeFrequency))
+                && shake.shake.duration > f32::EPSILON
+                && shake.shake.amplitude > f32::EPSILON
+                && shake.shake.frequency > f32::EPSILON;
+            // A constant tween retains the outer wait boundary when the shake
+            // lifetime is longer; nonblocking onsets need no parameter tween.
             let interpolated = timed
                 && (from_amplitude != shake.shake.amplitude
-                    || from_frequency != shake.shake.frequency);
+                    || from_frequency != shake.shake.frequency
+                    || (blocking && first_timed_shake));
             let mut value = crate::CameraShakeState::new(
                 shake.shake,
                 shake.randomness,
@@ -299,6 +311,67 @@ impl CameraTweenSpec {
 mod tests {
     use super::*;
     use crate::{CameraShakeAxis, CameraShakeFalloff, CameraShakeSpec, CameraShakeState, State};
+
+    #[test]
+    fn first_long_shake_starts_immediately_and_expires_at_authored_duration() {
+        let mut state = State::new();
+        let spec = CameraTweenSpec {
+            targets: CameraTargets::ALL,
+            transform: None,
+            effect: None,
+            v2: None,
+            shake: Some(CameraShakeTweenSpec {
+                shake: CameraShakeSpec {
+                    amplitude: 1.6,
+                    frequency: 1.15,
+                    duration: 600.0,
+                    axis: CameraShakeAxis::Both,
+                    falloff: CameraShakeFalloff::Linear,
+                },
+                randomness: CameraShakeRandomness {
+                    amplitude: 0.8,
+                    frequency: 0.7,
+                },
+            }),
+            fields: vec![
+                CameraTweenField::ShakeAmplitude,
+                CameraTweenField::ShakeFrequency,
+            ],
+            duration: 600.0,
+            easing: Easing::Linear,
+            blocking: false,
+        };
+        assert!(!spec.start(&mut state, false));
+        let shake = state.camera_shake.as_mut().unwrap();
+        assert_eq!((shake.spec.amplitude, shake.spec.frequency), (1.6, 1.15));
+        assert!(shake.tween.is_none());
+        let mut peak = 0.0_f32;
+        for _ in 0..60 {
+            shake.advance(1.0 / 60.0);
+            peak = peak.max(shake.offset_x.abs()).max(shake.offset_y.abs());
+        }
+        assert!(peak > 0.5, "first second peak was {peak}");
+        assert!(!state.presentation_blocked());
+        state.camera_shake.as_mut().unwrap().advance(600.0);
+        let shake = state.camera_shake.as_ref().unwrap();
+        assert_eq!(shake.elapsed, 600.0);
+        assert_eq!((shake.offset_x, shake.offset_y), (0.0, 0.0));
+
+        // Immediate onset must not remove the authored wait for a timed shake.
+        state.camera_shake = None;
+        let mut waiting = spec.clone();
+        waiting.duration = 0.5;
+        assert!(waiting.start(&mut state, true));
+        assert!(state.presentation_blocked());
+        state.camera_shake.as_mut().unwrap().advance(0.5);
+        assert!(!state.presentation_blocked());
+        assert!(state.camera_shake.is_some());
+        let mut instant = spec.clone();
+        instant.fields.clear();
+        state.camera_shake = None;
+        assert!(!instant.start(&mut state, true));
+        assert!(!state.presentation_blocked());
+    }
 
     #[test]
     fn shake_tween_keeps_phase_updates_selected_values_and_releases_wait() {

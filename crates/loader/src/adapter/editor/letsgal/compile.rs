@@ -768,7 +768,7 @@ struct CompileContext<'a> {
     characters: &'a HashMap<&'a str, &'a CharacterDefinition>,
     scenes: &'a HashMap<&'a str, &'a SceneDefinition>,
     voices: &'a HashMap<&'a str, &'a str>,
-    positions: &'a HashMap<String, (f32, f32, f32)>,
+    positions: &'a HashMap<String, PortraitPlacement>,
     portrait_height_ratio: Option<f32>,
 }
 
@@ -1439,8 +1439,23 @@ fn compile_character(
             .filter(|distance| !distance.is_empty())
             .unwrap_or_default(),
     );
-    let (position, distance_scale) =
-        studio_position(&character.id, &distance_id, &position_id, context);
+    let height_ratio = expression
+        .graphics_override
+        .height_ratio
+        .or_else(|| layout.and_then(|layout| layout.graphics.height_ratio))
+        .or(context.portrait_height_ratio)
+        .filter(|ratio| ratio.is_finite() && *ratio > 0.0);
+    let Some((position, distance_scale)) = studio_position(
+        &character.id,
+        &distance_id,
+        &position_id,
+        height_ratio.unwrap_or(1.0) * keine_core::DESIGN_HEIGHT,
+        context,
+        span,
+        report,
+    ) else {
+        return;
+    };
     let transform = SpriteTransform {
         scale_x: distance_scale,
         scale_y: distance_scale,
@@ -1471,12 +1486,7 @@ fn compile_character(
             id: character.id.clone(),
             image: image.clone(),
             position,
-            layout: expression
-                .graphics_override
-                .height_ratio
-                .or_else(|| layout.and_then(|layout| layout.graphics.height_ratio))
-                .or(context.portrait_height_ratio)
-                .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
+            layout: height_ratio
                 .map(SpriteLayout::ViewportHeight)
                 .unwrap_or(SpriteLayout::Natural),
             scale: distance_scale,
@@ -1489,12 +1499,7 @@ fn compile_character(
             id: character.id.clone(),
             image: image.clone(),
             position,
-            layout: expression
-                .graphics_override
-                .height_ratio
-                .or_else(|| layout.and_then(|layout| layout.graphics.height_ratio))
-                .or(context.portrait_height_ratio)
-                .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
+            layout: height_ratio
                 .map(SpriteLayout::ViewportHeight)
                 .unwrap_or(SpriteLayout::Natural),
             transition: fade(block, "animated", 0.2),
@@ -1895,47 +1900,95 @@ fn portrait_sequence(
     })
 }
 
+#[derive(Clone, Debug)]
+struct PortraitPlacement {
+    left: f32,
+    top: f32,
+    scale: f32,
+    // None retains the pre-v2 legacy baseline coordinates.
+    canvas_anchor: Option<String>,
+}
+
 fn studio_position(
     character_id: &str,
     distance_id: &str,
     position_id: &str,
+    base_height: f32,
     context: &CompileContext<'_>,
-) -> (Position, f32) {
+    span: SourceSpan,
+    report: &mut ParseReport,
+) -> Option<(Position, f32)> {
     let keys = [
         format!("{character_id}\0{distance_id}\0{position_id}"),
         format!("\0{distance_id}\0{position_id}"),
         position_id.to_owned(),
     ];
-    if let Some((left, top, scale)) = keys.iter().find_map(|key| context.positions.get(key)) {
-        return (
-            Position {
-                x: Anchor::Left(keine_core::DESIGN_WIDTH * *left / 100.0),
-                y: keine_core::DESIGN_HEIGHT * *top / 100.0,
+    if let Some(placement) = keys.iter().find_map(|key| context.positions.get(key)) {
+        let left = keine_core::DESIGN_WIDTH * placement.left / 100.0;
+        let top = keine_core::DESIGN_HEIGHT * placement.top / 100.0;
+        let position = match placement.canvas_anchor.as_deref() {
+            None => Position {
+                x: Anchor::Left(left),
+                y: top,
             },
-            scale.max(f32::EPSILON),
-        );
+            Some("center") => Position {
+                x: Anchor::Center(left - keine_core::DESIGN_WIDTH * 0.5),
+                y: keine_core::DESIGN_HEIGHT - top - base_height * 0.5,
+            },
+            Some(anchor) => {
+                report.diagnostics.push(Diagnostic {
+                    level: DiagnosticLevel::Error,
+                    span,
+                    message: format!(
+                        "unsupported LetsGal portrait anchor {anchor:?}; requires center"
+                    ),
+                });
+                return None;
+            }
+        };
+        return Some((position, placement.scale.max(f32::EPSILON)));
     }
-    (
+    Some((
         match position_id {
             "left" | "center-left" => Position::left(0.0),
             "right" | "center-right" => Position::right(0.0),
             _ => Position::center(0.0),
         },
         1.0,
-    )
+    ))
 }
 
-fn portrait_positions(characters: &CharactersDocument) -> HashMap<String, (f32, f32, f32)> {
+fn portrait_positions(characters: &CharactersDocument) -> HashMap<String, PortraitPlacement> {
+    let canvas_anchor = (characters.version >= 2
+        || !characters.global_settings.default_anchor.is_empty())
+    .then(|| {
+        if characters.global_settings.default_anchor.is_empty() {
+            "center".to_owned()
+        } else {
+            characters.global_settings.default_anchor.clone()
+        }
+    });
     let mut positions = characters
         .global_settings
         .positions
         .iter()
-        .map(|position| (position.id.clone(), (position.left, position.top, 1.0)))
+        .map(|position| {
+            (
+                position.id.clone(),
+                PortraitPlacement {
+                    left: position.left,
+                    top: position.top,
+                    scale: 1.0,
+                    canvas_anchor: canvas_anchor.clone(),
+                },
+            )
+        })
         .collect::<HashMap<_, _>>();
     insert_portrait_layout(
         &mut positions,
         "",
         &characters.global_settings.distance_presets,
+        canvas_anchor.clone(),
     );
     if let Some(default) = characters
         .global_settings
@@ -1946,13 +1999,28 @@ fn portrait_positions(characters: &CharactersDocument) -> HashMap<String, (f32, 
         for position in &default.positions {
             positions.insert(
                 format!("\0\0{}", position.id),
-                (position.left, position.top, default.scale),
+                PortraitPlacement {
+                    left: position.left,
+                    top: position.top,
+                    scale: default.scale,
+                    canvas_anchor: canvas_anchor.clone(),
+                },
             );
         }
     }
     for character in &characters.characters {
         if let Some(layout) = &character.portrait_layout {
-            insert_portrait_layout(&mut positions, &character.id, &layout.distance_presets);
+            let canvas_anchor = if layout.default_anchor.is_empty() {
+                canvas_anchor.clone()
+            } else {
+                Some(layout.default_anchor.clone())
+            };
+            insert_portrait_layout(
+                &mut positions,
+                &character.id,
+                &layout.distance_presets,
+                canvas_anchor.clone(),
+            );
             if let Some(default) = layout
                 .distance_presets
                 .iter()
@@ -1961,7 +2029,12 @@ fn portrait_positions(characters: &CharactersDocument) -> HashMap<String, (f32, 
                 for position in &default.positions {
                     positions.insert(
                         format!("{}\0\0{}", character.id, position.id),
-                        (position.left, position.top, default.scale),
+                        PortraitPlacement {
+                            left: position.left,
+                            top: position.top,
+                            scale: default.scale,
+                            canvas_anchor: canvas_anchor.clone(),
+                        },
                     );
                 }
             }
@@ -1971,15 +2044,21 @@ fn portrait_positions(characters: &CharactersDocument) -> HashMap<String, (f32, 
 }
 
 fn insert_portrait_layout(
-    positions: &mut HashMap<String, (f32, f32, f32)>,
+    positions: &mut HashMap<String, PortraitPlacement>,
     character_id: &str,
     presets: &[super::model::PortraitDistancePreset],
+    canvas_anchor: Option<String>,
 ) {
     for preset in presets {
         for position in &preset.positions {
             positions.insert(
                 format!("{character_id}\0{}\0{}", preset.id, position.id),
-                (position.left, position.top, preset.scale),
+                PortraitPlacement {
+                    left: position.left,
+                    top: position.top,
+                    scale: preset.scale,
+                    canvas_anchor: canvas_anchor.clone(),
+                },
             );
         }
     }
@@ -2551,6 +2630,7 @@ fn compile_sound(block: &StoryBlock, span: SourceSpan, report: &mut ParseReport)
                     id,
                     looped,
                     fade,
+                    fade_out: 0.0,
                 }
             },
             span,
@@ -2586,6 +2666,7 @@ fn compile_stop_sound(block: &StoryBlock, span: SourceSpan, report: &mut ParseRe
                 id: (!id.is_empty()).then_some(id),
                 looped: false,
                 fade: prop_f32(&block.props, "fadeDuration", 0.0) / 1000.0,
+                fade_out: 0.0,
             },
             span,
         );
@@ -4953,6 +5034,79 @@ mod tests {
     }
 
     #[test]
+    fn studio_v2_portrait_show_and_update_keep_authored_canvas_center() {
+        let document: CharactersDocument = serde_json::from_value(json!({
+            "version": 2,
+            "globalSettings": { "graphics": { "heightRatio": 0.9 },
+                "distancePresets": [{ "id": "middle", "scale": 1.32,
+                    "positions": [{ "id": "right", "left": 84.8, "top": 90 }] }] },
+            "characters": [{ "id": "hero", "name": "Hero",
+                "expressions": [{ "name": "neutral", "assetPath": "hero.webp" },
+                    { "name": "short", "assetPath": "short.webp", "graphicsOverride": { "heightRatio": 0.7 } }],
+                "portraitLayout": { "defaultDistanceId": "middle", "defaultAnchor": "center",
+                    "graphics": { "heightRatio": 0.8 },
+                    "distancePresets": [{ "id": "middle", "scale": 1.32,
+                        "positions": [{ "id": "left", "left": 20.1, "top": 90.4 }] }] }
+            }]
+        })).unwrap();
+        let positions = portrait_positions(&document);
+        let characters = HashMap::from([("hero", &document.characters[0])]);
+        let empty = HashMap::new();
+        let context = CompileContext {
+            entry: "entry",
+            chapter_next: &empty,
+            characters: &characters,
+            scenes: &HashMap::new(),
+            voices: &HashMap::new(),
+            positions: &positions,
+            portrait_height_ratio: document.global_settings.graphics.height_ratio,
+        };
+        for (expression, position_id, ratio, x, top) in [
+            ("neutral", "left", 0.8, 385.92, 976.32),
+            ("short", "left", 0.7, 385.92, 976.32),
+            ("neutral", "right", 0.8, 1628.16, 972.0),
+        ] {
+            for update in [false, true] {
+                let block: StoryBlock = serde_json::from_value(json!({ "type": "showCharacter",
+                    "props": { "characterId": "hero", "expression": expression,
+                        "position": position_id, "distance": "middle" } }))
+                .unwrap();
+                let mut report = ParseReport::default();
+                compile_character(
+                    &block,
+                    &context,
+                    SourceSpan { line: 1, column: 1 },
+                    &mut report,
+                    update,
+                );
+                assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+                let (position, layout, scale) = match &report.actions[0] {
+                    Action::ShowSprite {
+                        position,
+                        layout,
+                        transform,
+                        ..
+                    } => (*position, *layout, transform.scale_x),
+                    Action::UpdateSprite {
+                        position,
+                        layout,
+                        scale,
+                        ..
+                    } => (*position, *layout, *scale),
+                    action => panic!("{action:?}"),
+                };
+                let Anchor::Center(offset) = position.x else {
+                    panic!("{position:?}");
+                };
+                assert!((960.0 + offset - x).abs() < 0.001);
+                assert!((position.y + 1080.0 * ratio * 0.5 - (1080.0 - top)).abs() < 0.001);
+                assert_eq!(layout, SpriteLayout::ViewportHeight(ratio));
+                assert_eq!(scale, 1.32);
+            }
+        }
+    }
+
+    #[test]
     fn studio_198_dynamic_portraits_are_rejected_explicitly() {
         for kind in ["spine", "live2d"] {
             let character: CharacterDefinition = serde_json::from_value(json!({
@@ -5185,8 +5339,14 @@ mod tests {
         .unwrap();
 
         let positions = portrait_positions(&characters);
-        assert_eq!(positions["\0\0center"], (30.0, 4.0, 1.2));
-        assert_eq!(positions["hero\0\0center"], (42.0, 7.0, 1.5));
+        for (key, expected) in [
+            ("\0\0center", (30.0, 4.0, 1.2)),
+            ("hero\0\0center", (42.0, 7.0, 1.5)),
+        ] {
+            let placement = &positions[key];
+            assert_eq!((placement.left, placement.top, placement.scale), expected);
+            assert!(placement.canvas_anchor.is_none());
+        }
     }
 
     #[test]
