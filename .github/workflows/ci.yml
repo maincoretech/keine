@@ -6,7 +6,8 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Let main finish and save its cold build; superseded PR/branch runs can stop.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   dependencies:
@@ -35,23 +36,23 @@ jobs:
             os: ubuntu-latest
             quality: true
             backend: none
-            release_features: audio-all,ui-sounds
+            test_features: audio-all,ui-sounds,publisher
             shipping_features: ui-sounds
             timeout: 60
           - name: macOS
             os: macos-latest
             quality: false
             backend: native
-            release_features: audio-all,ui-sounds,video-native
+            test_features: audio-all,ui-sounds,publisher,video-native
             shipping_features: ui-sounds,video-native
             timeout: 60
           - name: Windows x64
             os: windows-latest
             quality: false
             backend: ffmpeg
-            release_features: audio-all,ui-sounds,video-ffmpeg
+            test_features: audio-all,ui-sounds,publisher,video-ffmpeg
             shipping_features: ui-sounds,video-ffmpeg
-            timeout: 90
+            timeout: 180
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout }}
     steps:
@@ -60,7 +61,8 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: Restore Rust build cache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        id: rust-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
             ~/.cargo/registry
@@ -85,37 +87,36 @@ jobs:
       - name: Check publisher pipeline
         if: matrix.quality
         run: cargo test --workspace --no-default-features --features publisher
-      - name: Check FFmpeg video unit contracts
-        if: matrix.backend == 'ffmpeg'
+      # Select Engine and Editor together to unify their Bevy dev-dependencies.
+      # libtest accepts several filters; Linux's workspace tests cover these too.
+      - name: Check platform video, process metrics and system Trash
+        if: ${{ !matrix.quality }}
         run: >-
-          cargo test -p keine --no-default-features --features publisher,video-ffmpeg
-          scene::video::ffmpeg_backend::tests
-      - name: Check FFmpeg video acceptance
-        if: matrix.backend == 'ffmpeg'
+          cargo test --locked -p keine -p keine-editor --lib --no-default-features
+          --features "${{ matrix.test_features }}" --
+          scene::video:: preview::performance:: file_ops::assets::
+      - name: Check platform video acceptance
+        if: ${{ !matrix.quality }}
         run: >-
-          cargo run --locked --no-default-features --features publisher,video-ffmpeg
+          cargo run --locked --no-default-features --features "${{ matrix.test_features }}"
           --bin keine-video-acceptance -- tests/fixtures/video/playback.mp4
-      - name: Check native video unit contracts
+      # Keep the native test boundary without rodio; developer audio above must
+      # not hide accidental audio references in otherwise audio-free tests.
+      - name: Check native video tests without audio
         if: matrix.backend == 'native'
-        run: >-
-          cargo test -p keine --no-default-features --features video-native
-          scene::video::
-      - name: Check AVFoundation video acceptance
-        if: matrix.backend == 'native'
-        run: >-
-          cargo run --locked --no-default-features --features publisher,video-native
-          --bin keine-video-acceptance -- tests/fixtures/video/playback.mp4
-      - name: Check Editor process metrics
-        run: >-
-          cargo test --locked -p keine-editor --lib preview::performance::
-      - name: Check recoverable system Trash
-        run: >-
-          cargo test --locked -p keine-editor --lib file_ops::assets::
-      - name: Build platform release backend
-        run: >-
-          cargo build --release --locked --no-default-features
-          --features "${{ matrix.release_features }}"
+        run: cargo check --locked -p keine --tests --no-default-features --features video-native
+      # Optimized linking/packaging belongs to Release and Project Release.
+      # Platform tests above still link developer formats; check shipping separately.
       - name: Check canonical shipping feature set
         run: >-
           cargo check --locked --no-default-features
           --features "${{ matrix.shipping_features }}"
+      - name: Save Rust build cache even after a test failure
+        if: ${{ !cancelled() && steps.rust-cache.outputs.cache-primary-key != '' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}

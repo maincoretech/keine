@@ -136,6 +136,37 @@ Linux 单独运行 `cargo test --locked -p keine-editor --lib` 时，Editor 的�
 包含 `winit/x11`；本机 fmt/check/clippy、publisher workspace 835 项测试通过（8 项忽略）。
 完整 Linux 交叉检查受本机缺少 `x86_64-linux-gnu-gcc` 限制，远程 CI 仍需重跑确认。
 
+### CI 的工作范围与缓存
+
+每次推送保留依赖政策、Linux fmt/Clippy/workspace 与 publisher 测试、benchmark
+采集器回归，三平台检查规范发行 features；macOS/Windows 合并视频、进程指标和
+系统 Trash 单元测试，仍实际链接并运行视频验收。Linux 的 workspace 测试已包含
+Editor 平台测试，不再另跑同一组。完整优化编译/打包由 Release / Project Release
+执行，常规 CI 不重复编译整个 release profile；发行优化参数保持不变。
+macOS 另检查无音频 `video-native` 测试的编译边界，避免默认音频掩盖意外的 rodio 引用。
+
+Windows job 总上限为 180 分钟（不是闲置计时），Linux/macOS 为 60 分钟。
+main 的运行中 CI 不被后续推送取消；同组只保留最新待运行提交，其他分支/PR
+继续取消过时任务。Rust 缓存在普通测试失败后也保存，取消/硬超时不保证保存。
+常规 CI 不注入发行 identity；发行 workflow 仍独立清理含密钥的 Engine/Loader 产物。
+
+Windows FFmpeg SDK 仅编译动态 Release 库：ffmpeg-sys-next 使用 vcpkg-rs 的
+`installed/<triplet>/lib`，不使用 `debug/lib`。SDK 缓存按 manifest、triplet 与提交建键，
+允许恢复同配方的前次缓存；vcpkg 自行校验 ABI，编译器变化引发重建后可保存新键。
+改为 Release-only 的首次运行须重新编译；SDK 安装成功即保存，不等待 Rust 测试。
+
+调整前 CI #238（`722dc7f`）Windows 冷缓存在 90 分钟超时：FFmpeg 的 Release / Debug
+分别约 10m47s / 10m15s，视频单测 31m31s、视频验收 17m32s、独立 Editor 指标
+测试 15m46s，之后才开始完整 release 编译。原命令及日志摘录保存在
+`target/performance/ci-audit/`；调整后的 Windows 时长待新 CI，不能以本机暖缓存
+结果推算跨平台加速。
+
+本机新命令验证：fmt/check/Clippy、默认 workspace 845 passed / 8 ignored、合并平台
+单测 20 passed、AVFoundation 文件/Hakutaku 视频解码、规范发行与无音频 native 测试 check、
+benchmark collector 6 项、native-smoke 零警告通过；Windows SDK 与新总耗时待远程 CI。
+工作流 YAML 与 actionlint 检查通过；发行模板的 `job.workflow_*` 字段由 GitHub 官方
+文档确认支持，actionlint 1.7.12 对这三个字段的误报仅在本次本地检查中精确排除。
+
 ## 测试布局
 
 ```text

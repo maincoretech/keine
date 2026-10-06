@@ -42,7 +42,9 @@ runs:
       uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
       with:
         path: ${{ runner.temp }}/vcpkg-binary-cache
-        key: vcpkg-ffmpeg-8.1.2-decode-${{ inputs.windows-triplet }}-v1
+        key: vcpkg-ffmpeg-${{ inputs.windows-triplet }}-${{ hashFiles('.github/actions/setup-video/vcpkg.json', '.github/actions/setup-video/triplets/*.cmake') }}-${{ github.sha }}
+        restore-keys: |
+          vcpkg-ffmpeg-${{ inputs.windows-triplet }}-${{ hashFiles('.github/actions/setup-video/vcpkg.json', '.github/actions/setup-video/triplets/*.cmake') }}-
 
     - name: Install Windows FFmpeg SDK
       if: runner.os == 'Windows' && inputs.enabled == 'true'
@@ -60,7 +62,8 @@ runs:
         "VCPKG_DEFAULT_BINARY_CACHE=$cache" | Out-File -FilePath $env:GITHUB_ENV -Append
         "VCPKG_TARGET_TRIPLET=$triplet" | Out-File -FilePath $env:GITHUB_ENV -Append
         $installed = Join-Path $root 'installed'
-        & (Join-Path $root 'vcpkg.exe') install "--x-manifest-root=$manifest" "--x-install-root=$installed" "--triplet=$triplet"
+        & (Join-Path $root 'vcpkg.exe') install "--x-manifest-root=$manifest" "--x-install-root=$installed" "--triplet=$triplet" "--overlay-triplets=$manifest/triplets"
+        if ($LASTEXITCODE -ne 0) { throw "FFmpeg SDK installation failed: $LASTEXITCODE" }
 
     # `actions/cache` normally saves only after the whole job succeeds. Persist
     # the expensive vcpkg result immediately so a later test failure or a
@@ -70,4 +73,4 @@ runs:
       uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
       with:
         path: ${{ runner.temp }}/vcpkg-binary-cache
-        key: vcpkg-ffmpeg-8.1.2-decode-${{ inputs.windows-triplet }}-v1
+        key: ${{ steps.windows-ffmpeg-cache.outputs.cache-primary-key }}
