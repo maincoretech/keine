@@ -136,6 +136,56 @@ Linux 单独运行 `cargo test --locked -p keine-editor --lib` 时，Editor 的�
 包含 `winit/x11`；本机 fmt/check/clippy、publisher workspace 835 项测试通过（8 项忽略）。
 完整 Linux 交叉检查受本机缺少 `x86_64-linux-gnu-gcc` 限制，远程 CI 仍需重跑确认。
 
+### Windows renderer
+
+Windows shipping / benchmark 编译 DX12、Vulkan 和 OpenGL；原生 GL 复用锁定的
+wgpu 29.0.4 WGL 实现，不附带 ANGLE 或额外渲染 DLL。`bevy_render/gles` 与 Linux
+共用同版本 feature 合并，CI 检查 Windows 三项 backend 均存在。
+启动沿用 Bevy 的 `Backends::all()` 与 HighPerformance 默认值：wgpu 在所有可用
+backend 中按 device type 排序，硬件 GPU 优先于 CPU 软件 adapter，窗口兼容性
+仍由 wgpu 检查。没有自建 adapter 选择器、重启或降级特效框架；显式环境变量
+`WGPU_BACKEND`、`WGPU_ADAPTER_NAME`、`WGPU_FORCE_FALLBACK_ADAPTER` 仍按上游规则生效。
+实现依据锁定源码 `bevy_render/src/settings.rs`、`wgpu-core/src/instance.rs` 和
+`wgpu-hal/src/gles/{mod,wgl,adapter}.rs`；Bevy 0.19.1 文档中的 Windows ANGLE
+说明未反映此锁定 wgpu 的 WGL 实现。
+
+HD 4600 的 Intel Windows 驱动不支持 Vulkan，较新驱动撤销 DX12；OpenGL 是这台
+机器的硬件兼容路径（[Intel API 表](https://www.intel.com/content/www/us/en/support/articles/000005524/graphics.html)、
+[DX12 撤销说明](https://www.intel.com/content/www/us/en/support/articles/000057520/graphics.html)）。
+已有舞台、遮罩和模糊 shader 使用 uniform/纹理采样；粒子
+额外要求 vertex storage buffer（GL 4.3/相应扩展及实际 limits），不能把 backend
+编译通过当作全部 shader 已被该驱动接受。不改变 1920×1080、镜头合成、粒子或特效语义。
+
+实体机先默认运行，再在 PowerShell 中做 GL 对照：
+
+```powershell
+Remove-Item Env:WGPU_BACKEND, Env:WGPU_ADAPTER_NAME, Env:WGPU_FORCE_FALLBACK_ADAPTER -ErrorAction SilentlyContinue
+.\keine.exe
+Copy-Item .\keine-benchmark-report.txt .\benchmark-auto.txt
+$env:WGPU_BACKEND = 'gl'
+.\keine.exe
+Copy-Item .\keine-benchmark-report.txt .\benchmark-gl.txt
+Remove-Item Env:WGPU_BACKEND
+```
+
+核对两份报告的 `GPU` / `GPUINFO` 为实际 Intel adapter（GL 对照应为 `Gl`），
+不是 `Microsoft Basic Render Driver · Cpu`；CPU adapter 的计时只能算软件渲染。
+GL GPU timestamp 未提供时记为 unavailable，不补零。基本包缺少 authored timeline
+时，粒子/特效/压力项仍为 skipped，完整验收必须提供这些时间轴。
+用户原始 Windows 报告 `26100601.txt`（b772dc0）为软件 Dx12：opening continuous
+606.19 ms / 1.6 FPS、scene-only 386.76 ms / 2.6 FPS，不能作为硬件 GPU 基线。
+新版 HD 4600 的 adapter、画面、粒子与性能验收 **NOT TESTED**；测试包需在新提交的
+CI / Release 完成后取得，旧包仅设置 `WGPU_BACKEND=gl` 不会增加未编译的 backend。
+
+本机验证：`cargo check --locked -p wgpu-hal --target x86_64-pc-windows-gnu` 和
+`cargo check --locked -p bevy_render --target x86_64-pc-windows-gnu` 通过，包含 WGL；
+Windows 的 dx12/vulkan/gles、Linux 的 vulkan/gles feature closure 均通过。
+macOS shipping check、publisher/video-native/hot-reload workspace check、publisher
+workspace Clippy、fmt/actionlint/cargo-deny、native-smoke 零警告和采集器 7 项通过；publisher workspace tests
+899 passed / 8 ignored（IPC/Trash 在沙箱外执行）。完整 Windows Engine target check
+在 native C 依赖因缺少 `x86_64-w64-mingw32-gcc` 受阻，仍需 Windows CI；没有新性能
+采样，不宣称比软件 Dx12 的旧报告提升了多少。
+
 ### Linux 窗口、renderer 与 portable benchmark
 
 Linux shipping / benchmark 同时编译 native Wayland 与 X11（含 XWayland），以及

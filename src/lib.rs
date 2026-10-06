@@ -1,7 +1,7 @@
 #![warn(unused_crate_dependencies)]
 
-// Linux-only feature unification for Bevy's native GL compatibility backend.
-#[cfg(target_os = "linux")]
+// Native GL compatibility alongside Vulkan/DX12 on desktop targets.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use bevy_render as _;
 
 #[cfg(feature = "publisher")]

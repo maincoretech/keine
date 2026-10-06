@@ -232,12 +232,15 @@ libc = { workspace = true, optional = true }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, optional = true }
 
+# Bevy's facade does not expose native GLES; unify its existing render crate.
+# wgpu uses WGL on Windows and EGL on Linux, alongside DX12/Vulkan.
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+bevy_render = { version = "=0.19.1", default-features = false, features = ["gles"] }
+
 # Winit has no implicit Linux backend when Bevy's default features are disabled.
 # Keep native Wayland and X11/XWayland available in every Linux engine build.
 [target.'cfg(target_os = "linux")'.dependencies]
 bevy = { workspace = true, features = ["x11", "wayland"] }
-# Bevy's facade does not expose native GLES; unify its existing render crate.
-bevy_render = { version = "=0.19.1", default-features = false, features = ["gles"] }
 rfd = { workspace = true, features = ["xdg-portal"] }
 
 [[test]]
