@@ -1,0 +1,9 @@
+# Original media stay local; the demo uses the tracked WebP/Opus copies.
+assets/**/*.[pP][nN][gG]
+assets/**/*.[wW][aA][vV]
+
+# Publisher credentials and exported packages never belong in the demo.
+*.key
+key
+*.haku
+*.taku

@@ -1,0 +1,54 @@
+title: tday
+title_background: asset_00045
+project:
+  id: bb1eeed1-bc1c-43b9-9e84-72d0b53a7cac
+  bundle_identifier: ""
+  description: ""
+features:
+  extra: false
+adapter:
+  asset:
+    - path: .
+      format: fs
+  script: keine
+  store: keine
+script:
+  version: 2
+  entry: start
+  assets: assets.yaml
+  characters: characters.yaml
+  objects: objects.yaml
+assets:
+  backgrounds: {}
+  figures: {}
+  bgm: {}
+  voices: {}
+  effects: {}
+  videos: {}
+  luts: {}
+fonts:
+  speaker_size: 39.0
+  dialogue_size: 45.0
+  icon_size: 19.5
+  label_size: 18.0
+styles:
+  textbox_alpha: 0.7200000286102295
+  typewriter_speed: 33.333333333333336
+  auto_delay: 2.0
+  text_reveal:
+    duration: 0.10000000149011612
+    effect: smooth-rise
+    distance: 8.0
+    scale: 0.8199999928474426
+    rotation: 70.0
+    blur: 4.0
+layout:
+  anchor_offset: 0.0
+  sprite_height: 1080.0
+  sprite_y_offset: 0.0
+  environment_light: 1.0
+  textbox_left: 0.0
+  textbox_dodge_left: 10.0
+  textbox_bottom: 1.0
+  textbox_height: 22.0
+  namebar_bottom: 24.0

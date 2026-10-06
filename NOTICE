@@ -29,3 +29,8 @@ Distributors must also include the applicable upstream license/copyright
 notices, source offers where required, and the notices for their actual
 native libraries and embedded assets. See dev/docs/release.md for the release
 checklist. Game scripts and assets can use their own licenses.
+
+The tracked projects/tday demo's scripts, backgrounds, character artwork,
+music and sound effects are original works by shiftz. Copyright 2026 shiftz;
+all rights reserved. They are not covered by the engine's Defold License 1.0.
+See projects/tday/LICENSE for the demo's separate copyright and source notice.

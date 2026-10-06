@@ -18,7 +18,7 @@ keine/
 │   └── assets/      内嵌字体、音效、shader、图标与品牌图片
 ├── tests/           集成回归、bench、fuzz、视频验收与 fixtures
 ├── dev/             文档与构建/fixture 脚本
-└── projects/        忽略的本机作者工程
+└── projects/        tday 示例工程；其他本机作者工程忽略
 ```
 
 依赖方向为 `core ← loader ← engine`。Runtime 只消费 typed `Program` / `State`，

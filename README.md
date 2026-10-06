@@ -18,7 +18,7 @@ cargo migrate /path/to/letsgal/tday projects/tday
 cargo bundle <project> --output <release-directory>
 ```
 
-`projects/` contains ignored local authoring inputs; `tests/fixtures/` contains the tracked regression projects.
+`projects/tday/` contains the playable authoring demo with WebP/Opus media. Its PNG/WAV originals and other local projects are ignored; `tests/fixtures/` contains the regression projects.
 The Editor controls a separate native Engine window. Text, Blocks and Inspector edit one source document.
 Compatibility JSON is read-only; migration is explicit and preserves its input.
 
@@ -50,4 +50,6 @@ Original Kēne code and documentation use the [Defold License 1.0](LICENSE).
 Commercial games are allowed; commercialisation of the engine or Editor as a
 Game Engine Product is restricted. This is source-available software.
 Third-party dependencies and assets retain their own licenses; see [NOTICE](NOTICE).
+The tday demo's scripts and media are original works by shiftz and retain their
+separate copyright; see [tday's notice](projects/tday/LICENSE).
 Contributions are accepted under the same license unless separately agreed.

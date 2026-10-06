@@ -1,0 +1,9 @@
+Copyright (c) 2026 shiftz. All rights reserved.
+
+tday 的剧本、背景、立绘、音乐和音效均由 shiftz 原创制作，版权归 shiftz。
+本工程作为 Kēne 的示例随本仓库提供，供运行、测试和在 Editor 中试用。
+将剧本或素材用于其他项目，或独立再分发，须另行取得 shiftz 的许可。
+本工程的剧本和素材不适用 Kēne 引擎的 Defold License 1.0。
+
+来源：shiftz 的 tday 作者工程。仓库保留当前 Kēne 剧本与由原 PNG/WAV
+转换得到的 WebP/Opus 成品；转换不改变素材归属。资源路径见 assets.yaml。

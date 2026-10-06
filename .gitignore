@@ -9,8 +9,9 @@ target/
 # Save files (runtime user data)
 saves/
 
-# Local authoring demo and its copied media
-projects/
+# Track tday's playable demo; other authoring projects remain local.
+projects/*
+!projects/tday/
 
 # Engine-generated artifacts (compiled program, caches)
 **/.keine/
