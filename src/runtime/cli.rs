@@ -569,10 +569,14 @@ fn parse_perf(args: &[OsString]) -> Result<CliCommand> {
 }
 
 pub(super) fn packaged_benchmark_command() -> Result<Option<CliCommand>> {
-    let Some(root) = std::env::current_exe()
-        .ok()
-        .and_then(|executable| executable.parent().map(Path::to_owned))
-    else {
+    let Ok(executable) = std::env::current_exe() else {
+        return Ok(None);
+    };
+    packaged_benchmark_command_at(&executable)
+}
+
+fn packaged_benchmark_command_at(executable: &Path) -> Result<Option<CliCommand>> {
+    let Some(root) = executable.parent() else {
         return Ok(None);
     };
     let marker = root.join(BENCHMARK_MARKER);
@@ -794,6 +798,59 @@ mod tests {
             std::fs::write(&package, b"package").unwrap();
             assert_eq!(packaged_project_path(&executable), package);
         }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn portable_benchmark_paths_follow_the_executable_after_relocation() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("keine-portable-{nonce}"));
+        let original = root.join("original package");
+        let relocated = root.join("relocated package");
+        std::fs::create_dir_all(original.join("data")).unwrap();
+        std::fs::write(original.join("game.haku"), b"snapshot").unwrap();
+        std::fs::write(original.join("data/segment.taku"), b"segment").unwrap();
+        let executable = original.join("keine");
+        assert!(
+            packaged_benchmark_command_at(&executable)
+                .unwrap()
+                .is_none()
+        );
+        std::fs::write(original.join(BENCHMARK_MARKER), b"7\n").unwrap();
+        std::fs::rename(&original, &relocated).unwrap();
+
+        // No process-wide cwd mutation: parallel tests keep their own paths.
+        assert_ne!(relocated, std::env::current_dir().unwrap());
+        for name in ["keine", "keine.exe"] {
+            let executable = relocated.join(name);
+            assert_eq!(
+                packaged_project_path(&executable),
+                relocated.join("game.haku")
+            );
+            let Some(CliCommand::BenchmarkReport {
+                project,
+                runs,
+                report_path,
+            }) = packaged_benchmark_command_at(&executable).unwrap()
+            else {
+                panic!("expected a portable benchmark command");
+            };
+            assert_eq!(project, relocated.join("game.haku"));
+            assert!(
+                project
+                    .parent()
+                    .unwrap()
+                    .join("data/segment.taku")
+                    .is_file()
+            );
+            assert_eq!(runs, 7);
+            assert_eq!(report_path, relocated.join(BENCHMARK_REPORT_FILE));
+        }
+        std::fs::write(relocated.join(BENCHMARK_MARKER), b"0\n").unwrap();
+        assert!(packaged_benchmark_command_at(&relocated.join("keine")).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 

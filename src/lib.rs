@@ -1,5 +1,9 @@
 #![warn(unused_crate_dependencies)]
 
+// Linux-only feature unification for Bevy's native GL compatibility backend.
+#[cfg(target_os = "linux")]
+use bevy_render as _;
+
 #[cfg(feature = "publisher")]
 mod compiler;
 #[cfg(feature = "publisher")]

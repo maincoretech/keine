@@ -922,6 +922,7 @@ fn benchmark_report_line(line: &str) -> bool {
     [
         "GPU      │",
         "GPUINFO  |",
+        "WINDOWSYS |",
         "DISPLAY  |",
         "START    |",
         "CAPTURE  |",
@@ -2012,6 +2013,11 @@ mod tests {
         assert!(benchmark_report_line(
             "0.1s INFO keine::performance: SLOW     | t=3.400s · 393.01 ms"
         ));
+        for system in ["Wayland", "X11 (native or XWayland)", "unavailable"] {
+            assert!(benchmark_report_line(&format!(
+                "0.1s INFO keine::platform: WINDOWSYS | {system} · actual primary window handle"
+            )));
+        }
     }
 
     #[test]

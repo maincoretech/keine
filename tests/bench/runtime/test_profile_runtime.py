@@ -1,6 +1,11 @@
 """Collector boundaries: sleep is not a dropped frame, missing data is not zero."""
 import importlib.util
+import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
+import sys
 import unittest
 import tempfile
 
@@ -54,6 +59,51 @@ class CaptureTests(unittest.TestCase):
             self.assertEqual(before, collector.source_digests(root))
             (root / "data/a.taku").write_bytes(b"changed")
             self.assertNotEqual(before, collector.source_digests(root))
+
+    @unittest.skipIf(os.name == "nt", "Unix executable discovery")
+    def test_relocated_unix_package_runs_from_unrelated_cwd_without_checkout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            package = root / "original package"
+            package.mkdir()
+            shutil.copyfile(SCRIPT, package / "profile-runtime.py")
+            (package / "keine-benchmark.conf").write_text("7\n")
+            (package / "game.haku").write_bytes(b"snapshot")
+            (package / "data").mkdir()
+            (package / "data/a.taku").write_bytes(b"segment")
+            # A command stub verifies collector paths, not GPU/runtime acceptance.
+            engine = package / "keine"
+            engine.write_text(
+                "#!/usr/bin/env python3\nimport json, pathlib, sys\n"
+                "entry = pathlib.Path(sys.argv[2])\n"
+                "assert entry.is_absolute() and entry.read_bytes() == b'snapshot'\n"
+                "assert (entry.parent / 'data/a.taku').read_bytes() == b'segment'\n"
+                "print(json.dumps(sys.argv))\n"
+                f"print({self.row(20, 16)!r}, file=sys.stderr)\n"
+                "print('KEINE_RENDER_SAMPLE stub', file=sys.stderr)\n"
+                "print('GPU      │ test adapter · IntegratedGpu · Gl', file=sys.stderr)\n"
+                "print('WINDOWSYS | Wayland · actual primary window handle', file=sys.stderr)\n"
+            )
+            engine.chmod(0o755)
+            moved = root / "relocated package"
+            package.rename(moved)
+            cwd = root / "unrelated cwd"
+            cwd.mkdir()
+            result = subprocess.run(
+                [sys.executable, str(moved / "profile-runtime.py"), "--output", "capture",
+                 "--seconds", "1", "--stacks", "off"],
+                cwd=cwd, capture_output=True, text=True, timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            metadata = json.loads((cwd / "capture/metadata.json").read_text())
+            self.assertEqual(metadata["command"][:3],
+                             [str(moved / "keine"), "perf", str(moved / "game.haku")])
+            self.assertEqual(metadata["git_status"], "packaged build")
+            self.assertEqual(set(metadata["source_sha256"]), {"game.haku", "data/a.taku"})
+            self.assertTrue(metadata["source_unchanged"])
+            self.assertEqual(metadata["retained_intervals"], 1)
+            self.assertTrue(any("GPU      │" in line for line in metadata["engine_summary"]))
+            self.assertTrue(any("WINDOWSYS | Wayland" in line for line in metadata["engine_summary"]))
 
     def test_suite_does_not_mix_camera_decomposition_costs(self):
         trace = self.row(20, 16).split("\t", 1)[1]

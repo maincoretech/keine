@@ -224,7 +224,7 @@ def main():
     metadata["engine_errors"] = [line for line in log.splitlines() if " ERROR " in line]
     metadata["engine_summary"] = [line for line in log.splitlines() if any(
         tag in line for tag in ("CAPTURE  |", "FRAME    |", "BUDGET   |", "PROCESS  |", "EXCLUDED |", "GPU_TIME |",
-                               "GPUINFO  |", "SAMPLING |", "ASSETS   |", "DISPLAY  |", "MEMORY   |", "RENDER   |", "build identity ·"))]
+                               "GPUINFO  |", "GPU      │", "WINDOWSYS |", "SAMPLING |", "ASSETS   |", "DISPLAY  |", "MEMORY   |", "RENDER   |", "build identity ·"))]
     metadata["source_unchanged"] = source_digests(project) == source_hashes
     (output / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     if not metadata["source_unchanged"]:

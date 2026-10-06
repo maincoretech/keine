@@ -23,6 +23,7 @@ runs:
           libasound2-dev
           libfontconfig-dev
           libudev-dev
+          libwayland-dev
           libxkbcommon-dev
           libxkbcommon-x11-dev
           pkg-config

@@ -738,6 +738,8 @@ fn runtime_log_filter(benchmark: bool) -> String {
 
 pub(super) fn install_runtime_diagnostics(app: &mut App) {
     app.add_systems(PostStartup, log_window);
+    #[cfg(target_os = "linux")]
+    app.add_systems(PostStartup, log_window_system);
     if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
         render_app.add_systems(Render, log_renderer.run_if(run_once));
     }
@@ -789,6 +791,21 @@ fn log_window(window: Single<&Window, With<PrimaryWindow>>) {
         "WINDOW   │ {} · {width}×{height} @{scale:.1}× · {resize}",
         window.title,
     );
+}
+
+#[cfg(target_os = "linux")]
+fn log_window_system(handles: Query<&bevy::window::RawHandleWrapper, With<PrimaryWindow>>) {
+    use winit::raw_window_handle::RawWindowHandle;
+
+    let system =
+        handles
+            .single()
+            .map_or("unavailable", |handle| match handle.get_window_handle() {
+                RawWindowHandle::Wayland(_) => "Wayland",
+                RawWindowHandle::Xlib(_) | RawWindowHandle::Xcb(_) => "X11 (native or XWayland)",
+                _ => "unknown",
+            });
+    log::info!(target: "keine::platform", "WINDOWSYS | {system} · actual primary window handle");
 }
 
 fn log_renderer(adapter: Res<RenderAdapterInfo>, preprocessing: Res<GpuPreprocessingSupport>) {

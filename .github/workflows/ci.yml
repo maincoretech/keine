@@ -75,6 +75,18 @@ jobs:
       - uses: ./.github/actions/setup-video
         with:
           enabled: ${{ matrix.backend == 'ffmpeg' }}
+      - name: Guard Linux window and renderer features
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cargo tree --locked -p keine --no-default-features --features ui-sounds -e normal,build,features -i winit > "$RUNNER_TEMP/winit-features.txt"
+          cargo tree --locked -p keine --no-default-features --features ui-sounds -e normal,build,features -i wgpu > "$RUNNER_TEMP/wgpu-features.txt"
+          for feature in x11 wayland; do
+            grep -E "(^|[[:space:]])winit feature \"$feature\"" "$RUNNER_TEMP/winit-features.txt"
+          done
+          for feature in vulkan gles; do
+            grep -E "(^|[[:space:]])wgpu feature \"$feature\"" "$RUNNER_TEMP/wgpu-features.txt"
+          done
       - if: matrix.quality
         run: cargo fmt --all -- --check
       - if: matrix.quality

@@ -136,6 +136,55 @@ Linux 单独运行 `cargo test --locked -p keine-editor --lib` 时，Editor 的�
 包含 `winit/x11`；本机 fmt/check/clippy、publisher workspace 835 项测试通过（8 项忽略）。
 完整 Linux 交叉检查受本机缺少 `x86_64-linux-gnu-gcc` 限制，远程 CI 仍需重跑确认。
 
+### Linux 窗口、renderer 与 portable benchmark
+
+Linux shipping / benchmark 同时编译 native Wayland 与 X11（含 XWayland），以及
+wgpu Vulkan 与 native OpenGL/GLES compatibility backend；Bevy 保持 0.19.1。
+Linux target 的同版本 `bevy_render/gles` 合并到既有 wgpu，未使用 `webgl2`。
+正常启动沿用 Bevy/wgpu 自动选择；下面只用于测试或故障排查：
+
+```sh
+WGPU_BACKEND=vulkan ./keine
+WGPU_BACKEND=gl ./keine
+# Wayland 桌面上测试 X11/XWayland，须有可用的 DISPLAY。
+env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET WGPU_BACKEND=vulkan ./keine
+# 便宜的 feature closure 检查，不编译或启动 GUI；CI 检查相同的四项。
+cargo tree --locked --target x86_64-unknown-linux-gnu -p keine --no-default-features --features ui-sounds -e normal,build,features -i winit
+cargo tree --locked --target x86_64-unknown-linux-gnu -p keine --no-default-features --features ui-sounds -e normal,build,features -i wgpu
+```
+
+依赖树必须包含 `winit/x11`、`winit/wayland`、`wgpu/vulkan` 与 `wgpu/gles`。
+Linux CI/Release 共用 setup-video action 安装 `libwayland-dev`。
+GL 驱动需提供 EGL 和满足 wgpu/Bevy features/limits 的 OpenGL/GLES；编译进 backend
+不代表所有老 GPU 均能运行。选择规则沿用
+[Bevy WgpuSettings](https://docs.rs/bevy_render/0.19.1/bevy_render/settings/struct.WgpuSettings.html)
+及锁定版本的 `settings.rs`，不增加重启或软件渲染兜底。
+
+无参数启动 portable benchmark 时，package root 是 `current_exe()` 的父目录；
+`game.haku`、marker `keine-benchmark.conf`、`keine-benchmark-report.txt` 均在该目录，
+Hakutaku 按 snapshot 位置寻找 sibling `data/`，与启动 cwd 无关。Linux executable
+名为 `keine`；搬移时保留整个包，含可能存在的 `lib/`。Python collector 按自身所在目录
+的 marker 自动发现包、`keine` 与 `game.haku`，不访问 Git 或作者工程；显式 `--output`
+等相对参数仍相对调用者 cwd；无参数启动引擎的 suite 报告写在包旁。
+
+报告保留实际 GPU/adapter、Vulkan/Gl backend、OS 和 architecture。Linux 新增
+`WINDOWSYS`，来自 primary window 的实际 raw handle；Wayland 表示 native Wayland，
+X11 表示应用使用 X11，无法仅靠 handle 区分原生 X server 与 XWayland。
+缺少 handle 会明确输出 unavailable；`XDG_SESSION_TYPE` 不作为 native Wayland 证据。
+Python metadata 同样保留 GPU 与 WINDOWSYS 日志。
+
+本轮 macOS 验证：default / `ui-sounds` locked check、publisher/hot-reload/video-native
+workspace check、publisher Clippy、fmt、collector 7 项与 native-smoke 零警告通过；
+default / 无默认功能 publisher workspace tests 的 IPC 沙箱失败已放行后完整重跑。
+Linux 四项 feature closure 与 all-features cargo-deny 通过，但两条 Linux target check
+均在 `alsa-sys` 因缺少交叉 sysroot/pkg-config 配置受阻；Linux 编译及远程 CI 尚未通过验收。
+
+实体机验收 **NOT TESTED**：openSUSE Leap 16 / KDE Plasma Wayland /
+Intel HD Graphics 4400 / Mesa，至少分别跑 A native Wayland + Vulkan、
+B native Wayland + `WGPU_BACKEND=gl`、C X11/XWayland + Vulkan；从无关 cwd 启动
+解压后搬移的包并检查报告、资源与 collector。记录实际 adapter/backend/WINDOWSYS
+及失败的驱动原因，不把 llvmpipe 或 hosted runner 编译通过当作实体 GPU 验收。
+
 ### CI 的工作范围与缓存
 
 每次推送保留依赖政策、Linux fmt/Clippy/workspace 与 publisher 测试、benchmark
