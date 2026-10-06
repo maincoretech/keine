@@ -1,9 +1,12 @@
 name: Release
 
-# Manual bundles default to an isolated temporary identity. Stable production
-# updates explicitly select the repository identity so test and fork workflows
-# never require or inherit publisher secrets.
+# Successful main CI updates the rolling benchmark download. Manual production
+# bundles still explicitly select the stable identity; automatic builds use no secret.
 on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       project:
@@ -27,9 +30,27 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.event_name == 'workflow_run' || inputs.benchmark }}
+  cancel-in-progress: false
+
+env:
+  # workflow_run's github.sha is the default branch tip, not necessarily the
+  # commit that passed CI. Use the upstream run's immutable source throughout.
+  RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+  KEINE_BUILD_COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
+  IDENTITY_MODE: ${{ inputs.identity || 'temporary' }}
+  BENCHMARK_PACKAGE: ${{ github.event_name == 'workflow_run' || inputs.benchmark }}
+
 jobs:
   identity:
     name: Resolve publisher identity
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     steps:
       - name: Validate stable publisher identity
@@ -87,6 +108,8 @@ jobs:
       KEINE_BUILD_TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.RELEASE_SHA }}
       - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
       - name: Install cross-compilation target
         if: matrix.target != ''
@@ -95,7 +118,7 @@ jobs:
         id: project
         shell: bash
         env:
-          PROJECT_INPUT: ${{ inputs.project }}
+          PROJECT_INPUT: ${{ inputs.project || 'tests/fixtures/native-smoke' }}
         run: |
           if [[ "$PROJECT_INPUT" == *$'\n'* || "$PROJECT_INPUT" == *$'\r'* ]]; then
             echo 'Project path must not contain line breaks' >&2
@@ -127,8 +150,6 @@ jobs:
         id: artifact
         shell: bash
         env:
-          BENCHMARK_PACKAGE: ${{ inputs.benchmark }}
-          IDENTITY_MODE: ${{ inputs.identity }}
           ARTIFACT_BASE: ${{ matrix.artifact }}
         run: |
           artifact="$ARTIFACT_BASE"
@@ -150,7 +171,7 @@ jobs:
             target/${{ matrix.engine_target_dir }}
             target/${{ matrix.target }}/profiling
             target/runner
-          key: release-rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ env.KEINE_RELEASE_FEATURES }}-${{ github.sha }}
+          key: release-rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ env.KEINE_RELEASE_FEATURES }}-${{ env.RELEASE_SHA }}
           restore-keys: |
             release-rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ env.KEINE_RELEASE_FEATURES }}-
             release-rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-
@@ -171,7 +192,7 @@ jobs:
           identity_dir="${RUNNER_TEMP//\\//}/keine-release-secrets"
           mkdir -p "$identity_dir"
           echo "path=$identity_dir/publisher.key" >> "$GITHUB_OUTPUT"
-          if [[ "${{ inputs.identity }}" == "temporary" ]]; then
+          if [[ "$IDENTITY_MODE" == "temporary" ]]; then
             echo 'Using an isolated temporary publisher identity for this platform bundle'
           fi
       - name: Restore stable publisher identity
@@ -189,7 +210,6 @@ jobs:
         env:
           PROJECT_PATH: ${{ steps.project.outputs.path }}
           KEINE_HAKUTAKU_IDENTITY: ${{ steps.publisher_identity.outputs.path }}
-          BENCHMARK_PACKAGE: ${{ inputs.benchmark }}
         run: |
           args=(bundle "$PROJECT_PATH" --output "target/${{ steps.artifact.outputs.name }}")
           if [[ "$BENCHMARK_PACKAGE" == "true" ]]; then
@@ -240,7 +260,7 @@ jobs:
 
   publish-benchmark:
     name: Publish benchmark release
-    if: inputs.benchmark
+    if: github.event_name == 'workflow_run' || inputs.benchmark
     needs: bundle
     runs-on: ubuntu-latest
     permissions:
@@ -250,6 +270,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
+          ref: ${{ env.RELEASE_SHA }}
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           pattern: '*-benchmark'
@@ -272,17 +293,26 @@ jobs:
         id: release
         shell: bash
         run: |
-          git tag --force benchmark-latest "$GITHUB_SHA"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_run" ]]; then
+            current_main="$(git ls-remote origin refs/heads/main | cut -f1)"
+            if [[ "$current_main" != "$RELEASE_SHA" ]]; then
+              echo 'A newer main commit exists; keep these artifacts without replacing the rolling download.'
+              exit 0
+            fi
+          fi
+          git tag --force benchmark-latest "$RELEASE_SHA"
           git push --force origin refs/tags/benchmark-latest
-          echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${RELEASE_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "publish=true" >> "$GITHUB_OUTPUT"
       - name: Update rolling benchmark release
+        if: steps.release.outputs.publish == 'true'
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           tag_name: benchmark-latest
-          target_commitish: ${{ github.sha }}
+          target_commitish: ${{ env.RELEASE_SHA }}
           name: Kēne benchmark · ${{ steps.release.outputs.short_sha }}
           body: |
-            Automated performance packages built from commit ${{ github.sha }}.
+            Automated performance packages built from commit ${{ env.RELEASE_SHA }}.
 
             Download the package for your platform, extract it, and run
             `keine.exe` on Windows or `keine` on macOS/Linux. The report is

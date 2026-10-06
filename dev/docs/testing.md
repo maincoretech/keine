@@ -144,6 +144,8 @@ Linux 单独运行 `cargo test --locked -p keine-editor --lib` 时，Editor 的�
 Editor 平台测试，不再另跑同一组。完整优化编译/打包由 Release / Project Release
 执行，常规 CI 不重复编译整个 release profile；发行优化参数保持不变。
 macOS 另检查无音频 `video-native` 测试的编译边界，避免默认音频掩盖意外的 rodio 引用。
+main 的成功 CI 会触发 Release 更新 `benchmark-latest`；发布必须分别确认构建、
+附件上传、滚动 tag 和 Release 提交匹配，不能把 CI 成功当作发布完成。
 
 Windows job 总上限为 180 分钟（不是闲置计时），Linux/macOS 为 60 分钟。
 main 的运行中 CI 不被后续推送取消；同组只保留最新待运行提交，其他分支/PR
@@ -166,6 +168,8 @@ Windows FFmpeg SDK 仅编译动态 Release 库：ffmpeg-sys-next 使用 vcpkg-rs
 benchmark collector 6 项、native-smoke 零警告通过；Windows SDK 与新总耗时待远程 CI。
 工作流 YAML 与 actionlint 检查通过；发行模板的 `job.workflow_*` 字段由 GitHub 官方
 文档确认支持，actionlint 1.7.12 对这三个字段的误报仅在本次本地检查中精确排除。
+提交 `e9cec0d` 的远程 CI #239 与 Media safety 已全部通过，包括 Windows 平台测试、
+视频验收和规范发行 feature check；GUI / 硬件 benchmark 验收仍独立。
 
 ## 测试布局
 
