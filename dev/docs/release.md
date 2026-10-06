@@ -33,6 +33,8 @@ Release 的提交 SHA 和三平台附件，不能仅以 CI 成功或 Actions art
 需要 Python 3 和平台采样工具。Windows 包附 PDB，macOS 有 dSYM 时一并附带。
 工作流保存 Cargo 缓存前按 package 清理 Engine/Loader 的 release/profiling 产物，
 避免内嵌运行密钥份额进入缓存；其他依赖和不含发行密钥的 publisher runner 保留。
+缓存同时保留 `target/CACHEDIR.TAG`；若还原或独立 runner 先创建了 target 目录，
+清理前补写标准标记，满足 Cargo 1.97 的显式目录清理检查。清理失败仍阻止缓存保存和发布。
 
 Cargo aliases 与 executable 使用同名动词；具体参数以 `--help` 为准。
 正式内容先验证/编译，再加载或创建 publisher identity；失败保留已有可运行发布目录。

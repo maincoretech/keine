@@ -168,6 +168,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
+            target/CACHEDIR.TAG
             target/${{ matrix.engine_target_dir }}
             target/${{ matrix.target }}/profiling
             target/runner
@@ -251,6 +252,11 @@ jobs:
         if: always()
         shell: bash
         run: |
+          # Cache restore and the separate publisher build can create target/
+          # before Cargo writes its tag. Cargo 1.97 requires it for explicit clean.
+          if [[ -d target && ! -f target/CACHEDIR.TAG ]]; then
+            printf 'Signature: 8a477f597d28d172789f06886806bc55\n' > target/CACHEDIR.TAG
+          fi
           args=(--locked --target-dir target -p keine -p keine-loader)
           if [[ -n "${{ matrix.target }}" ]]; then
             args+=(--target "${{ matrix.target }}")
