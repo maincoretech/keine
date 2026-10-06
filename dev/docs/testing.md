@@ -279,6 +279,7 @@ tests/
 ├── letsgal/sample.rs          本机官方示例资源与内容完整性
 ├── fixtures/
 │   ├── native-smoke/          最小 tracked 原生工程
+│   ├── native-benchmark/      三平台同负载原生性能工程
 │   ├── letsgal-timeline/      舞台/镜头/退格/音频回归与 benchmark 场景
 │   ├── webgal-showcase/       只作 parser / IR 冻结回归
 │   └── video/                生成的合法与损坏视频
@@ -305,7 +306,7 @@ tests/
 fmt/check/clippy、可选 feature 构建和 native-smoke validate 通过。IPC 沙箱权限失败后在放宽沙箱的同一 checkout 重跑通过。
 
 官方 LetsGal 示例验收和 loader benchmark 通过 `KEINE_LETSGAL_PROJECT` 指定外部原工程；
-不依赖本地 demo。`projects/tday` 是唯一忽略的开发 demo，CI 打包默认使用 tracked native-smoke。
+不依赖本地 demo。`projects/tday` 是唯一忽略的开发 demo，CI 打包默认使用 tracked native-benchmark；native-smoke 保留作最小回归。
 
 显式 Cargo `path` 注册嵌套 tests/benches，参见 [Cargo targets](https://doc.rust-lang.org/cargo/reference/cargo-targets.html)。
 
@@ -325,6 +326,79 @@ Linux 使用 `video-ffmpeg`；CI 另跑 FFmpeg ASan。fuzz 的目录参数由
 合法文件必须读到 EOF 并可 rewind，损坏头在 FS/加密包中均必须拒绝。
 
 ## 性能
+
+### 三平台原生完整套件
+
+自动 Release 的 Windows、macOS、Linux 包统一使用 `tests/fixtures/native-benchmark`，
+不再用只有一句对白的 smoke。同一份 EYS v2、WebP、Opus、1080p H.264 素材
+经过正常 publisher → Hakutaku → 解码/播放 → MainCore UI/场景渲染路径；macOS 视频
+用 AVFoundation，Windows/Linux 用 FFmpeg。素材自生成，不包含 tday 私有内容。
+71 个作者场景加 7 个运行模式/显示对照，共 78 个必测负载：
+
+| 范围 | 场景 |
+| --- | --- |
+| 对照与日常 | 同画面无特效基线、中文/Latin 打字与自动翻页、双立绘移动/缩放、背景切换 |
+| Shader | 32 个独立特效族、4 个经典镜头分组、8 个属性/事件组合 |
+| 粒子 | 雪/雨/花瓣、80/256/768 密度、自定义纹理、大尺寸填充、多层 emitter |
+| 媒体 | Opus 循环/淡入淡出/语音/SE、1080p 视频全屏/混合/循环/音轨 |
+| UI/立绘 | 浮动文字、幕布、滤镜、环境光开关、16 项选择、输入、设置/存档/读档/80 条历史/鉴赏面板 |
+| 压力与显示 | 粒子+视频+镜头+媒体、720p/1080p 粒子、实际屏幕全屏；对白/粒子/音频/视频正常 runtime 模式 |
+
+另测 7 次隔离启动、开场正常休眠/唤醒、连续绘制、3 个 camera 分解及真实资源+
+204.2 MiB 确定性 payload 的暖缓存 I/O。阶段预热 3 秒、采样 5 秒；基线、粒子、
+主要组合热点跑 3 次，保留每次原始帧及中位数。运行需十余分钟，关闭其他重负载，
+保持显示模式固定；窗口切换等排除记录不可删除。
+
+`COVERAGE` 必须是 78 completed / 0 missing / 0 failed；单项失败继续后续场景，
+保留部分报告并返回失败。正常播放必须有前台样本；全程后台暂停不能算作已测。
+启动/开场/I/O 的失败也会使套件返回失败，原始报告仍保留。
+自选工程同样必须提供目标，不能用缺测结果冒充完整套件。
+三平台 CI 都启用进程采样 feature 与本平台媒体后端，检查全部目标唯一、引用完整、
+可重放、透明素材有效及原生打包映射；Linux 也执行 FFmpeg 播放合同。CI 构建/媒体合同
+测试不代替实机 GPU 性能验收。存读档事务、回退和 IME 的正确性仍由对应回归测试验证，
+面板场景只测真实 UI 负载；Editor 大文档/拖动基准仍在独立 Editor 测试中。
+
+报告首先定位优化候选：`HOTSPOT` 按同画面基线的帧时差排序并给复测命令；
+结合各负载的 `PROCESS` CPU、`MEMORY` RSS、`UPDATE` 脚本/场景/布局/UI 调度耗时、
+`RENDER` CPU/GPU span 与 `SLOW` 源码位置区分方向，再采调用栈确认函数。
+UPDATE 是墙钟窗口，包含等待及并行重叠，不能加总作独占 CPU；Fifo 帧时会受垂直同步
+限制，帧时相同也需比较 CPU 和阶段耗时。时间戳不可用明确标出，不能写零。
+Windows 自动调用栈尚未实现，可用 PDB 与外部 profiler；这项缺口不冒充已覆盖。
+
+```sh
+cargo validate tests/fixtures/native-benchmark
+cargo test -p keine --lib portable_benchmark_
+# 包内执行；无需源工程/Python，完整套件生成 keine-benchmark-report.txt。
+./keine
+# 定位候选后，同硬件/尺寸/后端复测，再单独采栈，避免 sampler 扰动基线。
+python3 profile-runtime.py --timeline bench_particle_layers_768 --window 1920x1080 --mode continuous --seconds 30 --stacks off --output particle-baseline
+python3 profile-runtime.py --timeline bench_particle_layers_768 --window 1920x1080 --mode continuous --seconds 30 --output particle-stacks
+```
+
+当前本地证据：macOS / Apple M5 Pro / Metal / 120 Hz，优化且保留符号的包完成
+74/78 个负载、7 次启动和暖缓存 I/O；4 个 `runtime` 对话/粒子/音频/视频负载全程
+失焦，按合同判失败，整套结果为 INCOMPLETE，不能称为全覆盖验收。
+Windows/Linux 新套件尚待实机运行，修改后的远端 CI 尚未执行。
+报告在 `target/performance/native-0131-verified-benchmark/keine-benchmark-report.txt`，
+69,882 条含排除记录的帧已转换为同级 `native-0131-report-json/`。
+基线 CPU 三次中位数 14.81%，组合压力 21.53%（一核为 100%）；两者帧时均约
+8.33 ms，因此优先进一步分解 CPU/渲染提交，而不能据 FPS 判断没有优化空间。
+GPU span 本机不可用，未填零。另采的 scene+UI 调用栈成功且输入哈希未变，
+主线程多为事件等待，采样覆盖启动且会扰动结果，暂未确认单个函数热点。
+
+实际命令（bundle 的一次性测试 identity 通过 `KEINE_HAKUTAKU_IDENTITY` 指定，
+测试后删除；不使用开发/发行密钥）：
+
+```sh
+CARGO_NET_OFFLINE=true target/debug/keine bundle tests/fixtures/native-benchmark --output target/performance/native-0131-verified --benchmark
+target/performance/native-0131-verified-benchmark/keine
+python3 dev/scripts/profile-runtime.py --report target/performance/native-0131-verified-benchmark/keine-benchmark-report.txt --output target/performance/native-0131-report-json
+python3 dev/scripts/profile-runtime.py target/performance/native-0131-verified-benchmark --binary target/performance/native-0131-verified-benchmark/keine --mode continuous --camera scene-ui --seconds 10 --output target/performance/native-0131-scene-ui-stacks
+```
+
+代码门槛已通过：workspace 909 测试（8 个既有 ignored）、collector 7 测试、
+fmt/clippy、原生项目与 smoke validate、原生及 FFmpeg feature check、Actionlint。
+IPC 测试先遇到本地沙箱 PermissionDenied，提权重跑完整 workspace 后通过。
 
 ### 实际运行热点采样
 

@@ -13,9 +13,18 @@ const DEFAULT_BUNDLE_OUTPUT: &str = "target/bundle";
 pub(crate) const BENCHMARK_MARKER: &str = "keine-benchmark.conf";
 pub(crate) const BENCHMARK_REPORT_FILE: &str = "keine-benchmark-report.txt";
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum BenchmarkWindow {
+    #[default]
+    Default,
+    Size(u32, u32),
+    Fullscreen,
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct BenchmarkOptions {
     pub(super) seconds: f32,
+    pub(super) window: BenchmarkWindow,
     pub(super) continuous: bool,
     pub(super) raw: bool,
     pub(super) refresh_hz: Option<f64>,
@@ -431,9 +440,10 @@ fn parse_development(args: &[OsString]) -> Result<CliCommand> {
 }
 
 fn parse_perf(args: &[OsString]) -> Result<CliCommand> {
-    const USAGE: &str = "keine perf <project> [--seconds N] [--timeline ID | --cursor N] [--camera PROFILE] [--mode runtime|continuous] [--hz N] [--scene ID] [--raw] | --startup [--runs N]";
+    const USAGE: &str = "keine perf <project> [--seconds N] [--timeline ID | --cursor N] [--camera PROFILE] [--mode runtime|continuous] [--hz N] [--scene ID] [--window WIDTHxHEIGHT|fullscreen] [--raw] | --startup [--runs N]";
     let project = required_path(args, 1, USAGE)?;
     let mut seconds = None;
+    let mut window = None;
     let mut target = None;
     let mut cameras = None;
     let mut startup = false;
@@ -498,6 +508,21 @@ fn parse_perf(args: &[OsString]) -> Result<CliCommand> {
                     _ => anyhow::bail!("--mode expects runtime or continuous"),
                 });
             }
+            "--window" if window.is_none() => {
+                let value = required_utf8(args, index + 1, USAGE)?;
+                window = Some(if value == "fullscreen" {
+                    BenchmarkWindow::Fullscreen
+                } else {
+                    let (width, height) = value
+                        .split_once('x')
+                        .context("--window expects WIDTHxHEIGHT or fullscreen")?;
+                    let (width, height) = (width.parse::<u32>()?, height.parse::<u32>()?);
+                    if !(128..=8192).contains(&width) || !(128..=8192).contains(&height) {
+                        anyhow::bail!("benchmark window dimensions must be between 128 and 8192");
+                    }
+                    BenchmarkWindow::Size(width, height)
+                });
+            }
             "--hz" if refresh_hz.is_none() => {
                 let hz = required_utf8(args, index + 1, USAGE)?.parse::<f64>()?;
                 if !hz.is_finite() || !(1.0..=1000.0).contains(&hz) {
@@ -522,7 +547,8 @@ fn parse_perf(args: &[OsString]) -> Result<CliCommand> {
         index += 2;
     }
     if startup {
-        if seconds.is_some()
+        if window.is_some()
+            || seconds.is_some()
             || target.is_some()
             || cameras.is_some()
             || continuous.is_some()
@@ -559,6 +585,7 @@ fn parse_perf(args: &[OsString]) -> Result<CliCommand> {
         project,
         InteractiveMode::Benchmark(BenchmarkOptions {
             seconds: seconds.unwrap_or(15.0),
+            window: window.unwrap_or_default(),
             continuous,
             raw,
             refresh_hz,
@@ -672,6 +699,7 @@ fn print_command_help(name: &str) {
         println!("  --raw             Write attributed per-frame TSV records to stderr");
         println!("  --mode MODE       runtime (normal sleep/wake) or continuous (render stress)");
         println!("  --hz N            Frame budget override; otherwise use monitor refresh rate");
+        println!("  --window SIZE     WIDTHxHEIGHT or fullscreen; records actual surface size");
         println!("  --scene ID        Start in this scene; optionally add --cursor N");
         println!("  --camera PROFILE  runtime, scene-ui, scene-dialog, or scene");
         println!("\nStartup options:");

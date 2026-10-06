@@ -251,6 +251,8 @@ impl EiyashouObjectManifest {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EiyashouAssetManifest {
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub luts: HashMap<String, EiyashouAssetEntry>,
     #[serde(default)]
     pub backgrounds: HashMap<String, EiyashouAssetEntry>,
     #[serde(default)]

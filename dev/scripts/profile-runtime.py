@@ -122,6 +122,7 @@ def main():
     parser.add_argument("--cursor", type=int)
     parser.add_argument("--timeline")
     parser.add_argument("--hz", type=float)
+    parser.add_argument("--window", help="WIDTHxHEIGHT or fullscreen; actual physical size is recorded")
     parser.add_argument("--camera", choices=("runtime", "scene", "scene-ui", "scene-dialog"), default="runtime")
     parser.add_argument("--stacks", choices=("auto", "off"), default="auto")
     args = parser.parse_args()
@@ -155,7 +156,7 @@ def main():
     entry = project / "game.haku" if (project / "game.haku").is_file() else project
     command = [str(binary), "perf", str(entry), "--seconds", str(args.seconds), "--mode", args.mode, "--raw"]
     for flag, value in (("--scene", args.scene), ("--cursor", args.cursor), ("--timeline", args.timeline),
-                        ("--hz", args.hz), ("--camera", args.camera)):
+                        ("--hz", args.hz), ("--camera", args.camera), ("--window", args.window)):
         if value is not None:
             command += [flag, str(value)]
     source_hashes = source_digests(project)
@@ -224,7 +225,7 @@ def main():
     metadata["engine_errors"] = [line for line in log.splitlines() if " ERROR " in line]
     metadata["engine_summary"] = [line for line in log.splitlines() if any(
         tag in line for tag in ("CAPTURE  |", "FRAME    |", "BUDGET   |", "PROCESS  |", "EXCLUDED |", "GPU_TIME |",
-                               "GPUINFO  |", "GPU      │", "WINDOWSYS |", "SAMPLING |", "ASSETS   |", "DISPLAY  |", "MEMORY   |", "RENDER   |", "build identity ·"))]
+                               "GPUINFO  |", "GPU      │", "WINDOWSYS |", "SAMPLING |", "ASSETS   |", "DISPLAY  |", "MEMORY   |", "RENDER   |", "UPDATE   |", "build identity ·"))]
     metadata["source_unchanged"] = source_digests(project) == source_hashes
     (output / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     if not metadata["source_unchanged"]:

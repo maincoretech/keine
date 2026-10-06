@@ -32,8 +32,8 @@ use crate::render::blur::{BlurCamera, BlurPlugin, DialogCamera, SceneBlurCamera,
 use crate::render::camera_blur::{CameraEffectsPlugin, CompositedCameraEffects};
 use crate::runtime::GamePlugin;
 use crate::runtime::cli::{
-    BenchmarkOptions, CliCommand, InteractiveMode, help_or_version, packaged_benchmark_command,
-    parse as parse_cli, resolve_project_path,
+    BenchmarkOptions, BenchmarkWindow, CliCommand, InteractiveMode, help_or_version,
+    packaged_benchmark_command, parse as parse_cli, resolve_project_path,
 };
 use crate::runtime::resources::{
     ContentProjectResource, DevelopmentSession, EditorSyncSession, GameConfigResource, GameState,
@@ -48,56 +48,121 @@ pub(crate) const MAX_PROJECT_CONFIG_BYTES: usize = keine_loader::MAX_PROJECT_CON
 type BenchmarkWorkload = (&'static str, &'static str);
 type BenchmarkSection = (&'static str, &'static [BenchmarkWorkload]);
 
+const BASELINE_BENCHMARK_WORKLOADS: &[BenchmarkWorkload] =
+    &[("reference composition", "bench_baseline")];
+const ISOLATED_EFFECT_BENCHMARK_WORKLOADS: &[BenchmarkWorkload] = &[
+    ("effect bloom", "bench_effect_bloom"),
+    ("effect depth", "bench_effect_depth"),
+    ("effect blur", "bench_effect_blur"),
+    ("effect distortion", "bench_effect_distortion"),
+    ("effect vignette", "bench_effect_vignette"),
+    ("effect color", "bench_effect_color"),
+    ("effect tone", "bench_effect_tone"),
+    ("effect old_film", "bench_effect_old_film"),
+    ("effect shock", "bench_effect_shock"),
+    ("effect godray", "bench_effect_godray"),
+    ("effect lut", "bench_effect_lut"),
+    ("effect chromatic", "bench_effect_chromatic"),
+    ("effect pixelate", "bench_effect_pixelate"),
+    ("effect glitch", "bench_effect_glitch"),
+    ("effect crt", "bench_effect_crt"),
+    ("effect sharpen", "bench_effect_sharpen"),
+    ("effect radial_blur", "bench_effect_radial_blur"),
+    ("effect motion_blur", "bench_effect_motion_blur"),
+    ("effect zoom_blur", "bench_effect_zoom_blur"),
+    ("effect light_leak", "bench_effect_light_leak"),
+    ("effect lens_flare", "bench_effect_lens_flare"),
+    ("effect grain", "bench_effect_grain"),
+    ("effect heat_haze", "bench_effect_heat_haze"),
+    ("effect water", "bench_effect_water"),
+    ("effect fog", "bench_effect_fog"),
+    ("effect vhs", "bench_effect_vhs"),
+    ("effect halftone", "bench_effect_halftone"),
+    ("effect dither", "bench_effect_dither"),
+    ("effect outline", "bench_effect_outline"),
+    ("effect eyelid", "bench_effect_eyelid"),
+    ("effect shatter", "bench_effect_shatter"),
+    ("effect speed_lines", "bench_effect_speed_lines"),
+];
+const PARTICLE_BENCHMARK_WORKLOADS: &[BenchmarkWorkload] = &[
+    ("particle snow_80", "bench_particle_snow_80"),
+    ("particle snow_256", "bench_particle_snow_256"),
+    ("particle rain_256", "bench_particle_rain_256"),
+    ("particle petals_128", "bench_particle_petals_128"),
+    ("particle texture_256", "bench_particle_texture_256"),
+    ("particle large_256", "bench_particle_large_256"),
+    ("particle layers_768", "bench_particle_layers_768"),
+];
+const MEDIA_BENCHMARK_WORKLOADS: &[BenchmarkWorkload] = &[
+    ("audio_loop", "bench_audio_loop"),
+    ("audio_crossfade", "bench_audio_crossfade"),
+    ("video_fullscreen", "bench_video_fullscreen"),
+    ("video_mixed", "bench_video_mixed"),
+];
+const UI_BENCHMARK_WORKLOADS: &[BenchmarkWorkload] = &[
+    ("text_layers", "bench_text_layers"),
+    ("curtain", "bench_curtain"),
+    ("sprite_filter", "bench_sprite_filter"),
+    ("light_off", "bench_light_off"),
+    ("choice", "bench_choice"),
+    ("input", "bench_input"),
+    ("settings", "bench_settings"),
+    ("save panel", "bench_save"),
+    ("load panel", "bench_load"),
+    ("history", "bench_history"),
+    ("gallery", "bench_gallery"),
+];
+
 const DAILY_BENCHMARK_WORKLOADS: &[BenchmarkWorkload] = &[
     (
         "representative dialogue · runtime composition",
-        "benchmark representative dialogue",
+        "bench_representative_dialogue",
     ),
     (
         "representative portrait motion · runtime composition",
-        "benchmark representative portrait motion",
+        "bench_representative_portrait_motion",
     ),
     (
         "representative scene transition · runtime composition",
-        "benchmark representative scene transition",
+        "bench_representative_scene_transition",
     ),
 ];
 const FEATURE_BENCHMARK_WORKLOADS: &[BenchmarkWorkload] = &[
-    ("shared transforms", "10-01 shared transform clock"),
-    ("classic camera", "10-02 classic camera properties"),
-    ("optical effects", "10-03 optical effects"),
-    ("blur family", "10-04 blur family"),
-    ("atmosphere effects", "10-05 atmosphere effects"),
-    ("retro and mask effects", "10-06 retro and eyelid mask"),
-    ("timed event types", "10-07 all event types"),
-    ("playback controls", "10-08 playback options"),
+    ("shared transforms", "bench_shared_transform_clock"),
+    ("classic camera", "bench_classic_camera_properties"),
+    ("optical effects", "bench_optical_effects"),
+    ("blur family", "bench_blur_family"),
+    ("atmosphere effects", "bench_atmosphere_effects"),
+    ("retro and mask effects", "bench_retro_and_eyelid_mask"),
+    ("timed event types", "bench_all_event_types"),
+    ("playback controls", "bench_playback_options"),
 ];
 const CLASSIC_ATTRIBUTION_BENCHMARK_WORKLOADS: &[BenchmarkWorkload] = &[
     (
         "classic sampling · depth blur and shock",
-        "benchmark classic sampling",
+        "bench_classic_sampling",
     ),
-    ("classic godray math", "benchmark classic godray"),
-    ("classic film noise", "benchmark classic film noise"),
+    ("classic godray math", "bench_classic_godray"),
+    ("classic film noise", "bench_classic_film_noise"),
     (
         "classic color and lens math",
-        "benchmark classic color and lens",
+        "bench_classic_color_and_lens",
     ),
 ];
 const STRESS_BENCHMARK_WORKLOADS: &[BenchmarkWorkload] =
-    &[("stress composition", "benchmark stress composition")];
+    &[("stress composition", "bench_stress_composition")];
 const REPEATED_BENCHMARK_TARGETS: &[&str] = &[
-    "10-02 classic camera properties",
-    "10-03 optical effects",
-    "10-04 blur family",
-    "10-05 atmosphere effects",
-    "10-06 retro and eyelid mask",
-    "10-07 all event types",
-    "benchmark classic sampling",
-    "benchmark classic godray",
-    "benchmark classic film noise",
-    "benchmark classic color and lens",
-    "benchmark stress composition",
+    "bench_classic_camera_properties",
+    "bench_optical_effects",
+    "bench_blur_family",
+    "bench_atmosphere_effects",
+    "bench_retro_and_eyelid_mask",
+    "bench_all_event_types",
+    "bench_classic_sampling",
+    "bench_classic_godray",
+    "bench_classic_film_noise",
+    "bench_classic_color_and_lens",
+    "bench_stress_composition",
 ];
 const HOTSPOT_BENCHMARK_RUNS: usize = 3;
 const CAMERA_BENCHMARK_WORKLOADS: &[(&str, BenchmarkCameras)] = &[
@@ -116,11 +181,31 @@ const CAMERA_BENCHMARK_WORKLOADS: &[(&str, BenchmarkCameras)] = &[
 ];
 const PORTABLE_BENCHMARK_SECTIONS: &[BenchmarkSection] = &[
     (
+        "control · same background, portraits and dialogue; no effects",
+        BASELINE_BENCHMARK_WORKLOADS,
+    ),
+    (
+        "isolated effects · one family at a time",
+        ISOLATED_EFFECT_BENCHMARK_WORKLOADS,
+    ),
+    (
+        "particles · density, texture, fill and emitter scaling",
+        PARTICLE_BENCHMARK_WORKLOADS,
+    ),
+    (
+        "media · Opus loop/crossfade and 1080p H.264 playback",
+        MEDIA_BENCHMARK_WORKLOADS,
+    ),
+    (
+        "UI and sprites · overlays, filter and environment light control",
+        UI_BENCHMARK_WORKLOADS,
+    ),
+    (
         "daily workloads · representative player-facing actions",
         DAILY_BENCHMARK_WORKLOADS,
     ),
     (
-        "feature coverage · every authored timeline property and event family",
+        "feature coverage · authored property and event combinations",
         FEATURE_BENCHMARK_WORKLOADS,
     ),
     (
@@ -426,7 +511,10 @@ fn run_startup_suite(project_path: &Path, runs: usize) -> Result<String> {
             emit_report_line(&mut report, gpu.trim());
         }
         let sample = crate::ui::performance::StartupSample::parse(&format!("{stdout}\n{stderr}"));
-        if !output.status.success() || sample.is_none() {
+        if !output.status.success()
+            || sample.is_none()
+            || stderr.lines().any(|line| line.contains(" ERROR "))
+        {
             anyhow::bail!(
                 "startup child {run} failed with {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
                 output.status,
@@ -587,148 +675,287 @@ fn physical_memory_bytes() -> Option<u64> {
 }
 
 fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) -> Result<()> {
-    let executable = std::env::current_exe().context("failed to locate benchmark executable")?;
-    let mut report = run_startup_suite(project_path, runs)?;
+    let mut report = String::new();
     let mut raw_frames = format!(
         "RAWFRAME\tworkload\trun\ttotal_runs\ttarget\tcamera_profile\t{}\n",
         crate::ui::performance::TRACE_FIELDS,
     );
-    // Measure real sleep/wake behavior separately from continuous throughput.
-    run_benchmark_workload(
-        BenchmarkWorkloadCapture {
-            executable: &executable,
-            project_path,
-            label: "opening composition · runtime sleep/wake",
-            target: None,
-            cameras: BenchmarkCameras::Runtime,
-            continuous: false,
-            run: 1,
-            total_runs: 1,
-        },
-        &mut report,
-        &mut raw_frames,
-    )?;
-    emit_report_line(&mut report, "");
-    emit_report_line(
-        &mut report,
-        "project workload · actual packaged opening composition",
-    );
-    emit_report_line(
-        &mut report,
-        "portable render coverage · continuous window loop · runtime cameras auto-disable empty overlays · decomposition pins cameras",
-    );
-    let timeline_inventory = run_benchmark_workload(
-        BenchmarkWorkloadCapture {
-            executable: &executable,
-            project_path,
-            label: "opening composition · runtime composition",
-            target: None,
-            cameras: BenchmarkCameras::Runtime,
-            continuous: true,
-            run: 1,
-            total_runs: 1,
-        },
-        &mut report,
-        &mut raw_frames,
-    )?
-    .stderr;
-    emit_report_line(&mut report, "");
-    emit_report_line(
-        &mut report,
-        "camera decomposition · opening composition render attribution",
-    );
-    for (label, cameras) in CAMERA_BENCHMARK_WORKLOADS {
-        run_benchmark_workload(
+    let outcome = (|| -> Result<()> {
+        let executable =
+            std::env::current_exe().context("failed to locate benchmark executable")?;
+        report.push_str(&run_startup_suite(project_path, runs)?);
+        // Measure real sleep/wake behavior separately from continuous throughput.
+        let mut preliminary_failed = false;
+        if let Err(error) = run_benchmark_workload(
             BenchmarkWorkloadCapture {
                 executable: &executable,
                 project_path,
-                label,
+                label: "opening composition · runtime sleep/wake",
                 target: None,
-                cameras: *cameras,
+                cameras: BenchmarkCameras::Runtime,
+                window: BenchmarkWindow::Default,
+                continuous: false,
+                run: 1,
+                total_runs: 1,
+            },
+            &mut report,
+            &mut raw_frames,
+        ) {
+            preliminary_failed = true;
+            emit_report_line(
+                &mut report,
+                format!("FAILED   | runtime opening · {error:#}"),
+            );
+        }
+        emit_report_line(&mut report, "");
+        emit_report_line(
+            &mut report,
+            "project workload · actual packaged opening composition",
+        );
+        emit_report_line(
+            &mut report,
+            "portable render coverage · continuous window loop · runtime cameras auto-disable empty overlays · decomposition pins cameras",
+        );
+        let timeline_inventory = run_benchmark_workload(
+            BenchmarkWorkloadCapture {
+                executable: &executable,
+                project_path,
+                label: "opening composition · runtime composition",
+                target: None,
+                cameras: BenchmarkCameras::Runtime,
+                window: BenchmarkWindow::Default,
                 continuous: true,
                 run: 1,
                 total_runs: 1,
             },
             &mut report,
             &mut raw_frames,
-        )?;
-    }
-    for (section, workloads) in PORTABLE_BENCHMARK_SECTIONS {
+        )?
+        .stderr;
         emit_report_line(&mut report, "");
-        emit_report_line(&mut report, section);
-        let mut authored = 0;
-        for (label, target) in *workloads {
-            if timeline_is_available(&timeline_inventory, target) {
+        emit_report_line(
+            &mut report,
+            "camera decomposition · opening composition render attribution",
+        );
+        for (label, cameras) in CAMERA_BENCHMARK_WORKLOADS {
+            run_benchmark_workload(
+                BenchmarkWorkloadCapture {
+                    executable: &executable,
+                    project_path,
+                    label,
+                    target: None,
+                    cameras: *cameras,
+                    window: BenchmarkWindow::Default,
+                    continuous: true,
+                    run: 1,
+                    total_runs: 1,
+                },
+                &mut report,
+                &mut raw_frames,
+            )?;
+        }
+        let mut completed = 0;
+        let mut missing = 0;
+        let mut failed = 0;
+        let mut ranked = Vec::new();
+        for (section, workloads) in PORTABLE_BENCHMARK_SECTIONS {
+            emit_report_line(&mut report, "");
+            emit_report_line(&mut report, section);
+            for (label, target) in *workloads {
+                if !timeline_is_available(&timeline_inventory, target) {
+                    missing += 1;
+                    emit_report_line(
+                        &mut report,
+                        format!("MISSING  | {label} · target {target:?}"),
+                    );
+                    continue;
+                }
                 let total_runs = benchmark_workload_runs(target);
                 let mut summaries = Vec::with_capacity(total_runs);
                 for run in 1..=total_runs {
-                    summaries.push(
-                        run_benchmark_workload(
-                            BenchmarkWorkloadCapture {
-                                executable: &executable,
-                                project_path,
-                                label,
-                                target: Some(target),
-                                cameras: BenchmarkCameras::Runtime,
-                                continuous: true,
-                                run,
-                                total_runs,
-                            },
-                            &mut report,
-                            &mut raw_frames,
-                        )?
-                        .summary,
-                    );
+                    match run_benchmark_workload(
+                        BenchmarkWorkloadCapture {
+                            executable: &executable,
+                            project_path,
+                            label,
+                            target: Some(target),
+                            cameras: BenchmarkCameras::Runtime,
+                            window: BenchmarkWindow::Default,
+                            continuous: true,
+                            run,
+                            total_runs,
+                        },
+                        &mut report,
+                        &mut raw_frames,
+                    ) {
+                        Ok(output) => summaries.push(output.summary),
+                        Err(error) => {
+                            emit_report_line(
+                                &mut report,
+                                format!("FAILED   | {label} · run {run}/{total_runs} · {error:#}"),
+                            );
+                            break;
+                        }
+                    }
                 }
+                if summaries.len() != total_runs {
+                    failed += 1;
+                    continue;
+                }
+                completed += 1;
                 if total_runs > 1 {
                     append_render_repeat_summary(label, &summaries, &mut report);
                 }
-                authored += 1;
+                summaries.sort_by(|a, b| a.average_ms.total_cmp(&b.average_ms));
+                ranked.push((*label, *target, summaries[total_runs / 2]));
             }
         }
-        if authored == 0 {
-            emit_report_line(
+        // Visible windows exercise actual presentation and fill cost, separately
+        // from the fixed-size hidden throughput samples used for shader attribution.
+        for (label, window, target) in [
+            (
+                "720p particles",
+                BenchmarkWindow::Size(1280, 720),
+                "bench_particle_snow_256",
+            ),
+            (
+                "1080p particles",
+                BenchmarkWindow::Size(1920, 1080),
+                "bench_particle_snow_256",
+            ),
+            (
+                "runtime dialogue",
+                BenchmarkWindow::Default,
+                "bench_representative_dialogue",
+            ),
+            (
+                "runtime particles",
+                BenchmarkWindow::Default,
+                "bench_particle_snow_256",
+            ),
+            (
+                "runtime audio",
+                BenchmarkWindow::Default,
+                "bench_audio_loop",
+            ),
+            (
+                "runtime video",
+                BenchmarkWindow::Default,
+                "bench_video_fullscreen",
+            ),
+            (
+                "fullscreen stress",
+                BenchmarkWindow::Fullscreen,
+                "bench_stress_composition",
+            ),
+        ] {
+            if !timeline_is_available(&timeline_inventory, target) {
+                missing += 1;
+                emit_report_line(
+                    &mut report,
+                    format!("MISSING  | {label} · target {target:?}"),
+                );
+                continue;
+            }
+            match run_benchmark_workload(
+                BenchmarkWorkloadCapture {
+                    executable: &executable,
+                    project_path,
+                    label,
+                    target: Some(target),
+                    cameras: BenchmarkCameras::Runtime,
+                    window,
+                    continuous: !label.starts_with("runtime "),
+                    run: 1,
+                    total_runs: 1,
+                },
                 &mut report,
-                "not authored by this project · skipped without substituting unrelated content",
+                &mut raw_frames,
+            ) {
+                Ok(_) => completed += 1,
+                Err(error) => {
+                    failed += 1;
+                    emit_report_line(&mut report, format!("FAILED   | {label} · {error:#}"));
+                }
+            }
+        }
+        append_hotspot_ranking(&ranked, &mut report);
+        emit_report_line(
+            &mut report,
+            format!(
+                "COVERAGE | {completed} completed · {missing} missing · {failed} failed · {} required render workloads · {}",
+                PORTABLE_BENCHMARK_SECTIONS
+                    .iter()
+                    .map(|(_, w)| w.len())
+                    .sum::<usize>()
+                    + 7,
+                if missing == 0 && failed == 0 {
+                    "complete"
+                } else {
+                    "INCOMPLETE: not a full benchmark"
+                }
+            ),
+        );
+        emit_report_line(&mut report, "");
+        emit_report_line(
+            &mut report,
+            "warm Hakutaku/cache throughput · real assets and isolated access-class stress",
+        );
+        emit_report_line(
+            &mut report,
+            "scope · package open/decrypt/cache/memory path; not a cold-cache or physical-device benchmark",
+        );
+        let mut package_failed = false;
+        let package = (|| -> Result<String> {
+            let output = Command::new(&executable)
+                .arg("__benchmark-package")
+                .arg(project_path)
+                .output()
+                .context("failed to start package I/O benchmark")?;
+            if !output.status.success() {
+                anyhow::bail!(
+                    "package I/O failed: {}\n{}\n{}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            String::from_utf8(output.stdout).context("package I/O output is not UTF-8")
+        })();
+        match package {
+            Ok(output) => {
+                for line in output.lines() {
+                    emit_report_line(&mut report, line);
+                }
+            }
+            Err(error) => {
+                package_failed = true;
+                emit_report_line(&mut report, format!("FAILED   | package I/O · {error:#}"));
+            }
+        }
+        emit_report_line(&mut report, "");
+        emit_report_line(
+            &mut report,
+            "raw frame appendix · bounded tab-separated samples for offline analysis",
+        );
+        if missing != 0 || failed != 0 || package_failed || preliminary_failed {
+            anyhow::bail!(
+                "benchmark incomplete ({missing} missing, {failed} failed, package failed: {package_failed}, runtime opening failed: {preliminary_failed}); partial evidence retained in {}",
+                report_path.display()
             );
         }
-    }
-    emit_report_line(&mut report, "");
-    emit_report_line(
-        &mut report,
-        "warm Hakutaku/cache throughput · real assets and isolated access-class stress",
-    );
-    emit_report_line(
-        &mut report,
-        "scope · package open/decrypt/cache/memory path; not a cold-cache or physical-device benchmark",
-    );
-    let output = Command::new(&executable)
-        .arg("__benchmark-package")
-        .arg(project_path)
-        .output()
-        .context("failed to start package I/O benchmark")?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "package I/O benchmark failed with {}\nstdout:\n{}\nstderr:\n{}",
-            output.status,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
+        Ok(())
+    })();
+    if let Err(error) = &outcome {
+        emit_report_line(
+            &mut report,
+            format!("FAILED   | suite incomplete · {error:#}"),
         );
     }
-    let package_report =
-        String::from_utf8(output.stdout).context("package I/O benchmark output is not UTF-8")?;
-    for line in package_report.lines() {
-        emit_report_line(&mut report, line);
-    }
-    emit_report_line(&mut report, "");
-    emit_report_line(
-        &mut report,
-        "raw frame appendix · bounded tab-separated samples for offline analysis",
-    );
     report.push_str(&raw_frames);
     crate::storage::write_atomically(report_path, report.as_bytes())?;
     println!("benchmark report written to {}", report_path.display());
-    Ok(())
+    outcome
 }
 
 struct BenchmarkWorkloadOutput {
@@ -742,6 +969,7 @@ struct BenchmarkWorkloadCapture<'a> {
     label: &'a str,
     target: Option<&'a str>,
     cameras: BenchmarkCameras,
+    window: BenchmarkWindow,
     continuous: bool,
     run: usize,
     total_runs: usize,
@@ -758,6 +986,7 @@ fn run_benchmark_workload(
         label,
         target,
         cameras,
+        window,
         continuous,
         run,
         total_runs,
@@ -780,10 +1009,19 @@ fn run_benchmark_workload(
         .arg(project_path)
         .args(["--seconds", "5", "--mode", mode, "--raw"]);
     // Reactive redraws require a real window; a hidden window cannot measure idle behavior.
-    if continuous {
+    if continuous && window == BenchmarkWindow::Default {
         command.env(RUNTIME_BENCHMARK_CHILD_ENV, "1");
     } else {
         command.env_remove(RUNTIME_BENCHMARK_CHILD_ENV);
+    }
+    match window {
+        BenchmarkWindow::Default => {}
+        BenchmarkWindow::Size(width, height) => {
+            command.args(["--window", &format!("{width}x{height}")]);
+        }
+        BenchmarkWindow::Fullscreen => {
+            command.args(["--window", "fullscreen"]);
+        }
     }
     if let Some(target) = target {
         command.arg("--timeline").arg(target);
@@ -808,10 +1046,12 @@ fn run_benchmark_workload(
         anyhow::bail!("{label} benchmark did not resolve timeline {target:?}\n{stderr}");
     }
     let mut captured = 0;
+    let mut focused_intervals = 0;
     let mut summary = None;
     for line in stdout.lines().chain(stderr.lines()) {
         let line = line.trim();
         if let Some(frame) = line.strip_prefix("KEINE_TRACE\t") {
+            focused_intervals += usize::from(frame.split('\t').nth(10) == Some("true"));
             append_raw_frame(raw_frames, label, run, total_runs, target, cameras, frame);
             continue;
         }
@@ -829,6 +1069,17 @@ fn run_benchmark_workload(
     }
     let summary =
         summary.context("benchmark completed without a machine-readable render sample")?;
+    if stderr.lines().any(|line| line.contains(" ERROR ")) {
+        anyhow::bail!("{label} reported an engine error\n{stderr}");
+    }
+    if !continuous && focused_intervals == 0 {
+        anyhow::bail!(
+            "{label} has no focused runtime intervals; leave the benchmark window foreground"
+        );
+    }
+    if (continuous || label.starts_with("runtime ")) && summary.frames == 0 {
+        anyhow::bail!("{label} has no eligible active render intervals");
+    }
     Ok(BenchmarkWorkloadOutput {
         stderr: stderr.into_owned(),
         summary,
@@ -836,11 +1087,57 @@ fn run_benchmark_workload(
 }
 
 fn benchmark_workload_runs(target: &str) -> usize {
-    if REPEATED_BENCHMARK_TARGETS.contains(&target) {
+    if REPEATED_BENCHMARK_TARGETS.contains(&target)
+        || target == "bench_baseline"
+        || target.starts_with("bench_particle_")
+    {
         HOTSPOT_BENCHMARK_RUNS
     } else {
         1
     }
+}
+
+fn append_hotspot_ranking(
+    results: &[(&str, &str, crate::ui::performance::RenderSummary)],
+    report: &mut String,
+) {
+    emit_report_line(report, "");
+    emit_report_line(
+        report,
+        "optimization candidates · controlled workload deltas, not exclusive function cost",
+    );
+    let Some((_, _, baseline)) = results
+        .iter()
+        .find(|(_, target, _)| *target == "bench_baseline")
+    else {
+        emit_report_line(
+            report,
+            "HOTSPOT  | reference unavailable; no fabricated deltas",
+        );
+        return;
+    };
+    let mut candidates = results
+        .iter()
+        .filter(|(_, target, s)| *target != "bench_baseline" && s.frames > 0)
+        .collect::<Vec<_>>();
+    candidates.sort_by(|a, b| b.2.average_ms.total_cmp(&a.2.average_ms));
+    for (label, target, summary) in candidates.into_iter().take(15) {
+        emit_report_line(
+            report,
+            format!(
+                "HOTSPOT  | {label} · Δavg {:+.2} ms · avg {:.2} · p99 {:.2} · max {:.2} ms · 1% low {:.1} FPS · rerun: perf <package> --timeline {target:?} --mode continuous --raw",
+                summary.average_ms - baseline.average_ms,
+                summary.average_ms,
+                summary.p99_ms,
+                summary.maximum_ms,
+                summary.one_percent_low_fps
+            ),
+        );
+    }
+    emit_report_line(
+        report,
+        "ATTRIBUTION | compare identical size/backend/cache/pacing; inspect each workload's PROCESS, MEMORY, UPDATE, RENDER and SLOW lines; frame intervals include driver/presentation/scheduling, CPU/GPU spans must not be summed; use a separate native stack capture to locate functions",
+    );
 }
 
 fn append_render_repeat_summary(
@@ -937,6 +1234,7 @@ fn benchmark_report_line(line: &str) -> bool {
         "ASSETS   |",
         "MEMORY   |",
         "RENDER   |",
+        "UPDATE   |",
         " ERROR ",
     ]
     .iter()
@@ -1247,7 +1545,22 @@ fn build_opened_app(
             } else {
                 config.title.clone()
             },
-            resolution: if authoring_preview {
+            mode: if options
+                .benchmark
+                .as_ref()
+                .is_some_and(|b| b.window == BenchmarkWindow::Fullscreen)
+            {
+                bevy::window::WindowMode::BorderlessFullscreen(
+                    bevy::window::MonitorSelection::Primary,
+                )
+            } else {
+                bevy::window::WindowMode::Windowed
+            },
+            resolution: if let Some(BenchmarkWindow::Size(width, height)) =
+                options.benchmark.as_ref().map(|b| b.window)
+            {
+                WindowResolution::new(width, height).with_scale_factor_override(1.0)
+            } else if authoring_preview {
                 WindowResolution::new(1280, 720)
             } else {
                 initial_resolution
@@ -1983,10 +2296,10 @@ mod tests {
         assert_eq!(STRESS_BENCHMARK_WORKLOADS.len(), 1);
         assert_eq!(REPEATED_BENCHMARK_TARGETS.len(), 11);
         assert_eq!(HOTSPOT_BENCHMARK_RUNS, 3);
-        assert_eq!(benchmark_workload_runs("10-04 blur family"), 3);
-        assert_eq!(benchmark_workload_runs("benchmark classic godray"), 3);
-        assert_eq!(benchmark_workload_runs("10-01 shared transform clock"), 1);
-        assert_eq!(targets.len(), 16);
+        assert_eq!(benchmark_workload_runs("bench_blur_family"), 3);
+        assert_eq!(benchmark_workload_runs("bench_classic_godray"), 3);
+        assert_eq!(benchmark_workload_runs("bench_shared_transform_clock"), 1);
+        assert_eq!(targets.len(), 71);
         assert_eq!(CAMERA_BENCHMARK_WORKLOADS.len(), 3);
         assert!(
             CAMERA_BENCHMARK_WORKLOADS
@@ -2001,6 +2314,97 @@ mod tests {
                 .len(),
             CAMERA_BENCHMARK_WORKLOADS.len()
         );
+    }
+
+    #[test]
+    fn portable_benchmark_fixture_resolves_every_required_workload() {
+        let loader = LoaderRegistry::default();
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native-benchmark");
+        let project = open_project(&root, &loader).unwrap();
+        let languages = loader.languages(&project.config.adapter.script).unwrap();
+        let report = validate_project(&project.config, &project.content, &languages).unwrap();
+        assert_eq!(
+            (report.errors, report.warnings),
+            (0, 0),
+            "{:?}",
+            report.diagnostics
+        );
+        assert!(project.config.assets.luts.contains_key("cinematic"));
+        assert!(project.content.contains_asset(Path::new(
+            &project.config.bg_path(&project.config.title_background)
+        )));
+        let scenes = load_scenes_with(&project.content, &languages).unwrap();
+        let mut state = State::new();
+        state.install_program(Program::from_scenes(
+            scenes.into_iter().map(|s| (s.name, s.actions)),
+        ));
+        let required = PORTABLE_BENCHMARK_SECTIONS
+            .iter()
+            .flat_map(|(_, w)| w.iter().map(|(_, t)| *t));
+        for target in required {
+            let (scene, cursor) =
+                resolve_benchmark_target(&state, &BenchmarkTarget::Timeline(target.into()))
+                    .unwrap_or_else(|| panic!("missing or duplicate target: {target}"));
+            let mut preview = State::new();
+            preview.program = state.program.clone();
+            preview.program_fingerprint = state.program_fingerprint;
+            preview.current_scene = scene.clone();
+            preview.ended = false;
+            assert!(
+                crate::runtime::tick::seek_editor_state(&mut preview, &scene, cursor, cursor + 1),
+                "{target}"
+            );
+            assert!(
+                preview.stage_animation.is_some(),
+                "{target} is not an active native workload"
+            );
+        }
+        // Transparent calibration art must exercise sprites, not invisible placeholders.
+        let image = keine_media::decode_webp(
+            &std::fs::read(root.join("assets/portrait.webp")).unwrap(),
+            |size| size,
+        )
+        .unwrap();
+        assert_eq!(image.size(), keine_media::ImageSize::new(720, 1440));
+        let pixels = image.into_pixels();
+        assert!(pixels.chunks_exact(4).any(|p| p[3] == 0));
+        assert!(pixels.chunks_exact(4).any(|p| p[3] == 255));
+    }
+
+    #[test]
+    fn portable_benchmark_ranking_does_not_fabricate_a_reference() {
+        let summary = |ms| crate::ui::performance::RenderSummary {
+            frames: 100,
+            average_ms: ms,
+            p50_ms: ms,
+            p95_ms: ms,
+            p99_ms: ms,
+            maximum_ms: ms,
+            average_fps: 1000.0 / ms,
+            one_percent_low_fps: 1000.0 / ms,
+            p99_equivalent_fps: 1000.0 / ms,
+        };
+        let mut report = String::new();
+        append_hotspot_ranking(
+            &[("particle", "bench_particle_snow_256", summary(20.0))],
+            &mut report,
+        );
+        assert!(report.contains("reference unavailable"));
+        assert!(!report.contains("Δavg"));
+        report.clear();
+        append_hotspot_ranking(
+            &[
+                ("baseline", "bench_baseline", summary(5.0)),
+                ("particle", "bench_particle_snow_256", summary(20.0)),
+                ("blur", "bench_effect_blur", summary(10.0)),
+            ],
+            &mut report,
+        );
+        assert!(report.contains("Δavg +15.00 ms"));
+        assert!(
+            report.find("HOTSPOT  | particle").unwrap() < report.find("HOTSPOT  | blur").unwrap()
+        );
+        assert!(report.contains("--timeline \"bench_particle_snow_256\""));
     }
 
     #[test]
@@ -2028,13 +2432,13 @@ mod tests {
             "blur\tfamily",
             2,
             3,
-            Some("10-04 blur family"),
+            Some("bench_blur_family"),
             BenchmarkCameras::Runtime,
             "3.500000\t121\t16.750000\t6\t8.33\tchapter2\t8\tscripts/2.shou\tIdle\t12\tfalse\t1920\t1080\tsleep",
         );
         assert_eq!(
             output,
-            "RAWFRAME\tblur family\t2\t3\t10-04 blur family\truntime\t3.500000\t121\t16.750000\t6\t8.33\tchapter2\t8\tscripts/2.shou\tIdle\t12\tfalse\t1920\t1080\tsleep\n"
+            "RAWFRAME\tblur family\t2\t3\tbench_blur_family\truntime\t3.500000\t121\t16.750000\t6\t8.33\tchapter2\t8\tscripts/2.shou\tIdle\t12\tfalse\t1920\t1080\tsleep\n"
         );
     }
 
@@ -2046,13 +2450,13 @@ mod tests {
 
     #[test]
     fn portable_benchmark_matches_only_complete_authored_timeline_ids() {
-        let inventory = "0.1s INFO keine::performance: TIMELINE | intro:2:benchmark representative dialogue, coverage:8:10-04 blur family\n";
+        let inventory = "0.1s INFO keine::performance: TIMELINE | intro:2:bench_representative_dialogue, coverage:8:bench_blur_family\n";
 
         assert!(timeline_is_available(
             inventory,
-            "benchmark representative dialogue"
+            "bench_representative_dialogue"
         ));
-        assert!(timeline_is_available(inventory, "10-04 blur family"));
+        assert!(timeline_is_available(inventory, "bench_blur_family"));
         assert!(!timeline_is_available(inventory, "blur family"));
         assert!(!timeline_is_available("TIMELINE | ", "anything"));
     }
@@ -2093,6 +2497,7 @@ mod tests {
         assert!(
             !InteractiveMode::Benchmark(BenchmarkOptions {
                 seconds: 1.0,
+                window: BenchmarkWindow::Default,
                 continuous: false,
                 raw: false,
                 refresh_hz: None,
@@ -2200,6 +2605,10 @@ mod tests {
             Some(BenchmarkTarget::SceneCursor("chapter2".into(), 7))
         );
         for invalid in [
+            vec!["--window", "0x1080"],
+            vec!["--window", "1920x9000"],
+            vec!["--window", "1080"],
+            vec!["--startup", "--window", "fullscreen"],
             vec!["--hz", "NaN"],
             vec!["--hz", "0"],
             vec!["--seconds", "3601"],
@@ -2211,6 +2620,23 @@ mod tests {
             let mut command = vec!["perf", "/tmp/project"];
             command.extend(invalid);
             assert!(parse_cli(&args(&command)).is_err(), "{command:?}");
+        }
+    }
+
+    #[test]
+    fn benchmark_window_accepts_size_and_fullscreen() {
+        for (value, expected) in [
+            ("1920x1080", BenchmarkWindow::Size(1920, 1080)),
+            ("fullscreen", BenchmarkWindow::Fullscreen),
+        ] {
+            let CliCommand::Run {
+                mode: InteractiveMode::Benchmark(options),
+                ..
+            } = parse_cli(&args(&["perf", "/tmp/project", "--window", value])).unwrap()
+            else {
+                panic!("benchmark");
+            };
+            assert_eq!(options.window, expected);
         }
     }
 

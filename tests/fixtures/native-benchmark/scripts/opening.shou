@@ -1,0 +1,9 @@
+scene opening {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  stage.animate(bench_baseline, duration: 1s, infinite: false, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}

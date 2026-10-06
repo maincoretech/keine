@@ -1,0 +1,19 @@
+backgrounds:
+  day: assets/day.webp
+  night: assets/night.webp
+figures:
+  portrait: assets/portrait.webp
+  portrait_alt: assets/portrait-alt.webp
+bgm:
+  music: assets/music.opus
+  music_alt: assets/music-alt.opus
+se:
+  click: assets/click.opus
+voices:
+  voice: assets/voice.opus
+videos:
+  movie: assets/movie.mp4
+particles:
+  flake: assets/flake.webp
+luts:
+  cinematic: assets/luts/cinematic.webp

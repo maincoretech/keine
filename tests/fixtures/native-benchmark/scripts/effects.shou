@@ -1,0 +1,351 @@
+scene effect_bloom {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, bloom_intensity: 0.25),
+  stage.animate(bench_effect_bloom, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_depth {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, focal_distance: 3, blur_strength: 0.3),
+  stage.animate(bench_effect_depth, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_blur {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, blur_amount: 3),
+  stage.animate(bench_effect_blur, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_distortion {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, distortion_strength: 0.25),
+  stage.animate(bench_effect_distortion, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_vignette {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, vignette_intensity: 0.3),
+  stage.animate(bench_effect_vignette, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_color {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, color_exposure: 0.15, color_brightness: 0.05, color_contrast: 0.1, color_saturation: 0.8, color_temperature: 0.15),
+  stage.animate(bench_effect_color, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_tone {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, color_tone: sepia, color_tone_intensity: 0.3),
+  stage.animate(bench_effect_tone, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_old_film {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, old_film_intensity: 0.25),
+  stage.animate(bench_effect_old_film, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_shock {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, shock_intensity: 0.3),
+  stage.animate(bench_effect_shock, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_godray {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, godray_intensity: 0.3),
+  stage.animate(bench_effect_godray, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_lut {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, lut_preset: cinematic, lut_intensity: 0.5),
+  stage.animate(bench_effect_lut, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_chromatic {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, chromatic_aberration: 0.02),
+  stage.animate(bench_effect_chromatic, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_pixelate {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, pixelate_size: 4),
+  stage.animate(bench_effect_pixelate, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_glitch {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, glitch_intensity: 0.2),
+  stage.animate(bench_effect_glitch, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_crt {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, crt_intensity: 0.3),
+  stage.animate(bench_effect_crt, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_sharpen {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, sharpen_strength: 0.4),
+  stage.animate(bench_effect_sharpen, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_radial_blur {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, radial_blur_strength: 0.15),
+  stage.animate(bench_effect_radial_blur, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_motion_blur {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, motion_blur_strength: 0.15),
+  stage.animate(bench_effect_motion_blur, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_zoom_blur {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, zoom_blur_strength: 0.15),
+  stage.animate(bench_effect_zoom_blur, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_light_leak {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, light_leak_intensity: 0.3),
+  stage.animate(bench_effect_light_leak, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_lens_flare {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, lens_flare_intensity: 0.3),
+  stage.animate(bench_effect_lens_flare, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_grain {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, film_grain_intensity: 0.3),
+  stage.animate(bench_effect_grain, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_heat_haze {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, heat_haze_intensity: 0.3),
+  stage.animate(bench_effect_heat_haze, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_water {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, water_ripple_intensity: 0.3),
+  stage.animate(bench_effect_water, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_fog {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, fog_intensity: 0.3),
+  stage.animate(bench_effect_fog, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_vhs {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, vhs_intensity: 0.3),
+  stage.animate(bench_effect_vhs, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_halftone {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, halftone_intensity: 0.3),
+  stage.animate(bench_effect_halftone, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_dither {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, dither_intensity: 0.3),
+  stage.animate(bench_effect_dither, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_outline {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, outline_intensity: 0.4),
+  stage.animate(bench_effect_outline, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_eyelid {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, eyelid_openness: 0.5),
+  stage.animate(bench_effect_eyelid, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_shatter {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, mirror_shatter_intensity: 0.3),
+  stage.animate(bench_effect_shatter, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene effect_speed_lines {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  camera.effect(all, speed_lines_intensity: 0.3),
+  stage.animate(bench_effect_speed_lines, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}

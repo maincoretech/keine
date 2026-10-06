@@ -1,0 +1,13 @@
+title: Kēne Runtime Benchmark
+title_background: day
+project:
+  id: keine-runtime-benchmark
+adapter:
+  script: keine
+script:
+  version: 2
+  entry: opening
+  assets: assets.yaml
+  characters: characters.yaml
+features:
+  extra: true

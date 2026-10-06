@@ -10,7 +10,7 @@ EYS v2.0 对应 `script.version: 2`；省略时默认 2，显式旧版本会被�
 ```text
 project/
 ├── config.yaml        project.id、adapter.script: keine、script.entry
-├── assets.yaml        backgrounds / figures / voices / bgm / se / videos / particles
+├── assets.yaml        backgrounds / figures / voices / bgm / se / videos / particles / luts
 ├── characters.yaml    characters: { rin: { name: 凛 } }
 ├── objects.yaml       可选迁移对象/前缀映射
 ├── scripts/*.shou

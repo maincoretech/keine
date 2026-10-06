@@ -12,7 +12,7 @@ on:
       project:
         description: Project directory to bundle
         required: true
-        default: tests/fixtures/native-smoke
+        default: tests/fixtures/native-benchmark
       identity:
         description: Publisher identity (temporary for tests; stable for production updates)
         required: true
@@ -118,7 +118,7 @@ jobs:
         id: project
         shell: bash
         env:
-          PROJECT_INPUT: ${{ inputs.project || 'tests/fixtures/native-smoke' }}
+          PROJECT_INPUT: ${{ inputs.project || 'tests/fixtures/native-benchmark' }}
         run: |
           if [[ "$PROJECT_INPUT" == *$'\n'* || "$PROJECT_INPUT" == *$'\r'* ]]; then
             echo 'Project path must not contain line breaks' >&2

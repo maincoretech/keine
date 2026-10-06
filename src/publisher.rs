@@ -127,10 +127,10 @@ fn prepare_project(
     exclude_native_source_media(&config, &content)?;
     validate_shipping_media(&content)?;
     let config_path = source.join("config.yaml");
-    if !config_path.is_file() {
-        // LetsGal source: materialize the adapter-derived config (asset
-        // aliases, layout, styles) so the packaged archive can be opened
-        // through config.yaml with the same resolution as the editor.
+    if !config_path.is_file() || config.adapter.script.eq_ignore_ascii_case("keine") {
+        // Author manifests are excluded from shipping. Materialize resolved
+        // aliases for native projects too; otherwise the compiled Program
+        // silently falls back to background/<id> and figure/<id> paths.
         let yaml = serialize_config_deterministically(&config)?;
         fs::write(&config_path, yaml)?;
     }
@@ -345,6 +345,7 @@ fn exclude_native_source_media(
         manifest.effects,
         manifest.videos,
         manifest.particles,
+        manifest.luts,
     ]
     .into_iter()
     .flat_map(|entries| entries.into_values())
@@ -1012,8 +1013,13 @@ The self-running suite writes keine-benchmark-report.txt beside the executable.
 No Python installation is needed for this suite.
 
 The report includes startup, normal runtime sleep/wake, continuous opening
-composition, camera decomposition, authored daily/feature/stress timelines,
-and warm Hakutaku/cache I/O. Missing authored timelines are explicitly skipped.
+composition, camera decomposition, native effects, particles, media, UI panels,
+daily/stress timelines, 720p/1080p/fullscreen, and warm Hakutaku/cache I/O.
+Missing or failed required workloads make the suite INCOMPLETE and return failure.
+The partial report is retained. The default fixture is native-benchmark.
+UPDATE lines are schedule wall time, not exclusive function CPU time.
+HOTSPOT lines rank controlled deltas and include rerun commands. Use separate
+platform stack captures to locate functions; unavailable GPU timing is explicit.
 RAWFRAME rows retain all frame fields: scene, next cursor, source line, update
 to render latency, refresh budget, focus, surface size, and exclusion reason.
 Render submission intervals are not display presentation or proof of drops.
@@ -1181,6 +1187,39 @@ mod tests {
         let archive = publish_test_archive(&project);
 
         assert_compiled_release(&archive);
+    }
+
+    #[test]
+    fn native_release_materializes_manifest_aliases_without_touching_author_files() {
+        let temp = tempdir().unwrap();
+        let project = temp.path().join("native");
+        write_config_project(&project, "release-aliases", "keine");
+        let config_before = fs::read(project.join("config.yaml")).unwrap();
+        let manifest = "backgrounds:\n  room: assets/runtime.webp\nfigures:\n  hero: assets/runtime.webp\nluts:\n  grade: assets/runtime.webp\n";
+        fs::write(project.join("assets.yaml"), manifest).unwrap();
+        fs::write(project.join("scripts/start.shou"), "scene start { background(room), sprite(hero, hero), camera.effect(all, lut_preset: grade, lut_intensity: 0.2), \"Hello\" }").unwrap();
+        let archive = publish_test_archive(&project);
+        assert_compiled_release(&archive);
+        let config = archive.read(Path::new("config.yaml")).unwrap();
+        let config =
+            keine_core::config::GameConfig::from_yaml(std::str::from_utf8(&config).unwrap())
+                .unwrap();
+        for path in [
+            config.bg_path("room"),
+            config.figure_path("hero"),
+            config.lut_path("grade"),
+        ] {
+            assert_eq!(path, "runtime.webp");
+            assert!(archive.contains_file(&Path::new("assets").join(path)));
+        }
+        assert_eq!(
+            fs::read(project.join("config.yaml")).unwrap(),
+            config_before
+        );
+        assert_eq!(
+            fs::read_to_string(project.join("assets.yaml")).unwrap(),
+            manifest
+        );
     }
 
     #[test]

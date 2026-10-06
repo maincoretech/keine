@@ -20,7 +20,7 @@ perf <project> [--startup]  开发测量
 
 main 的推送通过 **CI** 后，**Release** 自动构建 Linux、macOS、Windows 测试包，
 更新 [benchmark-latest](https://github.com/maincoretech/keine/releases/tag/benchmark-latest)
-的三个下载。自动构建固定使用通过 CI 的提交、native-smoke 与临时 identity；PR、fork、
+的三个下载。自动构建固定使用通过 CI 的提交、native-benchmark 与临时 identity；PR、fork、
 失败的 CI 不发布，新 main 已出现时旧提交仅保留 Actions artifact，不覆盖滚动下载。
 它不在 CI 主机上执行 GPU 性能验收，也不是正式游戏发行。
 手动运行仍可选择项目/identity，并勾选 `benchmark` 更新相同测试包下载。
@@ -28,7 +28,8 @@ main 的推送通过 **CI** 后，**Release** 自动构建 Linux、macOS、Windo
 Project Release 中执行，正式发行前必须核对所发行提交的这些结果。
 “代码已推送”“CI 通过”“Release 下载已更新”是三个独立状态；下载更新完成须核对
 Release 的提交 SHA 和三平台附件，不能仅以 CI 成功或 Actions artifact 上传作结论。
-默认 native-smoke 是基本检查，完整特效压力覆盖必须由所选项目提供相应时间轴。
+默认 native-benchmark 在三个平台使用同一套原生真实负载，包含媒体。
+所选工程缺少必测时间轴时，测试返回 INCOMPLETE 并保留报告，不能当作完整跑分。
 每个测试包包含 `profile-runtime.py`；直接运行 Engine 无需 Python，额外采集调用栈时
 需要 Python 3 和平台采样工具。Windows 包附 PDB，macOS 有 dSYM 时一并附带。
 工作流保存 Cargo 缓存前按 package 清理 Engine/Loader 的 release/profiling 产物，

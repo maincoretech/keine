@@ -18,6 +18,7 @@ use crate::runtime::resources::AssetLoadingGate;
 use crate::ui::title::TitleRoot;
 
 mod frame;
+mod update;
 pub(crate) use frame::TRACE_FIELDS;
 #[cfg(any(feature = "publisher", feature = "startup-metrics"))]
 pub(crate) mod source_map;
@@ -601,7 +602,11 @@ pub(crate) fn install_runtime_capture(
         frame::attribute_frame.after(crate::runtime::platform::update_lifecycle),
     )
     .init_resource::<RuntimeCaptureState>()
-    .add_systems(Update, capture_runtime_performance);
+    .add_systems(
+        Update,
+        capture_runtime_performance.after(update::checkpoint::<3>),
+    );
+    update::install(app);
     if continuous {
         app.insert_resource(WinitSettings::continuous());
     }
@@ -879,7 +884,7 @@ fn capture_runtime_performance(
         })
         .collect::<Vec<_>>();
     render_passes.sort_by(|left, right| right.1.total_cmp(&left.1));
-    for kind in ["elapsed_cpu", "elapsed_gpu"] {
+    for kind in ["elapsed_cpu", "elapsed_gpu", "elapsed_wall"] {
         let passes = render_passes
             .iter()
             .filter(|(path, ..)| path.ends_with(kind))
@@ -888,7 +893,12 @@ fn capture_runtime_performance(
             log::info!(target: "keine::performance", "GPU_TIME | no samples recorded (backend support/activity); unavailable is not zero");
         }
         for (path, average, p99, maximum, count, suffix) in passes.into_iter().take(8) {
-            log::info!(target: "keine::performance", "RENDER   | {path} avg {average:.3}{suffix} · p99 {p99:.3}{suffix} · max {maximum:.3}{suffix} · {count} samples");
+            let label = if kind == "elapsed_wall" {
+                "UPDATE  "
+            } else {
+                "RENDER  "
+            };
+            log::info!(target: "keine::performance", "{label} | {path} avg {average:.3}{suffix} · p99 {p99:.3}{suffix} · max {maximum:.3}{suffix} · {count} samples");
         }
     }
     if config.machine_output {

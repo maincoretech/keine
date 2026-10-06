@@ -296,6 +296,14 @@ impl ContentProject {
             &mut config.assets.videos,
             &mut data,
         )?;
+        install_asset_namespace(
+            &self.root,
+            &asset_roots,
+            ResourceKind::Lut,
+            assets.luts,
+            &mut config.assets.luts,
+            &mut data,
+        )?;
         let mut particle_paths = HashMap::new();
         install_asset_namespace(
             &self.root,

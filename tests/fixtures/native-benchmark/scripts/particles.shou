@@ -1,0 +1,78 @@
+scene particle_snow_80 {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  particle.show(weather, LIGHT_SNOW, count: 80),
+  stage.animate(bench_particle_snow_80, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene particle_snow_256 {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  particle.show(weather, LIGHT_SNOW, count: 256),
+  stage.animate(bench_particle_snow_256, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene particle_rain_256 {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  particle.show(weather, HEAVY_RAIN, count: 256),
+  stage.animate(bench_particle_rain_256, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene particle_petals_128 {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  particle.show(weather, SAKURA, count: 128),
+  stage.animate(bench_particle_petals_128, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene particle_texture_256 {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  particle.show(weather, LIGHT_SNOW, texture: flake, count: 256),
+  stage.animate(bench_particle_texture_256, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene particle_large_256 {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  particle.show(weather, LIGHT_SNOW, texture: flake, count: 256, size: 96),
+  stage.animate(bench_particle_large_256, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}
+
+scene particle_layers_768 {
+  background(day),
+  sprite(hero, portrait, position: left(x: 240), layout: viewport(height: 0.85)),
+  sprite(friend, portrait_alt, position: right(x: -240), layout: viewport(height: 0.85)),
+  particle.show(snow, LIGHT_SNOW, count: 256),
+  particle.show(rain, HEAVY_RAIN, count: 256),
+  particle.show(petals, SAKURA, count: 256),
+  stage.animate(bench_particle_layers_768, duration: 8s, infinite: true, blocking: false) {
+    track(camera, x) { key(time: 0ms, value: 0) }
+  },
+  hero: "Runtime workload · 实际舞台与对白渲染"
+}

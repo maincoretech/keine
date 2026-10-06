@@ -53,7 +53,7 @@ F11 只改变当前窗口，设置页的全屏选项仍可保存为偏好。
 └── compatibility.md   LetsGal 与 WebGAL 的支持边界
 ```
 
-当前版本 0.13.0。macOS 是当前验收重点；Windows/Linux 的运行态验收暂缓。
+当前版本 0.13.1。macOS 是当前验收重点；Windows/Linux 的运行态验收暂缓。
 编译和自动测试通过不等于 IME、DPI、音视频和运行态验收通过。
 
 ## 许可证

@@ -1326,6 +1326,7 @@ mod ffmpeg_backend {
     mod tests {
         #[cfg(feature = "publisher")]
         use std::fs;
+        #[cfg(feature = "publisher")]
         use std::path::PathBuf;
         #[cfg(feature = "publisher")]
         use std::time::{SystemTime, UNIX_EPOCH};

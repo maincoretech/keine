@@ -35,22 +35,22 @@ jobs:
           - name: Linux x64
             os: ubuntu-latest
             quality: true
-            backend: none
-            test_features: audio-all,ui-sounds,publisher
-            shipping_features: ui-sounds
+            backend: ffmpeg
+            test_features: audio-all,ui-sounds,publisher,startup-metrics,video-ffmpeg
+            shipping_features: ui-sounds,video-ffmpeg
             timeout: 60
           - name: macOS
             os: macos-latest
             quality: false
             backend: native
-            test_features: audio-all,ui-sounds,publisher,video-native
+            test_features: audio-all,ui-sounds,publisher,startup-metrics,video-native
             shipping_features: ui-sounds,video-native
             timeout: 60
           - name: Windows x64
             os: windows-latest
             quality: false
             backend: ffmpeg
-            test_features: audio-all,ui-sounds,publisher,video-ffmpeg
+            test_features: audio-all,ui-sounds,publisher,startup-metrics,video-ffmpeg
             shipping_features: ui-sounds,video-ffmpeg
             timeout: 180
     runs-on: ${{ matrix.os }}
@@ -109,14 +109,14 @@ jobs:
         run: cargo test --workspace --no-default-features --features publisher
       # Select Engine and Editor together to unify their Bevy dev-dependencies.
       # libtest accepts several filters; Linux's workspace tests cover these too.
-      - name: Check platform video, process metrics and system Trash
-        if: ${{ !matrix.quality }}
+      - name: Check platform video, process metrics, benchmark contracts and system Trash
         run: >-
           cargo test --locked -p keine -p keine-editor --lib --no-default-features
           --features "${{ matrix.test_features }}" --
-          scene::video:: preview::performance:: file_ops::assets::
+          scene::video:: preview::performance:: file_ops::assets:: portable_benchmark_
+          runtime::bootstrap::tests::benchmark_ ui::support::performance::
+          publisher::tests::native_release_
       - name: Check platform video acceptance
-        if: ${{ !matrix.quality }}
         run: >-
           cargo run --locked --no-default-features --features "${{ matrix.test_features }}"
           --bin keine-video-acceptance -- tests/fixtures/video/playback.mp4

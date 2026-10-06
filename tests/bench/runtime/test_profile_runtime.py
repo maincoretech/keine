@@ -91,13 +91,15 @@ class CaptureTests(unittest.TestCase):
             cwd.mkdir()
             result = subprocess.run(
                 [sys.executable, str(moved / "profile-runtime.py"), "--output", "capture",
-                 "--seconds", "1", "--stacks", "off"],
+                 "--seconds", "1", "--stacks", "off", "--window", "1280x720"],
                 cwd=cwd, capture_output=True, text=True, timeout=30,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             metadata = json.loads((cwd / "capture/metadata.json").read_text())
             self.assertEqual(metadata["command"][:3],
                              [str(moved / "keine"), "perf", str(moved / "game.haku")])
+            self.assertIn("--window", metadata["command"])
+            self.assertIn("1280x720", metadata["command"])
             self.assertEqual(metadata["git_status"], "packaged build")
             self.assertEqual(set(metadata["source_sha256"]), {"game.haku", "data/a.taku"})
             self.assertTrue(metadata["source_unchanged"])
