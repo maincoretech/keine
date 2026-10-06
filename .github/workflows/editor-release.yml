@@ -1,0 +1,163 @@
+name: Editor Release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: editor-release
+  cancel-in-progress: false
+
+env:
+  RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+  KEINE_BUILD_COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+jobs:
+  build:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: keine-editor-linux-x64
+            target: ''
+            features: audio-all,ui-sounds,hot-reload,video-ffmpeg
+          - os: macos-latest
+            artifact: keine-editor-macos-arm64
+            target: ''
+            features: audio-all,ui-sounds,hot-reload,video-native
+          - os: windows-latest
+            artifact: keine-editor-windows-x64
+            target: x86_64-pc-windows-msvc
+            features: audio-all,ui-sounds,hot-reload,video-ffmpeg
+    runs-on: ${{ matrix.os }}
+    env:
+      KEINE_AUTHORING_FEATURES: ${{ matrix.features }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+      - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+      - name: Install cross-compilation target
+        if: matrix.target != ''
+        run: rustup target add ${{ matrix.target }}
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          # Separate from encrypted game caches; no publisher/hardened build.
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/authoring
+          key: editor-rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ env.RELEASE_SHA }}
+          restore-keys: |
+            editor-rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-
+            editor-rust-v1-${{ runner.os }}-${{ runner.arch }}-
+      - uses: ./.github/actions/setup-video
+        with:
+          enabled: ${{ runner.os != 'macOS' }}
+          windows-triplet: x64-windows
+      - name: Build standalone authoring tools
+        shell: bash
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          args=(--release --locked --no-default-features --features "$KEINE_AUTHORING_FEATURES"
+                --target-dir target/authoring -p keine -p keine-editor --bin keine --bin editor)
+          if [[ -n "$BUILD_TARGET" ]]; then
+            args+=(--target "$BUILD_TARGET")
+          fi
+          if [[ "$RUNNER_OS" == 'Linux' ]]; then
+            export RUSTFLAGS='-C link-arg=-Wl,--disable-new-dtags,-rpath,$ORIGIN/lib'
+          fi
+          cargo build "${args[@]}"
+      - name: Package and validate installed runtime
+        shell: bash
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          binary_dir="target/authoring/${BUILD_TARGET:+$BUILD_TARGET/}release"
+          suffix=''
+          if [[ "$RUNNER_OS" == 'Windows' ]]; then suffix='.exe'; fi
+          python3 dev/scripts/package-authoring.py "$binary_dir/editor$suffix" "$binary_dir/keine$suffix" "target/${{ matrix.artifact }}"
+      - name: Archive complete package
+        shell: bash
+        run: |
+          mkdir -p downloads
+          if [[ "$RUNNER_OS" == 'macOS' ]]; then
+            ditto -c -k --keepParent "target/${{ matrix.artifact }}" "downloads/${{ matrix.artifact }}.zip"
+          else
+            python3 - <<'PY'
+          import shutil
+          shutil.make_archive('downloads/${{ matrix.artifact }}', 'zip', 'target/${{ matrix.artifact }}')
+          PY
+          fi
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: ${{ matrix.artifact }}
+          path: downloads/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: keine-editor-*
+          path: downloads
+          merge-multiple: true
+      - name: Move Editor rolling tag
+        id: release
+        shell: bash
+        run: |
+          shopt -s nullglob
+          packages=(downloads/keine-editor-*.zip)
+          [[ "${#packages[@]}" -eq 3 ]] || { echo 'Expected three Editor downloads' >&2; exit 1; }
+          if [[ "$GITHUB_EVENT_NAME" == 'workflow_run' ]]; then
+            current_main="$(git ls-remote origin refs/heads/main | cut -f1)"
+            if [[ "$current_main" != "$RELEASE_SHA" ]]; then
+              echo 'Newer main exists; retain artifacts without replacing editor-latest.'
+              exit 0
+            fi
+          fi
+          git tag --force editor-latest "$RELEASE_SHA"
+          git push --force origin refs/tags/editor-latest
+          echo "short_sha=${RELEASE_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo 'publish=true' >> "$GITHUB_OUTPUT"
+      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
+        if: steps.release.outputs.publish == 'true'
+        with:
+          tag_name: editor-latest
+          target_commitish: ${{ env.RELEASE_SHA }}
+          name: Kēne Editor · ${{ steps.release.outputs.short_sha }}
+          body: |
+            Standalone Editor with the matching Preview Engine, built from ${{ env.RELEASE_SHA }}.
+            Download and extract the complete package. Open Kēne Editor.app (macOS),
+            editor.exe (Windows) or ./editor (Linux). No game content or publisher keys.
+            macOS download is Apple Silicon with an ad hoc development signature.
+            Noncanonical audio/video conversion requires an external FFmpeg executable.
+          prerelease: true
+          make_latest: false
+          files: downloads/*.zip
+          fail_on_unmatched_files: true
+          overwrite_files: true

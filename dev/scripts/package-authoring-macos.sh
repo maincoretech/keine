@@ -22,7 +22,6 @@ output_parent="$(dirname "$output_dir")"
 mkdir -p "$output_parent"
 output_dir="$(cd "$output_parent" && pwd -P)/$(basename "$output_dir")"
 editor_app="$output_dir/Kēne Editor.app"
-engine_app="$output_dir/Kēne Engine.app"
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd -P)"
 version="$(awk '
@@ -60,13 +59,10 @@ make_app() {
 }
 
 make_app 'Kēne Editor' 'moe.maincore.keine-editor' 'editor' "$editor_binary"
-make_app 'Kēne Engine' 'moe.maincore.keine-engine' 'keine' "$engine_binary"
-# A copied linker-signed Mach-O does not seal the surrounding app resources.
-# Re-sign each assembled bundle locally so Launch Services can validate it.
-for app in "$staging/Kēne Editor.app" "$staging/Kēne Engine.app"; do
-    bash "$repo_root/dev/scripts/sign-macos.sh" "$app"
-done
+# Keep Preview beside Editor inside one app; EngineLocator already checks here.
+cp "$engine_binary" "$staging/Kēne Editor.app/Contents/MacOS/keine"
+chmod +x "$staging/Kēne Editor.app/Contents/MacOS/keine"
+bash "$repo_root/dev/scripts/sign-macos.sh" "$staging/Kēne Editor.app"
 mv "$staging" "$output_dir"
 staging=""
 echo "$editor_app"
-echo "$engine_app"

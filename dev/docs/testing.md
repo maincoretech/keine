@@ -1,5 +1,16 @@
 # 开发与验收
 
+## 发布渠道验证
+
+`Release` 分开发布 benchmark 自动包与 tday 手动试玩；`Editor Release` 发布独立
+Editor + 同版本 Preview。actionlint 1.7.12 对本次两个 workflow 检查通过，shell 语法与
+Python 编译检查通过。用本轮已构建的 macOS debug 二进制执行 `package-authoring.py`，
+产出单个 App；ZIP 解压后两 executable 的执行位、`codesign --verify --deep --strict`
+和内置 Engine 的 native-smoke validate 均通过（1 scene / 1 action / 0 warning）。
+输出目录冲突被拒绝，未覆盖已有包；无游戏包/私钥文件。此次没有另建持久化安装 App。
+这些证据确认打包布局，不等于 release profile、Windows/Linux 动态库打包或 GUI 验收通过；
+远端三平台构建和下载更新须按实际 Actions 结果核对。此前 engine/editor 回归结果见下文。
+
 ## 剩余事项与分工
 
 本轮审计、预取预算、密钥文件改名、跨平台废纸篓与进程采样已实现。

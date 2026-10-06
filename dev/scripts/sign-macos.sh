@@ -10,6 +10,7 @@ if [[ -n "$profile" && "$identity" == '-' ]]; then
     exit 2
 fi
 if [[ "$identity" == '-' ]]; then
+    codesign --force --sign - "$app/Contents/MacOS/"*
     codesign --force --sign - "$app"
 else
     codesign --force --options runtime --timestamp --sign "$identity" "$app/Contents/MacOS/"*
