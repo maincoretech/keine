@@ -1598,24 +1598,45 @@ fn spawn_system_data_controls(
         font,
         SYSTEM_DATA_CELL,
     );
-    spawn_choice_row(
-        content,
-        tr(settings.locale, UiText::ImportExport),
-        &[
-            (
-                tr(settings.locale, UiText::Export),
-                SettingAction::ExportData,
-            ),
-            (
-                tr(settings.locale, UiText::Import),
-                SettingAction::ImportData,
-            ),
-        ],
-        usize::MAX,
-        false,
-        font,
-        SYSTEM_TRANSFER_CELL,
-    );
+    if !cfg!(target_os = "android") {
+        spawn_choice_row(
+            content,
+            tr(settings.locale, UiText::ImportExport),
+            &[
+                (
+                    tr(settings.locale, UiText::Export),
+                    SettingAction::ExportData,
+                ),
+                (
+                    tr(settings.locale, UiText::Import),
+                    SettingAction::ImportData,
+                ),
+            ],
+            usize::MAX,
+            false,
+            font,
+            SYSTEM_TRANSFER_CELL,
+        );
+    }
+}
+
+// Android has no desktop file picker. Hide these controls until a native
+// document-provider flow exists, and ignore stale requests defensively.
+fn choose_backup_path(export: bool) -> Option<std::path::PathBuf> {
+    #[cfg(not(target_os = "android"))]
+    {
+        let dialog = rfd::FileDialog::new().add_filter("keine backup", &["keine-backup"]);
+        if export {
+            dialog.set_file_name("keine.keine-backup").save_file()
+        } else {
+            dialog.pick_file()
+        }
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = export;
+        None
+    }
 }
 
 fn spawn_choice_content(
@@ -2030,11 +2051,7 @@ pub fn handle_setting_action(context: SettingActionContext) {
             return;
         }
         SettingAction::ExportData => {
-            let Some(path) = rfd::FileDialog::new()
-                .add_filter("keine backup", &["keine-backup"])
-                .set_file_name("keine.keine-backup")
-                .save_file()
-            else {
+            let Some(path) = choose_backup_path(true) else {
                 return;
             };
             if let Err(error) = crate::storage::backup::export(&project_root, &path) {
@@ -2043,10 +2060,7 @@ pub fn handle_setting_action(context: SettingActionContext) {
             return;
         }
         SettingAction::ImportData => {
-            let Some(path) = rfd::FileDialog::new()
-                .add_filter("keine backup", &["keine-backup"])
-                .pick_file()
-            else {
+            let Some(path) = choose_backup_path(false) else {
                 return;
             };
             preview_coordinator.invalidate_all();

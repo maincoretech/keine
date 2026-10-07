@@ -32,6 +32,15 @@ fn open(_root: &Path, resolved: &Path) -> io::Result<File> {
     // Each openat sees exactly one component. No ancestor or leaf can turn
     // into a followed symlink after canonicalization. In-root symlinks have
     // already been resolved and continue to work through their canonical path.
+    #[cfg(target_os = "android")]
+    let mut directory = {
+        use std::os::unix::fs::OpenOptionsExt;
+        File::options()
+            .read(true)
+            .custom_flags(libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC)
+            .open("/")?
+    };
+    #[cfg(not(target_os = "android"))]
     let mut directory = File::open("/")?;
     let mut components = resolved.components().peekable();
     if components.next() != Some(Component::RootDir) {
@@ -53,11 +62,11 @@ fn open(_root: &Path, resolved: &Path) -> io::Result<File> {
         let flags = if components.peek().is_some() {
             // Traversal needs search permission, not permission to list the
             // directory. Preserve ordinary file-open permission semantics.
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "android"))]
             let access = libc::O_PATH;
             #[cfg(target_os = "macos")]
             let access = libc::O_SEARCH;
-            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+            #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
             let access = libc::O_RDONLY;
             flags | access | libc::O_DIRECTORY
         } else {

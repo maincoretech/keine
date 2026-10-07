@@ -50,6 +50,11 @@ GPU instance 创建前传递 winit 的 owned display connection，连接保留�
 Editor 通过显式开始/停止控制独立原生 Engine；Block 与执行位置双向同步。
 失去窗口焦点不会代替停止指令。
 
+实验性 Android Engine 使用系统 NativeActivity 与现有 runtime，平台入口集中在
+`runtime/android.rs`；私有 files 下的游戏目录与按 `project.id` 隔离的数据目录分开。
+Android 当前无视频，启动先尝试 Vulkan、初始化错误时回退 OpenGL ES；游戏与错误页共用
+平台渲染配置。构建与验收边界见 [Android guide](android.md)。
+
 ## 持久化
 
 Save v11 只恢复到 fingerprint 相同的 Program；不支持的二进制布局直接拒绝。

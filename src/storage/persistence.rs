@@ -7,24 +7,29 @@ use keine_core::config::ProjectMetadata;
 
 #[derive(Clone, Copy)]
 enum HostPlatform {
+    #[cfg(target_os = "android")]
+    Android,
     #[cfg(any(target_os = "macos", test))]
     MacOs,
     #[cfg(any(target_os = "windows", test))]
     Windows,
-    #[cfg(any(not(any(target_os = "macos", target_os = "windows")), test))]
+    #[cfg(any(
+        not(any(target_os = "macos", target_os = "windows", target_os = "android")),
+        test
+    ))]
     Linux,
 }
 
 /// Select the root that owns the `saves/` directory.
 ///
-/// Editable projects intentionally keep their local sidecar. Packaged content
-/// is immutable and instead receives a stable per-game user-data namespace.
+/// Desktop editable projects intentionally keep their local sidecar. Packaged
+/// content and Android sessions receive a stable per-game user-data namespace.
 pub(crate) fn root(
     content_root: &Path,
     project: &ProjectMetadata,
     packaged: bool,
 ) -> Result<PathBuf> {
-    if !packaged {
+    if !packaged && !cfg!(target_os = "android") {
         return Ok(content_root.to_owned());
     }
     packaged_root(project, current_platform(), &|name| std::env::var_os(name))
@@ -89,42 +94,56 @@ fn cleanup_migration_archive(path: &Path) {
 }
 
 fn current_platform() -> HostPlatform {
+    #[cfg(target_os = "android")]
+    return HostPlatform::Android;
     #[cfg(target_os = "macos")]
     return HostPlatform::MacOs;
     #[cfg(target_os = "windows")]
     return HostPlatform::Windows;
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "android")))]
     return HostPlatform::Linux;
 }
 
 fn packaged_root(
     project: &ProjectMetadata,
     platform: HostPlatform,
-    environment: &impl Fn(&str) -> Option<OsString>,
+    _environment: &impl Fn(&str) -> Option<OsString>,
 ) -> Result<PathBuf> {
     match platform {
+        #[cfg(target_os = "android")]
+        HostPlatform::Android => {
+            let base = bevy::android::ANDROID_APP
+                .get()
+                .and_then(|app| app.internal_data_path())
+                .context("could not locate the Android application data directory")?;
+            android_root(&base, project)
+        }
         #[cfg(any(target_os = "macos", test))]
         HostPlatform::MacOs => {
             let application = project.application_identifier().context(
                 "project.bundle_identifier must be a valid reverse-DNS identifier, or be omitted to derive one from project.id",
             )?;
-            let home = absolute_environment_path(environment, "HOME")
+            let home = absolute_environment_path(_environment, "HOME")
                 .context("could not locate the macOS user home directory")?;
             Ok(home.join("Library/Application Support").join(application))
         }
         #[cfg(any(target_os = "windows", test))]
         HostPlatform::Windows => {
             let project_id = required_project_id(project)?;
-            let base = absolute_environment_path(environment, "LOCALAPPDATA")
-                .or_else(|| absolute_environment_path(environment, "APPDATA"))
+            let base = absolute_environment_path(_environment, "LOCALAPPDATA")
+                .or_else(|| absolute_environment_path(_environment, "APPDATA"))
                 .context("could not locate the Windows per-user application data directory")?;
             Ok(base.join("Kēne").join(project_id))
         }
-        #[cfg(any(not(any(target_os = "macos", target_os = "windows")), test))]
+        #[cfg(any(
+            not(any(target_os = "macos", target_os = "windows", target_os = "android")),
+            test
+        ))]
         HostPlatform::Linux => {
             let project_id = required_project_id(project)?;
-            let base = absolute_environment_path(environment, "XDG_DATA_HOME").or_else(|| {
-                absolute_environment_path(environment, "HOME").map(|home| home.join(".local/share"))
+            let base = absolute_environment_path(_environment, "XDG_DATA_HOME").or_else(|| {
+                absolute_environment_path(_environment, "HOME")
+                    .map(|home| home.join(".local/share"))
             });
             Ok(base
                 .context("could not locate the Linux user data directory")?
@@ -134,6 +153,14 @@ fn packaged_root(
     }
 }
 
+#[cfg(any(target_os = "android", test))]
+fn android_root(base: &Path, project: &ProjectMetadata) -> Result<PathBuf> {
+    if !base.is_absolute() {
+        anyhow::bail!("Android application data directory must be absolute");
+    }
+    Ok(base.join("userdata").join(required_project_id(project)?))
+}
+
 #[cfg(any(not(target_os = "macos"), test))]
 fn required_project_id(project: &ProjectMetadata) -> Result<&str> {
     project.valid_id().context(
@@ -141,6 +168,7 @@ fn required_project_id(project: &ProjectMetadata) -> Result<&str> {
     )
 }
 
+#[cfg(any(not(target_os = "android"), test))]
 fn absolute_environment_path(
     environment: &impl Fn(&str) -> Option<OsString>,
     name: &str,
@@ -170,6 +198,22 @@ mod tests {
                 .iter()
                 .find_map(|(key, value)| (*key == name).then(|| OsString::from(value)))
         }
+    }
+
+    #[test]
+    fn android_data_is_private_and_scoped_by_project_identity() {
+        let base = std::env::temp_dir().join("android-app-files");
+        assert_eq!(
+            android_root(&base, &metadata()).unwrap(),
+            base.join("userdata/example-game")
+        );
+        assert!(android_root(&base, &ProjectMetadata::default()).is_err());
+        let invalid = ProjectMetadata {
+            id: "../other-game".into(),
+            ..metadata()
+        };
+        assert!(android_root(&base, &invalid).is_err());
+        assert!(android_root(Path::new("relative"), &metadata()).is_err());
     }
 
     #[test]

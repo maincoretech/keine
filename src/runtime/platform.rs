@@ -33,6 +33,16 @@ use crate::ui::user_input::UserInputCaretBlink;
 /// for EGL to choose the Wayland/X11 display and a presentable framebuffer.
 pub(crate) struct NativeRenderDisplayPlugin;
 
+/// Keep the game and missing-content screen on the same native render policy.
+pub(crate) fn default_plugins() -> bevy::app::PluginGroupBuilder {
+    let plugins = DefaultPlugins
+        .build()
+        .add_before::<bevy::render::RenderPlugin>(NativeRenderDisplayPlugin);
+    #[cfg(target_os = "android")]
+    let plugins = plugins.set(super::android::render_plugin());
+    plugins
+}
+
 impl Plugin for NativeRenderDisplayPlugin {
     fn build(&self, app: &mut App) {
         if let Some(display) = app

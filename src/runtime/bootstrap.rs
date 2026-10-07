@@ -1538,8 +1538,10 @@ fn build_opened_app(
     // host overlay or focus interception is involved.
     initial_resolution.set_scale_factor_override(Some(1.0));
     let authoring_preview = options.authoring_preview.is_some();
-    let remember_window =
-        options.benchmark.is_none() && options.startup_capture.is_none() && !options.hidden_window;
+    let remember_window = !cfg!(target_os = "android")
+        && options.benchmark.is_none()
+        && options.startup_capture.is_none()
+        && !options.hidden_window;
     let window_plugin = WindowPlugin {
         primary_window: Some(Window {
             title: if authoring_preview {
@@ -1581,9 +1583,7 @@ fn build_opened_app(
         close_when_requested: false,
         ..default()
     };
-    let plugins = DefaultPlugins
-        .build()
-        .add_before::<bevy::render::RenderPlugin>(super::platform::NativeRenderDisplayPlugin)
+    let plugins = super::platform::default_plugins()
         .set(AssetPlugin {
             watch_for_changes_override: Some(watch_assets),
             ..default()

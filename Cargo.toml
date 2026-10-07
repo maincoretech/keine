@@ -177,7 +177,6 @@ serde = { workspace = true }
 serde_json = { workspace = true, optional = true }
 futures-lite = { workspace = true }
 notify = { workspace = true, optional = true }
-rfd = { workspace = true }
 webbrowser = { workspace = true }
 rodio = { workspace = true, optional = true }
 symphonia = { workspace = true, optional = true }
@@ -237,8 +236,8 @@ libc = { workspace = true, optional = true }
 windows-sys = { workspace = true, optional = true }
 
 # Bevy's facade does not expose native GLES; unify its existing render crate.
-# wgpu uses WGL on Windows and EGL on Linux, alongside DX12/Vulkan.
-[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+# wgpu uses WGL on Windows and EGL on Linux/Android, alongside DX12/Vulkan.
+[target.'cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))'.dependencies]
 bevy_render = { version = "=0.19.1", default-features = false, features = ["gles"] }
 
 # Winit has no implicit Linux backend when Bevy's default features are disabled.
@@ -246,6 +245,14 @@ bevy_render = { version = "=0.19.1", default-features = false, features = ["gles
 [target.'cfg(target_os = "linux")'.dependencies]
 bevy = { workspace = true, features = ["x11", "wayland"] }
 rfd = { workspace = true, features = ["xdg-portal"] }
+
+[target.'cfg(not(any(target_os = "android", target_os = "linux")))'.dependencies]
+rfd = { workspace = true }
+
+# Android builds the existing Engine library as a cdylib for NativeActivity.
+# Keep the desktop CLI, Editor and video backends out of the Android build.
+[target.'cfg(target_os = "android")'.dependencies]
+bevy = { workspace = true, features = ["android-native-activity"] }
 
 [[test]]
 name = "authoring-process"

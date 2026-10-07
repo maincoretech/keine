@@ -354,6 +354,25 @@ benchmark collector 6 项、native-smoke 零警告通过；Windows SDK 与新总
 提交 `e9cec0d` 的远程 CI #239 与 Media safety 已全部通过，包括 Windows 平台测试、
 视频验收和规范发行 feature check；GUI / 硬件 benchmark 验收仍独立。
 
+## Android Engine
+
+实验性 ARM64 Engine 使用 `--no-default-features --features ui-sounds`，安卓明确不支持视频。
+默认先初始化 Vulkan，surface/adapter/device 返回错误时释放该次资源并重试 GLES；
+单独指定 gl/vulkan 时保留指定后端。游戏与缺失资源提示页使用同一平台配置。
+独立 CI job 构建 release 原生库及 debug 签名 APK，检查桌面/Editor/FFmpeg 依赖隔离、
+Vulkan/GLES feature closure、NativeActivity 启动符号、ELF LOAD/RELRO 与 APK 的 16 KB
+对齐、APK 签名与硬件声明，再上传 artifact；手动 CI 支持只运行 Android job。
+构建入口、资源部署及限制见 [Android guide](android.md)。
+
+本机 NDK 28.2.13676358 交叉 Clippy、原生库链接、APK 打包及上述校验通过；无新增 Rust
+依赖，Cargo.lock 未变。视频 feature 在安卓上明确拒绝编译，存储回归覆盖稳定项目 ID、
+私有目录及路径逃逸拒绝；renderer 回归验证不存在 adapter 时返回可恢复错误。
+GLES 交叉 Clippy、raw_vulkan_init 交叉 check、双后端 APK、LOAD/RELRO 显式 16 KB
+链接与 APK 原生段一致性校验通过。workspace check/all-targets Clippy、989 项本机工作区测试（含并行 Editor 修改，21 ignored，
+publisher/video-native/hot-reload，IPC/Trash 在沙箱外）、native-smoke 零警告、全特性
+cargo-deny 和 CI actionlint 通过。远程 Android CI 尚未执行，手机画面、触摸、音频、
+后台恢复与性能均未验收；APK 校验只证明构建产物，不代表运行态支持已经完成。
+
 ## 测试布局
 
 ```text

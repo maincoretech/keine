@@ -1,4 +1,4 @@
-# Bevy display connection patch
+# Bevy native renderer patches
 
 Source: the official [`bevy_render` 0.19.1 crate](https://crates.io/crates/bevy_render/0.19.1).
 Upstream MIT/Apache licenses and source files are retained.
@@ -11,8 +11,14 @@ startup error view. Public `initialize_renderer` and `WgpuSettings` stay unchang
 Upstream uses `display: None`; wgpu 29's Mesa EGL initialization then chooses
 the surfaceless platform, which cannot present Wayland or X11 windows.
 Changing the present mode cannot fix an empty surface capability list.
-The patch uses the safe owned display API; no borrowed raw pointers or backend
-selection/driver installation policy is added.
+The display patch uses the safe owned display API without borrowed raw pointers.
+
+Android automatic initialization (without `raw_vulkan_init`) tries Vulkan first,
+then retries a fresh GLES instance when surface, adapter or device initialization
+returns an error. Single-backend selections remain authoritative. The private
+initialization helper now returns errors so a failed Vulkan driver can be
+released before GLES initialization; desktop selection policy is unchanged.
+This does not catch driver crashes or recover from later shader/runtime errors.
 
 `sparse_buffer_vec.rs` also removes one redundant formatting borrow so the
 official crate passes the workspace's current Clippy gate. `rustfmt.toml`
@@ -23,6 +29,6 @@ This includes upstream test dependencies, not new shipping dependencies.
 
 On upgrades, compare these four modified source files to upstream and
 remove the override when it forwards the real display connection.
-The two `renderer::display_tests` exercise descriptor ownership and headless
-initialization without a GUI; Linux native Wayland/GL and X11/GL still require
-actual window acceptance.
+The `renderer::display_tests` exercise descriptor ownership, headless descriptor
+creation and a recoverable failed adapter request without a GUI; native backend
+rendering and Android automatic fallback still require hardware acceptance.

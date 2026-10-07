@@ -15,7 +15,10 @@ const WINDOW_WIDTH: u32 = 960;
 const WINDOW_HEIGHT: u32 = 540;
 const CARD_WIDTH: f32 = 600.0;
 const TITLE: &str = "游戏资源不可用";
+#[cfg(not(target_os = "android"))]
 const INSTRUCTION: &str = "请重新下载 game.haku 和 data 文件夹，并放到游戏可执行文件同目录";
+#[cfg(target_os = "android")]
+const INSTRUCTION: &str = "当前为安卓引擎测试包，请先部署游戏资源再重新启动";
 
 #[derive(Component)]
 struct CloseButton;
@@ -30,21 +33,16 @@ struct InitialRender {
 pub(crate) fn show() {
     let mut app = App::new();
     app.add_plugins(
-        DefaultPlugins
-            .build()
-            .add_before::<bevy::render::RenderPlugin>(
-                crate::runtime::platform::NativeRenderDisplayPlugin,
-            )
-            .set(WindowPlugin {
-                primary_window: Some(Window {
-                    title: "Kēne — 无法启动".to_owned(),
-                    resolution: WindowResolution::new(WINDOW_WIDTH, WINDOW_HEIGHT),
-                    resizable: false,
-                    window_theme: Some(WindowTheme::Dark),
-                    ..default()
-                }),
+        crate::runtime::platform::default_plugins().set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "Kēne — 无法启动".to_owned(),
+                resolution: WindowResolution::new(WINDOW_WIDTH, WINDOW_HEIGHT),
+                resizable: false,
+                window_theme: Some(WindowTheme::Dark),
                 ..default()
             }),
+            ..default()
+        }),
     )
     .insert_resource(ClearColor(Color::BLACK))
     .insert_resource(WinitSettings::continuous())

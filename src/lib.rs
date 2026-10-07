@@ -1,7 +1,15 @@
 #![warn(unused_crate_dependencies)]
 
-// Native GL compatibility alongside Vulkan/DX12 on desktop targets.
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(all(
+    target_os = "android",
+    any(feature = "video-native", feature = "video-ffmpeg")
+))]
+compile_error!(
+    "Android does not support video; build with --no-default-features --features ui-sounds"
+);
+
+// Native GL compatibility alongside Vulkan/DX12 on desktop and Android.
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
 use bevy_render as _;
 
 #[cfg(feature = "publisher")]

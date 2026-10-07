@@ -1,3 +1,5 @@
+#[cfg(target_os = "android")]
+mod android;
 #[path = "runtime/asset/reader.rs"]
 pub(crate) mod asset_reader;
 pub(crate) mod audio;

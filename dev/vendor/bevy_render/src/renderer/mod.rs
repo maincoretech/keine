@@ -204,6 +204,54 @@ pub(crate) async fn initialize_renderer_with_display(
     #[cfg(feature = "raw_vulkan_init")]
     raw_vulkan_init_settings: raw_vulkan_init::RawVulkanInitSettings,
 ) -> RenderResources {
+    // Android drivers can expose Vulkan but fail device initialization. Try
+    // Vulkan first, then create a fresh GLES instance/surface on failure.
+    // An explicit single-backend selection must remain authoritative.
+    #[cfg(all(target_os = "android", not(feature = "raw_vulkan_init")))]
+    if backends.contains(Backends::VULKAN | Backends::GL) {
+        match try_initialize_renderer_with_display(
+            Backends::VULKAN,
+            primary_window.clone(),
+            options,
+            display_handle.clone(),
+        )
+        .await
+        {
+            Ok(resources) => return resources,
+            Err(error) => {
+                warn!("Android Vulkan initialization failed: {error}; retrying OpenGL ES");
+            }
+        }
+        return try_initialize_renderer_with_display(
+            Backends::GL,
+            primary_window,
+            options,
+            display_handle,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("Android OpenGL ES initialization failed: {error}"));
+    }
+
+    try_initialize_renderer_with_display(
+        backends,
+        primary_window,
+        options,
+        display_handle,
+        #[cfg(feature = "raw_vulkan_init")]
+        raw_vulkan_init_settings,
+    )
+    .await
+    .unwrap_or_else(|error| panic!("{error}"))
+}
+
+async fn try_initialize_renderer_with_display(
+    backends: Backends,
+    primary_window: Option<RawHandleWrapperHolder>,
+    options: &WgpuSettings,
+    display_handle: Option<RenderDisplayHandle>,
+    #[cfg(feature = "raw_vulkan_init")]
+    raw_vulkan_init_settings: raw_vulkan_init::RawVulkanInitSettings,
+) -> Result<RenderResources, String> {
     let instance_descriptor = instance_descriptor(backends, options, display_handle);
 
     #[cfg(not(feature = "raw_vulkan_init"))]
@@ -217,23 +265,25 @@ pub(crate) async fn initialize_renderer_with_display(
         &mut additional_vulkan_features,
     );
 
-    let surface = primary_window.and_then(|wrapper| {
-        let maybe_handle = wrapper
-            .0
-            .lock()
-            .expect("Couldn't get the window handle in time for renderer initialization");
-        if let Some(wrapper) = maybe_handle.as_ref() {
-            // SAFETY: Plugins should be set up on the main thread.
-            let handle = unsafe { wrapper.get_handle() };
-            Some(
+    let surface = primary_window
+        .map(|wrapper| {
+            let maybe_handle = wrapper
+                .0
+                .lock()
+                .expect("Couldn't get the window handle in time for renderer initialization");
+            if let Some(wrapper) = maybe_handle.as_ref() {
+                // SAFETY: Plugins should be set up on the main thread.
+                let handle = unsafe { wrapper.get_handle() };
                 instance
                     .create_surface(handle)
-                    .expect("Failed to create wgpu surface"),
-            )
-        } else {
-            None
-        }
-    });
+                    .map(Some)
+                    .map_err(|error| format!("Failed to create wgpu surface: {error}"))
+            } else {
+                Ok(None)
+            }
+        })
+        .transpose()?
+        .flatten();
 
     let force_fallback_adapter = std::env::var("WGPU_FORCE_FALLBACK_ADAPTER")
         .map_or(options.force_fallback_adapter, |v| {
@@ -281,7 +331,7 @@ pub(crate) async fn initialize_renderer_with_display(
             .ok();
     }
 
-    let adapter = selected_adapter.expect(GPU_NOT_FOUND_ERROR_MESSAGE);
+    let adapter = selected_adapter.ok_or_else(|| GPU_NOT_FOUND_ERROR_MESSAGE.to_owned())?;
     let adapter_info = adapter.get_info();
     info!("{:?}", adapter_info);
 
@@ -337,7 +387,10 @@ pub(crate) async fn initialize_renderer_with_display(
     };
 
     #[cfg(not(feature = "raw_vulkan_init"))]
-    let (device, queue) = adapter.request_device(&device_descriptor).await.unwrap();
+    let (device, queue) = adapter
+        .request_device(&device_descriptor)
+        .await
+        .map_err(|error| format!("Failed to create wgpu device: {error}"))?;
 
     #[cfg(feature = "raw_vulkan_init")]
     let (device, queue) = raw_vulkan_init::create_raw_device(
@@ -347,12 +400,12 @@ pub(crate) async fn initialize_renderer_with_display(
         &mut additional_vulkan_features,
     )
     .await
-    .unwrap();
+    .map_err(|error| format!("Failed to create wgpu device: {error}"))?;
 
     debug!("Configured wgpu adapter Limits: {:#?}", device.limits());
     debug!("Configured wgpu adapter Features: {:#?}", device.features());
 
-    RenderResources(
+    Ok(RenderResources(
         RenderDevice::from(device),
         RenderQueue(Arc::new(WgpuWrapper::new(queue))),
         RenderAdapterInfo(WgpuWrapper::new(adapter_info)),
@@ -360,7 +413,7 @@ pub(crate) async fn initialize_renderer_with_display(
         RenderInstance(Arc::new(WgpuWrapper::new(instance))),
         #[cfg(feature = "raw_vulkan_init")]
         additional_vulkan_features,
-    )
+    ))
 }
 
 fn instance_descriptor(
@@ -429,5 +482,19 @@ mod display_tests {
     fn headless_descriptor_does_not_require_a_display() {
         let descriptor = instance_descriptor(Backends::all(), &WgpuSettings::default(), None);
         assert!(descriptor.display.is_none());
+    }
+
+    #[cfg(not(feature = "raw_vulkan_init"))]
+    #[test]
+    fn missing_adapter_returns_a_recoverable_initialization_error() {
+        // An empty backend set exercises the real failed adapter request without
+        // needing a GPU or window server. Android can retry after this failure.
+        let result = bevy_tasks::block_on(try_initialize_renderer_with_display(
+            Backends::empty(),
+            None,
+            &WgpuSettings::default(),
+            None,
+        ));
+        assert!(matches!(result, Err(error) if error == GPU_NOT_FOUND_ERROR_MESSAGE));
     }
 }
