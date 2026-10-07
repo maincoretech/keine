@@ -370,7 +370,7 @@ Vulkan/GLES feature closure、NativeActivity 启动符号、ELF LOAD/RELRO 与 A
 GLES 交叉 Clippy、raw_vulkan_init 交叉 check、双后端 APK、LOAD/RELRO 显式 16 KB
 链接与 APK 原生段一致性校验通过。workspace check/all-targets Clippy、989 项本机工作区测试（含并行 Editor 修改，21 ignored，
 publisher/video-native/hot-reload，IPC/Trash 在沙箱外）、native-smoke 零警告、全特性
-cargo-deny 和 CI actionlint 通过。远程 Android CI 尚未执行，手机画面、触摸、音频、
+cargo-deny 和 CI actionlint 通过。远程 Android CI 按对应提交的 Actions 结果核对；手机画面、触摸、音频、
 后台恢复与性能均未验收；APK 校验只证明构建产物，不代表运行态支持已经完成。
 
 ## 测试布局

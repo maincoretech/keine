@@ -39,10 +39,7 @@ jobs:
             'ndk;28.2.13676358' 'platforms;android-35' 'build-tools;35.0.0'
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
       - name: Install pinned cargo-ndk
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
-        with:
-          tool: cargo-ndk@4.1.2
-          fallback: none
+        run: cargo install cargo-ndk --version 4.1.2 --locked
       - name: Restore Android Rust build cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
