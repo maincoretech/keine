@@ -9,3 +9,5 @@ pub mod performance;
 pub(crate) mod sound;
 #[path = "support/text/style.rs"]
 pub mod text_style;
+#[path = "support/input/touch.rs"]
+pub(crate) mod touch;

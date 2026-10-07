@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use crate::project_key::ProjectKey;
 
 const STATE_SCHEMA: u32 = 1;
-const BLOCK_PICKER_SCHEMA: u32 = 1;
+const BLOCK_PICKER_SCHEMA: u32 = 2;
 const WINDOW_BOUNDS_SCHEMA: u32 = 3;
 const MAX_RECENTS: usize = 12;
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
@@ -69,7 +69,25 @@ pub struct BlockPickerPreferences {
 impl Default for BlockPickerPreferences {
     fn default() -> Self {
         Self {
-            favorites: Vec::new(),
+            favorites: [
+                "Narration",
+                "Dialogue",
+                "Background",
+                "Figure",
+                "BGM",
+                "Sound",
+                "Wait",
+                "Hide",
+                "Move",
+                "Choice",
+                "Goto",
+                "Textbox",
+                "Camera move",
+                "Camera shake",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
             hidden: Vec::new(),
             category_order: ["Text", "Scene", "Media", "Flow", "Data"]
                 .into_iter()
@@ -172,8 +190,16 @@ impl AppPersistence {
 
     pub fn load_block_picker_preferences(&self) -> BlockPickerPreferences {
         read_json::<BlockPickerPreferencesFile>(&self.root.join("block-picker.json"))
-            .filter(|state| state.schema == BLOCK_PICKER_SCHEMA)
-            .map(|state| state.preferences)
+            .filter(|state| matches!(state.schema, 1 | BLOCK_PICKER_SCHEMA))
+            .map(|state| {
+                let mut preferences = state.preferences;
+                // Seed the old empty default once; schema 2 can explicitly
+                // store an empty favorites list without restoring defaults.
+                if state.schema == 1 && preferences.favorites.is_empty() {
+                    preferences.favorites = BlockPickerPreferences::default().favorites;
+                }
+                preferences
+            })
             .unwrap_or_default()
     }
 
@@ -427,6 +453,31 @@ mod tests {
             .save_block_picker_preferences(&preferences)
             .unwrap();
         assert_eq!(persistence.load_block_picker_preferences(), preferences);
+        let file = persistence.root().join("block-picker.json");
+        atomic_json(
+            &file,
+            &BlockPickerPreferencesFile {
+                schema: 1,
+                preferences: preferences.clone(),
+            },
+        )
+        .unwrap();
+        assert_eq!(persistence.load_block_picker_preferences(), preferences);
+        let mut empty = preferences.clone();
+        empty.favorites.clear();
+        atomic_json(
+            &file,
+            &BlockPickerPreferencesFile {
+                schema: 1,
+                preferences: empty.clone(),
+            },
+        )
+        .unwrap();
+        let mut upgraded = empty.clone();
+        upgraded.favorites = BlockPickerPreferences::default().favorites;
+        assert_eq!(persistence.load_block_picker_preferences(), upgraded);
+        persistence.save_block_picker_preferences(&empty).unwrap();
+        assert_eq!(persistence.load_block_picker_preferences(), empty);
         assert!(!persistence.root().starts_with(&project));
         assert!(fs::read_dir(persistence.root()).unwrap().all(|entry| {
             !entry

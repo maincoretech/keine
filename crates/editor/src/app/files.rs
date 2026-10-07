@@ -254,23 +254,23 @@ impl WorkbenchPanel {
             PanelContent::Explorer { root, .. } | PanelContent::Assets { root } => root.clone(),
             _ => return,
         };
-        if self.file_history.next_requires_manifest(undo)
+        if self.explorer.file_history.next_requires_manifest(undo)
             && !self.manifest_mutation_ready(&root, window, cx)
         {
             return;
         }
         if !self.affected_files_closed(
             &root,
-            &self.file_history.next_affected_paths(undo),
+            &self.explorer.file_history.next_affected_paths(undo),
             window,
             cx,
         ) {
             return;
         }
-        match self.file_history.step(&root, undo) {
+        match self.explorer.file_history.step(&root, undo) {
             Ok(Some(result)) => {
                 self.accept_file_result(&root, result, window, cx);
-                self.file_selection = None;
+                self.explorer.file_selection = None;
                 cx.global_mut::<EditorDocuments>()
                     .set_notice(&root, if undo { "File undo" } else { "File redo" });
                 cx.notify();
@@ -291,7 +291,7 @@ impl WorkbenchPanel {
         let PanelContent::Explorer { files, .. } = &self.content else {
             return PathBuf::new();
         };
-        let Some(selected) = self.file_selection.as_ref() else {
+        let Some(selected) = self.explorer.file_selection.as_ref() else {
             return PathBuf::new();
         };
         if files
@@ -334,10 +334,12 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.file_name_input
+        self.explorer
+            .file_name_input
             .update(cx, |input, cx| input.set_value(initial, window, cx));
-        self.file_edit = Some(mode);
-        self.file_name_input
+        self.explorer.file_edit = Some(mode);
+        self.explorer
+            .file_name_input
             .update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
     }
@@ -348,37 +350,37 @@ impl WorkbenchPanel {
         position: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        self.file_context_epoch = self.file_context_epoch.wrapping_add(1);
-        self.file_selection = Some(path.clone());
-        self.file_context_menu = Some(FileContextMenu {
+        self.explorer.file_context_epoch = self.explorer.file_context_epoch.wrapping_add(1);
+        self.explorer.file_selection = Some(path.clone());
+        self.explorer.file_context_menu = Some(FileContextMenu {
             path: Some(path),
             position,
-            epoch: self.file_context_epoch,
+            epoch: self.explorer.file_context_epoch,
             closing: false,
         });
         cx.notify();
     }
 
     pub(super) fn open_explorer_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        self.file_context_epoch = self.file_context_epoch.wrapping_add(1);
-        self.file_context_menu = Some(FileContextMenu {
+        self.explorer.file_context_epoch = self.explorer.file_context_epoch.wrapping_add(1);
+        self.explorer.file_context_menu = Some(FileContextMenu {
             path: None,
             position,
-            epoch: self.file_context_epoch,
+            epoch: self.explorer.file_context_epoch,
             closing: false,
         });
         cx.notify();
     }
 
     pub(super) fn close_file_context_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(menu) = self.file_context_menu.as_mut() else {
+        let Some(menu) = self.explorer.file_context_menu.as_mut() else {
             return;
         };
         if menu.closing {
             return;
         }
-        self.file_context_epoch = self.file_context_epoch.wrapping_add(1);
-        menu.epoch = self.file_context_epoch;
+        self.explorer.file_context_epoch = self.explorer.file_context_epoch.wrapping_add(1);
+        menu.epoch = self.explorer.file_context_epoch;
         menu.closing = true;
         let epoch = menu.epoch;
         let delay = if cx.reduce_motion() {
@@ -391,11 +393,12 @@ impl WorkbenchPanel {
             cx.background_executor().timer(delay).await;
             let _ = this.update_in(cx, |this, _, cx| {
                 if this
+                    .explorer
                     .file_context_menu
                     .as_ref()
                     .is_some_and(|menu| menu.epoch == epoch && menu.closing)
                 {
-                    this.file_context_menu = None;
+                    this.explorer.file_context_menu = None;
                     cx.notify();
                 }
             });
@@ -407,10 +410,16 @@ impl WorkbenchPanel {
         let Some(root) = self.explorer_root() else {
             return;
         };
-        let Some(mode) = self.file_edit.clone() else {
+        let Some(mode) = self.explorer.file_edit.clone() else {
             return;
         };
-        let name = self.file_name_input.read(cx).value().trim().to_owned();
+        let name = self
+            .explorer
+            .file_name_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_owned();
         let result = match mode {
             FileEditMode::NewFile { parent } => {
                 file_ops::create_file(&root, &parent, &name).map(|path| {
@@ -455,8 +464,8 @@ impl WorkbenchPanel {
         };
         match result {
             Ok((update, edit)) => {
-                self.file_edit = None;
-                self.file_history.record(edit);
+                self.explorer.file_edit = None;
+                self.explorer.file_history.record(edit);
                 if let Some(update) = update {
                     self.accept_file_result(&root, update, window, cx);
                 } else {
@@ -604,7 +613,7 @@ impl WorkbenchPanel {
         let Some(root) = self.explorer_root() else {
             return;
         };
-        let Some(source) = self.file_clipboard.clone() else {
+        let Some(source) = self.explorer.file_clipboard.clone() else {
             return;
         };
         if !self.manifest_mutation_ready(&root, window, cx) {
@@ -617,7 +626,7 @@ impl WorkbenchPanel {
         if let Some(workspace) = cx.global_mut::<EditorDocuments>().workspaces.get_mut(&root) {
             workspace.file_operation_active = true;
         }
-        self.file_progress = Some(FileProgress {
+        self.explorer.file_progress = Some(FileProgress {
             completed: 0,
             total: 1,
         });
@@ -641,7 +650,7 @@ impl WorkbenchPanel {
                 }
             });
             let _ = this.update_in(cx, |this, window, cx| {
-                this.file_progress = None;
+                this.explorer.file_progress = None;
                 match result {
                     Ok((manifest_before, results)) => {
                         let copied = target.join(source.file_name().unwrap_or_default());
@@ -649,7 +658,7 @@ impl WorkbenchPanel {
                             .iter()
                             .rev()
                             .find_map(|result| result.manifest_update.clone());
-                        this.file_history.record(FileEdit::Toggle {
+                        this.explorer.file_history.record(FileEdit::Toggle {
                             paths: vec![(copied, None)],
                             after_present: true,
                             present: true,
@@ -693,7 +702,7 @@ impl WorkbenchPanel {
         }
         match file_ops::move_entry(&root, source, target) {
             Ok(result) => {
-                self.file_history.record(FileEdit::Relocate {
+                self.explorer.file_history.record(FileEdit::Relocate {
                     before: source.to_owned(),
                     after: result.destination.clone(),
                 });
@@ -713,7 +722,7 @@ impl WorkbenchPanel {
         let Some(root) = self.explorer_root() else {
             return;
         };
-        let Some(path) = self.file_selection.clone() else {
+        let Some(path) = self.explorer.file_selection.clone() else {
             return;
         };
         let receiver = window.prompt(
@@ -739,8 +748,8 @@ impl WorkbenchPanel {
                     .and_then(|()| change.apply(&root, false));
                 match result {
                     Ok(()) => {
-                        this.file_history.record(FileEdit::Trash(change));
-                        this.file_selection = None;
+                        this.explorer.file_history.record(FileEdit::Trash(change));
+                        this.explorer.file_selection = None;
                         this.refresh_explorer(&root, cx);
                         this.focus.focus(window, cx);
                         window.push_notification(Notification::success("Deleted"), cx);
@@ -764,6 +773,17 @@ impl WorkbenchPanel {
         let Some(root) = self.explorer_root() else {
             return;
         };
+        self.import_asset_files(root, paths, target, window, cx);
+    }
+
+    pub(super) fn import_asset_files(
+        &mut self,
+        root: PathBuf,
+        paths: Vec<PathBuf>,
+        target: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let jobs = paths
             .into_iter()
             .map(|source| MediaJob::Import {
@@ -810,7 +830,7 @@ impl WorkbenchPanel {
         if jobs.is_empty() || !self.manifest_mutation_ready(&root, window, cx) {
             return;
         }
-        self.file_progress = Some(FileProgress {
+        self.explorer.file_progress = Some(FileProgress {
             completed: 0,
             total: jobs.len(),
         });
@@ -818,7 +838,7 @@ impl WorkbenchPanel {
         let manifest_before = match file_ops::asset_manifest_source(&root) {
             Ok(source) => source,
             Err(error) => {
-                self.file_progress = None;
+                self.explorer.file_progress = None;
                 window.push_notification(Notification::error(short_error(&error)), cx);
                 return;
             }
@@ -870,7 +890,7 @@ impl WorkbenchPanel {
                     }
                 }
                 let _ = this.update_in(cx, |this, _, cx| {
-                    this.file_progress = Some(FileProgress {
+                    this.explorer.file_progress = Some(FileProgress {
                         completed: index + 1,
                         total,
                     });
@@ -890,9 +910,9 @@ impl WorkbenchPanel {
                 {
                     workspace.file_operation_active = false;
                 }
-                this.file_progress = None;
+                this.explorer.file_progress = None;
                 if !imported.is_empty() {
-                    this.file_history.record(FileEdit::Toggle {
+                    this.explorer.file_history.record(FileEdit::Toggle {
                         paths: imported,
                         after_present: true,
                         present: true,
@@ -1097,3 +1117,8 @@ mod history_tests {
         fs::remove_dir_all(root).unwrap();
     }
 }
+
+mod state;
+pub(in crate::app) use state::ExplorerState;
+
+mod view;

@@ -172,24 +172,24 @@ impl Geometry {
 
 impl WorkbenchPanel {
     pub(super) fn scroll_minimap(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        if self.document_mode == DocumentMode::Text {
+        if self.document.document_mode == DocumentMode::Text {
             self.scroll_text_minimap(position, cx);
             return;
         }
-        let bounds = *self.minimap_navigation.bounds.borrow();
+        let bounds = *self.document.minimap_navigation.bounds.borrow();
         let height = f32::from(bounds.size.height) - INSET * 2.;
         if height <= 0. {
             return;
         }
         let y = f32::from(position.y - bounds.origin.y) - INSET;
-        let mut pan = self.minimap_navigation.pan.borrow_mut();
+        let mut pan = self.document.minimap_navigation.pan.borrow_mut();
         let geometry = pan.for_blocks(&self.view_scroll, height);
-        let scroll = pan.drag(geometry, y, &mut self.minimap_navigation.grab);
+        let scroll = pan.drag(geometry, y, &mut self.document.minimap_navigation.grab);
         let offset = self.view_scroll.offset();
         self.view_scroll
             .set_offset(gpui_kit::point(offset.x, px(-scroll)));
-        self.block_scroll_pending = false;
-        self.block_context_menu = None;
+        self.document.block_scroll_pending = false;
+        self.document.block_context_menu = None;
         cx.notify();
     }
 }
@@ -216,17 +216,17 @@ pub(super) fn render(
             MouseButton::Left,
             cx.listener(|this, event: &MouseDownEvent, _, cx| {
                 cx.stop_propagation();
-                this.minimap_navigation.grab = None;
+                this.document.minimap_navigation.grab = None;
                 this.scroll_minimap(event.position, cx);
             }),
         )
         .on_click(|_, _, cx| cx.stop_propagation())
         .on_scroll_wheel(
             cx.listener(|this, event: &gpui_kit::ScrollWheelEvent, _, cx| {
-                let bounds = *this.minimap_navigation.bounds.borrow();
+                let bounds = *this.document.minimap_navigation.bounds.borrow();
                 let height = (f32::from(bounds.size.height) - INSET * 2.).max(0.);
                 let delta = event.delta.pixel_delta(px(20.));
-                let mut pan = this.minimap_navigation.pan.borrow_mut();
+                let mut pan = this.document.minimap_navigation.pan.borrow_mut();
                 pan.for_blocks(&this.view_scroll, height);
                 pan.offset -= f32::from(delta.y);
                 pan.for_blocks(&this.view_scroll, height);
@@ -329,14 +329,14 @@ pub(super) fn render(
                         let Some(panel) = moving_panel.upgrade() else {
                             return;
                         };
-                        if panel.read(cx).minimap_navigation.grab.is_none() {
+                        if panel.read(cx).document.minimap_navigation.grab.is_none() {
                             return;
                         }
                         panel.update(cx, |this, cx| {
                             if event.pressed_button == Some(MouseButton::Left) {
                                 this.scroll_minimap(event.position, cx);
                             } else {
-                                this.minimap_navigation.grab = None;
+                                this.document.minimap_navigation.grab = None;
                             }
                         });
                     });
@@ -348,9 +348,9 @@ pub(super) fn render(
                         let Some(panel) = release_panel.upgrade() else {
                             return;
                         };
-                        if panel.read(cx).minimap_navigation.grab.is_some() {
+                        if panel.read(cx).document.minimap_navigation.grab.is_some() {
                             panel.update(cx, |this, cx| {
-                                this.minimap_navigation.grab = None;
+                                this.document.minimap_navigation.grab = None;
                                 cx.notify();
                             });
                         }

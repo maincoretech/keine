@@ -3,6 +3,8 @@ plugins {
 }
 
 android {
+    // NativeActivity has no Kotlin sources or standard-library dependency.
+    enableKotlin = false
     namespace = 'moe.maincore.keine'
     compileSdk = 35
     buildToolsVersion = '36.0.0'

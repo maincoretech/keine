@@ -34,8 +34,8 @@ use super::{
     ASSET_PREVIEW_PANEL, ASSETS_PANEL, BUILD_PANEL, CANVAS, CHARACTERS_PANEL, CHROME,
     EXPLORER_PANEL, INK, INSPECTOR_PANEL, MUTED, MigrateEiyashou, OpenFolder, PERFORMANCE_PANEL,
     PRIMARY, PRIMARY_DIM, PROBLEMS_PANEL, RedoSources, ResetLayout, SEARCH_PANEL, SURFACE_HOVER,
-    Save, SaveAll, ShowAssetPreview, ShowAssets, ShowSearch, ToggleEngine, UndoSources,
-    VIEW_INSET_PX, VIEW_RADIUS_PX, activity_divider, activity_tool, dock, icon_hint,
+    Save, SaveAll, ShowAssetPreview, ShowAssets, ShowProblems, ShowSearch, ToggleEngine,
+    UndoSources, VIEW_INSET_PX, VIEW_RADIUS_PX, activity_divider, activity_tool, dock, icon_hint,
 };
 
 struct WindowRegistry<W> {
@@ -1309,6 +1309,9 @@ impl Render for WorkbenchWindow {
             }))
             .on_action(cx.listener(|this, _: &ShowSearch, window, cx| {
                 this.show_tool(ToolKind::Search, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ShowProblems, window, cx| {
+                this.show_tool(ToolKind::Problems, window, cx)
             }))
             .on_action(cx.listener(Self::show_asset_preview))
             .on_action(cx.listener(Self::migrate_eiyashou))

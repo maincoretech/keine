@@ -12,7 +12,7 @@ pub use screens::{extra, save_load, settings_panel, title};
 pub use stage::{choice, control_bar, textbox};
 #[cfg(feature = "ui-sounds")]
 pub(crate) use support::sound;
-pub(crate) use support::{activity, foundation, input_scope};
+pub(crate) use support::{activity, foundation, input_scope, touch};
 pub use support::{loading, performance, text_style};
 
 use bevy::asset::embedded_asset;
@@ -43,6 +43,13 @@ impl Plugin for GameUiPlugin {
         text_style::install_renderer(app);
         init_resources(app);
         app.add_systems(PreUpdate, input_scope::sync);
+        app.add_systems(
+            PreUpdate,
+            touch::collect
+                .after(bevy::ui::UiSystems::Focus)
+                .after(input_scope::sync)
+                .before(crate::runtime::platform::collect_input),
+        );
         add_startup_systems(app);
         app.add_systems(
             Update,
@@ -78,7 +85,7 @@ fn init_resources(app: &mut App) {
         .init_resource::<control_bar::AutoHideTiming>()
         .init_resource::<control_bar::QuickSavePreview>()
         .init_resource::<control_bar::QuickSavePreviewLoad>()
-        .init_resource::<dialog::SavePreviewWriter>()
+        .init_resource::<crate::storage::save::preview::SavePreviewWriter>()
         .init_resource::<textbox::TextboxOverlayFade>()
         .init_resource::<textbox::InitialTextboxFade>()
         .init_resource::<textbox::TextboxLayoutMotion>()
@@ -97,6 +104,7 @@ fn init_resources(app: &mut App) {
         .init_resource::<settings_panel::ActiveSettingSlider>()
         .init_resource::<extra::ExtraUi>()
         .init_resource::<input_scope::UiInputScope>()
+        .init_resource::<touch::TouchInputState>()
         .init_resource::<crate::storage::settings::RuntimeSettings>();
     #[cfg(feature = "ui-sounds")]
     app.init_resource::<sound::UiSoundAssets>();
@@ -276,11 +284,7 @@ fn add_menu_systems(app: &mut App) {
                     .run_if(loading::assets_ready)
                     .run_if(input_scope::menu_allowed)
                     .run_if(menu::route_settled),
-                settings_panel::handle_setting_sliders
-                    .run_if(loading::assets_ready)
-                    .run_if(input_scope::menu_allowed)
-                    .run_if(input_scope::writable_session)
-                    .run_if(menu::route_settled),
+                settings_panel::handle_setting_sliders.run_if(input_scope::writable_session),
                 save_load::sync_save_load,
             )
                 .chain(),

@@ -1,6 +1,61 @@
 //! Shared workbench controls and overflow containers.
 use super::*;
 
+/// Reversible disclosure motion; stable IDs also preserve measurement and mid-flight reversal.
+pub(super) fn disclosure_progress(
+    id: impl Into<SharedString>,
+    expanded: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> f32 {
+    transition(
+        (id.into(), "disclosure"),
+        if expanded { 1. } else { 0. },
+        Transition::new(Duration::from_millis(160)),
+        window,
+        cx,
+    )
+}
+
+pub(super) fn disclosure_chevron(progress: f32) -> impl IntoElement {
+    Icon::new(IconName::ChevronRight)
+        .xsmall()
+        .rotate(radians(progress * std::f32::consts::FRAC_PI_2))
+        .text_color(rgb(MUTED))
+}
+
+pub(super) fn disclosure_content(
+    id: impl Into<SharedString>,
+    progress: f32,
+    content: impl IntoElement,
+) -> impl IntoElement {
+    gpui_kit::base::Collapsible::new()
+        .reveal(id.into(), progress)
+        .content(div().w_full().opacity(progress).child(content))
+}
+
+/// Prefix geometry keeps virtualized lists correct while disclosure rows change height.
+pub(super) fn row_offsets(heights: impl IntoIterator<Item = f32>) -> Vec<f32> {
+    let mut offsets = vec![0.];
+    for height in heights {
+        offsets.push(offsets.last().unwrap() + height.max(0.));
+    }
+    offsets
+}
+
+pub(super) fn visible_row_range(offsets: &[f32], top: f32, height: f32) -> Range<usize> {
+    let count = offsets.len().saturating_sub(1);
+    let start = offsets
+        .partition_point(|position| *position <= top.max(0.))
+        .saturating_sub(1)
+        .min(count);
+    let end = offsets
+        .partition_point(|position| *position < top.max(0.) + height.max(0.))
+        .min(count)
+        .max(start);
+    start..end
+}
+
 pub(super) fn preview_transport_icon(running: bool) -> AssetIconName {
     if running {
         AssetIconName::Square
@@ -293,4 +348,125 @@ pub(super) fn preview_window_controls(root: &Path, cx: &mut App) -> Option<State
                 window.dispatch_action(Box::new(ToggleEngine), cx);
             })),
     )
+}
+
+#[cfg(test)]
+mod disclosure_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn virtual_rows_follow_fractional_heights_and_scroll_boundaries() {
+        let offsets = row_offsets([25., 12.5, 12.5, 25.]);
+        assert_eq!(offsets, [0., 25., 37.5, 50., 75.]);
+        assert_eq!(visible_row_range(&offsets, 25., 25.), 1..3);
+        assert_eq!(visible_row_range(&offsets, 75., 10.), 4..4);
+        assert_eq!(visible_row_range(&row_offsets([]), 0., 100.), 0..0);
+        assert_eq!(
+            visible_row_range(&row_offsets([25., 0., 25.]), 25., 25.),
+            2..3
+        );
+    }
+
+    struct DisclosureHarness {
+        width: f32,
+        open: bool,
+        progress: Rc<Cell<f32>>,
+    }
+
+    impl Render for DisclosureHarness {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let progress = disclosure_progress("disclosure-test", self.open, window, cx);
+            self.progress.set(progress);
+            div()
+                .w(px(self.width))
+                .flex()
+                .flex_col()
+                .child(div().h(px(28.)).flex_none())
+                .child(disclosure_content(
+                    "disclosure-test-body",
+                    progress,
+                    div()
+                        .w_full()
+                        .flex()
+                        .flex_col()
+                        .child(div().h(px(40.)).flex_none())
+                        .child(
+                            div().text_sm().whitespace_normal().child(
+                                "Ready 70 Pending 0 Unused 0 Missing 0 Undefined 0 Unmapped 0",
+                            ),
+                        ),
+                ))
+                .child(
+                    div()
+                        .debug_selector(|| "after-disclosure".into())
+                        .h(px(20.))
+                        .flex_none(),
+                )
+        }
+    }
+
+    #[gpui_kit::test]
+    fn measured_disclosure_reverses_without_jumping_and_honors_reduced_motion(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        cx.update(gpui_kit::init);
+        let progress = Rc::new(Cell::new(0.));
+        let (panel, cx) = cx.add_window_view(|_, _| DisclosureHarness {
+            width: 160.,
+            open: false,
+            progress: progress.clone(),
+        });
+        let draw = |cx: &mut gpui_kit::VisualTestContext| {
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+        };
+        draw(cx);
+        let closed = cx.debug_bounds("after-disclosure").unwrap().top();
+        panel.update(cx, |panel, cx| {
+            panel.open = true;
+            cx.notify();
+        });
+        draw(cx);
+        assert_eq!(cx.debug_bounds("after-disclosure").unwrap().top(), closed);
+        cx.executor().advance_clock(Duration::from_millis(60));
+        draw(cx);
+        let halfway = cx.debug_bounds("after-disclosure").unwrap().top();
+        let before = progress.get();
+        assert!(before > 0. && before < 1.);
+        assert!(halfway > closed);
+        panel.update(cx, |panel, cx| {
+            panel.open = false;
+            cx.notify();
+        });
+        draw(cx);
+        assert_eq!(progress.get(), before);
+        assert_eq!(cx.debug_bounds("after-disclosure").unwrap().top(), halfway);
+        cx.executor().advance_clock(Duration::from_millis(200));
+        draw(cx);
+        assert_eq!(cx.debug_bounds("after-disclosure").unwrap().top(), closed);
+        cx.update(|_, cx| cx.set_reduce_motion(true));
+        panel.update(cx, |panel, cx| {
+            panel.open = true;
+            cx.notify();
+        });
+        draw(cx);
+        assert_eq!(progress.get(), 1.);
+        assert!(cx.debug_bounds("after-disclosure").unwrap().top() > halfway);
+        // Width changes remeasure wrapped content, so no guessed height clips the final row.
+        let wide_height = cx.debug_bounds("after-disclosure").unwrap().top();
+        panel.update(cx, |panel, cx| {
+            panel.width = 80.;
+            cx.notify();
+        });
+        draw(cx);
+        draw(cx);
+        assert!(cx.debug_bounds("after-disclosure").unwrap().top() > wide_height);
+        panel.update(cx, |panel, cx| {
+            panel.open = false;
+            cx.notify();
+        });
+        draw(cx);
+        assert_eq!(progress.get(), 0.);
+        assert_eq!(cx.debug_bounds("after-disclosure").unwrap().top(), closed);
+    }
 }

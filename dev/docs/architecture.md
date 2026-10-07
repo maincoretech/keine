@@ -55,6 +55,15 @@ Editor 通过显式开始/停止控制独立原生 Engine；Block 与执行位�
 Android 当前无视频，启动先尝试 Vulkan、初始化错误时回退 OpenGL ES；游戏与错误页共用
 平台渲染配置。构建与验收边界见 [Android guide](android.md)。
 
+## UI 职责
+
+Editor（GPUI）按功能拥有面板状态及视图，工作台只负责分派、Dock 与共享输入。
+Engine（Bevy）的 Settings、Save/Load、Dialog 各自拆为 `state/view/actions/motion/sync`；
+原有系统入口由 facade 重新导出，保持注册顺序、相机层和共享菜单路由。
+槽位截图采集属于 `ui/screens/save/capture`；预览编码与落盘属于 `storage/save/preview`，
+继续使用容量为 2 的后台队列和存档代际校验，删除/替换后不写回过期缩略图。
+这两套 UI 共用 authoring 协议与 typed 状态，不共享渲染框架。
+
 ## 持久化
 
 Save v11 只恢复到 fingerprint 相同的 Program；不支持的二进制布局直接拒绝。

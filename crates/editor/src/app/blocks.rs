@@ -54,18 +54,24 @@ impl WorkbenchPanel {
                 offset
             }
         };
-        for row in &mut self.block_text_editors {
+        for row in &mut self.document.block_text_editors {
             row.text_start = map(row.text_start);
         }
-        self.block_heights = std::mem::take(&mut self.block_heights)
+        self.document.block_heights = std::mem::take(&mut self.document.block_heights)
             .into_iter()
             .map(|(start, height)| (map(start), height))
             .collect();
-        self.selected_blocks = self.selected_blocks.iter().copied().map(map).collect();
-        self.block_selection_anchor = self.block_selection_anchor.map(map);
+        self.document.selected_blocks = self
+            .document
+            .selected_blocks
+            .iter()
+            .copied()
+            .map(map)
+            .collect();
+        self.document.block_selection_anchor = self.document.block_selection_anchor.map(map);
     }
     pub(super) fn finish_block_text_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !std::mem::take(&mut self.block_text_refresh_pending) {
+        if !std::mem::take(&mut self.document.block_text_refresh_pending) {
             return;
         }
         let PanelContent::Document {
@@ -77,9 +83,9 @@ impl WorkbenchPanel {
         else {
             return;
         };
-        self.syntax_check = Some(completion::schedule_syntax_check(
+        self.document.syntax_check = Some(completion::schedule_syntax_check(
             editor.clone(),
-            self.syntax_marks.clone(),
+            self.document.syntax_marks.clone(),
             (
                 cx.global::<EditorDocuments>().authoring(root),
                 relative.clone(),
@@ -199,15 +205,15 @@ impl WorkbenchPanel {
                         editor.replace_all(source.clone(), window, cx)
                     });
                 }
-                self.selected_blocks.clear();
-                self.block_selection_anchor = None;
+                self.document.selected_blocks.clear();
+                self.document.block_selection_anchor = None;
                 self.rebuild_visual_editors(window, cx);
                 if path.extension().is_some_and(|ext| ext == "shou")
                     && let PanelContent::Document { editor, .. } = &self.content
                 {
-                    self.syntax_check = Some(completion::schedule_syntax_check(
+                    self.document.syntax_check = Some(completion::schedule_syntax_check(
                         editor.clone(),
-                        self.syntax_marks.clone(),
+                        self.document.syntax_marks.clone(),
                         (
                             cx.global::<EditorDocuments>().authoring(root),
                             path.to_owned(),
@@ -263,18 +269,18 @@ impl WorkbenchPanel {
             }
         } else {
             self.rebuild_visual_editors(window, cx);
-            self.block_scroll_pending = true;
+            self.document.block_scroll_pending = true;
             if let PanelContent::Document { root, relative, .. } = &self.content {
                 cx.global_mut::<EditorDocuments>().set_block_selection(
                     root,
                     relative.clone(),
-                    self.selected_blocks.iter().copied().collect(),
+                    self.document.selected_blocks.iter().copied().collect(),
                 );
             }
         }
-        self.minimap_navigation = minimap::Navigation::default();
-        self.document_mode = mode;
-        self.text_scroll_pending = mode == DocumentMode::Text;
+        self.document.minimap_navigation = minimap::Navigation::default();
+        self.document.document_mode = mode;
+        self.document.text_scroll_pending = mode == DocumentMode::Text;
         cx.notify();
         cx.refresh_windows();
     }
@@ -288,7 +294,7 @@ impl WorkbenchPanel {
         use gpui_kit::EntityInputHandler;
         use gpui_kit::base::input::{EditorMode, InputModeKind};
         cx.propagate();
-        if self.document_mode == DocumentMode::Text
+        if self.document.document_mode == DocumentMode::Text
             && self.resource_picker.is_none()
             && let PanelContent::Document {
                 document: Some(_),
@@ -332,7 +338,7 @@ impl WorkbenchPanel {
 
     fn delete_empty_focused_text(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         use gpui_kit::EntityInputHandler;
-        if self.document_mode != DocumentMode::Block || self.resource_picker.is_some() {
+        if self.document.document_mode != DocumentMode::Block || self.resource_picker.is_some() {
             return false;
         }
         let source = match &self.content {
@@ -342,17 +348,21 @@ impl WorkbenchPanel {
             } => document.borrow().contents().to_owned(),
             _ => return false,
         };
-        let draft_focused = self.draft_text.as_ref().is_some_and(|draft| {
+        let draft_focused = self.document.draft_text.as_ref().is_some_and(|draft| {
             draft.state.read(cx).focus_handle(cx).is_focused(window)
                 && draft.state.read(cx).value().is_empty()
         });
         let (state, text_start) = if draft_focused {
-            let draft = self.draft_text.as_ref().expect("focused draft exists");
+            let draft = self
+                .document
+                .draft_text
+                .as_ref()
+                .expect("focused draft exists");
             (
                 draft.state.clone(),
                 draft.text_range.as_ref().map(|range| range.start),
             )
-        } else if let Some(row) = self.block_text_editors.iter().find(|row| {
+        } else if let Some(row) = self.document.block_text_editors.iter().find(|row| {
             row.state.read(cx).focus_handle(cx).is_focused(window)
                 && row.state.read(cx).value().is_empty()
         }) {
@@ -372,7 +382,7 @@ impl WorkbenchPanel {
             };
             self.apply_block_source(edited, "Empty Block deleted", window, cx);
         } else {
-            self.draft_text = None;
+            self.document.draft_text = None;
             self.focus.focus(window, cx);
             cx.notify();
         }
@@ -386,9 +396,9 @@ impl WorkbenchPanel {
         let Some(source) = cx.global::<EditorDocuments>().source(root, relative) else {
             return;
         };
-        let pending = self.block_scroll_pending;
+        let pending = self.document.block_scroll_pending;
         self.select_edited_block(&source, start, cx);
-        self.block_scroll_pending = pending;
+        self.document.block_scroll_pending = pending;
     }
 
     fn select_edited_block(&mut self, source: &str, start: usize, cx: &mut Context<Self>) {
@@ -404,9 +414,9 @@ impl WorkbenchPanel {
         else {
             return;
         };
-        self.selected_blocks = HashSet::from([start]);
-        self.block_selection_anchor = Some(start);
-        self.block_scroll_pending = true;
+        self.document.selected_blocks = HashSet::from([start]);
+        self.document.block_selection_anchor = Some(start);
+        self.document.block_scroll_pending = true;
         cx.global_mut::<EditorDocuments>()
             .set_block_selection(root, relative.clone(), vec![start]);
         // Inline fields and source edits select the Inspector target without
@@ -426,9 +436,9 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.block_context_menu = None;
+        self.close_block_context_menu(window, cx);
         self.rebuild_visual_editors(window, cx);
-        self.block_insertion_target = Some(if before {
+        self.document.block_insertion_target = Some(if before {
             DraftInsertionTarget::Before(row)
         } else {
             DraftInsertionTarget::After(row)
@@ -443,9 +453,9 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.selected_blocks.contains(&row) {
-            self.selected_blocks = HashSet::from([row]);
-            self.block_selection_anchor = Some(row);
+        if !self.document.selected_blocks.contains(&row) {
+            self.document.selected_blocks = HashSet::from([row]);
+            self.document.block_selection_anchor = Some(row);
         }
         if let PanelContent::Document {
             root,
@@ -464,7 +474,7 @@ impl WorkbenchPanel {
                 cx.global_mut::<EditorDocuments>().set_block_selection(
                     root,
                     relative.clone(),
-                    self.selected_blocks.iter().copied().collect(),
+                    self.document.selected_blocks.iter().copied().collect(),
                 );
                 set_authoring_selection(root, relative.clone(), block.line, block.column, cx);
             }
@@ -476,9 +486,52 @@ impl WorkbenchPanel {
             } => document.borrow().contents().to_owned(),
             _ => return,
         };
-        self.block_context_menu = Some((row, position, source));
+        self.document.block_context_epoch = self.document.block_context_epoch.wrapping_add(1);
+        self.document.block_context_menu = Some(BlockContextMenu {
+            row,
+            position,
+            source,
+            epoch: self.document.block_context_epoch,
+            closing: false,
+        });
         self.focus.focus(window, cx);
         cx.notify();
+    }
+
+    pub(super) fn close_block_context_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(menu) = self.document.block_context_menu.as_mut() else {
+            return;
+        };
+        if menu.closing {
+            return;
+        }
+        if cx.reduce_motion() {
+            self.document.block_context_menu = None;
+            cx.notify();
+            return;
+        }
+        self.document.block_context_epoch = self.document.block_context_epoch.wrapping_add(1);
+        menu.epoch = self.document.block_context_epoch;
+        menu.closing = true;
+        let epoch = menu.epoch;
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(90))
+                .await;
+            let _ = this.update_in(cx, |this, _, cx| {
+                if this
+                    .document
+                    .block_context_menu
+                    .as_ref()
+                    .is_some_and(|menu| menu.epoch == epoch && menu.closing)
+                {
+                    this.document.block_context_menu = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     pub(super) fn block_menu_action(
@@ -489,7 +542,15 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.block_context_menu = None;
+        if self
+            .document
+            .block_context_menu
+            .as_ref()
+            .is_some_and(|menu| menu.closing)
+        {
+            return;
+        }
+        self.close_block_context_menu(window, cx);
         let current = match &self.content {
             PanelContent::Document {
                 document: Some(document),
@@ -533,7 +594,8 @@ impl WorkbenchPanel {
             BlockMenuAction::Copy => self.copy_selected_blocks(&CopyBlocks, window, cx),
             BlockMenuAction::Duplicate => {
                 let projection = EiyashouProjection::parse(source);
-                let duplicated = projection.duplicate_blocks(source, &self.selected_blocks);
+                let duplicated =
+                    projection.duplicate_blocks(source, &self.document.selected_blocks);
                 match duplicated {
                     Ok((edited, inserted)) => {
                         self.apply_block_source(edited.clone(), "Blocks duplicated", window, cx);
@@ -548,7 +610,7 @@ impl WorkbenchPanel {
             }
             BlockMenuAction::Paste => self.paste_blocks(&PasteBlocks, window, cx),
             BlockMenuAction::SelectAll => {
-                self.selected_blocks = EiyashouProjection::parse(source)
+                self.document.selected_blocks = EiyashouProjection::parse(source)
                     .scenes
                     .iter()
                     .flat_map(|scene| &scene.blocks)
@@ -559,7 +621,7 @@ impl WorkbenchPanel {
                     cx.global_mut::<EditorDocuments>().set_block_selection(
                         root,
                         relative.clone(),
-                        self.selected_blocks.iter().copied().collect(),
+                        self.document.selected_blocks.iter().copied().collect(),
                     );
                 }
             }
@@ -584,7 +646,7 @@ impl WorkbenchPanel {
         cx.defer(move |cx| {
             let _ = cx.update_window(window_handle, |_, window, cx| {
                 let _ = panel.update(cx, |panel, cx| {
-                    let state = std::mem::take(&mut panel.block_drag);
+                    let state = std::mem::take(&mut panel.document.block_drag);
                     if let BlockDragState::Committing {
                         edited, mut motion, ..
                     } = state
@@ -598,21 +660,21 @@ impl WorkbenchPanel {
                         {
                             motion.revision = Some(document.borrow().revision());
                             motion.started_at = Some(std::time::Instant::now());
-                            panel.block_heights = motion.heights.clone();
-                            panel.block_height_revision = document.borrow().revision();
+                            panel.document.block_heights = motion.heights.clone();
+                            panel.document.block_height_revision = document.borrow().revision();
                         } else {
                             motion = None;
                         }
-                        panel.block_drag =
+                        panel.document.block_drag =
                             motion.map_or(BlockDragState::Idle, BlockDragState::Settling);
-                        panel.selected_blocks.clear();
-                        panel.block_selection_anchor = None;
+                        panel.document.selected_blocks.clear();
+                        panel.document.block_selection_anchor = None;
                         if let PanelContent::Document { root, .. } = &panel.content {
                             cx.global_mut::<EditorDocuments>()
                                 .clear_block_selection(&root.clone());
                         }
                     } else {
-                        panel.block_drag = state;
+                        panel.document.block_drag = state;
                     }
                     panel.rebuild_visual_editors(window, cx);
                     cx.notify();
@@ -634,36 +696,43 @@ impl WorkbenchPanel {
         let document_handle = document;
         let document = document.borrow();
         let snapshot = self
+            .document
             .block_layout
             .borrow_mut()
             .snapshot(document_handle, None);
         let projection = &snapshot.projection;
-        if self.block_height_revision != document.revision() {
-            if !self.block_text_refresh_pending {
-                self.block_heights.clear();
+        if self.document.block_height_revision != document.revision() {
+            if !self.document.block_text_refresh_pending {
+                self.document.block_heights.clear();
             }
-            self.block_height_revision = document.revision();
+            self.document.block_height_revision = document.revision();
         }
-        if self.block_drag.session().is_none()
-            && self.block_drag.motion().is_none()
-            && self.draft_text.is_none()
+        if self.document.block_drag.session().is_none()
+            && self.document.block_drag.motion().is_none()
+            && self.document.draft_text.is_none()
         {
-            let mut cache = self.block_layout.borrow_mut();
-            for editor in &self.block_text_editors {
+            let mut cache = self.document.block_layout.borrow_mut();
+            for editor in &self.document.block_text_editors {
                 if let Some(id) = snapshot.text_lookup.get(&editor.text_start) {
                     let &(scene, block) = snapshot.lookup.get(id).unwrap();
                     let block = &snapshot.projection.scenes[scene].blocks[block];
                     let height = block_row_height(
                         block,
-                        &self.block_text_editors,
+                        &self.document.block_text_editors,
                         None,
-                        &self.block_heights,
+                        &self.document.block_heights,
                         cx,
                     );
-                    self.block_heights.insert(block.source_range.start, height);
+                    self.document
+                        .block_heights
+                        .insert(block.source_range.start, height);
                 }
             }
-            let geometry = cache.geometry(&snapshot, &self.collapsed_scenes, &self.block_heights);
+            let geometry = cache.geometry(
+                &snapshot,
+                &self.document.collapsed_scenes,
+                &self.document.block_heights,
+            );
             let top = (-f32::from(self.view_scroll.offset().y) - 400.).max(0.);
             let bottom = top + f32::from(window.viewport_size().height) + 800.;
             let first = geometry
@@ -674,7 +743,7 @@ impl WorkbenchPanel {
                 .take_while(|(_, y, _)| *y <= bottom)
                 .map(|(id, _, _)| *id)
                 .collect::<HashSet<_>>();
-            visible.extend(&self.selected_blocks);
+            visible.extend(&self.document.selected_blocks);
             if let Some((_, line, column)) = cx
                 .global::<EditorDocuments>()
                 .selection(root)
@@ -683,7 +752,7 @@ impl WorkbenchPanel {
             {
                 visible.insert(block.source_range.start);
             }
-            for editor in &self.block_text_editors {
+            for editor in &self.document.block_text_editors {
                 if (editor.state.read(cx).focus_handle(cx).is_focused(window)
                     || editor.wait.as_ref().is_some_and(|wait| {
                         wait.input.read(cx).focus_handle(cx).is_focused(window)
@@ -693,7 +762,7 @@ impl WorkbenchPanel {
                     visible.insert(*id);
                 }
             }
-            self.block_visible = visible;
+            self.document.block_visible = visible;
             return;
         }
         let top = (-f32::from(self.view_scroll.offset().y) - 400.).max(0.);
@@ -710,7 +779,7 @@ impl WorkbenchPanel {
         }
         for scene in &projection.scenes {
             offset += 36.;
-            if self.collapsed_scenes.contains(&scene.name) {
+            if self.document.collapsed_scenes.contains(&scene.name) {
                 continue;
             }
             for block in scene
@@ -719,6 +788,7 @@ impl WorkbenchPanel {
                 .filter(|block| !block.is_textbox_ending())
             {
                 let height = self
+                    .document
                     .block_drag
                     .session()
                     .and_then(|session| session.row(block.source_range.start))
@@ -726,42 +796,49 @@ impl WorkbenchPanel {
                         || {
                             block_row_height(
                                 block,
-                                &self.block_text_editors,
-                                self.draft_text.as_ref(),
-                                &self.block_heights,
+                                &self.document.block_text_editors,
+                                self.document.draft_text.as_ref(),
+                                &self.document.block_heights,
                                 cx,
                             )
                         },
                         |row| row.height,
                     );
                 if block.text_range.as_ref().is_some_and(|range| {
-                    self.block_text_editors
+                    self.document
+                        .block_text_editors
                         .iter()
                         .any(|editor| editor.text_start == range.start)
                 }) {
-                    self.block_heights.insert(block.source_range.start, height);
+                    self.document
+                        .block_heights
+                        .insert(block.source_range.start, height);
                 }
                 let focused = block.text_range.as_ref().is_some_and(|range| {
-                    self.block_text_editors.iter().any(|editor| {
+                    self.document.block_text_editors.iter().any(|editor| {
                         editor.text_start == range.start
                             && editor.state.read(cx).focus_handle(cx).is_focused(window)
                     })
                 });
                 let moving_into_view = self
+                    .document
                     .block_drag
                     .session()
                     .and_then(|session| {
                         session.position(block.source_range.start, cx.reduce_motion())
                     })
                     .or_else(|| {
-                        self.block_drag.motion().and_then(|motion| {
+                        self.document.block_drag.motion().and_then(|motion| {
                             motion.positions.get(&block.source_range.start).copied()
                         })
                     })
                     .is_some_and(|origin| origin + height >= top && origin <= bottom);
                 if offset + height >= top && offset <= bottom
                     || moving_into_view
-                    || self.selected_blocks.contains(&block.source_range.start)
+                    || self
+                        .document
+                        .selected_blocks
+                        .contains(&block.source_range.start)
                     || focused
                 {
                     visible.insert(block.source_range.start);
@@ -769,20 +846,20 @@ impl WorkbenchPanel {
                 offset += height + 4.;
             }
         }
-        self.block_visible = visible;
+        self.document.block_visible = visible;
     }
 
     pub(super) fn rebuild_visual_editors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.finish_block_text_edit(window, cx);
-        self.block_text_editors.clear();
-        self.visual_subscriptions.clear();
-        self.draft_text = None;
+        self.document.block_text_editors.clear();
+        self.document.visual_subscriptions.clear();
+        self.document.draft_text = None;
         self.update_block_viewport(window, cx);
         self.sync_visual_editors(window, cx);
     }
 
     pub(super) fn sync_visual_editors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.document_mode != DocumentMode::Block {
+        if self.document.document_mode != DocumentMode::Block {
             return;
         }
         let PanelContent::Document {
@@ -803,10 +880,11 @@ impl WorkbenchPanel {
         // SourceDocument may not receive its Change event until later. Build
         // row states from the same revision that the Blocks projection will
         // render after the event, so moved text cannot bind to old offsets.
-        let mut cache = self.block_layout.borrow_mut();
+        let mut cache = self.document.block_layout.borrow_mut();
         let dialogues = cache.dialogues(editor.read(cx).text(), document, relative);
         let snapshot = cache.snapshot(document, None);
         let visible_text = self
+            .document
             .block_visible
             .iter()
             .filter_map(|start| {
@@ -818,7 +896,7 @@ impl WorkbenchPanel {
             })
             .collect::<HashSet<_>>();
         drop(cache);
-        self.block_text_editors.retain(|editor| {
+        self.document.block_text_editors.retain(|editor| {
             visible_text.contains(&editor.text_start)
                 || editor.state.read(cx).focus_handle(cx).is_focused(window)
                 || editor
@@ -836,7 +914,7 @@ impl WorkbenchPanel {
             // A draft becomes source on its first committed input. Keep its
             // focused textarea until submit; creating a second row state here
             // would replace the visible input and lose subsequent keystrokes.
-            if self.draft_text.as_ref().is_some_and(|draft| {
+            if self.document.draft_text.as_ref().is_some_and(|draft| {
                 draft
                     .text_range
                     .as_ref()
@@ -845,6 +923,7 @@ impl WorkbenchPanel {
                 continue;
             }
             if self
+                .document
                 .block_text_editors
                 .iter()
                 .any(|editor| editor.text_start == dialogue.text_range.start)
@@ -863,7 +942,7 @@ impl WorkbenchPanel {
             let relative = relative.clone();
             let state_for_change = state.clone();
             let subscription = cx.subscribe(&state, move |panel, _, event: &InputEvent, cx| {
-                if panel.block_drag.committing() {
+                if panel.document.block_drag.committing() {
                     return;
                 }
                 if matches!(event, InputEvent::Focus | InputEvent::Blur) {
@@ -897,6 +976,7 @@ impl WorkbenchPanel {
                 // events queued by a retired state, and resolve live rows by
                 // their updated source offset rather than their original line.
                 let Some(text_start) = panel
+                    .document
                     .block_text_editors
                     .iter()
                     .find(|editor| editor.state.entity_id() == state_for_change.entity_id())
@@ -924,7 +1004,7 @@ impl WorkbenchPanel {
                     });
                 match result {
                     Ok(edited) => {
-                        panel.block_text_refresh_pending = true;
+                        panel.document.block_text_refresh_pending = true;
                         let delta = edited.len() as isize - source.len() as isize;
                         let changed_end = current
                             .as_ref()
@@ -949,7 +1029,7 @@ impl WorkbenchPanel {
                 }
                 cx.notify();
             });
-            self.block_text_editors.push(BlockTextEditor {
+            self.document.block_text_editors.push(BlockTextEditor {
                 text_start: dialogue.text_range.start,
                 state,
                 wait: None,
@@ -966,6 +1046,7 @@ impl WorkbenchPanel {
         cx: &mut Context<Self>,
     ) {
         let Some(row) = self
+            .document
             .block_text_editors
             .iter_mut()
             .find(|row| row.state == *state)
@@ -989,7 +1070,7 @@ impl WorkbenchPanel {
         let live_input = input.clone();
         let window_handle = window.window_handle();
         let subscription = cx.subscribe(&input, move |panel, _, event: &InputEvent, cx| {
-            let Some(row) = panel.block_text_editors.iter_mut().find(|row| {
+            let Some(row) = panel.document.block_text_editors.iter_mut().find(|row| {
                 row.state == text
                     && row
                         .wait
@@ -1056,17 +1137,21 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.document_mode != DocumentMode::Block {
+        if self.document.document_mode != DocumentMode::Block {
             return;
         }
-        self.block_picker_open = !self.block_picker_open;
-        self.block_picker_index = 0;
-        if self.block_picker_open {
-            self.block_picker_input
-                .update(cx, |state, cx| state.focus(window, cx));
-        } else {
-            self.focus.focus(window, cx);
+        if self.picker.block_picker_open && !self.picker.block_picker_closing {
+            self.close_block_picker(&CloseBlockPicker, window, cx);
+            return;
         }
+        // Reopening invalidates any pending fade-out completion.
+        self.picker.block_picker_epoch = self.picker.block_picker_epoch.wrapping_add(1);
+        self.picker.block_picker_open = true;
+        self.picker.block_picker_closing = false;
+        self.picker.block_picker_index = 0;
+        self.picker
+            .block_picker_input
+            .update(cx, |state, cx| state.focus(window, cx));
         cx.notify();
     }
 
@@ -1078,7 +1163,7 @@ impl WorkbenchPanel {
     ) {
         let count = self.filtered_picker_kinds(cx).len();
         if count > 0 {
-            self.block_picker_index = (self.block_picker_index + 1) % count;
+            self.picker.block_picker_index = (self.picker.block_picker_index + 1) % count;
             cx.notify();
         }
     }
@@ -1091,29 +1176,32 @@ impl WorkbenchPanel {
     ) {
         let count = self.filtered_picker_kinds(cx).len();
         if count > 0 {
-            self.block_picker_index = (self.block_picker_index + count - 1) % count;
+            self.picker.block_picker_index = (self.picker.block_picker_index + count - 1) % count;
         }
         cx.notify();
     }
 
     fn step_picker_category(&mut self, direction: isize, cx: &mut Context<Self>) {
         let preferences = cx.global::<EditorDocuments>().block_picker_preferences();
-        let categories = std::iter::once(None)
-            .chain(std::iter::once(Some("Favorites")))
-            .chain(ordered_picker_categories(preferences).into_iter().map(Some))
-            .collect::<Vec<_>>();
+        let categories = picker_categories(preferences);
         let current = categories
             .iter()
-            .position(|category| *category == self.block_picker_category)
+            .position(|category| *category == self.picker.block_picker_category)
             .unwrap_or(0) as isize;
-        let query = self.block_picker_input.read(cx).value().to_string();
+        let query = self.picker.block_picker_input.read(cx).value().to_string();
         let mut candidate = current + direction;
         while candidate >= 0 && (candidate as usize) < categories.len() {
             let category = categories[candidate as usize];
-            let kinds = picker_kinds(preferences, &query, category, self.block_picker_customize);
+            let kinds = picker_kinds(
+                preferences,
+                &query,
+                category,
+                self.picker.block_picker_customize,
+            );
             if !kinds.is_empty() {
-                self.block_picker_category = category;
-                self.block_picker_index = self.block_picker_index.min(kinds.len() - 1);
+                self.picker.block_picker_category = category;
+                self.picker.block_picker_index =
+                    self.picker.block_picker_index.min(kinds.len() - 1);
                 cx.notify();
                 break;
             }
@@ -1145,11 +1233,14 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.picker.block_picker_open || self.picker.block_picker_closing {
+            return;
+        }
         let kinds = self.filtered_picker_kinds(cx);
-        let Some(kind) = kinds.get(self.block_picker_index).copied() else {
+        let Some(kind) = kinds.get(self.picker.block_picker_index).copied() else {
             return;
         };
-        self.block_picker_open = false;
+        self.close_block_picker(&CloseBlockPicker, window, cx);
         self.insert_from_palette(kind, window, cx);
         self.schedule_visual_editors_rebuild(window, cx);
         self.focus.focus(window, cx);
@@ -1162,14 +1253,41 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.block_picker_open = false;
-        self.block_context_menu = None;
+        self.cancel_picker_drag(window, cx);
+        self.picker.picker_drag = None;
+        self.close_block_context_menu(window, cx);
         self.focus.focus(window, cx);
         cx.notify();
+        if !self.picker.block_picker_open || self.picker.block_picker_closing {
+            return;
+        }
+        if cx.reduce_motion() {
+            self.picker.block_picker_open = false;
+            cx.notify();
+            return;
+        }
+        self.picker.block_picker_closing = true;
+        self.picker.block_picker_epoch = self.picker.block_picker_epoch.wrapping_add(1);
+        let epoch = self.picker.block_picker_epoch;
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor()
+                .timer(BLOCK_PICKER_CLOSE_DURATION)
+                .await;
+            let _ = this.update_in(cx, |this, _, cx| {
+                if this.picker.block_picker_epoch == epoch && this.picker.block_picker_closing {
+                    this.picker.block_picker_open = false;
+                    this.picker.block_picker_closing = false;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     pub(super) fn filtered_picker_kinds(&self, cx: &App) -> Vec<InsertKind> {
         let query = self
+            .picker
             .block_picker_input
             .read(cx)
             .value()
@@ -1178,8 +1296,8 @@ impl WorkbenchPanel {
         picker_kinds(
             cx.global::<EditorDocuments>().block_picker_preferences(),
             &query,
-            self.block_picker_category,
-            self.block_picker_customize,
+            self.picker.block_picker_category,
+            self.picker.block_picker_customize,
         )
     }
 
@@ -1213,7 +1331,24 @@ impl WorkbenchPanel {
     }
 
     pub(super) fn move_picker_item(&self, kind: InsertKind, delta: isize, cx: &mut Context<Self>) {
+        let favorites = self.picker.block_picker_category == Some("Favorites")
+            && self.picker.block_picker_input.read(cx).value().is_empty();
         self.change_picker_preferences(cx, move |preferences| {
+            if favorites {
+                let Some(index) = preferences
+                    .favorites
+                    .iter()
+                    .position(|label| label == kind.label())
+                else {
+                    return;
+                };
+                let target = index
+                    .saturating_add_signed(delta)
+                    .min(preferences.favorites.len() - 1);
+                let label = preferences.favorites.remove(index);
+                preferences.favorites.insert(target, label);
+                return;
+            }
             let universe = InsertKind::ALL
                 .into_iter()
                 .map(InsertKind::label)
@@ -1255,10 +1390,10 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.document_mode != DocumentMode::Block {
+        if self.document.document_mode != DocumentMode::Block {
             return;
         }
-        if let Some(draft) = &self.draft_text {
+        if let Some(draft) = &self.document.draft_text {
             let state = draft.state.clone();
             self.continue_text_block(&state, window, cx);
             return;
@@ -1280,10 +1415,12 @@ impl WorkbenchPanel {
             .filter(|(path, _, _)| path == relative)
             .map_or(0, |(_, line, _)| *line);
         let target = self
+            .document
             .block_insertion_target
             .take()
             .or_else(|| {
-                self.selected_blocks
+                self.document
+                    .selected_blocks
                     .iter()
                     .copied()
                     .max()
@@ -1328,7 +1465,7 @@ impl WorkbenchPanel {
                 .any(|block| block.source_range.start == start),
             DraftInsertionTarget::SceneEnd(start) => scene.source_range.start == start,
         }) {
-            self.collapsed_scenes.remove(&scene.name);
+            self.document.collapsed_scenes.remove(&scene.name);
         }
         let state = cx.new(|cx| {
             TextareaState::new(window, cx)
@@ -1341,7 +1478,7 @@ impl WorkbenchPanel {
         let root = root.clone();
         let window_handle = window.window_handle();
         let subscription = cx.subscribe(&state, move |panel, _, event: &InputEvent, cx| {
-            if panel.block_drag.committing() {
+            if panel.document.block_drag.committing() {
                 return;
             }
             if matches!(event, InputEvent::Blur) {
@@ -1375,6 +1512,7 @@ impl WorkbenchPanel {
             let source = source_editor.read(cx).value().to_string();
             let source_len = source.len();
             let Some(draft) = panel
+                .document
                 .draft_text
                 .as_mut()
                 .filter(|draft| draft.state.entity_id() == state_for_change.entity_id())
@@ -1412,16 +1550,16 @@ impl WorkbenchPanel {
                 .map(|(edited, range)| {
                     draft.text_range = Some(range.start + 1..range.end - 1);
                     draft.last_escaped.clone_from(&escaped);
-                    panel.selected_blocks.clear();
-                    panel.selected_blocks.insert(range.start);
-                    panel.block_selection_anchor = Some(range.start);
+                    panel.document.selected_blocks.clear();
+                    panel.document.selected_blocks.insert(range.start);
+                    panel.document.block_selection_anchor = Some(range.start);
                     edited
                 })
                 .map_err(|error| error.to_string())
             };
             match edit {
                 Ok(edited) => {
-                    panel.block_text_refresh_pending = true;
+                    panel.document.block_text_refresh_pending = true;
                     let delta = edited.len() as isize - source_len as isize;
                     let changed_end =
                         changed_end.unwrap_or_else(|| draft.text_range.as_ref().unwrap().start);
@@ -1443,8 +1581,8 @@ impl WorkbenchPanel {
             }
             cx.notify();
         });
-        self.visual_subscriptions.push(subscription);
-        self.draft_text = Some(DraftTextBlock {
+        self.document.visual_subscriptions.push(subscription);
+        self.document.draft_text = Some(DraftTextBlock {
             target,
             text_range: None,
             last_escaped: String::new(),
@@ -1461,7 +1599,7 @@ impl WorkbenchPanel {
         cx: &mut Context<Self>,
     ) {
         self.finish_block_text_edit(window, cx);
-        if self.document_mode != DocumentMode::Block {
+        if self.document.document_mode != DocumentMode::Block {
             return;
         }
         let PanelContent::Document {
@@ -1479,6 +1617,7 @@ impl WorkbenchPanel {
         let source = editor.read(cx).value().to_string();
         let projection = EiyashouProjection::parse(&source);
         let draft = self
+            .document
             .draft_text
             .as_ref()
             .filter(|draft| draft.state.entity_id() == state.entity_id());
@@ -1511,7 +1650,8 @@ impl WorkbenchPanel {
                 let text_start = draft
                     .and_then(|draft| draft.text_range.as_ref().map(|range| range.start))
                     .or_else(|| {
-                        self.block_text_editors
+                        self.document
+                            .block_text_editors
                             .iter()
                             .find(|editor| editor.state.entity_id() == state.entity_id())
                             .map(|editor| editor.text_start)
@@ -1534,12 +1674,12 @@ impl WorkbenchPanel {
                 start
             }
         };
-        self.selected_blocks.clear();
-        self.selected_blocks.insert(start);
-        self.block_selection_anchor = Some(start);
+        self.document.selected_blocks.clear();
+        self.document.selected_blocks.insert(start);
+        self.document.block_selection_anchor = Some(start);
         cx.global_mut::<EditorDocuments>()
             .set_block_selection(&root, relative, vec![start]);
-        self.draft_text = None;
+        self.document.draft_text = None;
         self.rebuild_visual_editors(window, cx);
         self.begin_text_block(&BeginTextBlock, window, cx);
     }
@@ -1550,7 +1690,7 @@ impl WorkbenchPanel {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.document_mode != DocumentMode::Block {
+        if self.document.document_mode != DocumentMode::Block {
             return;
         }
         let PanelContent::Document {
@@ -1562,7 +1702,9 @@ impl WorkbenchPanel {
             return;
         };
         let source = document.borrow().contents().to_owned();
-        match EiyashouProjection::parse(&source).copy_blocks(&source, &self.selected_blocks) {
+        match EiyashouProjection::parse(&source)
+            .copy_blocks(&source, &self.document.selected_blocks)
+        {
             Ok(value) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(value));
                 cx.global_mut::<EditorDocuments>()
@@ -1581,7 +1723,7 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.document_mode != DocumentMode::Block {
+        if self.document.document_mode != DocumentMode::Block {
             return;
         }
         let Some(fragment) = cx.read_from_clipboard().and_then(|item| item.text()) else {
@@ -1630,9 +1772,10 @@ impl WorkbenchPanel {
             return;
         }
         let Some(before_start) = self
+            .document
             .block_selection_anchor
-            .filter(|start| self.selected_blocks.contains(start))
-            .or_else(|| self.selected_blocks.iter().copied().min())
+            .filter(|start| self.document.selected_blocks.contains(start))
+            .or_else(|| self.document.selected_blocks.iter().copied().min())
         else {
             self.set_block_notice("Paste blocked: select an insertion block".into(), cx);
             return;
@@ -1657,7 +1800,7 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.document_mode != DocumentMode::Block {
+        if self.document.document_mode != DocumentMode::Block {
             return;
         }
         if self.delete_empty_focused_text(window, cx) {
@@ -1670,7 +1813,9 @@ impl WorkbenchPanel {
             } => document.borrow().contents().to_owned(),
             _ => return,
         };
-        match EiyashouProjection::parse(&source).delete_blocks(&source, &self.selected_blocks) {
+        match EiyashouProjection::parse(&source)
+            .delete_blocks(&source, &self.document.selected_blocks)
+        {
             Ok(edited) => self.apply_block_source(edited, "Blocks deleted", window, cx),
             Err(error) => self.set_block_notice(format!("Delete blocked: {error}"), cx),
         }
@@ -1700,7 +1845,7 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.document_mode != DocumentMode::Block {
+        if self.document.document_mode != DocumentMode::Block {
             return;
         }
         let source = match &self.content {
@@ -1712,7 +1857,7 @@ impl WorkbenchPanel {
         };
         match EiyashouProjection::parse(&source).move_blocks(
             &source,
-            &self.selected_blocks,
+            &self.document.selected_blocks,
             direction,
         ) {
             Ok(edited) => self.apply_block_source(edited, "Blocks moved", window, cx),
@@ -1728,7 +1873,7 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.block_drag.session().is_some_and(|session| {
+        if self.document.block_drag.session().is_some_and(|session| {
             session.assets.is_some() && Rc::ptr_eq(&session.token, &drag.token)
         }) {
             self.finish_asset_drag(drag, window, cx);
@@ -1742,7 +1887,7 @@ impl WorkbenchPanel {
         else {
             return;
         };
-        if self.document_mode != DocumentMode::Block || drag.root != *root {
+        if self.document.document_mode != DocumentMode::Block || drag.root != *root {
             return;
         }
         let source = document.borrow().contents().to_owned();
@@ -1779,9 +1924,9 @@ impl WorkbenchPanel {
         let root = root.clone();
         let editor = editor.clone();
         editor.update(cx, |editor, cx| editor.replace_all(edited, window, cx));
-        if !self.block_drag.committing() {
-            self.selected_blocks.clear();
-            self.block_selection_anchor = None;
+        if !self.document.block_drag.committing() {
+            self.document.selected_blocks.clear();
+            self.document.block_selection_anchor = None;
             cx.global_mut::<EditorDocuments>()
                 .clear_block_selection(&root);
         }
@@ -1798,7 +1943,7 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.document_mode != DocumentMode::Block || !self.focus.is_focused(window) {
+        if self.document.document_mode != DocumentMode::Block || !self.focus.is_focused(window) {
             return;
         }
         self.replay_block_source(true, window, cx);
@@ -1810,7 +1955,7 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.document_mode != DocumentMode::Block || !self.focus.is_focused(window) {
+        if self.document.document_mode != DocumentMode::Block || !self.focus.is_focused(window) {
             return;
         }
         self.replay_block_source(false, window, cx);
@@ -1823,8 +1968,8 @@ impl WorkbenchPanel {
         let root = root.clone();
         match replay_source_history(&root, undo, window, cx) {
             Ok(true) => {
-                self.selected_blocks.clear();
-                self.block_selection_anchor = None;
+                self.document.selected_blocks.clear();
+                self.document.block_selection_anchor = None;
                 self.schedule_visual_editors_rebuild(window, cx);
                 cx.global_mut::<EditorDocuments>()
                     .clear_block_selection(&root);
@@ -1845,16 +1990,18 @@ impl WorkbenchPanel {
             SceneEditMode::New => "",
             SceneEditMode::Rename { old_name, .. } => old_name.as_str(),
         };
-        self.scene_name_input
+        self.document
+            .scene_name_input
             .update(cx, |input, cx| input.set_value(initial, window, cx));
-        self.scene_edit = Some(mode);
-        self.scene_name_input
+        self.document.scene_edit = Some(mode);
+        self.document
+            .scene_name_input
             .update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
     }
 
     pub(super) fn commit_scene_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(mode) = self.scene_edit.clone() else {
+        let Some(mode) = self.document.scene_edit.clone() else {
             return;
         };
         let PanelContent::Document {
@@ -1869,13 +2016,19 @@ impl WorkbenchPanel {
         let root = root.clone();
         let relative = relative.clone();
         let source = document.borrow().contents().to_owned();
-        let name = self.scene_name_input.read(cx).value().trim().to_owned();
+        let name = self
+            .document
+            .scene_name_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_owned();
         if !valid_identifier(&name) {
             self.set_block_notice("Scene name must be an identifier".into(), cx);
             return;
         }
         if matches!(&mode, SceneEditMode::Rename { old_name, .. } if old_name == &name) {
-            self.scene_edit = None;
+            self.document.scene_edit = None;
             cx.notify();
             return;
         }
@@ -1948,11 +2101,11 @@ impl WorkbenchPanel {
         match result.and_then(|edits| apply_prepared_edits(&root, &edits, window, cx)) {
             Ok(()) => {
                 if let SceneEditMode::Rename { old_name, .. } = &mode
-                    && self.collapsed_scenes.remove(old_name)
+                    && self.document.collapsed_scenes.remove(old_name)
                 {
-                    self.collapsed_scenes.insert(name.clone());
+                    self.document.collapsed_scenes.insert(name.clone());
                 }
-                self.scene_edit = None;
+                self.document.scene_edit = None;
                 self.schedule_visual_editors_rebuild(window, cx);
                 self.set_block_notice(format!("Scene {name} updated"), cx);
             }
@@ -2041,7 +2194,7 @@ impl WorkbenchPanel {
                 }
                 match delete_scene(&source, start) {
                     Ok(edited) => {
-                        this.collapsed_scenes.remove(&name);
+                        this.document.collapsed_scenes.remove(&name);
                         this.apply_block_source(edited, "Scene deleted", window, cx)
                     }
                     Err(error) => this.set_block_notice(format!("Delete blocked: {error}"), cx),
@@ -2058,26 +2211,26 @@ impl WorkbenchPanel {
         position: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        self.scene_context_epoch = self.scene_context_epoch.wrapping_add(1);
-        self.scene_context_menu = Some(SceneContextMenu {
+        self.document.scene_context_epoch = self.document.scene_context_epoch.wrapping_add(1);
+        self.document.scene_context_menu = Some(SceneContextMenu {
             start,
             name,
             position,
-            epoch: self.scene_context_epoch,
+            epoch: self.document.scene_context_epoch,
             closing: false,
         });
         cx.notify();
     }
 
     pub(super) fn close_scene_context_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(menu) = self.scene_context_menu.as_mut() else {
+        let Some(menu) = self.document.scene_context_menu.as_mut() else {
             return;
         };
         if menu.closing {
             return;
         }
-        self.scene_context_epoch = self.scene_context_epoch.wrapping_add(1);
-        menu.epoch = self.scene_context_epoch;
+        self.document.scene_context_epoch = self.document.scene_context_epoch.wrapping_add(1);
+        menu.epoch = self.document.scene_context_epoch;
         menu.closing = true;
         let epoch = menu.epoch;
         let delay = if cx.reduce_motion() {
@@ -2090,11 +2243,12 @@ impl WorkbenchPanel {
             cx.background_executor().timer(delay).await;
             let _ = this.update_in(cx, |this, _, cx| {
                 if this
+                    .document
                     .scene_context_menu
                     .as_ref()
                     .is_some_and(|menu| menu.epoch == epoch && menu.closing)
                 {
-                    this.scene_context_menu = None;
+                    this.document.scene_context_menu = None;
                     cx.notify();
                 }
             });
@@ -2129,8 +2283,8 @@ impl WorkbenchPanel {
         let line = document.borrow().selection().line;
         let index = cx.global::<EditorDocuments>().authoring(root);
         let projection = EiyashouProjection::parse(&source);
-        let after = self.selected_blocks.iter().copied().max();
-        let edited = if self.document_mode == DocumentMode::Block
+        let after = self.document.selected_blocks.iter().copied().max();
+        let edited = if self.document.document_mode == DocumentMode::Block
             && let Some(after) = after
         {
             let indent = projection
@@ -2185,6 +2339,8 @@ fn inline_wait_value_range(source: &str, ordinal: usize) -> Option<Range<usize>>
     let start = wait.range.start + start + usize::from(body[start..].starts_with('"'));
     Some(start..start + value.len())
 }
+
+pub(super) use picker::PickerState;
 
 #[cfg(test)]
 mod inline_wait_edit_tests {

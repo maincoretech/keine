@@ -1,4 +1,5 @@
-//! Workbench panel state, construction and dock registration.
+//! Workbench panel state and dock lifecycle.
+mod construction;
 
 pub(super) use crate::authoring::fields::SourceContext as SourceInspectorKey;
 use std::cell::RefCell;
@@ -18,8 +19,6 @@ use gpui_kit::component::dock::{
 };
 use gpui_kit::component::input::{EditorState, InputEvent, InputState, TextareaState};
 use gpui_kit::component::notification::Notification;
-use gpui_kit::component::select::SelectState;
-use gpui_kit::component::slider::SliderState;
 use gpui_kit::component::{Icon, Sizable as _, WindowExt as _};
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -38,7 +37,6 @@ use crate::workspace::WorkspaceFile;
 use super::documents::{EditorDocuments, schedule_authoring_refresh};
 use super::edits::block_at_position;
 use super::files::FileHistory;
-use super::inspector::{InlineBlockControl, SourceOption};
 use super::resource::ResourcePicker;
 use super::{
     ASSET_PREVIEW_PANEL, ASSETS_PANEL, BUILD_PANEL, CHARACTERS_PANEL, DOCUMENT_PANEL,
@@ -361,102 +359,16 @@ impl PanelContent {
 pub(super) struct WorkbenchPanel {
     pub(super) content: PanelContent,
     pub(super) focus: FocusHandle,
-    pub(super) document_mode: DocumentMode,
-    pub(super) last_text_cursor: Option<(usize, usize)>,
-    pub(super) text_scroll_pending: bool,
-    pub(super) block_text_editors: Vec<BlockTextEditor>,
-    pub(super) collapsed_scenes: HashSet<String>,
-    pub(super) selected_blocks: HashSet<usize>,
-    pub(super) block_selection_anchor: Option<usize>,
-    pub(super) draft_text: Option<DraftTextBlock>,
-    pub(super) block_drag: super::blocks::BlockDragState,
-    pub(super) block_row_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
-    pub(super) block_row_positions: RefCell<HashMap<usize, f32>>,
-    pub(super) block_picker_open: bool,
-    pub(super) block_picker_index: usize,
-    pub(super) block_picker_category: Option<&'static str>,
-    pub(super) block_picker_customize: bool,
-    pub(super) block_picker_input: Entity<InputState>,
-    pub(super) block_insertion_target: Option<DraftInsertionTarget>,
-    pub(super) block_context_menu: Option<(usize, Point<Pixels>, String)>,
     pub(super) view_scroll: ScrollHandle,
-    pub(super) block_scroll_anchor: ScrollAnchor,
-    pub(super) block_scroll_pending: bool,
-    pub(super) minimap_navigation: minimap::Navigation,
-    pub(super) text_minimap: text_minimap::TextMinimap,
     pub(super) project_search: Option<search::ProjectSearch>,
-    pub(super) tool_inputs: Vec<Entity<InputState>>,
-    pub(super) character_id: Option<String>,
-    pub(super) character_expression: Option<String>,
-    pub(super) character_script: Option<(PathBuf, usize)>,
-    pub(super) character_images: Option<Entity<SelectState<Vec<SourceOption>>>>,
-    pub(super) character_image_options: Vec<SourceOption>,
-    pub(super) recovery_epoch: u64,
-    pub(super) syntax_check: Option<gpui_kit::Task<()>>,
-    pub(super) diagnostic_index: std::sync::Weak<crate::authoring::AuthoringIndex>,
-    pub(super) syntax_marks: Option<gpui_kit::base::input::TextDecorationCollection>,
     pub(super) _subscriptions: Vec<Subscription>,
-    pub(super) visual_subscriptions: Vec<Subscription>,
-    pub(super) inspector_key: Option<InspectorEditKey>,
-    pub(super) inspector_inputs: Vec<Entity<InputState>>,
-    pub(super) text_lifetime_inputs: Vec<Entity<InputState>>,
-    pub(super) inspector_selects: Vec<Entity<SelectState<Vec<SourceOption>>>>,
-    pub(super) inspector_subscriptions: Vec<Subscription>,
-    pub(super) inline_block_controls: HashMap<usize, InlineBlockControl>,
-    pub(super) block_visible: HashSet<usize>,
-    pub(super) block_heights: HashMap<usize, f32>,
-    pub(super) block_layout: RefCell<super::blocks::layout::Cache>,
-    pub(super) block_height_revision: u64,
-    pub(super) block_text_refresh_pending: bool,
     pub(super) resource_picker: Option<ResourcePicker>,
-    pub(super) source_inspector_key: Option<SourceInspectorKey>,
-    pub(super) source_inspector_inputs: Vec<Entity<InputState>>,
-    pub(super) source_inspector_texts: Vec<Entity<TextareaState>>,
-    pub(super) source_inspector_sliders: HashMap<String, Entity<SliderState>>,
-    pub(super) source_inspector_selects: HashMap<String, Entity<SelectState<Vec<SourceOption>>>>,
-    pub(super) source_inspector_subscriptions: Vec<Subscription>,
-    pub(super) source_inspector_effect: Option<&'static str>,
-    pub(super) source_position_bounds: Rc<RefCell<Bounds<Pixels>>>,
-    pub(super) source_position_draft: Option<(usize, f32, f32)>,
-    pub(super) asset_inspector_key: Option<(AssetKey, PathBuf, Vec<String>)>,
-    pub(super) asset_inspector_inputs: Vec<Entity<InputState>>,
-    pub(super) asset_rename_file: bool,
-    pub(super) asset_batch_tags: Entity<InputState>,
-    pub(super) batch_block_field: Option<String>,
-    pub(super) batch_block_input: Entity<InputState>,
-    pub(super) asset_inspector_subscriptions: Vec<Subscription>,
-    pub(super) file_selection: Option<PathBuf>,
-    pub(super) file_drop_target: Option<(PathBuf, Bounds<Pixels>)>,
-    pub(super) file_clipboard: Option<PathBuf>,
-    pub(super) file_history: FileHistory,
-    pub(super) file_edit: Option<FileEditMode>,
-    pub(super) file_name_input: Entity<InputState>,
-    pub(super) file_commit_requested: bool,
-    pub(super) file_progress: Option<FileProgress>,
-    pub(super) file_context_menu: Option<FileContextMenu>,
-    pub(super) file_context_epoch: u64,
-    pub(super) scene_edit: Option<SceneEditMode>,
-    pub(super) scene_name_input: Entity<InputState>,
-    pub(super) scene_commit_requested: bool,
-    pub(super) scene_context_menu: Option<SceneContextMenu>,
-    pub(super) scene_context_epoch: u64,
-    pub(super) asset_search: Entity<InputState>,
-    pub(super) asset_kind: Option<AssetKind>,
-    pub(super) asset_folder: Option<PathBuf>,
-    pub(super) asset_sort: AssetSort,
-    pub(super) asset_tag: Option<String>,
-    pub(super) asset_status: crate::authoring::AssetStatus,
-    pub(super) asset_size: crate::authoring::AssetSize,
-    pub(super) asset_modified: Option<Duration>,
-    pub(super) asset_grid: Option<bool>,
-    pub(super) asset_large: bool,
-    pub(super) asset_statistics_expanded: bool,
-    pub(super) asset_browser: RefCell<super::resource::browse::Cache>,
-    pub(super) asset_thumbnails: Entity<super::resource::thumbnail::Thumbnails>,
-    pub(super) asset_unmapped: bool,
-    pub(super) asset_anchor: Option<AssetKey>,
-    pub(super) asset_filter_menu: Option<AssetFilterMenu>,
-    pub(super) asset_filter_epoch: u64,
+    pub(super) picker: super::blocks::PickerState,
+    pub(super) inspector: super::inspector::InspectorState,
+    pub(super) assets: super::resource::AssetsState,
+    pub(super) explorer: super::files::ExplorerState,
+    pub(super) characters: super::characters::CharactersState,
+    pub(super) document: super::document::DocumentState,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -547,9 +459,19 @@ pub(super) enum AssetFilterChoice {
 #[derive(Clone, Debug)]
 pub(super) struct AssetFilterMenu {
     pub(super) position: Point<Pixels>,
+    pub(super) reveal_epoch: u64,
     pub(super) epoch: u64,
     pub(super) closing: bool,
     pub(super) expanded: Option<AssetFilterGroup>,
+}
+
+#[derive(Clone)]
+pub(super) struct BlockContextMenu {
+    pub(super) row: usize,
+    pub(super) position: Point<Pixels>,
+    pub(super) source: String,
+    pub(super) epoch: usize,
+    pub(super) closing: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -756,618 +678,6 @@ pub(super) enum BlockMenuAction {
     Delete,
 }
 
-impl WorkbenchPanel {
-    pub(super) fn from_payload(
-        payload: PanelPayload,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> io::Result<Entity<Self>> {
-        let saved_view = match &payload {
-            PanelPayload::Document { view, .. } => Some(*view),
-            _ => None,
-        };
-        let content = PanelContent::from_payload(payload, window, cx)?;
-        let registration = match &content {
-            PanelContent::Document { root, relative, .. } => Some((root.clone(), relative.clone())),
-            _ => None,
-        };
-        let tool_registration = match &content {
-            PanelContent::Explorer { root, .. } => Some((root.clone(), EXPLORER_PANEL)),
-            PanelContent::Inspector { root, .. } => Some((root.clone(), INSPECTOR_PANEL)),
-            PanelContent::Search { root } => Some((root.clone(), SEARCH_PANEL)),
-            PanelContent::Assets { root } => Some((root.clone(), ASSETS_PANEL)),
-            PanelContent::AssetPreview { root } => Some((root.clone(), ASSET_PREVIEW_PANEL)),
-            PanelContent::Characters { root } => Some((root.clone(), CHARACTERS_PANEL)),
-            PanelContent::Scenes { root } => Some((root.clone(), SCENES_PANEL)),
-            PanelContent::Problems { root } => Some((root.clone(), PROBLEMS_PANEL)),
-            PanelContent::Performance { root, .. } => Some((root.clone(), PERFORMANCE_PANEL)),
-            PanelContent::Build { root } => Some((root.clone(), BUILD_PANEL)),
-            PanelContent::Output { root, .. } => Some((root.clone(), OUTPUT_PANEL)),
-            _ => None,
-        };
-        let panel = cx.new(|cx| {
-            let block_picker_input =
-                cx.new(|cx| InputState::new(window, cx).placeholder("Search blocks"));
-            let file_name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Name"));
-            let scene_name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Scene"));
-            let asset_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
-            let view_scroll = ScrollHandle::new();
-            let block_scroll_anchor = ScrollAnchor::for_handle(view_scroll.clone());
-            let syntax_marks = match &content {
-                PanelContent::Document {
-                    relative,
-                    document: Some(_),
-                    editor,
-                    ..
-                } if relative
-                    .extension()
-                    .is_some_and(|extension| extension == "shou") =>
-                {
-                    Some(editor.update(cx, |editor, cx| {
-                        editor.create_decorations_collection(Vec::new(), cx)
-                    }))
-                }
-                _ => None,
-            };
-            let mut panel = Self {
-                content,
-                focus: cx.focus_handle(),
-                document_mode: saved_view.map_or(DocumentMode::Text, |view| view.mode),
-                last_text_cursor: None,
-                text_scroll_pending: saved_view.is_some_and(|view| view.mode == DocumentMode::Text),
-                block_text_editors: Vec::new(),
-                collapsed_scenes: HashSet::new(),
-                selected_blocks: HashSet::new(),
-                block_selection_anchor: None,
-                draft_text: None,
-                block_drag: Default::default(),
-                block_row_bounds: Rc::new(RefCell::new(HashMap::new())),
-                block_row_positions: RefCell::new(HashMap::new()),
-                block_picker_open: false,
-                block_picker_index: 0,
-                block_picker_category: None,
-                block_picker_customize: false,
-                block_picker_input: block_picker_input.clone(),
-                block_insertion_target: None,
-                block_context_menu: None,
-                view_scroll,
-                block_scroll_anchor,
-                block_scroll_pending: false,
-                minimap_navigation: minimap::Navigation::default(),
-                text_minimap: text_minimap::TextMinimap::default(),
-                project_search: None,
-                tool_inputs: Vec::new(),
-                character_id: None,
-                character_expression: None,
-                character_script: None,
-                character_images: None,
-                character_image_options: Vec::new(),
-                recovery_epoch: 0,
-                syntax_check: None,
-                diagnostic_index: Default::default(),
-                syntax_marks,
-                _subscriptions: Vec::new(),
-                visual_subscriptions: Vec::new(),
-                inspector_key: None,
-                inspector_inputs: Vec::new(),
-                text_lifetime_inputs: Vec::new(),
-                inspector_selects: Vec::new(),
-                inspector_subscriptions: Vec::new(),
-                inline_block_controls: HashMap::new(),
-                block_visible: HashSet::new(),
-                block_heights: HashMap::new(),
-                block_layout: RefCell::new(super::blocks::layout::Cache::default()),
-                block_height_revision: 0,
-                block_text_refresh_pending: false,
-                resource_picker: None,
-                source_inspector_key: None,
-                source_inspector_inputs: Vec::new(),
-                source_inspector_texts: Vec::new(),
-                source_inspector_sliders: HashMap::new(),
-                source_inspector_selects: HashMap::new(),
-                source_inspector_subscriptions: Vec::new(),
-                source_inspector_effect: None,
-                source_position_bounds: Rc::new(RefCell::new(Bounds::default())),
-                source_position_draft: None,
-                asset_inspector_key: None,
-                asset_inspector_inputs: Vec::new(),
-                asset_rename_file: true,
-                batch_block_field: None,
-                batch_block_input: cx.new(|cx| InputState::new(window, cx).placeholder("Value")),
-                asset_batch_tags: cx
-                    .new(|cx| InputState::new(window, cx).placeholder("Tags, separated by commas")),
-                asset_inspector_subscriptions: Vec::new(),
-                file_selection: None,
-                file_drop_target: None,
-                file_clipboard: None,
-                file_history: FileHistory::default(),
-                file_edit: None,
-                file_name_input: file_name_input.clone(),
-                file_commit_requested: false,
-                file_progress: None,
-                file_context_menu: None,
-                file_context_epoch: 0,
-                scene_edit: None,
-                scene_name_input: scene_name_input.clone(),
-                scene_commit_requested: false,
-                scene_context_menu: None,
-                scene_context_epoch: 0,
-                asset_search: asset_search.clone(),
-                asset_kind: None,
-                asset_folder: None,
-                asset_sort: AssetSort::Name,
-                asset_tag: None,
-                asset_status: crate::authoring::AssetStatus::All,
-                asset_size: crate::authoring::AssetSize::All,
-                asset_modified: None,
-                asset_grid: None,
-                asset_large: false,
-                asset_statistics_expanded: false,
-                asset_browser: RefCell::new(super::resource::browse::Cache::default()),
-                asset_thumbnails: super::resource::thumbnail::Thumbnails::new(cx),
-                asset_unmapped: false,
-                asset_anchor: None,
-                asset_filter_menu: None,
-                asset_filter_epoch: 0,
-            };
-            if matches!(panel.content, PanelContent::Search { .. }) {
-                panel.install_search(window, cx);
-            }
-            if let PanelContent::Performance { controller, .. } = &panel.content {
-                let controller = controller.clone();
-                cx.spawn_in(window, async move |this, cx| {
-                    let mut revision = controller.performance().revision;
-                    loop {
-                        cx.background_executor()
-                            .timer(crate::preview::performance::SAMPLE_INTERVAL)
-                            .await;
-                        let latest = controller.performance().revision;
-                        if this
-                            .update_in(cx, |_, _, cx| {
-                                if latest != revision {
-                                    cx.notify();
-                                }
-                            })
-                            .is_err()
-                        {
-                            break;
-                        }
-                        revision = latest;
-                    }
-                })
-                .detach();
-            }
-            panel._subscriptions.push(cx.subscribe(
-                &asset_search,
-                |panel: &mut WorkbenchPanel, _, event: &InputEvent, cx| {
-                    if matches!(event, InputEvent::Change) {
-                        panel
-                            .view_scroll
-                            .set_offset(gpui_kit::point(px(0.), px(0.)));
-                        cx.notify();
-                    }
-                },
-            ));
-            panel._subscriptions.push(cx.subscribe(
-                &block_picker_input,
-                |panel: &mut WorkbenchPanel, _, event: &InputEvent, cx| {
-                    if matches!(event, InputEvent::Change) {
-                        panel.block_picker_index = 0;
-                        cx.notify();
-                    }
-                },
-            ));
-            panel._subscriptions.push(cx.subscribe(
-                &file_name_input,
-                move |panel: &mut WorkbenchPanel, _, event: &InputEvent, cx| {
-                    if matches!(event, InputEvent::PressEnter { .. }) {
-                        panel.file_commit_requested = true;
-                        cx.notify();
-                    }
-                },
-            ));
-            panel._subscriptions.push(cx.subscribe(
-                &scene_name_input,
-                |panel: &mut WorkbenchPanel, _, event: &InputEvent, cx| {
-                    if matches!(event, InputEvent::PressEnter { .. }) {
-                        panel.scene_commit_requested = true;
-                        cx.notify();
-                    }
-                },
-            ));
-            if let PanelContent::Document { editor, .. } = &panel.content {
-                panel._subscriptions.push(cx.subscribe(
-                    editor,
-                    |panel, _, event: &InputEvent, cx| {
-                        if matches!(event, InputEvent::Change) {
-                            panel.text_minimap.invalidate();
-                            cx.notify();
-                        }
-                    },
-                ));
-            }
-            if let PanelContent::Document {
-                root,
-                relative,
-                document,
-                editor,
-            } = &panel.content
-            {
-                let root = root.clone();
-                let relative = relative.clone();
-                let editor_for_selection = editor.clone();
-                let root_for_selection = root.clone();
-                let relative_for_selection = relative.clone();
-                let selection_window = window.window_handle();
-                panel
-                    ._subscriptions
-                    .push(cx.observe(editor, move |panel, _, cx| {
-                        // Blocks mode owns the source selection; the hidden
-                        // text editor's stale caret must not seek Preview.
-                        if panel.document_mode == DocumentMode::Block {
-                            return;
-                        }
-                        use gpui_kit::EntityInputHandler;
-                        let composing = cx
-                            .update_window(selection_window, |_, window, cx| {
-                                editor_for_selection.update(cx, |editor, cx| {
-                                    editor.marked_text_range(window, cx).is_some()
-                                })
-                            })
-                            .unwrap_or(false);
-                        if composing {
-                            return;
-                        }
-                        let position = editor_for_selection.read(cx).cursor_position();
-                        let cursor = (position.line as usize, position.character as usize);
-                        if panel.last_text_cursor == Some(cursor) {
-                            return;
-                        }
-                        panel.last_text_cursor = Some(cursor);
-                        cx.global_mut::<EditorDocuments>().set_selection(
-                            &root_for_selection,
-                            relative_for_selection.clone(),
-                            cursor.0,
-                            cursor.1,
-                        );
-                        cx.global_mut::<EditorDocuments>()
-                            .clear_block_selection(&root_for_selection);
-                        let disabled = cx
-                            .global::<EditorDocuments>()
-                            .source(&root_for_selection, &relative_for_selection)
-                            .and_then(|source| {
-                                let projection = cx.global::<EditorDocuments>().projection(
-                                    &root_for_selection,
-                                    &relative_for_selection,
-                                    &source,
-                                );
-                                block_at_position(&projection, &source, cursor.0, cursor.1)
-                            })
-                            .is_some_and(|(_, block)| block.disabled);
-                        if !disabled
-                            && let Ok(preview) = cx
-                                .global_mut::<EditorDocuments>()
-                                .preview(&root_for_selection)
-                        {
-                            preview.set_cursor(
-                                relative_for_selection.clone(),
-                                cursor.0 + 1,
-                                cursor.1 + 1,
-                            );
-                        }
-                        cx.refresh_windows();
-                    }));
-                if let Some(document) = document {
-                    if relative
-                        .extension()
-                        .is_some_and(|extension| extension == "shou")
-                    {
-                        panel.syntax_check = Some(completion::schedule_syntax_check(
-                            editor.clone(),
-                            panel.syntax_marks.clone(),
-                            (
-                                cx.global::<EditorDocuments>().authoring(&root),
-                                relative.clone(),
-                            ),
-                            window,
-                            cx,
-                        ));
-                    }
-                    let document_for_change = document.clone();
-                    let syntax_window = window.window_handle();
-                    let change_subscription = cx.subscribe(
-                        editor,
-                        move |panel: &mut WorkbenchPanel, editor, event: &InputEvent, cx| {
-                            if !matches!(event, InputEvent::Change) {
-                                return;
-                            }
-                            let editor_entity = editor.clone();
-                            let editor = editor.read(cx);
-                            let contents = editor.value().to_string();
-                            let position = editor.cursor_position();
-                            let result =
-                                document_for_change.borrow_mut().replace_contents(contents);
-                            let changed = match result {
-                                Ok(changed) => changed,
-                                Err(error) => {
-                                    let previous =
-                                        document_for_change.borrow().contents().to_owned();
-                                    let message = error.to_string();
-                                    cx.defer(move |cx| {
-                                        let _ = cx.update_window(syntax_window, |_, window, cx| {
-                                            editor_entity.update(cx, |editor, cx| {
-                                                editor.replace_all(previous, window, cx)
-                                            });
-                                            window.push_notification(
-                                                Notification::warning(message),
-                                                cx,
-                                            );
-                                        });
-                                    });
-                                    return;
-                                }
-                            };
-                            if !panel.block_text_refresh_pending {
-                                document_for_change.borrow_mut().set_selection(
-                                    position.line as usize,
-                                    position.character as usize,
-                                );
-                                cx.global_mut::<EditorDocuments>().set_selection(
-                                    &root,
-                                    relative.clone(),
-                                    position.line as usize,
-                                    position.character as usize,
-                                );
-                            }
-                            if changed {
-                                if !panel.block_text_refresh_pending
-                                    && relative
-                                        .extension()
-                                        .is_some_and(|extension| extension == "shou")
-                                {
-                                    let window_handle = syntax_window;
-                                    let panel_entity = cx.weak_entity();
-                                    let project = (
-                                        cx.global::<EditorDocuments>().authoring(&root),
-                                        relative.clone(),
-                                    );
-                                    cx.defer(move |cx| {
-                                        let _ = cx.update_window(window_handle, |_, window, cx| {
-                                            let _ = panel_entity.update(cx, |panel, cx| {
-                                                panel.syntax_check =
-                                                    Some(completion::schedule_syntax_check(
-                                                        editor_entity,
-                                                        panel.syntax_marks.clone(),
-                                                        project,
-                                                        window,
-                                                        cx,
-                                                    ));
-                                            });
-                                        });
-                                    });
-                                }
-                                if !panel.block_text_refresh_pending {
-                                    schedule_authoring_refresh(&root, Some(&relative), cx);
-                                }
-                                panel.recovery_epoch = panel.recovery_epoch.wrapping_add(1);
-                                let epoch = panel.recovery_epoch;
-                                let document = document_for_change.clone();
-                                let root = root.clone();
-                                if !document.borrow().is_dirty() {
-                                    let cleanup = document.borrow().recovery_write();
-                                    cx.background_executor()
-                                        .spawn(async move {
-                                            if let Ok(write) = cleanup {
-                                                let _ = write.execute();
-                                            }
-                                        })
-                                        .detach();
-                                }
-                                let any_dirty =
-                                    cx.global::<EditorDocuments>().has_dirty_documents(&root);
-                                let notice = if !any_dirty {
-                                    "Ready"
-                                } else {
-                                    "Unsaved changes"
-                                }
-                                .to_owned();
-                                cx.global_mut::<EditorDocuments>().set_notice(&root, notice);
-                                if !panel.block_text_refresh_pending
-                                    && relative
-                                        .extension()
-                                        .and_then(|extension| extension.to_str())
-                                        == Some("shou")
-                                {
-                                    let preview_root = root.clone();
-                                    let preview_relative = relative.clone();
-                                    let preview_document = document.clone();
-                                    cx.spawn(async move |panel, cx| {
-                                        cx.background_executor()
-                                            .timer(PREVIEW_SOURCE_DEBOUNCE)
-                                            .await;
-                                        let _ = panel.update(cx, |panel, cx| {
-                                            if panel.recovery_epoch == epoch
-                                                && let Ok(preview) = cx
-                                                    .global_mut::<EditorDocuments>()
-                                                    .preview(&preview_root)
-                                            {
-                                                preview.apply_snapshot(
-                                                    preview_relative,
-                                                    preview_document
-                                                        .borrow()
-                                                        .contents()
-                                                        .as_bytes()
-                                                        .to_vec(),
-                                                );
-                                            }
-                                        });
-                                    })
-                                    .detach();
-                                }
-                                cx.spawn(async move |panel, cx| {
-                                    cx.background_executor()
-                                        .timer(Duration::from_millis(350))
-                                        .await;
-                                    let _ = panel.update(cx, |panel, cx| {
-                                        if panel.recovery_epoch == epoch {
-                                            let clean = !document.borrow().is_dirty();
-                                            let recovery = document.borrow().recovery_write();
-                                            let revision = document.borrow().revision();
-                                            let write_root = root.clone();
-                                            let background = cx.background_executor().clone();
-                                            cx.spawn(async move |panel, cx| {
-                                                let recovery = match recovery {
-                                                    Ok(write) => {
-                                                        background
-                                                            .spawn(async move { write.execute() })
-                                                            .await
-                                                    }
-                                                    Err(error) => Err(error),
-                                                };
-                                                let _ = panel.update(cx, |panel, cx| {
-                                                    if panel.recovery_epoch != epoch
-                                                        || document.borrow().revision() != revision
-                                                    {
-                                                        return;
-                                                    }
-                                                    let any_dirty = cx
-                                                        .global::<EditorDocuments>()
-                                                        .has_dirty_documents(&write_root);
-                                                    let notice = match recovery {
-                                                        Ok(()) if !any_dirty => "Ready".to_owned(),
-                                                        Ok(()) if clean => {
-                                                            "Unsaved changes".to_owned()
-                                                        }
-                                                        Ok(()) => "Recovery draft saved".to_owned(),
-                                                        Err(error) => format!(
-                                                            "Recovery draft failed: {error}"
-                                                        ),
-                                                    };
-                                                    cx.global_mut::<EditorDocuments>()
-                                                        .set_notice(&write_root, notice);
-                                                    if !panel.block_text_refresh_pending {
-                                                        cx.refresh_windows();
-                                                    }
-                                                });
-                                            })
-                                            .detach();
-                                        }
-                                    });
-                                })
-                                .detach();
-                            }
-                            cx.notify();
-                            if !panel.block_text_refresh_pending {
-                                cx.refresh_windows();
-                            }
-                        },
-                    );
-                    panel._subscriptions.push(change_subscription);
-                }
-            }
-            if let PanelContent::Characters { .. } = &panel.content {
-                for placeholder in [
-                    "Character id",
-                    "Display name",
-                    "Color (optional)",
-                    "Expression name",
-                    "Frame asset IDs, comma separated",
-                    "Avatar asset ID (optional)",
-                ] {
-                    panel
-                        .tool_inputs
-                        .push(cx.new(|cx| InputState::new(window, cx).placeholder(placeholder)));
-                }
-            }
-            if let Some(view) = saved_view
-                && let PanelContent::Document {
-                    root,
-                    relative,
-                    editor,
-                    ..
-                } = &panel.content
-            {
-                let position = editor.update(cx, |editor, cx| {
-                    let position = gpui_kit::base::input::Position::new(
-                        view.line.min(u32::MAX as usize) as u32,
-                        view.column.min(u32::MAX as usize) as u32,
-                    );
-                    editor.set_cursor_position(position, window, cx);
-                    editor.cursor_position()
-                });
-                cx.global_mut::<EditorDocuments>().set_selection(
-                    root,
-                    relative.clone(),
-                    position.line as usize,
-                    position.character as usize,
-                );
-                if view.mode == DocumentMode::Block {
-                    let source = editor.read(cx).value().to_string();
-                    let projection = EiyashouProjection::parse(&source);
-                    if let Some((_, block)) = block_at_position(
-                        &projection,
-                        &source,
-                        position.line as usize,
-                        position.character as usize,
-                    ) {
-                        panel.selected_blocks.insert(block.source_range.start);
-                        panel.block_selection_anchor = Some(block.source_range.start);
-                        panel.block_scroll_pending = true;
-                        cx.global_mut::<EditorDocuments>().set_block_selection(
-                            root,
-                            relative.clone(),
-                            vec![block.source_range.start],
-                        );
-                    }
-                }
-            }
-            panel.rebuild_visual_editors(window, cx);
-            panel
-        });
-        if let Some((root, relative)) = registration {
-            let editor = match &panel.read(cx).content {
-                PanelContent::Document { editor, .. } => Some(editor.downgrade()),
-                _ => None,
-            };
-            let documents = cx.global_mut::<EditorDocuments>();
-            documents.register_panel(
-                &root,
-                relative.clone(),
-                PanelId::from(panel.entity_id()),
-                panel.downgrade(),
-            );
-            if let Some(editor) = editor {
-                documents.register_editor(&root, relative.clone(), editor);
-            }
-            let reopened = match &panel.read(cx).content {
-                PanelContent::Document {
-                    document: Some(document),
-                    ..
-                } => Some(document.borrow().contents().as_bytes().to_vec()),
-                _ => None,
-            };
-            if let Some(source) = reopened {
-                if relative.extension().is_some_and(|ext| ext == "shou")
-                    && let Ok(preview) = cx.global_mut::<EditorDocuments>().preview(&root)
-                {
-                    preview.apply_snapshot(relative.clone(), source);
-                }
-                // Opening a clean file may adopt a newer disk revision without
-                // an InputEvent::Change. Update every derived consumer as well.
-                schedule_authoring_refresh(&root, Some(&relative), cx);
-            }
-        }
-        if let Some((root, name)) = tool_registration {
-            cx.global_mut::<EditorDocuments>().set_tool_panel(
-                &root,
-                name,
-                Some(PanelId::from(panel.entity_id())),
-            );
-        }
-        Ok(panel)
-    }
-}
-
 impl BasePanel for WorkbenchPanel {
     fn panel_name(&self) -> &'static str {
         self.content.panel_name()
@@ -1379,8 +689,9 @@ impl BasePanel for WorkbenchPanel {
             && let PanelContent::Document { editor, .. } = &self.content
         {
             let editor = editor.read(cx);
-            let position = if self.document_mode == DocumentMode::Block {
-                self.block_selection_anchor
+            let position = if self.document.document_mode == DocumentMode::Block {
+                self.document
+                    .block_selection_anchor
                     .map(|offset| {
                         editor
                             .text()
@@ -1391,7 +702,7 @@ impl BasePanel for WorkbenchPanel {
                 editor.cursor_position()
             };
             *view = DocumentView {
-                mode: self.document_mode,
+                mode: self.document.document_mode,
                 line: position.line as usize,
                 column: position.character as usize,
             };
@@ -1568,6 +879,123 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn asset_filter_reset_preserves_view_and_selection_and_enter_commits_once(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::VisualTestContext;
+        let temporary =
+            std::env::temp_dir().join(format!("keine-panel-events-{}", std::process::id()));
+        let root = temporary.join("project");
+        std::fs::create_dir_all(root.join("scripts")).unwrap();
+        for name in [
+            "config.yaml",
+            "assets.yaml",
+            "characters.yaml",
+            "scripts/main.shou",
+        ] {
+            let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/fixtures/native-smoke")
+                .join(name);
+            std::fs::copy(source, root.join(name)).unwrap();
+        }
+        let window = cx.update(|cx| {
+            gpui_kit::init(cx);
+            let session = crate::workspace::WorkspaceSession::open(&root).unwrap();
+            let mut documents = EditorDocuments::new(crate::persistence::AppPersistence::new(
+                temporary.join("app-data"),
+            ));
+            documents
+                .ensure_workspace_with_files(session.root(), session.files())
+                .unwrap();
+            cx.set_global(documents);
+            cx.open_window(gpui_kit::WindowOptions::default(), |window, cx| {
+                WorkbenchPanel::from_payload(
+                    PanelPayload::Explorer {
+                        root: session.root().to_owned(),
+                        expanded: vec![],
+                    },
+                    window,
+                    cx,
+                )
+                .unwrap()
+            })
+            .unwrap()
+        });
+        let panel = window.root(cx).unwrap();
+        let cx = &mut VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+        let root = root.canonicalize().unwrap();
+        let selection = vec![AssetKey {
+            kind: AssetKind::Background,
+            id: "keep_selection".into(),
+        }];
+        cx.update(|window, cx| {
+            cx.global_mut::<EditorDocuments>()
+                .set_asset_selection(&root, selection.clone());
+            panel.update(cx, |panel, cx| {
+                panel.assets.asset_sort = AssetSort::Size;
+                panel.assets.asset_grid = Some(true);
+                panel.assets.asset_large = true;
+                panel.assets.asset_kind = Some(AssetKind::Background);
+                panel.assets.asset_folder = Some("assets/backgrounds".into());
+                panel.assets.asset_tag = Some("outdoors".into());
+                panel.assets.asset_status = crate::authoring::AssetStatus::Unused;
+                panel.assets.asset_size = crate::authoring::AssetSize::Large;
+                panel.assets.asset_modified = Some(Duration::from_secs(86400));
+                panel.assets.asset_unmapped = true;
+                panel
+                    .assets
+                    .asset_search
+                    .update(cx, |input, cx| input.set_value("missing", window, cx));
+                assert!(panel.assets.has_filters(cx));
+                panel.clear_asset_filters(window, cx);
+                assert!(!panel.assets.has_filters(cx));
+                assert_eq!(panel.assets.asset_sort, AssetSort::Size);
+                assert_eq!(panel.assets.asset_grid, Some(true));
+                assert!(panel.assets.asset_large);
+                assert_eq!(
+                    cx.global::<EditorDocuments>().asset_selection(&root),
+                    selection
+                );
+                panel.begin_file_edit(
+                    FileEditMode::NewFile {
+                        parent: "scripts".into(),
+                    },
+                    "enter.shou",
+                    window,
+                    cx,
+                );
+            });
+        });
+        cx.run_until_parked();
+        // Rendering and field changes do not create the file. Submission owns the transaction.
+        assert!(!root.join("scripts/enter.shou").exists());
+        cx.update(|_, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.explorer.file_name_input.update(cx, |_, cx| {
+                    cx.emit(InputEvent::PressEnter {
+                        secondary: false,
+                        shift: false,
+                    })
+                });
+            });
+        });
+        cx.run_until_parked();
+        assert!(root.join("scripts/enter.shou").is_file());
+        panel.read_with(cx, |panel, _| assert!(panel.explorer.file_edit.is_none()));
+        let original = std::fs::read(root.join("scripts/main.shou")).unwrap();
+        assert_eq!(
+            original,
+            std::fs::read(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../tests/fixtures/native-smoke/scripts/main.shou")
+            )
+            .unwrap()
+        );
+        std::fs::remove_dir_all(temporary).unwrap();
+    }
+
+    #[gpui_kit::test]
     fn composition_and_text_continuation_keep_source_focus_and_position(
         cx: &mut gpui_kit::TestAppContext,
     ) {
@@ -1680,6 +1108,7 @@ mod tests {
                 panel.sync_visual_editors(window, cx);
                 let start = document.borrow().contents().find("你middle").unwrap();
                 let row = panel
+                    .document
                     .block_text_editors
                     .iter()
                     .find(|row| row.text_start == start)
@@ -1690,6 +1119,7 @@ mod tests {
         cx.run_until_parked();
         let row = panel.read_with(cx, |panel, cx| {
             panel
+                .document
                 .block_text_editors
                 .iter()
                 .find(|row| row.state.read(cx).value() == "你middle")
@@ -1724,9 +1154,10 @@ mod tests {
                 assert_eq!(documents.selection(&root).cloned(), selection);
                 assert_eq!(documents.workspaces[&root].index_epoch, index_epoch);
                 let panel = panel.read(cx);
-                assert!(panel.block_text_refresh_pending);
+                assert!(panel.document.block_text_refresh_pending);
                 assert!(
                     panel
+                        .document
                         .block_text_editors
                         .iter()
                         .any(|editor| editor.state == row)
@@ -1737,13 +1168,13 @@ mod tests {
         cx.run_until_parked();
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
-        assert!(!panel.read_with(cx, |panel, _| panel.block_text_refresh_pending));
+        assert!(!panel.read_with(cx, |panel, _| panel.document.block_text_refresh_pending));
         assert!(
             cx.read(|cx| cx.global::<EditorDocuments>().workspaces[&root].index_epoch)
                 > index_epoch
         );
         let draft = panel.read_with(cx, |panel, _| {
-            panel.draft_text.as_ref().unwrap().state.clone()
+            panel.document.draft_text.as_ref().unwrap().state.clone()
         });
         cx.simulate_input("inserted");
         cx.run_until_parked();
@@ -1774,9 +1205,9 @@ mod tests {
                 panel.downgrade(),
             );
             documents.register_editor(&root, path.clone(), editor.downgrade());
-            assert!(panel.read(cx).block_text_refresh_pending);
+            assert!(panel.read(cx).document.block_text_refresh_pending);
             super::super::edits::format_and_save(&root, window, cx).unwrap();
-            assert!(!panel.read(cx).block_text_refresh_pending);
+            assert!(!panel.read(cx).document.block_text_refresh_pending);
             assert!(draft.read(cx).focus_handle(cx).is_focused(window));
             assert!(!document.borrow().is_dirty());
         });
@@ -1784,7 +1215,7 @@ mod tests {
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         panel.read_with(cx, |panel, _| {
-            assert_ne!(panel.draft_text.as_ref().unwrap().state, draft);
+            assert_ne!(panel.document.draft_text.as_ref().unwrap().state, draft);
             assert_eq!(document.borrow().contents().matches("inserted").count(), 1);
         });
         // Saving on close can reformat the file before the layout is dumped.
@@ -1804,9 +1235,9 @@ mod tests {
             documents.register_editor(&root, path.clone(), editor.downgrade());
             panel.update(cx, |panel, _| {
                 let start = unformatted.find("\"inserted").unwrap();
-                panel.selected_blocks = HashSet::from([start]);
-                panel.block_selection_anchor = Some(start);
-                panel.draft_text = None;
+                panel.document.selected_blocks = HashSet::from([start]);
+                panel.document.block_selection_anchor = Some(start);
+                panel.document.draft_text = None;
             });
         });
         cx.run_until_parked();
@@ -1824,7 +1255,7 @@ mod tests {
                 0
             );
             assert_eq!(
-                panel.read(cx).block_selection_anchor,
+                panel.read(cx).document.block_selection_anchor,
                 document.borrow().contents().find("\"inserted")
             );
             assert_eq!(
@@ -1842,12 +1273,12 @@ mod tests {
         cx.update(|window, cx| {
             let restored = WorkbenchPanel::from_payload(payload, window, cx).unwrap();
             let restored = restored.read(cx);
-            assert_eq!(restored.document_mode, DocumentMode::Block);
+            assert_eq!(restored.document.document_mode, DocumentMode::Block);
             assert_eq!(
-                restored.block_selection_anchor,
-                panel.read(cx).block_selection_anchor
+                restored.document.block_selection_anchor,
+                panel.read(cx).document.block_selection_anchor
             );
-            assert!(restored.block_scroll_pending);
+            assert!(restored.document.block_scroll_pending);
         });
         std::fs::remove_dir_all(temporary).unwrap();
     }

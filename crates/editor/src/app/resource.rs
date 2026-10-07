@@ -24,6 +24,7 @@ impl WorkbenchPanel {
         cx: &mut Context<Self>,
     ) {
         let tags = self
+            .inspector
             .asset_batch_tags
             .read(cx)
             .value()
@@ -67,7 +68,8 @@ impl WorkbenchPanel {
         })();
         match result {
             Ok(()) => {
-                self.asset_batch_tags
+                self.inspector
+                    .asset_batch_tags
                     .update(cx, |input, cx| input.set_value("", window, cx));
             }
             Err(error) => window.push_notification(Notification::error(error), cx),
@@ -332,12 +334,13 @@ pub(super) fn render_asset_filter_menu(
     folders: &[PathBuf],
     index: &AuthoringIndex,
     panel: &WorkbenchPanel,
+    window: &mut Window,
     cx: &mut Context<WorkbenchPanel>,
 ) -> AnyElement {
     let type_choices = std::iter::once((
         "All".to_owned(),
         AssetFilterChoice::Type(None),
-        panel.asset_kind.is_none(),
+        panel.assets.asset_kind.is_none(),
     ))
     .chain(
         [
@@ -354,7 +357,7 @@ pub(super) fn render_asset_filter_menu(
             (
                 kind.label().to_owned(),
                 AssetFilterChoice::Type(Some(kind)),
-                panel.asset_kind == Some(kind),
+                panel.assets.asset_kind == Some(kind),
             )
         }),
     )
@@ -362,13 +365,13 @@ pub(super) fn render_asset_filter_menu(
     let folder_choices = std::iter::once((
         "All".to_owned(),
         AssetFilterChoice::Folder(None),
-        panel.asset_folder.is_none(),
+        panel.assets.asset_folder.is_none(),
     ))
     .chain(folders.iter().map(|folder| {
         (
             folder.display().to_string(),
             AssetFilterChoice::Folder(Some(folder.clone())),
-            panel.asset_folder.as_ref() == Some(folder),
+            panel.assets.asset_folder.as_ref() == Some(folder),
         )
     }))
     .collect::<Vec<_>>();
@@ -381,26 +384,30 @@ pub(super) fn render_asset_filter_menu(
     let mut tag_choices = vec![(
         "All".into(),
         AssetFilterChoice::Tags(None),
-        panel.asset_tag.is_none(),
+        panel.assets.asset_tag.is_none(),
     )];
     tag_choices.extend(tags.into_iter().map(|tag| {
         (
             tag.clone(),
             AssetFilterChoice::Tags(Some(tag.clone())),
-            panel.asset_tag.as_ref() == Some(&tag),
+            panel.assets.asset_tag.as_ref() == Some(&tag),
         )
     }));
     let groups = [
         (
             AssetFilterGroup::Tags,
             "Tags",
-            panel.asset_tag.clone().unwrap_or_else(|| "All".into()),
+            panel
+                .assets
+                .asset_tag
+                .clone()
+                .unwrap_or_else(|| "All".into()),
             tag_choices,
         ),
         (
             AssetFilterGroup::Status,
             "Status",
-            format!("{:?}", panel.asset_status),
+            toolbar::status_label(panel.assets.asset_status).into(),
             [
                 AssetStatus::All,
                 AssetStatus::Used,
@@ -412,13 +419,9 @@ pub(super) fn render_asset_filter_menu(
             .into_iter()
             .map(|value| {
                 (
-                    match value {
-                        AssetStatus::Canonical => "Canonical format".into(),
-                        AssetStatus::NeedsConversion => "Needs conversion".into(),
-                        _ => format!("{value:?}"),
-                    },
+                    toolbar::status_label(value).into(),
                     AssetFilterChoice::Status(value),
-                    panel.asset_status == value,
+                    panel.assets.asset_status == value,
                 )
             })
             .collect(),
@@ -426,7 +429,7 @@ pub(super) fn render_asset_filter_menu(
         (
             AssetFilterGroup::FileSize,
             "File size",
-            format!("{:?}", panel.asset_size),
+            format!("{:?}", panel.assets.asset_size),
             [
                 (AssetSize::All, "All"),
                 (AssetSize::Small, "< 1 MB"),
@@ -438,7 +441,7 @@ pub(super) fn render_asset_filter_menu(
                 (
                     label.into(),
                     AssetFilterChoice::FileSize(value),
-                    panel.asset_size == value,
+                    panel.assets.asset_size == value,
                 )
             })
             .collect(),
@@ -446,7 +449,7 @@ pub(super) fn render_asset_filter_menu(
         (
             AssetFilterGroup::Modified,
             "Modified",
-            panel.asset_modified.map_or("Any".into(), |age| {
+            panel.assets.asset_modified.map_or("Any".into(), |age| {
                 format!("{} days", age.as_secs() / 86400)
             }),
             [
@@ -460,7 +463,7 @@ pub(super) fn render_asset_filter_menu(
                 (
                     label.into(),
                     AssetFilterChoice::Modified(value),
-                    panel.asset_modified == value,
+                    panel.assets.asset_modified == value,
                 )
             })
             .collect(),
@@ -469,6 +472,7 @@ pub(super) fn render_asset_filter_menu(
             AssetFilterGroup::Type,
             "Type",
             panel
+                .assets
                 .asset_kind
                 .map_or("All".to_owned(), |kind| kind.label().to_owned()),
             type_choices,
@@ -477,6 +481,7 @@ pub(super) fn render_asset_filter_menu(
             AssetFilterGroup::Folder,
             "Folder",
             panel
+                .assets
                 .asset_folder
                 .as_ref()
                 .map_or("All".to_owned(), |folder| folder.display().to_string()),
@@ -485,7 +490,7 @@ pub(super) fn render_asset_filter_menu(
         (
             AssetFilterGroup::Sort,
             "Sort",
-            match panel.asset_sort {
+            match panel.assets.asset_sort {
                 AssetSort::Name => "Name",
                 AssetSort::Path => "Path",
                 AssetSort::References => "References",
@@ -497,34 +502,34 @@ pub(super) fn render_asset_filter_menu(
                 (
                     "Name".to_owned(),
                     AssetFilterChoice::Sort(AssetSort::Name),
-                    panel.asset_sort == AssetSort::Name,
+                    panel.assets.asset_sort == AssetSort::Name,
                 ),
                 (
                     "Path".to_owned(),
                     AssetFilterChoice::Sort(AssetSort::Path),
-                    panel.asset_sort == AssetSort::Path,
+                    panel.assets.asset_sort == AssetSort::Path,
                 ),
                 (
                     "References".to_owned(),
                     AssetFilterChoice::Sort(AssetSort::References),
-                    panel.asset_sort == AssetSort::References,
+                    panel.assets.asset_sort == AssetSort::References,
                 ),
                 (
                     "Modified".into(),
                     AssetFilterChoice::Sort(AssetSort::Modified),
-                    panel.asset_sort == AssetSort::Modified,
+                    panel.assets.asset_sort == AssetSort::Modified,
                 ),
                 (
                     "Size".into(),
                     AssetFilterChoice::Sort(AssetSort::Size),
-                    panel.asset_sort == AssetSort::Size,
+                    panel.assets.asset_sort == AssetSort::Size,
                 ),
             ],
         ),
         (
             AssetFilterGroup::View,
             "View",
-            match panel.asset_grid {
+            match panel.assets.asset_grid {
                 None => "Auto",
                 Some(true) => "Grid",
                 Some(false) => "List",
@@ -534,24 +539,24 @@ pub(super) fn render_asset_filter_menu(
                 (
                     "Auto".to_owned(),
                     AssetFilterChoice::View(None),
-                    panel.asset_grid.is_none(),
+                    panel.assets.asset_grid.is_none(),
                 ),
                 (
                     "List".to_owned(),
                     AssetFilterChoice::View(Some(false)),
-                    panel.asset_grid == Some(false),
+                    panel.assets.asset_grid == Some(false),
                 ),
                 (
                     "Grid".to_owned(),
                     AssetFilterChoice::View(Some(true)),
-                    panel.asset_grid == Some(true),
+                    panel.assets.asset_grid == Some(true),
                 ),
             ],
         ),
         (
             AssetFilterGroup::Size,
             "Thumbnails",
-            if panel.asset_large {
+            if panel.assets.asset_large {
                 "Large"
             } else {
                 "Compact"
@@ -561,19 +566,19 @@ pub(super) fn render_asset_filter_menu(
                 (
                     "Compact".to_owned(),
                     AssetFilterChoice::Size(false),
-                    !panel.asset_large,
+                    !panel.assets.asset_large,
                 ),
                 (
                     "Large".to_owned(),
                     AssetFilterChoice::Size(true),
-                    panel.asset_large,
+                    panel.assets.asset_large,
                 ),
             ],
         ),
         (
             AssetFilterGroup::Show,
             "Show",
-            if panel.asset_unmapped {
+            if panel.assets.asset_unmapped {
                 "Unmapped"
             } else {
                 "Mapped"
@@ -583,21 +588,36 @@ pub(super) fn render_asset_filter_menu(
                 (
                     "Mapped".to_owned(),
                     AssetFilterChoice::Show(false),
-                    !panel.asset_unmapped,
+                    !panel.assets.asset_unmapped,
                 ),
                 (
                     "Unmapped".to_owned(),
                     AssetFilterChoice::Show(true),
-                    panel.asset_unmapped,
+                    panel.assets.asset_unmapped,
                 ),
             ],
         ),
     ];
-    let expanded_count = groups
+    let reveals = groups
         .iter()
-        .find(|(group, _, _, _)| menu.expanded == Some(*group))
-        .map_or(0, |(_, _, _, choices)| choices.len());
-    let height = (8 + groups.len() * 32 + expanded_count * 27).min(344) as f32;
+        .enumerate()
+        .map(|(index, (group, _, _, _))| {
+            disclosure_progress(
+                format!("asset-filter-group-{}-{index}", menu.reveal_epoch),
+                menu.expanded == Some(*group),
+                window,
+                cx,
+            )
+        })
+        .collect::<Vec<_>>();
+    let height = (8.
+        + groups.len() as f32 * 32.
+        + groups
+            .iter()
+            .zip(&reveals)
+            .map(|((_, _, _, choices), progress)| choices.len() as f32 * 27. * progress)
+            .sum::<f32>())
+    .min(344.);
     let closing = menu.closing;
     let motion_duration = if closing { 90 } else { 120 };
     let surface = div()
@@ -616,7 +636,7 @@ pub(super) fn render_asset_filter_menu(
                 .overflow_y_scrollbar()
                 .children(groups.into_iter().enumerate().map(
                     |(group_index, (group, title, value, choices))| {
-                        let expanded = menu.expanded == Some(group);
+                        let reveal = reveals[group_index];
                         div()
                             .flex()
                             .flex_col()
@@ -634,7 +654,7 @@ pub(super) fn render_asset_filter_menu(
                                     .cursor_pointer()
                                     .hover(|style| style.bg(rgb(SURFACE_HOVER)))
                                     .on_click(cx.listener(move |this, _, _, cx| {
-                                        if let Some(menu) = this.asset_filter_menu.as_mut() {
+                                        if let Some(menu) = this.assets.asset_filter_menu.as_mut() {
                                             menu.expanded = if menu.expanded == Some(group) {
                                                 None
                                             } else {
@@ -653,21 +673,15 @@ pub(super) fn render_asset_filter_menu(
                                             .text_color(rgb(MUTED))
                                             .child(value),
                                     )
-                                    .child(
-                                        Icon::new(AssetIconName::ChevronDown)
-                                            .xsmall()
-                                            .rotate(radians(if expanded {
-                                                std::f32::consts::PI
-                                            } else {
-                                                0.
-                                            }))
-                                            .text_color(rgb(MUTED)),
-                                    ),
+                                    .child(disclosure_chevron(reveal)),
                             )
-                            .when(expanded, |this| {
-                                this.children(choices.into_iter().enumerate().map(
-                                    |(option_index, (label, choice, selected))| {
-                                        div()
+                            .child(disclosure_content(
+                                format!("asset-filter-choices-{}-{group_index}", menu.reveal_epoch),
+                                reveal,
+                                div().flex().flex_col().children(
+                                    choices.into_iter().enumerate().map(
+                                        |(option_index, (label, choice, selected))| {
+                                            div()
                                             .id(SharedString::from(format!(
                                                 "asset-filter-option-{group_index}-{option_index}"
                                             )))
@@ -685,39 +699,40 @@ pub(super) fn render_asset_filter_menu(
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 match &choice {
                                                     AssetFilterChoice::Tags(tag) => {
-                                                        this.asset_tag = tag.clone()
+                                                        this.assets.asset_tag = tag.clone()
                                                     }
                                                     AssetFilterChoice::Status(status) => {
-                                                        this.asset_status = *status
+                                                        this.assets.asset_status = *status
                                                     }
                                                     AssetFilterChoice::FileSize(size) => {
-                                                        this.asset_size = *size
+                                                        this.assets.asset_size = *size
                                                     }
                                                     AssetFilterChoice::Modified(age) => {
-                                                        this.asset_modified = *age
+                                                        this.assets.asset_modified = *age
                                                     }
                                                     AssetFilterChoice::Type(kind) => {
-                                                        this.asset_kind = *kind
+                                                        this.assets.asset_kind = *kind
                                                     }
                                                     AssetFilterChoice::Folder(folder) => {
-                                                        this.asset_folder = folder.clone()
+                                                        this.assets.asset_folder = folder.clone()
                                                     }
                                                     AssetFilterChoice::Sort(sort) => {
-                                                        this.asset_sort = *sort
+                                                        this.assets.asset_sort = *sort
                                                     }
                                                     AssetFilterChoice::View(grid) => {
-                                                        this.asset_grid = *grid
+                                                        this.assets.asset_grid = *grid
                                                     }
                                                     AssetFilterChoice::Size(large) => {
-                                                        this.asset_large = *large
+                                                        this.assets.asset_large = *large
                                                     }
                                                     AssetFilterChoice::Show(unmapped) => {
-                                                        this.asset_unmapped = *unmapped
+                                                        this.assets.asset_unmapped = *unmapped
                                                     }
                                                 }
                                                 this.view_scroll
                                                     .set_offset(gpui_kit::point(px(0.), px(0.)));
-                                                if let Some(menu) = this.asset_filter_menu.as_mut()
+                                                if let Some(menu) =
+                                                    this.assets.asset_filter_menu.as_mut()
                                                 {
                                                     menu.expanded = None;
                                                 }
@@ -739,16 +754,22 @@ pub(super) fn render_asset_filter_menu(
                                                         .text_color(rgb(PRIMARY)),
                                                 )
                                             })
-                                    },
-                                ))
-                            })
+                                        },
+                                    ),
+                                ),
+                            ))
                             .into_any_element()
                     },
                 )),
         )
         .with_animation(
             ("asset-filter-motion", menu.epoch),
-            Animation::new(Duration::from_millis(motion_duration)).with_easing(ease_out_quint()),
+            Animation::new(if cx.reduce_motion() {
+                Duration::ZERO
+            } else {
+                Duration::from_millis(motion_duration)
+            })
+            .with_easing(ease_out_quint()),
             move |surface, delta| {
                 let progress = if closing { 1. - delta } else { delta };
                 let scale = 0.94 + progress * 0.06;
@@ -786,6 +807,7 @@ impl WorkbenchPanel {
         cx: &mut Context<Self>,
     ) {
         if self
+            .assets
             .asset_filter_menu
             .as_ref()
             .is_some_and(|menu| !menu.closing)
@@ -793,13 +815,14 @@ impl WorkbenchPanel {
             self.close_asset_filter_menu(window, cx);
             return;
         }
-        self.asset_filter_epoch = self.asset_filter_epoch.wrapping_add(1);
-        self.asset_filter_menu = Some(AssetFilterMenu {
+        self.assets.asset_filter_epoch = self.assets.asset_filter_epoch.wrapping_add(1);
+        self.assets.asset_filter_menu = Some(AssetFilterMenu {
+            reveal_epoch: self.assets.asset_filter_epoch,
             position: Point {
                 x: position.x - px(ASSET_FILTER_MENU_WIDTH_PX / 2.),
                 y: position.y + px(14.),
             },
-            epoch: self.asset_filter_epoch,
+            epoch: self.assets.asset_filter_epoch,
             closing: false,
             expanded: None,
         });
@@ -807,14 +830,14 @@ impl WorkbenchPanel {
     }
 
     pub(super) fn close_asset_filter_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(menu) = self.asset_filter_menu.as_mut() else {
+        let Some(menu) = self.assets.asset_filter_menu.as_mut() else {
             return;
         };
         if menu.closing {
             return;
         }
-        self.asset_filter_epoch = self.asset_filter_epoch.wrapping_add(1);
-        menu.epoch = self.asset_filter_epoch;
+        self.assets.asset_filter_epoch = self.assets.asset_filter_epoch.wrapping_add(1);
+        menu.epoch = self.assets.asset_filter_epoch;
         menu.closing = true;
         let epoch = menu.epoch;
         let delay = if cx.reduce_motion() {
@@ -827,11 +850,12 @@ impl WorkbenchPanel {
             cx.background_executor().timer(delay).await;
             let _ = this.update_in(cx, |this, _, cx| {
                 if this
+                    .assets
                     .asset_filter_menu
                     .as_ref()
                     .is_some_and(|menu| menu.epoch == epoch && menu.closing)
                 {
-                    this.asset_filter_menu = None;
+                    this.assets.asset_filter_menu = None;
                     cx.notify();
                 }
             });
@@ -839,3 +863,8 @@ impl WorkbenchPanel {
         .detach();
     }
 }
+
+mod state;
+pub(in crate::app) use state::AssetsState;
+
+mod toolbar;

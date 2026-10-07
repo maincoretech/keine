@@ -12,11 +12,12 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let bounds = *self.source_position_bounds.borrow();
+        let bounds = *self.inspector.source_position_bounds.borrow();
         if bounds.size.width <= px(0.) || bounds.size.height <= px(0.) {
             return;
         }
         let Some(mut key) = self
+            .inspector
             .source_inspector_key
             .clone()
             .filter(|key| key.block_start == start)
@@ -59,7 +60,7 @@ impl WorkbenchPanel {
         let y = ((percent(((point.y - bounds.origin.y) / bounds.size.height) * 100.) / 100. - 0.5)
             * keine_core::DESIGN_HEIGHT)
             .round();
-        self.source_position_draft = Some((start, x, y));
+        self.inspector.source_position_draft = Some((start, x, y));
         self.commit_source_fields(
             root,
             &key,
@@ -138,6 +139,7 @@ impl SourceInspectorView<'_> {
                                             };
                                             if !panel
                                                 .read(cx)
+                                                .inspector
                                                 .source_position_draft
                                                 .is_some_and(|(active, _, _)| active == start)
                                             {
@@ -152,7 +154,7 @@ impl SourceInspectorView<'_> {
                                                     window,
                                                     cx,
                                                 );
-                                                panel.source_position_draft = None;
+                                                panel.inspector.source_position_draft = None;
                                                 cx.notify();
                                             });
                                         },
@@ -170,6 +172,7 @@ impl SourceInspectorView<'_> {
                                             };
                                             if !panel
                                                 .read(cx)
+                                                .inspector
                                                 .source_position_draft
                                                 .is_some_and(|(active, _, _)| active == start)
                                             {
@@ -186,7 +189,7 @@ impl SourceInspectorView<'_> {
                                                         cx,
                                                     );
                                                 } else {
-                                                    panel.source_position_draft = None;
+                                                    panel.inspector.source_position_draft = None;
                                                     cx.notify();
                                                 }
                                             });
@@ -249,14 +252,14 @@ impl SourceInspectorView<'_> {
                         .on_mouse_up(
                             MouseButton::Left,
                             cx.listener(|this, _, _, cx| {
-                                this.source_position_draft = None;
+                                this.inspector.source_position_draft = None;
                                 cx.notify();
                             }),
                         )
                         .on_mouse_up_out(
                             MouseButton::Left,
                             cx.listener(|this, _, _, cx| {
-                                this.source_position_draft = None;
+                                this.inspector.source_position_draft = None;
                                 cx.notify();
                             }),
                         ),

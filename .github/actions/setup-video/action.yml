@@ -34,13 +34,13 @@ runs:
             libswscale-dev libswresample-dev
           )
         fi
-        sudo apt-get update
-        sudo apt-get install -y "${packages[@]}"
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y "${packages[@]}"
 
     - name: Cache Windows FFmpeg packages
       if: runner.os == 'Windows' && inputs.enabled == 'true'
       id: windows-ffmpeg-cache
-      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/vcpkg-binary-cache
         key: vcpkg-ffmpeg-${{ inputs.windows-triplet }}-${{ hashFiles('.github/actions/setup-video/vcpkg.json', '.github/actions/setup-video/triplets/*.cmake') }}-${{ github.sha }}
@@ -71,7 +71,7 @@ runs:
     # superseding push does not force FFmpeg to rebuild from source again.
     - name: Save Windows FFmpeg packages
       if: runner.os == 'Windows' && inputs.enabled == 'true' && steps.windows-ffmpeg-cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/vcpkg-binary-cache
         key: ${{ steps.windows-ffmpeg-cache.outputs.cache-primary-key }}

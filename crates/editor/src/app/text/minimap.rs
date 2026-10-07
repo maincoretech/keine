@@ -165,18 +165,18 @@ impl WorkbenchPanel {
         let PanelContent::Document { editor, .. } = &self.content else {
             return;
         };
-        let Some(rows) = &self.text_minimap.cache else {
+        let Some(rows) = &self.document.text_minimap.cache else {
             return;
         };
-        let bounds = *self.minimap_navigation.bounds.borrow();
+        let bounds = *self.document.minimap_navigation.bounds.borrow();
         let height = (f32::from(bounds.size.height) - INSET * 2.).max(0.);
         if height <= 0. {
             return;
         }
         let y = f32::from(position.y - bounds.origin.y) - INSET;
-        let mut pan = self.minimap_navigation.pan.borrow_mut();
+        let mut pan = self.document.minimap_navigation.pan.borrow_mut();
         let mapped = geometry(editor.read(cx), rows.strokes.len(), height, &mut pan);
-        let scroll = pan.drag(mapped, y, &mut self.minimap_navigation.grab);
+        let scroll = pan.drag(mapped, y, &mut self.document.minimap_navigation.grab);
         let offset = editor.read(cx).scroll_offset();
         editor.update(cx, |editor, cx| {
             editor.set_scroll_offset(gpui_kit::point(offset.x, px(-scroll)), cx)
@@ -253,7 +253,7 @@ pub(super) fn render(
         state.task = Some(cx.spawn(async move |panel, cx| {
             if let Some(rows) = worker.await {
                 let _ = panel.update(cx, |panel, cx| {
-                    if panel.text_minimap.publish(epoch, rows) {
+                    if panel.document.text_minimap.publish(epoch, rows) {
                         cx.notify();
                     }
                 });
@@ -279,7 +279,7 @@ pub(super) fn render(
             MouseButton::Left,
             cx.listener(|panel, event: &MouseDownEvent, _, cx| {
                 cx.stop_propagation();
-                panel.minimap_navigation.grab = None;
+                panel.document.minimap_navigation.grab = None;
                 panel.scroll_minimap(event.position, cx);
             }),
         )
@@ -289,13 +289,20 @@ pub(super) fn render(
                 let PanelContent::Document { editor, .. } = &panel.content else {
                     return;
                 };
-                let Some(cache) = &panel.text_minimap.cache else {
+                let Some(cache) = &panel.document.text_minimap.cache else {
                     return;
                 };
-                let height = (f32::from(panel.minimap_navigation.bounds.borrow().size.height)
-                    - INSET * 2.)
+                let height = (f32::from(
+                    panel
+                        .document
+                        .minimap_navigation
+                        .bounds
+                        .borrow()
+                        .size
+                        .height,
+                ) - INSET * 2.)
                     .max(0.);
-                let mut pan = panel.minimap_navigation.pan.borrow_mut();
+                let mut pan = panel.document.minimap_navigation.pan.borrow_mut();
                 geometry(editor.read(cx), cache.strokes.len(), height, &mut pan);
                 pan.offset -= f32::from(event.delta.pixel_delta(px(20.)).y);
                 geometry(editor.read(cx), cache.strokes.len(), height, &mut pan);
@@ -374,14 +381,14 @@ pub(super) fn render(
                         let Some(panel) = moving.upgrade() else {
                             return;
                         };
-                        if panel.read(cx).minimap_navigation.grab.is_none() {
+                        if panel.read(cx).document.minimap_navigation.grab.is_none() {
                             return;
                         }
                         panel.update(cx, |panel, cx| {
                             if event.pressed_button == Some(MouseButton::Left) {
                                 panel.scroll_minimap(event.position, cx);
                             } else {
-                                panel.minimap_navigation.grab = None;
+                                panel.document.minimap_navigation.grab = None;
                             }
                         });
                     });
@@ -392,7 +399,7 @@ pub(super) fn render(
                         }
                         if let Some(panel) = release.upgrade() {
                             panel.update(cx, |panel, cx| {
-                                panel.minimap_navigation.grab = None;
+                                panel.document.minimap_navigation.grab = None;
                                 cx.notify();
                             });
                         }

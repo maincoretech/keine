@@ -5419,6 +5419,7 @@ dependencies = [
  "futures-lite",
  "hakutaku-core",
  "hakutaku-pack",
+ "jni 0.22.4",
  "keine-authoring",
  "keine-core",
  "keine-editor",

@@ -571,10 +571,10 @@ impl WorkbenchPanel {
             }
             ResourceTarget::Voice(ref key) | ResourceTarget::Speaker(ref key) => {
                 let position = usize::from(matches!(target, ResourceTarget::Voice(_)));
-                if self.inspector_key.as_ref() != Some(key) {
+                if self.inspector.inspector_key.as_ref() != Some(key) {
                     return;
                 }
-                if let Some(input) = self.inspector_inputs.get(position) {
+                if let Some(input) = self.inspector.inspector_inputs.get(position) {
                     input.update(cx, |input, cx| {
                         input.set_value(option.value.clone(), window, cx)
                     });

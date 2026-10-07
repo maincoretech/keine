@@ -961,7 +961,7 @@ impl WorkbenchPanel {
             cx.propagate();
             return;
         };
-        if self.document_mode != DocumentMode::Text
+        if self.document.document_mode != DocumentMode::Text
             || relative
                 .extension()
                 .is_none_or(|extension| extension != "shou")

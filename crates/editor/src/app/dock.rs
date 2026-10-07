@@ -276,7 +276,7 @@ impl EditorTabGroupSkin {
         ) {
             return None;
         }
-        let mode = state.document_mode;
+        let mode = state.document.document_mode;
         let shou = matches!(&state.content, PanelContent::Document { relative, .. } if relative.extension().is_some_and(|extension| extension == "shou"));
         let reload_panel = panel.clone();
         let reload = file_action_icon(

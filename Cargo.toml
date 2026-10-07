@@ -253,6 +253,7 @@ rfd = { workspace = true }
 # Keep the desktop CLI, Editor and video backends out of the Android build.
 [target.'cfg(target_os = "android")'.dependencies]
 bevy = { workspace = true, features = ["android-native-activity"] }
+jni = "=0.22.4"
 
 [[test]]
 name = "authoring-process"

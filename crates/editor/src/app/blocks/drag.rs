@@ -1,5 +1,6 @@
 //! One owner for a Block drag: snapshot → preview → source write → settling.
 use super::*;
+use crate::app::reorder::{PositionMotion, edge_scroll_velocity};
 use std::time::Instant;
 
 #[derive(Default)]
@@ -37,9 +38,7 @@ pub(in crate::app) struct DragSession {
     pub assets: Option<Vec<AssetKey>>,
     pub insertion: bool,
     hit_offset: f32,
-    origins: HashMap<usize, f32>,
-    destinations: HashMap<usize, f32>,
-    started: Instant,
+    motion: PositionMotion,
     pointer: Option<Point<Pixels>>,
     last_candidate: Option<BlockDropTarget>,
     last_scroll_tick: Instant,
@@ -83,9 +82,7 @@ impl DragSession {
             assets: None,
             insertion: false,
             hit_offset: 0.,
-            origins: positions.clone(),
-            destinations: positions,
-            started: Instant::now(),
+            motion: PositionMotion::new(positions),
             pointer: None,
             last_candidate: None,
             last_scroll_tick: Instant::now(),
@@ -104,19 +101,11 @@ impl DragSession {
     }
 
     pub fn position(&self, id: usize, reduce_motion: bool) -> Option<f32> {
-        let destination = *self.destinations.get(&id)?;
-        let progress = if reduce_motion {
-            1.
-        } else {
-            ease_out_quint()((self.started.elapsed().as_secs_f32() / 0.2).min(1.))
-        };
-        Some(self.origins.get(&id).map_or(destination, |origin| {
-            origin + (destination - origin) * progress
-        }))
+        self.motion.position(id, reduce_motion)
     }
 
     pub fn animating(&self) -> bool {
-        self.started.elapsed() < Duration::from_millis(200)
+        self.motion.animating()
     }
 
     pub fn retarget(
@@ -128,18 +117,8 @@ impl DragSession {
         if self.target == target && self.insertion == insertion {
             return false;
         }
-        self.origins = self
-            .rows
-            .iter()
-            .map(|row| {
-                (
-                    row.id,
-                    self.position(row.id, reduce_motion).unwrap_or(row.top),
-                )
-            })
-            .collect();
         self.insertion = insertion;
-        self.destinations = if self.assets.is_some() {
+        let destinations = if self.assets.is_some() {
             let top = target
                 .filter(|_| self.insertion)
                 .and_then(|target| self.insertion_top(target));
@@ -161,7 +140,7 @@ impl DragSession {
             preview_positions(&self.rows, &self.moved, target)
         };
         self.target = target;
-        self.started = Instant::now();
+        self.motion.retarget(destinations, reduce_motion);
         true
     }
 
@@ -261,17 +240,6 @@ fn preview_positions(
         .collect()
 }
 
-fn edge_scroll_velocity(y: f32, height: f32) -> f32 {
-    const EDGE: f32 = 32.;
-    if y < EDGE {
-        420. * (1. - y / EDGE).clamp(0., 1.)
-    } else if y > height - EDGE {
-        -420. * (1. - (height - y) / EDGE).clamp(0., 1.)
-    } else {
-        0.
-    }
-}
-
 impl BlockDragState {
     pub fn session(&self) -> Option<&DragSession> {
         match self {
@@ -309,7 +277,7 @@ impl WorkbenchPanel {
         cx: &mut Context<Self>,
     ) -> (f32, f32) {
         self.focus.focus(window, cx);
-        let bounds = self.block_row_bounds.borrow();
+        let bounds = self.document.block_row_bounds.borrow();
         let width = bounds
             .get(&row_id)
             .map_or(fallback_width, |bounds| f32::from(bounds.size.width));
@@ -322,7 +290,7 @@ impl WorkbenchPanel {
         } = &self.content
             && Rc::ptr_eq(document, &drag.document)
             && document.borrow().revision() == drag.revision
-            && !self.block_drag.committing()
+            && !self.document.block_drag.committing()
         {
             let projection = document.borrow().projection();
             if let Some(scene) = projection.scenes.iter().find(|scene| {
@@ -337,7 +305,7 @@ impl WorkbenchPanel {
                     .filter(|block| drag.selected.contains(&block.source_range.start))
                     .map(|block| block.source_range.clone())
                     .collect::<Vec<_>>();
-                let positions = self.block_row_positions.borrow();
+                let positions = self.document.block_row_positions.borrow();
                 let rows = scene
                     .blocks
                     .iter()
@@ -351,9 +319,9 @@ impl WorkbenchPanel {
                                 || {
                                     block_row_height(
                                         block,
-                                        &self.block_text_editors,
-                                        self.draft_text.as_ref(),
-                                        &self.block_heights,
+                                        &self.document.block_text_editors,
+                                        self.document.draft_text.as_ref(),
+                                        &self.document.block_heights,
                                         cx,
                                     )
                                 },
@@ -377,7 +345,7 @@ impl WorkbenchPanel {
                                     - self.view_scroll.offset().y,
                             ) - top
                         });
-                self.block_drag = BlockDragState::Dragging(session);
+                self.document.block_drag = BlockDragState::Dragging(session);
             }
         }
         drop(bounds);
@@ -398,13 +366,13 @@ impl WorkbenchPanel {
             } => Some(document),
             _ => None,
         };
-        match &self.block_drag {
+        match &self.document.block_drag {
             BlockDragState::Dragging(session) => {
                 let stale = current.is_none_or(|document| !session.is_current(document))
-                    || self.document_mode != DocumentMode::Block;
+                    || self.document.document_mode != DocumentMode::Block;
                 if stale {
                     cx.stop_active_drag(window);
-                    self.block_drag = BlockDragState::Idle;
+                    self.document.block_drag = BlockDragState::Idle;
                 } else if !cx.has_active_drag() || !window.is_window_active() {
                     self.cancel_block_drag(window, cx);
                 }
@@ -414,7 +382,7 @@ impl WorkbenchPanel {
                     || motion.is_finished()
                     || current.map(|document| document.borrow().revision()) != motion.revision =>
             {
-                self.block_drag = BlockDragState::Idle
+                self.document.block_drag = BlockDragState::Idle
             }
             _ => {}
         }
@@ -422,7 +390,7 @@ impl WorkbenchPanel {
     }
 
     fn scroll_block_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let BlockDragState::Dragging(session) = &mut self.block_drag else {
+        let BlockDragState::Dragging(session) = &mut self.document.block_drag else {
             return;
         };
         let Some(pointer) = session.pointer else {
@@ -458,14 +426,15 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !matches!(self.block_drag, BlockDragState::Dragging(_)) {
+        if !matches!(self.document.block_drag, BlockDragState::Dragging(_)) {
             return;
         }
-        let BlockDragState::Dragging(session) = std::mem::take(&mut self.block_drag) else {
+        let BlockDragState::Dragging(session) = std::mem::take(&mut self.document.block_drag)
+        else {
             unreachable!()
         };
         cx.stop_active_drag(window);
-        self.block_drag = BlockDragState::Settling(BlockReorderMotion {
+        self.document.block_drag = BlockDragState::Settling(BlockReorderMotion {
             positions: session.painted_positions(cx.reduce_motion()),
             heights: session
                 .rows
@@ -484,7 +453,7 @@ impl WorkbenchPanel {
         cx: &mut Context<Self>,
     ) {
         let drag = event.drag(cx);
-        let BlockDragState::Dragging(session) = &self.block_drag else {
+        let BlockDragState::Dragging(session) = &self.document.block_drag else {
             return;
         };
         if !Rc::ptr_eq(&session.token, &drag.token) {
@@ -510,12 +479,12 @@ impl WorkbenchPanel {
             return;
         };
         if *root != drag.root
-            || self.document_mode != DocumentMode::Block
-            || self.block_drag.committing()
+            || self.document.document_mode != DocumentMode::Block
+            || self.document.block_drag.committing()
         {
             return;
         }
-        let same = self.block_drag.session().is_some_and(|session| {
+        let same = self.document.block_drag.session().is_some_and(|session| {
             Rc::ptr_eq(&session.token, &drag.token) && session.row(row_id).is_some()
         });
         if !same {
@@ -545,7 +514,7 @@ impl WorkbenchPanel {
                 .find(|block| block.source_range.start == row_id)
                 .map_or(0., |block| block.depth as f32 * 18.);
             self.begin_block_drag(&payload, row_id, 300., 38., indent, window, cx);
-            if let BlockDragState::Dragging(session) = &mut self.block_drag {
+            if let BlockDragState::Dragging(session) = &mut self.document.block_drag {
                 session.height = keys.iter().collect::<HashSet<_>>().len() as f32 * 42. - 4.;
                 session.assets = Some(keys);
                 session.last_candidate = None;
@@ -559,7 +528,7 @@ impl WorkbenchPanel {
         position: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        let BlockDragState::Dragging(session) = &mut self.block_drag else {
+        let BlockDragState::Dragging(session) = &mut self.document.block_drag else {
             return;
         };
         session.pointer = Some(position);
@@ -627,7 +596,7 @@ impl WorkbenchPanel {
         }
         session.last_candidate = candidate;
         let target = candidate.filter(|target| matches!(&self.content, PanelContent::Document {document: Some(document), ..} if session.is_current(document) && (session.assets.is_some() || document.borrow().projection().accepts_block_drop(&session.selected, target.row))));
-        if let BlockDragState::Dragging(session) = &mut self.block_drag {
+        if let BlockDragState::Dragging(session) = &mut self.document.block_drag {
             session.indent = indent;
             if session.retarget(target, insertion, cx.reduce_motion()) {
                 cx.notify();
@@ -641,7 +610,7 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let BlockDragState::Dragging(session) = &self.block_drag else {
+        let BlockDragState::Dragging(session) = &self.document.block_drag else {
             return;
         };
         if !Rc::ptr_eq(&session.token, &drag.token) {
@@ -651,7 +620,7 @@ impl WorkbenchPanel {
         // gesture can release without another DragMoveEvent; resolve the final
         // pointer position even in that case.
         self.update_block_drag_target(window.mouse_position(), cx);
-        let BlockDragState::Dragging(session) = &self.block_drag else {
+        let BlockDragState::Dragging(session) = &self.document.block_drag else {
             return;
         };
         let Some(target) = session.target else {
@@ -662,11 +631,13 @@ impl WorkbenchPanel {
             PanelContent::Document {
                 document: Some(document),
                 ..
-            } if session.is_current(document) && self.document_mode == DocumentMode::Block => {
+            } if session.is_current(document)
+                && self.document.document_mode == DocumentMode::Block =>
+            {
                 document.borrow().contents().to_owned()
             }
             _ => {
-                self.block_drag = BlockDragState::Idle;
+                self.document.block_drag = BlockDragState::Idle;
                 cx.notify();
                 return;
             }
@@ -688,10 +659,12 @@ impl WorkbenchPanel {
                     &session.painted_positions(cx.reduce_motion()),
                     &heights,
                 );
-                let BlockDragState::Dragging(session) = std::mem::take(&mut self.block_drag) else {
+                let BlockDragState::Dragging(session) =
+                    std::mem::take(&mut self.document.block_drag)
+                else {
                     return;
                 };
-                self.block_drag = BlockDragState::Committing {
+                self.document.block_drag = BlockDragState::Committing {
                     session,
                     source,
                     edited: edited.clone(),
@@ -713,13 +686,13 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.block_drag.session().is_some_and(|session| {
+        if !self.document.block_drag.session().is_some_and(|session| {
             session.assets.is_some() && Rc::ptr_eq(&session.token, &drag.token)
         }) {
             return;
         }
         self.update_block_drag_target(window.mouse_position(), cx);
-        let BlockDragState::Dragging(session) = &self.block_drag else {
+        let BlockDragState::Dragging(session) = &self.document.block_drag else {
             return;
         };
         let Some(target) = session.target else {
@@ -735,7 +708,7 @@ impl WorkbenchPanel {
             return;
         };
         if !session.is_current(document)
-            || self.document_mode != DocumentMode::Block
+            || self.document.document_mode != DocumentMode::Block
             || *root != drag.root
         {
             self.cancel_block_drag(window, cx);
@@ -768,10 +741,12 @@ impl WorkbenchPanel {
                         )
                     })
                     .flatten();
-                let BlockDragState::Dragging(session) = std::mem::take(&mut self.block_drag) else {
+                let BlockDragState::Dragging(session) =
+                    std::mem::take(&mut self.document.block_drag)
+                else {
                     return;
                 };
-                self.block_drag = BlockDragState::Committing {
+                self.document.block_drag = BlockDragState::Committing {
                     session,
                     source,
                     edited: edited.clone(),
@@ -876,9 +851,9 @@ mod tests {
             after: true,
         });
         assert!(session.retarget(target, false, true));
-        let started = session.started;
+        let started = session.motion.started;
         assert!(!session.retarget(target, false, true));
-        assert_eq!(session.started, started);
+        assert_eq!(session.motion.started, started);
         assert_eq!(session.position(2, true), Some(76.));
         assert_eq!(
             session.candidate(200.),

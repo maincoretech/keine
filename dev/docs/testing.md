@@ -1,5 +1,45 @@
 # 开发与验收
 
+## UI 模块与资源页
+
+Editor 的面板状态与视图归各功能模块，工作台保留分派、Dock 和共享输入；文件/场景名
+Enter 提交移到输入事件，回归确认渲染不提交、Enter 只提交一次，且不改原剧本。
+Engine 的 Settings、Save/Load、Dialog 分离 state/view/actions/motion/sync，保留系统入口与顺序；
+槽位截图仍在 UI，后台编码和落盘归 storage，沿用有界队列与代际保护。
+
+Assets 增加可移除筛选标签、结果/选择计数、导入及多选操作、空结果提示和状态跳转。
+回归确认清除筛选保留视图偏好与跨筛选选择。macOS 原生新版已检查统计卡、搜索无结果及恢复、
+Missing 筛选、多选/清除选择，以及约 190 逻辑像素窄栏中计数完整、操作按钮整组换行。
+导入/删除沿用已有事务回归，本次未在真实工程执行；Engine 菜单及 Windows/Linux 原生视觉未复测。
+
+`cargo test --workspace --features publisher,video-native,hot-reload`：993 passed / 21 ignored / 0 failed；
+IPC 沙箱权限失败后完整放行重跑。fmt、上述组合的 workspace check/all-targets Clippy、
+无默认功能 + video-native check、Engine/Editor debug 构建通过；native-smoke validate 为
+1 scene / 1 action / 1 source / 0 warning。tday、依赖清单和 lockfile 未改动；
+验证偏好已逐字节恢复，临时 App 已清理。模块拆分不作为性能提升的证据。
+
+## Editor 动效
+
+展开/收起 UX：资源统计卡、资源筛选分组、文件树和搜索分组共用 160 ms 可反向过渡；
+统计卡/筛选复用 GPUI 的测量展开，文件树/搜索用实际动画行高的前缀位置做可见区裁剪。
+Block 右键菜单补淡入/淡出及关闭任务代际保护，旧菜单动画和 Build 旋转遵循减少动态效果。
+检查范围与即时反馈规则见 [Editor 交互](editor.md#交互)。
+GPUI 回归覆盖资源统计卡带动实际列表 viewport、快速反向无跳变、窄栏换行重新测量、
+减少动态效果直接到达端点、Block 菜单关闭后快速重开不被旧任务清除；几何边界覆盖
+部分行高、零高行、空列表及滚动底部。Computer Use 未发现可操作的运行中 Editor；
+fmt、workspace check（publisher/video-native/hot-reload）、all-targets Clippy、
+workspace tests 992 passed / 21 ignored（IPC 在沙箱外）及 Editor debug 构建通过。
+原生动效目测仍待重启新版，三平台的验收不由这些布局测试代替。
+
+Block 插入弹窗：180 ms 轻微上移淡入、90 ms 关闭淡出；右上角 X 与 Esc/Tab/选择条目共用关闭流程，
+沿用 Editor 动画和减少动态效果设置。Favorites 置顶并默认打开，All 放底部；预置常用收藏，
+收藏按自身顺序显示。自定义列表改为拖动柄排序，复用 Block 预览卡、200 ms 位移插值和边缘滚动，
+占位让位后只在松手保存偏好。GPUI 鼠标回归覆盖跨分类多位置移动、拖动中不写入、
+外部取消、分类切换使拖动失效、点击不插入剧本及偏好落盘；位移回归覆盖中途改目标连续性。
+持久化回归覆盖旧收藏保留、旧空收藏补入默认及新版主动清空。fmt/check、workspace all-targets Clippy、988 项工作区测试
+（21 ignored，publisher/video-native/hot-reload，IPC 在沙箱外）与 Editor debug 构建通过。
+Computer Use 未发现可操作的运行中 Editor；本次未做原生拖动/动画目测，Windows/Linux 交互仍待实机验收。
+
 设置页数据管理简化为“还原设置 / 清除存档”，保留分别确认，移除整项目数据清除入口及其专用路径。
 简体、繁体、日语、英语的标题、按钮和确认文案已同步；存档清除沿用保留设置的现有回归。
 workspace tests（publisher/video-native/hot-reload）984 passed / 21 ignored，fmt、check 和
@@ -21,6 +61,59 @@ Windows/Linux 原生弹窗尚待新构建复测。临时 app 与验证产生的 
 临时验证剧本已逐字节恢复，临时 app/存档已清理；Windows/Linux 排版未实机复测。
 
 ## 窗口与菜单输入
+
+Android 触摸由一个共享 owner 捕获，控件和列表不转为导航；设置 tab 仅点击切换，左右划识别已移除；剧情上划 backlog、
+backlog 正文拖动滚动及系统返回复用现有屏幕操作。回归覆盖轻点松手只推进一次、上划不推进、
+多指/取消/失焦/路由与剧本变化/边缘拒绝、折返与斜划、控件/列表不导航，以及 HiDPI 滑块
+拖出轨道仍夹取自身数值、拖动中不写盘、松手与弹窗打断才持久化。
+控件松手才点击，拖动不触发起点按钮；命中回归覆盖父级裁剪和层叠遮挡，滚动 owner
+仅识别实际 scroll overflow。手势超时使用单调时钟，不随游戏时钟暂停或唤醒重置改变。
+`cargo test --workspace --features publisher,video-native,hot-reload`：1008 passed / 21 ignored / 0 failed；
+系统回收站/IPC 在 macOS 沙箱外重跑。fmt、workspace check/all-targets Clippy、Android
+`cargo ndk -t arm64-v8a -P 26 clippy --locked -p keine --lib --target-dir target/android --no-default-features --features ui-sounds -- -D warnings` 通过。
+
+唤醒动画回归用 `cargo test --lib waking_animation_does_not_consume_sleep_from_the_render_clock -- --nocapture`：
+模拟两条休眠前渲染时间戳，修复前新动画第二帧吃进 250 ms；恢复时清空队列并重置真实时钟后，
+60/120 Hz 的步进分别为 16.667/8.333 ms，两者 100 ms 累积进度一致。原始输出在
+`target/android/animation-wake-before.log` 和 `target/android/animation-wake-after.log`。
+保持菜单原时长；手机反馈确认动画、滑块、返回、剧情上划与退出重开正常；左右划切 tab
+未通过，按用户要求完全删除。最终测试 APK 的 JNI 返回入口、
+ELF LOAD/RELRO 与 APK 16 KB 对齐、签名、空 Java runtime classpath 均通过；已安装到
+Motorola 测试机，`target/android/gestures-phone-final.log` 确认 Native Smoke ready / Adreno 829 Vulkan。
+该 fixture 仅一句对白，不能作为长 backlog 列表滚动的真机验收。
+
+设置页避免重复写 `Node.display` / `UiTransform`，保持原动画。原始前后命令相同：
+`cargo test --lib settled_settings_panels_do_not_dirty_layout -- --nocapture`；60 次静止帧更新后，
+每帧被标记布局变化的面板从 4 个降为 0 个。
+原始输出在 `target/android/tab-layout-before.log` 和 `target/android/touch-regression.log`；
+移除左右划后的回归在 `target/android/no-horizontal-tests.log`；覆盖设置/Save/Load 横划无导航，
+以及菜单空白处不触发下层控件。
+这证明重复变更已消除，不代表手机切 tab 的帧率；移除左右划后的测试包仍需单独确认。
+
+Android 后台恢复：旧包日志显示 Home 后点击桌面图标以 LAUNCH_MULTIPLE 新建第二个
+EngineActivity，随后进程被结束。入口改为 singleTask，复用活动中的 Activity；本次目标为
+保留进程内当前界面/剧情，不新增冷启动自动恢复。安卓导入/导出使用 SAF 文档选择器，
+JNI 转交唯一文件描述符，公共存储逻辑支持无 seek 的有界流。回归覆盖桌面/流格式互通、
+读取失败时恢复旧事务、截断/无效备份保留旧数据、导出 flush 失败。最新完整测试在
+`target/android/backup-tests.log`，check/Clippy 和 all-features cargo-deny 均通过；
+增加的直接 jni 依赖已有于锁文件闭包中，没有新增 crate 或 Java runtime 依赖。
+最终 APK 构建、Java lint（0 errors / 5 既有 warnings）、16 KB/签名/JNI/singleTask 检查通过，
+Java runtime classpath 为空；已安装，21 个既有用户数据文件逐个 SHA256 一致。
+打包检查记录在 `target/android/backup-package.log`，真机运行记录在
+`target/android/backup-phone-runtime.log`。用户确认后台往返和移除横划正常；系统日志也确认
+桌面图标两次复用活动中的进程（LAUNCH_SINGLE_TASK）。清除最近任务后系统 remove task
+结束进程属于冷启动边界。设置按钮漏点阻挡了文件选择器测试，导出/导入/取消仍未验收。
+漏点专项重现了透明 MenuHeader 整页容器误捕获，以及普通按钮被 800 ms 手势超时拒绝；
+触摸现在遵守 FocusPolicy::Pass/Block，按钮松手点击保留拖动/裁剪/遮挡检查但不受手势超时限制。
+专项前后原始记录为 `target/android/control-pass-before.log` / `control-pass-after.log`，
+按住超过两秒的旧版失败记录为 `target/android/control-hold-before.log`；修复后的同一系统回归通过。
+修复后完整 workspace 回归仍为 1008 passed / 21 ignored / 0 failed，记录在
+`target/android/control-pass-tests.log`；workspace check/Clippy、Android Clippy、fmt/actionlint 通过。
+新 APK 的 JNI/16 KB/签名/singleTask 与 Java lint 检查通过，记录在
+`target/android/control-pass-package.log` / `control-pass-java-lint.log`。本机 ADB 在沙箱内
+无法创建 USB interface plug-in；沙箱外重启后恢复通信，已安装新包，21 个用户文件校验一致
+（`target/android/continue-phone-{before,after}.sha256`）。漏点修复与备份文件选择器的
+最终真机验收待用户确认，日志在 `target/android/control-pass-phone-runtime.log`。
 
 非 Stage 右键使用现有 Esc 返回路径；Stage 仍只切换文本框，存档删除改为悬停后 Delete 并确认。
 窗口正常关闭时单独保存大小、位置与最大化状态；首次打开适配显示器，恢复时处理 DPI 改变、
@@ -353,6 +446,16 @@ benchmark collector 6 项、native-smoke 零警告通过；Windows SDK 与新总
 文档确认支持，actionlint 1.7.12 对这三个字段的误报仅在本次本地检查中精确排除。
 提交 `e9cec0d` 的远程 CI #239 与 Media safety 已全部通过，包括 Windows 平台测试、
 视频验收和规范发行 feature check；GUI / 硬件 benchmark 验收仍独立。
+
+## CI 命名
+
+Workflow 使用空格分隔的 `类别 范围`：`CI Desktop`、`CI Android`、`CI Media Safety`，
+以及 `Release Engine`、`Release Editor`、`Release Project`。
+Job 使用 `阶段 平台 架构`（如 `Check Linux x64`、`Build macOS arm64`），
+专项检查使用 `Check 对象`，发布辅助 job 使用 `Prepare Source` / `Publish 产物`。
+步骤以 Check out、Install、Restore、Check、Build、Package、Upload、Publish 等动词开头。
+文件名、job ID、产物名称保持稳定；发布监听 `CI Desktop`，concurrency group
+固定为原队列标识，改名不会绕开仍在运行的旧任务。
 
 ## Android Engine
 

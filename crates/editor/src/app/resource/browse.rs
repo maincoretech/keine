@@ -6,19 +6,10 @@ pub(in crate::app) fn render_assets(
     root: &Path,
     index: &Arc<AuthoringIndex>,
     panel: &WorkbenchPanel,
-    window: &Window,
+    window: &mut Window,
     cx: &mut Context<WorkbenchPanel>,
 ) -> AnyElement {
-    let query = AssetQuery {
-        search: panel.asset_search.read(cx).value().to_string(),
-        kind: panel.asset_kind,
-        folder: panel.asset_folder.clone(),
-        sort: panel.asset_sort,
-        tag: panel.asset_tag.clone(),
-        status: panel.asset_status,
-        size: panel.asset_size,
-        modified: panel.asset_modified,
-    };
+    let query = panel.assets.query(cx);
     let bounds = panel.view_scroll.bounds();
     let offset = panel.view_scroll.offset();
     let width = (if bounds.size.width > px(0.) {
@@ -32,36 +23,27 @@ pub(in crate::app) fn render_assets(
     } else {
         f32::from(window.viewport_size().height)
     };
-    let columns = (width / if panel.asset_large { 176. } else { 120. })
+    let columns = (width / if panel.assets.asset_large { 176. } else { 120. })
         .floor()
         .max(1.) as usize;
-    let snapshot = panel.asset_browser.borrow_mut().resolve(
+    let snapshot = panel.assets.asset_browser.borrow_mut().resolve(
         index,
         &query,
-        panel.asset_unmapped,
+        panel.assets.asset_unmapped,
         columns,
-        panel.asset_large,
-        panel.asset_grid,
+        panel.assets.asset_large,
+        panel.assets.asset_grid,
     );
     let results = &snapshot.assets;
     let rows = &snapshot.rows;
     let ordered = snapshot.ordered.clone();
-    let unmapped_mode = panel.asset_unmapped;
+    let unmapped_mode = panel.assets.asset_unmapped;
     let selection = cx.global::<EditorDocuments>().asset_selection(root);
-    let filter_active = panel.asset_tag.is_some()
-        || panel.asset_status != crate::authoring::AssetStatus::All
-        || panel.asset_size != crate::authoring::AssetSize::All
-        || panel.asset_modified.is_some()
-        || panel.asset_kind.is_some()
-        || panel.asset_folder.is_some()
-        || panel.asset_sort != AssetSort::Name
-        || panel.asset_grid.is_some()
-        || panel.asset_large
-        || panel.asset_unmapped;
-    let filter_menu = panel
-        .asset_filter_menu
-        .clone()
-        .map(|menu| render_asset_filter_menu(menu, &snapshot.folders, index, panel, cx));
+    let filter_active = panel.assets.has_filters(cx);
+    let filter_menu =
+        panel.assets.asset_filter_menu.clone().map(|menu| {
+            render_asset_filter_menu(menu, &snapshot.folders, index, panel, window, cx)
+        });
     let controls = div()
         .flex()
         .p_2()
@@ -76,7 +58,7 @@ pub(in crate::app) fn render_assets(
                 .bg(rgb(SURFACE))
                 .px_2()
                 .child(
-                    Input::new(&panel.asset_search)
+                    Input::new(&panel.assets.asset_search)
                         .appearance(false)
                         .bordered(false)
                         .size_full()
@@ -93,11 +75,13 @@ pub(in crate::app) fn render_assets(
                 .items_center()
                 .justify_center()
                 .rounded(px(7.))
-                .bg(rgb(if filter_active || panel.asset_filter_menu.is_some() {
-                    SURFACE
-                } else {
-                    CHROME
-                }))
+                .bg(rgb(
+                    if filter_active || panel.assets.asset_filter_menu.is_some() {
+                        SURFACE
+                    } else {
+                        CHROME
+                    },
+                ))
                 .cursor_pointer()
                 .hover(|style| style.bg(rgb(SURFACE_HOVER)))
                 .tooltip(icon_hint("Filter assets"))
@@ -194,13 +178,13 @@ pub(in crate::app) fn render_assets(
                             let next = select_asset_keys(
                                 &previous,
                                 &row_order,
-                                this.asset_anchor.as_ref(),
+                                this.assets.asset_anchor.as_ref(),
                                 &row_key,
                                 modifiers.shift,
                                 modifiers.platform || modifiers.control,
                             );
                             if !modifiers.shift {
-                                this.asset_anchor = Some(row_key.clone());
+                                this.assets.asset_anchor = Some(row_key.clone());
                             }
                             let show_preview = !next.is_empty();
                             cx.global_mut::<EditorDocuments>()
@@ -235,7 +219,7 @@ pub(in crate::app) fn render_assets(
                             asset,
                             media,
                             layout.grid,
-                            &panel.asset_thumbnails,
+                            &panel.assets.asset_thumbnails,
                             cx,
                         ))
                 }))
@@ -244,7 +228,7 @@ pub(in crate::app) fn render_assets(
         .on_click(cx.listener({
             let root = root.clone();
             move |this, _, _, cx| {
-                this.asset_anchor = None;
+                this.assets.asset_anchor = None;
                 cx.global_mut::<EditorDocuments>()
                     .clear_asset_selection(&root);
                 cx.refresh_windows();
@@ -263,18 +247,27 @@ pub(in crate::app) fn render_assets(
         .child(statistics_card(
             &root,
             &snapshot.statistics,
-            panel.asset_statistics_expanded,
-            panel.file_progress.as_ref(),
+            panel.assets.asset_statistics_expanded,
+            panel.explorer.file_progress.as_ref(),
+            window,
             cx,
         ))
         .child(controls.flex_none())
-        .child(
-            div()
-                .px_2()
-                .text_xs()
-                .text_color(rgb(MUTED))
-                .child(format!("{} assets", results.len())),
-        )
+        .child(super::toolbar::render(
+            &root,
+            super::toolbar::Results {
+                count: results.len(),
+                total: if unmapped_mode {
+                    index.unmapped.len()
+                } else {
+                    index.assets.len()
+                },
+                ordered: ordered.clone(),
+                selection: &selection,
+            },
+            panel,
+            cx,
+        ))
         .child(
             div()
                 .id("asset-viewport")
@@ -284,12 +277,15 @@ pub(in crate::app) fn render_assets(
                 .on_click(cx.listener({
                     let root = root.clone();
                     move |this, _, _, cx| {
-                        this.asset_anchor = None;
+                        this.assets.asset_anchor = None;
                         cx.global_mut::<EditorDocuments>()
                             .clear_asset_selection(&root);
                         cx.refresh_windows();
                     }
                 }))
+                .when(results.is_empty(), |this| {
+                    this.child(super::toolbar::empty_state(panel, index, window, cx))
+                })
                 .child(vertical_overflow_view(
                     "asset-scroll",
                     &panel.view_scroll,
@@ -434,7 +430,7 @@ fn asset_content(
                         .text_ellipsis()
                         .text_size(px(12.))
                         .when(!grid, |this| this.line_height(px(12.)))
-                        .text_color(rgb(INK))
+                        .text_color(rgb(if asset.exists { INK } else { 0xe68e98 }))
                         .flex()
                         .items_center()
                         .gap_1()
@@ -739,9 +735,14 @@ fn statistic_filter(
         .gap_1()
         .cursor_pointer()
         .hover(|style| style.text_color(rgb(PRIMARY)))
-        .on_click(cx.listener(move |panel, _, _, cx| {
-            panel.asset_unmapped = false;
-            panel.asset_status = filter;
+        .on_click(cx.listener(move |panel, _, window, cx| {
+            let active = !panel.assets.asset_unmapped && panel.assets.asset_status == filter;
+            panel.clear_asset_filters(window, cx);
+            panel.assets.asset_status = if active {
+                crate::authoring::AssetStatus::All
+            } else {
+                filter
+            };
             panel.view_scroll.set_offset(Point::default());
             cx.notify();
         }))
@@ -755,8 +756,10 @@ fn statistics_card(
     statistics: &AssetStatistics,
     expanded: bool,
     progress: Option<&FileProgress>,
+    window: &mut Window,
     cx: &mut Context<WorkbenchPanel>,
 ) -> AnyElement {
+    let reveal = disclosure_progress("asset-statistics-body", expanded, window, cx);
     let root = root.to_owned();
     let pending = statistics.needs_conversion();
     let can_convert = pending > 0 && progress.is_none();
@@ -764,22 +767,28 @@ fn statistics_card(
         .child(div().flex().items_center().gap_2().px_2().py_1()
             .child(div().id("asset-statistics").flex_1().flex().items_center().gap_1()
                 .cursor_pointer().on_click(cx.listener(|panel, _, _, cx| {
-                    panel.asset_statistics_expanded = !panel.asset_statistics_expanded;
+                    panel.assets.asset_statistics_expanded = !panel.assets.asset_statistics_expanded;
                     cx.notify();
                 }))
-                .child(Icon::new(if expanded { IconName::ChevronDown } else { IconName::ChevronRight }).xsmall().text_color(rgb(MUTED)))
+                .child(disclosure_chevron(reveal))
                 .child(Icon::new(AssetIconName::Files).xsmall().text_color(rgb(MUTED)))
                 .child(div().text_sm().text_color(rgb(INK)).child(format!("{} files", statistics.files))))
             .child(div().text_xs().text_color(rgb(MUTED)).child(asset_bytes(statistics.bytes))))
-        .when(expanded, |card| card.child(div().px_2().pb_2().flex().flex_col().gap_2().text_xs().text_color(rgb(MUTED))
+        .child(disclosure_content("asset-statistics-body", reveal, div().px_2().pb_2().flex().flex_col().gap_2().text_xs().text_color(rgb(MUTED))
             .child(div().flex().flex_wrap().gap_2()
                 .child(statistic_filter(AssetIconName::CircleCheck, "Ready", statistics.canonical, crate::authoring::AssetStatus::Canonical, cx))
                 .child(statistic_filter(AssetIconName::RefreshCw, "Pending", pending, crate::authoring::AssetStatus::NeedsConversion, cx))
                 .child(statistic_filter(AssetIconName::Unplug, "Unused", statistics.unused, crate::authoring::AssetStatus::Unused, cx)))
             .child(div().flex().flex_wrap().gap_2()
                 .child(statistic_filter(AssetIconName::FileX, "Missing", statistics.missing, crate::authoring::AssetStatus::Missing, cx))
-                .child(div().flex().items_center().gap_1().child(Icon::new(AssetIconName::TriangleAlert).xsmall()).child(format!("Undefined {}", statistics.missing_references)))
-                .child(div().flex().items_center().gap_1().child(Icon::new(AssetIconName::Link).xsmall()).child(format!("Unmapped {}", statistics.unmapped))))
+                .child(div().id("asset-undefined-references").flex().items_center().gap_1().cursor_pointer().tooltip(icon_hint("Show undefined references in Problems"))
+                    .hover(|style| style.text_color(rgb(PRIMARY)))
+                    .on_click(|_, window, cx| window.dispatch_action(Box::new(ShowProblems), cx))
+                    .child(Icon::new(AssetIconName::TriangleAlert).xsmall()).child(format!("Undefined {}", statistics.missing_references)))
+                .child(div().id("asset-unmapped-files").flex().items_center().gap_1().cursor_pointer().tooltip(icon_hint("Show files not registered in the resource manifest"))
+                    .hover(|style| style.text_color(rgb(PRIMARY)))
+                    .on_click(cx.listener(|panel, _, window, cx| { let active = panel.assets.asset_unmapped; panel.clear_asset_filters(window, cx); panel.assets.asset_unmapped = !active; cx.notify(); }))
+                    .child(Icon::new(AssetIconName::Link).xsmall()).child(format!("Unmapped {}", statistics.unmapped))))
             .child(div().id("asset-package-estimate").flex().items_center().gap_1()
                 .tooltip(icon_hint("Registered assets, counted once per file, including unused. Pending files use current size; conversion updates the estimate. Excludes runtime, scripts and package overhead."))
                 .child(Icon::new(AssetIconName::Package).xsmall())
@@ -790,7 +799,7 @@ fn statistics_card(
                 .tooltip(icon_hint("Convert pending assets to WebP / Opus / H.264 MP4 beside originals. Keep IDs, tags and scripts. Original files stay unchanged."))
                 .on_click(cx.listener(move |panel, _, window, cx| { if can_convert { panel.start_asset_conversion(&root, window, cx); } }))
                 .child(Icon::new(AssetIconName::RefreshCw).xsmall())
-                .child(progress.map_or_else(|| "Convert all".to_owned(), |progress| format!("Converting {}/{}", progress.completed, progress.total))))))
+                .child(progress.map_or_else(|| "Convert all".to_owned(), |progress| format!("Working {}/{}", progress.completed, progress.total))))))
         .when_some(progress, |card, progress| card.child(
             div().px_2().pb_2()
                 .child(div().w_full().h(px(4.)).rounded_full().overflow_hidden().bg(rgb(SURFACE_HOVER))
@@ -814,6 +823,83 @@ fn asset_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui_kit::test]
+    fn statistics_disclosure_moves_the_real_asset_viewport_and_reverses(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let root =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/native-smoke");
+        let temporary =
+            std::env::temp_dir().join(format!("keine-statistics-motion-{}", std::process::id()));
+        let window = cx.update(|cx| {
+            gpui_kit::init(cx);
+            let session = WorkspaceSession::open(&root).unwrap();
+            let mut documents = EditorDocuments::new(AppPersistence::new(temporary.clone()));
+            documents
+                .ensure_workspace_with_files(session.root(), session.files())
+                .unwrap();
+            cx.set_global(documents);
+            cx.open_window(gpui_kit::WindowOptions::default(), |window, cx| {
+                WorkbenchPanel::from_payload(
+                    crate::app::panel::PanelPayload::Assets {
+                        root: session.root().to_owned(),
+                    },
+                    window,
+                    cx,
+                )
+                .unwrap()
+            })
+            .unwrap()
+        });
+        let panel = window.root(cx).unwrap();
+        let cx = &mut gpui_kit::VisualTestContext::from_window(window.into(), cx);
+        cx.simulate_resize(size(px(290.), px(650.)));
+        let draw = |cx: &mut gpui_kit::VisualTestContext| {
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+        };
+        draw(cx);
+        draw(cx);
+        let height = |cx: &mut gpui_kit::VisualTestContext| {
+            panel.read_with(cx, |panel, _| panel.view_scroll.bounds().size.height)
+        };
+        let closed = height(cx);
+        panel.update(cx, |panel, cx| {
+            panel.assets.asset_statistics_expanded = true;
+            cx.notify();
+        });
+        draw(cx);
+        assert_eq!(height(cx), closed);
+        cx.executor().advance_clock(Duration::from_millis(60));
+        draw(cx);
+        let halfway = height(cx);
+        assert!(halfway < closed);
+        panel.update(cx, |panel, cx| {
+            panel.assets.asset_statistics_expanded = false;
+            cx.notify();
+        });
+        draw(cx);
+        assert_eq!(height(cx), halfway);
+        cx.executor().advance_clock(Duration::from_millis(200));
+        draw(cx);
+        assert_eq!(height(cx), closed);
+        cx.update(|_, cx| cx.set_reduce_motion(true));
+        panel.update(cx, |panel, cx| {
+            panel.assets.asset_statistics_expanded = true;
+            cx.notify();
+        });
+        draw(cx);
+        assert!(height(cx) < halfway);
+        panel.update(cx, |panel, cx| {
+            panel.assets.asset_statistics_expanded = false;
+            cx.notify();
+        });
+        draw(cx);
+        assert_eq!(height(cx), closed);
+        if temporary.exists() {
+            fs::remove_dir_all(temporary).unwrap();
+        }
+    }
 
     #[test]
     fn statistics_deduplicate_files_and_separate_missing_from_unconverted() {

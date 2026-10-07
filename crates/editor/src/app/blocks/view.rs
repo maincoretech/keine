@@ -701,14 +701,14 @@ pub(in crate::app) fn render_block_projection(
             .hover(|style| style.bg(rgb(SURFACE_HOVER)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 cx.stop_propagation();
-                if this.scene_edit.is_some() {
+                if this.document.scene_edit.is_some() {
                     return;
                 }
-                if !this.collapsed_scenes.remove(&scene_name) {
-                    this.collapsed_scenes.insert(scene_name.clone());
+                if !this.document.collapsed_scenes.remove(&scene_name) {
+                    this.document.collapsed_scenes.insert(scene_name.clone());
                 }
-                this.selected_blocks.clear();
-                this.block_selection_anchor = None;
+                this.document.selected_blocks.clear();
+                this.document.block_selection_anchor = None;
                 cx.global_mut::<EditorDocuments>()
                     .clear_block_selection(&scene_root);
                 set_authoring_selection(&scene_root, scene_relative.clone(), scene_line, 0, cx);
@@ -1044,31 +1044,32 @@ pub(in crate::app) fn render_block_projection(
                     cx.stop_propagation();
                     let modifiers = event.modifiers();
                     if modifiers.shift {
-                        let anchor = this.block_selection_anchor.unwrap_or(row_id);
+                        let anchor = this.document.block_selection_anchor.unwrap_or(row_id);
                         if let (Some(anchor_index), Some(row_index)) = (
                             order.iter().position(|candidate| *candidate == anchor),
                             order.iter().position(|candidate| *candidate == row_id),
                         ) {
                             let start = anchor_index.min(row_index);
                             let end = anchor_index.max(row_index);
-                            this.selected_blocks.clear();
-                            this.selected_blocks
+                            this.document.selected_blocks.clear();
+                            this.document
+                                .selected_blocks
                                 .extend(order[start..=end].iter().copied());
                         }
                     } else if modifiers.platform || modifiers.control {
-                        if !this.selected_blocks.remove(&row_id) {
-                            this.selected_blocks.insert(row_id);
+                        if !this.document.selected_blocks.remove(&row_id) {
+                            this.document.selected_blocks.insert(row_id);
                         }
-                        this.block_selection_anchor = Some(row_id);
+                        this.document.block_selection_anchor = Some(row_id);
                     } else {
-                        this.selected_blocks.clear();
-                        this.selected_blocks.insert(row_id);
-                        this.block_selection_anchor = Some(row_id);
+                        this.document.selected_blocks.clear();
+                        this.document.selected_blocks.insert(row_id);
+                        this.document.block_selection_anchor = Some(row_id);
                     }
                     cx.global_mut::<EditorDocuments>().set_block_selection(
                         &root,
                         relative.clone(),
-                        this.selected_blocks.iter().copied().collect(),
+                        this.document.selected_blocks.iter().copied().collect(),
                     );
                     set_authoring_selection(&root, relative.clone(), line, column, cx);
                     cx.notify();
@@ -1312,7 +1313,7 @@ pub(in crate::app) fn render_block_projection(
                         .tooltip(icon_hint("Open source"))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             cx.stop_propagation();
-                            this.document_mode = DocumentMode::Text;
+                            this.document.document_mode = DocumentMode::Text;
                             navigate_source(
                                 &source_root,
                                 &source_relative,
@@ -1533,7 +1534,7 @@ pub(in crate::app) fn render_block_projection(
                 .child(
                     file_action_icon("scene-add-cancel", AssetIconName::Close, "Cancel").on_click(
                         cx.listener(|this, _, _, cx| {
-                            this.scene_edit = None;
+                            this.document.scene_edit = None;
                             cx.notify();
                         }),
                     ),
@@ -1594,8 +1595,8 @@ pub(in crate::app) fn render_block_projection(
         .pb(px(120.))
         .children(rows)
         .on_click(cx.listener(move |this, _, _, cx| {
-            this.selected_blocks.clear();
-            this.block_selection_anchor = None;
+            this.document.selected_blocks.clear();
+            this.document.block_selection_anchor = None;
             cx.global_mut::<EditorDocuments>()
                 .clear_block_selection(&root);
             cx.notify();
@@ -1619,6 +1620,7 @@ pub(in crate::app) fn render_block_projection(
         .on_drag_move(
             cx.listener(|this, event: &DragMoveEvent<AssetDrag>, _, cx| {
                 if this
+                    .document
                     .block_drag
                     .session()
                     .is_some_and(|session| Rc::ptr_eq(&session.token, &event.drag(cx).token))

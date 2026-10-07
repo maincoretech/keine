@@ -18,6 +18,9 @@ use bevy::window::{Monitor, OnMonitor, PrimaryWindow};
 use bevy::winit::{UpdateMode, WinitSettings};
 use keine_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
+#[cfg(target_os = "android")]
+pub(crate) use super::android::backup::{request_backup, take_backup_result};
+
 use crate::render::blur::{DialogCamera, SceneBlurCamera, UiBlurCamera};
 use crate::runtime::resources::{
     AssetLoadingGate, DialogueLengthCache, EditorSyncSession, GameState,
@@ -45,6 +48,8 @@ pub(crate) fn default_plugins() -> bevy::app::PluginGroupBuilder {
 
 impl Plugin for NativeRenderDisplayPlugin {
     fn build(&self, app: &mut App) {
+        #[cfg(target_os = "android")]
+        super::android::install_back_wakeup(app);
         if let Some(display) = app
             .world()
             .get_resource::<bevy::winit::DisplayHandleWrapper>()
@@ -54,6 +59,17 @@ impl Plugin for NativeRenderDisplayPlugin {
                 std::sync::Arc::new(display),
             ));
         }
+    }
+}
+
+pub(crate) fn take_native_back() -> bool {
+    #[cfg(target_os = "android")]
+    {
+        super::android::take_back()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        false
     }
 }
 
@@ -158,7 +174,8 @@ pub(crate) fn request_graceful_exit(
 pub(crate) struct InputContext<'w, 's> {
     keys: Res<'w, ButtonInput<KeyCode>>,
     mouse: Res<'w, ButtonInput<MouseButton>>,
-    touches: Res<'w, Touches>,
+    touch: Option<Res<'w, crate::ui::touch::TouchInputState>>,
+    logical_keys: Res<'w, ButtonInput<bevy::input::keyboard::Key>>,
     gamepads: Query<'w, 's, &'static Gamepad>,
     windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
     scope: Res<'w, crate::ui::input_scope::UiInputScope>,
@@ -171,7 +188,8 @@ pub(crate) fn collect_input(context: InputContext) {
     let InputContext {
         keys,
         mouse,
-        touches,
+        touch,
+        logical_keys,
         gamepads,
         windows,
         scope,
@@ -180,6 +198,8 @@ pub(crate) fn collect_input(context: InputContext) {
         mut actions,
     } = context;
     let was_held = actions.auto_held;
+    let system_back =
+        take_native_back() | logical_keys.just_pressed(bevy::input::keyboard::Key::BrowserBack);
     if windows.single().is_ok_and(|window| !window.focused) {
         *actions = InputActions {
             auto_released: was_held,
@@ -201,11 +221,12 @@ pub(crate) fn collect_input(context: InputContext) {
     let gamepad_skip = gamepads
         .iter()
         .any(|pad| pad.just_pressed(GamepadButton::RightTrigger2));
-    let pointer_pressed =
-        gameplay_input && (mouse.just_pressed(MouseButton::Left) || touches.any_just_pressed());
+    let pointer_pressed = gameplay_input
+        && !system_back
+        && (mouse.just_pressed(MouseButton::Left) || touch.as_ref().is_some_and(|touch| touch.tap));
     let control_pressed = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     actions.back = *scope != crate::ui::input_scope::UiInputScope::Stage
-        && mouse.just_pressed(MouseButton::Right);
+        && (mouse.just_pressed(MouseButton::Right) || system_back);
     actions.shortcut = if matches!(
         *scope,
         crate::ui::input_scope::UiInputScope::Stage
@@ -213,7 +234,15 @@ pub(crate) fn collect_input(context: InputContext) {
             | crate::ui::input_scope::UiInputScope::Menu
             | crate::ui::input_scope::UiInputScope::Backlog
     ) {
-        keyboard_shortcut(&keys)
+        (system_back && *scope == crate::ui::input_scope::UiInputScope::Stage)
+            .then_some(ButtonAction::System)
+            .or_else(|| {
+                touch.as_ref().and_then(|touch| {
+                    (touch.swipe == Some(crate::ui::touch::Swipe::Backlog))
+                        .then_some(ButtonAction::Backlog)
+                })
+            })
+            .or_else(|| keyboard_shortcut(&keys))
             .or_else(|| {
                 (*scope == crate::ui::input_scope::UiInputScope::Stage
                     && !control_pressed
@@ -385,7 +414,8 @@ pub(crate) struct LifecycleContext<'w, 's> {
     toggles: Res<'w, ToggleStates>,
     auto_hide: Res<'w, AutoHideTiming>,
     input_caret: Res<'w, UserInputCaretBlink>,
-    real_time: Res<'w, Time<Real>>,
+    real_time: ResMut<'w, Time<Real>>,
+    render_time: Option<Res<'w, bevy::time::TimeReceiver>>,
     windows: Query<'w, 's, (&'static Window, Option<&'static OnMonitor>)>,
     monitors: Query<'w, 's, &'static Monitor>,
     benchmark: Option<Res<'w, crate::ui::performance::RuntimeCaptureConfig>>,
@@ -401,7 +431,7 @@ pub(crate) struct LifecycleContext<'w, 's> {
 const IDLE_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
 
 pub(crate) fn update_lifecycle(
-    context: LifecycleContext,
+    mut context: LifecycleContext,
     mut activity: ResMut<RuntimeActivity>,
     mut winit: ResMut<WinitSettings>,
     mut virtual_time: ResMut<Time<Virtual>>,
@@ -497,6 +527,14 @@ pub(crate) fn update_lifecycle(
         if should_pause_time {
             virtual_time.pause();
         } else {
+            // TimePlugin can consume a pre-sleep render timestamp on the wake
+            // frame. Its next timestamp would charge the whole idle interval
+            // after unpausing and skip up to max_delta of a new animation.
+            // Discard that backlog and rebase Real while Virtual is paused.
+            if let Some(receiver) = &context.render_time {
+                while receiver.0.try_recv().is_ok() {}
+            }
+            context.real_time.update_with_instant(Instant::now());
             virtual_time.unpause();
         }
     }
@@ -946,6 +984,7 @@ mod tests {
         app.init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<Touches>()
+            .init_resource::<ButtonInput<bevy::input::keyboard::Key>>()
             .init_resource::<Time>()
             .init_resource::<InputActions>()
             .init_resource::<PointerClickHistory>()
@@ -1002,6 +1041,7 @@ mod tests {
         app.init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<Touches>()
+            .init_resource::<ButtonInput<bevy::input::keyboard::Key>>()
             .init_resource::<Time>()
             .init_resource::<InputActions>()
             .init_resource::<PointerClickHistory>()
@@ -1368,6 +1408,66 @@ mod tests {
             UpdateMode::reactive_low_power(std::time::Duration::from_millis(500)),
             "idle sleep must still honor the control-bar fade deadline"
         );
+    }
+
+    #[test]
+    fn waking_animation_does_not_consume_sleep_from_the_render_clock() {
+        use bevy::ecs::system::RunSystemOnce;
+        use bevy::time::{TimePlugin, create_time_channels};
+        for hz in [60, 120] {
+            let mut app = App::new();
+            let (sender, receiver) = create_time_channels();
+            let origin = Instant::now() - std::time::Duration::from_secs(2);
+            app.add_plugins(TimePlugin)
+                .insert_resource(receiver)
+                .insert_resource(GameState(keine_core::State::new()))
+                .insert_resource(AssetLoadingGate { blocked: false })
+                .init_resource::<UiAnimationActivity>()
+                .init_resource::<AudioAnimationActivity>()
+                .init_resource::<ToggleStates>()
+                .init_resource::<AutoHideTiming>()
+                .init_resource::<UserInputCaretBlink>()
+                .init_resource::<RuntimeActivity>()
+                .insert_resource(WinitSettings::desktop_app());
+            app.world_mut().spawn(Window::default());
+            sender.0.try_send(origin).unwrap();
+            app.update();
+            app.world_mut().resource_mut::<Time<Virtual>>().pause();
+            // Pipelined rendering can leave two pre-sleep timestamps queued.
+            sender
+                .0
+                .try_send(origin + std::time::Duration::from_millis(8))
+                .unwrap();
+            sender
+                .0
+                .try_send(origin + std::time::Duration::from_millis(16))
+                .unwrap();
+            app.update();
+            app.world_mut().resource_mut::<UiAnimationActivity>().0 = true;
+            app.world_mut().run_system_once(update_lifecycle).unwrap();
+            let resumed = app.world().resource::<Time<Real>>().last_update().unwrap();
+            for frame in 1..=hz / 10 {
+                sender
+                    .0
+                    .try_send(
+                        resumed
+                            + std::time::Duration::from_secs_f64(f64::from(frame) / f64::from(hz)),
+                    )
+                    .unwrap();
+                app.update();
+                let delta = app.world().resource::<Time>().delta_secs();
+                println!("wake animation {hz} Hz delta: {delta:.6}s");
+                assert!(
+                    delta < 0.04,
+                    "sleep must not skip the start of an animation"
+                );
+            }
+            let elapsed = app.world().resource::<Time>().elapsed_secs();
+            assert!(
+                (elapsed - 0.1).abs() < 0.000_001,
+                "refresh rate must not change animation speed"
+            );
+        }
     }
 
     #[test]

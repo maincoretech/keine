@@ -294,7 +294,7 @@ impl SourceInspectorView<'_> {
                                     .cursor_pointer()
                                     .hover(|style| style.bg(rgb(SURFACE_HOVER)))
                                     .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.source_inspector_effect = Some(prefix);
+                                        this.inspector.source_inspector_effect = Some(prefix);
                                         cx.notify();
                                     }))
                                     .child(
@@ -327,7 +327,8 @@ impl SourceInspectorView<'_> {
                                             }))
                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                 cx.stop_propagation();
-                                                this.source_inspector_effect = Some(prefix);
+                                                this.inspector.source_inspector_effect =
+                                                    Some(prefix);
                                                 this.commit_source_fields(
                                                     &root, &key, &updates, window, cx,
                                                 );
@@ -737,6 +738,477 @@ pub(in crate::app) fn batch_block_edit(
         })
         .collect();
     Ok((edited, starts))
+}
+
+impl WorkbenchPanel {
+    pub(in crate::app) fn render_inspector(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let PanelContent::Inspector { root, file_count } = &self.content else {
+            return Empty.into_any_element();
+        };
+
+        let document_count = cx.global::<EditorDocuments>().open_document_count(root);
+        let index = cx.global::<EditorDocuments>().authoring(root);
+        let has_selection = cx.global::<EditorDocuments>().selection(root).is_some();
+        let asset_selection = cx.global::<EditorDocuments>().asset_selection(root);
+        let selected_assets = asset_selection
+            .iter()
+            .filter_map(|key| index.assets.iter().find(|asset| asset.key() == *key))
+            .collect::<Vec<_>>();
+        let inputs = self.inspector.inspector_inputs.clone();
+        let text_selects = self.inspector.inspector_selects.clone();
+        let source_key = self.inspector.source_inspector_key.clone();
+        let source_inputs = self.inspector.source_inspector_inputs.clone();
+        let source_texts = self.inspector.source_inspector_texts.clone();
+        let source_sliders = self.inspector.source_inspector_sliders.clone();
+        let source_selects = self.inspector.source_inspector_selects.clone();
+        let source_effect = self.inspector.source_inspector_effect;
+        let asset_inputs = self.inspector.asset_inspector_inputs.clone();
+        let unmapped_preview =
+            cx.global::<EditorDocuments>()
+                .asset_preview(root)
+                .filter(|preview| {
+                    file_ops::mapped_path(&preview.path).is_some() && asset_selection.is_empty()
+                });
+        let content = div()
+            .flex()
+            .flex_col()
+            .px(px(16.))
+            .py(px(10.))
+            .gap_2()
+            .when(!selected_assets.is_empty(), |this| {
+                this.child(section_label("ASSET"))
+                    .when(selected_assets.len() == 1, |this| {
+                        let asset = selected_assets[0];
+                        let mut groups =
+                            BTreeMap::<PathBuf, Vec<&crate::authoring::AssetReference>>::new();
+                        for reference in index
+                            .asset_references
+                            .iter()
+                            .filter(|reference| reference.key == asset.key())
+                        {
+                            let group = groups.entry(reference.path.clone()).or_default();
+                            if !group.iter().any(|entry| entry.line == reference.line) {
+                                group.push(reference);
+                            }
+                        }
+                        let limit = (f32::from(window.viewport_size().height) / 96.)
+                            .floor()
+                            .clamp(3., 12.) as usize;
+                        let more = groups.len().saturating_sub(limit);
+                        let references = groups
+                            .iter()
+                            .take(limit)
+                            .enumerate()
+                            .map(|(row, (path, refs))| {
+                                let root = root.clone();
+                                let path = path.clone();
+                                let line = refs[0].line;
+                                let column = refs[0].column;
+                                let lines = refs
+                                    .iter()
+                                    .take(4)
+                                    .map(|entry| format!("L{}", entry.line))
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                let extra = refs.len().saturating_sub(4);
+                                let label = format!(
+                                    "{}  {lines}{}",
+                                    path.display(),
+                                    if extra > 0 {
+                                        format!(" +{extra}")
+                                    } else {
+                                        String::new()
+                                    }
+                                );
+                                div()
+                                    .id(("asset-reference", row))
+                                    .p_1()
+                                    .rounded(px(6.))
+                                    .text_xs()
+                                    .text_color(rgb(MUTED))
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                                    .tooltip(icon_hint(
+                                        refs.iter()
+                                            .map(|entry| {
+                                                format!("{}:L{}", path.display(), entry.line)
+                                            })
+                                            .collect::<Vec<_>>()
+                                            .join(
+                                                "
+",
+                                            ),
+                                    ))
+                                    .on_click(move |_, window, cx| {
+                                        navigate_source(&root, &path, line, column, window, cx)
+                                    })
+                                    .child(label)
+                            })
+                            .collect::<Vec<_>>();
+                        this.when(asset_inputs.len() == 3, |this| {
+                            this.child(property_input("ID", &asset_inputs[0]))
+                                .child(property_input("Type", &asset_inputs[1]))
+                                .child(property_row("Path", asset.path.display().to_string()))
+                                .child(property_input("Tags", &asset_inputs[2]))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap_1()
+                                        .items_center()
+                                        .child(
+                                            Switch::new("rename-asset-file")
+                                                .checked(self.inspector.asset_rename_file)
+                                                .on_click(cx.listener(
+                                                    |this, checked: &bool, _, cx| {
+                                                        this.inspector.asset_rename_file = *checked;
+                                                        cx.notify();
+                                                    },
+                                                )),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(MUTED))
+                                                .child("Rename file to match"),
+                                        ),
+                                )
+                        })
+                        .child(section_label("REFERENCES"))
+                        .children(references)
+                        .child(resource_trigger(
+                            root,
+                            ResourceTarget::Reference,
+                            index
+                                .asset_references
+                                .iter()
+                                .filter(|reference| reference.key == asset.key())
+                                .map(|reference| SourceOption {
+                                    value: serde_json::to_string(&(
+                                        reference.path.clone(),
+                                        reference.line,
+                                        reference.column,
+                                    ))
+                                    .expect("reference tuple serializes"),
+                                    title: format!(
+                                        "{}:L{}",
+                                        reference.path.display(),
+                                        reference.line
+                                    )
+                                    .into(),
+                                    asset: None,
+                                })
+                                .collect(),
+                            "Browse references".into(),
+                            false,
+                            cx,
+                        ))
+                        .when(more > 0, |this| {
+                            this.child(
+                                div()
+                                    .id("asset-more-references")
+                                    .text_xs()
+                                    .text_color(rgb(MUTED))
+                                    .tooltip(icon_hint(
+                                        groups
+                                            .keys()
+                                            .skip(limit)
+                                            .map(|path| path.display().to_string())
+                                            .collect::<Vec<_>>()
+                                            .join(
+                                                "
+",
+                                            ),
+                                    ))
+                                    .child(format!("+{more} files")),
+                            )
+                        })
+                    })
+                    .when(selected_assets.len() > 1, |this| {
+                        this.child(property_row("Selected", selected_assets.len().to_string()))
+                            .child(property_row(
+                                "Type",
+                                common_value(
+                                    selected_assets
+                                        .iter()
+                                        .map(|asset| asset.kind.label().to_owned()),
+                                ),
+                            ))
+                            .child(property_row(
+                                "Folder",
+                                common_value(selected_assets.iter().map(|asset| {
+                                    asset
+                                        .path
+                                        .parent()
+                                        .unwrap_or(Path::new(""))
+                                        .display()
+                                        .to_string()
+                                })),
+                            ))
+                            .child(property_row(
+                                "Tags",
+                                common_value(
+                                    selected_assets.iter().map(|asset| asset.tags.join(", ")),
+                                ),
+                            ))
+                            .child(property_input(
+                                "Batch tags",
+                                &self.inspector.asset_batch_tags,
+                            ))
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap_1()
+                                    .child(asset_action_button("add-tags", "Add").on_click(
+                                        cx.listener({
+                                            let root = root.clone();
+                                            move |this, _, window, cx| {
+                                                this.asset_tags(&root, true, window, cx)
+                                            }
+                                        }),
+                                    ))
+                                    .child(asset_action_button("remove-tags", "Remove").on_click(
+                                        cx.listener({
+                                            let root = root.clone();
+                                            move |this, _, window, cx| {
+                                                this.asset_tags(&root, false, window, cx)
+                                            }
+                                        }),
+                                    )),
+                            )
+                    })
+                    .child(
+                        asset_action_button("delete-assets", "Delete").on_click(cx.listener({
+                            let root = root.clone();
+                            move |this, _, window, cx| this.delete_assets(&root, None, window, cx)
+                        })),
+                    )
+            })
+            .when_some(unmapped_preview.clone(), |this, preview| {
+                let path = preview.path;
+                this.child(section_label("UNMAPPED"))
+                    .child(property_row("Path", path.display().to_string()))
+                    .child(
+                        div()
+                            .flex()
+                            .gap_1()
+                            .child(asset_action_button("remap-asset", "Remap").on_click(
+                                cx.listener({
+                                    let root = root.clone();
+                                    let path = path.clone();
+                                    move |this, _, window, cx| {
+                                        this.remap_asset(&root, &path, window, cx)
+                                    }
+                                }),
+                            ))
+                            .child(asset_action_button("trash-unmapped", "Trash").on_click(
+                                cx.listener({
+                                    let root = root.clone();
+                                    move |this, _, window, cx| {
+                                        this.delete_assets(&root, Some(path.clone()), window, cx)
+                                    }
+                                }),
+                            )),
+                    )
+            })
+            .when(
+                asset_selection.is_empty() && unmapped_preview.is_none() && has_selection,
+                |this| {
+                    this.when(source_key.is_none() && inputs.is_empty(), |this| {
+                        let batch = cx
+                            .global::<EditorDocuments>()
+                            .block_selection(root)
+                            .and_then(|(path, starts)| {
+                                let source = cx.global::<EditorDocuments>().source(root, path)?;
+                                Some(batch_block_fields(&source, starts))
+                            })
+                            .unwrap_or_default();
+                        this.child(selection_summary(root, &index, cx)).when(
+                            !batch.is_empty(),
+                            |this| {
+                                this.child(section_label("BATCH EDIT"))
+                                    .child(div().flex().flex_wrap().gap_1().children(
+                                        batch.into_iter().enumerate().map(|(i, (name, value))| {
+                                            let active = self.inspector.batch_block_field.as_ref()
+                                                == Some(&name);
+                                            div()
+                                                .id(("batch-field", i))
+                                                .px_2()
+                                                .py_1()
+                                                .rounded(px(5.))
+                                                .text_xs()
+                                                .bg(rgb(if active { PRIMARY_DIM } else { SURFACE }))
+                                                .text_color(rgb(if active {
+                                                    PRIMARY
+                                                } else {
+                                                    MUTED
+                                                }))
+                                                .cursor_pointer()
+                                                .child(format!(
+                                                    "{name} · {}",
+                                                    if value.is_empty() {
+                                                        "Default"
+                                                    } else {
+                                                        &value
+                                                    }
+                                                ))
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        this.inspector.batch_block_field =
+                                                            Some(name.clone());
+                                                        this.inspector.batch_block_input.update(
+                                                            cx,
+                                                            |input, cx| {
+                                                                input.set_value(
+                                                                    if value == "Mixed" {
+                                                                        ""
+                                                                    } else {
+                                                                        &value
+                                                                    },
+                                                                    window,
+                                                                    cx,
+                                                                )
+                                                            },
+                                                        );
+                                                        cx.notify();
+                                                    },
+                                                ))
+                                        }),
+                                    ))
+                                    .child(property_input(
+                                        "Value",
+                                        &self.inspector.batch_block_input,
+                                    ))
+                                    .child(
+                                        asset_action_button("apply-batch-block", "Apply").on_click(
+                                            cx.listener({
+                                                let root = root.clone();
+                                                move |this, _, window, cx| {
+                                                    this.apply_batch_block_field(&root, window, cx)
+                                                }
+                                            }),
+                                        ),
+                                    )
+                            },
+                        )
+                    })
+                    .when(inputs.len() == 3 && text_selects.len() == 2, |this| {
+                        this.child(section_label("TEXT"))
+                            .child(
+                                div()
+                                    .w_full()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(section_label("Speaker"))
+                                    .child(resource_trigger(
+                                        root,
+                                        ResourceTarget::Speaker(
+                                            self.inspector
+                                                .inspector_key
+                                                .clone()
+                                                .expect("selected text Inspector"),
+                                        ),
+                                        resource::speaker_options(&index),
+                                        inputs[0].read(cx).value().to_string(),
+                                        false,
+                                        cx,
+                                    )),
+                            )
+                            .child(
+                                div()
+                                    .w_full()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(section_label("Voice"))
+                                    .child(resource_trigger(
+                                        root,
+                                        ResourceTarget::Voice(
+                                            self.inspector
+                                                .inspector_key
+                                                .clone()
+                                                .expect("Text Inspector key"),
+                                        ),
+                                        voice_resource_options(root, &index),
+                                        self.inspector
+                                            .inspector_key
+                                            .as_ref()
+                                            .and_then(|key| key.metadata.voice.clone())
+                                            .unwrap_or_default(),
+                                        false,
+                                        cx,
+                                    )),
+                            )
+                            .child(property_input("Stable ID", &inputs[2]))
+                            .child(render_text_ending(
+                                root,
+                                self.inspector
+                                    .inspector_key
+                                    .as_ref()
+                                    .expect("Text Inspector key"),
+                                &self.inspector.text_lifetime_inputs,
+                                cx,
+                            ))
+                    })
+                    .when_some(source_key, |this, key| {
+                        this.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    Icon::new(block_card_icon(&key.kind, &key.command))
+                                        .small()
+                                        .text_color(rgb(PRIMARY)),
+                                )
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(rgb(INK))
+                                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                        .child(block_card_label(&key.kind, &key.command)),
+                                ),
+                        )
+                        .child(
+                            SourceInspectorView {
+                                root,
+                                key: &key,
+                                inputs: &source_inputs,
+                                texts: &source_texts,
+                                sliders: &source_sliders,
+                                selects: &source_selects,
+                                effect: source_effect,
+                                position_bounds: &self.inspector.source_position_bounds,
+                                position_draft: self.inspector.source_position_draft,
+                            }
+                            .render(cx),
+                        )
+                    })
+                },
+            )
+            .when(asset_selection.is_empty() && !has_selection, |this| {
+                this.child(section_label("WORKSPACE"))
+                    .child(property_row("Path", root.display().to_string()))
+                    .child(property_row("Text files", file_count.to_string()))
+                    .child(property_row("Open documents", document_count.to_string()))
+            });
+        div()
+            .size_full()
+            .relative()
+            .child(vertical_overflow_view(
+                "inspector-scroll",
+                &self.view_scroll,
+                content,
+            ))
+            .when_some(self.render_resource_picker(window, cx), |this, picker| {
+                this.child(picker)
+            })
+            .into_any_element()
+    }
 }
 
 #[cfg(test)]

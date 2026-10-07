@@ -1,6 +1,12 @@
 //! Block insertion palette, context menus and persisted ordering preferences.
 use super::*;
 
+mod drag;
+pub(in crate::app) use drag::{PickerDrag, PickerDragSession};
+use drag::{picker_item_id, render_picker_grip};
+
+pub(in crate::app) const BLOCK_PICKER_CLOSE_DURATION: Duration = Duration::from_millis(90);
+
 pub(in crate::app) const PICKER_CATEGORIES: [&str; 5] = ["Text", "Scene", "Media", "Flow", "Data"];
 
 pub(in crate::app) fn toggle_preference(values: &mut Vec<String>, value: &str) {
@@ -67,7 +73,15 @@ pub(in crate::app) fn move_group_preference(
     let target = group_index
         .saturating_add_signed(delta)
         .min(group_positions.len() - 1);
-    ordered.swap(group_positions[group_index], group_positions[target]);
+    let mut group_values = group_positions
+        .iter()
+        .map(|index| ordered[*index])
+        .collect::<Vec<_>>();
+    let moved = group_values.remove(group_index);
+    group_values.insert(target, moved);
+    for (position, value) in group_positions.into_iter().zip(group_values) {
+        ordered[position] = value;
+    }
     *values = ordered.into_iter().map(str::to_owned).collect();
 }
 
@@ -93,6 +107,15 @@ pub(in crate::app) fn ordered_picker_categories(
         )
     });
     categories
+}
+
+pub(in crate::app) fn picker_categories(
+    preferences: &BlockPickerPreferences,
+) -> Vec<Option<&'static str>> {
+    std::iter::once(Some("Favorites"))
+        .chain(ordered_picker_categories(preferences).into_iter().map(Some))
+        .chain(std::iter::once(None))
+        .collect()
 }
 
 pub(in crate::app) fn picker_kinds(
@@ -131,6 +154,9 @@ pub(in crate::app) fn picker_kinds(
         })
         .collect::<Vec<_>>();
     kinds.sort_by_key(|kind| {
+        if selected_category == Some("Favorites") && query.is_empty() {
+            return (0, preference_rank(&preferences.favorites, kind.label(), 0));
+        }
         let category_rank = categories
             .iter()
             .position(|category| *category == kind.category())
@@ -207,18 +233,23 @@ pub(in crate::app) fn insert_kind_icon(kind: InsertKind) -> AssetIconName {
 
 pub(in crate::app) fn render_block_picker(
     kinds: &[InsertKind],
-    input: &Entity<InputState>,
-    selected_index: usize,
-    selected_category: Option<&'static str>,
-    customize: bool,
     preferences: &BlockPickerPreferences,
+    panel: &WorkbenchPanel,
     cx: &mut Context<WorkbenchPanel>,
 ) -> AnyElement {
+    let input = &panel.picker.block_picker_input;
+    let selected_index = panel.picker.block_picker_index;
+    let selected_category = panel.picker.block_picker_category;
+    let customize = panel.picker.block_picker_customize;
+    let closing = panel.picker.block_picker_closing;
+    let epoch = panel.picker.block_picker_epoch;
+    let favorites_view =
+        selected_category == Some("Favorites") && input.read(cx).value().is_empty();
     let mut rows = Vec::new();
     let mut previous_category = None;
     for (index, kind) in kinds.iter().copied().enumerate() {
         let category = kind.category();
-        if previous_category != Some(category) {
+        if previous_category != Some(category) && !favorites_view {
             rows.push(
                 div()
                     .w_full()
@@ -264,12 +295,23 @@ pub(in crate::app) fn render_block_picker(
                 .cursor_pointer()
                 .hover(|style| style.bg(rgb(SURFACE_HOVER)))
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    this.block_picker_open = false;
+                    if this.picker.block_picker_closing {
+                        return;
+                    }
+                    if this.picker.block_picker_customize {
+                        this.picker.block_picker_index = index;
+                        cx.notify();
+                        return;
+                    }
+                    this.close_block_picker(&CloseBlockPicker, window, cx);
                     this.insert_from_palette(kind, window, cx);
                     this.rebuild_visual_editors(window, cx);
                     this.focus.focus(window, cx);
                     cx.notify();
                 }))
+                .when(customize && input.read(cx).value().is_empty(), |row| {
+                    row.child(render_picker_grip(kind, cx))
+                })
                 .child(
                     div()
                         .size(px(16.))
@@ -329,48 +371,6 @@ pub(in crate::app) fn render_block_picker(
                 )
                 .child(
                     div()
-                        .id(("picker-up", index))
-                        .size(px(24.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(5.))
-                        .hover(|style| style.bg(rgb(SURFACE)))
-                        .tooltip(icon_hint("Move up"))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.move_picker_item(kind, -1, cx);
-                            cx.notify();
-                        }))
-                        .child(
-                            Icon::new(AssetIconName::ArrowUp)
-                                .xsmall()
-                                .text_color(rgb(MUTED)),
-                        ),
-                )
-                .child(
-                    div()
-                        .id(("picker-down", index))
-                        .size(px(24.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(5.))
-                        .hover(|style| style.bg(rgb(SURFACE)))
-                        .tooltip(icon_hint("Move down"))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.move_picker_item(kind, 1, cx);
-                            cx.notify();
-                        }))
-                        .child(
-                            Icon::new(AssetIconName::ArrowDown)
-                                .xsmall()
-                                .text_color(rgb(MUTED)),
-                        ),
-                )
-                .child(
-                    div()
                         .id(("picker-visible", index))
                         .size(px(24.))
                         .flex()
@@ -405,14 +405,40 @@ pub(in crate::app) fn render_block_picker(
                     .text_color(rgb(PRIMARY)),
             );
         }
+        if customize {
+            let id = picker_item_id(kind);
+            let offset = panel
+                .picker
+                .picker_drag
+                .as_ref()
+                .map_or(0., |drag| drag.offset(id, cx.reduce_motion()));
+            let hidden = panel
+                .picker
+                .picker_drag
+                .as_ref()
+                .is_some_and(|drag| drag.hidden(id));
+            let measured = panel.picker.picker_row_bounds.clone();
+            row = row
+                .relative()
+                .top(px(offset))
+                .when(hidden, |row| row.opacity(0.))
+                .child(
+                    canvas(
+                        move |bounds, _, _| {
+                            measured.borrow_mut().insert(id, bounds);
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .size_full(),
+                );
+        }
         rows.push(row.into_any_element());
     }
-    let categories = std::iter::once(None)
-        .chain(std::iter::once(Some("Favorites")))
-        .chain(ordered_picker_categories(preferences).into_iter().map(Some))
-        .collect::<Vec<_>>();
-    div()
+    let categories = picker_categories(preferences);
+    let overlay = div()
         .id("block-picker-overlay")
+        .occlude()
         .absolute()
         .top_0()
         .right_0()
@@ -473,14 +499,37 @@ pub(in crate::app) fn render_block_picker(
                                 .hover(|style| style.bg(rgb(SURFACE_HOVER)))
                                 .tooltip(icon_hint("Customize blocks"))
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.block_picker_customize = !this.block_picker_customize;
-                                    this.block_picker_index = 0;
+                                    this.picker.block_picker_customize =
+                                        !this.picker.block_picker_customize;
+                                    this.picker.block_picker_index = 0;
                                     cx.notify();
                                 }))
                                 .child(
                                     Icon::new(AssetIconName::SlidersHorizontal)
                                         .xsmall()
                                         .text_color(rgb(if customize { PRIMARY } else { MUTED })),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .id("block-picker-close")
+                                .size(px(28.))
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(6.))
+                                .cursor_pointer()
+                                .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                                .tooltip(icon_hint("Close"))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.close_block_picker(&CloseBlockPicker, window, cx);
+                                }))
+                                .child(
+                                    Icon::new(AssetIconName::Close)
+                                        .xsmall()
+                                        .text_color(rgb(MUTED)),
                                 ),
                         ),
                 )
@@ -505,6 +554,10 @@ pub(in crate::app) fn render_block_picker(
                                         let label = category.unwrap_or("All");
                                         let mut row = div()
                                             .id(("block-picker-category", index))
+                                            .when(
+                                                category.is_none() || category == Some("Favorites"),
+                                                |row| row.w_full(),
+                                            )
                                             .h(px(30.))
                                             .px_2()
                                             .flex()
@@ -516,8 +569,8 @@ pub(in crate::app) fn render_block_picker(
                                             .cursor_pointer()
                                             .hover(|style| style.bg(rgb(SURFACE_HOVER)))
                                             .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.block_picker_category = category;
-                                                this.block_picker_index = 0;
+                                                this.picker.block_picker_category = category;
+                                                this.picker.block_picker_index = 0;
                                                 cx.notify();
                                             }))
                                             .child(div().flex_1().child(label));
@@ -576,6 +629,7 @@ pub(in crate::app) fn render_block_picker(
                         )
                         .child(
                             div()
+                                .id("block-picker-results")
                                 .relative()
                                 .flex_1()
                                 .min_w_0()
@@ -586,20 +640,80 @@ pub(in crate::app) fn render_block_picker(
                                 .content_start()
                                 .gap_1()
                                 .children(rows)
-                                .overflow_y_scrollbar()
-                                .id("block-picker-results"),
+                                .when_some(
+                                    panel
+                                        .picker
+                                        .picker_drag
+                                        .as_ref()
+                                        .and_then(|drag| drag.placeholder_top(cx.reduce_motion())),
+                                    |results, top| {
+                                        results.child(
+                                            div()
+                                                .absolute()
+                                                .left(px(8.))
+                                                .right(px(8.))
+                                                .top(px(top))
+                                                .h(px(34.))
+                                                .rounded(px(6.))
+                                                .bg(rgb(SURFACE_HOVER))
+                                                .opacity(0.5),
+                                        )
+                                    },
+                                )
+                                .track_scroll(&panel.picker.picker_scroll)
+                                .on_drag_move(cx.listener(
+                                    |this, event: &DragMoveEvent<PickerDrag>, _, cx| {
+                                        if this.picker.picker_drag.as_ref().is_some_and(|session| {
+                                            Rc::ptr_eq(&session.token, &event.drag(cx).token)
+                                        }) {
+                                            this.update_picker_drag(event.event.position, cx);
+                                        }
+                                    },
+                                ))
+                                .on_drop(cx.listener(|this, drag: &PickerDrag, window, cx| {
+                                    this.drop_picker_drag(drag, window, cx)
+                                }))
+                                .overflow_y_scroll()
+                                .vertical_scrollbar(&panel.picker.picker_scroll),
                         ),
                 ),
+        );
+    if cx.reduce_motion() {
+        return overlay.into_any_element();
+    }
+    overlay
+        .with_animation(
+            ("block-picker-motion", epoch),
+            Animation::new(if closing {
+                BLOCK_PICKER_CLOSE_DURATION
+            } else {
+                Duration::from_millis(180)
+            })
+            .with_easing(ease_out_quint()),
+            move |overlay, progress| {
+                let alpha = if closing { 1. - progress } else { progress };
+                // Move the whole surface without resizing the results area.
+                let offset = if closing { 0. } else { (1. - progress) * 8. };
+                overlay
+                    .opacity(alpha)
+                    .pt(px(12. + offset))
+                    .pb(px(12. - offset))
+            },
         )
         .into_any_element()
 }
 
 pub(in crate::app) fn render_block_context_menu(
-    row: usize,
-    position: Point<Pixels>,
-    source: String,
+    menu: BlockContextMenu,
     cx: &mut Context<WorkbenchPanel>,
 ) -> AnyElement {
+    let BlockContextMenu {
+        row,
+        position,
+        source,
+        epoch,
+        closing,
+    } = menu;
     let block = EiyashouProjection::parse(&source)
         .scenes
         .into_iter()
@@ -702,9 +816,8 @@ pub(in crate::app) fn render_block_context_menu(
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                        this.block_context_menu = None;
-                        cx.notify();
+                    .on_mouse_down_out(cx.listener(|this, _, window, cx| {
+                        this.close_block_context_menu(window, cx);
                     }))
                     .children(items.into_iter().enumerate().map(
                         |(index, (action, icon, label, danger))| {
@@ -740,7 +853,21 @@ pub(in crate::app) fn render_block_context_menu(
                                 .child(Icon::new(icon).xsmall())
                                 .child(label)
                         },
-                    )),
+                    ))
+                    .with_animation(
+                        ("block-context-motion", epoch),
+                        Animation::new(if cx.reduce_motion() {
+                            Duration::ZERO
+                        } else if closing {
+                            Duration::from_millis(90)
+                        } else {
+                            Duration::from_millis(120)
+                        })
+                        .with_easing(ease_out_quint()),
+                        move |surface, progress| {
+                            surface.opacity(if closing { 1. - progress } else { progress })
+                        },
+                    ),
             ),
     )
     .priority(100)
@@ -830,7 +957,12 @@ pub(in crate::app) fn render_scene_context_menu(
         )
         .with_animation(
             ("scene-context-motion", menu.epoch),
-            Animation::new(Duration::from_millis(motion_duration)).with_easing(ease_out_quint()),
+            Animation::new(if cx.reduce_motion() {
+                Duration::ZERO
+            } else {
+                Duration::from_millis(motion_duration)
+            })
+            .with_easing(ease_out_quint()),
             move |surface, delta| {
                 let progress = if closing { 1. - delta } else { delta };
                 let scale = 0.94 + progress * 0.06;
@@ -861,3 +993,6 @@ pub(in crate::app) fn render_scene_context_menu(
     .priority(100)
     .into_any_element()
 }
+
+mod state;
+pub(in crate::app) use state::PickerState;

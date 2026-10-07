@@ -33,12 +33,19 @@ Preview Engine；Windows/Linux 是相邻的 Editor/Engine executable 和运行�
 Editor 的 Build 临时试玩导出不需要 Cargo/密钥；规范媒体播放含对应平台视频后端。
 转换非规范音视频仍须另装 FFmpeg executable，SDK 动态库不是转换工具。
 
+CI / 发布使用官方稳定 Actions 并固定完整发布 SHA；JavaScript Actions 使用 Node 24。
+Runner 显式使用 `ubuntu-26.04`、`macos-26`（arm64）和 `windows-2025`（x64）；
+Rust 原生构建缓存按 runner image / architecture 隔离，
+避免系统迁移时恢复其他镜像的链接产物。artifact 下载沿用新版默认的哈希校验失败即报错。
+版本与 runner 要求依据 [GitHub Node 20 退役公告](https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/)
+及 [官方 runner images](https://github.com/actions/runner-images#available-images)。
+
 维护者操作：
 
-1. 推送 main 后等待 **CI**，成功后 **Release** 更新 benchmark，**Editor Release** 更新 Editor。
-2. 发布 tday：Actions → **Release** → **Run workflow** → 选目标 ref → `package=tday`。
+1. 推送 main 后等待 **CI Desktop**，成功后 **Release Engine** 更新 benchmark，**Release Editor** 更新 Editor。
+2. 发布 tday：Actions → **Release Engine** → **Run workflow** → 选目标 ref → `package=tday`。
    普通推送和自动 CI 完成不会触发 tday 打包。此渠道只用隔离临时 identity，不读正式发行密钥。
-3. 手动补发 benchmark：同一入口选 `package=benchmark`；补发 Editor 则运行 **Editor Release**。
+3. 手动补发 benchmark：同一入口选 `package=benchmark`；补发 Editor 则运行 **Release Editor**。
 4. 下载更新完成后核对标签对应的 SHA、三个平台 ZIP 和包内 provenance；代码推送、CI 成功、
    Release 附件更新分别确认。正式游戏发行继续使用下方 Project CI/CLI 与稳定 identity。
 

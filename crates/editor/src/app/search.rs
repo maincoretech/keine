@@ -182,11 +182,11 @@ impl WorkbenchPanel {
                     editor.unfold_at(position, cx);
                     editor.set_cursor_position(position, window, cx);
                     editor.set_selected_range(hit.range.clone(), cx);
-                    if panel.document_mode == DocumentMode::Text {
+                    if panel.document.document_mode == DocumentMode::Text {
                         editor.focus(window, cx);
                     }
                 });
-                if panel.document_mode == DocumentMode::Block
+                if panel.document.document_mode == DocumentMode::Block
                     && let Some(source) = source.as_ref()
                 {
                     let projection = cx
@@ -202,7 +202,7 @@ impl WorkbenchPanel {
                         block_at_position(&projection, source, hit.line, column)
                     {
                         panel.select_current_block(block.source_range.start, cx);
-                        panel.block_scroll_pending = true;
+                        panel.document.block_scroll_pending = true;
                         panel.focus.focus(window, cx);
                     }
                 }
@@ -215,7 +215,7 @@ impl WorkbenchPanel {
     pub(super) fn render_search(
         &mut self,
         root: &Path,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let revision = cx
@@ -249,6 +249,8 @@ impl WorkbenchPanel {
             )
         };
         let mut rows = Vec::new();
+        let mut reveals = HashMap::new();
+        let mut progresses = Vec::new();
         let mut start = 0;
         while start < search.results.hits.len() {
             let path = &search.results.hits[start].path;
@@ -257,25 +259,34 @@ impl WorkbenchPanel {
                     .iter()
                     .take_while(|hit| hit.path == *path)
                     .count();
+            let progress = disclosure_progress(
+                format!("search-file-{}", path.display()),
+                !search.collapsed.contains(path),
+                window,
+                cx,
+            );
+            reveals.insert(path.clone(), progress);
             rows.push(SearchRow::File(path.clone(), end - start));
-            if !search.collapsed.contains(path) {
+            progresses.push(1.);
+            if progress > 0. {
                 rows.extend((start..end).map(SearchRow::Hit));
+                progresses.extend(std::iter::repeat_n(progress, end - start));
             }
             start = end;
         }
-        let first = ((-f32::from(self.view_scroll.offset().y) / ROW_HEIGHT).max(0.) as usize)
-            .saturating_sub(3)
-            .min(rows.len());
-        let count = (f32::from(self.view_scroll.bounds().size.height) / ROW_HEIGHT)
-            .ceil()
-            .max(24.) as usize
-            + 6;
-        let end = (first + count).min(rows.len());
+        let offsets = row_offsets(progresses.iter().map(|progress| ROW_HEIGHT * progress));
+        let range = visible_row_range(
+            &offsets,
+            (-f32::from(self.view_scroll.offset().y) - 84.).max(0.),
+            f32::from(self.view_scroll.bounds().size.height).max(672.) + 168.,
+        );
+        let first = range.start;
+        let end = range.end;
         let contents = div()
             .flex()
             .flex_col()
             .w_full()
-            .child(div().h(px(first as f32 * ROW_HEIGHT)).flex_none())
+            .child(div().h(px(offsets[first])).flex_none())
             .children(
                 rows[first..end]
                     .iter()
@@ -283,7 +294,6 @@ impl WorkbenchPanel {
                     .map(|(row, result)| match result {
                         SearchRow::File(path, count) => {
                             let path = path.clone();
-                            let collapsed = search.collapsed.contains(&path);
                             div()
                                 .id(("search-file", first + row))
                                 .h(px(ROW_HEIGHT))
@@ -296,14 +306,7 @@ impl WorkbenchPanel {
                                 .text_color(rgb(MUTED))
                                 .cursor_pointer()
                                 .hover(|style| style.bg(rgb(SURFACE)))
-                                .child(
-                                    Icon::new(if collapsed {
-                                        IconName::ChevronRight
-                                    } else {
-                                        IconName::ChevronDown
-                                    })
-                                    .xsmall(),
-                                )
+                                .child(disclosure_chevron(reveals[&path]))
                                 .child(
                                     div()
                                         .flex_1()
@@ -336,7 +339,7 @@ impl WorkbenchPanel {
                                         ..Default::default()
                                     },
                                 )]);
-                            div()
+                            let hit_row = div()
                                 .id(("search-hit", index))
                                 .h(px(ROW_HEIGHT))
                                 .flex_none()
@@ -368,14 +371,20 @@ impl WorkbenchPanel {
                                 )
                                 .on_click(cx.listener(move |panel, _, window, cx| {
                                     panel.open_search_hit(index, window, cx)
-                                }))
+                                }));
+                            div()
+                                .h(px(ROW_HEIGHT * progresses[first + row]))
+                                .flex_none()
+                                .overflow_hidden()
+                                .opacity(progresses[first + row])
+                                .child(hit_row)
                                 .into_any_element()
                         }
                     }),
             )
             .child(
                 div()
-                    .h(px((rows.len() - end) as f32 * ROW_HEIGHT))
+                    .h(px(offsets.last().unwrap() - offsets[end]))
                     .flex_none(),
             );
         div().size_full().flex().flex_col().min_h_0()
@@ -383,17 +392,20 @@ impl WorkbenchPanel {
                 let Some(search) = panel.project_search.as_mut().filter(|search| !search.loading) else { return; };
                 match event.keystroke.key.as_str() {
                     "down" | "up" if !search.results.hits.is_empty() => {
-                        search.selected = if event.keystroke.key == "down" { (search.selected + 1).min(search.results.hits.len() - 1) } else { search.selected.saturating_sub(1) };
+                        let eligible = search.results.hits.iter().enumerate().filter(|(_, hit)| !search.collapsed.contains(&hit.path)).map(|(index, _)| index).collect::<Vec<_>>();
+                        let next = if event.keystroke.key == "down" { eligible.iter().find(|index| **index > search.selected) } else { eligible.iter().rev().find(|index| **index < search.selected) };
+                        let Some(next) = next else { return; };
+                        search.selected = *next;
                         // Keep the selected result in the visible window, including file headers.
                         let row = rows.iter().position(|row| matches!(row, SearchRow::Hit(index) if *index == search.selected)).unwrap_or(0);
                         let visible = f32::from(panel.view_scroll.bounds().size.height);
                         let current = -f32::from(panel.view_scroll.offset().y);
-                        let top = row as f32 * ROW_HEIGHT;
+                        let top = offsets[row];
                         let scroll = if top < current { top } else if top + ROW_HEIGHT > current + visible { top + ROW_HEIGHT - visible } else { current };
                         panel.view_scroll.set_offset(gpui_kit::point(px(0.), px(-scroll.max(0.))));
                         cx.stop_propagation(); cx.notify();
                     }
-                    "enter" => { let index = search.selected; panel.open_search_hit(index, window, cx); cx.stop_propagation(); }
+                    "enter" => { let index = search.selected; if search.results.hits.get(index).is_some_and(|hit| !search.collapsed.contains(&hit.path)) { panel.open_search_hit(index, window, cx); } cx.stop_propagation(); }
                     _ => {}
                 }
             }))

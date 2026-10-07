@@ -1,4 +1,4 @@
-name: Project release
+name: Release Project
 
 # A game repository calls this workflow by a full Kēne commit SHA. The job
 # checks out the workflow-owning repository at that same resolved SHA, making
@@ -31,8 +31,8 @@ permissions:
 
 jobs:
   bundle-linux:
-    name: Linux x64 release
-    runs-on: ubuntu-24.04
+    name: Build Linux x64
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     env:
       RUST_TOOLCHAIN: 1.97.1
@@ -146,9 +146,9 @@ jobs:
             ~/.cargo/git
             keine-engine/target/release
             keine-engine/target/runner
-          key: project-release-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.keine.outputs.sha }}-${{ hashFiles('keine-engine/Cargo.lock', 'keine-engine/**/Cargo.toml', 'keine-engine/rust-toolchain.toml') }}-${{ env.KEINE_RELEASE_CACHE_FEATURES }}
+          key: project-release-v1-ubuntu-26.04-${{ runner.arch }}-${{ steps.keine.outputs.sha }}-${{ hashFiles('keine-engine/Cargo.lock', 'keine-engine/**/Cargo.toml', 'keine-engine/rust-toolchain.toml') }}-${{ env.KEINE_RELEASE_CACHE_FEATURES }}
           restore-keys: |
-            project-release-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.keine.outputs.sha }}-${{ hashFiles('keine-engine/Cargo.lock', 'keine-engine/**/Cargo.toml', 'keine-engine/rust-toolchain.toml') }}-
+            project-release-v1-ubuntu-26.04-${{ runner.arch }}-${{ steps.keine.outputs.sha }}-${{ hashFiles('keine-engine/Cargo.lock', 'keine-engine/**/Cargo.toml', 'keine-engine/rust-toolchain.toml') }}-
 
       - name: Install Linux platform dependencies
         uses: ./keine-engine/.github/actions/setup-video
@@ -238,7 +238,7 @@ jobs:
           keine_sha=$KEINE_SHA
           rust_toolchain=$RUST_TOOLCHAIN
           rustc_version=$rustc_version
-          runner_image=ubuntu-24.04
+          runner_image=ubuntu-26.04
           runner_os=$RUNNER_OS
           runner_arch=$RUNNER_ARCH
           release_features=$KEINE_RELEASE_FEATURES
@@ -246,7 +246,7 @@ jobs:
           EOF
 
       - name: Upload formal release
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ inputs.artifact-name }}
           path: ${{ steps.bundle.outputs.path }}/

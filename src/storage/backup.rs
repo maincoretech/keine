@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 use std::fs;
+#[cfg(any(target_os = "android", test))]
+use std::io::Read;
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
@@ -42,6 +44,17 @@ struct BorrowedBackupFile<'a> {
 }
 
 pub(crate) fn export(project_root: &Path, target: &Path) -> Result<()> {
+    super::write_atomically(target, &export_bytes(project_root)?)
+}
+
+#[cfg(any(target_os = "android", test))]
+pub(crate) fn export_to_stream(project_root: &Path, mut target: impl Write) -> Result<()> {
+    target.write_all(&export_bytes(project_root)?)?;
+    target.flush()?;
+    Ok(())
+}
+
+fn export_bytes(project_root: &Path) -> Result<Vec<u8>> {
     let directory = project_root.join("saves");
     let mut files = Vec::new();
     let mut total_bytes = 0usize;
@@ -78,7 +91,7 @@ pub(crate) fn export(project_root: &Path, target: &Path) -> Result<()> {
     if bytes.len() > MAX_BACKUP_BYTES {
         bail!("backup exceeds the {MAX_BACKUP_BYTES}-byte limit");
     }
-    super::write_atomically(target, &bytes)
+    Ok(bytes)
 }
 
 pub(crate) fn import(project_root: &Path, source: &Path) -> Result<()> {
@@ -88,8 +101,26 @@ pub(crate) fn import(project_root: &Path, source: &Path) -> Result<()> {
     recover(project_root)?;
 
     let bytes = super::read_limited(source, MAX_BACKUP_BYTES)?;
+    import_bytes(project_root, &bytes)
+}
+
+#[cfg(any(target_os = "android", test))]
+pub(crate) fn import_from_stream(project_root: &Path, source: impl Read) -> Result<()> {
+    recover(project_root)?;
+    // Document providers can return pipes with no length or seek support.
+    let mut bytes = Vec::new();
+    source
+        .take(MAX_BACKUP_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_BACKUP_BYTES {
+        bail!("backup exceeds the {MAX_BACKUP_BYTES}-byte limit");
+    }
+    import_bytes(project_root, &bytes)
+}
+
+fn import_bytes(project_root: &Path, bytes: &[u8]) -> Result<()> {
     let bundle: BorrowedBackupBundle<'_> =
-        super::decode_postcard_exact(&bytes).context("invalid backup file")?;
+        super::decode_postcard_exact(bytes).context("invalid backup file")?;
     if bundle.version != VERSION {
         bail!("unsupported backup version {}", bundle.version);
     }
@@ -295,6 +326,72 @@ mod tests {
     fn write_save_set(path: &Path, marker: &[u8]) {
         fs::create_dir_all(path).unwrap();
         fs::write(path.join("marker"), marker).unwrap();
+    }
+
+    #[test]
+    fn document_streams_and_desktop_files_share_the_backup_format() {
+        let root = test_root("document-stream");
+        write_save_set(&root.join("saves"), b"original");
+        let mut bytes = Vec::new();
+        export_to_stream(&root, &mut bytes).unwrap();
+        let path = root.join("backup.keine-backup");
+        fs::write(&path, &bytes).unwrap();
+        write_save_set(&root.join("saves"), b"changed");
+        import(&root, &path).unwrap();
+        assert_eq!(fs::read(root.join("saves/marker")).unwrap(), b"original");
+
+        export(&root, &path).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        write_save_set(&root.join("saves"), b"changed again");
+        // A byte slice implements Read, but has no Seek or file metadata.
+        import_from_stream(&root, bytes.as_slice()).unwrap();
+        assert_eq!(fs::read(root.join("saves/marker")).unwrap(), b"original");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn interrupted_document_reads_and_invalid_archives_preserve_saves() {
+        struct BrokenProvider;
+        impl Read for BrokenProvider {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("document provider disconnected"))
+            }
+        }
+        let root = test_root("document-read-error");
+        write_save_set(&root.join("saves.previous"), b"original");
+        write_save_set(&root.join("saves.importing"), b"partial");
+        assert!(import_from_stream(&root, BrokenProvider).is_err());
+        assert_eq!(fs::read(root.join("saves/marker")).unwrap(), b"original");
+        assert!(!root.join("saves.previous").exists());
+        assert!(!root.join("saves.importing").exists());
+
+        let mut bytes = Vec::new();
+        export_to_stream(&root, &mut bytes).unwrap();
+        for invalid in [&bytes[..bytes.len() - 1], b"invalid".as_slice()] {
+            assert!(import_from_stream(&root, invalid).is_err());
+            assert_eq!(fs::read(root.join("saves/marker")).unwrap(), b"original");
+            assert!(!root.join("saves.importing").exists());
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn document_export_reports_flush_failure() {
+        struct BrokenProvider(Vec<u8>);
+        impl Write for BrokenProvider {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::other("document provider disconnected"))
+            }
+        }
+        let root = test_root("document-write-error");
+        write_save_set(&root.join("saves"), b"original");
+        assert!(export_to_stream(&root, BrokenProvider(Vec::new())).is_err());
+        assert_eq!(fs::read(root.join("saves/marker")).unwrap(), b"original");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

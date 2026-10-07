@@ -161,7 +161,8 @@ fn close(
     buttons: Query<&Interaction, (Changed<Interaction>, With<CloseButton>)>,
     mut exits: MessageWriter<AppExit>,
 ) {
-    if keys.just_pressed(KeyCode::Escape)
+    if crate::runtime::platform::take_native_back()
+        || keys.just_pressed(KeyCode::Escape)
         || mouse.just_pressed(MouseButton::Right)
         || buttons
             .iter()

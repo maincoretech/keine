@@ -15,11 +15,11 @@ pub(super) fn render(
         .selection(root)
         .filter(|(path, _, _)| path.extension().is_some_and(|ext| ext == "shou"))
     {
-        panel.character_script = Some((path.clone(), *line));
+        panel.characters.character_script = Some((path.clone(), *line));
     }
     panel.sync_character_images(root, &index, window, cx);
-    let inputs = panel.tool_inputs.clone();
-    let selected = panel.character_id.clone();
+    let inputs = panel.characters.tool_inputs.clone();
+    let selected = panel.characters.character_id.clone();
     let mut content = div()
         .flex()
         .flex_col()
@@ -94,20 +94,24 @@ pub(super) fn render(
             .find(|character| &character.id == id)
     }) {
         content = content
-            .when_some(panel.character_script.as_ref(), |this, (path, line)| {
-                this.child(div().text_xs().text_color(rgb(MUTED)).child(format!(
-                    "Insert after {}:{}",
-                    path.display(),
-                    line + 1
-                )))
-            })
+            .when_some(
+                panel.characters.character_script.as_ref(),
+                |this, (path, line)| {
+                    this.child(div().text_xs().text_color(rgb(MUTED)).child(format!(
+                        "Insert after {}:{}",
+                        path.display(),
+                        line + 1
+                    )))
+                },
+            )
             .child(tool_action("Delete character").on_click(
                 cx.listener(|panel, _, window, cx| panel.confirm_delete_character(window, cx)),
             ))
             .child(section_label("EXPRESSIONS"))
-            .when_some(panel.character_images.as_ref(), |this, images| {
-                this.child(Select::new(images).small())
-            })
+            .when_some(
+                panel.characters.character_images.as_ref(),
+                |this, images| this.child(Select::new(images).small()),
+            )
             .child(
                 div()
                     .flex()
@@ -237,7 +241,7 @@ impl WorkbenchPanel {
             .authoring_ref(&root)?
             .characters
             .iter()
-            .find(|character| Some(&character.id) == self.character_id.as_ref())
+            .find(|character| Some(&character.id) == self.characters.character_id.as_ref())
             .cloned()
     }
     fn select_character(
@@ -246,10 +250,10 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.character_id = id;
-        self.character_expression = None;
+        self.characters.character_id = id;
+        self.characters.character_expression = None;
         let character = self.selected_character(cx).unwrap_or_default();
-        for (input, value) in self.tool_inputs.iter().zip([
+        for (input, value) in self.characters.tool_inputs.iter().zip([
             character.id,
             character.name,
             character.color.unwrap_or_default(),
@@ -284,15 +288,18 @@ impl WorkbenchPanel {
                 asset: Some((root.to_owned(), asset.kind, asset.path.clone())),
             })
             .collect::<Vec<_>>();
-        if self.character_images.is_some() && options == self.character_image_options {
+        if self.characters.character_images.is_some()
+            && options == self.characters.character_image_options
+        {
             return;
         }
-        self.character_image_options = options.clone();
-        self.character_images =
+        self.characters.character_image_options = options.clone();
+        self.characters.character_images =
             Some(cx.new(|cx| SelectState::new(options, None, window, cx).searchable(true)));
     }
     fn add_character_frame(&mut self, avatar: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(id) = self
+            .characters
             .character_images
             .as_ref()
             .and_then(|select| select.read(cx).selected_value())
@@ -300,7 +307,7 @@ impl WorkbenchPanel {
         else {
             return;
         };
-        let input = self.tool_inputs[if avatar { 5 } else { 4 }].clone();
+        let input = self.characters.tool_inputs[if avatar { 5 } else { 4 }].clone();
         let previous = input.read(cx).value().to_string();
         input.update(cx, |input, cx| {
             input.set_value(
@@ -348,6 +355,7 @@ impl WorkbenchPanel {
     }
     fn save_character(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let values = self
+            .characters
             .tool_inputs
             .iter()
             .map(|input| input.read(cx).value().trim().to_owned())
@@ -356,7 +364,7 @@ impl WorkbenchPanel {
             return;
         };
         let mut character = self.selected_character(cx).unwrap_or_default();
-        if self.character_id.is_some() && character.id != values[0] {
+        if self.characters.character_id.is_some() && character.id != values[0] {
             window.push_notification(
                 Notification::error(
                     "Character ID is stable; edit references in Text view before renaming",
@@ -382,7 +390,7 @@ impl WorkbenchPanel {
             );
             return;
         }
-        let new = self.character_id.is_none();
+        let new = self.characters.character_id.is_none();
         if self.write_character(
             |source| {
                 let source = if new {
@@ -400,7 +408,7 @@ impl WorkbenchPanel {
             window,
             cx,
         ) {
-            self.character_id = Some(character.id);
+            self.characters.character_id = Some(character.id);
         }
         cx.refresh_windows();
     }
@@ -408,9 +416,9 @@ impl WorkbenchPanel {
         let Some(character) = self.selected_character(cx) else {
             return;
         };
-        self.character_expression = Some(name.to_owned());
+        self.characters.character_expression = Some(name.to_owned());
         let frames = character.expressions.get(name).cloned().unwrap_or_default();
-        for (input, value) in self.tool_inputs[3..5]
+        for (input, value) in self.characters.tool_inputs[3..5]
             .iter()
             .zip([name.to_owned(), frames.join(", ")])
         {
@@ -421,7 +429,11 @@ impl WorkbenchPanel {
         let Some(mut character) = self.selected_character(cx) else {
             return;
         };
-        let name = self.tool_inputs[3].read(cx).value().trim().to_owned();
+        let name = self.characters.tool_inputs[3]
+            .read(cx)
+            .value()
+            .trim()
+            .to_owned();
         if !valid_identifier(&name) {
             window.push_notification(
                 Notification::error("Expression name must be an identifier"),
@@ -430,10 +442,14 @@ impl WorkbenchPanel {
             return;
         }
         if delete {
-            let selected = self.character_expression.as_ref().unwrap_or(&name);
+            let selected = self
+                .characters
+                .character_expression
+                .as_ref()
+                .unwrap_or(&name);
             character.expressions.remove(selected);
         } else {
-            let frames = self.tool_inputs[4]
+            let frames = self.characters.tool_inputs[4]
                 .read(cx)
                 .value()
                 .split(',')
@@ -458,6 +474,7 @@ impl WorkbenchPanel {
                 return;
             }
             if self
+                .characters
                 .character_expression
                 .as_ref()
                 .is_some_and(|selected| selected != &name)
@@ -467,13 +484,13 @@ impl WorkbenchPanel {
                     .push_notification(Notification::error("Expression name is already used"), cx);
                 return;
             }
-            if let Some(selected) = &self.character_expression {
+            if let Some(selected) = &self.characters.character_expression {
                 character.expressions.remove(selected);
             }
             character.expressions.insert(name.clone(), frames);
         }
         if self.write_character(|source| edit_character(source, &character), window, cx) {
-            self.character_expression = (!delete).then_some(name);
+            self.characters.character_expression = (!delete).then_some(name);
         }
         cx.refresh_windows();
     }
@@ -498,7 +515,7 @@ impl WorkbenchPanel {
             return;
         }
         if !batch {
-            self.tool_inputs[4].update(cx, |input, cx| {
+            self.characters.tool_inputs[4].update(cx, |input, cx| {
                 input.set_value(
                     images
                         .iter()
@@ -609,7 +626,7 @@ impl WorkbenchPanel {
         let Some(root) = self.character_root() else {
             return;
         };
-        let Some((path, line)) = self.character_script.clone() else {
+        let Some((path, line)) = self.characters.character_script.clone() else {
             window.push_notification(
                 Notification::error("Select a script block or Text position first"),
                 cx,
@@ -791,3 +808,6 @@ mod tests {
         );
     }
 }
+
+mod state;
+pub(in crate::app) use state::CharactersState;

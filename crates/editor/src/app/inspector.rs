@@ -24,10 +24,15 @@ impl WorkbenchPanel {
         let Some(source) = cx.global::<EditorDocuments>().source(root, &path) else {
             return;
         };
-        let Some(field) = self.batch_block_field.clone() else {
+        let Some(field) = self.inspector.batch_block_field.clone() else {
             return;
         };
-        let value = self.batch_block_input.read(cx).value().to_string();
+        let value = self
+            .inspector
+            .batch_block_input
+            .read(cx)
+            .value()
+            .to_string();
         match batch_block_edit(&source, &starts, &field, &value) {
             Ok((edited, starts)) => {
                 apply_workspace_edit(root, &path, edited, window, cx);
@@ -138,16 +143,20 @@ impl WorkbenchPanel {
         cx: &mut Context<Self>,
     ) {
         let Some(source) = cx.global::<EditorDocuments>().source(root, path) else {
-            self.inline_block_controls.clear();
+            self.document.inline_block_controls.clear();
             return;
         };
         let projection = cx
             .global::<EditorDocuments>()
             .projection(root, path, &source);
-        let mut previous = std::mem::take(&mut self.inline_block_controls);
+        let mut previous = std::mem::take(&mut self.document.inline_block_controls);
         let window_handle = window.window_handle();
         for block in projection.scenes.iter().flat_map(|scene| &scene.blocks) {
-            if !self.block_visible.contains(&block.source_range.start) {
+            if !self
+                .document
+                .block_visible
+                .contains(&block.source_range.start)
+            {
                 continue;
             }
             if block.read_only || block.kind != BlockKind::Command {
@@ -188,7 +197,7 @@ impl WorkbenchPanel {
                         if !matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
                             return;
                         }
-                        let Some(control) = panel.inline_block_controls.get(&start) else {
+                        let Some(control) = panel.document.inline_block_controls.get(&start) else {
                             return;
                         };
                         if control.input.entity_id() != input.entity_id() {
@@ -207,7 +216,7 @@ impl WorkbenchPanel {
                             }
                         });
                     });
-                self.inline_block_controls.insert(
+                self.document.inline_block_controls.insert(
                     start,
                     InlineBlockControl {
                         key,
@@ -256,7 +265,8 @@ impl WorkbenchPanel {
                 control.options = options;
                 control.position = position;
                 control.key = key;
-                self.inline_block_controls
+                self.document
+                    .inline_block_controls
                     .insert(control.key.block_start, control);
                 continue;
             }
@@ -271,7 +281,7 @@ impl WorkbenchPanel {
                         if !matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
                             return;
                         }
-                        let Some(control) = panel.inline_block_controls.get(&start) else {
+                        let Some(control) = panel.document.inline_block_controls.get(&start) else {
                             return;
                         };
                         if control.input.entity_id() != input.entity_id() {
@@ -319,7 +329,8 @@ impl WorkbenchPanel {
                             let SelectEvent::Confirm(Some(value)) = event else {
                                 return;
                             };
-                            let Some(control) = panel.inline_block_controls.get(&start) else {
+                            let Some(control) = panel.document.inline_block_controls.get(&start)
+                            else {
                                 return;
                             };
                             if control
@@ -349,7 +360,7 @@ impl WorkbenchPanel {
                     ));
                     select
                 });
-            self.inline_block_controls.insert(
+            self.document.inline_block_controls.insert(
                 start,
                 InlineBlockControl {
                     key,
@@ -512,14 +523,14 @@ impl WorkbenchPanel {
                 fields,
             })
         });
-        if self.source_inspector_key == next {
+        if self.inspector.source_inspector_key == next {
             return;
         }
-        let previous_key = self.source_inspector_key.take();
-        let previous_inputs = std::mem::take(&mut self.source_inspector_inputs);
-        let previous_texts = std::mem::take(&mut self.source_inspector_texts);
-        let previous_sliders = std::mem::take(&mut self.source_inspector_sliders);
-        let previous_selects = std::mem::take(&mut self.source_inspector_selects);
+        let previous_key = self.inspector.source_inspector_key.take();
+        let previous_inputs = std::mem::take(&mut self.inspector.source_inspector_inputs);
+        let previous_texts = std::mem::take(&mut self.inspector.source_inspector_texts);
+        let previous_sliders = std::mem::take(&mut self.inspector.source_inspector_sliders);
+        let previous_selects = std::mem::take(&mut self.inspector.source_inspector_selects);
         let same_block = previous_key
             .as_ref()
             .zip(next.as_ref())
@@ -529,11 +540,11 @@ impl WorkbenchPanel {
                     && old.kind == new.kind
                     && old.command == new.command
             });
-        self.source_inspector_key = next.clone();
-        self.source_inspector_subscriptions.clear();
+        self.inspector.source_inspector_key = next.clone();
+        self.inspector.source_inspector_subscriptions.clear();
         if !same_block {
-            self.source_inspector_effect = None;
-            self.source_position_draft = None;
+            self.inspector.source_inspector_effect = None;
+            self.inspector.source_position_draft = None;
         }
         let Some(key) = next else {
             return;
@@ -570,51 +581,58 @@ impl WorkbenchPanel {
                     })
                 });
                 let input_root = root.to_owned();
-                self.source_inspector_subscriptions.push(cx.subscribe(
-                    &input,
-                    move |panel, input, event: &InputEvent, cx| {
-                        if !matches!(
-                            event,
-                            InputEvent::PressEnter { shift: false, .. } | InputEvent::Blur
-                        ) {
-                            return;
-                        }
-                        let Some(key) = panel
-                            .source_inspector_key
-                            .clone()
-                            .filter(|key| key.command == "text.retract")
-                        else {
-                            return;
-                        };
-                        if panel
-                            .source_inspector_texts
-                            .get(position)
-                            .is_none_or(|active| active.entity_id() != input.entity_id())
-                        {
-                            return;
-                        }
-                        let draft = input.read(cx).value().to_string();
-                        let _ = cx.update_window(window_handle, |_, window, cx| {
-                            if !panel.commit_source_field(
-                                &input_root,
-                                &key,
-                                position,
-                                draft,
-                                window,
-                                cx,
+                self.inspector
+                    .source_inspector_subscriptions
+                    .push(
+                        cx.subscribe(&input, move |panel, input, event: &InputEvent, cx| {
+                            if !matches!(
+                                event,
+                                InputEvent::PressEnter { shift: false, .. } | InputEvent::Blur
                             ) {
-                                input.update(cx, |input, cx| {
-                                    input.set_value(key.fields[position].value.clone(), window, cx)
-                                });
+                                return;
                             }
-                        });
-                    },
-                ));
-                self.source_inspector_texts.push(input);
+                            let Some(key) = panel
+                                .inspector
+                                .source_inspector_key
+                                .clone()
+                                .filter(|key| key.command == "text.retract")
+                            else {
+                                return;
+                            };
+                            if panel
+                                .inspector
+                                .source_inspector_texts
+                                .get(position)
+                                .is_none_or(|active| active.entity_id() != input.entity_id())
+                            {
+                                return;
+                            }
+                            let draft = input.read(cx).value().to_string();
+                            let _ = cx.update_window(window_handle, |_, window, cx| {
+                                if !panel.commit_source_field(
+                                    &input_root,
+                                    &key,
+                                    position,
+                                    draft,
+                                    window,
+                                    cx,
+                                ) {
+                                    input.update(cx, |input, cx| {
+                                        input.set_value(
+                                            key.fields[position].value.clone(),
+                                            window,
+                                            cx,
+                                        )
+                                    });
+                                }
+                            });
+                        }),
+                    );
+                self.inspector.source_inspector_texts.push(input);
             }
             return;
         }
-        self.source_inspector_inputs = key
+        self.inspector.source_inspector_inputs = key
             .fields
             .iter()
             .map(|field| {
@@ -662,80 +680,87 @@ impl WorkbenchPanel {
                 .unwrap_or_else(|| cx.new(|cx| InputState::new(window, cx).default_value("1000")));
             let root = root.to_owned();
             let initial_draft = input.read(cx).value().to_string();
-            self.source_inspector_subscriptions.push(cx.subscribe(
-                &input,
-                move |panel, input, event: &InputEvent, cx| {
-                    if !matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
-                        return;
-                    }
-                    let Some(key) = panel
-                        .source_inspector_key
-                        .clone()
-                        .filter(|key| key.command == "wait.advance")
-                    else {
-                        return;
-                    };
-                    if panel
-                        .source_inspector_inputs
-                        .first()
-                        .is_none_or(|active| active.entity_id() != input.entity_id())
-                    {
-                        return;
-                    }
-                    let draft = input.read(cx).value().to_string();
-                    let _ = cx.update_window(window_handle, |_, window, cx| {
-                        if (draft != initial_draft
-                            || matches!(event, InputEvent::PressEnter { .. }))
-                            && !panel.commit_wait_mode(&root, &key, Some(&draft), window, cx)
-                        {
-                            input.update(cx, |input, cx| {
-                                input.set_value(initial_draft.clone(), window, cx)
-                            });
+            self.inspector
+                .source_inspector_subscriptions
+                .push(
+                    cx.subscribe(&input, move |panel, input, event: &InputEvent, cx| {
+                        if !matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+                            return;
                         }
-                    });
-                },
-            ));
-            self.source_inspector_inputs.push(input);
+                        let Some(key) = panel
+                            .inspector
+                            .source_inspector_key
+                            .clone()
+                            .filter(|key| key.command == "wait.advance")
+                        else {
+                            return;
+                        };
+                        if panel
+                            .inspector
+                            .source_inspector_inputs
+                            .first()
+                            .is_none_or(|active| active.entity_id() != input.entity_id())
+                        {
+                            return;
+                        }
+                        let draft = input.read(cx).value().to_string();
+                        let _ = cx.update_window(window_handle, |_, window, cx| {
+                            if (draft != initial_draft
+                                || matches!(event, InputEvent::PressEnter { .. }))
+                                && !panel.commit_wait_mode(&root, &key, Some(&draft), window, cx)
+                            {
+                                input.update(cx, |input, cx| {
+                                    input.set_value(initial_draft.clone(), window, cx)
+                                });
+                            }
+                        });
+                    }),
+                );
+            self.inspector.source_inspector_inputs.push(input);
             return;
         }
-        for (position, input) in self.source_inspector_inputs.iter().enumerate() {
+        for (position, input) in self.inspector.source_inspector_inputs.iter().enumerate() {
             let root = root.to_owned();
             let field_name = key.fields[position].key.clone();
-            self.source_inspector_subscriptions.push(cx.subscribe(
-                input,
-                move |panel, input, event: &InputEvent, cx| {
-                    if !matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
-                        return;
-                    }
-                    let Some(key) = panel.source_inspector_key.clone() else {
-                        return;
-                    };
-                    let Some(position) =
-                        key.fields.iter().position(|field| field.key == field_name)
-                    else {
-                        return;
-                    };
-                    if panel.source_inspector_inputs[position].entity_id() != input.entity_id() {
-                        return;
-                    }
-                    let value = source_input_commit(
-                        &key,
-                        &key.fields[position],
-                        input.read(cx).value().to_string(),
-                    );
-                    let _ = cx.update_window(window_handle, |_, window, cx| {
-                        if !panel.commit_source_field(&root, &key, position, value, window, cx) {
-                            input.update(cx, |input, cx| {
-                                input.set_value(
-                                    source_input_value(&key, &key.fields[position]),
-                                    window,
-                                    cx,
-                                )
-                            });
+            self.inspector
+                .source_inspector_subscriptions
+                .push(
+                    cx.subscribe(input, move |panel, input, event: &InputEvent, cx| {
+                        if !matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+                            return;
                         }
-                    });
-                },
-            ));
+                        let Some(key) = panel.inspector.source_inspector_key.clone() else {
+                            return;
+                        };
+                        let Some(position) =
+                            key.fields.iter().position(|field| field.key == field_name)
+                        else {
+                            return;
+                        };
+                        if panel.inspector.source_inspector_inputs[position].entity_id()
+                            != input.entity_id()
+                        {
+                            return;
+                        }
+                        let value = source_input_commit(
+                            &key,
+                            &key.fields[position],
+                            input.read(cx).value().to_string(),
+                        );
+                        let _ = cx.update_window(window_handle, |_, window, cx| {
+                            if !panel.commit_source_field(&root, &key, position, value, window, cx)
+                            {
+                                input.update(cx, |input, cx| {
+                                    input.set_value(
+                                        source_input_value(&key, &key.fields[position]),
+                                        window,
+                                        cx,
+                                    )
+                                });
+                            }
+                        });
+                    }),
+                );
         }
         for field in &key.fields {
             if let Some(control) = source_number(&key, field) {
@@ -757,69 +782,74 @@ impl WorkbenchPanel {
                 };
                 let field_name = field.key.clone();
                 let root = root.to_owned();
-                self.source_inspector_subscriptions.push(cx.subscribe(
-                    &state,
-                    move |panel, slider, event: &SliderEvent, cx| {
-                        let (SliderEvent::Change(value) | SliderEvent::Release(value)) = event;
-                        if panel
-                            .source_inspector_sliders
-                            .get(&field_name)
-                            .is_none_or(|active| active.entity_id() != slider.entity_id())
-                        {
-                            return;
-                        }
-                        let Some(mut key) = panel.source_inspector_key.clone() else {
-                            return;
-                        };
-                        // Pointer events may arrive before the next Inspector render.
-                        // Read this command's current bounded fields for each update.
-                        let Some(source) = cx.global::<EditorDocuments>().source(&root, &key.path)
-                        else {
-                            return;
-                        };
-                        let projection = EiyashouProjection::parse(&source);
-                        let Some(block) = projection
-                            .scenes
-                            .iter()
-                            .flat_map(|scene| &scene.blocks)
-                            .find(|block| {
-                                block.source_range.start == key.block_start
-                                    && block.kind == key.kind
-                                    && block.summary.split('(').next().map(str::trim)
-                                        == Some(key.command.as_str())
-                            })
-                        else {
-                            return;
-                        };
-                        let Some(fields) = projection.source_fields_for_block(&source, block)
-                        else {
-                            return;
-                        };
-                        key.fields = fields;
-                        let Some(position) =
-                            key.fields.iter().position(|field| field.key == field_name)
-                        else {
-                            return;
-                        };
-                        let value = control.source(value.start());
-                        let _ = cx.update_window(window_handle, |_, window, cx| {
-                            if !panel.commit_source_field(&root, &key, position, value, window, cx)
+                self.inspector
+                    .source_inspector_subscriptions
+                    .push(
+                        cx.subscribe(&state, move |panel, slider, event: &SliderEvent, cx| {
+                            let (SliderEvent::Change(value) | SliderEvent::Release(value)) = event;
+                            if panel
+                                .inspector
+                                .source_inspector_sliders
+                                .get(&field_name)
+                                .is_none_or(|active| active.entity_id() != slider.entity_id())
                             {
-                                slider.update(cx, |slider, cx| {
-                                    slider.set_value(
-                                        control
-                                            .parse(&key.fields[position].value)
-                                            .unwrap_or(control.default)
-                                            .clamp(control.min, control.max),
-                                        window,
-                                        cx,
-                                    )
-                                });
+                                return;
                             }
-                        });
-                    },
-                ));
-                self.source_inspector_sliders
+                            let Some(mut key) = panel.inspector.source_inspector_key.clone() else {
+                                return;
+                            };
+                            // Pointer events may arrive before the next Inspector render.
+                            // Read this command's current bounded fields for each update.
+                            let Some(source) =
+                                cx.global::<EditorDocuments>().source(&root, &key.path)
+                            else {
+                                return;
+                            };
+                            let projection = EiyashouProjection::parse(&source);
+                            let Some(block) = projection
+                                .scenes
+                                .iter()
+                                .flat_map(|scene| &scene.blocks)
+                                .find(|block| {
+                                    block.source_range.start == key.block_start
+                                        && block.kind == key.kind
+                                        && block.summary.split('(').next().map(str::trim)
+                                            == Some(key.command.as_str())
+                                })
+                            else {
+                                return;
+                            };
+                            let Some(fields) = projection.source_fields_for_block(&source, block)
+                            else {
+                                return;
+                            };
+                            key.fields = fields;
+                            let Some(position) =
+                                key.fields.iter().position(|field| field.key == field_name)
+                            else {
+                                return;
+                            };
+                            let value = control.source(value.start());
+                            let _ = cx.update_window(window_handle, |_, window, cx| {
+                                if !panel
+                                    .commit_source_field(&root, &key, position, value, window, cx)
+                                {
+                                    slider.update(cx, |slider, cx| {
+                                        slider.set_value(
+                                            control
+                                                .parse(&key.fields[position].value)
+                                                .unwrap_or(control.default)
+                                                .clamp(control.min, control.max),
+                                            window,
+                                            cx,
+                                        )
+                                    });
+                                }
+                            });
+                        }),
+                    );
+                self.inspector
+                    .source_inspector_sliders
                     .insert(field.key.clone(), state);
             }
             if source_asset_kind(&key, field).is_some() {
@@ -844,43 +874,48 @@ impl WorkbenchPanel {
             };
             let field_name = field.key.clone();
             let root = root.to_owned();
-            self.source_inspector_subscriptions.push(cx.subscribe(
-                &state,
-                move |panel, select, event: &SelectEvent<Vec<SourceOption>>, cx| {
-                    let SelectEvent::Confirm(Some(value)) = event else {
-                        return;
-                    };
-                    if panel
-                        .source_inspector_selects
-                        .get(&field_name)
-                        .is_none_or(|active| active.entity_id() != select.entity_id())
-                    {
-                        return;
-                    }
-                    let Some(key) = panel.source_inspector_key.clone() else {
-                        return;
-                    };
-                    let Some(position) =
-                        key.fields.iter().position(|field| field.key == field_name)
-                    else {
-                        return;
-                    };
-                    let field = &key.fields[position];
-                    let value = if source_asset_kind(&key, field).is_some() {
-                        asset_source_value(field, value)
-                    } else {
-                        value.clone()
-                    };
-                    let _ = cx.update_window(window_handle, |_, window, cx| {
-                        if !panel.commit_source_field(&root, &key, position, value, window, cx) {
-                            select.update(cx, |select, cx| {
-                                select.set_selected_value(&field.value, window, cx)
-                            });
+            self.inspector
+                .source_inspector_subscriptions
+                .push(cx.subscribe(
+                    &state,
+                    move |panel, select, event: &SelectEvent<Vec<SourceOption>>, cx| {
+                        let SelectEvent::Confirm(Some(value)) = event else {
+                            return;
+                        };
+                        if panel
+                            .inspector
+                            .source_inspector_selects
+                            .get(&field_name)
+                            .is_none_or(|active| active.entity_id() != select.entity_id())
+                        {
+                            return;
                         }
-                    });
-                },
-            ));
-            self.source_inspector_selects
+                        let Some(key) = panel.inspector.source_inspector_key.clone() else {
+                            return;
+                        };
+                        let Some(position) =
+                            key.fields.iter().position(|field| field.key == field_name)
+                        else {
+                            return;
+                        };
+                        let field = &key.fields[position];
+                        let value = if source_asset_kind(&key, field).is_some() {
+                            asset_source_value(field, value)
+                        } else {
+                            value.clone()
+                        };
+                        let _ = cx.update_window(window_handle, |_, window, cx| {
+                            if !panel.commit_source_field(&root, &key, position, value, window, cx)
+                            {
+                                select.update(cx, |select, cx| {
+                                    select.set_selected_value(&field.value, window, cx)
+                                });
+                            }
+                        });
+                    },
+                ));
+            self.inspector
+                .source_inspector_selects
                 .insert(field.key.clone(), state);
         }
     }
@@ -893,22 +928,22 @@ impl WorkbenchPanel {
     ) {
         let asset_selection = cx.global::<EditorDocuments>().asset_selection(root);
         if !asset_selection.is_empty() {
-            self.inspector_key = None;
-            self.inspector_inputs.clear();
-            self.text_lifetime_inputs.clear();
-            self.inspector_selects.clear();
-            self.inspector_subscriptions.clear();
-            self.source_inspector_key = None;
-            self.source_inspector_inputs.clear();
-            self.source_inspector_sliders.clear();
-            self.source_inspector_selects.clear();
-            self.source_inspector_subscriptions.clear();
+            self.inspector.inspector_key = None;
+            self.inspector.inspector_inputs.clear();
+            self.inspector.text_lifetime_inputs.clear();
+            self.inspector.inspector_selects.clear();
+            self.inspector.inspector_subscriptions.clear();
+            self.inspector.source_inspector_key = None;
+            self.inspector.source_inspector_inputs.clear();
+            self.inspector.source_inspector_sliders.clear();
+            self.inspector.source_inspector_selects.clear();
+            self.inspector.source_inspector_subscriptions.clear();
             self.refresh_asset_inspector(root, &asset_selection, window, cx);
             return;
         }
-        self.asset_inspector_key = None;
-        self.asset_inspector_inputs.clear();
-        self.asset_inspector_subscriptions.clear();
+        self.inspector.asset_inspector_key = None;
+        self.inspector.asset_inspector_inputs.clear();
+        self.inspector.asset_inspector_subscriptions.clear();
         let selected = cx
             .global::<EditorDocuments>()
             .block_selection(root)
@@ -941,19 +976,19 @@ impl WorkbenchPanel {
                 lifetime,
             })
         });
-        if self.inspector_key == next {
+        if self.inspector.inspector_key == next {
             return;
         }
-        let previous_key = self.inspector_key.take();
-        let previous_inputs = std::mem::take(&mut self.inspector_inputs);
-        let previous_selects = std::mem::take(&mut self.inspector_selects);
+        let previous_key = self.inspector.inspector_key.take();
+        let previous_inputs = std::mem::take(&mut self.inspector.inspector_inputs);
+        let previous_selects = std::mem::take(&mut self.inspector.inspector_selects);
         let same_block = previous_key
             .as_ref()
             .zip(next.as_ref())
             .is_some_and(|(old, new)| old.path == new.path && old.block_start == new.block_start);
-        self.inspector_key = next.clone();
-        self.inspector_subscriptions.clear();
-        let previous_lifetime_inputs = std::mem::take(&mut self.text_lifetime_inputs);
+        self.inspector.inspector_key = next.clone();
+        self.inspector.inspector_subscriptions.clear();
+        let previous_lifetime_inputs = std::mem::take(&mut self.inspector.text_lifetime_inputs);
         let Some(key) = next else {
             return;
         };
@@ -961,7 +996,7 @@ impl WorkbenchPanel {
         let old_lifetime_values = previous_key
             .as_ref()
             .map(|key| [&key.lifetime.target, &key.lifetime.transition]);
-        self.text_lifetime_inputs = lifetime_values
+        self.inspector.text_lifetime_inputs = lifetime_values
             .iter()
             .enumerate()
             .map(|(position, value)| {
@@ -988,13 +1023,14 @@ impl WorkbenchPanel {
             })
             .collect();
         let lifetime_window = window.window_handle();
-        for input in &self.text_lifetime_inputs {
+        for input in &self.inspector.text_lifetime_inputs {
             let root = root.to_owned();
-            self.inspector_subscriptions.push(cx.subscribe(
+            self.inspector.inspector_subscriptions.push(cx.subscribe(
                 input,
                 move |panel, input, event: &InputEvent, cx| {
                     if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur)
                         && panel
+                            .inspector
                             .text_lifetime_inputs
                             .iter()
                             .any(|active| active.entity_id() == input.entity_id())
@@ -1011,7 +1047,7 @@ impl WorkbenchPanel {
             .as_ref()
             .map(|key| text_inspector_values(&key.metadata));
         let placeholders = ["Narrator / character id", "Voice id", "Stable ID"];
-        self.inspector_inputs = values
+        self.inspector.inspector_inputs = values
             .iter()
             .zip(placeholders)
             .enumerate()
@@ -1033,13 +1069,14 @@ impl WorkbenchPanel {
             })
             .collect();
         let window_handle = window.window_handle();
-        for input in &self.inspector_inputs {
+        for input in &self.inspector.inspector_inputs {
             let root = root.to_owned();
-            self.inspector_subscriptions.push(cx.subscribe(
+            self.inspector.inspector_subscriptions.push(cx.subscribe(
                 input,
                 move |panel, input, event: &InputEvent, cx| {
                     if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur)
                         && panel
+                            .inspector
                             .inspector_inputs
                             .iter()
                             .any(|active| active.entity_id() == input.entity_id())
@@ -1098,13 +1135,14 @@ impl WorkbenchPanel {
                 })
             };
             let root = root.to_owned();
-            self.inspector_subscriptions.push(cx.subscribe(
+            self.inspector.inspector_subscriptions.push(cx.subscribe(
                 &state,
                 move |panel, state, event: &SelectEvent<Vec<SourceOption>>, cx| {
                     let SelectEvent::Confirm(Some(value)) = event else {
                         return;
                     };
                     if panel
+                        .inspector
                         .inspector_selects
                         .get(position)
                         .is_none_or(|active| active.entity_id() != state.entity_id())
@@ -1113,13 +1151,13 @@ impl WorkbenchPanel {
                     }
                     let value = value.clone();
                     let _ = cx.update_window(window_handle, |_, window, cx| {
-                        panel.inspector_inputs[position]
+                        panel.inspector.inspector_inputs[position]
                             .update(cx, |input, cx| input.set_value(value, window, cx));
                         panel.commit_text_inspector(&root, window, cx);
                     });
                 },
             ));
-            self.inspector_selects.push(state);
+            self.inspector.inspector_selects.push(state);
         }
     }
 
@@ -1131,18 +1169,24 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let Some(key) = self.inspector_key.clone() else {
+        let Some(key) = self.inspector.inspector_key.clone() else {
             return;
         };
-        if self.text_lifetime_inputs.len() != 2 {
+        if self.inspector.text_lifetime_inputs.len() != 2 {
             return;
         }
         let target = if keep_characters {
             String::new()
         } else {
-            self.text_lifetime_inputs[0].read(cx).value().to_string()
+            self.inspector.text_lifetime_inputs[0]
+                .read(cx)
+                .value()
+                .to_string()
         };
-        let transition = self.text_lifetime_inputs[1].read(cx).value().to_string();
+        let transition = self.inspector.text_lifetime_inputs[1]
+            .read(cx)
+            .value()
+            .to_string();
         let keep_dialogue = keep_dialogue.unwrap_or(key.lifetime.text_box.is_none());
         if keep_dialogue == key.lifetime.text_box.is_none()
             && target.trim() == key.lifetime.target
@@ -1180,6 +1224,7 @@ impl WorkbenchPanel {
             }
             Err(error) => {
                 for (input, original) in self
+                    .inspector
                     .text_lifetime_inputs
                     .iter()
                     .zip([&key.lifetime.target, &key.lifetime.transition])
@@ -1196,13 +1241,14 @@ impl WorkbenchPanel {
     }
 
     pub(super) fn commit_text_inspector(&mut self, root: &Path, window: &mut Window, cx: &mut App) {
-        let Some(key) = self.inspector_key.clone() else {
+        let Some(key) = self.inspector.inspector_key.clone() else {
             return;
         };
-        if self.inspector_inputs.len() != 3 {
+        if self.inspector.inspector_inputs.len() != 3 {
             return;
         }
         let values = self
+            .inspector
             .inspector_inputs
             .iter()
             .map(|input| input.read(cx).value().to_string())
@@ -1269,12 +1315,12 @@ impl WorkbenchPanel {
             .filter(|_| selection.len() == 1)
             .and_then(|key| index.assets.iter().find(|asset| asset.key() == *key))
             .map(|asset| (asset.key(), asset.path.clone(), asset.tags.clone()));
-        if self.asset_inspector_key == next {
+        if self.inspector.asset_inspector_key == next {
             return;
         }
-        self.asset_inspector_key = next.clone();
-        self.asset_inspector_inputs.clear();
-        self.asset_inspector_subscriptions.clear();
+        self.inspector.asset_inspector_key = next.clone();
+        self.inspector.asset_inspector_inputs.clear();
+        self.inspector.asset_inspector_subscriptions.clear();
         let Some((key, _, _)) = next else {
             return;
         };
@@ -1286,20 +1332,20 @@ impl WorkbenchPanel {
             (asset.kind.label().to_owned(), "Type"),
             (asset.tags.join(", "), "Tags"),
         ] {
-            self.asset_inspector_inputs.push(cx.new(|cx| {
+            self.inspector.asset_inspector_inputs.push(cx.new(|cx| {
                 InputState::new(window, cx)
                     .default_value(value)
                     .placeholder(placeholder)
             }));
         }
-        let inputs = self.asset_inspector_inputs.clone();
+        let inputs = self.inspector.asset_inspector_inputs.clone();
         let root = root.to_owned();
         let window_handle = window.window_handle();
         for input in &inputs {
             let inputs = inputs.clone();
             let root = root.clone();
             let key = key.clone();
-            self.asset_inspector_subscriptions.push(cx.subscribe(
+            self.inspector.asset_inspector_subscriptions.push(cx.subscribe(
                 input,
                 move |panel: &mut WorkbenchPanel, _, event: &InputEvent, cx| {
                     if !matches!(event, InputEvent::PressEnter { .. }) {
@@ -1318,7 +1364,7 @@ impl WorkbenchPanel {
                         "video" => AssetKind::Video,
                         "particle" => AssetKind::Particle,
                         _ => {
-                            panel.asset_inspector_key = None;
+                            panel.inspector.asset_inspector_key = None;
                             cx.global_mut::<EditorDocuments>()
                                 .set_notice(&root, "Unknown asset type");
                             cx.refresh_windows();
@@ -1351,7 +1397,7 @@ impl WorkbenchPanel {
                     match result {
                         Ok(mut edits) => {
                             let id = values[0].trim().to_owned();
-                            let path = file_ops::asset_edit_path(asset, &id, kind, panel.asset_rename_file);
+                            let path = file_ops::asset_edit_path(asset, &id, kind, panel.inspector.asset_rename_file);
                             if path != asset.path {
                                 let update = edits.iter_mut().find(|(path, _)| Some(path) == index.assets_manifest.as_ref());
                                 if let Some((_, source)) = update {
@@ -1362,7 +1408,7 @@ impl WorkbenchPanel {
                                 }
                             }
                             if path != asset.path && index.assets.iter().any(|other| other.path == asset.path && other.key() != asset.key()) {
-                                panel.asset_inspector_key = None;
+                                panel.inspector.asset_inspector_key = None;
                                 cx.global_mut::<EditorDocuments>().set_notice(&root, "File is mapped more than once; resolve duplicate mappings before moving it");
                                 return;
                             }
@@ -1371,14 +1417,14 @@ impl WorkbenchPanel {
                             let receiver = if id != asset.id || kind != asset.kind {
                                 match cx.update_window(window_handle, |_, window, cx| window.prompt(PromptLevel::Warning, "Update asset?", Some(&message), &[PromptButton::Other("Apply".into()), PromptButton::Cancel("Cancel".into())], cx)) {
                                     Ok(receiver) => Some(receiver),
-                                    Err(error) => { panel.asset_inspector_key = None; cx.global_mut::<EditorDocuments>().set_notice(&root, error.to_string()); return; }
+                                    Err(error) => { panel.inspector.asset_inspector_key = None; cx.global_mut::<EditorDocuments>().set_notice(&root, error.to_string()); return; }
                                 }
                             } else { None };
                             let baselines = edits.iter().filter_map(|(path, _)| cx.global::<EditorDocuments>().source(&root, path).map(|source| (path.clone(), source))).collect::<Vec<_>>();
                             let root = root.clone();
                             cx.spawn(async move |this, cx| {
                                 if let Some(receiver) = receiver && prompt_answer(receiver.await.ok(), 2) != Some(0) {
-                                    let _ = this.update(cx, |panel, cx| { panel.asset_inspector_key = None; cx.refresh_windows(); });
+                                    let _ = this.update(cx, |panel, cx| { panel.inspector.asset_inspector_key = None; cx.refresh_windows(); });
                                     return;
                                 }
                                 let _ = this.update(cx, |panel, cx| {
@@ -1395,7 +1441,7 @@ impl WorkbenchPanel {
                                             cx.global_mut::<EditorDocuments>().set_asset_selection(&root, vec![AssetKey { kind, id }]);
                                             cx.global_mut::<EditorDocuments>().set_notice(&root, "Asset updated");
                                         }
-                                        Ok(Err(error)) => { panel.asset_inspector_key = None; cx.global_mut::<EditorDocuments>().set_notice(&root, format!("Asset: {error}")); }
+                                        Ok(Err(error)) => { panel.inspector.asset_inspector_key = None; cx.global_mut::<EditorDocuments>().set_notice(&root, format!("Asset: {error}")); }
                                         Err(error) => { cx.global_mut::<EditorDocuments>().set_notice(&root, error.to_string()); }
                                     }
                                     cx.refresh_windows();
@@ -1403,7 +1449,7 @@ impl WorkbenchPanel {
                             }).detach();
                         }
                         Err(error) => {
-                            panel.asset_inspector_key = None;
+                            panel.inspector.asset_inspector_key = None;
                             cx.global_mut::<EditorDocuments>()
                                 .set_notice(&root, format!("Asset: {error}"));
                         }
@@ -1425,3 +1471,6 @@ fn text_inspector_values(metadata: &TextBlockMetadata) -> [String; 3] {
         metadata.stable_id.clone().unwrap_or_default(),
     ]
 }
+
+mod state;
+pub(in crate::app) use state::InspectorState;

@@ -1,0 +1,84 @@
+package moe.maincore.keine;
+
+import android.app.NativeActivity;
+import android.content.Intent;
+import android.os.ParcelFileDescriptor;
+import android.os.Build;
+import android.os.Bundle;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
+
+/** System Back and document selection; screen and backup ownership remain in Rust. */
+public final class EngineActivity extends NativeActivity {
+    private static native void nativeBack();
+    private static native void nativeBackupResult(int descriptor, boolean export);
+    private static final int EXPORT_BACKUP = 101;
+    private static final int IMPORT_BACKUP = 102;
+    private OnBackInvokedCallback backCallback;
+
+    @Override
+    protected void onCreate(Bundle state) {
+        super.onCreate(state);
+        // Associate NativeActivity's library with the VM for JNI resolution.
+        System.loadLibrary("keine");
+        if (Build.VERSION.SDK_INT >= 33) {
+            backCallback = EngineActivity::nativeBack;
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    OnBackInvokedDispatcher.PRIORITY_DEFAULT, backCallback);
+        }
+    }
+
+    @Override
+    @SuppressWarnings("deprecation")
+    public void onBackPressed() {
+        // API 26–32 uses the same action as API 33+.
+        nativeBack();
+    }
+
+    /** Called on the Java main thread; only grants access to the chosen document. */
+    public void chooseBackup(boolean export) {
+        Intent intent = new Intent(export ? Intent.ACTION_CREATE_DOCUMENT : Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType(export ? "application/octet-stream" : "*/*");
+        if (export) intent.putExtra(Intent.EXTRA_TITLE, "keine.keine-backup");
+        try {
+            startActivityForResult(intent, export ? EXPORT_BACKUP : IMPORT_BACKUP);
+        } catch (RuntimeException error) {
+            nativeBackupResult(-2, export);
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != EXPORT_BACKUP && requestCode != IMPORT_BACKUP) return;
+        boolean export = requestCode == EXPORT_BACKUP;
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+            nativeBackupResult(-1, export);
+            return;
+        }
+        try (ParcelFileDescriptor descriptor = getContentResolver().openFileDescriptor(
+                data.getData(), export ? "wt" : "r")) {
+            if (descriptor == null) {
+                nativeBackupResult(-2, export);
+            } else {
+                nativeBackupResult(descriptor.detachFd(), export);
+            }
+        } catch (java.io.IOException | RuntimeException error) {
+            nativeBackupResult(-2, export);
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (Build.VERSION.SDK_INT >= 33 && backCallback != null) {
+            getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backCallback);
+        }
+        super.onDestroy();
+        // NativeActivity waits for the Rust thread here. After its saves and
+        // teardown complete, end this standalone Engine process: winit and
+        // Bevy's AndroidApp are process singletons and cannot be recreated.
+        // Pause/resume does not destroy the Activity or take this path.
+        System.exit(0);
+    }
+}

@@ -35,15 +35,26 @@ pub(super) fn render(
                 if !running && native { choose_export(export_root.clone(), window, cx); }
             }));
     if running {
+        let icon = Icon::new(AssetIconName::RefreshCw)
+            .small()
+            .text_color(rgb(MUTED));
+        let activity = if cx.reduce_motion() {
+            icon.into_any_element()
+        } else {
+            icon.with_animation(
+                "build-spinner",
+                Animation::new(Duration::from_secs(2)).repeat(),
+                |icon, delta| icon.rotate(radians(delta * std::f32::consts::TAU)),
+            )
+            .into_any_element()
+        };
         content = content.child(
-            Icon::new(AssetIconName::RefreshCw)
-                .small()
-                .text_color(rgb(MUTED))
-                .with_animation(
-                    "build-spinner",
-                    Animation::new(Duration::from_secs(2)).repeat(),
-                    |icon, delta| icon.rotate(radians(delta * std::f32::consts::TAU)),
-                ),
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(activity)
+                .child(div().text_xs().text_color(rgb(MUTED)).child("Exporting…")),
         );
     }
     if !native {

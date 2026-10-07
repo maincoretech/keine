@@ -483,15 +483,18 @@ pub(super) fn follow_preview_position(
     if let Some(panel) = documents.panel_entity_for(root, relative) {
         let _ = panel.update(cx, |panel, cx| {
             let selected = block.as_ref().map(|(_, block)| block.source_range.start);
-            if panel.selected_blocks.len() != usize::from(selected.is_some())
-                || selected.is_some_and(|start| !panel.selected_blocks.contains(&start))
+            if panel.document.selected_blocks.len() != usize::from(selected.is_some())
+                || selected.is_some_and(|start| !panel.document.selected_blocks.contains(&start))
             {
-                panel.selected_blocks.clear();
-                panel.block_selection_anchor = selected;
+                panel.document.selected_blocks.clear();
+                panel.document.block_selection_anchor = selected;
                 if let Some((scene, block)) = &block {
-                    panel.selected_blocks.insert(block.source_range.start);
-                    panel.collapsed_scenes.remove(scene);
-                    panel.block_scroll_pending = true;
+                    panel
+                        .document
+                        .selected_blocks
+                        .insert(block.source_range.start);
+                    panel.document.collapsed_scenes.remove(scene);
+                    panel.document.block_scroll_pending = true;
                 }
                 cx.notify();
             }
@@ -705,30 +708,39 @@ pub(super) fn format_and_save(
             .panel_entity_for(root, &change.path)
         {
             let _ = panel.update(cx, |panel, _| {
-                panel.selected_blocks = panel.selected_blocks.iter().copied().map(map).collect();
-                panel.block_selection_anchor = panel.block_selection_anchor.map(map);
+                panel.document.selected_blocks = panel
+                    .document
+                    .selected_blocks
+                    .iter()
+                    .copied()
+                    .map(map)
+                    .collect();
+                panel.document.block_selection_anchor =
+                    panel.document.block_selection_anchor.map(map);
                 // Formatting changes byte offsets, not Block geometry. Keep the
                 // measured heights under their new identities to avoid a relayout jump.
-                panel.block_heights = std::mem::take(&mut panel.block_heights)
+                panel.document.block_heights = std::mem::take(&mut panel.document.block_heights)
                     .into_iter()
                     .map(|(start, height)| (map(start), height))
                     .collect();
-                *panel.block_row_positions.borrow_mut() = panel
+                *panel.document.block_row_positions.borrow_mut() = panel
+                    .document
                     .block_row_positions
                     .take()
                     .into_iter()
                     .map(|(start, y)| (map(start), y))
                     .collect();
-                *panel.block_row_bounds.borrow_mut() = panel
+                *panel.document.block_row_bounds.borrow_mut() = panel
+                    .document
                     .block_row_bounds
                     .take()
                     .into_iter()
                     .map(|(start, bounds)| (map(start), bounds))
                     .collect();
-                for row in &mut panel.block_text_editors {
+                for row in &mut panel.document.block_text_editors {
                     row.text_start = map(row.text_start);
                 }
-                if let Some(draft) = &mut panel.draft_text
+                if let Some(draft) = &mut panel.document.draft_text
                     && let Some(range) = &mut draft.text_range
                 {
                     *range = map(range.start)..map(range.end);

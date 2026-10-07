@@ -69,18 +69,29 @@ jobs:
           cargo ndk -t arm64-v8a -P 26 clippy --locked -p keine --lib \
             --target-dir target/android --no-default-features --features ui-sounds -- -D warnings
           dev/scripts/build-android.sh
+      - name: Check Android Java lint
+        run: gradle --no-daemon -p dev/android lintDebug
       - name: Verify native entry point and 16 KB alignment
         run: |
           library=target/android/jniLibs/arm64-v8a/libkeine.so
           readelf --dyn-syms --wide "$library" | grep ' ANativeActivity_onCreate$'
+          readelf --dyn-syms --wide "$library" | grep ' Java_moe_maincore_keine_EngineActivity_nativeBack$'
+          readelf --dyn-syms --wide "$library" | grep ' Java_moe_maincore_keine_EngineActivity_nativeBackupResult$'
+          gradle --no-daemon -p dev/android :app:dependencies --configuration debugRuntimeClasspath \
+            > "$RUNNER_TEMP/android-runtime-dependencies.txt"
+          grep -F 'No dependencies' "$RUNNER_TEMP/android-runtime-dependencies.txt"
           python3 - <<'PY'
           import subprocess
+          import zipfile
           library = 'target/android/jniLibs/arm64-v8a/libkeine.so'
           headers = subprocess.check_output(['readelf', '-lW', library], text=True)
           loads = [line.split() for line in headers.splitlines() if line.strip().startswith('LOAD ')]
           assert loads and all(int(line[-1], 16) >= 16384 for line in loads), headers
           relro = [line.split() for line in headers.splitlines() if line.strip().startswith('GNU_RELRO ')]
           assert all((int(line[2], 16) + int(line[5], 16)) % 16384 == 0 for line in relro), headers
+          with zipfile.ZipFile('dev/android/app/build/outputs/apk/debug/app-debug.apk') as apk:
+              entries = apk.namelist()
+              assert not any(name.startswith('kotlin/') or 'kotlin-stdlib' in name for name in entries), entries
           PY
           "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 4 \
             dev/android/app/build/outputs/apk/debug/app-debug.apk
@@ -88,9 +99,15 @@ jobs:
             dev/android/app/build/outputs/apk/debug/app-debug.apk
           "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging \
             dev/android/app/build/outputs/apk/debug/app-debug.apk > "$RUNNER_TEMP/android-apk-manifest.txt"
+          grep -F "launchable-activity: name='moe.maincore.keine.EngineActivity'" \
+            "$RUNNER_TEMP/android-apk-manifest.txt"
           grep -F "uses-gl-es: '0x30000'" "$RUNNER_TEMP/android-apk-manifest.txt"
           grep -F "uses-feature-not-required: name='android.hardware.vulkan.level'" \
             "$RUNNER_TEMP/android-apk-manifest.txt"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump xmltree \
+            dev/android/app/build/outputs/apk/debug/app-debug.apk --file AndroidManifest.xml \
+            > "$RUNNER_TEMP/android-apk-activity.txt"
+          grep -E ':launchMode\(.*\)=(2|0x0*2)$' "$RUNNER_TEMP/android-apk-activity.txt"
       - name: Upload Android Engine artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

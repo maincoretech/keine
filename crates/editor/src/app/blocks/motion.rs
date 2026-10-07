@@ -2,7 +2,7 @@
 use super::*;
 use std::time::Instant;
 
-const REORDER_DURATION: Duration = Duration::from_millis(200);
+use crate::app::reorder::REORDER_DURATION;
 
 pub(in crate::app) struct BlockReorderMotion {
     pub(in crate::app) positions: HashMap<usize, f32>,

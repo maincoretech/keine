@@ -615,6 +615,7 @@ pub fn animate_backlog_buttons(time: Res<Time>, mut buttons: BacklogButtonQuery)
 
 #[derive(SystemParam)]
 pub(crate) struct BacklogScrollContext<'w, 's> {
+    touch: Option<Res<'w, crate::ui::touch::TouchInputState>>,
     wheel: MessageReader<'w, 's, MouseWheel>,
     keys: Res<'w, ButtonInput<KeyCode>>,
     time: Res<'w, Time>,
@@ -622,8 +623,12 @@ pub(crate) struct BacklogScrollContext<'w, 's> {
     scope: Res<'w, UiInputScope>,
     ui: ResMut<'w, BacklogUiState>,
     motion: ResMut<'w, BacklogScrollMotion>,
-    scroll:
-        Query<'w, 's, (&'static mut ScrollPosition, &'static ComputedNode), With<BacklogScroll>>,
+    scroll: Query<
+        'w,
+        's,
+        (Entity, &'static mut ScrollPosition, &'static ComputedNode),
+        With<BacklogScroll>,
+    >,
     list: Query<'w, 's, &'static mut UiTransform, With<BacklogList>>,
 }
 
@@ -654,10 +659,17 @@ pub fn scroll_backlog(mut context: BacklogScrollContext) {
             };
         delta += amount;
     }
-    let Ok((mut position, computed)) = context.scroll.single_mut() else {
+    let Ok((entity, mut position, computed)) = context.scroll.single_mut() else {
         context.motion.reset();
         return;
     };
+    if let Some((owner, amount)) = context.touch.as_ref().and_then(|touch| touch.scroll)
+        && context.ui.open
+        && owner == entity
+    {
+        // The shared owner emits physical pixels; lists use their UI scale.
+        delta += amount * computed.inverse_scale_factor();
+    }
     let max =
         (computed.content_size().y - computed.size().y).max(0.0) * computed.inverse_scale_factor();
     if !context.motion.initialized {

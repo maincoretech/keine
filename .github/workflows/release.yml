@@ -1,9 +1,9 @@
-name: Release
+name: Release Engine
 
 # Main CI publishes benchmarks automatically; tday is an explicit manual choice.
 on:
   workflow_run:
-    workflows: [CI]
+    workflows: ["CI Desktop"]
     types: [completed]
     branches: [main]
   workflow_dispatch:
@@ -32,38 +32,39 @@ env:
 
 jobs:
   source:
-    name: Select trusted source
+    name: Prepare Source
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - run: echo 'Test packages use an isolated temporary publisher identity.'
+      - name: Check publisher isolation
+        run: echo 'Test packages use an isolated temporary publisher identity.'
 
   bundle:
-    name: ${{ matrix.name }}
+    name: Build ${{ matrix.name }}
     needs: source
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: Linux x64
-            os: ubuntu-latest
+            os: ubuntu-26.04
             artifact: keine-linux
             target: ''
             engine_target_dir: release
             triplet: x64-windows
-          - name: macOS
-            os: macos-latest
+          - name: macOS arm64
+            os: macos-26
             artifact: keine-macos
             target: ''
             engine_target_dir: release
             triplet: x64-windows
           - name: Windows x64
-            os: windows-latest
+            os: windows-2025
             artifact: keine-windows-x64
             target: x86_64-pc-windows-msvc
             engine_target_dir: x86_64-pc-windows-msvc
@@ -72,10 +73,12 @@ jobs:
     env:
       KEINE_BUILD_TARGET: ${{ matrix.target }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.RELEASE_SHA }}
-      - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
       - name: Install cross-compilation target
         if: matrix.target != ''
         run: rustup target add ${{ matrix.target }}
@@ -126,7 +129,7 @@ jobs:
           fi
           echo "name=$artifact" >> "$GITHUB_OUTPUT"
       - name: Restore Rust release cache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           # Bundle outputs also live under target/, so cache only Cargo's
           # release trees rather than archiving the finished distributions.
@@ -137,12 +140,13 @@ jobs:
             target/${{ matrix.engine_target_dir }}
             target/${{ matrix.target }}/profiling
             target/runner
-          key: release-rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ env.KEINE_RELEASE_CACHE_FEATURES }}-${{ env.RELEASE_SHA }}
+          key: release-rust-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ env.KEINE_RELEASE_CACHE_FEATURES }}-${{ env.RELEASE_SHA }}
           restore-keys: |
-            release-rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ env.KEINE_RELEASE_CACHE_FEATURES }}-
-            release-rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-
-            release-rust-v1-${{ runner.os }}-${{ runner.arch }}-
-      - uses: ./.github/actions/setup-video
+            release-rust-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ env.KEINE_RELEASE_CACHE_FEATURES }}-
+            release-rust-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-
+            release-rust-v1-${{ matrix.os }}-${{ runner.arch }}-
+      - name: Set up video dependencies
+        uses: ./.github/actions/setup-video
         with:
           enabled: ${{ contains(env.KEINE_RELEASE_FEATURES, 'video-ffmpeg') }}
           windows-triplet: ${{ matrix.triplet }}
@@ -207,7 +211,8 @@ jobs:
           import shutil
           shutil.make_archive('bundles/${{ steps.artifact.outputs.name }}', 'zip', 'target/${{ steps.artifact.outputs.name }}')
           PYTHON
-      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+      - name: Upload artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.artifact.outputs.name }}
           path: bundles/${{ steps.artifact.outputs.name }}.zip
@@ -230,18 +235,20 @@ jobs:
           cargo clean "${args[@]}" --profile profiling
 
   publish:
-    name: Publish selected test release
+    name: Publish Engine
     needs: bundle
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       actions: read
       contents: write
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           ref: ${{ env.RELEASE_SHA }}
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+      - name: Download artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: ${{ inputs.package == 'tday' && 'tday-*-test' || '*-benchmark' }}
           path: bundles
@@ -272,11 +279,11 @@ jobs:
           echo "publish=true" >> "$GITHUB_OUTPUT"
       - name: Update selected test release
         if: steps.release.outputs.publish == 'true'
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           target_commitish: ${{ env.RELEASE_SHA }}
-          name: ${{ inputs.package == 'tday' && 'tday playtest' || 'Kēne benchmark' }} · ${{ steps.release.outputs.short_sha }}
+          name: ${{ inputs.package == 'tday' && 'tday playtest' || 'Kēne benchmark' }} ${{ steps.release.outputs.short_sha }}
           body: |
             ${{ inputs.package == 'tday' && 'Manually requested tday test game. Original story and media copyright shiftz; see TDAY-LICENSE in the download.' || 'Automated performance suite. Run the executable; the benchmark report is written beside it.' }}
 

@@ -1,12 +1,55 @@
 //! NativeActivity entry point for the standalone Android Engine test package.
 
 use anyhow::{Context, Result};
-use bevy::prelude::bevy_main;
+use bevy::prelude::{App, bevy_main};
 use bevy::render::{
     RenderPlugin,
     settings::{Backends, WgpuSettings},
 };
 use keine_loader::LoaderRegistry;
+use std::sync::{
+    Mutex,
+    atomic::{AtomicBool, Ordering},
+};
+
+pub(super) mod backup;
+
+static BACK_PENDING: AtomicBool = AtomicBool::new(false);
+static BACK_WAKE: Mutex<Option<winit::event_loop::EventLoopProxy<bevy::winit::WinitUserEvent>>> =
+    Mutex::new(None);
+
+pub(super) fn install_back_wakeup(app: &App) {
+    if let Some(proxy) = app
+        .world()
+        .get_resource::<bevy::winit::EventLoopProxyWrapper>()
+        && let Ok(mut wake) = BACK_WAKE.lock()
+    {
+        *wake = Some(std::ops::Deref::deref(proxy).clone());
+        BACK_PENDING.store(false, Ordering::Relaxed);
+    }
+}
+
+pub(super) fn take_back() -> bool {
+    BACK_PENDING.swap(false, Ordering::Relaxed)
+}
+
+/// No borrowed JVM data; Bevy remains on its event-loop thread.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_moe_maincore_keine_EngineActivity_nativeBack(
+    _env: *mut std::ffi::c_void,
+    _class: *mut std::ffi::c_void,
+) {
+    BACK_PENDING.store(true, Ordering::Relaxed);
+    wake();
+}
+
+fn wake() {
+    if let Ok(wake) = BACK_WAKE.lock()
+        && let Some(proxy) = wake.as_ref()
+    {
+        let _ = proxy.send_event(bevy::winit::WinitUserEvent::WakeUp);
+    }
+}
 
 /// A private test-package override allows both drivers to be exercised with
 /// the same APK. Absence means Vulkan first, then GLES on initialization failure.

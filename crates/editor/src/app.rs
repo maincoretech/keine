@@ -65,10 +65,10 @@ use crate::workspace::{WorkspaceEntryKind, WorkspaceFile, WorkspaceSession};
 
 use documents::{AssetPreviewSelection, EditorDocuments, schedule_authoring_refresh};
 use panel::{
-    AssetDrag, AssetFilterChoice, AssetFilterGroup, AssetFilterMenu, BlockDrag, BlockDragPreview,
-    BlockDropTarget, BlockMenuAction, BlockTextEditor, DocumentMode, DraftInsertionTarget,
-    DraftTextBlock, FileContextMenu, FileDrag, FileEditMode, FileProgress, InlineWaitEdit,
-    InspectorEditKey, PanelContent, PanelPayload, SceneContextMenu, SceneEditMode,
+    AssetDrag, AssetFilterChoice, AssetFilterGroup, AssetFilterMenu, BlockContextMenu, BlockDrag,
+    BlockDragPreview, BlockDropTarget, BlockMenuAction, BlockTextEditor, DocumentMode,
+    DraftInsertionTarget, DraftTextBlock, FileContextMenu, FileDrag, FileEditMode, FileProgress,
+    InlineWaitEdit, InspectorEditKey, PanelContent, PanelPayload, SceneContextMenu, SceneEditMode,
     SourceInspectorKey, WorkbenchPanel, language_for_path, register_workbench_panels,
 };
 use window::{EditorApp, EditorAppOwner, WorkbenchWindow, listen_for_secondary_launches};
@@ -79,14 +79,17 @@ mod characters;
 mod completion;
 mod controls;
 mod dock;
+mod document;
 mod documents;
 mod edits;
 mod files;
 mod inspector;
 mod minimap;
+mod output;
 mod panel;
 mod performance;
 mod render;
+mod reorder;
 mod resource;
 mod search;
 #[path = "app/text/minimap.rs"]
@@ -156,6 +159,8 @@ gpui_kit::assets::icon_assets!(
         FileX,
         Package,
         Link,
+        X,
+        Trash,
     ]
 );
 
@@ -220,6 +225,7 @@ actions!(
         SaveAll,
         ToggleEngine,
         ShowAssets,
+        ShowProblems,
         ShowSearch,
         ShowAssetPreview,
         MigrateEiyashou,
@@ -910,6 +916,22 @@ mod tests {
         assert_eq!(
             picker_kinds(&preferences, "", Some("Favorites"), false),
             vec![InsertKind::Wait]
+        );
+        let preferences = BlockPickerPreferences {
+            favorites: vec!["Wait".into(), "BGM".into(), "Dialogue".into()],
+            category_order: vec!["Text".into(), "Media".into(), "Flow".into()],
+            ..preferences
+        };
+        assert_eq!(
+            picker_kinds(&preferences, "", Some("Favorites"), false),
+            vec![InsertKind::Wait, InsertKind::Bgm, InsertKind::Dialogue]
+        );
+        let categories = picker_categories(&preferences);
+        assert_eq!(categories.first(), Some(&Some("Favorites")));
+        assert_eq!(categories.last(), Some(&None));
+        assert!(
+            picker_kinds(&preferences, "video", Some("Favorites"), false)
+                .contains(&InsertKind::Video)
         );
     }
 
