@@ -2105,9 +2105,12 @@ fn bootstrap_project(
 }
 
 fn spawn_cameras(commands: &mut Commands, cameras: crate::ui::performance::BenchmarkCameras) {
+    // All three layers share one single-sample target. A later camera's MSAA
+    // resolve would overwrite the regional blur and UI already composited there.
     commands.spawn((
         Name::new("scene_camera"),
         Camera2d,
+        Msaa::Off,
         Camera {
             order: 0,
             is_active: cameras.scene(),
@@ -2121,6 +2124,7 @@ fn spawn_cameras(commands: &mut Commands, cameras: crate::ui::performance::Bench
     commands.spawn((
         Name::new("ui_camera"),
         Camera2d,
+        Msaa::Off,
         Camera {
             order: 1,
             is_active: cameras.ui(),
@@ -2134,6 +2138,7 @@ fn spawn_cameras(commands: &mut Commands, cameras: crate::ui::performance::Bench
     commands.spawn((
         Name::new("dialog_camera"),
         Camera2d,
+        Msaa::Off,
         Camera {
             order: 2,
             is_active: cameras.dialog(),
@@ -2171,6 +2176,31 @@ fn ensure_playable_scene(state: &mut State) {
 mod tests {
     use super::*;
     use std::ffi::OsString;
+
+    #[test]
+    fn layered_cameras_preserve_the_single_sample_post_process_target() {
+        for profile in [
+            BenchmarkCameras::Runtime,
+            BenchmarkCameras::SceneUi,
+            BenchmarkCameras::SceneDialog,
+            BenchmarkCameras::SceneOnly,
+        ] {
+            let mut app = App::new();
+            // Match the renderer's implicit default so an omitted override
+            // cannot pass merely because this test has no RenderPlugin.
+            app.register_required_components::<Camera, Msaa>();
+            app.add_systems(Startup, move |mut commands: Commands| {
+                spawn_cameras(&mut commands, profile);
+            });
+            app.update();
+            let world = app.world_mut();
+            let mut cameras = world.query::<(&Camera, &Msaa)>();
+            assert_eq!(cameras.iter(world).count(), 3);
+            for (camera, msaa) in cameras.iter(world) {
+                assert_eq!(*msaa, Msaa::Off, "{profile:?}, layer {}", camera.order);
+            }
+        }
+    }
 
     fn unique_temp_path(name: &str) -> PathBuf {
         let nonce = std::time::SystemTime::now()

@@ -155,6 +155,14 @@ Linux 单独运行 `cargo test --locked -p keine-editor --lib` 时，Editor 的�
 
 ### Windows renderer
 
+Windows HD 4600 / `Gl` 旧包已通过远程原生窗口复现：设置/存档页背景清晰且底色缺失，
+启动日志没有 shader 错误。三层相机默认 4× MSAA，已发现后续空透明 pass 的 resolve
+可能覆盖单采样纹理上的模糊和 UI；现统一为 `Msaa::Off`，不更改模糊参数与合成顺序。
+回归覆盖 runtime 与三个 benchmark 相机组合；fmt、workspace check/Clippy、workspace
+866 passed / 8 ignored 通过（IPC 在沙箱外重跑）。macOS Engine debug 构建及 native-smoke
+validate 通过（1 scene / 1 action / 0 warning）；新版 Windows 是否恢复及 macOS 未显现
+异常的具体原因尚待实机比对，MSAA 覆盖尚不能作为此次故障的已验证根因。
+
 Windows shipping / benchmark 编译 DX12、Vulkan 和 OpenGL；原生 GL 复用锁定的
 wgpu 29.0.4 WGL 实现，不附带 ANGLE 或额外渲染 DLL。`bevy_render/gles` 与 Linux
 共用同版本 feature 合并，CI 检查 Windows 三项 backend 均存在。
