@@ -213,6 +213,27 @@ workspace Clippy、fmt/actionlint/cargo-deny、native-smoke 零警告和采集�
 
 ### Linux 窗口、renderer 与 portable benchmark
 
+kids（openSUSE Leap 16 / Mesa 24.3.3 / HD 4400）的旧 tday 包在 Wayland/GL
+和 XWayland/GL 均由用户复现 `Fifo, Options: []` 崩溃。SSH 只读检查确认
+Wayland EGL 支持硬件 GL 4.6，但 Vulkan loader 没有可用 ICD；不能要求切换
+Vulkan作为现成解决方案。Bevy 0.19.1 的 instance 初始化固定 `display: None`，
+wgpu 29 的 Mesa EGL 因此进入 surfaceless 分支，生成不能呈现的 surface。
+
+现对官方 `bevy_render` 0.19.1 做局部 vendor patch，游戏和启动错误页均在
+RenderPlugin 前传入 winit owned display；GPU recovery 复用同一连接。
+保留原 public 初始化 API、无窗口调用和后端选择规则；未增加 unsafe 或运行时依赖。
+源文件/上游许可证与差异范围见 `dev/vendor/bevy_render/KEINE-PATCH.md`。
+新增 descriptor 的连接转发/生命周期及无窗口回归，并接入三平台 CI；新版
+Linux 实机启动和效果验收待构建后完成，当前不记为通过。
+
+本轮 fmt、workspace check/Clippy、actionlint、all-features cargo-deny 通过。
+workspace 单元/集成测试 889 passed / 8 ignored（含 renderer 23 项），另有上游
+doctest 18 passed / 13 ignored；IPC 在沙箱外执行。Linux/Windows renderer 的
+gles 交叉 check 与 Linux raw_vulkan_init check 通过；macOS Engine debug 构建、
+native-smoke validate（1 scene / 1 action / 0 warning）与 640×360 短窗口运行
+通过，实际为 Metal / Fifo / 120 个渲染样本。此项只确认初始化与正常退出，
+不作为性能改善或 Linux 画面验收证据。
+
 Linux shipping / benchmark 同时编译 native Wayland 与 X11（含 XWayland），以及
 wgpu Vulkan 与 native OpenGL/GLES compatibility backend；Bevy 保持 0.19.1。
 Linux target 的同版本 `bevy_render/gles` 合并到既有 wgpu，未使用 `webgl2`。

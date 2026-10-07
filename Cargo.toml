@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/*",
+    "dev/vendor/bevy_render",
 ]
 default-members = ["."]
 exclude = ["dev/vendor/bevy_winit"]
@@ -158,8 +159,11 @@ image = "0.25.10"
 # Bevy 0.19.1 requests synthetic macOS redraws from `about_to_wait`. The local
 # fix keeps reactive idle asleep while preserving redraw-driven continuous
 # animation. Drop this override once upstream provides equivalent behavior.
+# Renderer initialization also needs winit's owned display connection for
+# native EGL; upstream 0.19.1 always passes None. See each KEINE-PATCH.md.
 [patch.crates-io]
 bevy_winit = { path = "dev/vendor/bevy_winit" }
+bevy_render = { path = "dev/vendor/bevy_render" }
 
 [dependencies]
 keine-core = { workspace = true }

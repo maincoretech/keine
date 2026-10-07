@@ -118,6 +118,8 @@ jobs:
           scene::video:: preview::performance:: file_ops::assets:: portable_benchmark_
           runtime::bootstrap::tests::benchmark_ ui::support::performance::
           publisher::tests::native_release_
+      - name: Check native display connection ownership
+        run: cargo test --locked -p bevy_render --lib renderer::display_tests
       - name: Check platform video acceptance
         run: >-
           cargo run --locked --no-default-features --features "${{ matrix.test_features }}"

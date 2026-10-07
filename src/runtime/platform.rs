@@ -28,6 +28,25 @@ use crate::ui::control_bar::{AutoHideTiming, ButtonAction, QuickPreviewSurface, 
 use crate::ui::textbox::{ContentRoot, QuickPreviewLayer};
 use crate::ui::user_input::UserInputCaretBlink;
 
+/// Pass the event loop's owned connection to wgpu before renderer creation.
+/// A native window is not available yet; borrowing its handle later is too late
+/// for EGL to choose the Wayland/X11 display and a presentable framebuffer.
+pub(crate) struct NativeRenderDisplayPlugin;
+
+impl Plugin for NativeRenderDisplayPlugin {
+    fn build(&self, app: &mut App) {
+        if let Some(display) = app
+            .world()
+            .get_resource::<bevy::winit::DisplayHandleWrapper>()
+        {
+            let display = display.0.clone();
+            app.insert_resource(bevy::render::settings::RenderDisplayHandle(
+                std::sync::Arc::new(display),
+            ));
+        }
+    }
+}
+
 /// Raises the cost of runtime extraction for packaged builds.
 ///
 /// Only the `keine bundle` engine build compiles with the `hardened`

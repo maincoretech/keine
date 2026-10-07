@@ -43,6 +43,8 @@ Action 入场初态与 Engine 每帧插值共用同一规则，计时、完成�
 
 1920×1080 是唯一设计空间。viewport/letterbox 转换只有一个 owner。
 scene、normal UI、dialog camera 职责固定，特效不得改变合成顺序。
+GPU instance 创建前传递 winit 的 owned display connection，连接保留到 instance
+释放，并用于 GPU recovery；不能以离屏 EGL 配置呈现 Wayland/X11 窗口。
 三层相机统一使用单采样目标（`Msaa::Off`）：后续相机不能再用 MSAA resolve
 覆盖已经写入目标纹理的模糊和 UI；位图与文字沿用各自的采样与抗锯齿。
 Editor 通过显式开始/停止控制独立原生 Engine；Block 与执行位置双向同步。

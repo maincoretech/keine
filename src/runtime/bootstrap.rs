@@ -1581,6 +1581,7 @@ fn build_opened_app(
     };
     let plugins = DefaultPlugins
         .build()
+        .add_before::<bevy::render::RenderPlugin>(super::platform::NativeRenderDisplayPlugin)
         .set(AssetPlugin {
             watch_for_changes_override: Some(watch_assets),
             ..default()

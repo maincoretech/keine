@@ -29,16 +29,23 @@ struct InitialRender {
 
 pub(crate) fn show() {
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window {
-            title: "Kēne — 无法启动".to_owned(),
-            resolution: WindowResolution::new(WINDOW_WIDTH, WINDOW_HEIGHT),
-            resizable: false,
-            window_theme: Some(WindowTheme::Dark),
-            ..default()
-        }),
-        ..default()
-    }))
+    app.add_plugins(
+        DefaultPlugins
+            .build()
+            .add_before::<bevy::render::RenderPlugin>(
+                crate::runtime::platform::NativeRenderDisplayPlugin,
+            )
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "Kēne — 无法启动".to_owned(),
+                    resolution: WindowResolution::new(WINDOW_WIDTH, WINDOW_HEIGHT),
+                    resizable: false,
+                    window_theme: Some(WindowTheme::Dark),
+                    ..default()
+                }),
+                ..default()
+            }),
+    )
     .insert_resource(ClearColor(Color::BLACK))
     .insert_resource(WinitSettings::continuous())
     .add_systems(Startup, setup)

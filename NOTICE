@@ -20,6 +20,10 @@ Major components include Bevy (MIT/Apache-2.0), GPUI (Apache-2.0), Hakutaku
 upstream repository at the revision identified in Cargo.lock; modifications
 to those files must be provided under MPL when distributing them.
 
+The source tree carries narrowly patched bevy_winit and bevy_render 0.19.1
+under dev/vendor. Their original MIT/Apache-2.0 licenses are preserved there;
+each KEINE-PATCH.md identifies the changes and upstream source.
+
 The optional FFmpeg Rust wrappers use WTFPL. FFmpeg libraries and external
 codecs have separate licenses depending on their build configuration; the
 wrapper license does not authorize redistribution of those libraries.
