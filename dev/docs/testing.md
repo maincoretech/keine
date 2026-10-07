@@ -2,6 +2,12 @@
 
 ## 发布渠道验证
 
+缓存 key 单独将 feature 分隔逗号编码为连字符，Cargo feature 参数保留原值；Release 与
+Project Release 的 key/restore-key 已按三平台、三个 feature 组合验证。Linux Editor 打包
+保留已复制库到原 SDK 文件的来源映射，新增回归覆盖第二个 executable 的 RPATH 复用及
+未解析依赖拒绝。上次 CI 成功，Release 三平台缓存失败；Editor macOS/Windows 成功、
+Linux 来源查找失败，修复后的远端构建和附件发布尚待确认。
+
 `Release` 分开发布 benchmark 自动包与 tday 手动试玩；`Editor Release` 发布独立
 Editor + 同版本 Preview。actionlint 1.7.12 对本次两个 workflow 检查通过，shell 语法与
 Python 编译检查通过。用本轮已构建的 macOS debug 二进制执行 `package-authoring.py`，

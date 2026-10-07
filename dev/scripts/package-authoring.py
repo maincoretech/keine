@@ -23,6 +23,7 @@ def linux_libraries(executables, output):
     notices.mkdir()
     queue = list(executables)
     visited = set()
+    origins = {}
     while queue:
         binary = queue.pop()
         result = subprocess.run(['ldd', str(binary)], check=True, capture_output=True, text=True)
@@ -33,7 +34,10 @@ def linux_libraries(executables, output):
             if not words or not words[0].startswith('/'):
                 continue
             library = Path(words[0])
-            source = library.resolve(strict=True)
+            resolved = library.resolve(strict=True)
+            # RPATH may resolve dependencies from our partly assembled lib/ on
+            # the second executable. Keep the original SDK provenance.
+            source = origins.get(resolved, resolved)
             if source.name.startswith(HOST_ABI):
                 continue
             destination = libraries / library.name
@@ -41,6 +45,7 @@ def linux_libraries(executables, output):
                 raise RuntimeError(f'Conflicting runtime libraries: {library.name}')
             if not destination.exists():
                 shutil.copy2(source, destination)
+            origins[destination.resolve()] = source
             if source not in visited:
                 visited.add(source)
                 queue.append(source)
