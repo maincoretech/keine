@@ -14,8 +14,8 @@ workflow 安装固定 NDK/Gradle/Rust 工具，无需开发机常驻整套环境
 
 需要本地构建时：
 
-安装 Rust `aarch64-linux-android` 目标、cargo-ndk 4.1.2、JDK 17、Gradle 8.11.1、CMake、Python 3；
-Android SDK 安装 `platforms;android-35`、`build-tools;35.0.0`、NDK `28.2.13676358`。
+安装 Rust `aarch64-linux-android` 目标、cargo-ndk 4.1.2、JDK 17、Gradle 9.8.1 / AGP 9.4.1、CMake、Python 3；
+Android SDK 安装 `platforms;android-35`、`build-tools;36.0.0`、NDK `28.2.13676358`。
 设置 `ANDROID_HOME` 为 SDK 根，`ANDROID_NDK_HOME` 为该 NDK 目录：
 
 ```sh
@@ -37,7 +37,7 @@ APK 为 `dev/android/app/build/outputs/apk/debug/app-debug.apk`，原生库为
 Android 构建队列独立，不等待桌面/视频 workflow 结束。
 
 工具和平台入口依据 [Bevy 0.19.1 Android 示例](https://github.com/bevyengine/bevy/blob/v0.19.1/examples/README.md#android)、
-[AGP 8.9 构建要求](https://developer.android.com/build/releases/agp-8-9-0-release-notes)、
+[AGP 9.4 构建要求](https://developer.android.com/build/releases/agp-9-4-0-release-notes)、
 [Android 16 KB 对齐要求](https://developer.android.com/guide/practices/page-sizes)。
 
 ## 渲染与后端测试

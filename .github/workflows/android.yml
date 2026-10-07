@@ -12,42 +12,43 @@ concurrency:
 jobs:
   android:
     name: Build Android arm64
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
       - name: Check out source
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
         with:
           targets: aarch64-linux-android
           components: clippy
       - name: Install JDK
-        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '17'
       - name: Install Gradle
-        uses: gradle/actions/setup-gradle@41ad77ca97e46ee2e825d5e6b9a95d8169fcc44c # v4.4.2
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
-          gradle-version: '8.11.1'
+          gradle-version: '9.8.1'
       - name: Install Android toolchain
         run: |
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            'ndk;28.2.13676358' 'platforms;android-35' 'build-tools;35.0.0'
+            'ndk;28.2.13676358' 'platforms;android-35' 'build-tools;36.0.0'
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
       - name: Install pinned cargo-ndk
         run: cargo install cargo-ndk --version 4.1.2 --locked
       - name: Restore Android Rust build cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target/android
-          key: android-arm64-ndk28-v1-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ github.sha }}
+          key: android-arm64-ubuntu26-ndk28-v1-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ github.sha }}
           restore-keys: |
-            android-arm64-ndk28-v1-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-
+            android-arm64-ubuntu26-ndk28-v1-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-
       - name: Guard Android runtime dependencies
         run: |
           cargo tree --locked -p keine --target aarch64-linux-android \
@@ -81,17 +82,17 @@ jobs:
           relro = [line.split() for line in headers.splitlines() if line.strip().startswith('GNU_RELRO ')]
           assert all((int(line[2], 16) + int(line[5], 16)) % 16384 == 0 for line in relro), headers
           PY
-          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 4 \
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 4 \
             dev/android/app/build/outputs/apk/debug/app-debug.apk
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify \
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify \
             dev/android/app/build/outputs/apk/debug/app-debug.apk
-          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging \
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging \
             dev/android/app/build/outputs/apk/debug/app-debug.apk > "$RUNNER_TEMP/android-apk-manifest.txt"
           grep -F "uses-gl-es: '0x30000'" "$RUNNER_TEMP/android-apk-manifest.txt"
           grep -F "uses-feature-not-required: name='android.hardware.vulkan.level'" \
             "$RUNNER_TEMP/android-apk-manifest.txt"
       - name: Upload Android Engine artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: keine-android-arm64-engine
           if-no-files-found: error
