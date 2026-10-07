@@ -38,7 +38,6 @@ pub(crate) enum DialogAction {
     DeleteSlot(u32),
     ClearSaves,
     ResetSettings,
-    ClearAll,
     BackToTitle,
     Noop,
     SystemMessage,
@@ -255,9 +254,6 @@ pub(crate) struct QuickSaveContext<'w, 's> {
     settings: ResMut<'w, crate::storage::settings::RuntimeSettings>,
     toggles: ResMut<'w, crate::ui::control_bar::ToggleStates>,
     pending_window: ResMut<'w, crate::ui::settings_panel::PendingWindowMode>,
-    profile_writer: ResMut<'w, crate::storage::profile::ProfileWriter>,
-    read_history_writer: ResMut<'w, crate::storage::read_history::ReadHistoryWriter>,
-    gallery_snapshot: ResMut<'w, crate::storage::gallery::GallerySnapshot>,
     preview_coordinator: Res<'w, crate::storage::save::SavePreviewCoordinator>,
     editor_sync: Option<Res<'w, crate::runtime::resources::EditorSyncSession>>,
     authoring_preview: Option<Res<'w, crate::runtime::preview::AuthoringPreviewSession>>,
@@ -719,29 +715,6 @@ pub fn handle_dialog_click(
                     &mut context.pending_window,
                     &context.project_root,
                 );
-            }
-            DialogAction::ClearAll => {
-                context.preview_coordinator.invalidate_all();
-                crate::ui::settings_panel::reset_runtime_settings(
-                    &mut context.settings,
-                    &mut context.toggles,
-                    &mut context.pending_window,
-                    &context.project_root,
-                );
-                if let Err(error) = crate::storage::reset_all(
-                    &context.project_root,
-                    &mut context.state,
-                    &mut context.settings,
-                    &mut context.profile_writer,
-                    &mut context.read_history_writer,
-                    &mut context.gallery_snapshot,
-                ) {
-                    log::error!("failed to clear all persistent data: {error:#}");
-                }
-                context.preview.state = None;
-                context.preview.image = None;
-                context.save_previews.clear();
-                context.save_load.set_changed();
             }
             DialogAction::Noop => {}
             DialogAction::SystemMessage => {

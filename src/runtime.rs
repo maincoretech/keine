@@ -16,6 +16,7 @@ pub(crate) mod resources;
 #[path = "runtime/script/driver.rs"]
 pub(crate) mod script_driver;
 pub(crate) mod tick;
+mod window;
 
 use bevy::prelude::*;
 

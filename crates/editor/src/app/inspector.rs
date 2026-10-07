@@ -1377,7 +1377,7 @@ impl WorkbenchPanel {
                             let baselines = edits.iter().filter_map(|(path, _)| cx.global::<EditorDocuments>().source(&root, path).map(|source| (path.clone(), source))).collect::<Vec<_>>();
                             let root = root.clone();
                             cx.spawn(async move |this, cx| {
-                                if let Some(receiver) = receiver && receiver.await.ok() != Some(0) {
+                                if let Some(receiver) = receiver && prompt_answer(receiver.await.ok(), 2) != Some(0) {
                                     let _ = this.update(cx, |panel, cx| { panel.asset_inspector_key = None; cx.refresh_windows(); });
                                     return;
                                 }

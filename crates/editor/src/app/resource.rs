@@ -107,7 +107,7 @@ impl WorkbenchPanel {
         let receiver = window.prompt(PromptLevel::Warning, &format!("Delete {count} asset(s)?"),
             Some("Keep files removes the mapping and marks files .unmapped. Trash uses the system Trash. Existing script references are left for diagnostics; Undo restores the change."), &buttons, cx);
         cx.spawn_in(window, async move |this, cx| {
-            let answer = receiver.await.ok();
+            let answer = prompt_answer(receiver.await.ok(), buttons.len());
             let delete_file = if unmapped.is_some() { answer == Some(0) } else { answer == Some(1) };
             if answer.is_none() || answer == Some(if unmapped.is_some() { 1 } else { 2 }) { return; }
             let _ = this.update_in(cx, |this, window, cx| {

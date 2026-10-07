@@ -53,7 +53,10 @@ Editor 通过显式开始/停止控制独立原生 Engine；Block 与执行位�
 ## 持久化
 
 Save v11 只恢复到 fingerprint 相同的 Program；不支持的二进制布局直接拒绝。
-profile、read history、gallery、settings 不随 slot rollback 回滚。
+profile、read history、gallery、settings、window bounds 不随 slot rollback 回滚。
+窗口布局由 runtime/window.rs 管理，独立版本化 `saves/window.bin` 保存正常窗口
+物理尺寸、位置、DPI 和最大化状态，不改变设置 v4 或 Save v11。启动时按当前 monitor
+限制尺寸和位置，再显示窗口；benchmark 保留显式尺寸及隐藏窗口策略。
 发行数据写入稳定 `project.id` 对应的平台 user-data 目录；不写到只读 bundle 旁。
 Preview 使用子进程临时数据根，子进程退出后清理。
 

@@ -115,6 +115,8 @@ impl ParticleClock {
             steps,
             previous_elapsed: (self.elapsed - PARTICLE_STEP_SECONDS).max(0.0),
             current_elapsed: self.elapsed,
+            previous_wind: 0.0,
+            current_wind: 0.0,
         }
     }
 
@@ -129,6 +131,8 @@ struct ParticleFrame {
     steps: usize,
     previous_elapsed: f32,
     current_elapsed: f32,
+    previous_wind: f32,
+    current_wind: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -165,6 +169,7 @@ pub(crate) struct ParticleBatch {
     particles: Vec<Particle>,
     acceleration: Vec2,
     drag: f32,
+    gust_strength: f32,
     color: Color,
     mesh: Handle<Mesh>,
     material: Handle<ParticleMaterial>,
@@ -280,16 +285,18 @@ pub(crate) fn sync(
                 let depth = perspective.depth;
                 let size = style.size * perspective.size;
                 let speed = style.speed * perspective.speed;
-                let horizontal = if style.kind == ParticleKind::Rain {
-                    effect.wind.unwrap_or(style.wind) * perspective.speed
+                let weather = matches!(style.kind, ParticleKind::Snow | ParticleKind::Rain);
+                let spread = if weather && effect.wind.is_some() {
+                    0.0
                 } else {
-                    let horizontal =
-                        effect.wind.unwrap_or(style.wind) + (random(index, 4) - 0.5) * style.spread;
-                    if style.kind == ParticleKind::Snow {
-                        horizontal * perspective.speed
-                    } else {
-                        horizontal
-                    }
+                    style.spread
+                };
+                let horizontal =
+                    effect.wind.unwrap_or(style.wind) + (random(index, 4) - 0.5) * spread;
+                let horizontal = if matches!(style.kind, ParticleKind::Snow | ParticleKind::Rain) {
+                    horizontal * perspective.speed
+                } else {
+                    horizontal
                 };
                 let position = Vec2::new(
                     random(index, 5) * (DESIGN_WIDTH + 240.0) - 120.0,
@@ -328,6 +335,8 @@ pub(crate) fn sync(
             steps: 0,
             previous_elapsed: clock.elapsed,
             current_elapsed: clock.elapsed,
+            previous_wind: 0.0,
+            current_wind: 0.0,
         };
         let gpu_particles = particles
             .iter()
@@ -350,6 +359,16 @@ pub(crate) fn sync(
                     -effect.gravity.unwrap_or(style.acceleration_y),
                 ),
                 drag: style.drag,
+                // Explicit wind remains a fixed author-controlled velocity.
+                gust_strength: if effect.wind.is_some() {
+                    0.0
+                } else {
+                    match style.kind {
+                        ParticleKind::Snow => style.drift * 1.5,
+                        ParticleKind::Rain => style.wind.abs() * 0.5,
+                        _ => 0.0,
+                    }
+                },
                 color: style.color,
                 mesh: mesh.clone(),
                 material: material.clone(),
@@ -405,13 +424,27 @@ pub(crate) fn animate(
         let drag_factor = (-batch.drag * PARTICLE_STEP_SECONDS).exp();
         let opacity = effect.opacity();
         let linear = batch.color.to_linear().to_f32_array();
+        let frame = ParticleFrame {
+            previous_wind: weather_wind(frame.previous_elapsed) * batch.gust_strength,
+            current_wind: weather_wind(frame.current_elapsed) * batch.gust_strength,
+            ..frame
+        };
+        // Shared, smoothly changing wind is evaluated once per emitter/step,
+        // not with a random generator or extra trigonometry for every drop.
+        let mut winds = [0.0; MAX_PARTICLE_STEPS_PER_FRAME];
+        for (step, wind) in winds.iter_mut().take(frame.steps).enumerate() {
+            let elapsed =
+                frame.current_elapsed - (frame.steps - step - 1) as f32 * PARTICLE_STEP_SECONDS;
+            *wind = weather_wind(elapsed) * batch.gust_strength;
+        }
         for particle in &mut batch.particles {
-            for _ in 0..frame.steps {
+            for wind in winds.iter().take(frame.steps) {
                 particle.previous_position = particle.position;
                 particle.previous_rotation = particle.rotation;
                 particle.velocity += acceleration * PARTICLE_STEP_SECONDS;
                 particle.velocity *= drag_factor;
                 particle.position += particle.velocity * PARTICLE_STEP_SECONDS;
+                particle.position.x += wind * wind_response(particle) * PARTICLE_STEP_SECONDS;
                 particle.rotation += particle.angular_velocity * PARTICLE_STEP_SECONDS;
 
                 let margin = particle.size.max_element().max(24.0) * 2.0;
@@ -472,10 +505,8 @@ impl ParticlePerspective {
             };
             return Self {
                 depth,
-                // Rain uses a restrained perspective range so its parallel
-                // direction remains the dominant visual characteristic.
-                size: (0.72 + depth * 0.56) * (0.90 + random(index, 2) * 0.20),
-                speed: (0.76 + depth * 0.42) * (0.94 + random(index, 3) * 0.12),
+                size: (0.35 + depth * 0.90) * (0.85 + random(index, 2) * 0.30),
+                speed: (0.55 + depth * 0.75) * (0.88 + random(index, 3) * 0.24),
                 alpha: (0.58 + depth * 0.42) * (0.88 + random(index, 7) * 0.12),
                 drift: 1.0,
             };
@@ -552,8 +583,16 @@ impl ParticleGpu {
             - center;
         let current =
             particle.position + particle_motion(kind, particle, frame.current_elapsed) - center;
-        let (previous_sin, previous_cos) = particle.previous_rotation.sin_cos();
-        let (sin, cos) = particle.rotation.sin_cos();
+        let (previous_sin, previous_cos) =
+            particle_orientation(particle, kind, true, frame.previous_wind);
+        let (sin, cos) = particle_orientation(particle, kind, false, frame.current_wind);
+        let width = if kind == ParticleKind::Snow {
+            // A flake turning edge-on changes its silhouette without flicker
+            // or an additional texture/pass. Explicit spin: 0 stays still.
+            particle.size.x * (0.65 + 0.35 * sin.abs())
+        } else {
+            particle.size.x
+        };
         let pulse = if kind == ParticleKind::Firefly {
             0.7 + 0.3 * (frame.current_elapsed * 2.1 + particle.phase).sin().abs()
         } else {
@@ -562,12 +601,7 @@ impl ParticleGpu {
         Self {
             previous: Vec4::new(previous.x, previous.y, previous_cos, previous_sin),
             current: Vec4::new(current.x, current.y, cos, sin),
-            size_depth: Vec4::new(
-                particle.size.x,
-                particle.size.y,
-                particle.depth * 0.001,
-                0.0,
-            ),
+            size_depth: Vec4::new(width, particle.size.y, particle.depth * 0.001, 0.0),
             color: Vec4::new(
                 linear[0],
                 linear[1],
@@ -580,10 +614,11 @@ impl ParticleGpu {
 
 fn particle_motion(kind: ParticleKind, particle: &Particle, elapsed: f32) -> Vec2 {
     match kind {
-        ParticleKind::Snow => Vec2::new(
-            (elapsed * (0.72 + particle.depth * 0.86) + particle.phase).sin() * particle.drift,
-            0.0,
-        ),
+        ParticleKind::Snow => {
+            let sway = (elapsed * (0.55 + particle.depth * 0.65) + particle.phase).sin();
+            let flutter = (elapsed * (0.23 + particle.depth * 0.31) + particle.phase * 1.7).sin();
+            Vec2::new(sway * 0.75 + flutter * 0.25, flutter * 0.12) * particle.drift
+        }
         ParticleKind::Leaf => Vec2::new(
             (elapsed * 1.15 + particle.phase).sin() * particle.drift,
             0.0,
@@ -594,6 +629,41 @@ fn particle_motion(kind: ParticleKind, particle: &Particle, elapsed: f32) -> Vec
         ),
         ParticleKind::Rain | ParticleKind::Ambient => Vec2::ZERO,
     }
+}
+
+fn weather_wind(elapsed: f32) -> f32 {
+    (elapsed * 0.43).sin() * 0.7 + (elapsed * 0.19 + 1.7).sin() * 0.3
+}
+
+fn wind_response(particle: &Particle) -> f32 {
+    0.5 + particle.depth * 0.5
+}
+
+fn particle_orientation(
+    particle: &Particle,
+    kind: ParticleKind,
+    previous: bool,
+    wind: f32,
+) -> (f32, f32) {
+    let rotation = if previous {
+        particle.previous_rotation
+    } else {
+        particle.rotation
+    };
+    let (sin, cos) = rotation.sin_cos();
+    if kind != ParticleKind::Rain {
+        return (sin, cos);
+    }
+    let direction = Vec2::new(
+        particle.velocity.x + wind * wind_response(particle),
+        -particle.velocity.y,
+    )
+    .try_normalize()
+    .unwrap_or(Vec2::Y);
+    (
+        direction.x * cos + direction.y * sin,
+        direction.y * cos - direction.x * sin,
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -618,9 +688,9 @@ struct ParticleStyle {
 impl ParticleStyle {
     fn from_effect(effect: &ParticleEffect) -> Self {
         match effect.preset.to_ascii_uppercase().as_str() {
-            "LIGHT_SNOW" => Self::snow(64, 82.0, 8.0),
-            "MODERATE_SNOW" => Self::snow(120, 118.0, 9.0),
-            "HEAVY_SNOW" => Self::snow(192, 154.0, 10.0),
+            "LIGHT_SNOW" => Self::snow(64, 54.0, 8.0),
+            "MODERATE_SNOW" => Self::snow(120, 82.0, 9.0),
+            "HEAVY_SNOW" => Self::snow(192, 118.0, 10.0),
             "LIGHT_RAIN" => Self::rain(56, 660.0),
             "MODERATE_RAIN" => Self::rain(112, 820.0),
             "HEAVY_RAIN" => Self::rain(192, 980.0),
@@ -642,17 +712,15 @@ impl ParticleStyle {
             color: Color::WHITE,
             count,
             speed,
-            // Scale horizontal velocity with fall speed so every density
-            // keeps the same clearly diagonal trajectory.
-            wind: -speed * 0.34,
-            spread: speed * 0.08,
+            wind: -speed * 0.15,
+            spread: 20.0,
             acceleration_x: 0.0,
-            acceleration_y: 8.0,
-            drag: 0.035,
+            acceleration_y: 0.0,
+            drag: 0.0,
             size,
             aspect: 1.0,
             alpha: 0.82,
-            drift: 22.0,
+            drift: 24.0,
             rotation: 0.0,
             angular_velocity: 0.45,
         }
@@ -664,16 +732,16 @@ impl ParticleStyle {
             color: Color::srgba(0.72, 0.84, 0.96, 1.0),
             count,
             speed,
-            wind: -105.0,
-            spread: 36.0,
+            wind: -(speed - 600.0) * 0.3,
+            spread: 12.0,
             acceleration_x: 0.0,
             acceleration_y: 0.0,
-            drag: 0.01,
-            size: 64.0,
-            aspect: 0.14,
-            alpha: 0.72,
+            drag: 0.0,
+            size: 36.0,
+            aspect: 0.12,
+            alpha: 0.68,
             drift: 0.0,
-            rotation: -0.14,
+            rotation: 0.0,
             angular_velocity: 0.0,
         }
     }
@@ -767,8 +835,8 @@ fn native_particle_texture(kind: ParticleKind) -> Image {
     match kind {
         ParticleKind::Rain => procedural_texture(|point| {
             let across = (point.x * 5.5).abs();
-            let along = (1.0 - point.y.abs()).clamp(0.0, 1.0);
-            (1.0 - across).clamp(0.0, 1.0).powi(2) * along.sqrt()
+            let along = ((point.y + 1.0) * 0.5).powi(2) * (1.0 - point.y);
+            (1.0 - across).clamp(0.0, 1.0) * along * 3.0
         }),
         ParticleKind::Leaf => procedural_texture(|point| {
             let along = point.y.abs();
@@ -780,7 +848,12 @@ fn native_particle_texture(kind: ParticleKind) -> Image {
             let distance = point.length();
             (1.0 - distance).clamp(0.0, 1.0).powf(1.6)
         }),
-        ParticleKind::Snow | ParticleKind::Ambient => soft_particle_texture(),
+        ParticleKind::Snow => procedural_texture(|point| {
+            let radius = (point / Vec2::new(0.78, 0.95)).length();
+            let edge = ((1.0 - radius) / 0.35).clamp(0.0, 1.0);
+            edge * edge * (3.0 - 2.0 * edge)
+        }),
+        ParticleKind::Ambient => soft_particle_texture(),
     }
 }
 
@@ -915,22 +988,24 @@ mod tests {
     }
 
     #[test]
-    fn snow_presets_are_fine_fast_and_diagonal() {
+    fn weather_presets_keep_fall_speed_stable_across_lifetimes() {
         let light = ParticleStyle::from_effect(&ParticleEffect::preset("LIGHT_SNOW"));
         let moderate = ParticleStyle::from_effect(&ParticleEffect::preset("MODERATE_SNOW"));
         let heavy = ParticleStyle::from_effect(&ParticleEffect::preset("HEAVY_SNOW"));
 
         assert!(light.size <= 8.0 && moderate.size <= 9.0 && heavy.size <= 10.0);
-        assert!(light.speed >= 82.0 && moderate.speed >= 118.0 && heavy.speed >= 154.0);
-        for style in [light, moderate, heavy] {
-            assert!(style.wind < 0.0);
-            assert!((style.wind / style.speed + 0.34).abs() < 0.001);
-            assert!(style.spread <= style.speed * 0.08 + f32::EPSILON);
+        assert!(light.speed < moderate.speed && moderate.speed < heavy.speed);
+        for style in [light, moderate, heavy, ParticleStyle::rain(192, 980.0)] {
+            // Presets start at a steady fall speed. Authored gravity/drag can
+            // override this, but defaults must not slow rain to a halt or
+            // accelerate snow for as long as its emitter survives.
+            assert_eq!(style.acceleration_y, 0.0);
+            assert_eq!(style.drag, 0.0);
         }
     }
 
     #[test]
-    fn rain_has_subtle_depth_without_changing_its_direction() {
+    fn distant_rain_streaks_are_smaller_and_slower() {
         let profiles = (0..MAX_PARTICLE_COUNT)
             .map(|index| ParticlePerspective::new(ParticleKind::Rain, index))
             .collect::<Vec<_>>();
@@ -949,13 +1024,6 @@ mod tests {
         };
         assert!(average(&near, |profile| profile.size) > average(&far, |profile| profile.size));
         assert!(average(&near, |profile| profile.speed) > average(&far, |profile| profile.speed));
-
-        let style = ParticleStyle::rain(96, 760.0);
-        for profile in profiles {
-            let vertical = style.speed * profile.speed;
-            let horizontal = style.wind * (vertical / style.speed);
-            assert!((horizontal / vertical - style.wind / style.speed).abs() < f32::EPSILON);
-        }
     }
 
     #[test]
@@ -996,6 +1064,8 @@ mod tests {
             steps: 1,
             previous_elapsed: 2.5,
             current_elapsed: 2.5 + PARTICLE_STEP_SECONDS,
+            previous_wind: 0.0,
+            current_wind: 0.0,
         };
         for kind in [
             ParticleKind::Snow,
@@ -1021,7 +1091,7 @@ mod tests {
                     Vec2::new(0.5, 0.5),
                     Vec2::new(-0.5, 0.5),
                 ] {
-                    let corner = corner * particle.size;
+                    let corner = corner * gpu.size_depth.xy();
                     let expand = |data: Vec4| {
                         data.xy()
                             + Vec2::new(
@@ -1048,6 +1118,60 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn rain_streak_follows_motion_in_both_wind_directions_and_at_rest() {
+        let mut particle = Particle {
+            position: Vec2::ZERO,
+            previous_position: Vec2::ZERO,
+            velocity: Vec2::ZERO,
+            size: Vec2::new(3.0, 28.0),
+            drift: 0.0,
+            phase: 0.0,
+            angular_velocity: 0.0,
+            rotation: 0.0,
+            previous_rotation: 0.0,
+            base_alpha: 1.0,
+            depth: 0.5,
+            cycle: 0,
+        };
+        for velocity in [
+            Vec2::new(-100.0, -800.0),
+            Vec2::new(100.0, -800.0),
+            Vec2::ZERO,
+        ] {
+            particle.velocity = velocity;
+            for wind in [-50.0, 0.0, 50.0] {
+                let (sin, cos) = particle_orientation(&particle, ParticleKind::Rain, false, wind);
+                let fall = Vec2::new(velocity.x + wind * wind_response(&particle), velocity.y);
+                let streak = Vec2::new(sin, -cos);
+                assert!(streak.is_finite());
+                assert!((streak.length() - 1.0).abs() < 1e-6);
+                if let Some(direction) = fall.try_normalize() {
+                    assert!(streak.distance(direction) < 1e-6);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn weather_wind_changes_smoothly_and_snow_texture_has_no_glow() {
+        let values = (0..3600)
+            .map(|step| weather_wind(step as f32 * PARTICLE_STEP_SECONDS))
+            .collect::<Vec<_>>();
+        assert!(values.iter().any(|wind| *wind < -0.5));
+        assert!(values.iter().any(|wind| *wind > 0.5));
+        assert!(
+            values
+                .windows(2)
+                .all(|pair| (pair[1] - pair[0]).abs() < 0.01)
+        );
+        let snow = native_particle_texture(ParticleKind::Snow);
+        let data = snow.data.as_ref().unwrap();
+        assert_eq!(data[3], 0);
+        assert_ne!(data, soft_particle_texture().data.as_ref().unwrap());
+        assert!(data.chunks_exact(4).any(|pixel| pixel[3] == 255));
     }
 
     #[test]

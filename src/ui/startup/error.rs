@@ -159,10 +159,12 @@ fn text(
 
 fn close(
     keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
     buttons: Query<&Interaction, (Changed<Interaction>, With<CloseButton>)>,
     mut exits: MessageWriter<AppExit>,
 ) {
     if keys.just_pressed(KeyCode::Escape)
+        || mouse.just_pressed(MouseButton::Right)
         || buttons
             .iter()
             .any(|interaction| *interaction == Interaction::Pressed)

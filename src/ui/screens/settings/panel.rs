@@ -363,7 +363,6 @@ pub(crate) enum SettingAction {
     SetTextSize(u8),
     ClearSaves,
     ResetSettings,
-    ClearAll,
     ExportData,
     ImportData,
 }
@@ -579,7 +578,7 @@ pub fn toggle_settings(
     let next_route = active_route(&save_load, &ui);
     begin_route_change(&mut route_transition, previous_route, next_route);
     if ui.open
-        && ((keys.just_pressed(KeyCode::Escape) && !toggled)
+        && (((keys.just_pressed(KeyCode::Escape) || input.back_pressed()) && !toggled)
             || back
                 .iter()
                 .any(|interaction| *interaction == Interaction::Pressed))
@@ -1583,19 +1582,15 @@ fn spawn_system_data_controls(
 ) {
     spawn_choice_row(
         content,
-        tr(settings.locale, UiText::ClearOrRestore),
+        tr(settings.locale, UiText::DataManagement),
         &[
-            (
-                tr(settings.locale, UiText::ClearSaves),
-                SettingAction::ClearSaves,
-            ),
             (
                 tr(settings.locale, UiText::ResetSettings),
                 SettingAction::ResetSettings,
             ),
             (
-                tr(settings.locale, UiText::ClearAll),
-                SettingAction::ClearAll,
+                tr(settings.locale, UiText::ClearSaves),
+                SettingAction::ClearSaves,
             ),
         ],
         usize::MAX,
@@ -2034,13 +2029,6 @@ pub fn handle_setting_action(context: SettingActionContext) {
             ));
             return;
         }
-        SettingAction::ClearAll => {
-            commands.insert_resource(crate::ui::dialog::DialogRequest::confirmation(
-                tr(settings.locale, UiText::ConfirmClearAll),
-                crate::ui::dialog::DialogAction::ClearAll,
-            ));
-            return;
-        }
         SettingAction::ExportData => {
             let Some(path) = rfd::FileDialog::new()
                 .add_filter("keine backup", &["keine-backup"])
@@ -2395,7 +2383,6 @@ fn choice_is_selected(settings: &RuntimeSettings, action: SettingAction) -> bool
         SettingAction::SetTextSize(value) => settings.text_size == value,
         SettingAction::ClearSaves
         | SettingAction::ResetSettings
-        | SettingAction::ClearAll
         | SettingAction::ExportData
         | SettingAction::ImportData => false,
     }
@@ -2556,6 +2543,28 @@ mod tests {
             .shortcut = None;
         app.update();
         assert!(!app.world().resource::<SettingsUi>().open);
+    }
+
+    #[test]
+    fn right_click_closes_settings_without_opening_another_menu() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .insert_resource(crate::runtime::platform::InputActions {
+                back: true,
+                ..default()
+            })
+            .insert_resource(UiInputScope::Menu)
+            .insert_resource(SettingsUi {
+                open: true,
+                ..default()
+            })
+            .init_resource::<SaveLoadUi>()
+            .init_resource::<MenuRouteTransition>()
+            .init_resource::<SettingsPageTransition>()
+            .add_systems(Update, toggle_settings);
+        app.update();
+        assert!(!app.world().resource::<SettingsUi>().open);
+        assert!(app.world().resource::<SaveLoadUi>().mode.is_none());
     }
 
     #[test]

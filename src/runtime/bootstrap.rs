@@ -1538,6 +1538,8 @@ fn build_opened_app(
     // host overlay or focus interception is involved.
     initial_resolution.set_scale_factor_override(Some(1.0));
     let authoring_preview = options.authoring_preview.is_some();
+    let remember_window =
+        options.benchmark.is_none() && options.startup_capture.is_none() && !options.hidden_window;
     let window_plugin = WindowPlugin {
         primary_window: Some(Window {
             title: if authoring_preview {
@@ -1569,7 +1571,7 @@ fn build_opened_app(
             // surface but hide them from the desktop/taskbar. A truly
             // headless render target would omit the startup costs this
             // benchmark is intended to measure.
-            visible: !options.hidden_window,
+            visible: !options.hidden_window && !remember_window,
             ..default()
         }),
         // Keep the native window alive until the shutdown pipeline has
@@ -1593,6 +1595,9 @@ fn build_opened_app(
         ));
     app.add_plugins(plugins)
         .insert_resource(ClearColor(Color::BLACK));
+    if remember_window {
+        app.add_plugins(super::window::WindowMemoryPlugin);
+    }
     crate::runtime::audio::configure_audio(&mut app, asset_mounts);
     app.add_plugins((webp, GamePlugin, CameraEffectsPlugin, BlurPlugin))
         .insert_resource(ProjectRoot(project_root))

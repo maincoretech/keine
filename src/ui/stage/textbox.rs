@@ -2,6 +2,7 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use bevy::text::LineHeight;
 use bevy::ui::FocusPolicy;
 use keine_core::config::{GameConfig, LayoutConfig, TextRevealConfig, TextRevealEffect};
 use keine_core::{DESIGN_HEIGHT, DESIGN_WIDTH, DialogueStyle, Rgba};
@@ -421,7 +422,7 @@ fn spawn_text_box(root: &mut ChildSpawnerCommands, config: &GameConfig, assets: 
                 // Ruby is overlaid inside each base glyph's line box. This gap
                 // only keeps annotations on adjacent wrapped lines apart; it
                 // does not create a separate ruby line.
-                row_gap: Val::Px(10.5),
+                row_gap: Val::Px(2.5),
                 ..default()
             },
         ));
@@ -1032,6 +1033,7 @@ fn spawn_plain_cluster(
                 },
                 TextColor(style.color),
                 TextLayout::no_wrap(),
+                LineHeight::RelativeToFont(1.1),
                 HideContentText::new(
                     alpha
                         * initial_reveal_alpha(
@@ -1142,6 +1144,7 @@ fn spawn_ruby_cluster(
                 },
                 TextColor(style.color),
                 TextLayout::no_wrap(),
+                LineHeight::RelativeToFont(1.1),
                 HideContentText::new(
                     alpha
                         * initial_reveal_alpha(

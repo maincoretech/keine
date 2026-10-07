@@ -100,13 +100,6 @@ fn decode(bytes: &[u8]) -> anyhow::Result<GalleryFileWire> {
     Ok(file)
 }
 
-pub(super) fn reset_memory(state: &mut keine_core::State, snapshot: &mut GallerySnapshot) {
-    state.unlocked_cg.clear();
-    state.unlocked_bgm.clear();
-    snapshot.cg.clear();
-    snapshot.bgm.clear();
-}
-
 fn path(project_root: &Path) -> std::path::PathBuf {
     project_root.join("saves/gallery.bin")
 }

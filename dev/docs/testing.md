@@ -1,5 +1,43 @@
 # 开发与验收
 
+设置页数据管理简化为“还原设置 / 清除存档”，保留分别确认，移除整项目数据清除入口及其专用路径。
+简体、繁体、日语、英语的标题、按钮和确认文案已同步；存档清除沿用保留设置的现有回归。
+workspace tests（publisher/video-native/hot-reload）984 passed / 21 ignored，fmt、check 和
+workspace all-targets Clippy 与 Engine debug 构建通过；IPC 在沙箱外运行。本次界面尚未原生目测。
+
+Editor 关闭确认：统一 macOS NSAlert 的 1000 起始返回值与 GPUI 的零起始按钮索引，
+修复 Close Without Saving 被当作 Cancel；共享流程中恢复草稿写入失败不再取消不保存关闭。
+真实 GPUI 窗口回归覆盖 Cancel 保留窗口/修改、Save and Close 保存并移除窗口、
+不保存关闭不改源文件，以及恢复目录不可写时仍关闭；后一边界在修复前复现失败、修复后通过。
+workspace tests（publisher/video-native/hot-reload）985 passed / 21 ignored，fmt、
+workspace all-targets Clippy 与 Editor debug 构建通过；IPC 在沙箱外运行。
+macOS 新 Editor 原生已验证 Cancel 后保留草稿，再选择不保存关闭后进程退出；
+Windows/Linux 原生弹窗尚待新构建复测。临时 app 与验证产生的 Editor 偏好/恢复记录已清理或恢复。
+
+对白排版：默认字号及 tday 显式字号 45→43，字形行高 1.2→1.1 倍，flex 行间距
+10.5→2.5 设计像素；保留原文本框尺寸和按钮位置。macOS 新 Engine 用截图中的三行
+实际文本检查，第三行完整且不覆盖底部按钮。workspace tests（publisher/video-native/hot-reload）
+983 passed / 21 ignored；fmt、all-targets Clippy、Engine debug 构建与 native-smoke validate 通过。
+临时验证剧本已逐字节恢复，临时 app/存档已清理；Windows/Linux 排版未实机复测。
+
+## 窗口与菜单输入
+
+非 Stage 右键使用现有 Esc 返回路径；Stage 仍只切换文本框，存档删除改为悬停后 Delete 并确认。
+窗口正常关闭时单独保存大小、位置与最大化状态；首次打开适配显示器，恢复时处理 DPI 改变、
+显示器移除及越界位置，不把全屏/最小化尺寸写成普通窗口大小。benchmark/隐藏启动不受此策略影响。
+Wayland 的窗口位置由合成器决定，Windows/Linux 原生恢复与首次显示尚待实机复测。
+
+Load 重建卡片时立即套用当前透明度，修复缓存跳过更新造成的不透明首帧；内容与背景使用同帧淡入进度。
+回归覆盖重建首帧、各菜单返回、窗口边界/DPI/显示器移除、持久化与只读会话。
+`cargo test --workspace --features publisher,video-native,hot-reload` 为 983 passed / 21 ignored
+（IPC/Trash 在沙箱外运行）；最终全屏保护调整后窗口专项 6 passed。
+fmt、workspace all-targets Clippy、上述功能组合 check、无默认功能 + video-native check、
+Engine debug 构建及 native-smoke validate（0 warning）通过。
+macOS 原生已检查设置/Load 右键返回、标题退出确认及取消、Stage 右键不推进对白；
+1404×790 窗口移动、关闭重开与全屏往返后保存的边界逐字节一致。
+Load 重开已观察正常显示，首帧修复由回归验证；不将静态截图记作逐帧闪屏验收。
+本次临时 app 和 native-smoke 生成的存档已清理，tday 未改写。
+
 ## 发布渠道验证
 
 缓存 key 单独将 feature 分隔逗号编码为连字符，Cargo feature 参数保留原值；Release 与
@@ -122,7 +160,7 @@ ad hoc codesign 验证通过；未执行正式签名/公证、远程 CI 或跨�
 |---|---|---|
 | 集成收尾 | 审查当前 diff，保留无关修改，按下方门禁复验；用户授权后提交推送，检查 Linux/macOS/Windows CI，修复真实失败 | 记录提交 SHA 与 CI 结果；不能把本机交叉编译当作远程 CI 通过 |
 | Windows/Linux 与显示验收 | 在对应系统原生运行 Editor/Engine；验证入篓→撤销→重做、同名冲突保护、CPU/内存采样与进程重启；检查保存重开、IME、Preview、音视频。用可用设备补测 1× DPI、Preview 极端比例；多屏设备到位后再测跨屏 | 各系统/显示配置分别记录通过、失败与未测；CI 单元测试不能替代 GUI/音视频实机验收 |
-| 独立性能阶段（仍延后） | 复用现有 bench、`cargo perf` 和 portable benchmark，测 Editor 滚动/大文档/搜索、启动与持续 CPU/RSS、Preview CPU/GPU 帧时、粒子全屏/瞬时峰值、媒体流与 Hakutaku I/O；先定位实际热点，再修改 | 同主机、同输入、同 release 配置保留前后原始命令/日志，报告 p99、最大帧时及超过刷新预算的帧数。以不掉帧为目标，窗口切换单独标记；平均 FPS 或 p99 单项不能证明零掉帧 |
+| 独立性能阶段（仍延后） | 复用现有 bench、`cargo perf` 和 portable benchmark，测 Editor 滚动/大文档/搜索、启动与持续 CPU/RSS、Preview CPU/GPU 帧时、粒子全屏/瞬时峰值、媒体流与 Hakutaku I/O；先定位实际热点，再修改 | 同主机、同输入、同 release 配置保留前后原始命令/日志，报告 p99、最大帧时及超过刷新预算的帧数。结合硬件、分辨率和可承受开销评价视觉质量与性能，窗口切换单独标记；平均 FPS 或 p99 单项不能证明零掉帧 |
 | 正式发行 | 在发行副本规范化存量 tday 媒体为 WebP/Opus 并保持 ID/引用，原工程只读；复用稳定 project.id 与 identity，验证并完整打包。macOS 在用户凭据就绪后执行正式签名/公证；测试解压、独立安装启动、Engine discovery、媒体播放、用户数据位置与更新 | 发行包满足生产格式，签名/公证检查通过，包中没有私有 identity；实际安装运行通过后才记录为发行验收完成 |
 
 维护者只按当前架构与已选政策收尾：Save 仍严格匹配 fingerprint，预取保持现有数量
@@ -793,6 +831,45 @@ cargo test -p keine --lib scene::assets::tests::speculative_budget_preserves_pri
 | 发行与 benchmark | 正常包与 benchmark 分离、挂载覆盖、确定性 payload、保留目录识别；不执行跑分 |
 
 对应 owner：`tests/authoring/process.rs`、`crates/authoring`、`crates/editor`、`src/runtime/audio.rs`、`src/runtime/package/benchmark.rs`、`src/scene/video`、`crates/media`。现有 `tests/bench` 与 CI 正确性检查保持可编译，不因暂缓删除测试或接口。
+
+### 雨雪视觉与成本
+
+性能目标是合理开销下的良好表现，按相同硬件、分辨率和负载比较。
+HD 4600 在 5120×2880 的压力结果不能按 1080p 的帧率目标判错：像素量是后者约 7.1 倍。
+参考本机 LetsGal Studio 的 `ParticleObject` / `ParticleObjectsEffect` 与雨雪预设，
+保留平滑风变化、个体摆动和远近层次的思路；[官方粒子说明](https://docs.avg-engine.com/manual/writing/blocks/particle/)介绍预设与自定义参数。
+
+现有 emitter 批处理、每粒子 64 字节、60 Hz 模拟及每 emitter 256 上限不变。
+雨丝缩短并按落速/风向倾斜；雪片以轻微纵横飘动、旋转及边缘朝向变化增加层次。
+省略 wind 时有缓慢阵风；显式 wind 固定风速。默认落速保持稳定，显式重力/阻力继续生效。
+原纹理优先，程序生成纹理只用于没有指定纹理的粒子。
+
+对照命令与原始日志保留在 `target/performance/weather-behavior/`。
+使用同一 M5 Pro / Metal、profiling 优化构建、1280×720 可见窗口与 continuous 模式；
+编译和原生画面检查结束后交替运行旧/新各三轮，预热 3 秒、采样 8 秒。
+CPU 为采样期间 `(user+system)/wall`，一个核心为 100%；p99 是帧间隔，包含呈现节奏。
+三轮中位数如下；CPU 跨轮波动明显（雨：旧 19.07–20.61%、新 10.06–20.53%；
+雪：旧 9.65–19.97%、新 9.73–18.51%），因此不据此宣称提速。
+
+| 用例 | 数量 | CPU % 旧 → 新 | FPS 旧 → 新 | p99 ms 旧 → 新 |
+|---|---:|---:|---:|---:|
+| 雨 | 256 | 19.81 → 18.92 | 60.0 → 60.0 | 18.23 → 18.03 |
+| 雪 | 256 | 14.39 → 10.94 | 60.0 → 60.0 | 17.61 → 17.54 |
+
+旧雨第二轮有未归因的 102.87 ms 长帧；保留完整日志，不声称零掉帧。
+
+```sh
+cargo build --locked --profile profiling --no-default-features --features bundled-opus,ui-sounds,startup-metrics,video-native --bin keine
+# before/after/keine 分别保留修改前后构建；run.py 顺序运行以下雨/雪命令各三轮。
+target/performance/weather-behavior/before/keine perf tests/fixtures/native-benchmark --timeline bench_particle_rain_256 --seconds 8 --mode continuous --window 1280x720 --raw
+target/performance/weather-behavior/after/keine perf tests/fixtures/native-benchmark --timeline bench_particle_rain_256 --seconds 8 --mode continuous --window 1280x720 --raw
+target/performance/weather-behavior/before/keine perf tests/fixtures/native-benchmark --timeline bench_particle_snow_256 --seconds 8 --mode continuous --window 1280x720 --raw
+target/performance/weather-behavior/after/keine perf tests/fixtures/native-benchmark --timeline bench_particle_snow_256 --seconds 8 --mode continuous --window 1280x720 --raw
+```
+
+fmt/check/Clippy、workspace 909 passed / 21 ignored（含 vendor 测试，IPC 放行重跑）、
+无默认音频的 video-native 粒子回归 12 passed，以及 native-smoke validate 通过。
+Computer Use 直接检查了原生雨雪画面。Windows/Linux 核显上的成本和实际项目的视觉效果仍需对应硬件验收。
 
 粒子优化实测：Apple M5 Pro / Metal，release LTO，仅额外保留采样符号。
 tday 临时追加独立 benchmark fragment，复用同一背景，结束后逐字节恢复脚本。

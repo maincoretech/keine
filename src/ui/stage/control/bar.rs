@@ -51,6 +51,10 @@ pub(crate) struct ControlInput<'w, 's> {
 }
 
 impl ControlInput<'_, '_> {
+    pub(crate) fn back_pressed(&self) -> bool {
+        self.actions.back
+    }
+
     pub(crate) fn pressed(&self, action: ButtonAction) -> bool {
         self.actions.shortcut == Some(action)
             || self.controls.iter().any(|(interaction, candidate)| {

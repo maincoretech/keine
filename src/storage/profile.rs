@@ -112,12 +112,6 @@ pub(crate) fn flush_on_exit(
     }
 }
 
-pub(super) fn reset_memory(state: &mut keine_core::State, writer: &mut ProfileWriter) {
-    state.global_vars.clear();
-    writer.saved.clear();
-    writer.dirty_seconds = 0.0;
-}
-
 fn persist_now(values: &HashMap<String, Value>, project_root: &Path, writer: &mut ProfileWriter) {
     match save(values, project_root) {
         Ok(()) => {
@@ -161,7 +155,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn profile_round_trip_and_reset() {
+    fn profile_round_trip() {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -175,15 +169,6 @@ mod tests {
         save(&values, &root).unwrap();
         assert_eq!(load(&root), values);
 
-        let mut state = keine_core::State::new();
-        state.global_vars = values.clone();
-        let mut writer = ProfileWriter::loaded(&values);
-        writer.dirty_seconds = WRITE_DELAY_SECONDS;
-        reset_memory(&mut state, &mut writer);
-        assert!(state.global_vars.is_empty());
-        assert!(writer.saved.is_empty());
-        assert_eq!(writer.dirty_seconds, 0.0);
-        assert_eq!(load(&root), values);
         let _ = fs::remove_dir_all(root);
     }
 

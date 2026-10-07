@@ -166,7 +166,7 @@ impl WorkbenchPanel {
                 cx,
             );
             cx.spawn_in(window, async move |this, cx| {
-                if receiver.await.ok() == Some(0) {
+                if prompt_answer(receiver.await.ok(), 2) == Some(0) {
                     let _ = this.update_in(cx, |this, window, cx| {
                         this.apply_reload(&root, &relative, window, cx)
                     });
@@ -2019,7 +2019,7 @@ impl WorkbenchPanel {
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
-            if receiver.await.ok() != Some(0) {
+            if prompt_answer(receiver.await.ok(), 2) != Some(0) {
                 return;
             }
             let _ = this.update_in(cx, |this, window, cx| {

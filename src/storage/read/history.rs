@@ -95,12 +95,6 @@ pub(crate) fn persist_read_history(
     }
 }
 
-pub(super) fn reset_memory(state: &mut keine_core::State, writer: &mut ReadHistoryWriter) {
-    state.read_dialogues.clear();
-    writer.saved_len = 0;
-    writer.dirty_seconds = 0.0;
-}
-
 fn save(history: &HashSet<DialogueKey>, project_root: &Path) -> Result<()> {
     let path = history_path(project_root);
     let bytes = super::encode_postcard_limited(

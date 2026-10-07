@@ -370,21 +370,6 @@ pub fn clear_games(store: &dyn StoreAdapter, project_root: &Path) -> Result<()> 
     Ok(())
 }
 
-/// Deletes the complete project persistence directory, including save slots,
-/// previews, settings, profile, read history, gallery and interrupted writes.
-pub(crate) fn clear_all_data(project_root: &Path) -> Result<()> {
-    let directory = project_root.join("saves");
-    match fs::remove_dir_all(&directory) {
-        Ok(()) => {
-            log::info!("cleared all persistent project data");
-            Ok(())
-        }
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error)
-            .with_context(|| format!("failed to delete save directory {}", directory.display())),
-    }
-}
-
 fn inspect_file(store: &dyn StoreAdapter, path: &Path) -> Result<SlotStatus> {
     let mut file = match File::open(path) {
         Ok(file) => file,

@@ -28,6 +28,7 @@ use super::dock::{ProjectWorkspace, install_default_layout};
 use super::documents::EditorDocuments;
 use super::edits::{follow_preview_position, format_and_save, replay_source_history};
 use super::panel::{ToolKind, WorkbenchPanel};
+use super::prompt_answer;
 use super::{
     ACTIVITY_BRAND_SIZE_PX, ACTIVITY_ICON_SIZE_PX, ACTIVITY_ITEM_SIZE_PX, ACTIVITY_RAIL_WIDTH_PX,
     ASSET_PREVIEW_PANEL, ASSETS_PANEL, BUILD_PANEL, CANVAS, CHARACTERS_PANEL, CHROME,
@@ -750,7 +751,7 @@ impl WorkbenchWindow {
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
-            let answer = receiver.await.ok();
+            let answer = prompt_answer(receiver.await.ok(), 2);
             let _ = this.update_in(cx, |this, window, cx| {
                 if answer != Some(0) {
                     cx.global_mut::<EditorDocuments>()
@@ -812,7 +813,7 @@ impl WorkbenchWindow {
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
-            let answer = receiver.await.ok();
+            let answer = prompt_answer(receiver.await.ok(), 3);
             if answer == Some(1) {
                 // Complete the latest recovery write before releasing the
                 // document/panel that owns the debounce. Editing during I/O
@@ -863,13 +864,10 @@ impl WorkbenchWindow {
                     let finished = this
                         .update_in(cx, |this, window, cx| {
                             if let Err(error) = result {
-                                this.close_prompt_open = false;
-                                window.push_notification(
-                                    Notification::error(format!(
-                                        "Could not preserve recovery draft: {error}"
-                                    )),
-                                    cx,
-                                );
+                                // The user chose not to save. A failed recovery
+                                // write must not turn that choice into Cancel.
+                                eprintln!("Kēne Editor could not preserve recovery draft: {error}");
+                                this.finish_close(window, cx);
                                 return true;
                             }
                             let unchanged = cx
@@ -1447,6 +1445,102 @@ pub(super) fn listen_for_secondary_launches(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui_kit::test]
+    fn closing_a_dirty_project_distinguishes_cancel_save_and_without_saving(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            super::super::register_workbench_panels(cx);
+        });
+        for (save, recovery_blocked) in [(false, false), (false, true), (true, false)] {
+            let temporary = std::env::temp_dir().join(format!(
+                "keine-close-prompt-{}-{save}-{recovery_blocked}",
+                std::process::id()
+            ));
+            let root = temporary.join("project");
+            std::fs::create_dir_all(root.join("scripts")).unwrap();
+            std::fs::write(
+                root.join("config.yaml"),
+                include_str!("../../../../tests/fixtures/native-smoke/config.yaml"),
+            )
+            .unwrap();
+            let path = PathBuf::from("scripts/main.shou");
+            let original = "scene start {\n  \"original\"\n}\n";
+            let draft = "scene start {\n  \"draft\"\n}\n";
+            std::fs::write(root.join(&path), original).unwrap();
+            let (editor, handle, document) = cx.update(|cx| {
+                let persistence = AppPersistence::new(temporary.join("app-data"));
+                let instance = match crate::instance::acquire_or_forward(persistence.root(), vec![])
+                    .unwrap()
+                {
+                    crate::instance::Startup::Primary(instance) => instance,
+                    _ => panic!("test must own its isolated editor instance"),
+                };
+                let session = WorkspaceSession::open(&root).unwrap();
+                let mut documents = EditorDocuments::new(persistence.clone());
+                documents
+                    .ensure_workspace_with_files(session.root(), session.files())
+                    .unwrap();
+                let document = documents
+                    .workspaces
+                    .get_mut(session.root())
+                    .unwrap()
+                    .manager
+                    .open(&path)
+                    .unwrap();
+                document
+                    .borrow_mut()
+                    .replace_contents(draft.into())
+                    .unwrap();
+                cx.set_global(documents);
+                let editor = cx.new(|cx| EditorApp::new(cx.weak_entity(), persistence, instance));
+                editor.update(cx, |editor, cx| editor.open_project(&root, cx).unwrap());
+                let handle = *editor.read(cx).windows.windows.values().next().unwrap();
+                (editor, handle, document)
+            });
+            let confirm = |cx: &mut gpui_kit::TestAppContext| {
+                handle
+                    .update(cx, |root, window, cx| {
+                        root.view()
+                            .clone()
+                            .downcast::<WorkbenchWindow>()
+                            .unwrap()
+                            .update(cx, |workbench, cx| workbench.confirm_close(window, cx));
+                    })
+                    .unwrap();
+                assert!(cx.has_pending_prompt());
+            };
+            confirm(cx);
+            cx.simulate_prompt_answer("Cancel");
+            cx.run_until_parked();
+            assert!(handle.update(cx, |_, _, _| ()).is_ok());
+            assert_eq!(document.borrow().contents(), draft);
+            assert_eq!(std::fs::read_to_string(root.join(&path)).unwrap(), original);
+            if recovery_blocked {
+                let persistence = AppPersistence::new(temporary.join("app-data"));
+                let recovery = persistence.recovery_dir(&ProjectKey::from_path(&root).unwrap());
+                std::fs::remove_dir_all(&recovery).unwrap();
+                std::fs::write(&recovery, "unavailable recovery directory").unwrap();
+            }
+            confirm(cx);
+            cx.simulate_prompt_answer(if save {
+                "Save and Close"
+            } else {
+                "Close Without Saving"
+            });
+            cx.run_until_parked();
+            assert!(handle.update(cx, |_, _, _| ()).is_err());
+            assert_eq!(
+                std::fs::read_to_string(root.join(&path)).unwrap(),
+                if save { draft } else { original }
+            );
+            drop(editor);
+            drop(document);
+            std::fs::remove_dir_all(temporary).unwrap();
+        }
+    }
 
     #[test]
     fn duplicate_project_routes_to_the_existing_window() {

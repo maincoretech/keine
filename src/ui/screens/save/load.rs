@@ -292,7 +292,7 @@ pub(crate) struct SaveLoadSyncContext<'w, 's> {
 
 #[derive(SystemParam)]
 pub(crate) struct SaveLoadFadeContext<'w, 's> {
-    roots: Query<'w, 's, (Entity, &'static MenuFade), With<SaveLoadRoot>>,
+    roots: Query<'w, 's, (Entity, &'static MenuFade, &'static Visibility), With<SaveLoadRoot>>,
     contents: Query<'w, 's, Entity, With<SaveLoadContent>>,
     parents: Query<'w, 's, &'static ChildOf>,
     texts: Query<'w, 's, (Entity, &'static mut TextColor)>,
@@ -365,6 +365,7 @@ pub fn toggle_save_load(
     }
     if ui.mode.is_some()
         && (keys.just_pressed(KeyCode::Escape)
+            || input.back_pressed()
             || back
                 .iter()
                 .any(|interaction| *interaction == Interaction::Pressed))
@@ -693,9 +694,12 @@ pub fn animate_save_load_content(
         cache.image.clear();
         return;
     };
-    let Ok((root, root_fade)) = context.roots.single() else {
+    let Ok((root, root_fade, visibility)) = context.roots.single() else {
         return;
     };
+    if *visibility == Visibility::Hidden {
+        return;
+    }
     let belongs_to = |entity: Entity, ancestor: Entity| {
         let mut current = entity;
         while let Ok(parent) = context.parents.get(current) {
@@ -722,8 +726,28 @@ pub fn animate_save_load_content(
         return;
     }
 
+    // Reopening/page rebuilds can replace the grid while alpha is unchanged.
+    // New children start opaque and must receive the fade before extraction.
     if cache.active && (cache.last_alpha - menu_alpha).abs() < 0.0001 {
-        return;
+        let new_visuals = context
+            .texts
+            .iter_mut()
+            .any(|(entity, color)| color.is_added() && belongs_to(entity, root))
+            || context
+                .backgrounds
+                .iter_mut()
+                .any(|(entity, color)| color.is_added() && belongs_to(entity, root))
+            || context
+                .borders
+                .iter_mut()
+                .any(|(entity, color)| color.is_added() && belongs_to(entity, root))
+            || context
+                .images
+                .iter_mut()
+                .any(|(entity, image)| image.is_added() && belongs_to(entity, root));
+        if !new_visuals {
+            return;
+        }
     }
 
     cache.active = true;
@@ -1331,10 +1355,8 @@ pub fn handle_save_load_slot(
         .insert_resource(DialogRequest::confirmation(title, action));
 }
 
-pub fn handle_save_delete(mouse: Res<ButtonInput<MouseButton>>, mut context: SaveDeleteContext) {
-    if context.ui.mode.is_none()
-        || context.request.is_some()
-        || !mouse.just_pressed(MouseButton::Right)
+pub fn handle_save_delete(keys: Res<ButtonInput<KeyCode>>, mut context: SaveDeleteContext) {
+    if context.ui.mode.is_none() || context.request.is_some() || !keys.just_pressed(KeyCode::Delete)
     {
         return;
     }
@@ -1369,6 +1391,102 @@ mod tests {
         _settings_roots: SettingsRootVisibilityQuery,
         _settings_proxies: SettingsProxyVisibilityQuery,
     ) {
+    }
+
+    #[test]
+    fn rebuilt_grid_at_unchanged_fade_does_not_flash_opaque_for_one_frame() {
+        let mut app = App::new();
+        app.add_systems(Update, animate_save_load_content);
+        let root = app
+            .world_mut()
+            .spawn((SaveLoadRoot, MenuFade::entering(), Visibility::Inherited))
+            .id();
+        let content = app.world_mut().spawn((SaveLoadContent, ChildOf(root))).id();
+        let original = app
+            .world_mut()
+            .spawn((TextColor(Color::WHITE), ChildOf(content)))
+            .id();
+        app.update();
+        assert_eq!(
+            app.world().get::<TextColor>(original).unwrap().0.alpha(),
+            0.0
+        );
+        app.world_mut().entity_mut(original).despawn();
+        let new_slot = app
+            .world_mut()
+            .spawn((
+                BackgroundColor(Color::srgba(0.5, 0.5, 0.5, 0.7)),
+                TextColor(Color::WHITE),
+                ImageNode::default(),
+                ChildOf(content),
+            ))
+            .id();
+        app.update();
+        assert_eq!(
+            app.world().get::<TextColor>(new_slot).unwrap().0.alpha(),
+            0.0
+        );
+        assert_eq!(
+            app.world()
+                .get::<BackgroundColor>(new_slot)
+                .unwrap()
+                .0
+                .alpha(),
+            0.0
+        );
+        assert_eq!(
+            app.world()
+                .get::<ImageNode>(new_slot)
+                .unwrap()
+                .color
+                .alpha(),
+            0.0
+        );
+        app.world_mut().get_mut::<MenuFade>(root).unwrap().current = 1.0;
+        app.update();
+        assert_eq!(
+            app.world().get::<TextColor>(new_slot).unwrap().0.alpha(),
+            1.0
+        );
+        assert_eq!(
+            app.world()
+                .get::<BackgroundColor>(new_slot)
+                .unwrap()
+                .0
+                .alpha(),
+            0.7
+        );
+        assert_eq!(
+            app.world()
+                .get::<ImageNode>(new_slot)
+                .unwrap()
+                .color
+                .alpha(),
+            1.0
+        );
+    }
+
+    #[test]
+    fn right_click_leaves_both_slot_pages() {
+        for mode in [SaveLoadMode::Save, SaveLoadMode::Load] {
+            let mut app = App::new();
+            app.init_resource::<ButtonInput<KeyCode>>()
+                .insert_resource(crate::runtime::platform::InputActions {
+                    back: true,
+                    ..default()
+                })
+                .insert_resource(crate::ui::input_scope::UiInputScope::Menu)
+                .insert_resource(SaveLoadUi {
+                    mode: Some(mode),
+                    ..default()
+                })
+                .init_resource::<crate::ui::settings_panel::SettingsUi>()
+                .init_resource::<SaveLoadPageTransition>()
+                .init_resource::<MenuRouteTransition>()
+                .add_systems(Update, toggle_save_load);
+            app.update();
+            assert!(app.world().resource::<SaveLoadUi>().mode.is_none());
+        }
     }
 
     #[test]

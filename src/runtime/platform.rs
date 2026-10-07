@@ -106,6 +106,7 @@ pub(crate) struct InputActions {
     pub advance: bool,
     pub pointer_advance: bool,
     pub shortcut: Option<ButtonAction>,
+    pub back: bool,
     pub toggle_auto: bool,
     pub toggle_skip: bool,
     pub auto_held: bool,
@@ -193,6 +194,8 @@ pub(crate) fn collect_input(context: InputContext) {
     let pointer_pressed =
         gameplay_input && (mouse.just_pressed(MouseButton::Left) || touches.any_just_pressed());
     let control_pressed = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    actions.back = *scope != crate::ui::input_scope::UiInputScope::Stage
+        && mouse.just_pressed(MouseButton::Right);
     actions.shortcut = if matches!(
         *scope,
         crate::ui::input_scope::UiInputScope::Stage
@@ -963,6 +966,7 @@ mod tests {
             UiInputScope::Title,
             UiInputScope::Menu,
             UiInputScope::Backlog,
+            UiInputScope::Extra,
             UiInputScope::Dialog,
             UiInputScope::UserInput,
             UiInputScope::Loading,
@@ -977,6 +981,7 @@ mod tests {
             app.update();
             assert!(!app.world().resource::<ToggleStates>().hide);
             assert!(app.world().resource::<InputActions>().shortcut.is_none());
+            assert!(app.world().resource::<InputActions>().back);
         }
     }
 

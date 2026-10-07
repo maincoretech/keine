@@ -100,6 +100,19 @@ use edits::*;
 use inspector::*;
 use resource::*;
 
+/// GPUI's macOS backend currently forwards NSAlert's 1000-based return codes;
+/// its custom prompts and the other platforms return zero-based indices.
+fn prompt_answer(answer: Option<usize>, button_count: usize) -> Option<usize> {
+    let answer = answer?;
+    #[cfg(target_os = "macos")]
+    let answer = if answer >= 1000 {
+        answer - 1000
+    } else {
+        answer
+    };
+    (answer < button_count).then_some(answer)
+}
+
 const CANVAS: u32 = 0x070809;
 const CHROME: u32 = 0x0b0d10;
 const PANEL: u32 = 0x101317;
@@ -610,6 +623,20 @@ pub fn run() -> ExitCode {
 mod tests {
     use super::*;
     use gpui_kit::point;
+
+    #[test]
+    fn prompt_answers_keep_save_close_and_cancel_distinct() {
+        for index in 0..3 {
+            assert_eq!(prompt_answer(Some(index), 3), Some(index));
+            #[cfg(target_os = "macos")]
+            assert_eq!(prompt_answer(Some(1000 + index), 3), Some(index));
+        }
+        assert_eq!(prompt_answer(None, 3), None);
+        assert_eq!(prompt_answer(Some(3), 3), None);
+        assert_eq!(prompt_answer(Some(1003), 3), None);
+        assert_eq!(prompt_answer(Some(usize::MAX), 3), None);
+        assert_eq!(prompt_answer(Some(2), 2), None);
+    }
 
     #[test]
     fn editor_cli_handles_help_and_rejects_unknown_options_before_opening_a_window() {

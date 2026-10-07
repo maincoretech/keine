@@ -757,7 +757,7 @@ fn title_keyboard_action(
     actions: &InputActions,
     can_continue: bool,
 ) -> Option<TitleAction> {
-    if keys.just_pressed(KeyCode::Escape) {
+    if keys.just_pressed(KeyCode::Escape) || actions.back {
         return Some(TitleAction::Exit);
     }
     match actions.shortcut {
@@ -1098,6 +1098,17 @@ mod tests {
 
         assert!(matches!(
             title_keyboard_action(&keys, &InputActions::default(), false),
+            Some(TitleAction::Exit)
+        ));
+        assert!(matches!(
+            title_keyboard_action(
+                &ButtonInput::default(),
+                &InputActions {
+                    back: true,
+                    ..default()
+                },
+                false,
+            ),
             Some(TitleAction::Exit)
         ));
     }

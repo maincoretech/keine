@@ -130,10 +130,6 @@ pub(crate) fn sanitize(settings: &mut RuntimeSettings) {
     clamp!(textbox_opacity, 0.0, 1.0);
 }
 
-pub(super) fn reset_memory(settings: &mut RuntimeSettings) {
-    *settings = RuntimeSettings::default();
-}
-
 fn path(project_root: &Path) -> std::path::PathBuf {
     project_root.join("saves").join("settings.bin")
 }

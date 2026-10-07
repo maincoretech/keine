@@ -538,7 +538,7 @@ fn default_speaker_size() -> f32 {
     39.0
 }
 fn default_dialogue_size() -> f32 {
-    45.0
+    43.0
 }
 fn default_icon_size() -> f32 {
     19.5

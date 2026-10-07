@@ -704,6 +704,7 @@ fn spawn_cg_cards(
 
 pub(crate) fn handle_navigation(
     keys: Res<ButtonInput<KeyCode>>,
+    actions: Res<crate::runtime::platform::InputActions>,
     close: Query<&Interaction, (With<ExtraClose>, Changed<Interaction>)>,
     full: Query<Entity, With<ExtraFullCg>>,
     mut ui: ResMut<ExtraUi>,
@@ -712,7 +713,7 @@ pub(crate) fn handle_navigation(
     if !ui.open {
         return;
     }
-    if keys.just_pressed(KeyCode::Escape) {
+    if keys.just_pressed(KeyCode::Escape) || actions.back {
         if !full.is_empty() {
             for entity in &full {
                 commands.entity(entity).despawn();
@@ -1427,6 +1428,27 @@ fn fade_extra_content(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn right_click_returns_from_full_cg_before_leaving_extra() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .insert_resource(crate::runtime::platform::InputActions {
+                back: true,
+                ..default()
+            })
+            .insert_resource(ExtraUi {
+                open: true,
+                ..default()
+            })
+            .add_systems(Update, handle_navigation);
+        let cg = app.world_mut().spawn(ExtraFullCg("test.webp".into())).id();
+        app.update();
+        assert!(app.world().get_entity(cg).is_err());
+        assert!(app.world().resource::<ExtraUi>().open);
+        app.update();
+        assert!(!app.world().resource::<ExtraUi>().open);
+    }
 
     #[test]
     fn formats_bgm_time_without_fractional_jitter() {

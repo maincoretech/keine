@@ -28,7 +28,7 @@ assets:
   luts: {}
 fonts:
   speaker_size: 39.0
-  dialogue_size: 45.0
+  dialogue_size: 43.0
   icon_size: 19.5
   label_size: 18.0
 styles:
