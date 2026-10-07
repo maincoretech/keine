@@ -6,7 +6,7 @@ Editor、publisher、桌面文件选择器不进入安卓运行依赖。Core、L
 
 ## 构建与 CI
 
-日常推荐使用 GitHub Actions：打开独立的 Android Engine workflow，点击 Run workflow；
+日常推荐使用 GitHub Actions：打开独立的 **CI Android** workflow，点击 Run workflow；
 结束后下载 `keine-android-arm64-engine` artifact 中的 APK。
 GitHub 的 [Ubuntu runner](https://github.com/actions/runner-images) 已有 Android SDK；
 workflow 安装固定 NDK/Gradle/Rust 工具，无需开发机常驻整套环境。
@@ -30,7 +30,7 @@ Gradle 使用系统 NativeActivity 封装为 **debug 签名的测试 APK**，没
 APK 为 `dev/android/app/build/outputs/apk/debug/app-debug.apk`，原生库为
 `target/android/jniLibs/arm64-v8a/libkeine.so`。正式游戏签名和发布尚未接入。
 
-独立 Android Engine workflow 在 push/PR 或手动触发时检查依赖隔离，构建原生库与 APK，验证 NativeActivity
+独立 **CI Android** workflow 在 push/PR 或手动触发时检查依赖隔离，构建原生库与 APK，验证 NativeActivity
 启动符号、ELF 16 KB 对齐、APK 对齐及签名，确认 Vulkan/GLES feature closure，
 复核 APK 的 GLES/Vulkan 硬件声明，上传 `keine-android-arm64-engine` artifact。
 不读取 publisher identity，也不打包 tday；原生构建缓存与桌面分开。
