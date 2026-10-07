@@ -359,9 +359,9 @@ benchmark collector 6 项、native-smoke 零警告通过；Windows SDK 与新总
 实验性 ARM64 Engine 使用 `--no-default-features --features ui-sounds`，安卓明确不支持视频。
 默认先初始化 Vulkan，surface/adapter/device 返回错误时释放该次资源并重试 GLES；
 单独指定 gl/vulkan 时保留指定后端。游戏与缺失资源提示页使用同一平台配置。
-独立 CI job 构建 release 原生库及 debug 签名 APK，检查桌面/Editor/FFmpeg 依赖隔离、
+独立 Android Engine workflow 构建 release 原生库及 debug 签名 APK，检查桌面/Editor/FFmpeg 依赖隔离、
 Vulkan/GLES feature closure、NativeActivity 启动符号、ELF LOAD/RELRO 与 APK 的 16 KB
-对齐、APK 签名与硬件声明，再上传 artifact；手动 CI 支持只运行 Android job。
+对齐、APK 签名与硬件声明，再上传 artifact；可单独手动触发，不等待桌面 CI 队列。
 构建入口、资源部署及限制见 [Android guide](android.md)。
 
 本机 NDK 28.2.13676358 交叉 Clippy、原生库链接、APK 打包及上述校验通过；无新增 Rust

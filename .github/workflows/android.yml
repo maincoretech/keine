@@ -1,0 +1,97 @@
+name: Android Engine
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  android:
+    name: Android ARM64 Engine (no video)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+        with:
+          targets: aarch64-linux-android
+          components: clippy
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@41ad77ca97e46ee2e825d5e6b9a95d8169fcc44c # v4.4.2
+        with:
+          gradle-version: '8.11.1'
+      - name: Install Android toolchain
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            'ndk;28.2.13676358' 'platforms;android-35' 'build-tools;35.0.0'
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
+      - name: Install pinned cargo-ndk
+        run: cargo install cargo-ndk --version 4.1.2 --locked
+      - name: Restore Android Rust build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/android
+          key: android-arm64-ndk28-v1-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ github.sha }}
+          restore-keys: |
+            android-arm64-ndk28-v1-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-
+      - name: Guard Android runtime dependencies
+        run: |
+          cargo tree --locked -p keine --target aarch64-linux-android \
+            --no-default-features --features ui-sounds -e normal,build --prefix none \
+            > "$RUNNER_TEMP/android-dependencies.txt"
+          if grep -E '^(keine-editor|gpui|rfd|ffmpeg-next) ' "$RUNNER_TEMP/android-dependencies.txt"; then
+            echo 'Android Engine must not include Editor, desktop file dialogs or FFmpeg.'
+            exit 1
+          fi
+          cargo tree --locked -p keine --target aarch64-linux-android \
+            --no-default-features --features ui-sounds -e features -i wgpu \
+            > "$RUNNER_TEMP/android-render-features.txt"
+          for backend in vulkan gles; do
+            grep -F "wgpu feature \"$backend\"" "$RUNNER_TEMP/android-render-features.txt"
+          done
+      - name: Build Android Engine and test APK
+        run: |
+          cargo ndk -t arm64-v8a -P 26 clippy --locked -p keine --lib \
+            --target-dir target/android --no-default-features --features ui-sounds -- -D warnings
+          dev/scripts/build-android.sh
+      - name: Verify native entry point and 16 KB alignment
+        run: |
+          library=target/android/jniLibs/arm64-v8a/libkeine.so
+          readelf --dyn-syms --wide "$library" | grep ' ANativeActivity_onCreate$'
+          python3 - <<'PY'
+          import subprocess
+          library = 'target/android/jniLibs/arm64-v8a/libkeine.so'
+          headers = subprocess.check_output(['readelf', '-lW', library], text=True)
+          loads = [line.split() for line in headers.splitlines() if line.strip().startswith('LOAD ')]
+          assert loads and all(int(line[-1], 16) >= 16384 for line in loads), headers
+          relro = [line.split() for line in headers.splitlines() if line.strip().startswith('GNU_RELRO ')]
+          assert all((int(line[2], 16) + int(line[5], 16)) % 16384 == 0 for line in relro), headers
+          PY
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 4 \
+            dev/android/app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify \
+            dev/android/app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging \
+            dev/android/app/build/outputs/apk/debug/app-debug.apk > "$RUNNER_TEMP/android-apk-manifest.txt"
+          grep -F "uses-gl-es: '0x30000'" "$RUNNER_TEMP/android-apk-manifest.txt"
+          grep -F "uses-feature-not-required: name='android.hardware.vulkan.level'" \
+            "$RUNNER_TEMP/android-apk-manifest.txt"
+      - name: Upload Android Engine artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: keine-android-arm64-engine
+          if-no-files-found: error
+          path: |
+            dev/android/app/build/outputs/apk/debug/app-debug.apk
+            target/android/jniLibs/arm64-v8a/libkeine.so
+            target/android/notices/
