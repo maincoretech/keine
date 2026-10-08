@@ -289,6 +289,7 @@ pub fn update_setting_visuals(
 
 pub fn update_setting_bubbles(
     settings: Res<RuntimeSettings>,
+    drag: Res<ActiveSettingSlider>,
     sliders: Query<(&Interaction, &SettingSlider)>,
     mut values: Query<(&SettingValueText, &mut Text)>,
     mut bubbles: Query<(&SettingValueBubble, &mut Node), Without<SettingSliderThumb>>,
@@ -300,9 +301,13 @@ pub fn update_setting_bubbles(
         }
     }
     for (kind, mut node) in &mut bubbles {
-        let active = sliders.iter().any(|(interaction, slider)| {
-            slider.0 == kind.0 && matches!(interaction, Interaction::Hovered | Interaction::Pressed)
-        });
+        // Touch capture owns the slider during a drag; it deliberately does
+        // not leave the button Pressed (which would trigger a click).
+        let active = drag.kind == Some(kind.0)
+            || sliders.iter().any(|(interaction, slider)| {
+                slider.0 == kind.0
+                    && matches!(interaction, Interaction::Hovered | Interaction::Pressed)
+            });
         let display = if active { Display::Flex } else { Display::None };
         let left = Val::Percent(kind.0.ratio(&settings).clamp(0.0, 1.0) * 90.0);
         if node.display != display {
@@ -454,6 +459,68 @@ fn set_page_presentation(
 #[cfg(test)]
 mod touch_performance_tests {
     use super::*;
+
+    #[test]
+    fn captured_slider_shows_only_its_live_value_until_release() {
+        let mut app = App::new();
+        app.init_resource::<RuntimeSettings>()
+            .init_resource::<ActiveSettingSlider>()
+            .add_systems(Update, update_setting_bubbles);
+        let mut bubbles = Vec::new();
+        for kind in [SettingKind::MasterVolume, SettingKind::BgmVolume] {
+            app.world_mut()
+                .spawn((SettingSlider(kind), Interaction::None));
+            let bubble = app
+                .world_mut()
+                .spawn((SettingValueBubble(kind), Node::default()))
+                .id();
+            let text = app
+                .world_mut()
+                .spawn((SettingValueText(kind), Text::default()))
+                .id();
+            bubbles.push((bubble, text));
+        }
+        app.world_mut().resource_mut::<ActiveSettingSlider>().kind =
+            Some(SettingKind::MasterVolume);
+        app.world_mut()
+            .resource_mut::<RuntimeSettings>()
+            .master_volume = 0.75;
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(bubbles[0].0).unwrap().display,
+            Display::Flex
+        );
+        assert_eq!(
+            app.world().get::<Node>(bubbles[1].0).unwrap().display,
+            Display::None
+        );
+        assert_eq!(app.world().get::<Text>(bubbles[0].1).unwrap().0, "75");
+        app.world_mut()
+            .resource_mut::<RuntimeSettings>()
+            .master_volume = 0.25;
+        app.update();
+        assert_eq!(app.world().get::<Text>(bubbles[0].1).unwrap().0, "25");
+        app.world_mut().resource_mut::<ActiveSettingSlider>().kind = None;
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(bubbles[0].0).unwrap().display,
+            Display::None
+        );
+        // Desktop mouse hovering retains its existing hint.
+        let mut sliders = app
+            .world_mut()
+            .query::<(&SettingSlider, &mut Interaction)>();
+        for (slider, mut interaction) in sliders.iter_mut(app.world_mut()) {
+            if slider.0 == SettingKind::BgmVolume {
+                *interaction = Interaction::Hovered;
+            }
+        }
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(bubbles[1].0).unwrap().display,
+            Display::Flex
+        );
+    }
 
     #[derive(Resource, Default)]
     struct LayoutWrites(usize);

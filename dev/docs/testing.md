@@ -7,6 +7,14 @@ Enter 提交移到输入事件，回归确认渲染不提交、Enter 只提交�
 Engine 的 Settings、Save/Load、Dialog 分离 state/view/actions/motion/sync，保留系统入口与顺序；
 槽位截图仍在 UI，后台编码和落盘归 storage，沿用有界队列与代际保护。
 
+存档截图相机复用 `DesignViewport` 的逻辑画布尺寸，排除手机宽屏/桌面窗口的 letterbox；
+回归覆盖 3168×1440、HiDPI、宽屏及高窗口的取景范围和 480×270 目标。
+滑块数值气泡同时读取捕获的拖动状态，回归覆盖实时更新、仅当前滑块显示、松手隐藏和鼠标悬停。
+`cargo test --workspace`：947 passed / 21 ignored / 0 failed；fmt、workspace check/all-targets Clippy、
+Android Clippy 与 release APK 校验通过。修复包已同签名覆盖安装，Vulkan 启动日志正常；
+用户已确认手机滑块气泡持续显示、实时更新和松手隐藏正常；新存档缩略图仍待实测，
+旧缩略图须重新存档生成。
+
 Assets 增加可移除筛选标签、结果/选择计数、导入及多选操作、空结果提示和状态跳转。
 回归确认清除筛选保留视图偏好与跨筛选选择。macOS 原生新版已检查统计卡、搜索无结果及恢复、
 Missing 筛选、多选/清除选择，以及约 190 逻辑像素窄栏中计数完整、操作按钮整组换行。

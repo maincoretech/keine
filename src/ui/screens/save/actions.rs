@@ -110,7 +110,7 @@ pub fn handle_save_load_slot(
                     crate::ui::save_load::capture::capture_save_preview(
                         &mut context.commands,
                         &mut context.images,
-                        Vec2::new(window.width(), window.height()),
+                        window,
                         slot,
                         generation,
                     );

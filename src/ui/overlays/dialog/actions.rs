@@ -76,11 +76,10 @@ pub fn handle_dialog_click(
                         );
                         context.preview.image = None;
                         if let Ok(window) = context.windows.single() {
-                            let size = Vec2::new(window.width(), window.height());
                             capture_save_preview(
                                 &mut commands,
                                 &mut context.images,
-                                size,
+                                window,
                                 QUICK_SAVE_SLOT,
                                 generation,
                             );
@@ -164,13 +163,12 @@ pub fn handle_dialog_click(
                     Ok(generation) => {
                         context.save_previews.invalidate(*slot);
                         if let Ok(window) = context.windows.single() {
-                            let size = Vec2::new(window.width(), window.height());
                             // Keep the old card intact until its replacement preview is ready;
                             // the screenshot callback refreshes metadata and image together.
                             capture_save_preview(
                                 &mut commands,
                                 &mut context.images,
-                                size,
+                                window,
                                 *slot,
                                 generation,
                             );
