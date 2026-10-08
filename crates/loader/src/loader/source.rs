@@ -663,19 +663,21 @@ mod tests {
     }
 
     #[test]
-    fn canonical_archive_paths_borrow_the_callers_utf8() {
-        let path = Path::new("assets/background/day.webp");
-        let normalized = archive_path(path).unwrap();
-
-        assert!(matches!(normalized, Cow::Borrowed(_)));
-        assert_eq!(normalized, "assets/background/day.webp");
-    }
-
-    #[test]
-    fn archive_paths_remove_current_directory_components() {
-        let normalized = archive_path(Path::new("assets/./day.webp")).unwrap();
-
-        assert_eq!(normalized, "assets/day.webp");
+    fn archive_paths_preserve_canonical_borrows_and_normalize_dot_components() {
+        for (input, expected, borrowed) in [
+            (
+                "assets/background/day.webp",
+                "assets/background/day.webp",
+                true,
+            ),
+            ("assets/./day.webp", "assets/day.webp", false),
+        ] {
+            let normalized = archive_path(Path::new(input)).unwrap();
+            assert_eq!(normalized, expected, "{input}");
+            if borrowed {
+                assert!(matches!(normalized, Cow::Borrowed(_)), "{input}");
+            }
+        }
     }
 
     #[test]

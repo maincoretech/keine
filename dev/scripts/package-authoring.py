@@ -10,11 +10,13 @@ import shutil
 import subprocess
 import tempfile
 from package_notices import append_file, cargo_metadata, write
+from package_windows import libraries as windows_runtime, sdk_root
 
 REPO = Path(__file__).resolve().parents[2]
 # Keep the host's libc/loader ABI and graphics drivers. Bundle linked application
 # dependencies, including FFmpeg, so Preview and Build exports can find them.
-HOST_ABI = ('ld-linux', 'libc.so', 'libdl.so', 'libm.so', 'libpthread.so', 'librt.so')
+HOST_ABI = ('ld-linux', 'libc.so', 'libdl.so', 'libm.so', 'libpthread.so', 'librt.so',
+            'libmvec.so', 'libresolv.so', 'libnss_', 'libanl.so', 'libutil.so')
 
 
 def linux_libraries(executables, output):
@@ -75,12 +77,8 @@ def linux_libraries(executables, output):
 
 
 def windows_libraries(output):
-    root = Path(os.environ['VCPKG_ROOT']) / 'installed' / os.environ.get('VCPKG_TARGET_TRIPLET', 'x64-windows')
-    dlls = list((root / 'bin').glob('*.dll'))
-    if not dlls:
-        raise RuntimeError('FFmpeg runtime DLLs are missing')
-    for library in dlls:
-        shutil.copy2(library, output / library.name)
+    root = sdk_root()
+    windows_runtime(output)
     copyrights = list((root / 'share').glob('*/copyright'))
     if not copyrights:
         raise RuntimeError('Native SDK copyright notices are missing')
@@ -125,8 +123,12 @@ def package(editor, engine, output):
                 raise RuntimeError(f'Unsupported authoring platform: {system}')
         runtime = staging / ('Kēne Editor.app/Contents/MacOS/keine' if system == 'Darwin'
                              else 'keine.exe' if system == 'Windows' else 'keine')
-        subprocess.run([str(runtime), 'validate', str(REPO / 'tests/fixtures/native-smoke')], check=True)
-        subprocess.run([str(runtime), '--version'], check=True)
+        runtime_env = os.environ.copy()
+        if system == 'Windows':
+            runtime_env['PATH'] = os.pathsep.join([str(Path(os.environ['SystemRoot']) / 'System32'), os.environ['SystemRoot']])
+        subprocess.run([str(runtime), 'validate', str(REPO / 'tests/fixtures/native-smoke')], check=True,
+                       cwd=temporary, env=runtime_env)
+        subprocess.run([str(runtime), '--version'], check=True, cwd=temporary, env=runtime_env)
         (staging / 'BUILD.json').write_text(json.dumps({
             'commit': os.environ.get('KEINE_BUILD_COMMIT', 'local'),
             'platform': system, 'architecture': platform.machine(),

@@ -500,21 +500,22 @@ mod tests {
     }
 
     #[test]
-    fn text_input_never_exceeds_its_unicode_scalar_limit() {
-        let mut value = "你".to_string();
-
-        assert!(append_with_scalar_limit(&mut value, "好🙂extra", 3));
-        assert_eq!(value, "你好🙂");
-        assert_eq!(value.chars().count(), 3);
-        assert!(!append_with_scalar_limit(&mut value, "!", 3));
-        assert_eq!(value, "你好🙂");
-    }
-
-    #[test]
-    fn zero_text_limit_remains_unbounded() {
-        let mut value = String::new();
-
-        assert!(append_with_scalar_limit(&mut value, "你好🙂", 0));
-        assert_eq!(value, "你好🙂");
+    fn text_input_scalar_limits_cover_bounded_and_unbounded_appends() {
+        for (initial, incoming, maximum, expected, changed) in [
+            ("你", "好🙂extra", 3, "你好🙂", true),
+            ("你好🙂", "!", 3, "你好🙂", false),
+            ("", "你好🙂", 0, "你好🙂", true),
+        ] {
+            let mut value = initial.to_string();
+            assert_eq!(
+                append_with_scalar_limit(&mut value, incoming, maximum),
+                changed,
+                "initial={initial:?}, incoming={incoming:?}, maximum={maximum}"
+            );
+            assert_eq!(value, expected, "maximum={maximum}");
+            if maximum != 0 {
+                assert_eq!(value.chars().count(), 3);
+            }
+        }
     }
 }

@@ -823,6 +823,16 @@ fn compact_layer(_: &mut App) -> Option<BoxedFmtLayer> {
         .with_thread_ids(false)
         .with_thread_names(false)
         .with_writer(std::io::stderr);
+    #[cfg(all(target_os = "android", feature = "startup-metrics"))]
+    if let Some(file) = super::benchmark_android::report_file() {
+        return Some(Box::new(
+            tracing_subscriber::fmt::layer()
+                .with_timer(ShortUptime::now())
+                .compact()
+                .with_ansi(false)
+                .with_writer(move || file),
+        ));
+    }
     Some(Box::new(layer))
 }
 

@@ -30,8 +30,16 @@ fn main() {
         return;
     }
 
-    winresource::WindowsResource::new()
-        .set_icon(out.join("keine.ico").to_str().unwrap())
+    println!("cargo:rerun-if-env-changed=KEINE_WINDOWS_BUNDLE");
+    println!("cargo:rerun-if-changed=dev/windows/runtime.manifest");
+    let mut resource = winresource::WindowsResource::new();
+    resource.set_icon(out.join("keine.ico").to_str().unwrap());
+    if std::env::var_os("CARGO_FEATURE_VIDEO_FFMPEG").is_some()
+        && std::env::var("KEINE_WINDOWS_BUNDLE").as_deref() == Ok("1")
+    {
+        resource.set_manifest(include_str!("dev/windows/runtime.manifest"));
+    }
+    resource
         .compile()
         .expect("failed to embed the Kēne Windows icon");
 }

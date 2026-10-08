@@ -66,8 +66,9 @@ class CaptureTests(unittest.TestCase):
             root = Path(directory).resolve()
             package = root / "original package"
             package.mkdir()
-            shutil.copyfile(SCRIPT, package / "profile-runtime.py")
-            (package / "keine-benchmark.conf").write_text("7\n")
+            (package / 'lib').mkdir()
+            shutil.copyfile(SCRIPT, package / "lib/profile-runtime.py")
+            (package / "lib/keine-benchmark.conf").write_text("7\n")
             (package / "game.haku").write_bytes(b"snapshot")
             (package / "data").mkdir()
             (package / "data/a.taku").write_bytes(b"segment")
@@ -90,7 +91,7 @@ class CaptureTests(unittest.TestCase):
             cwd = root / "unrelated cwd"
             cwd.mkdir()
             result = subprocess.run(
-                [sys.executable, str(moved / "profile-runtime.py"), "--output", "capture",
+                [sys.executable, str(moved / "lib/profile-runtime.py"), "--output", "capture",
                  "--seconds", "1", "--stacks", "off", "--window", "1280x720"],
                 cwd=cwd, capture_output=True, text=True, timeout=30,
             )

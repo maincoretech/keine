@@ -90,12 +90,16 @@ pub(super) fn render_plugin() -> RenderPlugin {
 #[bevy_main]
 fn main() {
     if let Err(error) = run() {
+        #[cfg(feature = "startup-metrics")]
+        super::benchmark_android::failure(&error);
         crate::runtime::platform::startup_error("failed to open Android project", &error);
         crate::ui::startup_error::show();
     }
 }
 
 fn run() -> Result<()> {
+    #[cfg(feature = "startup-metrics")]
+    let started = std::time::Instant::now();
     #[cfg(feature = "hardened")]
     crate::runtime::platform::apply_hardening();
     let activity = bevy::android::ANDROID_APP
@@ -105,6 +109,12 @@ fn run() -> Result<()> {
         .internal_data_path()
         .context("Android application data directory is unavailable")?;
     let assets = activity.asset_manager();
+    #[cfg(feature = "startup-metrics")]
+    let request = if assets.open(c"keine-benchmark.json").is_some() {
+        Some(super::benchmark_android::begin(&data)?)
+    } else {
+        None
+    };
     let mut app = if let Some(snapshot) = assets.open(c"keine-game/game.haku") {
         let descriptor = snapshot
             .open_file_descriptor()
@@ -120,15 +130,17 @@ fn run() -> Result<()> {
             Arc::new(ApkSegments(activity.clone())),
         )?;
         let project = keine_loader::open_hakutaku_archive(archive)?;
-        super::bootstrap::build_project_app(
-            super::bootstrap::OpenedProject {
-                root: project.root,
-                config: project.config,
-                content: project.content,
-                packaged: true,
-            },
-            LoaderRegistry::default(),
-        )?
+        let project = super::bootstrap::OpenedProject {
+            root: project.root,
+            config: project.config,
+            content: project.content,
+            packaged: true,
+        };
+        #[cfg(feature = "startup-metrics")]
+        if let Some(request) = request {
+            return run_benchmark(project, request, started);
+        }
+        super::bootstrap::build_project_app(project, LoaderRegistry::default())?
     } else {
         let project = data.join("game");
         std::fs::create_dir_all(&project).context("failed to create Android game directory")?;
@@ -159,4 +171,28 @@ impl SegmentSource for ApkSegments {
             descriptor.size as u64,
         )?))
     }
+}
+
+#[cfg(feature = "startup-metrics")]
+fn run_benchmark(
+    project: super::bootstrap::OpenedProject,
+    request: super::benchmark_android::Request,
+    started: std::time::Instant,
+) -> Result<()> {
+    match request {
+        super::benchmark_android::Request::Package => {
+            let report = super::package_benchmark::storage_report(
+                &project.root,
+                &project.content,
+                started.elapsed(),
+            )?;
+            super::benchmark_android::write_line(&report);
+            super::benchmark_android::complete();
+        }
+        super::benchmark_android::Request::Render(mode) => {
+            let mut app = super::bootstrap::build_android_benchmark_app(project, mode, started)?;
+            app.run();
+        }
+    }
+    Ok(())
 }

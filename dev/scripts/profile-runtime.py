@@ -11,8 +11,9 @@ import shutil
 import subprocess
 import time
 
-BUNDLE_ROOT = Path(__file__).resolve().parent
-PACKAGED = (BUNDLE_ROOT / "keine-benchmark.conf").is_file()
+SCRIPT_ROOT = Path(__file__).resolve().parent
+PACKAGED = (SCRIPT_ROOT / "keine-benchmark.conf").is_file()
+BUNDLE_ROOT = SCRIPT_ROOT.parent if PACKAGED and SCRIPT_ROOT.name == 'lib' else SCRIPT_ROOT
 ROOT = BUNDLE_ROOT if PACKAGED else Path(__file__).resolve().parents[2]
 TRACE_FIELDS = ("elapsed_seconds", "frame", "interval_ms", "update_to_render_ms",
                 "budget_ms", "scene", "next_cursor", "source", "activity", "line",

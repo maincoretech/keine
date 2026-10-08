@@ -139,12 +139,12 @@ mod tests {
     }
 
     #[test]
-    fn relative_and_absolute_paths_share_a_key() {
-        let root = std::env::current_dir().unwrap();
-        assert_eq!(
-            ProjectKey::from_path(".").unwrap(),
-            ProjectKey::from_path(root).unwrap()
-        );
+    fn equivalent_project_paths_share_key_and_workspace_id() {
+        let direct = ProjectKey::from_path(".").unwrap();
+        let absolute = ProjectKey::from_path(std::env::current_dir().unwrap()).unwrap();
+        assert_eq!(direct, absolute);
+        assert_eq!(direct.workspace_id(), absolute.workspace_id());
+        assert_eq!(direct.workspace_id().len(), 16);
     }
 
     #[cfg(unix)]
@@ -175,13 +175,5 @@ mod tests {
             ProjectKey::from_path(direct).unwrap(),
             ProjectKey::from_path(dotted).unwrap()
         );
-    }
-
-    #[test]
-    fn workspace_id_is_stable_for_equivalent_paths() {
-        let direct = ProjectKey::from_path(".").unwrap();
-        let absolute = ProjectKey::from_path(std::env::current_dir().unwrap()).unwrap();
-        assert_eq!(direct.workspace_id(), absolute.workspace_id());
-        assert_eq!(direct.workspace_id().len(), 16);
     }
 }

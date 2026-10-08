@@ -178,6 +178,8 @@ struct BenchmarkExit<'w, 's> {
 
 impl BenchmarkExit<'_, '_> {
     fn request(&mut self) {
+        #[cfg(all(target_os = "android", feature = "startup-metrics"))]
+        crate::runtime::benchmark_android::complete();
         if let Ok(window) = self.window.single() {
             self.close_requests.write(WindowCloseRequested { window });
         } else {
@@ -411,7 +413,7 @@ fn capture_startup_performance(
     let sample = StartupSample::from_capture(&capture, interactive);
     capture.finished = true;
     drop(capture);
-    eprintln!("{}", sample.machine_line());
+    capture_line(&sample.machine_line());
     exit.request();
 }
 
@@ -902,17 +904,16 @@ fn capture_runtime_performance(
         }
     }
     if config.machine_output {
-        eprintln!("{}", summary.machine_line());
+        capture_line(&summary.machine_line());
         for frame in &sampled_frames {
-            eprintln!("{}", frame.raw_line());
+            capture_line(&frame.raw_line());
             if frame.exclusion == "none" {
-                eprintln!(
-                    "{}",
-                    FrameSample {
+                capture_line(
+                    &FrameSample {
                         elapsed_seconds: frame.elapsed_seconds,
-                        frame_ms: frame.frame_ms
+                        frame_ms: frame.frame_ms,
                     }
-                    .machine_line()
+                    .machine_line(),
                 );
             }
         }
@@ -964,6 +965,14 @@ fn slowest_percent_average_fps(sorted_frame_ms: &[f64], fraction: f64) -> f64 {
         ((sorted_frame_ms.len() as f64 * fraction).ceil() as usize).clamp(1, sorted_frame_ms.len());
     let mean_ms = sorted_frame_ms.iter().rev().take(count).sum::<f64>() / count as f64;
     1_000.0 / mean_ms.max(f64::EPSILON)
+}
+
+fn capture_line(line: &str) {
+    #[cfg(all(target_os = "android", feature = "startup-metrics"))]
+    if crate::runtime::benchmark_android::write_line(line) {
+        return;
+    }
+    eprintln!("{line}");
 }
 
 #[cfg(test)]

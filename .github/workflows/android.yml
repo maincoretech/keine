@@ -53,6 +53,8 @@ jobs:
         run: |
           cargo ndk -t arm64-v8a -P 26 clippy --locked -p keine --lib \
             --target-dir target/android --no-default-features --features ui-sounds -- -D warnings
+          cargo ndk -t arm64-v8a -P 26 clippy --locked -p keine --lib \
+            --target-dir target/android --no-default-features --features ui-sounds,startup-metrics -- -D warnings
           dev/scripts/build-android.sh
       - name: Verify native entry point and 16 KB alignment
         run: |

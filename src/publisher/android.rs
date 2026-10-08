@@ -30,6 +30,7 @@ pub(super) fn application_id(project: &keine_core::config::ProjectMetadata) -> R
     Ok(id)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn assemble(
     output: &Path,
     project: &Path,
@@ -38,8 +39,14 @@ pub(super) fn assemble(
     key_share_b: &Path,
     public_key: &Path,
     icons: &Path,
+    benchmark: bool,
 ) -> Result<()> {
     let id = application_id(&config.project)?;
+    if benchmark && id != "moe.maincore.keine.benchmark" {
+        bail!(
+            "Android benchmark requires the derived native-benchmark fixture; run prepare-android-benchmark.py first"
+        );
+    }
     let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
     let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let mut build = Command::new(cargo);
@@ -60,10 +67,15 @@ pub(super) fn assemble(
         "cdylib",
         "--target-dir",
         "target/android",
-        "--release",
+        "--profile",
+        engine_profile(benchmark),
         "--no-default-features",
         "--features",
-        "hardened,ui-sounds",
+        if benchmark {
+            "ui-sounds,startup-metrics"
+        } else {
+            "hardened,ui-sounds"
+        },
         "--",
         "-C",
         "link-arg=-Wl,-z,max-page-size=16384",
@@ -124,6 +136,27 @@ pub(super) fn assemble(
     let assets = tempdir()?;
     let game = assets.path().join("keine-game");
     fs::create_dir_all(game.join("data"))?;
+    if benchmark {
+        let plan = serde_json::to_vec_pretty(&crate::runtime::bootstrap::android_benchmark_plan())?;
+        fs::write(assets.path().join("keine-benchmark.json"), &plan)?;
+        fs::write(output.join("android-benchmark.json"), &plan)?;
+        for (name, bytes) in [
+            (
+                "benchmark-android.py",
+                include_bytes!("../../dev/scripts/benchmark-android.py").as_slice(),
+            ),
+            (
+                "profile-runtime.py",
+                include_bytes!("../../dev/scripts/profile-runtime.py").as_slice(),
+            ),
+        ] {
+            fs::write(output.join(name), bytes)?;
+        }
+        fs::write(
+            output.join("BENCHMARK.txt"),
+            "Kēne Android full benchmark (ARM64, Android 8+)\nInstall Python 3.9+ and adb, enable USB debugging and authorize this computer.\nRun: python3 benchmark-android.py --apk game.apk --output android-report\nUse --serial DEVICE if multiple phones are connected. --backend auto|gl|vulkan selects a separate full run.\nKeep the device unlocked and foreground; do not change resolution or refresh rate during a run.\nReports, raw frames and device/thermal context are automatically copied to the computer.\nUnknown refresh budget stays unknown; optional --hz is an explicit reference, not a measured display rate.\nPass timing differences remain available when VSync caps frame rate.\nMatching unstripped lib/libkeine.so is included for optional Simpleperf attribution.\nThis debuggable profiling APK is a performance tool, not a hardened shipping game.\nVideo and desktop window-size cases are explicit unsupported skips; Android stress excludes video.\n",
+        )?;
+    }
     link_or_copy(&output.join("game.haku"), &game.join("game.haku"))?;
     for entry in fs::read_dir(output.join("data"))? {
         let entry = entry?;
@@ -146,6 +179,7 @@ pub(super) fn assemble(
         .env_remove("KEINE_HAKUTAKU_PUBLIC_KEY")
         .args(["--no-daemon", "-p", "dev/android"])
         .arg(format!("-PengineVersion={}", env!("CARGO_PKG_VERSION")))
+        .arg(format!("-PengineBenchmark={benchmark}"))
         .arg(format!("-PengineApplicationId={id}"))
         .arg(format!("-PengineTitle={}", config.title))
         .arg(format!("-PengineGameDir={}", assets.path().display()))
@@ -165,11 +199,19 @@ pub(super) fn assemble(
         repo.join("dev/android/app/build/outputs/apk/release/app-release.apk"),
         output.join("game.apk"),
     )?;
+    if benchmark {
+        let symbols = output.join("lib");
+        fs::create_dir_all(&symbols)?;
+        fs::copy(
+            repo.join("target/android/jniLibs/arm64-v8a/libkeine.so"),
+            symbols.join("libkeine.so"),
+        )?;
+    }
     fs::write(
         output.join("ANDROID.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
             "application_id": id, "title": config.title, "project_id": config.project.id,
-            "engine_version": env!("CARGO_PKG_VERSION"),
+            "engine_version": env!("CARGO_PKG_VERSION"), "benchmark": benchmark,
         }))?,
     )?;
     Ok(())

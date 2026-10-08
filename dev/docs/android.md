@@ -165,3 +165,68 @@ adb shell am start -n moe.maincore.keine/.EngineActivity
 
 交叉编译和 APK 校验不能代替手机运行。真机仍需验证启动/恢复、菜单触摸、滚动/滑块、
 输入法、音频与 GPU 效果；当前只承诺构建入口，不声称已经通过这些验收。
+
+## 完整 Android benchmark 与 ADB 回传
+
+`benchmark-latest` 增加独立 Android ARM64 ZIP，内含优化的 `game.apk`、与 APK 相同的
+`android-benchmark.json`、Python 运行器及分析工具。应用 ID 为
+`moe.maincore.keine.benchmark`，不会覆盖 tday；profiling 与 release 使用相同优化，
+电脑侧 `lib/libkeine.so` 保留匹配的符号（APK 仍正常 strip），仅此 benchmark APK 开启 debuggable，供 `adb run-as` 读取私有报告。
+普通游戏仍为非 debuggable/hardened，不读取 benchmark 请求。需要 Python 3.9+ 和
+[ADB](https://developer.android.com/tools/adb)，打开手机 USB 调试并授权电脑：
+
+```sh
+adb devices -l
+python3 benchmark-android.py --apk game.apk --serial DEVICE_SERIAL --output moto-report
+```
+
+只有一个已授权设备时可省略 `--serial`；再次运行须换输出目录，避免覆盖原始报告。
+USB 或已配对的无线 ADB 均可；无需 root、手动复制 logcat 或安装额外手机管理应用。
+安装签名冲突会明确失败，不自动卸载任何应用或清除用户数据。
+
+运行器校验已安装 APK 的计划与下载的计划相同，再逐项 force-stop / 启动新进程。
+每个 render 样本沿用 3 秒热身 + 5 秒采样，基线、粒子及既有热点组合重复三次。
+包括 7 次原生启动、opening 休眠/连续模式、三种相机拆分、真实负载、效果/粒子/UI/
+音频、组合压力及直接读取 APK 密文挂载的四类 I/O。启动计时从 Rust 入口起算，
+Activity 启动的 ADB 输出另存 `launch.txt`，不混为整机冷启动耗时；系统/GPU cache 不强制清除。
+
+覆盖复用桌面清单：**73 个 Android 支持的必测 render 场景，另明确跳过 5 个平台不支持项**
+（2 个视频场景、runtime 视频、720p/1080p 桌面窗口尺寸）。Android stress 用不同时间轴
+`bench_stress_android`，明确移除视频，不能与桌面含视频压力直接比较。
+始终记录实际手机 surface 分辨率，不自动调整显示尺寸、刷新率或亮度。
+`--backend auto|gl|vulkan` 每次执行完整独立报告；默认 auto。指定后端不隐式切到另一后端。
+
+测试期间保持解锁、应用在前台，避免操作手机。独立 benchmark 的 Activity 在前台保持亮屏，不改系统休眠设置；每个 render 样本必须包含前台焦点证据。运行器在样本之外采集电池/温度/
+thermalservice 与显示配置，采样期间每两秒读取完成标记；ADB 开销存在，结果不是零干扰测量。
+设备不暴露的传感器和 GPU timestamp 能力标为不可用；不可用不代表零开销。
+失败或缺失场景保留原始日志并输出 INCOMPLETE，断连/中断保留已回传的部分报告。
+
+电脑输出目录包含：
+
+- `keine-benchmark-report.txt`：场景、构建/后端、pass、CPU/RSS、基线差值及覆盖情况。
+- `keine-benchmark-frames.tsv`：共享 RAWFRAME 格式，带场景、源码、尺寸、焦点与排除原因。
+- `device.json`、`samples/*/{before,after}.json`：真实设备信息及测试环境，回传时保留这些文件。
+- `samples/*/sample.txt`、`results.json`：逐次原始日志、数据及失败原因。
+- `hotspots.json`：超预算帧的源码位置归因；不是独占 CPU 调用栈或因果证明。
+- `pass-hotspots.json`：相同 pass 路径相对基线的 CPU/GPU/wall 时间差值，不把嵌套 span 相加。
+
+Android/winit 可能不暴露当前刷新率，此时原始预算保留 unknown，不能把超预算数为零当作通过。
+可显式传 `--hz 60` 等参考预算用于源码帧归因；这不修改屏幕刷新率，也不冒充实测刷新率。
+默认报告仍包含 pass/进程 CPU、RSS 与 interval 数据，用这些寻找被 VSync 帧率上限掩盖的开销。
+
+原生调用栈采集仍是另一个验收层，不声称上述 interval 排名等同于 Android Simpleperf。
+需要进一步归因时可给 [Simpleperf 官方脚本](https://android.googlesource.com/platform/system/extras/+/android16-release/simpleperf/doc/android_application_profiling.md)
+传入 `-lib lib`；包验证要求 host 符号库与 APK 的 `.text` 一致，不混用其他构建。
+性能结论需要同设备/后端/分辨率/温度条件的前后报告，不能只用满帧与否评判。
+
+本地打包（工具链要求同上）：
+
+```sh
+python3 dev/scripts/prepare-android-benchmark.py target/android-benchmark-fixture
+KEINE_BUILD_TARGET=aarch64-linux-android cargo bundle target/android-benchmark-fixture --output target/android-test --benchmark
+python3 target/android-test-benchmark/benchmark-android.py --apk target/android-test-benchmark/game.apk --output moto-report
+```
+
+派生 fixture 只调整 Android 不支持的内容与独立身份，不修改桌面 fixture 或作者工程。
+Release Engine 自动/手动 benchmark 均生成四平台附件，四个平台都成功后才更新滚动下载；
+云端 APK 编译/验证仍不代表 Moto 或其他真机已经通过完整运行测试。

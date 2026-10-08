@@ -106,7 +106,8 @@ release/
 ├── keine[.exe]        hardened runtime
 ├── game.haku          完整、签名、加密的 Hakutaku v1 快照
 ├── NOTICE             完整许可、署名、字体/native 声明及游戏版权（分章节）
-└── data/*.taku        不可变密文内容段
+├── data/*.taku        不可变密文内容段
+└── lib/               可选运行库；benchmark 的符号、采集器与启动标记
 ```
 
 编译 Program envelope v1 / IR schema v7 保存 typed 内容；发行资源由 allowlist 重建。

@@ -961,29 +961,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_config() {
-        let cfg = GameConfig::default();
-        assert_eq!(cfg.title, "Kēne");
-        assert_eq!(cfg.styles.typewriter_speed, 45.0);
-        assert!(!cfg.features.extra);
-        assert_eq!(cfg.adapter, AdapterConfig::default());
-        assert_eq!(cfg.layout.textbox_left, 0.0);
-        assert_eq!(cfg.layout.textbox_dodge_left, 10.0);
-    }
-
-    #[test]
-    fn test_parse_minimal() {
-        let yaml = r#"
-title: "Test Game"
-styles:
-  typewriter_speed: 60.0
-"#;
-        let cfg = GameConfig::from_yaml(yaml).unwrap();
-        assert_eq!(cfg.title, "Test Game");
-        assert_eq!(cfg.styles.typewriter_speed, 60.0);
-        assert!(!cfg.features.extra);
-        assert_eq!(cfg.adapter, AdapterConfig::default());
-        assert_eq!(cfg.layout.sprite_y_offset, 0.0);
+    fn defaults_and_minimal_yaml_preserve_unspecified_fields() {
+        for (name, cfg, title, speed) in [
+            ("default", GameConfig::default(), "Kēne", 45.0),
+            (
+                "minimal YAML",
+                GameConfig::from_yaml("title: Test Game\nstyles:\n  typewriter_speed: 60.0\n")
+                    .unwrap(),
+                "Test Game",
+                60.0,
+            ),
+        ] {
+            assert_eq!(cfg.title, title, "{name}");
+            assert_eq!(cfg.styles.typewriter_speed, speed, "{name}");
+            assert!(!cfg.features.extra, "{name}");
+            assert_eq!(cfg.adapter, AdapterConfig::default(), "{name}");
+            assert_eq!(cfg.layout.textbox_left, 0.0, "{name}");
+            assert_eq!(cfg.layout.textbox_dodge_left, 10.0, "{name}");
+            assert_eq!(cfg.layout.sprite_y_offset, 0.0, "{name}");
+        }
     }
 
     #[test]
@@ -1231,18 +1227,13 @@ script:
     }
 
     #[test]
-    fn aliases_take_priority_over_direct_paths() {
+    fn asset_aliases_follow_kind_priority_before_direct_paths() {
         let mut cfg = GameConfig::default();
         cfg.assets
             .backgrounds
             .insert("background/day.webp".into(), "packs/day.webp".into());
-
         assert_eq!(cfg.bg_path("background/day.webp"), "packs/day.webp");
-    }
 
-    #[test]
-    fn sprite_images_resolve_declared_backgrounds_without_overriding_figures() {
-        let mut cfg = GameConfig::default();
         cfg.assets
             .backgrounds
             .insert("day".into(), "assets/backgrounds/day.webp".into());
@@ -1254,39 +1245,37 @@ script:
     }
 
     #[test]
-    fn explicit_relative_asset_paths_are_preserved() {
+    fn asset_paths_preserve_relative_paths_and_prefix_logical_or_unsafe_names() {
         let cfg = GameConfig::default();
-
-        assert_eq!(cfg.bg_path("background/day.webp"), "background/day.webp");
-        assert_eq!(cfg.figure_path("figure/a.webp"), "figure/a.webp");
-        assert_eq!(cfg.voice_path("vocal/a.opus"), "vocal/a.opus");
-        assert_eq!(cfg.effect_path("se/a.opus"), "se/a.opus");
-        assert_eq!(cfg.bgm_path("bgm/a.opus"), "bgm/a.opus");
-        assert_eq!(cfg.video_path("video/a.mp4"), "video/a.mp4");
-        assert_eq!(cfg.lut_path("luts/night.png"), "luts/night.png");
-    }
-
-    #[test]
-    fn logical_asset_names_use_canonical_directories() {
-        let cfg = GameConfig::default();
-
-        assert_eq!(cfg.bg_path("day.webp"), "background/day.webp");
-        assert_eq!(cfg.figure_path("a.webp"), "figure/a.webp");
-        assert_eq!(cfg.voice_path("a.opus"), "vocal/a.opus");
-        assert_eq!(cfg.effect_path("a.opus"), "se/a.opus");
-        assert_eq!(cfg.bgm_path("a.opus"), "bgm/a.opus");
-        assert_eq!(cfg.video_path("a.mp4"), "video/a.mp4");
-        assert_eq!(cfg.lut_path("night"), "luts/night.webp");
-    }
-
-    #[test]
-    fn parent_and_platform_specific_paths_are_not_treated_as_direct() {
-        let cfg = GameConfig::default();
-
-        assert_eq!(cfg.bg_path("../day.webp"), "background/../day.webp");
-        assert_eq!(
-            cfg.bg_path("C:\\assets\\day.webp"),
-            "background/C:\\assets\\day.webp"
-        );
+        type Resolve = fn(&GameConfig, &str) -> String;
+        let cases: [(Resolve, &str, &str); 16] = [
+            (
+                GameConfig::bg_path,
+                "background/day.webp",
+                "background/day.webp",
+            ),
+            (GameConfig::figure_path, "figure/a.webp", "figure/a.webp"),
+            (GameConfig::voice_path, "vocal/a.opus", "vocal/a.opus"),
+            (GameConfig::effect_path, "se/a.opus", "se/a.opus"),
+            (GameConfig::bgm_path, "bgm/a.opus", "bgm/a.opus"),
+            (GameConfig::video_path, "video/a.mp4", "video/a.mp4"),
+            (GameConfig::lut_path, "luts/night.png", "luts/night.png"),
+            (GameConfig::bg_path, "day.webp", "background/day.webp"),
+            (GameConfig::figure_path, "a.webp", "figure/a.webp"),
+            (GameConfig::voice_path, "a.opus", "vocal/a.opus"),
+            (GameConfig::effect_path, "a.opus", "se/a.opus"),
+            (GameConfig::bgm_path, "a.opus", "bgm/a.opus"),
+            (GameConfig::video_path, "a.mp4", "video/a.mp4"),
+            (GameConfig::lut_path, "night", "luts/night.webp"),
+            (GameConfig::bg_path, "../day.webp", "background/../day.webp"),
+            (
+                GameConfig::bg_path,
+                "C:\\assets\\day.webp",
+                "background/C:\\assets\\day.webp",
+            ),
+        ];
+        for (resolve, input, expected) in cases {
+            assert_eq!(resolve(&cfg, input), expected, "{input:?} -> {expected:?}");
+        }
     }
 }

@@ -1,5 +1,70 @@
 # 开发与验收
 
+## 测试用例组织
+
+- 同一规则的参数变化优先使用带案例名的表驱动测试；保留每个输入、期望值和边界断言，合并测试入口不等于删除覆盖。
+- 独立故障保持独立回归，特别是 parser panic、递归预算、存档恢复、文件事务、IPC 与平台行为。Parser、Core 求值、Editor 投影保护不同入口，不能因输入相似而去重。
+- 不以测试数量设目标，也不只为减少数量合并不相关的合同。新增回归先检查同规则案例表，避免复制初始化代码。
+- CI 的默认、无默认功能 + publisher、平台音视频专项覆盖不同 feature 组合；合并前必须证明配置与路径等价，不能只看测试名称重叠。
+
+当前整理将配置默认值/资源路径、archive 路径规范化、Editor 工程身份、立绘基线、Unicode 输入上限与 APK 图标错误的 18 个测试入口收敛为 8 个；原有案例与断言保留，Rust 案例包含输入/路径等失败上下文，Python 使用 `subTest` 独立报告三个错误案例。
+实际验证：`cargo test --offline --workspace --features publisher,video-native,hot-reload`
+1043 passed / 21 ignored / 0 failed（IPC/Trash 在沙箱外）；Python packaging
+11 passed，benchmark collector 7 passed；fmt、workspace check、all-targets Clippy
+（同一 feature 组合）及 native-smoke validate 通过。测试整理不改变产品代码、feature 组合或发布流程，不作为性能改善或跨平台运行态验收证据。
+
+## Android 完整性能采集
+
+Android benchmark 复用桌面场景清单与 runtime 测量器，通过 ADB 逐项冷进程运行、
+回传原始结果。73 个支持的必测 render 场景；视频/桌面窗口尺寸 5 项明确标为不支持，
+另有 7 次启动、opening/相机拆分及真实 APK 挂载 I/O。压力场景明确不含视频。
+运行命令、温度/后端/尺寸证据与非独占 CPU 归因边界见 [Android guide](android.md#完整-android-benchmark-与-adb-回传)。
+不以移动 GPU 必须满帧为门槛；在可接受功耗/温度、分辨率与视觉质量下比较真实负载。
+
+本地实测：Motorola edge 70 max / Android 16 / Adreno 829 / Vulkan，物理显示
+1440×3168；以下完整命令完成 124 次样本、73/73 个支持场景，0 failed，5 项明确不支持：
+
+```sh
+python3 target/keine-android-arm64-local-benchmark/benchmark-android.py \
+  --apk target/keine-android-arm64-local-benchmark/game.apk --serial DEVICE_SERIAL \
+  --output target/moto-edge-70-max-benchmark-auto-full
+```
+
+报告与逐次日志、原始帧、设备/温度信息均自动回传。
+当前窗口接口未提供刷新预算，报告保留 unknown；pass 时间与 CPU/RSS 仍可分析，
+不能把 VSync 限帧下的 interval 排名或空的超预算排名解释为没有热点。
+
+实际验证：`cargo test --offline --workspace --features publisher,video-native,hot-reload,startup-metrics`
+1045 passed / 21 ignored / 0 failed（IPC/Trash 在沙箱外）；相同功能的 workspace
+check/all-targets Clippy、无默认功能 check/Clippy、Android ui-sounds/startup-metrics Clippy、
+fmt、native-smoke 与派生 fixture validate 通过。Python collector 9 passed、packaging
+11 passed；Gradle assembleRelease/lintRelease、APK 图标/16 KB/签名/NOTICE/计划校验、
+匹配 host 符号库的 `.text` 校验及 workflow actionlint 通过。此次真机只测试 Vulkan；
+GL、演出画面/触摸与音频听感不由性能采样代替验收，远端新 workflow 尚未运行。
+
+## 桌面包辅助文件与 Linux ABI
+
+`2423505` 将 Linux 发行 runner 从 `ubuntu-latest` 改为 `ubuntu-26.04`，用户的旧系统
+随后无法加载程序/附带库所需的 GLIBC 2.42/2.43 和 `GLIBC_ABI_DT_X86_64_PLT`。
+发行游戏/benchmark/Editor 与桌面 Linux CI 改用 `ubuntu-24.04`，明确 GLIBC 2.39
+上限；发布前扫描每个 ELF 的 version needs，超过上限或要求未知/private ABI 即拒绝。
+libmvec、libresolv、libnss、libanl、libutil 与 libc/loader 一样由宿主提供。
+
+Windows DLL、benchmark PDB/dSYM、Python 采集器和启动标记统一放进 `lib/`。
+Windows shipping Engine 内嵌私有 assembly 依赖，打包的 `lib/lib.manifest` 列出 SDK
+DLL；用受限 PATH 和不相关 cwd 启动包内 Engine 验证，避免构建机 SDK 掩盖漏包。
+Editor 的匹配 Preview Engine 同用此布局，临时 Build 导出沿用已有 lib 树复制。
+新布局的 marker、默认游戏路径、移动后采集与 ELF/DLL 边界纳入既有回归。
+
+实测验证：workspace check/all-targets Clippy（publisher,video-native,hot-reload,startup-metrics）、
+fmt、native-smoke validate、workflow actionlint 通过；完整 workspace 测试
+1045 passed / 21 ignored / 0 failed，IPC/Trash 在 macOS 沙箱外重跑；Python packaging
+12 passed、benchmark collector 9 passed。用 NDK Clang/LLD 生成真实 ELF version-needs
+边界样本，GLIBC 2.39 正确接受，2.43 正确拒绝；这仅验证门禁，不代替发行程序启动。
+
+此批修复以 0.14.3 发行。Windows/Linux 新包须按对应提交的远端 CI 和实机运行分别验收；
+旧 Ubuntu 26.04 基线的下载不能用于验证修复，源码检查也不能代替新包实机验收。
+
 ## 表达式诊断与深度预算
 
 在 `1dc025b` 上复现 `scene x { let a = ) == 1 }`：分组分类栈弹空后

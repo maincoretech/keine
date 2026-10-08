@@ -32,7 +32,7 @@ jobs:
       matrix:
         include:
           - name: Linux x64
-            os: ubuntu-26.04
+            os: ubuntu-24.04
             artifact: keine-editor-linux-x64
             target: ''
             features: audio-all,ui-sounds,hot-reload,video-ffmpeg
@@ -93,6 +93,9 @@ jobs:
           if [[ "$RUNNER_OS" == 'Linux' ]]; then
             export RUSTFLAGS='-C link-arg=-Wl,--disable-new-dtags,-rpath,$ORIGIN/lib'
           fi
+          if [[ "$RUNNER_OS" == 'Windows' ]]; then
+            export KEINE_WINDOWS_BUNDLE=1
+          fi
           cargo build "${args[@]}"
       - name: Package and validate installed runtime
         shell: bash
@@ -103,6 +106,9 @@ jobs:
           suffix=''
           if [[ "$RUNNER_OS" == 'Windows' ]]; then suffix='.exe'; fi
           python3 dev/scripts/package-authoring.py "$binary_dir/editor$suffix" "$binary_dir/keine$suffix" "target/${{ matrix.artifact }}"
+          if [[ "$RUNNER_OS" == 'Linux' ]]; then
+            python3 dev/scripts/verify-linux-abi.py "target/${{ matrix.artifact }}"
+          fi
       - name: Archive complete package
         shell: bash
         run: |

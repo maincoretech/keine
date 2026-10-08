@@ -69,9 +69,6 @@ pub fn bundle_project(
 ) -> Result<()> {
     let output = publisher_output_path(output)?;
     let android = env::var("KEINE_BUILD_TARGET").as_deref() == Ok("aarch64-linux-android");
-    if android && benchmark {
-        bail!("Android benchmark packaging is not supported");
-    }
     let prepared = prepare_project(project, loader, benchmark)?;
     let mut features = detect_features(&prepared.staged)?;
     if benchmark {
@@ -113,6 +110,7 @@ pub fn bundle_project(
                 &key_share_b,
                 &public_key,
                 &prepared.icons,
+                benchmark,
             )
         })?;
         println!("{}", output.display());
@@ -805,6 +803,8 @@ fn build_engine(
         .arg(repo_root.join("target"));
     configure_engine_environment(&mut command, key_share_a, key_share_b, public_key);
     command.env("KEINE_APP_ICON_DIR", icons);
+    #[cfg(windows)]
+    command.env("KEINE_WINDOWS_BUNDLE", "1");
     let build_target = env::var("KEINE_BUILD_TARGET")
         .ok()
         .filter(|target| !target.is_empty());
@@ -965,21 +965,23 @@ fn assemble(
     #[cfg(not(target_os = "linux"))]
     let _ = config;
     if benchmark {
-        fs::write(output.join(crate::runtime::BENCHMARK_MARKER), b"7\n")?;
+        let auxiliary = output.join("lib");
+        fs::create_dir_all(&auxiliary)?;
+        fs::write(auxiliary.join(crate::runtime::BENCHMARK_MARKER), b"7\n")?;
         fs::write(output.join("BENCHMARK.txt"), BENCHMARK_README)?;
         fs::write(
-            output.join("profile-runtime.py"),
+            auxiliary.join("profile-runtime.py"),
             include_str!("../dev/scripts/profile-runtime.py"),
         )?;
-        // Windows keeps the compiler's debug symbols in an adjacent PDB.
+        // Keep all auxiliary libraries/tools/symbols under the single lib/.
         #[cfg(windows)]
-        fs::copy(engine.with_extension("pdb"), output.join("keine.pdb"))
+        fs::copy(engine.with_extension("pdb"), auxiliary.join("keine.pdb"))
             .context("benchmark engine debug symbols missing")?;
         #[cfg(target_os = "macos")]
         {
             let symbols = engine.with_extension("dSYM");
             if symbols.is_dir() {
-                copy_tree(&symbols, &output.join("keine.dSYM"))?;
+                copy_tree(&symbols, &auxiliary.join("keine.dSYM"))?;
             }
         }
     }
@@ -988,31 +990,13 @@ fn assemble(
 
 #[cfg(windows)]
 fn bundle_ffmpeg_runtime(output: &Path) -> Result<()> {
-    let vcpkg_root = env::var("VCPKG_ROOT")
-        .context("VCPKG_ROOT is required to bundle the Windows FFmpeg runtime")?;
-    let triplet = env::var("VCPKG_TARGET_TRIPLET").unwrap_or_else(|_| match env::consts::ARCH {
-        "aarch64" => "arm64-windows".to_owned(),
-        _ => "x64-windows".to_owned(),
-    });
-    let ffmpeg_bin = Path::new(&vcpkg_root)
-        .join("installed")
-        .join(&triplet)
-        .join("bin");
-    let mut copied = 0;
-    for entry in fs::read_dir(&ffmpeg_bin).with_context(|| {
-        format!(
-            "Windows FFmpeg runtime DLLs were not found in {}",
-            ffmpeg_bin.display()
-        )
-    })? {
-        let entry = entry?;
-        if entry.file_name().to_string_lossy().ends_with(".dll") {
-            fs::copy(entry.path(), output.join(entry.file_name()))?;
-            copied += 1;
-        }
-    }
-    if copied == 0 {
-        bail!("no FFmpeg runtime DLLs found in {}", ffmpeg_bin.display());
+    let status = Command::new("python3")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("dev/scripts/package_windows.py"))
+        .arg(output)
+        .status()
+        .context("failed to package the Windows private runtime assembly")?;
+    if !status.success() {
+        bail!("Windows runtime assembly packaging failed");
     }
     Ok(())
 }
@@ -1088,7 +1072,7 @@ fn parse_ldd(output: &str) -> Vec<PathBuf> {
         .collect()
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 fn is_linux_abi_library(path: &Path) -> bool {
     let name = path
         .file_name()
@@ -1101,6 +1085,11 @@ fn is_linux_abi_library(path: &Path) -> bool {
         "libm.so",
         "libpthread.so",
         "librt.so",
+        "libmvec.so",
+        "libresolv.so",
+        "libnss_",
+        "libanl.so",
+        "libutil.so",
     ]
     .iter()
     .any(|prefix| name.starts_with(prefix))
@@ -1131,10 +1120,10 @@ Render submission intervals are not display presentation or proof of drops.
 Unavailable GPU timing is reported as unavailable, never zero.
 
 For source-attributed JSON and native call stacks, install Python 3 and run:
-  python3 profile-runtime.py --output capture --seconds 30 --mode continuous
+  python3 lib/profile-runtime.py --output capture --seconds 30 --mode continuous
 Add --scene ID --cursor N or --timeline ID to target authored work.
 To convert the suite report without rerunning:
-  python3 profile-runtime.py --report keine-benchmark-report.txt --output report-json
+  python3 lib/profile-runtime.py --report keine-benchmark-report.txt --output report-json
 For undisturbed comparisons add --stacks off; sample stacks in a separate run.
 Normal runtime mode is the script default and opens a visible window. Leave it
 focused when measuring active frames. Deliberate idle sleep is excluded from FPS.
@@ -1147,8 +1136,8 @@ Benchmark packages omit anti-debug hardening; use temporary test identities.
 The encrypted deterministic 204.2 MiB stress payload measures package I/O,
 not codec decoding or physical disk speed. Operating-system/drive caches are
 not forcibly cold. GPU shader analysis may require platform GPU tools.
-Persistence is disabled. Keep the executable, symbols, game.haku and data
-folder together. Send the report and, if captured, the capture directory.
+Persistence is disabled. Keep the executable, game.haku, data/ and lib/ together.
+Send the report and, if captured, the capture directory.
 ";
 
 #[cfg(test)]
@@ -1613,6 +1602,15 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         assert!(configured.contains("--disable-new-dtags,-rpath,$ORIGIN/lib"));
+        for name in [
+            "libmvec.so.1",
+            "libresolv.so.2",
+            "libnss_dns.so.2",
+            "libc.so.6",
+        ] {
+            assert!(is_linux_abi_library(Path::new(name)), "{name}");
+        }
+        assert!(!is_linux_abi_library(Path::new("libavcodec.so.60")));
     }
 
     #[test]
@@ -1638,9 +1636,15 @@ mod tests {
 
         assert!(!output.join("run.sh").exists());
         assert!(!output.join("run.bat").exists());
-        assert!(output.join(crate::runtime::BENCHMARK_MARKER).is_file());
+        assert!(
+            output
+                .join("lib")
+                .join(crate::runtime::BENCHMARK_MARKER)
+                .is_file()
+        );
+        assert!(!output.join(crate::runtime::BENCHMARK_MARKER).exists());
         assert_eq!(
-            fs::read_to_string(output.join("profile-runtime.py")).unwrap(),
+            fs::read_to_string(output.join("lib/profile-runtime.py")).unwrap(),
             include_str!("../dev/scripts/profile-runtime.py"),
         );
         assert_eq!(
@@ -1649,6 +1653,7 @@ mod tests {
         );
         assert!(!output.join("LICENSE").exists());
         assert!(!output.join("FONT-LICENSES.txt").exists());
+        assert!(!output.join("profile-runtime.py").exists());
         #[cfg(not(target_os = "linux"))]
         assert!(!output.join("keine.png").exists());
         #[cfg(target_os = "linux")]

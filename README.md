@@ -49,7 +49,7 @@ dev/scripts/  build and fixture scripts
 - [Publishing](dev/docs/release.md)
 - [Compatibility limits](dev/docs/compatibility.md)
 
-Current version: 0.14.2. macOS is the current acceptance focus; Windows/Linux runtime acceptance is deferred.
+Current version: 0.14.3. macOS is the current acceptance focus; Windows/Linux runtime acceptance is deferred.
 Build/test success and manual input/display/media acceptance are separate gates.
 
 ## License

@@ -54,7 +54,7 @@ ui-sounds = ["bundled-opus"]
 hardened = ["dep:libc", "dep:windows-sys"]
 # Benchmark-only process CPU/memory counters. Normal game builds do not include
 # the platform APIs or execute their sampling path.
-startup-metrics = ["dep:libc", "dep:windows-sys"]
+startup-metrics = ["dep:libc", "dep:windows-sys", "dep:serde_json"]
 # Publisher-only compiler and Hakutaku packer. Release game engines deliberately
 # omit this feature and link only hakutaku-core through keine-loader.
 publisher = [
@@ -86,7 +86,7 @@ video-native = [
 
 [workspace.package]
 license-file = "LICENSE"
-version = "0.14.2"
+version = "0.14.3"
 edition = "2024"
 rust-version = "1.97.1"
 

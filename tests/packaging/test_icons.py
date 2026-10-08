@@ -52,30 +52,24 @@ class CompiledIconTests(unittest.TestCase):
                 with patch.object(icons.subprocess, 'check_output', side_effect=dump):
                     icons.verify_apk(apk, Path('aapt2'))
 
-    def test_missing_foreground_bitmap_still_fails(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            apk = Path(temporary) / 'game.apk'
-            dump, _ = compiled_icon_fixture(apk, missing_logo=True)
-            with patch.object(icons.subprocess, 'check_output', side_effect=dump):
-                with self.assertRaisesRegex(AssertionError, 'Missing compiled icon file'):
-                    icons.verify_apk(apk, Path('aapt2'))
-
-    def test_incorrect_density_dimensions_still_fail(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            apk = Path(temporary) / 'game.apk'
-            dump, _ = compiled_icon_fixture(apk, wrong_size=True)
-            with patch.object(icons.subprocess, 'check_output', side_effect=dump):
-                with self.assertRaises(AssertionError):
-                    icons.verify_apk(apk, Path('aapt2'))
-
-    def test_manifest_reference_to_missing_resource_is_rejected(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            apk = Path(temporary) / 'game.apk'
-            dump, trees = compiled_icon_fixture(apk)
-            trees['AndroidManifest.xml'] = trees['AndroidManifest.xml'].replace('@0x7f030000', '@0x7f030001')
-            with patch.object(icons.subprocess, 'check_output', side_effect=dump):
-                with self.assertRaisesRegex(AssertionError, 'Unresolved icon ID'):
-                    icons.verify_apk(apk, Path('aapt2'))
+    def test_invalid_compiled_icon_resources_are_rejected(self):
+        cases = (
+            ('missing bitmap', {'missing_logo': True}, 'Missing compiled icon file'),
+            ('wrong density dimensions', {'wrong_size': True}, None),
+            ('missing manifest resource', {}, 'Unresolved icon ID'),
+        )
+        for name, options, message in cases:
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as temporary:
+                apk = Path(temporary) / 'game.apk'
+                dump, trees = compiled_icon_fixture(apk, **options)
+                if name == 'missing manifest resource':
+                    trees['AndroidManifest.xml'] = trees['AndroidManifest.xml'].replace(
+                        '@0x7f030000', '@0x7f030001')
+                with patch.object(icons.subprocess, 'check_output', side_effect=dump):
+                    expected_error = (self.assertRaisesRegex(AssertionError, message)
+                                      if message else self.assertRaises(AssertionError))
+                    with expected_error:
+                        icons.verify_apk(apk, Path('aapt2'))
 
 
 if __name__ == '__main__':

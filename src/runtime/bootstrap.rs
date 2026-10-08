@@ -218,6 +218,159 @@ const PORTABLE_BENCHMARK_SECTIONS: &[BenchmarkSection] = &[
     ),
 ];
 
+/// Android shares the desktop workload inventory; unsupported presentation/video
+/// cases remain explicit skips rather than silently disappearing from coverage.
+#[cfg(feature = "publisher")]
+pub(crate) fn android_benchmark_plan() -> serde_json::Value {
+    use serde_json::json;
+    let mut samples = Vec::new();
+    let mut add = |label: &str,
+                   target: Option<&str>,
+                   camera: &str,
+                   mode: &str,
+                   runs: usize,
+                   kind: &str,
+                   skip: Option<&str>,
+                   required: bool| {
+        let mut args = vec!["perf".to_owned(), "embedded".to_owned()];
+        if kind == "startup" {
+            args.extend(["--startup".into(), "--runs".into(), "1".into()]);
+        } else if kind == "render" {
+            args.extend([
+                "--seconds".into(),
+                "5".into(),
+                "--mode".into(),
+                mode.into(),
+                "--raw".into(),
+            ]);
+            if let Some(target) = target {
+                args.extend(["--timeline".into(), target.into()]);
+            }
+            if camera != "runtime" {
+                args.extend(["--camera".into(), camera.into()]);
+            }
+        }
+        samples.push(
+            json!({"label":label,"target":target,"camera":camera,"mode":mode,
+            "runs":runs,"kind":kind,"args":args,"skip":skip,"required":required}),
+        );
+    };
+    add(
+        "startup", None, "runtime", "runtime", 7, "startup", None, false,
+    );
+    add(
+        "opening composition · runtime sleep/wake",
+        None,
+        "runtime",
+        "runtime",
+        1,
+        "render",
+        None,
+        false,
+    );
+    add(
+        "opening composition · runtime composition",
+        None,
+        "runtime",
+        "continuous",
+        1,
+        "render",
+        None,
+        false,
+    );
+    for (label, cameras) in CAMERA_BENCHMARK_WORKLOADS {
+        add(
+            label,
+            None,
+            cameras.id(),
+            "continuous",
+            1,
+            "render",
+            None,
+            false,
+        );
+    }
+    for (_, workloads) in PORTABLE_BENCHMARK_SECTIONS {
+        for (label, target) in *workloads {
+            let skip = target
+                .starts_with("bench_video_")
+                .then_some("Android runtime does not support video");
+            let android_target = if *target == "bench_stress_composition" {
+                "bench_stress_android"
+            } else {
+                target
+            };
+            let label = if *target == "bench_stress_composition" {
+                "stress composition · Android, without video"
+            } else {
+                label
+            };
+            add(
+                label,
+                Some(android_target),
+                "runtime",
+                "continuous",
+                benchmark_workload_runs(target),
+                "render",
+                skip,
+                true,
+            );
+        }
+    }
+    for (label, target, skip) in [
+        (
+            "720p particles",
+            "bench_particle_snow_256",
+            Some("Android uses the actual device surface; desktop window resizing is unsupported"),
+        ),
+        (
+            "1080p particles",
+            "bench_particle_snow_256",
+            Some("Android uses the actual device surface; desktop window resizing is unsupported"),
+        ),
+        ("runtime dialogue", "bench_representative_dialogue", None),
+        ("runtime particles", "bench_particle_snow_256", None),
+        ("runtime audio", "bench_audio_loop", None),
+        (
+            "runtime video",
+            "bench_video_fullscreen",
+            Some("Android runtime does not support video"),
+        ),
+        (
+            "fullscreen stress · Android, without video",
+            "bench_stress_android",
+            None,
+        ),
+    ] {
+        add(
+            label,
+            Some(target),
+            "runtime",
+            if label.starts_with("runtime ") {
+                "runtime"
+            } else {
+                "continuous"
+            },
+            1,
+            "render",
+            skip,
+            true,
+        );
+    }
+    add(
+        "packaged APK I/O",
+        None,
+        "runtime",
+        "runtime",
+        1,
+        "package",
+        None,
+        false,
+    );
+    json!({"schema":1,"application_id":"moe.maincore.keine.benchmark", "engine_version":env!("CARGO_PKG_VERSION"),
+        "commit":env!("KEINE_BUILD_COMMIT"), "profile":"profiling", "samples":samples})
+}
+
 #[derive(Default)]
 struct LaunchOptions {
     development: bool,
@@ -1490,6 +1643,40 @@ pub(crate) fn build_project_app(project: OpenedProject, loader: LoaderRegistry) 
         store,
         LaunchOptions::default(),
     ))
+}
+
+#[cfg(all(target_os = "android", feature = "startup-metrics"))]
+pub(super) fn build_android_benchmark_app(
+    project: OpenedProject,
+    mode: InteractiveMode,
+    started: Instant,
+) -> Result<App> {
+    let opened = Instant::now();
+    let loader = LoaderRegistry::default();
+    let languages = loader.languages(&project.config.adapter.script)?;
+    let store = loader.store(&project.config.adapter.store)?;
+    let capture = mode
+        .startup_benchmark()
+        .map(|_| crate::ui::performance::StartupCapture::new(started, opened));
+    let persistence =
+        crate::storage::persistence_root(&project.root, &project.config.project, project.packaged)?;
+    let app = build_opened_app(
+        project.root,
+        persistence,
+        project.config,
+        project.content,
+        languages,
+        store,
+        LaunchOptions {
+            benchmark: mode.benchmark().cloned(),
+            startup_capture: capture.clone(),
+            ..Default::default()
+        },
+    );
+    if let Some(capture) = capture {
+        capture.mark_app_built();
+    }
+    Ok(app)
 }
 
 pub(crate) fn build_authoring_preview_app(

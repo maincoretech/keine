@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import unittest
 import sys
+import xml.etree.ElementTree as ET
 from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parents[2] / 'dev/scripts/package-authoring.py'
@@ -85,9 +86,43 @@ class WindowsPackageTests(unittest.TestCase):
             with patch.dict(os.environ, {'VCPKG_ROOT': str(root / 'vcpkg'),
                                          'VCPKG_TARGET_TRIPLET': 'x64-windows'}):
                 packaging.windows_libraries(output)
-            self.assertEqual((output / 'avcodec.dll').read_bytes(), b'library')
+            self.assertEqual((output / 'lib/avcodec.dll').read_bytes(), b'library')
+            self.assertFalse((output / 'avcodec.dll').exists())
+            ns = {'a': 'urn:schemas-microsoft-com:asm.v1'}
+            assembly = ET.parse(output / 'lib/lib.manifest').getroot()
+            identity = assembly.find('a:assemblyIdentity', ns).attrib
+            app = ET.parse(SCRIPT.parents[1] / 'windows/runtime.manifest').getroot()
+            self.assertEqual(app.find('a:dependency/a:dependentAssembly/a:assemblyIdentity', ns).attrib, identity)
+            self.assertEqual([file.attrib['name'] for file in assembly.findall('a:file', ns)], ['avcodec.dll'])
             self.assertTrue((output / 'NOTICE').read_bytes().endswith(copyright_file.read_bytes()))
             self.assertFalse((output / 'THIRD-PARTY').exists())
+
+
+class LinuxAbiTests(unittest.TestCase):
+    def test_required_versions_reject_newer_libc_but_ignore_export_definitions(self):
+        spec = importlib.util.spec_from_file_location('linux_abi', SCRIPT.with_name('verify-linux-abi.py'))
+        abi = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(abi)
+        for version, rejected in [('2.2.5', False), ('2.39', False), ('2.42', True),
+                                  ('2.43', True), ('ABI_DT_X86_64_PLT', True),
+                                  ('PRIVATE', True), ('ABI_DT_RELR', False)]:
+            with self.subTest(version=version):
+                text = ('Version definition section .gnu.version_d:\nName: GLIBC_9.99\n'
+                        f'Version needs section .gnu.version_r:\nName: GLIBC_{version}\n')
+                self.assertEqual(abi.requirements(text), {f'GLIBC_{version}'})
+                self.assertEqual(bool(abi.incompatible(abi.requirements(text))), rejected)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'keine').write_bytes(b'\x7fELFexecutable')
+            (root / 'lib').mkdir()
+            (root / 'lib/bad.so').write_bytes(b'\x7fELFlibrary')
+            def readelf(command, **kwargs):
+                newer = Path(command[-1]).name == 'bad.so'
+                return subprocess.CompletedProcess(command, 0,
+                    f'Version needs section:\nName: GLIBC_{"2.43" if newer else "2.39"}\n', '')
+            with patch.object(abi.subprocess, 'run', side_effect=readelf):
+                with self.assertRaisesRegex(RuntimeError, 'bad.so.*GLIBC_2.43'):
+                    abi.verify(root)
 
 
 if __name__ == '__main__':

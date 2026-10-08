@@ -127,7 +127,7 @@ pub(super) fn run(project_path: &Path, loader: &LoaderRegistry) -> Result<String
     storage_report(project_path, &content, open_elapsed)
 }
 
-fn storage_report(
+pub(crate) fn storage_report(
     project_path: &Path,
     content: &ContentProject,
     open_elapsed: Duration,

@@ -26,6 +26,11 @@ android {
         release {
             // The tday workflow is a playtest channel, not store publication.
             signingConfig = signingConfigs.debug
+            // Only the isolated profiling app permits ADB run-as report access.
+            debuggable = providers.gradleProperty('engineBenchmark').orElse('false').get() == 'true'
+            if (debuggable && android.defaultConfig.applicationId != 'moe.maincore.keine.benchmark') {
+                throw new GradleException('Only the benchmark application may enable release debugging')
+            }
         }
     }
 

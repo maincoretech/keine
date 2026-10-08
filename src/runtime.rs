@@ -7,6 +7,9 @@ mod android_package;
 pub(crate) mod asset_reader;
 pub(crate) mod audio;
 pub(crate) mod authoring;
+#[cfg(any(feature = "publisher", feature = "startup-metrics"))]
+#[path = "runtime/benchmark/android.rs"]
+pub(crate) mod benchmark_android;
 pub(crate) mod bootstrap;
 #[path = "runtime/input/bounded.rs"]
 pub(crate) mod bounded_input;

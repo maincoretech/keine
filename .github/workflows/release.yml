@@ -52,7 +52,8 @@ jobs:
       matrix:
         include:
           - name: Linux x64
-            os: ubuntu-26.04
+            # Shipping floor: GLIBC 2.39, including all bundled native libraries.
+            os: ubuntu-24.04
             artifact: keine-linux
             target: ''
             engine_target_dir: release
@@ -181,12 +182,15 @@ jobs:
           PUBLISHER_IDENTITY_PATH: ${{ steps.publisher_identity.outputs.path }}
         run: rm -f "$PUBLISHER_IDENTITY_PATH"
       - name: Verify Linux runtime closure
-        if: runner.os == 'Linux' && contains(env.KEINE_RELEASE_FEATURES, 'video-ffmpeg')
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           test -x "target/${{ steps.artifact.outputs.name }}/keine"
-          test -d "target/${{ steps.artifact.outputs.name }}/lib"
-          readelf -d "target/${{ steps.artifact.outputs.name }}/keine" | grep -F '(RPATH)' | grep -F '$ORIGIN/lib'
+          python3 dev/scripts/verify-linux-abi.py "target/${{ steps.artifact.outputs.name }}"
+          if [[ "$KEINE_RELEASE_FEATURES" == *video-ffmpeg* ]]; then
+            test -d "target/${{ steps.artifact.outputs.name }}/lib"
+            readelf -d "target/${{ steps.artifact.outputs.name }}/keine" | grep -F '(RPATH)' | grep -F '$ORIGIN/lib'
+          fi
           if ldd "target/${{ steps.artifact.outputs.name }}/keine" | grep -q 'not found'; then
             echo 'Linux release has unresolved dynamic libraries' >&2
             exit 1
@@ -198,7 +202,17 @@ jobs:
         run: |
           $root = 'target/${{ steps.artifact.outputs.name }}'
           if (-not (Test-Path (Join-Path $root 'keine.exe'))) { throw 'keine.exe is missing' }
-          if (-not (Get-ChildItem $root -Filter '*.dll')) { throw 'FFmpeg runtime DLLs are missing' }
+          if (Get-ChildItem $root -Filter '*.dll') { throw 'Runtime DLLs must be inside lib' }
+          if (-not (Get-ChildItem (Join-Path $root 'lib') -Filter '*.dll')) { throw 'FFmpeg runtime DLLs are missing' }
+          if (-not (Test-Path (Join-Path $root 'lib/lib.manifest'))) { throw 'Runtime assembly manifest is missing' }
+          # Do not let the SDK's PATH mask a broken private assembly.
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+          $executable = (Resolve-Path (Join-Path $root 'keine.exe')).Path
+          Push-Location $env:RUNNER_TEMP
+          try {
+            & $executable --version
+            if ($LASTEXITCODE -ne 0) { throw 'Packaged executable cannot load lib from an unrelated cwd' }
+          } finally { Pop-Location }
       - name: Archive executable permissions before artifact upload
         shell: bash
         run: |
@@ -233,7 +247,6 @@ jobs:
   android:
     name: Build Android arm64
     needs: source
-    if: inputs.package == 'tday'
     runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
@@ -274,6 +287,8 @@ jobs:
             target/android/CACHEDIR.TAG
             target/android/release
             target/android/aarch64-linux-android/release
+            target/android/profiling
+            target/android/aarch64-linux-android/profiling
             target/runner
           key: release-android-arm64-ndk28-v1-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ env.RELEASE_SHA }}
           restore-keys: |
@@ -287,21 +302,35 @@ jobs:
         run: |
           umask 077
           mkdir -p "$(dirname "$KEINE_HAKUTAKU_IDENTITY")"
-          target/runner/release/keine bundle projects/tday --output target/tday-android-arm64-test
           mkdir -p bundles
-          cp target/tday-android-arm64-test/game.apk bundles/tday-android-arm64-test.apk
+          if [[ "$BENCHMARK_PACKAGE" == "true" ]]; then
+            python3 dev/scripts/prepare-android-benchmark.py "$RUNNER_TEMP/keine-android-fixture"
+            target/runner/release/keine bundle "$RUNNER_TEMP/keine-android-fixture" --output target/keine-android-arm64 --benchmark
+            echo 'ANDROID_OUTPUT=target/keine-android-arm64-benchmark' >> "$GITHUB_ENV"
+            echo 'ANDROID_ARTIFACT=keine-android-arm64-benchmark' >> "$GITHUB_ENV"
+          else
+            target/runner/release/keine bundle projects/tday --output target/tday-android-arm64-test
+            echo 'ANDROID_OUTPUT=target/tday-android-arm64-test' >> "$GITHUB_ENV"
+            echo 'ANDROID_ARTIFACT=tday-android-arm64-test' >> "$GITHUB_ENV"
+          fi
       - name: Check Android release lint
         run: gradle --no-daemon -p dev/android lintRelease
       - name: Verify Android release package
         run: |
-          python3 dev/scripts/verify-android-release.py bundles/tday-android-arm64-test.apk target/tday-android-arm64-test/ANDROID.json
-          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 4 bundles/tday-android-arm64-test.apk
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify bundles/tday-android-arm64-test.apk
+          python3 dev/scripts/verify-android-release.py "$ANDROID_OUTPUT/game.apk" "$ANDROID_OUTPUT/ANDROID.json"
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 4 "$ANDROID_OUTPUT/game.apk"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify "$ANDROID_OUTPUT/game.apk"
+          if [[ "$BENCHMARK_PACKAGE" == "true" ]]; then
+            (cd "$ANDROID_OUTPUT" && zip -0 "$GITHUB_WORKSPACE/bundles/$ANDROID_ARTIFACT.zip" game.apk ANDROID.json android-benchmark.json benchmark-android.py profile-runtime.py BENCHMARK.txt)
+            (cd "$ANDROID_OUTPUT" && zip -6 "$GITHUB_WORKSPACE/bundles/$ANDROID_ARTIFACT.zip" lib/libkeine.so)
+          else
+            cp "$ANDROID_OUTPUT/game.apk" "bundles/$ANDROID_ARTIFACT.apk"
+          fi
       - name: Upload Android release
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: tday-android-arm64-test
-          path: bundles/tday-android-arm64-test.apk
+          name: ${{ env.ANDROID_ARTIFACT }}
+          path: bundles/${{ env.ANDROID_ARTIFACT }}.*
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
@@ -315,6 +344,8 @@ jobs:
           if [[ -f target/android/CACHEDIR.TAG ]]; then
             cargo clean --locked --target-dir target/android -p keine -p keine-loader --profile release
             cargo clean --locked --target-dir target/android --target aarch64-linux-android -p keine -p keine-loader --profile release
+            cargo clean --locked --target-dir target/android -p keine -p keine-loader --profile profiling
+            cargo clean --locked --target-dir target/android --target aarch64-linux-android -p keine -p keine-loader --profile profiling
           fi
 
   publish:
@@ -322,7 +353,7 @@ jobs:
     needs: [bundle, android]
     if: >-
       always() && !cancelled() && needs.bundle.result == 'success' &&
-      (needs.android.result == 'success' || needs.android.result == 'skipped')
+      needs.android.result == 'success'
     runs-on: ubuntu-26.04
     permissions:
       actions: read
@@ -344,8 +375,10 @@ jobs:
         run: |
           shopt -s nullglob
           packages=(bundles/*.zip)
-          if [[ "${#packages[@]}" -ne 3 ]]; then
-            echo "Expected three platform packages, found ${#packages[@]}" >&2
+          expected_zips=4
+          if [[ "$RELEASE_TAG" == "tday-latest" ]]; then expected_zips=3; fi
+          if [[ "${#packages[@]}" -ne "$expected_zips" ]]; then
+            echo "Expected $expected_zips platform packages, found ${#packages[@]}" >&2
             exit 1
           fi
           apks=(bundles/*.apk)
@@ -383,7 +416,7 @@ jobs:
             Source commit: ${{ env.RELEASE_SHA }}.
             Download your platform, extract the complete archive, and run
             `keine.exe` (Windows) or `./keine` (macOS/Linux).
-            ${{ inputs.package == 'tday' && 'Android: install tday-android-arm64-test.apk (ARM64, Android 8+); game content is included. Test signing only.' || '' }}
+            ${{ inputs.package == 'tday' && 'Android: install tday-android-arm64-test.apk (ARM64, Android 8+); game content is included. Test signing only.' || 'Android: unzip the ARM64 benchmark and run python3 benchmark-android.py --apk game.apk --output android-report with an authorized ADB device. Full supported workload suite; reports return automatically to the computer. Video/window-size cases are explicit unsupported skips.' }}
             Temporary test identity; not a formal game update channel.
           prerelease: true
           make_latest: false

@@ -22,7 +22,7 @@ perf <project> [--startup]  开发测量
 
 | 用途 | 下载标签 | 触发方式 | 内容 |
 | --- | --- | --- | --- |
-| 性能定位 | `benchmark-latest` | main 通过 CI 后自动；也可手动 | 三平台自运行真实负载、报告与 profiler 工具 |
+| 性能定位 | `benchmark-latest` | main 通过 CI 后自动；也可手动 | 三桌面平台自运行 + Android ADB 完整测试、报告与 profiler 工具 |
 | 作者开发 | `editor-latest` | main 通过 CI 后自动；也可手动 | 三平台独立 Editor + 同版本 Preview Engine，无游戏素材 |
 | tday 试玩 | `tday-latest` | **仅手动** | 三平台 ZIP + Android ARM64 APK，含 shiftz 素材版权说明 |
 
@@ -30,6 +30,15 @@ perf <project> [--startup]  开发测量
 同样优化但保留符号的 profiling。macOS 当前 runner 产出 Apple Silicon，Linux/Windows
 为 x64；不声称已经覆盖 Intel Mac。macOS Editor 下载是一个 `Kēne Editor.app`，内部带
 Preview Engine；Windows/Linux 是相邻的 Editor/Engine executable 和运行库，须完整解压。
+Linux 发行构建固定 `ubuntu-24.04` / GLIBC 2.39 基线；游戏、benchmark 与 Editor
+均校验包内每个 ELF 的版本需求，不能用最新构建机启动成功替代旧系统兼容。
+glibc 的 loader、libc/libm、libmvec/libresolv 等组件由宿主提供，不随应用复制。
+Windows 的 FFmpeg DLL 使用 EXE 内嵌的 Win32 私有 assembly 声明，从 `lib/lib.manifest`
+列出的 `lib/*.dll` 加载，无启动器、无全局 PATH 修改。开发构建不添加此发行依赖；
+加载位置依据 [Win32 私有 assembly 搜索顺序](https://learn.microsoft.com/en-us/windows/win32/sbscs/assembly-searching-sequence)。
+直接组装 Windows authoring 包时，先设置 `KEINE_WINDOWS_BUNDLE=1` 再编译对应 Engine。
+benchmark 的 PDB/dSYM、采集脚本与启动标记也归入同一个 `lib/`，不新增 tools/symbols 目录。
+GLIBC 版本基线依据 [Ubuntu 24.04 的 libc6](https://packages.ubuntu.com/noble/libc6)。
 Editor 的 Build 临时试玩导出不需要 Cargo/密钥；规范媒体播放含对应平台视频后端。
 转换非规范音视频仍须另装 FFmpeg executable，SDK 动态库不是转换工具。
 
@@ -78,16 +87,16 @@ Rust 原生构建缓存按 runner image / architecture 隔离，
 2. 发布 tday：Actions → **Release Engine** → **Run workflow** → 选目标 ref → `package=tday`。
    同一次触发并行构建桌面三平台和安卓 release APK，游戏资源已内置；普通推送和自动 CI 完成不会触发 tday 打包。此渠道只用隔离临时 identity，不读正式发行密钥。安卓使用测试应用签名，见 [Android](android.md)。
 3. 手动补发 benchmark：同一入口选 `package=benchmark`；补发 Editor 则运行 **Release Editor**。
-4. 下载更新完成后核对标签对应的 SHA、三个平台 ZIP、tday 的安卓 APK 和包内 provenance；代码推送、CI 成功、
+4. 下载更新完成后核对标签对应的 SHA、三个桌面 ZIP、benchmark 的 Android ZIP、tday 的安卓 APK 和包内 provenance；代码推送、CI 成功、
    Release 附件更新分别确认。正式游戏发行继续使用下方 Project CI/CLI 与稳定 identity。
 
 自动构建固定使用通过 CI 的 SHA；PR、fork、失败的 CI 不发布。新 main 已出现时，
 旧自动构建只保留 Actions artifact，不覆盖滚动下载。三个 ZIP 在原平台打好再上传，保留
-Unix executable 权限；benchmark 必须三个桌面平台成功，tday 必须四个平台成功后才发布。标签/附件更新失败会让发布 job 失败。
+Unix executable 权限；benchmark 与 tday 均须四个平台成功后才发布。标签/附件更新失败会让发布 job 失败。
 macOS 包是开发签名，未做 Apple 公证；完整跨平台运行验收与硬件性能测试仍是独立关卡。
 
 默认 native-benchmark 三平台使用同一套真实负载，包含媒体。缺少必测时间轴时返回
-INCOMPLETE 并保留报告，不能当作完整跑分。包内 `profile-runtime.py` 的额外调用栈采集
+INCOMPLETE 并保留报告，不能当作完整跑分。包内 `lib/profile-runtime.py` 的额外调用栈采集
 需要 Python 3 和平台采样工具；直接跑 benchmark 无需 Python。Windows 附 PDB，macOS
 有 dSYM 时附带。它不在 CI 主机上执行 GPU 性能验收，也不是正式游戏发行。
 

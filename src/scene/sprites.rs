@@ -511,17 +511,18 @@ mod tests {
     }
 
     #[test]
-    fn project_offset_moves_the_shared_sprite_baseline() {
-        let center = sprite_center_y(0.0, 1080.0, -90.0, 0.0);
-
-        assert_eq!(center, 450.0);
-        assert_eq!(center - 540.0, -90.0);
-        assert_eq!(center + 540.0, 990.0);
-    }
-
-    #[test]
-    fn script_transform_remains_relative_to_the_project_offset() {
-        assert_eq!(sprite_center_y(12.0, 1080.0, -90.0, 24.0), 486.0);
+    fn sprite_baseline_combines_project_position_and_script_offsets() {
+        for (position, script_offset, expected) in [(0.0, 0.0, 450.0), (12.0, 24.0, 486.0)] {
+            let center = sprite_center_y(position, 1080.0, -90.0, script_offset);
+            assert_eq!(
+                center, expected,
+                "position={position}, script_offset={script_offset}"
+            );
+            if position == 0.0 {
+                assert_eq!(center - 540.0, -90.0);
+                assert_eq!(center + 540.0, 990.0);
+            }
+        }
     }
 
     #[test]

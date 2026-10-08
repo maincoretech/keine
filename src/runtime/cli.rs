@@ -623,7 +623,11 @@ fn packaged_benchmark_command_at(executable: &Path) -> Result<Option<CliCommand>
     let Some(root) = executable.parent() else {
         return Ok(None);
     };
-    let marker = root.join(BENCHMARK_MARKER);
+    let marker = if root.join("lib").join(BENCHMARK_MARKER).is_file() {
+        root.join("lib").join(BENCHMARK_MARKER)
+    } else {
+        root.join(BENCHMARK_MARKER)
+    };
     if !marker.is_file() {
         return Ok(None);
     }
@@ -856,6 +860,7 @@ mod tests {
         let original = root.join("original package");
         let relocated = root.join("relocated package");
         std::fs::create_dir_all(original.join("data")).unwrap();
+        std::fs::create_dir_all(original.join("lib")).unwrap();
         std::fs::write(original.join("game.haku"), b"snapshot").unwrap();
         std::fs::write(original.join("data/segment.taku"), b"segment").unwrap();
         let executable = original.join("keine");
@@ -864,7 +869,7 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        std::fs::write(original.join(BENCHMARK_MARKER), b"7\n").unwrap();
+        std::fs::write(original.join("lib").join(BENCHMARK_MARKER), b"7\n").unwrap();
         std::fs::rename(&original, &relocated).unwrap();
 
         // No process-wide cwd mutation: parallel tests keep their own paths.
@@ -894,7 +899,7 @@ mod tests {
             assert_eq!(runs, 7);
             assert_eq!(report_path, relocated.join(BENCHMARK_REPORT_FILE));
         }
-        std::fs::write(relocated.join(BENCHMARK_MARKER), b"0\n").unwrap();
+        std::fs::write(relocated.join("lib").join(BENCHMARK_MARKER), b"0\n").unwrap();
         assert!(packaged_benchmark_command_at(&relocated.join("keine")).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }

@@ -25,6 +25,11 @@ public final class EngineActivity extends NativeActivity {
         // Associate NativeActivity's library with the VM for JNI resolution.
         System.loadLibrary("keine");
         hideSystemBars();
+        // Keep only the dedicated, foreground benchmark awake. Never change a
+        // user's global display timeout or the shipping game's window flags.
+        if ("moe.maincore.keine.benchmark".equals(getPackageName())) {
+            getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        }
         if (Build.VERSION.SDK_INT >= 33) {
             backCallback = EngineActivity::nativeBack;
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
