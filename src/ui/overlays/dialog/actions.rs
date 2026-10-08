@@ -63,25 +63,32 @@ pub fn handle_dialog_click(
         }
         match &req.action {
             DialogAction::QuickSave => {
-                match crate::storage::save::save_game_replacing_preview(
+                match crate::storage::save::save_manual_replacing_preview(
                     context.store.0.as_ref(),
                     &context.state,
+                    &context.checkpoint,
                     QUICK_SAVE_SLOT,
                     &context.project_root,
                     &context.preview_coordinator,
                 ) {
-                    Ok(generation) => {
-                        context.preview.state = Some(
-                            crate::ui::control_bar::QuickSaveSnapshot::from(&**context.state),
-                        );
+                    Ok(saved) => {
+                        context.preview.state =
+                            Some(crate::ui::control_bar::QuickSaveSnapshot::from(
+                                context
+                                    .checkpoint
+                                    .state_for_continuation(&context.state)
+                                    .expect("manual save selected a resumable state"),
+                            ));
                         context.preview.image = None;
-                        if let Ok(window) = context.windows.single() {
+                        if let Ok(window) = context.windows.single()
+                            && !saved.used_checkpoint
+                        {
                             capture_save_preview(
                                 &mut commands,
                                 &mut context.images,
                                 window,
                                 QUICK_SAVE_SLOT,
-                                generation,
+                                saved.generation,
                             );
                         }
                     }
@@ -153,16 +160,19 @@ pub fn handle_dialog_click(
                 context.backlog_ui.open = false;
             }
             DialogAction::SaveSlot(slot) => {
-                match crate::storage::save::save_game_replacing_preview(
+                match crate::storage::save::save_manual_replacing_preview(
                     context.store.0.as_ref(),
                     &context.state,
+                    &context.checkpoint,
                     *slot,
                     &context.project_root,
                     &context.preview_coordinator,
                 ) {
-                    Ok(generation) => {
+                    Ok(saved) => {
                         context.save_previews.invalidate(*slot);
-                        if let Ok(window) = context.windows.single() {
+                        if let Ok(window) = context.windows.single()
+                            && !saved.used_checkpoint
+                        {
                             // Keep the old card intact until its replacement preview is ready;
                             // the screenshot callback refreshes metadata and image together.
                             capture_save_preview(
@@ -170,7 +180,7 @@ pub fn handle_dialog_click(
                                 &mut context.images,
                                 window,
                                 *slot,
-                                generation,
+                                saved.generation,
                             );
                         } else {
                             context.save_load.set_changed();

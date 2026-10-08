@@ -95,16 +95,19 @@ pub fn handle_save_load_slot(
         return;
     }
     if mode == SaveLoadMode::Save && !matches!(status, crate::storage::save::SlotStatus::Ready(_)) {
-        match crate::storage::save::save_game_replacing_preview(
+        match crate::storage::save::save_manual_replacing_preview(
             context.store.0.as_ref(),
             &context.state,
+            &context.checkpoint,
             slot,
             &context.project_root,
             &context.preview_coordinator,
         ) {
-            Ok(generation) => {
+            Ok(saved) => {
                 context.save_previews.invalidate(slot);
-                if let Ok(window) = context.windows.single() {
+                if let Ok(window) = context.windows.single()
+                    && !saved.used_checkpoint
+                {
                     // Keep the current slot intact until the captured preview is ready, then the
                     // screenshot callback refreshes the complete card in one pass.
                     crate::ui::save_load::capture::capture_save_preview(
@@ -112,7 +115,7 @@ pub fn handle_save_load_slot(
                         &mut context.images,
                         window,
                         slot,
-                        generation,
+                        saved.generation,
                     );
                 } else {
                     ui.set_changed();

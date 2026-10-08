@@ -79,6 +79,8 @@ struct Session {
     overlay: PreviewOverlay,
     #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
     audition: Option<AudioAudition>,
+    #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+    audio_output: std::sync::OnceLock<bevy::audio::AudioOutput>,
 }
 
 impl Session {
@@ -93,11 +95,15 @@ impl Session {
             overlay: PreviewOverlay::create(token)?,
             #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
             audition: None,
+            #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+            audio_output: std::sync::OnceLock::new(),
         })
     }
 
     fn stop(&mut self) {
         self.stop_audition();
+        #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+        self.audio_output.take();
         self.lifecycle = LifecycleState::Stopped;
     }
 
@@ -180,17 +186,17 @@ impl Session {
                 ))?;
             let source = super::audio::authoring_audio_source(vec![mount].into(), &logical)
                 .map_err(|error| (ErrorCode::InvalidRequest, error.to_string()))?;
-            // Rodio 0.22: both the device sink and Player must live until playback
-            // stops. Dropping this transient owner stops sound, including disconnect.
-            let mut output = rodio::DeviceSinkBuilder::open_default_sink()
-                .map_err(|error| (ErrorCode::Internal, error.to_string()))?;
-            output.log_on_drop(false);
+            // Audition and Preview retain the same recovery owner. A missing
+            // device queues playback until it returns instead of failing the IPC request.
+            let output = self
+                .audio_output
+                .get_or_init(bevy::audio::AudioOutput::default);
             let player = rodio::Player::connect_new(output.mixer());
             player.append(source);
             self.audition = Some(AudioAudition {
                 path: path.to_owned(),
                 player,
-                _output: output,
+                _output: output.clone(),
             });
             Ok(ServerResponse::AudioAudition {
                 path: Some(path.to_owned()),
@@ -209,14 +215,24 @@ impl Session {
 
     fn build_runtime(&self, loader: &LoaderRegistry) -> Result<App> {
         let project_path = self.project_path.as_deref().context("no project is open")?;
-        build_authoring_preview_app(
+        let mut app = build_authoring_preview_app(
             project_path,
             &self.overlay.root,
             loader,
             super::preview::AuthoringPreviewConfig {
                 document_revision: self.document_revision,
             },
-        )
+        )?;
+        #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+        {
+            let output = self
+                .audio_output
+                .get_or_init(|| app.world().resource::<bevy::audio::AudioOutput>().clone())
+                .clone();
+            app.insert_resource(output);
+        }
+        super::audio::configure_audio_wake(&mut app);
+        Ok(app)
     }
 }
 
@@ -224,7 +240,7 @@ impl Session {
 struct AudioAudition {
     path: PathBuf,
     player: rodio::Player,
-    _output: rodio::MixerDeviceSink,
+    _output: bevy::audio::AudioOutput,
 }
 
 #[derive(Resource)]

@@ -1,5 +1,39 @@
 # 开发与验收
 
+## 演出中存档与音频输出恢复
+
+- 普通新槽位、覆盖存档和快速存档共用即时检查点选择：现场可完整恢复时保存现场，
+  否则保存最近一个可恢复 action 边界。创建瞬态演出前捕获边界，连续 forward batch
+  中的变量修改保留，读档重新执行演出入口；不推进现场、不等待演出结束。
+- 同 Program 检查点才能回退；缺少/外部 Program 检查点不覆盖已有槽位。
+  回退卡片文本取检查点的当前/上一句，删除旧缩略图且不截取较晚现场；Save v11 不变。
+- Bevy 音频同版 patch 保留逻辑 mixer、Player 和解码器，只重建设备 stream。
+  回归覆盖无设备静音、不推进源位置、断流恢复、暂停与音量保留、不同物理格式、
+  Windows 无错误的默认 endpoint 切换、CoreAudio 健康路由不重建、退避上限。
+  淡化时钟按健康 stream 提交时间计算，输出缺失不会消耗淡入/淡出或持续要求重绘。
+
+验证命令：
+
+```sh
+cargo test --workspace --features publisher,video-native,hot-reload
+cargo clippy --workspace --all-targets --features publisher,video-native,hot-reload -- -D warnings
+cargo clippy -p keine --no-default-features --all-targets -- -D warnings
+cargo ndk -t arm64-v8a -P 26 clippy --locked -p keine --lib --no-default-features --features ui-sounds -- -D warnings
+cargo deny --all-features check
+target/debug/keine validate tests/fixtures/native-smoke
+target/debug/keine validate projects/tday
+```
+
+验证结果：workspace 1043 passed / 21 ignored / 0 failed（IPC 在沙箱外运行）；
+fmt、workspace all-targets Clippy、Engine debug 构建、Android ui-sounds Clippy、
+all-features cargo-deny 通过。native-smoke 与 tday validate 均为 0 warning。
+无默认音频的 all-targets Clippy 覆盖关闭 Rodio 直接依赖的测试边界。
+
+当前手机截图及用户确认定位到旧版“当前演出结束后才能保存”提示。
+自动回归不能代替新版手机实际存档/读档、蓝牙/有线/USB 切换听感、Windows/Linux
+原生默认设备切换、Android 前后台路由和恢复时间验收。未覆盖安装当前手机 APK。
+
+
 ## 应用图标派生
 
 release 图标校验回归：本地 `assembleRelease` 复现源码路径被替换成 `res/BW.xml`、`res/TO.png`，
@@ -287,9 +321,30 @@ ad hoc codesign 验证通过；未执行正式签名/公证、远程 CI 或跨�
 | 工作 | 具体动作 | 完成标准 |
 |---|---|---|
 | 集成收尾 | 审查当前 diff，保留无关修改，按下方门禁复验；用户授权后提交推送，检查 Linux/macOS/Windows CI，修复真实失败 | 记录提交 SHA 与 CI 结果；不能把本机交叉编译当作远程 CI 通过 |
+| 下一阶段：Extra 页面设计（未开始） | 按下方设计范围完成 CG/BGM 鉴赏页方案，确认后实现与验收 | 布局、交互、多语言和实际设备验收分别记录；当前存档与音频恢复的实机验收仍需完成 |
 | Windows/Linux 与显示验收 | 在对应系统原生运行 Editor/Engine；验证入篓→撤销→重做、同名冲突保护、CPU/内存采样与进程重启；检查保存重开、IME、Preview、音视频。用可用设备补测 1× DPI、Preview 极端比例；多屏设备到位后再测跨屏 | 各系统/显示配置分别记录通过、失败与未测；CI 单元测试不能替代 GUI/音视频实机验收 |
 | 独立性能阶段（仍延后） | 复用现有 bench、`cargo perf` 和 portable benchmark，测 Editor 滚动/大文档/搜索、启动与持续 CPU/RSS、Preview CPU/GPU 帧时、粒子全屏/瞬时峰值、媒体流与 Hakutaku I/O；先定位实际热点，再修改 | 同主机、同输入、同 release 配置保留前后原始命令/日志，报告 p99、最大帧时及超过刷新预算的帧数。结合硬件、分辨率和可承受开销评价视觉质量与性能，窗口切换单独标记；平均 FPS 或 p99 单项不能证明零掉帧 |
 | 正式发行 | 在发行副本规范化存量 tday 媒体为 WebP/Opus 并保持 ID/引用，原工程只读；复用稳定 project.id 与 identity，验证并完整打包。macOS 在用户凭据就绪后执行正式签名/公证；测试解压、独立安装启动、Engine discovery、媒体播放、用户数据位置与更新 | 发行包满足生产格式，签名/公证检查通过，包中没有私有 identity；实际安装运行通过后才记录为发行验收完成 |
+
+### 下一阶段：Extra 页面设计
+
+状态：计划，尚未开始。先交付可审阅的布局与交互方案，再实施；入口为 Engine 的 Extra 鉴赏页，
+现有实现位于 `src/ui/screens/extra.rs`，已有 CG 分页/全图切换、BGM 播放/暂停/停止/切曲/拖动进度和页面动效。
+
+- **页面布局**：优先设计 CG / 音乐分区切换，替代固定各占一半的布局；明确标题、返回、内容和播放器的层级。
+  复用设计空间与 viewport 转换，覆盖桌面窄窗口、宽屏及手机横屏；文字、分页与触控按钮保持可读、可操作。
+- **CG 鉴赏**：缩略图网格、名称与分页统一；全图保持原比例，明确上一张/下一张/关闭。
+  设计空列表、加载中、资源缺失状态；现有数据只记录已解锁项目，不凭空显示未解锁总数或隐藏资源。
+- **音乐鉴赏**：曲目列表支持长名称与滚动，播放器稳定显示曲名、播放状态、时间和进度；
+  明确进入、切曲、停止与退出时鉴赏音频和舞台 BGM 的衔接，沿用现有音频输出恢复机制。
+- **交互与文案**：统一打开/关闭与切换动效；Esc、右键、Android 返回先关闭全图，再返回上级；
+  防止点击穿透。空状态、错误、按钮提示同步所有现有语言，图标配合简短文字。
+- **实现边界**：按实际职责整理 Extra 的状态、视图、交互与动效，复用已有 UI 支持；
+  保持 `gallery.unlock` 和独立持久化语义，读档不撤销鉴赏解锁。
+
+验收：覆盖零项、单项、多页 CG、大量曲目、长名称和缺失资源；验证 CG 切换、播放/暂停/拖动、
+退出后的音频状态及重启后的解锁保留。必要边界回归通过后，在 macOS、Windows、Linux 和 Android
+分别记录原生布局、返回路径与视听结果；构建通过不算画面或听感验收。
 
 维护者只按当前架构与已选政策收尾：Save 仍严格匹配 fingerprint，预取保持现有数量
 限制及 128 MiB 非关键预算，合法包版本回退允许，密钥仅显式轮换。

@@ -134,10 +134,14 @@ mod keine {
     }
 
     fn metadata(state: &State, saved_at_unix: u64) -> SerializedMetadata {
-        let (speaker, text) = state.dialogue.as_ref().map_or_else(
-            || (String::new(), String::new()),
-            |dialogue| (dialogue.speaker.clone(), dialogue.text.clone()),
-        );
+        let (speaker, text) = state
+            .dialogue
+            .as_ref()
+            .or(state.previous_dialogue.as_ref())
+            .map_or_else(
+                || (String::new(), String::new()),
+                |dialogue| (dialogue.speaker.clone(), dialogue.text.clone()),
+            );
         SerializedMetadata {
             saved_at_unix,
             program_fingerprint: state.program_fingerprint,
@@ -276,6 +280,35 @@ mod keine {
                 inspect(&bytes),
                 StoreStatus::Ready(metadata) if metadata.scene == "demo"
             ));
+        }
+
+        #[test]
+        fn boundary_between_actions_displays_previous_text_without_moving_the_saved_cursor() {
+            let mut state = State::new();
+            state.install_program(Program::from_scenes([(
+                "main".into(),
+                vec![
+                    Action::Say {
+                        speaker: "Mio".into(),
+                        text: "Last line".into(),
+                        options: SayOptions::default(),
+                    },
+                    Action::Comment,
+                ],
+            )]));
+            state.current_scene = "main".into();
+            keine_core::step::step(&mut state);
+            keine_core::step::advance(&mut state);
+            assert!(state.dialogue.is_none());
+            let bytes = KeineStore.encode(&state).unwrap();
+            let StoreStatus::Ready(metadata) = inspect(&bytes) else {
+                panic!("ready save expected")
+            };
+            assert_eq!(metadata.text, "Last line");
+            assert_eq!(metadata.speaker, "Mio");
+            let loaded = KeineStore.decode(&bytes).unwrap();
+            assert_eq!(loaded.snapshot().cursor, state.cursor);
+            assert!(loaded.snapshot().dialogue.is_none());
         }
 
         #[test]

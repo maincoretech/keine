@@ -56,7 +56,7 @@ const MAX_FORWARD_ACTIONS: usize = 1024;
 /// Execute actions from the current cursor position until we hit
 /// an interactive point (Say or Menu) or end of scene.
 pub fn step(state: &mut State) -> StepResult {
-    step_inner(state, None, true)
+    step_inner(state, None, true, &mut |_, _| {})
 }
 
 /// Execute one runtime step while deferring destructive end-of-game cleanup.
@@ -65,7 +65,7 @@ pub fn step(state: &mut State) -> StepResult {
 /// final authored frame remains visible. The frontend must call [`end_game`]
 /// after its transition completes.
 pub fn step_preserving_presentation(state: &mut State) -> StepResult {
-    step_inner(state, None, false)
+    step_inner(state, None, false, &mut |_, _| {})
 }
 
 /// Execute like [`step`], but never cross the requested cursor in one scene.
@@ -75,10 +75,29 @@ pub fn step_until_cursor(
     target_scene: &str,
     target_cursor: usize,
 ) -> StepResult {
-    step_inner(state, Some((target_scene, target_cursor)), true)
+    step_inner(
+        state,
+        Some((target_scene, target_cursor)),
+        true,
+        &mut |_, _| {},
+    )
 }
 
-fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bool) -> StepResult {
+/// Observe each reachable action before execution, without changing stepping or
+/// terminal cleanup. Native hosts use this to retain a resumable save boundary.
+pub fn step_preserving_presentation_observing(
+    state: &mut State,
+    mut before_action: impl FnMut(&State, &Action),
+) -> StepResult {
+    step_inner(state, None, false, &mut before_action)
+}
+
+fn step_inner(
+    state: &mut State,
+    stop: Option<(&str, usize)>,
+    cleanup_on_end: bool,
+    before_action: &mut impl FnMut(&State, &Action),
+) -> StepResult {
     if state.menu.is_some() {
         return StepResult::AwaitChoice;
     }
@@ -110,6 +129,7 @@ fn step_inner(state: &mut State, stop: Option<(&str, usize)>, cleanup_on_end: bo
             }
             return StepResult::EndOfScene;
         };
+        before_action(state, action);
         state.cursor += 1;
 
         let (action, next) = match action {

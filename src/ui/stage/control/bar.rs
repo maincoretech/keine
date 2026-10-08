@@ -129,10 +129,14 @@ pub(crate) struct QuickSaveSnapshot {
 
 impl From<&State> for QuickSaveSnapshot {
     fn from(state: &State) -> Self {
-        let (speaker, dialogue) = state.dialogue.as_ref().map_or_else(
-            || (String::new(), String::new()),
-            |dialogue| (dialogue.speaker.clone(), dialogue.text.clone()),
-        );
+        let (speaker, dialogue) = state
+            .dialogue
+            .as_ref()
+            .or(state.previous_dialogue.as_ref())
+            .map_or_else(
+                || (String::new(), String::new()),
+                |dialogue| (dialogue.speaker.clone(), dialogue.text.clone()),
+            );
         Self {
             program_fingerprint: state.program_fingerprint,
             playable: !state.ended,

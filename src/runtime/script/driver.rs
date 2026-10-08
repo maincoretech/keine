@@ -31,13 +31,53 @@ pub(crate) fn resume(state: &mut State, checkpoint: &mut ContinuationCheckpoint)
     // yield. Only a fresh/hot-reloaded program needs a pre-step seed; avoiding
     // an unconditional clone here keeps skip/auto traversal cheap.
     checkpoint.ensure_current_program(state);
-    let outcome = resume_inner(state);
+    let result = step::step_preserving_presentation_observing(state, |before, action| {
+        if introduces_transient_presentation(action) {
+            checkpoint.capture(before);
+        }
+    });
+    let outcome = classify_outcome(state, result);
     checkpoint.capture(state);
     outcome
 }
 
+// Capture only actions that can create fields omitted by Save v11. Ordinary
+// dialogue/flow does not clone State per action. Replaying this boundary restores
+// the presentation action, rather than skipping it or rerunning an earlier chapter.
+fn introduces_transient_presentation(action: &keine_core::Action) -> bool {
+    use keine_core::Action;
+    match action {
+        Action::Flow { action, .. } | Action::SpriteVisual { action, .. } => {
+            introduces_transient_presentation(action)
+        }
+        Action::AnimateKeyframes { .. }
+        | Action::PlayVideo { .. }
+        | Action::SetPostProcess { .. }
+        | Action::SetPostProcessV2 { .. }
+        | Action::SetCameraTransform { .. }
+        | Action::ShakeCamera { .. }
+        | Action::ShakeCameraRandomized { .. }
+        | Action::SetCameraTween { .. }
+        | Action::ShowParticlesWithOptions { .. }
+        | Action::ConfigureDynamicSpriteSequence { .. }
+        | Action::PatchSprite { .. }
+        | Action::StageAnimation { .. }
+        | Action::StageMask { .. }
+        | Action::ConfigureSceneMouseParallax { .. }
+        | Action::ConfigureTimedSpriteSequence { .. }
+        | Action::MoveSprite { .. }
+        | Action::UpdateSprite { .. } => true,
+        _ => false,
+    }
+}
+
 fn resume_inner(state: &mut State) -> ScriptOutcome {
-    match step::step_preserving_presentation(state) {
+    let result = step::step_preserving_presentation(state);
+    classify_outcome(state, result)
+}
+
+fn classify_outcome(state: &State, result: StepResult) -> ScriptOutcome {
+    match result {
         StepResult::EndOfScene => ScriptOutcome::ReturnToTitle(ReturnReason::EndOfScene),
         StepResult::ExecutionLimit => {
             log::error!(
@@ -244,6 +284,45 @@ mod tests {
                 .map(|dialogue| dialogue.text.as_str()),
             Some("Continued")
         );
+    }
+
+    #[test]
+    fn save_boundary_is_the_action_before_presentation_inside_a_forward_batch() {
+        let mut state = state_with(vec![
+            Action::Set {
+                name: "progress".into(),
+                expression: "7".into(),
+                global: false,
+            },
+            Action::Comment,
+            Action::PlayVideo {
+                video: VideoSpec {
+                    id: "opening".into(),
+                    file: "video/opening.mp4".into(),
+                    looped: false,
+                    muted: false,
+                    alpha: 1.0,
+                    skippable: true,
+                    wait_for_finished: false,
+                    mode: VideoMode::Fullscreen,
+                },
+            },
+            Action::Say {
+                speaker: "A".into(),
+                text: "During presentation".into(),
+                options: SayOptions::default(),
+            },
+        ]);
+        let mut checkpoint = ContinuationCheckpoint::default();
+        assert_eq!(resume(&mut state, &mut checkpoint), ScriptOutcome::Yielded);
+        let saved = checkpoint.state_for_continuation(&state).unwrap().clone();
+        assert_eq!(saved.cursor, 2);
+        assert_eq!(saved.vars["progress"], keine_core::Value::Int(7));
+        assert!(saved.persistence_safety().is_exact());
+        state.restore_saved(saved).unwrap();
+        assert_eq!(resume(&mut state, &mut checkpoint), ScriptOutcome::Yielded);
+        assert!(state.videos.contains_key("opening"));
+        assert_eq!(state.cursor, 4);
     }
 
     #[test]

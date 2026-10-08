@@ -57,6 +57,7 @@ use symphonia::core::units::{Time as SymphoniaTime, TimeBase, Timestamp};
 use symphonia_adapter_libopus::OpusDecoder;
 
 pub(crate) fn configure_audio(app: &mut App, _mounts: Vec<keine_loader::ContentMount>) {
+    configure_audio_wake(app);
     // Bevy only registers AudioSource when one of its decoder features is enabled.
     // Unsupported-format placeholders still need a registered handle type.
     #[cfg(not(feature = "audio-seekable"))]
@@ -69,6 +70,19 @@ pub(crate) fn configure_audio(app: &mut App, _mounts: Vec<keine_loader::ContentM
     app.add_plugins(SeekableAudioPlugin);
     #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
     tail::configure(app);
+}
+
+pub(crate) fn configure_audio_wake(app: &mut App) {
+    if let Some(proxy) = app
+        .world()
+        .get_resource::<bevy::winit::EventLoopProxyWrapper>()
+        && let Some(output) = app.world().get_resource::<bevy::audio::AudioOutput>()
+    {
+        let proxy = std::ops::Deref::deref(proxy).clone();
+        output.set_wake_callback(move || {
+            let _ = proxy.send_event(bevy::winit::WinitUserEvent::WakeUp);
+        });
+    }
 }
 
 /// Compatibility formats are retained in compressed form for seek/loop.

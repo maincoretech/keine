@@ -254,8 +254,27 @@ type EnvelopeQuery<'w, 's> = Query<
     Without<BgmPlayer>,
 >;
 
+#[derive(SystemParam)]
+pub struct AudioPlaybackClock<'w, 's> {
+    time: Res<'w, Time>,
+    output: Option<Res<'w, bevy::audio::AudioOutput>>,
+    previous: Local<'s, Option<std::time::Duration>>,
+}
+
+fn playback_delta(
+    previous: &mut Option<std::time::Duration>,
+    submitted: Option<std::time::Duration>,
+    frame_delta: f32,
+) -> f32 {
+    let Some(now) = submitted else {
+        return frame_delta;
+    };
+    let before = previous.replace(now).unwrap_or(now);
+    now.saturating_sub(before).as_secs_f32().min(frame_delta)
+}
+
 pub fn animate_audio(
-    time: Res<Time>,
+    mut clock: AudioPlaybackClock,
     settings: Res<RuntimeSettings>,
     state: Res<GameState>,
     mut bgm_players: Query<(Entity, &mut BgmPlayer, Option<&mut AudioSink>)>,
@@ -263,6 +282,15 @@ pub fn animate_audio(
     mut activity: ResMut<AudioAnimationActivity>,
     mut commands: Commands,
 ) {
+    // A disconnected output retains decoders and envelopes at their current
+    // position. Do not spend a fade while no device consumes its samples.
+    let available = clock
+        .output
+        .as_ref()
+        .is_none_or(|output| output.is_available());
+    let submitted = clock.output.as_ref().map(|output| output.playback_time());
+    let frame_delta = clock.time.delta_secs();
+    let delta = playback_delta(&mut clock.previous, submitted, frame_delta);
     let mut animating = false;
     let handoff_duration = bgm_players.iter().find_map(|(_, player, sink)| {
         (player.current && player.direction == FadeDirection::Waiting && sink.is_some())
@@ -301,7 +329,7 @@ pub fn animate_audio(
             continue;
         }
         if player.direction != FadeDirection::Settled {
-            player.elapsed = (player.elapsed + time.delta_secs()).min(player.duration);
+            player.elapsed = (player.elapsed + delta).min(player.duration);
         }
         let progress = if player.duration <= f32::EPSILON {
             1.0
@@ -376,13 +404,16 @@ pub fn animate_audio(
             animating |= sink.is_none() && (envelope.is_animating() || envelope.waiting_handoff);
             continue;
         }
-        let finished = envelope.advance(time.delta_secs());
+        let finished = envelope.advance(delta);
         if finished && envelope.despawn_on_finish {
             commands.entity(entity).despawn();
             continue;
         }
         animating |= envelope.is_animating();
     }
+    // The worker wakes winit when an output returns. No redraw loop is needed
+    // solely to wait for an unplugged device.
+    animating &= available;
     if activity.0 != animating {
         activity.0 = animating;
     }
@@ -742,6 +773,47 @@ mod tests {
     use super::*;
 
     #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
+    #[test]
+    fn output_outage_does_not_consume_fades_or_charge_reconnect_time() {
+        use std::time::Duration;
+        let mut previous = None;
+        let mut envelope = PlaybackEnvelope::fade_in(1.0);
+        envelope.advance(playback_delta(&mut previous, Some(Duration::ZERO), 0.25));
+        envelope.advance(playback_delta(
+            &mut previous,
+            Some(Duration::from_millis(250)),
+            0.25,
+        ));
+        assert_eq!(envelope.gain, 0.25);
+        // Frames and script clocks continue while hardware is absent.
+        for _ in 0..20 {
+            envelope.advance(playback_delta(
+                &mut previous,
+                Some(Duration::from_millis(250)),
+                0.25,
+            ));
+        }
+        assert_eq!(envelope.gain, 0.25);
+        envelope.fade_out(1.0);
+        envelope.advance(playback_delta(
+            &mut previous,
+            Some(Duration::from_millis(250)),
+            0.25,
+        ));
+        assert_eq!(envelope.gain, 0.25);
+        envelope.advance(playback_delta(
+            &mut previous,
+            Some(Duration::from_millis(500)),
+            0.25,
+        ));
+        assert_eq!(envelope.gain, 0.1875);
+    }
+
+    #[cfg(any(
+        feature = "audio-opus",
+        feature = "audio-seekable",
+        feature = "video-ffmpeg"
+    ))]
     #[test]
     fn loop_handoff_waits_for_new_sink_then_crossfades_without_restarting_outgoing_fade() {
         let mut app = App::new();

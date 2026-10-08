@@ -56,6 +56,18 @@ Editor 通过显式开始/停止控制独立原生 Engine；Block 与执行位�
 Android 当前无视频，启动先尝试 Vulkan、初始化错误时回退 OpenGL ES；游戏与错误页共用
 平台渲染配置。构建与验收边界见 [Android guide](android.md)。
 
+## 音频输出
+
+`bevy_audio` 同版局部补丁保留一个 48kHz/stereo 逻辑 mixer；播放器、解码器、暂停、
+音量与采样位置独立于物理 stream。恢复 worker 只重建设备输出，Windows 每秒检查
+默认 endpoint ID；CoreAudio 健康 DefaultOutput 沿用系统路由，Android AAudio 断流及
+三秒无 callback 时触发重连。无设备时保留队列，失败从 250ms 退避到最多 5s。
+错误 callback 只标记断流；close/open、日志与 winit 唤醒均在 worker 中执行。
+淡化使用实际提交到健康输出的时钟；断流不消耗淡入淡出，也不为了等待设备持续重绘。
+Asset audition 与同一 authoring Session 的 Preview 共用输出 owner。Linux ALSA default
+路由取决于系统音频配置；输出格式变化可能丢失少量重采样预读及硬件缓冲，不承诺无缝切换。
+上游差异、来源与许可证见 [audio patch](../vendor/bevy_audio/KEINE-PATCH.md)。
+
 ## UI 职责
 
 Editor（GPUI）按功能拥有面板状态及视图，工作台只负责分派、Dock 与共享输入。
@@ -68,6 +80,9 @@ Engine（Bevy）的 Settings、Save/Load、Dialog 各自拆为 `state/view/actio
 ## 持久化
 
 Save v11 只恢复到 fingerprint 相同的 Program；不支持的二进制布局直接拒绝。
+普通/快速存档在当前状态不可完整序列化时，立即保存最近的可恢复 action 边界；
+Runtime 在创建瞬态演出前捕获边界，读档后重新进入该演出，不推进现场剧本或等待演出结束。
+回退存档不捕获较晚的现场画面；卡片显示检查点文本，无匹配截图时使用默认背景。
 profile、read history、gallery、settings、window bounds 不随 slot rollback 回滚。
 窗口布局由 runtime/window.rs 管理，独立版本化 `saves/window.bin` 保存正常窗口
 物理尺寸、位置、DPI 和最大化状态，不改变设置 v4 或 Save v11。启动时按当前 monitor

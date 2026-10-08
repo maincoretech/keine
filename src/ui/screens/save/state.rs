@@ -269,6 +269,7 @@ pub(crate) struct SaveSlotContext<'w, 's> {
     pub(super) project_root: Res<'w, PersistenceRoot>,
     pub(super) store: Res<'w, crate::runtime::resources::StoreCodec>,
     pub(super) state: Res<'w, crate::runtime::resources::GameState>,
+    pub(super) checkpoint: Res<'w, crate::storage::save::ContinuationCheckpoint>,
     pub(super) windows: Query<'w, 's, &'static Window>,
     pub(super) images: ResMut<'w, Assets<Image>>,
     pub(super) commands: Commands<'w, 's>,

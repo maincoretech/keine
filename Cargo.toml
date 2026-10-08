@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/*",
     "dev/vendor/bevy_render",
+    "dev/vendor/bevy_audio",
 ]
 default-members = ["."]
 exclude = ["dev/vendor/bevy_winit"]
@@ -165,6 +166,7 @@ image = "0.25.10"
 [patch.crates-io]
 bevy_winit = { path = "dev/vendor/bevy_winit" }
 bevy_render = { path = "dev/vendor/bevy_render" }
+bevy_audio = { path = "dev/vendor/bevy_audio" }
 
 [dependencies]
 keine-core = { workspace = true }

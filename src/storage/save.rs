@@ -212,6 +212,31 @@ pub(crate) fn save_game_replacing_preview(
     Ok(generation)
 }
 
+/// A manual save uses the nearest resumable boundary immediately. A fallback
+/// must not capture the live frame: that would pair a later scene with an older save.
+pub(crate) struct ManualSave {
+    pub(crate) generation: SavePreviewGeneration,
+    pub(crate) used_checkpoint: bool,
+}
+
+pub(crate) fn save_manual_replacing_preview(
+    store: &dyn StoreAdapter,
+    live: &State,
+    checkpoint: &ContinuationCheckpoint,
+    slot: u32,
+    project_root: &Path,
+    previews: &SavePreviewCoordinator,
+) -> Result<ManualSave> {
+    let state = checkpoint
+        .state_for_continuation(live)
+        .context("no resumable action boundary is available for this program")?;
+    let generation = save_game_replacing_preview(store, state, slot, project_root, previews)?;
+    Ok(ManualSave {
+        generation,
+        used_checkpoint: !live.persistence_safety().is_exact(),
+    })
+}
+
 fn ensure_saveable(state: &State) -> Result<()> {
     if let PersistenceSafety::ActiveTransient(hazard) = state.persistence_safety() {
         bail!("save is unavailable while {hazard:?} presentation is active");
@@ -617,6 +642,63 @@ mod tests {
                 .cursor,
             stable.cursor
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn manual_saves_use_previous_boundary_immediately_and_remove_stale_preview() {
+        let root = temp_root("manual-checkpoint");
+        let mut checkpoint = ContinuationCheckpoint::default();
+        let stable = sample_state();
+        checkpoint.capture(&stable);
+        let live = state_with_active_video(50);
+        for slot in [QUICK_SAVE_SLOT, 7] {
+            save_game(&KeineStore, &stable, slot, &root).unwrap();
+            fs::write(preview_path(&root, slot), b"previous-image").unwrap();
+            let saved = save_manual_replacing_preview(
+                &KeineStore,
+                &live,
+                &checkpoint,
+                slot,
+                &root,
+                &SavePreviewCoordinator::default(),
+            )
+            .unwrap();
+            assert!(saved.used_checkpoint);
+            assert_eq!(
+                load_game(&KeineStore, slot, &root).unwrap().snapshot(),
+                &stable
+            );
+            assert!(!preview_path(&root, slot).exists());
+            assert_eq!(live.cursor, 50, "saving must not advance the live script");
+        }
+        let mut foreign = live.clone();
+        foreign.program_fingerprint = foreign.program_fingerprint.wrapping_add(1);
+        assert!(
+            save_manual_replacing_preview(
+                &KeineStore,
+                &foreign,
+                &checkpoint,
+                7,
+                &root,
+                &SavePreviewCoordinator::default(),
+            )
+            .is_err()
+        );
+        assert_eq!(
+            load_game(&KeineStore, 7, &root).unwrap().snapshot(),
+            &stable
+        );
+        let saved = save_manual_replacing_preview(
+            &KeineStore,
+            &stable,
+            &ContinuationCheckpoint::default(),
+            8,
+            &root,
+            &SavePreviewCoordinator::default(),
+        )
+        .unwrap();
+        assert!(!saved.used_checkpoint);
         let _ = fs::remove_dir_all(root);
     }
 
