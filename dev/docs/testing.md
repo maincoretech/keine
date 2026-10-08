@@ -2,6 +2,16 @@
 
 ## 应用图标派生
 
+release 图标校验回归：本地 `assembleRelease` 复现源码路径被替换成 `res/BW.xml`、`res/TO.png`，
+旧脚本失败；校验改为沿 manifest ID → compiled resource table → adaptive XML → foreground → bitmap。
+修复后同一 release APK 和 debug APK 均通过 `verify-icons.py --apk`。
+`python3 -m unittest discover -s tests/packaging -p 'test_*.py'`：8 passed，覆盖原路径/缩短路径、
+资源名不同、悬空 manifest 引用、缺失 bitmap 和错误密度尺寸；Android workflow actionlint 通过。
+CI Android 增加同一原生库的 release 包资源校验；不关闭 AAPT2 优化，也不跳过图标检查。
+同一次 `clean assembleDebug assembleRelease lintDebug` 使用派生资源通过，release APK 的 16 KB ZIP 对齐通过；
+fmt、workspace check/all-targets Clippy、publisher/video-native/hot-reload workspace tests（1016 passed / 21 ignored）
+和 native-smoke validate（0 warning）复验通过。此处不代表新远端 tday release 已发布或手机画面验收。
+
 `cargo test --workspace --features publisher,video-native,hot-reload`：1016 passed / 21 ignored / 0 failed
 （IPC/Trash 在沙箱外运行）。同组合 fmt/check/all-targets Clippy、Engine/Editor debug 构建、
 无默认功能 + ui-sounds 的 Android Clippy，以及 all-features cargo-deny 均通过；native-smoke validate

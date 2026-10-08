@@ -40,7 +40,9 @@ APK 为 `dev/android/app/build/outputs/apk/debug/app-debug.apk`，原生库为
 
 构建脚本在宿主机从单张默认 PNG 派生各密度 launcher 与 adaptive icon；正式游戏打包
 读取 `project.icon`（PNG/WebP），通过同一生成器传给 Gradle，不改变原生运行依赖。
-APK 校验检查实际编译资源和 manifest 图标声明。配置及桌面派生见 [发布](release.md#应用图标)。
+APK 校验沿 manifest 资源 ID 检查编译资源表、各密度 PNG 和 adaptive 前景/背景/bitmap 引用；
+不要求源码文件名与 APK ZIP 路径相同。release 可由 [AAPT2 optimize](https://developer.android.com/tools/aapt2#optimize)
+缩短资源路径，Android CI 同时校验 debug/release。配置及桌面派生见 [发布](release.md#应用图标)。
 
 独立 **CI Android** workflow 在 push/PR 或手动触发时检查依赖隔离、Android Clippy 与 Java lint，构建原生库与 APK，验证 NativeActivity
 启动符号、ELF 16 KB 对齐、APK 对齐及签名，确认 Vulkan/GLES feature closure，

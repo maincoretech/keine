@@ -3,6 +3,7 @@
 import argparse
 import os
 from pathlib import Path
+import re
 import struct
 import subprocess
 import xml.etree.ElementTree as ET
@@ -14,6 +15,70 @@ ROOT = Path(__file__).resolve().parents[2]
 def png_size(data):
     assert data[:8] == b'\x89PNG\r\n\x1a\n', 'Not a PNG'
     return struct.unpack('>II', data[16:24])
+
+
+def resource_files(table):
+    """Resolve compiled IDs, without assuming source names or APK file paths."""
+    resources, current = {}, None
+    for line in table.splitlines():
+        entry = re.match(r'\s*resource (0x[0-9a-fA-F]+)\s', line)
+        if entry:
+            current = int(entry[1], 16)
+            resources[current] = []
+        file = re.match(r'\s*\(([^)]*)\) \(file\) (\S+) type=(\w+)', line)
+        if file and current is not None:
+            resources[current].append(file.groups())
+    return resources
+
+
+def reference(tree, attribute, element=None):
+    if element:
+        node = re.search(rf'(?m)^\s*E: {re.escape(element)}[^\n]*\n((?:\s*A:[^\n]*\n?)*)', tree)
+        assert node, f'Missing icon element: {element}'
+        tree = node[1]
+    value = re.search(rf':{re.escape(attribute)}\(0x[0-9a-fA-F]+\)=@(0x[0-9a-fA-F]+)', tree)
+    assert value, f'Missing icon resource reference: {attribute}'
+    return int(value[1], 16)
+
+
+def verify_apk(apk, aapt2):
+    def dump(kind, path=None):
+        args = [aapt2, 'dump', kind, apk]
+        if path is not None:
+            args += ['--file', path]
+        return subprocess.check_output(args, text=True)
+
+    manifest = dump('xmltree', 'AndroidManifest.xml')
+    resources = resource_files(dump('resources'))
+    with zipfile.ZipFile(apk) as package:
+        def files(resource_id, kind):
+            assert resource_id in resources, f'Unresolved icon ID: {resource_id:#x}'
+            entries = [entry for entry in resources[resource_id] if entry[2] == kind]
+            assert entries, f'Missing {kind} icon resource: {resource_id:#x}'
+            for _, path, _ in entries:
+                assert path in package.namelist(), f'Missing compiled icon file: {path}'
+            return entries
+
+        # Release AAPT2 may shorten paths and resource names. Follow the same
+        # IDs Android uses, rather than requiring the source directory layout.
+        for icon in {reference(manifest, 'icon'), reference(manifest, 'roundIcon')}:
+            density_sizes = {'mdpi': 48, 'hdpi': 72, 'xhdpi': 96, 'xxhdpi': 144, 'xxxhdpi': 192}
+            for density, size in density_sizes.items():
+                entries = [entry for entry in files(icon, 'PNG') if density in entry[0].split('-')]
+                assert entries, f'Missing launcher density: {density}'
+                for _, path, _ in entries:
+                    assert png_size(package.read(path)) == (size, size), path
+            for _, path, _ in files(icon, 'XML'):
+                adaptive = dump('xmltree', path)
+                assert re.search(r'(?m)^\s*E: adaptive-icon\b', adaptive), path
+                background = reference(adaptive, 'drawable', 'background')
+                assert background in resources, 'Unresolved adaptive background'
+                foreground = reference(adaptive, 'drawable', 'foreground')
+                for _, foreground_path, _ in files(foreground, 'XML'):
+                    layer = dump('xmltree', foreground_path)
+                    logo = reference(layer, 'src', 'bitmap')
+                    for _, logo_path, _ in files(logo, 'PNG'):
+                        assert png_size(package.read(logo_path)) == (264, 264), logo_path
 
 
 def main():
@@ -53,17 +118,7 @@ def main():
     assert adaptive.tag == 'adaptive-icon' and {node.tag for node in adaptive} == {'foreground', 'background'}
     if args.apk:
         tools = Path(os.environ['ANDROID_HOME']) / 'build-tools/36.0.0'
-        manifest = subprocess.check_output([tools / 'aapt2', 'dump', 'xmltree', args.apk,
-                                           '--file', 'AndroidManifest.xml'], text=True)
-        assert ':icon(' in manifest and ':roundIcon(' in manifest, manifest
-        with zipfile.ZipFile(args.apk) as apk:
-            names = apk.namelist()
-            assert any('mipmap-anydpi-v26/ic_launcher.xml' in name for name in names), names
-            assert any(name.startswith('res/drawable-nodpi') and name.endswith('/ic_launcher_logo.png')
-                       for name in names), names
-        adaptive = subprocess.check_output([tools / 'aapt2', 'dump', 'xmltree', args.apk,
-                                            '--file', 'res/mipmap-anydpi-v26/ic_launcher.xml'], text=True)
-        assert 'adaptive-icon' in adaptive and 'foreground' in adaptive and 'background' in adaptive
+        verify_apk(args.apk, tools / 'aapt2')
     print('Icons: Windows 7 sizes, macOS standard/Retina ICNS, Linux 512 px and Android adaptive resources passed')
 
 

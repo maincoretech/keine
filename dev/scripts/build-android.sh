@@ -22,4 +22,4 @@ engine_version="$(cargo metadata --locked --format-version 1 --filter-platform a
 # Recreate the APK so replacing the large .so cannot leave old ZIP allocation
 # holes behind. This only cleans Gradle outputs, not the native Cargo cache.
 gradle --no-daemon -p dev/android -PengineVersion="$engine_version" \
-    -PengineIconDir="$KEINE_APP_ICON_DIR/android" clean assembleDebug
+    -PengineIconDir="$KEINE_APP_ICON_DIR/android" clean assembleDebug assembleRelease lintDebug
