@@ -36,17 +36,35 @@ AGP 的模块级 `enableKotlin = false` 关闭无需使用的 Kotlin 编译与�
 CI 拒绝 APK 中意外进入的 Kotlin 标准库资源，并要求 `debugRuntimeClasspath` 为空；
 自有返回桥接和 AGP 生成的 R/API DEX 保留，见 [官方配置](https://developer.android.com/build/migrate-to-built-in-kotlin)。
 APK 为 `dev/android/app/build/outputs/apk/debug/app-debug.apk`，原生库为
-`target/android/jniLibs/arm64-v8a/libkeine.so`。正式游戏签名和发布尚未接入。
+`target/android/jniLibs/arm64-v8a/libkeine.so`。正式应用签名尚未接入。
 
 独立 **CI Android** workflow 在 push/PR 或手动触发时检查依赖隔离、Android Clippy 与 Java lint，构建原生库与 APK，验证 NativeActivity
 启动符号、ELF 16 KB 对齐、APK 对齐及签名，确认 Vulkan/GLES feature closure，
 复核 APK 的 GLES/Vulkan 硬件声明，上传 `keine-android-arm64-engine` artifact。
-不读取 publisher identity，也不打包 tday；原生构建缓存与桌面分开。
+此引擎 CI 不读取 publisher identity，也不打包 tday；原生构建缓存与桌面分开。
 Android 构建队列独立，不等待桌面/视频 workflow 结束。
 
 工具和平台入口依据 [Bevy 0.19.1 Android 示例](https://github.com/bevyengine/bevy/blob/v0.19.1/examples/README.md#android)、
 [AGP 9.4 构建要求](https://developer.android.com/build/releases/agp-9-4-0-release-notes)、
 [Android 16 KB 对齐要求](https://developer.android.com/guide/practices/page-sizes)。
+
+`Release Engine` → `Run workflow` → `package=tday` 同时生成三平台 ZIP 和
+`tday-android-arm64-test.apk`，四个平台全部通过后更新 `tday-latest`。
+安卓 job 使用隔离临时内容 identity，构建 `hardened,ui-sounds` release 原生库，
+校验 release APK 的内容、入口、签名和 16 KB 对齐；含密钥的编译输出不会进入缓存。
+Gradle release 目前使用测试签名、关闭 debuggable；不同云端运行的测试签名不保证相同，
+覆盖安装可能需要先导出存档，再卸载旧试玩包。正式应用更新需要稳定签名另行配置。
+
+本地复用同一打包入口（publisher 在桌面运行）：
+
+```sh
+KEINE_BUILD_TARGET=aarch64-linux-android cargo bundle projects/tday --output target/tday-android
+```
+
+有效无视频工程通过校验后才创建/加载内容 identity；按需设置
+`KEINE_HAKUTAKU_IDENTITY` 使用工程外的测试身份。产物是输出目录的 `game.apk`。
+应用 ID 优先使用合法的 `project.bundle_identifier`，否则从稳定 `project.id` 派生，
+与引擎测试包独立安装。共享 Java Activity 的 namespace 保持不变。
 
 ## 渲染与后端测试
 
@@ -73,7 +91,7 @@ GPU 日志中的 `Vulkan` / `Gl`、画面、触摸、音频和后台恢复。
 
 ## 资源与数据
 
-APK 仅包含引擎和许可声明；构建从锁定 crate 的实际源码附上内嵌 WebP/Opus 的许可与源码获取地址。
+引擎测试 APK 仅包含引擎和许可声明；构建从锁定 crate 的实际源码附上内嵌 WebP/Opus 的许可与源码获取地址。
 现有 `NOTICE` 仍是概览，正式发行前需按 `release.md` 补齐其余适用的第三方声明。
 初次启动没有游戏资源时显示提示页。
 实验入口从 Activity 的私有 files 目录下 `game/` 读取普通工程，沿用 Loader 的只读挂载及路径约束。
@@ -124,7 +142,11 @@ adb shell am force-stop moe.maincore.keine
 adb shell am start -n moe.maincore.keine/.EngineActivity
 ```
 
-这不是正式游戏发行流程；Hakutaku 游戏打包、资源安装/更新与正式 APK 签名后续单独接入。
+游戏 APK 自带 `assets/keine-game/game.haku` 与签名命名的加密 `.taku` 段，保留游戏版权声明。
+这些条目不压缩，运行时通过 AssetManager 的有界文件描述符直接只读挂载，沿用 Loader
+验签、解密和 compiled Program 校验，不复制整份资源到私有目录。依据
+[NDK Asset API](https://developer.android.com/ndk/reference/group/asset)。
+存档/设置仍写入稳定 project.id 的私有 userdata；上述 run-as 部署仅用于引擎 debug 测试包。
 
 ## 验收边界
 

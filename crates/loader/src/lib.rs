@@ -10,6 +10,7 @@ mod report;
 #[path = "source/input.rs"]
 mod source_input;
 
+pub use adapter::open_hakutaku_archive;
 pub use adapter::{
     AdaptedProject, AdapterCategory, AdapterDescriptor, FormatAdapter, KeineStore, LoaderRegistry,
     NativeDocument, NativeLanguage, NativeSceneSyntax, NativeToken, NativeTokenKind,
@@ -25,7 +26,9 @@ pub use compiled::{
     EncodeInput, FIXED_HEADER_LEN, IR_SCHEMA_VERSION, PROGRAM_MAGIC, ProgramMetadataV1, decode,
     encode,
 };
-pub use hakutaku_core::OpenPolicy;
+pub use hakutaku_core::{
+    Error as HakutakuError, OpenPolicy, PositionedFile, SegmentId, SegmentSource,
+};
 pub use language::{ParsedScene, ScriptLanguage, ScriptLanguageRegistry};
 #[cfg(feature = "hot-reload")]
 pub use loader::ScriptWatcher;

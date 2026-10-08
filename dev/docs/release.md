@@ -24,7 +24,7 @@ perf <project> [--startup]  开发测量
 | --- | --- | --- | --- |
 | 性能定位 | `benchmark-latest` | main 通过 CI 后自动；也可手动 | 三平台自运行真实负载、报告与 profiler 工具 |
 | 作者开发 | `editor-latest` | main 通过 CI 后自动；也可手动 | 三平台独立 Editor + 同版本 Preview Engine，无游戏素材 |
-| tday 试玩 | `tday-latest` | **仅手动** | 三平台可运行 tday，含 shiftz 素材版权说明 |
+| tday 试玩 | `tday-latest` | **仅手动** | 三平台 ZIP + Android ARM64 APK，含 shiftz 素材版权说明 |
 
 三个渠道都是预发布，互不覆盖。Editor 和 tday 使用 release 优化；benchmark 使用
 同样优化但保留符号的 profiling。macOS 当前 runner 产出 Apple Silicon，Linux/Windows
@@ -44,14 +44,14 @@ Rust 原生构建缓存按 runner image / architecture 隔离，
 
 1. 推送 main 后等待 **CI Desktop**，成功后 **Release Engine** 更新 benchmark，**Release Editor** 更新 Editor。
 2. 发布 tday：Actions → **Release Engine** → **Run workflow** → 选目标 ref → `package=tday`。
-   普通推送和自动 CI 完成不会触发 tday 打包。此渠道只用隔离临时 identity，不读正式发行密钥。
+   同一次触发并行构建桌面三平台和安卓 release APK，游戏资源已内置；普通推送和自动 CI 完成不会触发 tday 打包。此渠道只用隔离临时 identity，不读正式发行密钥。安卓使用测试应用签名，见 [Android](android.md)。
 3. 手动补发 benchmark：同一入口选 `package=benchmark`；补发 Editor 则运行 **Release Editor**。
-4. 下载更新完成后核对标签对应的 SHA、三个平台 ZIP 和包内 provenance；代码推送、CI 成功、
+4. 下载更新完成后核对标签对应的 SHA、三个平台 ZIP、tday 的安卓 APK 和包内 provenance；代码推送、CI 成功、
    Release 附件更新分别确认。正式游戏发行继续使用下方 Project CI/CLI 与稳定 identity。
 
 自动构建固定使用通过 CI 的 SHA；PR、fork、失败的 CI 不发布。新 main 已出现时，
 旧自动构建只保留 Actions artifact，不覆盖滚动下载。三个 ZIP 在原平台打好再上传，保留
-Unix executable 权限；必须三个平台都成功后才发布。标签/附件更新失败会让发布 job 失败。
+Unix executable 权限；benchmark 必须三个桌面平台成功，tday 必须四个平台成功后才发布。标签/附件更新失败会让发布 job 失败。
 macOS 包是开发签名，未做 Apple 公证；完整跨平台运行验收与硬件性能测试仍是独立关卡。
 
 默认 native-benchmark 三平台使用同一套真实负载，包含媒体。缺少必测时间轴时返回

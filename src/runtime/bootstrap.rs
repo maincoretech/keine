@@ -1444,12 +1444,16 @@ pub fn build_app_with_loader(
     project_path: impl AsRef<Path>,
     loader: LoaderRegistry,
 ) -> Result<App> {
+    build_project_app(open_project(project_path.as_ref(), &loader)?, loader)
+}
+
+pub(crate) fn build_project_app(project: OpenedProject, loader: LoaderRegistry) -> Result<App> {
     let OpenedProject {
         root: project_root,
         config,
         content,
         packaged,
-    } = open_project(project_path.as_ref(), &loader)?;
+    } = project;
     let languages = loader
         .languages(&config.adapter.script)
         .context("failed to select script adapter")?;

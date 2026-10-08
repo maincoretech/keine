@@ -476,6 +476,17 @@ publisher/video-native/hot-reload，IPC/Trash 在沙箱外）、native-smoke 零
 cargo-deny 和 CI actionlint 通过。远程 Android CI 按对应提交的 Actions 结果核对；手机画面、触摸、音频、
 后台恢复与性能均未验收；APK 校验只证明构建产物，不代表运行态支持已经完成。
 
+`Release Engine` 的 `package=tday` 增加 Android ARM64 release APK，与三平台 ZIP 一起通过后才发布。
+本机完整打包已通过（13 scenes / 2619 actions / 0 warnings），APK 约 130 MiB；
+`verify-android-release.py` 检查独立应用 ID、非 debuggable、内置加密资源不压缩、许可声明、
+启动/JNI 入口和 ELF LOAD/RELRO 16 KB 对齐，zipalign/apksigner 均通过。
+有界 APK 读取回归拒绝相邻条目与整数溢出，Loader 回归验证平台源保留验签、目录索引和流式读取。
+完整 workspace 回归 1010 passed / 21 ignored / 0 failed，记录在
+`target/android/tday-full-tests.log`；workspace fmt/check/all-targets Clippy、Android
+`hardened,ui-sounds` Clippy、全特性 cargo-deny、actionlint 和 native-smoke validate 通过。
+已安装到 Motorola 测试机，`target/android/tday-phone-runtime.log` 确认 tday ready /
+Adreno 829 Vulkan；云端发布结果与手机画面/触摸验收继续单独核对。
+
 ## 测试布局
 
 ```text

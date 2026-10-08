@@ -5,7 +5,7 @@
     <application
         android:enableOnBackInvokedCallback="true"
         android:allowBackup="false"
-        android:label="Kēne Engine"
+        android:label="${engineTitle}"
         android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen">
         <activity
             android:name=".EngineActivity"

@@ -81,6 +81,12 @@ impl ProjectAdapter for HakutakuProjectAdapter {
     }
 }
 
+/// Open a verified archive with the same config and compiled-program rules as a local package.
+pub fn open_hakutaku_archive(archive: HakutakuArchive) -> Result<AdaptedProject> {
+    let path = archive.path().to_owned();
+    open_archive(archive, &path)
+}
+
 fn open_archive(archive: HakutakuArchive, project_root: &Path) -> Result<AdaptedProject> {
     let mount = ContentMount::new(ContentBackend::Hakutaku(archive.clone()), "")?;
     let yaml = SourceReader::with_limit(MAX_PROJECT_CONFIG_BYTES)

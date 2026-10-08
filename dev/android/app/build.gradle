@@ -11,7 +11,8 @@ android {
     ndkVersion = '28.2.13676358'
 
     defaultConfig {
-        applicationId = 'moe.maincore.keine'
+        applicationId = providers.gradleProperty('engineApplicationId').orElse('moe.maincore.keine').get()
+        manifestPlaceholders = [engineTitle: providers.gradleProperty('engineTitle').orElse('Kēne Engine').get()]
         minSdk = 26
         targetSdk = 35
         versionCode = 1
@@ -21,10 +22,24 @@ android {
         }
     }
 
+    buildTypes {
+        release {
+            // The tday workflow is a playtest channel, not store publication.
+            signingConfig = signingConfigs.debug
+        }
+    }
+
+    androidResources {
+        noCompress += ['haku', 'taku']
+    }
+
     sourceSets {
         main {
             jniLibs.srcDirs = ['../../../target/android/jniLibs']
             assets.srcDirs = ['../../../target/android/notices']
+            if (providers.gradleProperty('engineGameDir').isPresent()) {
+                assets.srcDir(providers.gradleProperty('engineGameDir').get())
+            }
         }
     }
     packaging {

@@ -393,6 +393,25 @@ impl fmt::Debug for HakutakuArchive {
 }
 
 impl HakutakuArchive {
+    /// Open immutable platform sources with the Engine's embedded release keys.
+    /// The logical path identifies the mount; all content comes from the bounded sources.
+    pub fn open_packaged_sources(
+        path: PathBuf,
+        snapshot: Arc<dyn hakutaku_core::PositionedFile>,
+        source: Arc<dyn hakutaku_core::SegmentSource>,
+    ) -> Result<Self> {
+        let (root_key, public_key) = packaged_hakutaku_keys()?;
+        let package = Package::open(
+            snapshot,
+            source,
+            root_key,
+            public_key,
+            ResourceBudget::memory_constrained(),
+            OpenPolicy::TrustFirstRelease,
+        )?;
+        Self::from_package(path, package)
+    }
+
     pub(crate) fn open_packaged(path: &Path) -> Result<Self> {
         let (root_key, public_key) = packaged_hakutaku_keys()?;
         Self::open_with_keys(path, root_key, public_key, OpenPolicy::TrustFirstRelease)
@@ -417,6 +436,10 @@ impl HakutakuArchive {
             policy,
         )
         .with_context(|| format!("failed to open Hakutaku snapshot {}", path.display()))?;
+        Self::from_package(path, package)
+    }
+
+    fn from_package(path: PathBuf, package: Package) -> Result<Self> {
         let files = package
             .list_assets()?
             .into_iter()
@@ -835,6 +858,37 @@ mod tests {
             OpenPolicy::TrustFirstRelease,
         )
         .unwrap();
+        // Immutable platform sources use the same signature policy and retain
+        // indexed mounts and streaming seeks as ordinary directory packages.
+        let snapshot = Arc::new(hakutaku_core::LocalFile::open(release.join("game.haku")).unwrap());
+        let segments = Arc::new(hakutaku_core::DirectorySegmentSource::new(
+            release.join("data"),
+        ));
+        assert!(
+            Package::open(
+                snapshot.clone(),
+                segments.clone(),
+                identity.root_key(),
+                [0; 32],
+                ResourceBudget::memory_constrained(),
+                OpenPolicy::TrustFirstRelease
+            )
+            .is_err()
+        );
+        let package = Package::open(
+            snapshot,
+            segments,
+            identity.root_key(),
+            identity.public_key(),
+            ResourceBudget::memory_constrained(),
+            OpenPolicy::TrustFirstRelease,
+        )
+        .unwrap();
+        let platform =
+            HakutakuArchive::from_package(PathBuf::from("/logical/game.haku"), package).unwrap();
+        assert_eq!(platform.path(), Path::new("/logical/game.haku"));
+        assert_eq!(platform.read(Path::new("video.mp4")).unwrap(), expected);
+        assert_eq!(platform.files.as_ref(), archive.files.as_ref());
         let mount = ContentMount::new(ContentBackend::Hakutaku(archive), "").unwrap();
         let mut file = mount.open_file(Path::new("video.mp4")).unwrap();
         file.seek(SeekFrom::Start(255_900)).unwrap();

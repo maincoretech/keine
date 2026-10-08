@@ -1,4 +1,4 @@
-//! NativeActivity entry point for the standalone Android Engine test package.
+//! NativeActivity entry point for Engine tests and packaged games.
 
 use anyhow::{Context, Result};
 use bevy::prelude::{App, bevy_main};
@@ -6,7 +6,8 @@ use bevy::render::{
     RenderPlugin,
     settings::{Backends, WgpuSettings},
 };
-use keine_loader::LoaderRegistry;
+use keine_loader::{HakutakuError, LoaderRegistry, PositionedFile, SegmentId, SegmentSource};
+use std::sync::Arc;
 use std::sync::{
     Mutex,
     atomic::{AtomicBool, Ordering},
@@ -95,15 +96,67 @@ fn main() {
 }
 
 fn run() -> Result<()> {
+    #[cfg(feature = "hardened")]
+    crate::runtime::platform::apply_hardening();
     let activity = bevy::android::ANDROID_APP
         .get()
         .context("Android Activity is not initialized")?;
     let data = activity
         .internal_data_path()
         .context("Android application data directory is unavailable")?;
-    let project = data.join("game");
-    std::fs::create_dir_all(&project).context("failed to create Android game directory")?;
-    let mut app = crate::build_app_with_loader(project, LoaderRegistry::default())?;
+    let assets = activity.asset_manager();
+    let mut app = if let Some(snapshot) = assets.open(c"keine-game/game.haku") {
+        let descriptor = snapshot
+            .open_file_descriptor()
+            .context("APK game snapshot must be uncompressed")?;
+        let snapshot = super::android_package::ApkFile::new(
+            descriptor.fd.into(),
+            descriptor.offset as u64,
+            descriptor.size as u64,
+        )?;
+        let archive = keine_loader::HakutakuArchive::open_packaged_sources(
+            data.join("apk-game/game.haku"),
+            Arc::new(snapshot),
+            Arc::new(ApkSegments(activity.clone())),
+        )?;
+        let project = keine_loader::open_hakutaku_archive(archive)?;
+        super::bootstrap::build_project_app(
+            super::bootstrap::OpenedProject {
+                root: project.root,
+                config: project.config,
+                content: project.content,
+                packaged: true,
+            },
+            LoaderRegistry::default(),
+        )?
+    } else {
+        let project = data.join("game");
+        std::fs::create_dir_all(&project).context("failed to create Android game directory")?;
+        crate::build_app_with_loader(project, LoaderRegistry::default())?
+    };
     app.run();
     Ok(())
+}
+
+// Asset handles stay on the opening thread; only owned, positioned file
+// descriptors cross into Loader/media workers. Signed segment IDs cannot
+// address arbitrary APK paths.
+struct ApkSegments(bevy::android::android_activity::AndroidApp);
+
+impl SegmentSource for ApkSegments {
+    fn open(&self, id: SegmentId) -> Result<Arc<dyn PositionedFile>, HakutakuError> {
+        let name = std::ffi::CString::new(format!("keine-game/data/{id}.taku"))
+            .expect("segment digest contains only hex digits");
+        let asset = self
+            .0
+            .asset_manager()
+            .open(&name)
+            .ok_or(HakutakuError::SegmentUnavailable(id))?;
+        let descriptor = asset.open_file_descriptor()?;
+        Ok(Arc::new(super::android_package::ApkFile::new(
+            descriptor.fd.into(),
+            descriptor.offset as u64,
+            descriptor.size as u64,
+        )?))
+    }
 }

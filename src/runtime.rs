@@ -1,5 +1,8 @@
 #[cfg(target_os = "android")]
 mod android;
+#[cfg(any(target_os = "android", all(test, unix)))]
+#[path = "runtime/package/android.rs"]
+mod android_package;
 #[path = "runtime/asset/reader.rs"]
 pub(crate) mod asset_reader;
 pub(crate) mod audio;

@@ -234,9 +234,99 @@ jobs:
           cargo clean "${args[@]}" --profile release
           cargo clean "${args[@]}" --profile profiling
 
+  android:
+    name: Build Android arm64
+    needs: source
+    if: inputs.package == 'tday'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+        with:
+          targets: aarch64-linux-android
+      - name: Set up video dependencies
+        uses: ./.github/actions/setup-video
+        with:
+          enabled: 'false'
+      - name: Set up Android toolchain
+        uses: ./.github/actions/setup-android
+        with:
+          cache-disabled: 'true'
+      - name: Restore Android release dependencies
+        # First game build can reuse Engine CI dependencies. This cache is
+        # restore-only: game keys and APKs must never be saved under its key.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/android
+          key: android-arm64-ubuntu26-ndk28-v1-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ env.RELEASE_SHA }}
+          restore-keys: |
+            android-arm64-ubuntu26-ndk28-v1-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-
+      - name: Restore isolated Android release cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/android/CACHEDIR.TAG
+            target/android/release
+            target/android/aarch64-linux-android/release
+            target/runner
+          key: release-android-arm64-ndk28-v1-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ env.RELEASE_SHA }}
+          restore-keys: |
+            release-android-arm64-ndk28-v1-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-
+      - name: Build publisher runner
+        run: cargo build --release --locked --no-default-features --features publisher --target-dir target/runner --bin keine
+      - name: Bundle encrypted Android release
+        env:
+          KEINE_BUILD_TARGET: aarch64-linux-android
+          KEINE_HAKUTAKU_IDENTITY: ${{ runner.temp }}/keine-android-release-secrets/publisher.key
+        run: |
+          umask 077
+          mkdir -p "$(dirname "$KEINE_HAKUTAKU_IDENTITY")"
+          target/runner/release/keine bundle projects/tday --output target/tday-android-arm64-test
+          mkdir -p bundles
+          cp target/tday-android-arm64-test/game.apk bundles/tday-android-arm64-test.apk
+      - name: Check Android release lint
+        run: gradle --no-daemon -p dev/android lintRelease
+      - name: Verify Android release package
+        run: |
+          python3 dev/scripts/verify-android-release.py bundles/tday-android-arm64-test.apk target/tday-android-arm64-test/ANDROID.json
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 4 bundles/tday-android-arm64-test.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify bundles/tday-android-arm64-test.apk
+      - name: Upload Android release
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tday-android-arm64-test
+          path: bundles/tday-android-arm64-test.apk
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+      - name: Remove publisher identity and key-bearing outputs before cache save
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/keine-android-release-secrets/publisher.key"
+          if [[ -d target/android && ! -f target/android/CACHEDIR.TAG ]]; then
+            printf 'Signature: 8a477f597d28d172789f06886806bc55\n' > target/android/CACHEDIR.TAG
+          fi
+          if [[ -f target/android/CACHEDIR.TAG ]]; then
+            cargo clean --locked --target-dir target/android -p keine -p keine-loader --profile release
+            cargo clean --locked --target-dir target/android --target aarch64-linux-android -p keine -p keine-loader --profile release
+          fi
+
   publish:
     name: Publish Engine
-    needs: bundle
+    needs: [bundle, android]
+    if: >-
+      always() && !cancelled() && needs.bundle.result == 'success' &&
+      (needs.android.result == 'success' || needs.android.result == 'skipped')
     runs-on: ubuntu-26.04
     permissions:
       actions: read
@@ -260,6 +350,13 @@ jobs:
           packages=(bundles/*.zip)
           if [[ "${#packages[@]}" -ne 3 ]]; then
             echo "Expected three platform packages, found ${#packages[@]}" >&2
+            exit 1
+          fi
+          apks=(bundles/*.apk)
+          expected=0
+          if [[ "$RELEASE_TAG" == "tday-latest" ]]; then expected=1; fi
+          if [[ "${#apks[@]}" -ne "$expected" ]]; then
+            echo "Expected $expected Android packages, found ${#apks[@]}" >&2
             exit 1
           fi
       - name: Move selected rolling tag
@@ -290,9 +387,10 @@ jobs:
             Source commit: ${{ env.RELEASE_SHA }}.
             Download your platform, extract the complete archive, and run
             `keine.exe` (Windows) or `./keine` (macOS/Linux).
+            ${{ inputs.package == 'tday' && 'Android: install tday-android-arm64-test.apk (ARM64, Android 8+); game content is included. Test signing only.' || '' }}
             Temporary test identity; not a formal game update channel.
           prerelease: true
           make_latest: false
-          files: bundles/*.zip
+          files: ${{ inputs.package == 'tday' && 'bundles/*' || 'bundles/*.zip' }}
           fail_on_unmatched_files: true
           overwrite_files: true

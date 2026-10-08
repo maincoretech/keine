@@ -1,6 +1,7 @@
 //! Adapter categories consumed by the content loader and storage layer.
 
 mod asset;
+pub use asset::open_hakutaku_archive;
 mod camera;
 mod editor;
 mod script;

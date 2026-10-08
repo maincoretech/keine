@@ -17,6 +17,8 @@ use tempfile::{Builder, TempDir, tempdir};
 use crate::compiler::build_program;
 use crate::runtime::bootstrap::{OpenedProject, open_project};
 
+mod android;
+
 #[cfg(target_os = "macos")]
 const VIDEO_FEATURE: &str = "video-native";
 #[cfg(not(target_os = "macos"))]
@@ -63,6 +65,10 @@ pub fn bundle_project(
     benchmark: bool,
 ) -> Result<()> {
     let output = publisher_output_path(output)?;
+    let android = env::var("KEINE_BUILD_TARGET").as_deref() == Ok("aarch64-linux-android");
+    if android && benchmark {
+        bail!("Android benchmark packaging is not supported");
+    }
     let prepared = prepare_project(project, loader, benchmark)?;
     let mut features = detect_features(&prepared.staged)?;
     if benchmark {
@@ -90,6 +96,24 @@ pub fn bundle_project(
     fs::write(&key_share_a, runtime_keys.key_share_a)?;
     fs::write(&key_share_b, runtime_keys.key_share_b)?;
     fs::write(&public_key, runtime_keys.public_key)?;
+    if android {
+        android::validate_features(&features)?;
+        let config = keine_core::config::GameConfig::from_yaml(&fs::read_to_string(
+            prepared.staged.join("config.yaml"),
+        )?)?;
+        publish_prepared(&prepared.staged, &prepared.identity, &output, |assembled| {
+            android::assemble(
+                assembled,
+                project,
+                &config,
+                &key_share_a,
+                &key_share_b,
+                &public_key,
+            )
+        })?;
+        println!("{}", output.display());
+        return Ok(());
+    }
     let engine = build_engine(
         &features,
         &key_share_a,
@@ -145,6 +169,10 @@ fn prepare_project(
     drop(scenes);
     let staged = staging.path().join("project");
     materialize_release_payload(&source, &staged, &config, &content)?;
+    if env::var("KEINE_BUILD_TARGET").as_deref() == Ok("aarch64-linux-android") {
+        android::validate_features(&detect_features(&staged)?)?;
+        android::application_id(&config.project)?;
+    }
     // Do not create or load publisher secrets until every project-owned
     // validation and compilation step has succeeded.
     let identity = load_or_create_identity(project)?;
