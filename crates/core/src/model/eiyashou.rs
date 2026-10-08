@@ -2,6 +2,10 @@ use serde::{Deserialize, Serialize};
 
 use super::{ChoiceTarget, Rgba, SayOptions, Value};
 
+/// Maximum expression nesting/tree depth, including the leaf node.
+/// Shared by source parsing and runtime evaluation, independently of action budgets.
+pub const MAX_EXPRESSION_DEPTH: usize = 64;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum EiyashouScalarType {
     Bool,

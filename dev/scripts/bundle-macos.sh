@@ -53,8 +53,7 @@ mkdir -p "$staging/Contents/MacOS" "$staging/Contents/Resources"
 cp "$package_dir/keine" "$staging/Contents/MacOS/keine"
 cp "$package_dir/game.haku" "$staging/Contents/Resources/game.haku"
 cp -R "$package_dir/data" "$staging/Contents/Resources/data"
-cp "$package_dir/LICENSE" "$package_dir/NOTICE" "$staging/Contents/Resources/"
-cp "$package_dir/FONT-LICENSES.txt" "$staging/Contents/Resources/"
+cp "$package_dir/NOTICE" "$staging/Contents/Resources/"
 cp "$package_dir/keine.icns" "$staging/Contents/Resources/keine.icns"
 
 sed -e "s/__NAME__/$name/g" -e "s/__VERSION__/$version/g" -e "s/__BUNDLE_IDENTIFIER__/$bundle_identifier/g" > "$staging/Contents/Info.plist" <<'PLIST'

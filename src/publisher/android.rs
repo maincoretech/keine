@@ -100,7 +100,8 @@ pub(super) fn assemble(
         ])
         .stdout(std::process::Stdio::piped())
         .spawn()?;
-    let status = Command::new("python3")
+    let mut notices = Command::new("python3");
+    notices
         .current_dir(repo)
         .env_remove("KEINE_HAKUTAKU_IDENTITY")
         .env_remove("HAKUTAKU_IDENTITY_BASE64")
@@ -108,8 +109,14 @@ pub(super) fn assemble(
         .env_remove("KEINE_HAKUTAKU_KEY_SHARE_B")
         .env_remove("KEINE_HAKUTAKU_PUBLIC_KEY")
         .arg("dev/scripts/android-notices.py")
-        .stdin(metadata.stdout.take().context("metadata pipe missing")?)
-        .status()?;
+        .stdin(metadata.stdout.take().context("metadata pipe missing")?);
+    let notice_snapshot = tempdir()?;
+    if let Some(license) = super::notices::game(project)? {
+        let path = notice_snapshot.path().join("GAME-LICENSE");
+        fs::write(&path, license)?;
+        notices.arg("--game-license").arg(path);
+    }
+    let status = notices.status()?;
     let metadata_status = metadata.wait()?;
     if !status.success() || !metadata_status.success() {
         bail!("Android native license staging failed");
@@ -128,9 +135,6 @@ pub(super) fn assemble(
         {
             link_or_copy(&entry.path(), &game.join("data").join(entry.file_name()))?;
         }
-    }
-    if project.join("LICENSE").is_file() {
-        fs::copy(project.join("LICENSE"), assets.path().join("GAME-LICENSE"))?;
     }
     let mut gradle = Command::new("gradle");
     gradle

@@ -1,6 +1,8 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
+use crate::model::eiyashou::MAX_EXPRESSION_DEPTH;
+
 use crate::{
     EiyashouAssignOp, EiyashouBinaryOp, EiyashouExpr, EiyashouListOperation, EiyashouPlace,
     EiyashouText, EiyashouTextPart, EiyashouUnaryOp, Value,
@@ -16,12 +18,24 @@ pub enum EiyashouRuntimeError {
     IndexOutOfBounds,
     EmptyList,
     MissingListValue,
+    ExpressionTooDeep,
 }
 
 pub fn evaluate(
     expression: &EiyashouExpr,
     variables: &HashMap<String, Value>,
 ) -> Result<Value, EiyashouRuntimeError> {
+    evaluate_at_depth(expression, variables, 1)
+}
+
+fn evaluate_at_depth(
+    expression: &EiyashouExpr,
+    variables: &HashMap<String, Value>,
+    depth: usize,
+) -> Result<Value, EiyashouRuntimeError> {
+    if depth > MAX_EXPRESSION_DEPTH {
+        return Err(EiyashouRuntimeError::ExpressionTooDeep);
+    }
     match expression {
         EiyashouExpr::Literal(value) => Ok(value.clone()),
         EiyashouExpr::Variable(name) => variables
@@ -31,7 +45,7 @@ pub fn evaluate(
         EiyashouExpr::List(items) => {
             let mut values = items
                 .iter()
-                .map(|item| evaluate(item, variables))
+                .map(|item| evaluate_at_depth(item, variables, depth + 1))
                 .collect::<Result<Vec<_>, _>>()?;
             if values.iter().any(|value| matches!(value, Value::Float(_))) {
                 for value in &mut values {
@@ -44,7 +58,7 @@ pub fn evaluate(
         }
         EiyashouExpr::EmptyList(_) => Ok(Value::Array(Vec::new())),
         EiyashouExpr::Unary { op, value } => {
-            let value = evaluate(value, variables)?;
+            let value = evaluate_at_depth(value, variables, depth + 1)?;
             match (op, value) {
                 (EiyashouUnaryOp::Not, Value::Bool(value)) => Ok(Value::Bool(!value)),
                 (EiyashouUnaryOp::Negate, Value::Int(value)) => value
@@ -56,13 +70,13 @@ pub fn evaluate(
             }
         }
         EiyashouExpr::Binary { op, left, right } => {
-            let left = evaluate(left, variables)?;
+            let left = evaluate_at_depth(left, variables, depth + 1)?;
             if *op == EiyashouBinaryOp::And {
                 let Value::Bool(left) = left else {
                     return Err(EiyashouRuntimeError::TypeMismatch);
                 };
                 return if left {
-                    strict_bool(evaluate(right, variables)?)
+                    strict_bool(evaluate_at_depth(right, variables, depth + 1)?)
                 } else {
                     Ok(Value::Bool(false))
                 };
@@ -74,24 +88,24 @@ pub fn evaluate(
                 return if left {
                     Ok(Value::Bool(true))
                 } else {
-                    strict_bool(evaluate(right, variables)?)
+                    strict_bool(evaluate_at_depth(right, variables, depth + 1)?)
                 };
             }
-            let right = evaluate(right, variables)?;
+            let right = evaluate_at_depth(right, variables, depth + 1)?;
             apply_binary(*op, left, right)
         }
         EiyashouExpr::Index { list, index } => {
-            let Value::Array(values) = evaluate(list, variables)? else {
+            let Value::Array(values) = evaluate_at_depth(list, variables, depth + 1)? else {
                 return Err(EiyashouRuntimeError::TypeMismatch);
             };
-            let index = index_value(evaluate(index, variables)?)?;
+            let index = index_value(evaluate_at_depth(index, variables, depth + 1)?)?;
             values
                 .get(index)
                 .cloned()
                 .ok_or(EiyashouRuntimeError::IndexOutOfBounds)
         }
         EiyashouExpr::Length(list) => {
-            let Value::Array(values) = evaluate(list, variables)? else {
+            let Value::Array(values) = evaluate_at_depth(list, variables, depth + 1)? else {
                 return Err(EiyashouRuntimeError::TypeMismatch);
             };
             i64::try_from(values.len())
@@ -458,6 +472,54 @@ mod tests {
 
     fn integer(value: i64) -> EiyashouExpr {
         EiyashouExpr::Literal(Value::Int(value))
+    }
+
+    #[test]
+    fn evaluation_depth_budget_covers_every_recursive_operand() {
+        for shape in 0..7 {
+            let mut expression = integer(1);
+            for _ in 1..MAX_EXPRESSION_DEPTH {
+                expression = match shape {
+                    0 => EiyashouExpr::Unary {
+                        op: EiyashouUnaryOp::Negate,
+                        value: Box::new(expression),
+                    },
+                    1 => EiyashouExpr::Binary {
+                        op: EiyashouBinaryOp::Add,
+                        left: Box::new(expression),
+                        right: Box::new(integer(0)),
+                    },
+                    2 => EiyashouExpr::Binary {
+                        op: EiyashouBinaryOp::Add,
+                        left: Box::new(integer(0)),
+                        right: Box::new(expression),
+                    },
+                    3 => EiyashouExpr::List(vec![expression]),
+                    4 => EiyashouExpr::Length(Box::new(expression)),
+                    5 => EiyashouExpr::Index {
+                        list: Box::new(expression),
+                        index: Box::new(integer(0)),
+                    },
+                    _ => EiyashouExpr::Index {
+                        list: Box::new(EiyashouExpr::EmptyList(crate::EiyashouScalarType::Int)),
+                        index: Box::new(expression),
+                    },
+                };
+            }
+            let variables = HashMap::new();
+            assert_ne!(
+                evaluate(&expression, &variables),
+                Err(EiyashouRuntimeError::ExpressionTooDeep)
+            );
+            let expression = EiyashouExpr::Unary {
+                op: EiyashouUnaryOp::Negate,
+                value: Box::new(expression),
+            };
+            assert_eq!(
+                evaluate(&expression, &variables),
+                Err(EiyashouRuntimeError::ExpressionTooDeep)
+            );
+        }
     }
 
     #[test]

@@ -1072,6 +1072,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn malformed_expression_projection_recovers_after_source_correction() {
+        let source = "scene x { let a = ) == 1 }";
+        let projection = EiyashouProjection::parse(source);
+        assert_eq!(projection.scenes[0].name, "x");
+        assert_eq!(projection.scenes[0].blocks[0].kind, BlockKind::Declaration);
+        assert!(
+            projection
+                .read_only
+                .iter()
+                .any(|card| card.message.contains("unmatched closing delimiter"))
+        );
+        let corrected = EiyashouProjection::parse("scene x { let a = (1) == 1, \"Ready\" }");
+        assert!(corrected.read_only.is_empty());
+        assert_eq!(corrected.scenes[0].blocks.len(), 2);
+    }
+
+    #[test]
     fn control_names_cannot_be_written_as_optional_voice_ids() {
         let source = "scene start { \"Hello\" }";
         let projection = EiyashouProjection::parse(source);

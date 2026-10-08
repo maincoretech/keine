@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use crate::Value;
+use crate::model::eiyashou::MAX_EXPRESSION_DEPTH;
 
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
@@ -24,6 +25,7 @@ pub fn evaluate(
     let mut parser = Parser {
         tokens: &tokens,
         cursor: 0,
+        depth: 0,
         vars,
         globals,
     };
@@ -155,12 +157,26 @@ fn tokenize(source: &str) -> Result<Vec<Token>, String> {
 struct Parser<'a> {
     tokens: &'a [Token],
     cursor: usize,
+    depth: usize,
     vars: &'a HashMap<String, Value>,
     globals: &'a HashMap<String, Value>,
 }
 
 impl Parser<'_> {
     fn parse_expression(&mut self, minimum_precedence: u8) -> Result<Value, String> {
+        if self.depth >= MAX_EXPRESSION_DEPTH {
+            return Err(format!(
+                "expression exceeds maximum depth of {MAX_EXPRESSION_DEPTH} at token {}",
+                self.cursor + 1
+            ));
+        }
+        self.depth += 1;
+        let result = self.parse_expression_inner(minimum_precedence);
+        self.depth -= 1;
+        result
+    }
+
+    fn parse_expression_inner(&mut self, minimum_precedence: u8) -> Result<Value, String> {
         let mut left = self.parse_prefix()?;
         while let Some(Token::Op(operator)) = self.tokens.get(self.cursor) {
             let precedence = precedence(operator);
@@ -407,6 +423,39 @@ fn number(value: f64) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compatibility_expression_recursion_is_bounded() {
+        for repetitions in [MAX_EXPRESSION_DEPTH - 1, MAX_EXPRESSION_DEPTH, 4096] {
+            for source in [
+                format!("{}1", "- ".repeat(repetitions)),
+                format!("{}1{}", "(".repeat(repetitions), ")".repeat(repetitions)),
+                format!("{}1{}", "[".repeat(repetitions), "]".repeat(repetitions)),
+                format!("{}1{}", "[1][".repeat(repetitions), "]".repeat(repetitions)),
+            ] {
+                let result = evaluate(&source, &HashMap::new(), &HashMap::new());
+                if repetitions < MAX_EXPRESSION_DEPTH {
+                    assert!(
+                        !result
+                            .as_ref()
+                            .err()
+                            .is_some_and(|error| error.contains("maximum depth"))
+                    );
+                } else {
+                    assert!(result.unwrap_err().contains("maximum depth"));
+                }
+            }
+        }
+        // Flat chains are evaluated iteratively rather than building recursive IR.
+        assert_eq!(
+            evaluate(
+                &format!("1{}", " + 1".repeat(4096)),
+                &HashMap::new(),
+                &HashMap::new()
+            ),
+            Ok(Value::Int(4097))
+        );
+    }
 
     #[test]
     fn evaluates_precedence_variables_and_arrays() {

@@ -1,5 +1,60 @@
 # 开发与验收
 
+## 表达式诊断与深度预算
+
+在 `1dc025b` 上复现 `scene x { let a = ) == 1 }`：分组分类栈弹空后
+`last_mut().unwrap()` panic。现在多余、错配及未闭合括号返回准确行/列诊断，
+插值诊断也映射到实际出错 token；Editor 投影可报告错误，修正源码后恢复正常 blocks。
+
+`MAX_EXPRESSION_DEPTH = 64` 由 core model 统一定义；原生 parser 限制递归嵌套，
+并在构造时迭代检查树深度，覆盖无括号的长二元运算、索引和 `.length` 链。
+typed 求值逐层检查实际访问的子表达式（短路规则保留），超限返回
+`ExpressionTooDeep`；兼容字符串求值仅补相同递归保护，不扩展语义。
+回归覆盖 64/65 层与 4096 次嵌套、一元运算、列表、索引、二元链、插值及 Editor 修正恢复。
+
+```sh
+cargo test --offline -p keine-loader expression_ -- --nocapture
+cargo test --offline -p keine-core
+cargo test --offline -p keine-editor malformed_expression_projection_recovers_after_source_correction
+cargo test --offline --workspace --features publisher,video-native,hot-reload
+cargo check --offline --workspace --features publisher,video-native,hot-reload
+cargo clippy --offline --workspace --all-targets --features publisher,video-native,hot-reload -- -D warnings
+cargo check --offline -p keine --no-default-features
+cargo build --offline -p keine --features publisher,video-native,hot-reload
+target/debug/keine validate tests/fixtures/native-smoke
+target/debug/keine validate projects/tday
+target/debug/keine --version
+```
+
+验证：专项 Loader 3 passed、Core 123 passed、Editor 1 passed；工作区
+1051 passed / 21 ignored / 0 failed（包含沙箱外 IPC/Trash）；check、Clippy
+与无默认功能 check 通过；当前 Engine debug 构建通过，native-smoke 与 tday 均零警告，
+`--version` 输出 `Kēne 0.14.2`。依赖版本、IR schema 与 Save v11 未改变。
+原生 Editor 交互、Windows/Linux/Android 运行态及 release 二进制尚未复验；
+以上表达式预算不作为嵌套 statement 或编译包反序列化的完整防护证明。
+
+## 发行声明合并与 Android 沉浸模式
+
+- 桌面游戏包、Editor 安装包、Build 临时导出和 Android APK 共用单个发行 `NOTICE`。
+  完整保留引擎许可、原署名、字体文本、已收集的 native 版权/专利/源码地址和游戏版权；
+  工程根目录的 `LICENSE` 作为 `GAME-LICENSE` 章节，不再额外复制 `TDAY-LICENSE`。
+  Editor 导出沿用已安装 Engine 的 native SDK 声明；项目声明通过受根目录约束的 mount 有界读取。
+  Android staging 清除之前生成的零散文件，游戏包之后重建引擎测试包不会残留游戏版权。
+- Activity 补上系统导航栏隐藏，创建、恢复及获得焦点时应用；API 30+ 使用原生
+  WindowInsetsController，API 26–29 使用 immersive sticky，无新增 AndroidX/Kotlin 依赖。
+  系统边缘滑动仍可临时呼出导航栏；不拦截 Home/返回手势。
+
+验证：workspace publisher/video-native/hot-reload tests 为 1046 passed / 21 ignored / 0 failed
+（IPC/Trash 在沙箱外运行）；workspace all-targets Clippy、check、fmt 和 diff 检查通过。
+Python 包装回归 13 passed，覆盖原文/换行完整保留、缺失或截断 native 文本拒绝、缓存清理、
+游戏→引擎声明切换、Linux/Windows SDK 版权合并。native-smoke 0 warnings。
+Android 离线 debug/release 组装与 lintDebug 通过，两份引擎 APK 的 assets 只有 `NOTICE`；
+使用既有 tday 密文资源重组的 release APK 通过完整内容/图标/入口/16 KB 校验，
+声明根目录只有 `NOTICE`，包含完整 shiftz 游戏版权。macOS Editor app 组装、签名及内置声明检查通过。
+APK 包装验证复用了已有原生库，未重新编译当前分支的 ARM64 原生库或覆盖安装手机；
+Pixel 的手势条隐藏、临时呼出、输入法及系统文件选择器/前后台恢复仍待新版实机验收。
+Windows/Linux 发行目录通过包装回归检查，未在对应系统重新组装或原生运行；远端 CI 未触发。
+
 ## 演出中存档与音频输出恢复
 
 - 普通新槽位、覆盖存档和快速存档共用即时检查点选择：现场可完整恢复时保存现场，

@@ -105,8 +105,7 @@ Backup 有启动恢复；publisher 两次 rename 之间被强制终止时，旧�
 release/
 ├── keine[.exe]        hardened runtime
 ├── game.haku          完整、签名、加密的 Hakutaku v1 快照
-├── LICENSE / NOTICE   引擎许可与署名
-├── FONT-LICENSES.txt  内嵌字体许可
+├── NOTICE             完整许可、署名、字体/native 声明及游戏版权（分章节）
 └── data/*.taku        不可变密文内容段
 ```
 
@@ -133,6 +132,7 @@ Hakutaku 的字节布局以锁定依赖自身 `FORMAT.md` 为准；Kēne 不维�
 | settings / gallery / profile / read history | 64 KiB / 16 MiB / 16 MiB / 64 MiB |
 | Backup envelope / 文件数 / 单文件 | 128 MiB / 4,096 / 72 MiB |
 | core 单次执行 / seek / blocking replay | 1,024 / 65,536 / 1,024 步 |
+| 表达式解析嵌套 / typed 表达式树深度（含叶节点） | 64 / 64 |
 
 Hakutaku 另有 catalog、page、block、数量和路径限制，由锁定依赖分配前验证。
 运行时使用 `memory_constrained()`：block-map cache 512 KiB、plaintext cache 16 MiB、

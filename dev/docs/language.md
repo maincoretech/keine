@@ -117,6 +117,10 @@ scene start {
 列表修改是 statement：`items.append(x)`、`remove(x)`、`clear()`、`insert(index, x)`，
 `pop(items, into: declared_variable)` 或 `pop(items, index, into: declared_variable)`。
 空列表/越界 pop 不修改目标变量。列表方法不是可嵌入插值的表达式。
+表达式解析嵌套与生成的表达式树深度（含叶节点）上限均为 64；括号、一元运算、
+列表与索引共享嵌套预算，连续二元运算和 `.length`/索引也受树深度限制。
+超限及多余、错配、未闭合括号返回带位置的语法诊断；运行时另设相同深度预算，
+超限返回 `ExpressionTooDeep`，不依赖 action 步数限制。
 
 ## 作者命令
 

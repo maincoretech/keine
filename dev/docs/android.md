@@ -97,8 +97,10 @@ GPU 日志中的 `Vulkan` / `Gl`、画面、触摸、音频和后台恢复。
 
 ## 资源与数据
 
-引擎测试 APK 仅包含引擎和许可声明；构建从锁定 crate 的实际源码附上内嵌 WebP/Opus 的许可与源码获取地址。
-现有 `NOTICE` 仍是概览，正式发行前需按 `release.md` 补齐其余适用的第三方声明。
+引擎测试 APK 仅包含引擎和许可声明；`assets/NOTICE` 按章节完整合并引擎许可、署名、
+字体声明，以及从锁定 crate 实际源码读取的 WebP/Opus 许可、专利条款和源码获取地址。
+游戏 APK 再追加作者的 `GAME-LICENSE` 章节；重建引擎测试包会移除旧游戏声明及缓存中的零散文件。
+APK 校验核对原文内容及源码版本，不只检查文件名；正式发行的其余声明仍按 `release.md` 检查。
 初次启动没有游戏资源时显示提示页。
 实验入口从 Activity 的私有 files 目录下 `game/` 读取普通工程，沿用 Loader 的只读挂载及路径约束。
 每个工程必须提供稳定 `project.id`，存档/设置使用私有 `files/userdata/<project.id>/`。
@@ -111,6 +113,11 @@ Java `detachFd` 转移唯一描述符所有权给 Rust `File`，由 Rust 在完�
 及 [ParcelFileDescriptor.detachFd](https://developer.android.com/reference/android/os/ParcelFileDescriptor#detachFd())。
 安卓不记忆桌面窗口位置。
 安卓始终使用全屏，设置页不显示桌面全屏开关。
+Activity 在创建、恢复与重新获得焦点时应用沉浸式系统栏设置：API 30+ 使用
+`WindowInsetsController` 隐藏状态栏与导航栏，API 26–29 使用 `IMMERSIVE_STICKY`。
+边缘滑动可临时呼出系统栏并由系统自动收起；不拦截返回/Home 手势，也不隐藏输入法。
+方案依据 [Android 沉浸模式](https://developer.android.com/develop/ui/views/layout/immersive)。
+Pixel 手势导航、三键导航以及文件选择器/前后台返回路径须分别实机验收。
 
 入口使用 `singleTask`，从桌面图标返回时复用已有 Activity，避免第二个 NativeActivity
 重建进程内的 winit/Bevy 单例。普通切后台/返回及文档选择器往返保留当前界面和剧情，

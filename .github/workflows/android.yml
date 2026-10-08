@@ -93,6 +93,14 @@ jobs:
           grep -E ':launchMode\(.*\)=(2|0x0*2)$' "$RUNNER_TEMP/android-apk-activity.txt"
           python3 dev/scripts/verify-icons.py --apk dev/android/app/build/outputs/apk/debug/app-debug.apk
           python3 dev/scripts/verify-icons.py --apk dev/android/app/build/outputs/apk/release/app-release.apk
+          python3 - <<'PY'
+          import sys, zipfile
+          sys.path.insert(0, 'dev/scripts')
+          from package_notices import verify_apk
+          for kind in ('debug', 'release'):
+              with zipfile.ZipFile(f'dev/android/app/build/outputs/apk/{kind}/app-{kind}.apk') as apk:
+                  verify_apk(apk)
+          PY
       - name: Upload Android Engine artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

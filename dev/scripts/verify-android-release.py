@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+from package_notices import verify_apk
 
 apk, provenance = map(Path, sys.argv[1:])
 game = json.loads(provenance.read_text(encoding="utf-8"))
@@ -32,9 +33,7 @@ with zipfile.ZipFile(apk) as package:
     assert segments and all(re.fullmatch(r"assets/keine-game/data/[0-9a-f]+\.taku", name) for name in segments), segments
     for name in ["assets/keine-game/game.haku", *segments]:
         assert package.getinfo(name).compress_type == zipfile.ZIP_STORED, name
-    for name in ("LICENSE", "NOTICE", "FONT-LICENSES.txt", "GAME-LICENSE", "NATIVE-SOURCES.txt",
-                 "libwebp-sys-COPYING.txt", "libwebp-sys-PATENTS.txt", "opusic-sys-COPYING.txt"):
-        assert f"assets/{name}" in entries, name
+    verify_apk(package, require_game=True)
     assert not any(name.startswith("kotlin/") or "kotlin-stdlib" in name for name in entries), entries
     assert not any(name.endswith(("publisher.key", ".keystore", ".jks", ".shou", ".wg")) for name in entries), entries
     natives = [name for name in entries if name.startswith("lib/") and name.endswith(".so")]

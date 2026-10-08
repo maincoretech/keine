@@ -12,6 +12,8 @@ pub use format::format_native_source;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
 
+use keine_core::model::eiyashou::MAX_EXPRESSION_DEPTH;
+
 use keine_core::{
     Action, BlendMode, CameraShakeAxis, CameraShakeFalloff, CameraShakeSpec, CameraTargets,
     ChoiceTarget, Easing, EiyashouAssignOp, EiyashouBinaryOp, EiyashouChoice, EiyashouDialogue,
@@ -3194,6 +3196,7 @@ struct ExpressionParser<'a> {
     tokens: &'a [NativeToken],
     indices: &'a [usize],
     cursor: usize,
+    depth: usize,
 }
 
 impl<'a> ExpressionParser<'a> {
@@ -3203,6 +3206,7 @@ impl<'a> ExpressionParser<'a> {
             tokens,
             indices,
             cursor: 0,
+            depth: 0,
         }
     }
 
@@ -3218,13 +3222,29 @@ impl<'a> ExpressionParser<'a> {
         Ok(expression)
     }
 
-    fn validate_explicit_grouping(&self) -> Result<(), String> {
+    fn validate_explicit_grouping(&mut self) -> Result<(), String> {
         let mut categories = vec![HashSet::new()];
-        for index in self.indices {
+        let mut delimiters = Vec::new();
+        for (cursor, index) in self.indices.iter().enumerate() {
+            self.cursor = cursor;
             let text = &self.source[self.tokens[*index].range.clone()];
             match text {
-                "(" | "[" => categories.push(HashSet::new()),
+                "(" | "[" => {
+                    if delimiters.len() >= MAX_EXPRESSION_DEPTH {
+                        return Err(expression_depth_error());
+                    }
+                    delimiters.push((text, cursor));
+                    categories.push(HashSet::new());
+                }
                 ")" | "]" => {
+                    let Some((open, _)) = delimiters.pop() else {
+                        return Err(format!("unmatched closing delimiter `{text}`"));
+                    };
+                    if !matches!((open, text), ("(", ")") | ("[", "]")) {
+                        return Err(format!(
+                            "mismatched closing delimiter `{text}` for `{open}`"
+                        ));
+                    }
                     if categories
                         .pop()
                         .is_some_and(|operators| operators.len() > 1)
@@ -3233,17 +3253,28 @@ impl<'a> ExpressionParser<'a> {
                     }
                 }
                 "==" | "!=" | "<" | "<=" | ">" | ">=" => {
-                    categories.last_mut().unwrap().insert("comparison");
+                    if let Some(operators) = categories.last_mut() {
+                        operators.insert("comparison");
+                    }
                 }
                 "in" => {
-                    categories.last_mut().unwrap().insert("membership");
+                    if let Some(operators) = categories.last_mut() {
+                        operators.insert("membership");
+                    }
                 }
                 "and" | "or" => {
-                    categories.last_mut().unwrap().insert("logic");
+                    if let Some(operators) = categories.last_mut() {
+                        operators.insert("logic");
+                    }
                 }
                 _ => {}
             }
         }
+        if let Some((open, cursor)) = delimiters.last() {
+            self.cursor = *cursor;
+            return Err(format!("unclosed delimiter `{open}`"));
+        }
+        self.cursor = 0;
         if categories.iter().any(|operators| operators.len() > 1) {
             Err("comparison, membership, and logic operators require explicit parentheses when mixed".into())
         } else {
@@ -3254,7 +3285,7 @@ impl<'a> ExpressionParser<'a> {
     fn parse_or(&mut self) -> Result<EiyashouExpr, String> {
         let mut expression = self.parse_and()?;
         while self.eat("or") {
-            expression = binary(EiyashouBinaryOp::Or, expression, self.parse_and()?);
+            expression = binary(EiyashouBinaryOp::Or, expression, self.parse_and()?)?;
         }
         Ok(expression)
     }
@@ -3262,7 +3293,7 @@ impl<'a> ExpressionParser<'a> {
     fn parse_and(&mut self) -> Result<EiyashouExpr, String> {
         let mut expression = self.parse_comparison()?;
         while self.eat("and") {
-            expression = binary(EiyashouBinaryOp::And, expression, self.parse_comparison()?);
+            expression = binary(EiyashouBinaryOp::And, expression, self.parse_comparison()?)?;
         }
         Ok(expression)
     }
@@ -3283,7 +3314,7 @@ impl<'a> ExpressionParser<'a> {
             return Ok(expression);
         };
         self.cursor += 1;
-        let expression = binary(operation, expression, self.parse_additive()?);
+        let expression = binary(operation, expression, self.parse_additive()?)?;
         if matches!(
             self.peek(),
             Some("==" | "!=" | "<" | "<=" | ">" | ">=" | "in")
@@ -3302,7 +3333,7 @@ impl<'a> ExpressionParser<'a> {
                 _ => break,
             };
             self.cursor += 1;
-            expression = binary(operation, expression, self.parse_multiplicative()?);
+            expression = binary(operation, expression, self.parse_multiplicative()?)?;
         }
         Ok(expression)
     }
@@ -3317,12 +3348,22 @@ impl<'a> ExpressionParser<'a> {
                 _ => break,
             };
             self.cursor += 1;
-            expression = binary(operation, expression, self.parse_unary()?);
+            expression = binary(operation, expression, self.parse_unary()?)?;
         }
         Ok(expression)
     }
 
     fn parse_unary(&mut self) -> Result<EiyashouExpr, String> {
+        if self.depth >= MAX_EXPRESSION_DEPTH {
+            return Err(expression_depth_error());
+        }
+        self.depth += 1;
+        let result = self.parse_unary_inner().and_then(bounded_expression);
+        self.depth -= 1;
+        result
+    }
+
+    fn parse_unary_inner(&mut self) -> Result<EiyashouExpr, String> {
         if self.eat("not") {
             return Ok(EiyashouExpr::Unary {
                 op: EiyashouUnaryOp::Not,
@@ -3346,15 +3387,15 @@ impl<'a> ExpressionParser<'a> {
                 if !self.eat("]") {
                     return Err("expected `]` after list index".into());
                 }
-                expression = EiyashouExpr::Index {
+                expression = bounded_expression(EiyashouExpr::Index {
                     list: Box::new(expression),
                     index: Box::new(index),
-                };
+                })?;
             } else if self.eat(".") {
                 if !self.eat("length") {
                     return Err("only `.length` is valid in an expression".into());
                 }
-                expression = EiyashouExpr::Length(Box::new(expression));
+                expression = bounded_expression(EiyashouExpr::Length(Box::new(expression)))?;
             } else {
                 break;
             }
@@ -3462,12 +3503,49 @@ impl<'a> ExpressionParser<'a> {
     }
 }
 
-fn binary(op: EiyashouBinaryOp, left: EiyashouExpr, right: EiyashouExpr) -> EiyashouExpr {
-    EiyashouExpr::Binary {
+fn binary(
+    op: EiyashouBinaryOp,
+    left: EiyashouExpr,
+    right: EiyashouExpr,
+) -> Result<EiyashouExpr, String> {
+    bounded_expression(EiyashouExpr::Binary {
         op,
         left: Box::new(left),
         right: Box::new(right),
+    })
+}
+
+fn expression_depth_error() -> String {
+    format!("expression exceeds maximum depth of {MAX_EXPRESSION_DEPTH}")
+}
+
+// Check each constructed tree before it can grow further. Iterative operator
+// chains can create deep IR even without recursive source nesting.
+fn bounded_expression(expression: EiyashouExpr) -> Result<EiyashouExpr, String> {
+    let mut pending = vec![(&expression, 1)];
+    while let Some((node, depth)) = pending.pop() {
+        if depth > MAX_EXPRESSION_DEPTH {
+            return Err(expression_depth_error());
+        }
+        match node {
+            EiyashouExpr::Unary { value, .. } | EiyashouExpr::Length(value) => {
+                pending.push((value, depth + 1));
+            }
+            EiyashouExpr::Binary { left, right, .. } => {
+                pending.push((left, depth + 1));
+                pending.push((right, depth + 1));
+            }
+            EiyashouExpr::Index { list, index } => {
+                pending.push((list, depth + 1));
+                pending.push((index, depth + 1));
+            }
+            EiyashouExpr::List(items) => {
+                pending.extend(items.iter().map(|item| (item, depth + 1)));
+            }
+            EiyashouExpr::Literal(_) | EiyashouExpr::Variable(_) | EiyashouExpr::EmptyList(_) => {}
+        }
     }
+    Ok(expression)
 }
 
 #[derive(Debug, Clone)]
@@ -3539,7 +3617,12 @@ fn parse_eiyashou_text(
                     Err(message) => diagnostics.push(indexed_error_at(
                         source,
                         lines,
-                        source_offset + 1 + expression_start,
+                        source_offset
+                            + 1
+                            + expression_start
+                            + indices
+                                .get(parser.cursor.min(indices.len().saturating_sub(1)))
+                                .map_or(0, |index| tokens[*index].range.start),
                         format!("invalid interpolation: {message}"),
                     )),
                 }
@@ -3684,6 +3767,105 @@ fn error_at(source: &str, offset: usize, message: impl Into<String>) -> Diagnost
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn expression_depth_limits_cover_nesting_and_iterative_trees() {
+        for repetitions in [MAX_EXPRESSION_DEPTH - 1, MAX_EXPRESSION_DEPTH, 4096] {
+            for source in [
+                format!("{}1", "- ".repeat(repetitions)),
+                format!("{}true", "not ".repeat(repetitions)),
+                format!("{}1{}", "(".repeat(repetitions), ")".repeat(repetitions)),
+                format!("{}1{}", "[".repeat(repetitions), "]".repeat(repetitions)),
+                format!("1{}", " + 1".repeat(repetitions)),
+                format!("items{}", "[0]".repeat(repetitions)),
+                format!("items{}", ".length".repeat(repetitions)),
+            ] {
+                let (tokens, diagnostics) = lex(&source);
+                assert!(diagnostics.is_empty());
+                let indices = tokens
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, token)| {
+                        (token.kind != NativeTokenKind::Whitespace).then_some(index)
+                    })
+                    .collect::<Vec<_>>();
+                let mut parser = ExpressionParser::new(&source, &tokens, &indices);
+                let result = parser.parse();
+                if repetitions < MAX_EXPRESSION_DEPTH {
+                    assert!(
+                        result.is_ok(),
+                        "{}: {result:?}",
+                        &source[..source.len().min(80)]
+                    );
+                } else {
+                    assert_eq!(result.unwrap_err(), expression_depth_error());
+                }
+            }
+        }
+        // A deep operand within a binary or list must not reset the budget.
+        for expression in [
+            format!("1 + ({}1)", "- ".repeat(MAX_EXPRESSION_DEPTH - 1)),
+            format!("[{}1]", "- ".repeat(MAX_EXPRESSION_DEPTH - 1)),
+        ] {
+            let source = format!("scene x {{ let a = {expression} }}");
+            let document = parse_native_document(&source);
+            assert!(
+                document.diagnostics.iter().any(|diagnostic| {
+                    diagnostic.level == DiagnosticLevel::Error
+                        && diagnostic.message == expression_depth_error()
+                        && diagnostic.span.column > 1
+                }),
+                "{:?}",
+                document.diagnostics
+            );
+        }
+        let source = format!("scene x {{ \"value ${{{}1}}\" }}", "- ".repeat(4096));
+        assert!(
+            parse_native_document(&source)
+                .diagnostics
+                .iter()
+                .any(|diagnostic| { diagnostic.message.contains(&expression_depth_error()) })
+        );
+    }
+
+    #[test]
+    fn malformed_expression_delimiters_report_the_offending_position() {
+        for (expression, offending) in [
+            (") == 1", ")"),
+            ("] in [1]", "]"),
+            ("1) and true", ")"),
+            ("([1)]", ")"),
+            ("(1", "("),
+            ("[1", "["),
+            ("()", ")"),
+        ] {
+            let source = format!("scene x {{\n  let a = {expression}\n}}");
+            let document = parse_native_document(&source);
+            let offset = source.find(expression).unwrap() + expression.find(offending).unwrap();
+            let expected = SourceLineIndex::new(&source).span(&source, offset);
+            assert!(
+                document.diagnostics.iter().any(|diagnostic| {
+                    diagnostic.level == DiagnosticLevel::Error && diagnostic.span == expected
+                }),
+                "{expression}: {:?}",
+                document.diagnostics
+            );
+        }
+        for expression in ["(1) == 1", "([1])[0]", "((1))", "[1, (2 + 3)]"] {
+            let document = parse_native_document(&format!("scene x {{ let a = {expression} }}"));
+            assert!(
+                document.diagnostics.is_empty(),
+                "{:?}",
+                document.diagnostics
+            );
+        }
+        let source = "scene x { \"value ${) == 1}\" }";
+        let document = parse_native_document(source);
+        assert!(document.diagnostics.iter().any(|diagnostic| {
+            diagnostic.span == SourceLineIndex::new(source).span(source, source.find(')').unwrap())
+                && diagnostic.message.contains("unmatched closing delimiter")
+        }));
+    }
 
     #[test]
     fn empty_choice_options_continue_and_dynamic_assets_are_collected() {

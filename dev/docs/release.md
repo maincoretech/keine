@@ -52,8 +52,11 @@ Android 将完整图标居中留在安全区域；没有自动生成 monochrome 
 
 Editor Build 保留图标源文件，生成 macOS/Linux 应用图标并供窗口使用。
 Windows 临时导出复用已安装 Engine，EXE 文件图标仍为 Engine；正式 `bundle` 会重新嵌入项目 ICO。
+正式 Windows 游戏包使用 EXE 内嵌 ICO 和窗口 PNG，不再附带旁边的 `keine.png`；
+macOS 使用 app 的 ICNS，同样不附带无用途的 PNG。
 Linux 包中的 `python3 install-desktop.py --install` 可注册应用菜单与图标；应在最终存放目录运行，
-移动包后重新运行。此步骤需要 Python 3，直接启动游戏不需要。
+移动包后重新运行。它需要包内 `keine.png`，窗口本身仍使用内嵌图标；
+此步骤需要 Python 3，直接启动游戏不需要。
 
 维护者只维护 `src/assets/icons/keine.png`。Release Editor / CI Android 在构建前自动派生，
 项目发行直接调用同一 Rust 生成器；现有 `image` PNG 与 `keine-media` WebP 解码器复用，无额外图片工具。
@@ -105,8 +108,13 @@ Kēne 原创代码与文档采用 [Defold License 1.0](https://defold.com/licens
 游戏剧本和素材可使用作者自己的许可。第三方组件保持各自许可；提交贡献默认遵循 DL1，
 不要求转让贡献者的著作权。Cargo 使用 `license-file` 声明这个非标准 SPDX 许可证。
 
-用户仍按原流程导出/打包，保留输出中的 `LICENSE`、`NOTICE`、`FONT-LICENSES.txt` 即可；
-macOS app 内放在 `Contents/Resources`。这些文件由打包器写入，不需要手动复制。
+用户仍按原流程导出/打包，保留输出中的单个 `NOTICE` 即可；macOS app 内放在
+`Contents/Resources`，Android 放在 APK 的 `assets`。打包器按章节合并引擎完整许可、
+原 NOTICE、字体声明、已收集的 native 许可和源码地址；工程提供根目录 `LICENSE` 时，
+作为 `GAME-LICENSE` 章节保留。原文不缩写，不再另发 `TDAY-LICENSE` 等零散副本。
+Editor 安装包的 SDK 版权声明也写入同一文件，Build 导出沿用对应 Engine 的声明并追加游戏版权。
+本地直接编译的 Engine 没有相邻发行声明时，Build 使用内嵌引擎/字体声明；
+正式发行的其余第三方义务仍按下方清单检查。
 试玩导出不等于正式发行许可审查完成。
 
 维护者每次升级或加入依赖时运行（CI 使用 cargo-deny 0.20.2）：
@@ -120,8 +128,9 @@ cargo deny --locked --all-features check advisories licenses bans sources
 修改许可或允许列表必须核对完整上游条款，不能用宽泛 ignore 绕过。
 
 正式发行前，维护者按实际目标平台与 features 补齐第三方依赖的完整版权/许可文本，
-为 MPL 组件提供实际使用版本的源代码获取方式及必要的修改源码；`NOTICE` 是概览，
-不是全部依赖的许可文本集合。外部 FFmpeg 的 LGPL/GPL 和 codec 义务由实际构建配置决定，
+为 MPL 组件提供实际使用版本的源代码获取方式及必要的修改源码；源码根目录的 `NOTICE` 是概览，
+发行版 `NOTICE` 收集已列出的完整文档，但不代表全部依赖的许可审查已完成。
+外部 FFmpeg 的 LGPL/GPL 和 codec 义务由实际构建配置决定，
 不能套用 Rust wrapper 的 WTFPL；macOS 使用系统 AVFoundation；Windows/Linux Editor 包附 FFmpeg 播放库及 SDK 版权说明，
 不附带转换 executable。正式发行仍须核对实际 native SDK 的许可和来源。
 `cargo-deny` 检查声明，不证明所有二进制与素材的发行义务已满足。

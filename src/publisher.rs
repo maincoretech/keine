@@ -18,6 +18,8 @@ use crate::compiler::build_program;
 use crate::runtime::bootstrap::{OpenedProject, open_project};
 
 mod android;
+#[path = "../dev/packaging/notices.rs"]
+mod notices;
 
 #[cfg(target_os = "macos")]
 const VIDEO_FEATURE: &str = "video-native";
@@ -135,7 +137,27 @@ pub fn bundle_project(
             benchmark,
             &config,
             &prepared.icons,
-        )
+            project,
+        )?;
+        let mut command = Command::new("python3");
+        command
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .env_remove("KEINE_HAKUTAKU_IDENTITY")
+            .env_remove("HAKUTAKU_IDENTITY_BASE64")
+            .env_remove("KEINE_HAKUTAKU_KEY_SHARE_A")
+            .env_remove("KEINE_HAKUTAKU_KEY_SHARE_B")
+            .env_remove("KEINE_HAKUTAKU_PUBLIC_KEY")
+            .arg("dev/scripts/package_notices.py")
+            .arg(assembled.join("NOTICE"))
+            .arg("--append-native");
+        if !command
+            .status()
+            .context("failed to assemble release notices")?
+            .success()
+        {
+            bail!("release notice assembly failed");
+        }
+        Ok(())
     })?;
     println!("{}", output.display());
     Ok(())
@@ -894,14 +916,14 @@ fn assemble(
     engine: &Path,
     benchmark: bool,
     config: &keine_core::config::GameConfig,
-    icons: &Path,
+    _icons: &Path,
+    project: &Path,
 ) -> Result<()> {
-    fs::write(output.join("LICENSE"), include_str!("../LICENSE"))?;
-    fs::write(output.join("NOTICE"), include_str!("../NOTICE"))?;
-    fs::write(
-        output.join("FONT-LICENSES.txt"),
-        include_str!("assets/fonts/FONT-LICENSES.txt"),
-    )?;
+    let mut text = notices::BASE.to_owned();
+    if let Some(license) = notices::game(project)? {
+        notices::append(&mut text, "GAME-LICENSE", &license);
+    }
+    fs::write(output.join("NOTICE"), text)?;
     #[cfg(windows)]
     {
         fs::copy(engine, output.join("keine.exe"))?;
@@ -921,11 +943,13 @@ fn assemble(
             fs::set_permissions(output.join("keine"), fs::Permissions::from_mode(0o755))?;
         }
     }
-    fs::copy(icons.join("keine-512.png"), output.join("keine.png"))?;
     #[cfg(target_os = "macos")]
-    fs::copy(icons.join("keine.icns"), output.join("keine.icns"))?;
+    fs::copy(_icons.join("keine.icns"), output.join("keine.icns"))?;
     #[cfg(target_os = "linux")]
     {
+        // The window icon is embedded on every platform. Only the Linux
+        // desktop launcher installer needs an external PNG.
+        fs::copy(_icons.join("keine-512.png"), output.join("keine.png"))?;
         fs::write(
             output.join("install-desktop.py"),
             include_str!("../dev/scripts/install-desktop.py"),
@@ -1608,6 +1632,7 @@ mod tests {
             true,
             &Default::default(),
             &Path::new(env!("CARGO_MANIFEST_DIR")).join("src/assets/icons"),
+            root.path(),
         )
         .unwrap();
 
@@ -1619,16 +1644,17 @@ mod tests {
             include_str!("../dev/scripts/profile-runtime.py"),
         );
         assert_eq!(
-            fs::read_to_string(output.join("LICENSE")).unwrap(),
-            include_str!("../LICENSE")
-        );
-        assert_eq!(
             fs::read_to_string(output.join("NOTICE")).unwrap(),
-            include_str!("../NOTICE")
+            notices::BASE
         );
+        assert!(!output.join("LICENSE").exists());
+        assert!(!output.join("FONT-LICENSES.txt").exists());
+        #[cfg(not(target_os = "linux"))]
+        assert!(!output.join("keine.png").exists());
+        #[cfg(target_os = "linux")]
         assert_eq!(
-            fs::read_to_string(output.join("FONT-LICENSES.txt")).unwrap(),
-            include_str!("assets/fonts/FONT-LICENSES.txt")
+            fs::read(output.join("keine.png")).unwrap(),
+            include_bytes!("assets/icons/keine-512.png")
         );
     }
 

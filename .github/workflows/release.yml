@@ -174,10 +174,6 @@ jobs:
             args+=(--benchmark)
           fi
           target/runner/release/keine "${args[@]}"
-      - name: Include demo copyright notice
-        if: inputs.package == 'tday'
-        shell: bash
-        run: cp projects/tday/LICENSE "target/${{ steps.artifact.outputs.name }}/TDAY-LICENSE"
       - name: Remove publisher identity
         if: always()
         shell: bash
@@ -382,7 +378,7 @@ jobs:
           target_commitish: ${{ env.RELEASE_SHA }}
           name: ${{ inputs.package == 'tday' && 'tday playtest' || 'Kēne benchmark' }} ${{ steps.release.outputs.short_sha }}
           body: |
-            ${{ inputs.package == 'tday' && 'Manually requested tday test game. Original story and media copyright shiftz; see TDAY-LICENSE in the download.' || 'Automated performance suite. Run the executable; the benchmark report is written beside it.' }}
+            ${{ inputs.package == 'tday' && 'Manually requested tday test game. Original story and media copyright shiftz; see the GAME-LICENSE section in NOTICE.' || 'Automated performance suite. Run the executable; the benchmark report is written beside it.' }}
 
             Source commit: ${{ env.RELEASE_SHA }}.
             Download your platform, extract the complete archive, and run

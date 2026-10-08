@@ -9,6 +9,7 @@ import platform
 import shutil
 import subprocess
 import tempfile
+from package_notices import append_file, cargo_metadata, write
 
 REPO = Path(__file__).resolve().parents[2]
 # Keep the host's libc/loader ABI and graphics drivers. Bundle linked application
@@ -19,8 +20,8 @@ HOST_ABI = ('ld-linux', 'libc.so', 'libdl.so', 'libm.so', 'libpthread.so', 'libr
 def linux_libraries(executables, output):
     libraries = output / 'lib'
     libraries.mkdir()
-    notices = output / 'THIRD-PARTY'
-    notices.mkdir()
+    notices = output / 'NOTICE'
+    recorded_notices = set()
     queue = list(executables)
     visited = set()
     origins = {}
@@ -59,7 +60,9 @@ def linux_libraries(executables, output):
                     copyright_file = Path('/usr/share/doc') / package / 'copyright'
                     if not copyright_file.is_file():
                         raise RuntimeError(f'Missing native library copyright: {package}')
-                    shutil.copy2(copyright_file, notices / f'{package}.txt')
+                    if package not in recorded_notices:
+                        append_file(notices, f'Native SDK / {package}', copyright_file)
+                        recorded_notices.add(package)
     for executable in executables:
         result = subprocess.run(['ldd', str(executable)], check=True, capture_output=True, text=True)
         if '=> not found' in result.stdout:
@@ -81,10 +84,8 @@ def windows_libraries(output):
     copyrights = list((root / 'share').glob('*/copyright'))
     if not copyrights:
         raise RuntimeError('Native SDK copyright notices are missing')
-    notices = output / 'THIRD-PARTY'
-    notices.mkdir()
-    for notice in copyrights:
-        shutil.copy2(notice, notices / f'{notice.parent.name}.txt')
+    for notice in sorted(copyrights):
+        append_file(output / 'NOTICE', f'Native SDK / {notice.parent.name}', notice)
 
 
 def package(editor, engine, output):
@@ -108,8 +109,7 @@ def package(editor, engine, output):
                 target = staging / (name + suffix)
                 shutil.copy2(source, target)
                 shipped.append(target)
-            for source in [REPO / 'LICENSE', REPO / 'NOTICE', REPO / 'src/assets/fonts/FONT-LICENSES.txt']:
-                shutil.copy2(source, staging / source.name)
+            write(staging / 'NOTICE', cargo_metadata())
             if system == 'Linux':
                 linux_libraries(shipped, staging)
                 icons = Path(os.environ.get('KEINE_APP_ICON_DIR', REPO / 'src/assets/icons'))

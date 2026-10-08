@@ -10,6 +10,8 @@ use keine_core::config::{EiyashouAssetManifest, GameConfig};
 use keine_loader::{ContentBackend, ContentMount, MAX_PROJECT_CONFIG_BYTES, load_project};
 
 use super::WorkspaceSession;
+#[path = "../../../../dev/packaging/notices.rs"]
+mod notices;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ExportedGame {
@@ -175,16 +177,11 @@ fn assemble(
         directory.to_owned()
     };
     fs::create_dir_all(&notices)?;
-    for (name, text) in [
-        ("LICENSE", include_str!("../../../../LICENSE")),
-        ("NOTICE", include_str!("../../../../NOTICE")),
-        (
-            "FONT-LICENSES.txt",
-            include_str!("../../../../src/assets/fonts/FONT-LICENSES.txt"),
-        ),
-    ] {
-        fs::write(notices.join(name), text)?;
+    let mut notice = engine_notice(engine)?;
+    if let Some(license) = notices::game(&content.root)? {
+        notices::append(&mut notice, "GAME-LICENSE", &license);
     }
+    fs::write(notices.join("NOTICE"), &notice)?;
     fs::create_dir_all(executable.parent().context("Engine has no parent")?)?;
     fs::create_dir_all(&project)?;
     for source in content
@@ -197,9 +194,7 @@ fn assemble(
             .context("Resource source is not a directory")?;
         fs::create_dir_all(project.join(source.strip_prefix(&content.root)?))?;
     }
-    let mut bytes = include_str!("../../../../LICENSE").len() as u64
-        + include_str!("../../../../NOTICE").len() as u64
-        + include_str!("../../../../src/assets/fonts/FONT-LICENSES.txt").len() as u64;
+    let mut bytes = notice.len() as u64;
     for relative in files {
         safe_relative(relative)?;
         let target = project.join(relative);
@@ -373,6 +368,26 @@ fn read_text(mount: &ContentMount, path: &str, limit: u64) -> Result<String> {
     Ok(String::from_utf8(bytes)?)
 }
 
+fn engine_notice(engine: &Path) -> Result<String> {
+    let directory = engine.parent().context("Engine has no parent")?;
+    let path = if cfg!(target_os = "macos") {
+        directory.join("../Resources/NOTICE")
+    } else {
+        directory.join("NOTICE")
+    };
+    // Installed authoring packages contain the exact native SDK notices for their binaries.
+    // Locally built executables have no adjacent distribution document.
+    let text = match File::open(&path) {
+        Ok(file) => Some(notices::read(file)?),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    match text {
+        Some(text) if text.starts_with("Kēne distribution notices\n") => Ok(text),
+        _ => Ok(notices::BASE.to_owned()),
+    }
+}
+
 fn copy_runtime_libraries(engine: &Path, output: &Path, bytes: &mut u64) -> Result<()> {
     if cfg!(target_os = "macos") {
         return Ok(());
@@ -426,6 +441,30 @@ fn xml(value: &str) -> String {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn installed_engine_notices_survive_playtest_export() {
+        let fixture = Fixture::new();
+        // Use an isolated app-like layout, without writing beside another fixture.
+        let engine = if cfg!(target_os = "macos") {
+            fixture.0.join("Contents/MacOS/keine")
+        } else {
+            fixture.0.join("keine")
+        };
+        let path = if cfg!(target_os = "macos") {
+            fixture.0.join("Contents/Resources/NOTICE")
+        } else {
+            fixture.0.join("NOTICE")
+        };
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::create_dir_all(engine.parent().unwrap()).unwrap();
+        let mut text = notices::BASE.to_owned();
+        notices::append(&mut text, "Native SDK / example", "Complete SDK terms\n");
+        fs::write(&path, &text).unwrap();
+        assert_eq!(engine_notice(&engine).unwrap(), text);
+        fs::remove_file(&path).unwrap();
+        assert_eq!(engine_notice(&engine).unwrap(), notices::BASE);
+    }
 
     struct Fixture(PathBuf);
     impl Fixture {
