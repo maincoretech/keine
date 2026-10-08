@@ -1,5 +1,22 @@
 # 开发与验收
 
+## 应用图标派生
+
+`cargo test --workspace --features publisher,video-native,hot-reload`：1016 passed / 21 ignored / 0 failed
+（IPC/Trash 在沙箱外运行）。同组合 fmt/check/all-targets Clippy、Engine/Editor debug 构建、
+无默认功能 + ui-sounds 的 Android Clippy，以及 all-features cargo-deny 均通过；native-smoke validate
+为 1 scene / 1 action / 1 source / 0 warning。
+PNG/WebP 回归覆盖派生一致性、透明隐藏 RGB 不产生彩边、尺寸/输入大小限制、路径越界/缺失、
+原工程不改写、发行配置移除图标源引用及临时导出保留图标。包装 Python 测试 4 passed。
+
+`python3 dev/scripts/build-icons.py target/icons-final-review` 与 `verify-icons.py --icon-dir target/icons-final-review`
+通过；macOS `iconutil -c iconset` 可读取生成的全部 ICNS 条目。
+现有 JDK/SDK/Gradle 离线运行 `assembleDebug lintDebug -PengineIconDir=.../target/icons-derived-review/android`
+通过；`verify-icons.py --apk .../app-debug.apk` 检查实际 adaptive 资源和 manifest，zipalign 16 KB 检查通过。
+workflow actionlint 通过（本地规则补充已有 ubuntu-26.04 runner 名称）。
+这些是格式、构建与包内容证据；Windows EXE/桌面、Linux 应用菜单、macOS Dock 及 Android launcher
+的实际显示尚未重新目测；远端新 CI 未触发，APK 未覆盖安装到手机。已有 Android 缩略图/滑块修改保持不变，tday 未改写。
+
 ## UI 模块与资源页
 
 Editor 的面板状态与视图归各功能模块，工作台保留分派、Dock 和共享输入；文件/场景名

@@ -112,6 +112,13 @@ def package(editor, engine, output):
                 shutil.copy2(source, staging / source.name)
             if system == 'Linux':
                 linux_libraries(shipped, staging)
+                icons = Path(os.environ.get('KEINE_APP_ICON_DIR', REPO / 'src/assets/icons'))
+                shutil.copy2(icons / 'keine-512.png', staging / 'keine.png')
+                shutil.copy2(REPO / 'dev/scripts/install-desktop.py', staging / 'install-desktop.py')
+                (staging / 'DESKTOP.json').write_text(json.dumps({
+                    'id': 'moe.maincore.keine-editor', 'name': 'Kēne Editor',
+                    'executable': 'editor', 'category': 'Development',
+                }) + '\n', encoding='utf-8')
             elif system == 'Windows':
                 windows_libraries(staging)
             else:
@@ -128,6 +135,7 @@ def package(editor, engine, output):
         (staging / 'START.txt').write_text(
             'Kēne Editor development package\n'
             'macOS: open Kēne Editor.app. Windows: editor.exe. Linux: ./editor.\n'
+            'Linux optional launcher: python3 install-desktop.py --install (after unpacking at its final location).\n'
             'Keep the entire package together; the matching Preview Engine is included.\n'
             'Open your project directory. No demo/game content or publisher identity is bundled.\n'
             'Build view exports a runnable playtest without Cargo or publisher keys.\n'

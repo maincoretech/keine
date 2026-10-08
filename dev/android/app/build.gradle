@@ -35,6 +35,7 @@ android {
 
     sourceSets {
         main {
+            res.srcDirs = ['src/main/res', providers.gradleProperty('engineIconDir').orElse('src/main/icon-res').get()]
             jniLibs.srcDirs = ['../../../target/android/jniLibs']
             assets.srcDirs = ['../../../target/android/notices']
             if (providers.gradleProperty('engineGameDir').isPresent()) {

@@ -5,6 +5,9 @@
 
 use std::io;
 
+#[cfg(feature = "icons")]
+pub mod icons;
+
 use libwebp_sys::{
     VP8StatusCode, WEBP_CSP_MODE, WebPData, WebPDataClear, WebPDecode, WebPDecoderConfig,
     WebPEncodeRGBA, WebPFree, WebPFreeDecBuffer, WebPGetFeatures, WebPInitDecoderConfig,

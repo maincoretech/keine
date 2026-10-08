@@ -3,7 +3,16 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn main() {
-    const WINDOWS_ICON: &str = "src/assets/icons/keine.ico";
+    let icons = std::env::var_os("KEINE_APP_ICON_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "src/assets/icons".into());
+    println!("cargo:rerun-if-env-changed=KEINE_APP_ICON_DIR");
+    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+    for name in ["keine-256.png", "keine.icns", "keine.ico"] {
+        let source = icons.join(name);
+        println!("cargo:rerun-if-changed={}", source.display());
+        std::fs::copy(&source, out.join(name)).expect("application icon derivation is incomplete");
+    }
 
     println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-changed=crates");
@@ -17,13 +26,12 @@ fn main() {
     println!("cargo:rustc-env=KEINE_BUILD_TIME={}", build_time());
     println!("cargo:rustc-env=KEINE_BUILD_COMMIT={}", build_commit());
     println!("cargo:rustc-env=KEINE_BUILD_FEATURES={}", build_features());
-    println!("cargo:rerun-if-changed={WINDOWS_ICON}");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
 
     winresource::WindowsResource::new()
-        .set_icon(WINDOWS_ICON)
+        .set_icon(out.join("keine.ico").to_str().unwrap())
         .compile()
         .expect("failed to embed the Kēne Windows icon");
 }

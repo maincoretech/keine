@@ -37,6 +37,7 @@ struct PreparedProject {
     staged: PathBuf,
     identity: Identity,
     benchmark_map: Option<Vec<u8>>,
+    icons: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,6 +110,7 @@ pub fn bundle_project(
                 &key_share_a,
                 &key_share_b,
                 &public_key,
+                &prepared.icons,
             )
         })?;
         println!("{}", output.display());
@@ -120,9 +122,20 @@ pub fn bundle_project(
         &key_share_b,
         &public_key,
         benchmark,
+        &prepared.icons,
     )?;
+    let config = keine_core::config::GameConfig::from_yaml(&fs::read_to_string(
+        prepared.staged.join("config.yaml"),
+    )?)?;
     publish_prepared(&prepared.staged, &prepared.identity, &output, |assembled| {
-        assemble(assembled, &features, &engine, benchmark)
+        assemble(
+            assembled,
+            &features,
+            &engine,
+            benchmark,
+            &config,
+            &prepared.icons,
+        )
     })?;
     println!("{}", output.display());
     Ok(())
@@ -144,9 +157,25 @@ fn prepare_project(
     copy_tree(project, &source)?;
 
     let OpenedProject {
-        config, content, ..
+        mut config,
+        content,
+        ..
     } = open_project(&source, loader)?;
     validate_shipping_identity(&config.project)?;
+    let icons = staging.path().join("icons");
+    let icon = if config.project.icon.is_empty() {
+        keine_media::icons::IconSet::decode(include_bytes!("assets/icons/keine.png"))?
+    } else {
+        let mount = keine_loader::ContentMount::new(
+            keine_loader::ContentBackend::FileSystem(source.canonicalize()?),
+            "",
+        )?;
+        keine_media::icons::IconSet::read(mount.open_file(Path::new(&config.project.icon))?)
+            .context("invalid project application icon")?
+    };
+    icon.write(&icons)?;
+    // Source art is publisher metadata, not a runtime media reference.
+    config.project.icon.clear();
     println!("release project identity: {}", config.project.id);
     exclude_native_source_media(&config, &content)?;
     validate_shipping_media(&content)?;
@@ -181,6 +210,7 @@ fn prepare_project(
         staged,
         identity,
         benchmark_map,
+        icons,
     })
 }
 
@@ -722,6 +752,7 @@ fn build_engine(
     key_share_b: &Path,
     public_key: &Path,
     benchmark: bool,
+    icons: &Path,
 ) -> Result<PathBuf> {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
@@ -751,6 +782,7 @@ fn build_engine(
         .arg("--target-dir")
         .arg(repo_root.join("target"));
     configure_engine_environment(&mut command, key_share_a, key_share_b, public_key);
+    command.env("KEINE_APP_ICON_DIR", icons);
     let build_target = env::var("KEINE_BUILD_TARGET")
         .ok()
         .filter(|target| !target.is_empty());
@@ -856,8 +888,14 @@ fn link_or_copy(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-fn assemble(output: &Path, _features: &str, engine: &Path, benchmark: bool) -> Result<()> {
-    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+fn assemble(
+    output: &Path,
+    _features: &str,
+    engine: &Path,
+    benchmark: bool,
+    config: &keine_core::config::GameConfig,
+    icons: &Path,
+) -> Result<()> {
     fs::write(output.join("LICENSE"), include_str!("../LICENSE"))?;
     fs::write(output.join("NOTICE"), include_str!("../NOTICE"))?;
     fs::write(
@@ -883,10 +921,25 @@ fn assemble(output: &Path, _features: &str, engine: &Path, benchmark: bool) -> R
             fs::set_permissions(output.join("keine"), fs::Permissions::from_mode(0o755))?;
         }
     }
-    fs::copy(
-        repo_root.join("src/assets/icons/keine-256.png"),
-        output.join("keine.png"),
-    )?;
+    fs::copy(icons.join("keine-512.png"), output.join("keine.png"))?;
+    #[cfg(target_os = "macos")]
+    fs::copy(icons.join("keine.icns"), output.join("keine.icns"))?;
+    #[cfg(target_os = "linux")]
+    {
+        fs::write(
+            output.join("install-desktop.py"),
+            include_str!("../dev/scripts/install-desktop.py"),
+        )?;
+        fs::write(
+            output.join("DESKTOP.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "id": config.project.application_identifier().unwrap_or_else(|| "moe.maincore.keine".into()),
+                "name": config.title, "executable": "keine", "category": "Game",
+            }))?,
+        )?;
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = config;
     if benchmark {
         fs::write(output.join(crate::runtime::BENCHMARK_MARKER), b"7\n")?;
         fs::write(output.join("BENCHMARK.txt"), BENCHMARK_README)?;
@@ -1078,6 +1131,7 @@ folder together. Send the report and, if captured, the capture directory.
 mod tests {
     use super::*;
     use hakutaku_core::OpenPolicy;
+    use keine_core::config::GameConfig;
     use keine_loader::HakutakuArchive;
     use keine_loader::compiled::{IR_SCHEMA_VERSION, decode};
 
@@ -1114,6 +1168,49 @@ mod tests {
             OpenPolicy::TrustFirstRelease,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn project_icon_is_derived_without_mutating_source_and_invalid_path_creates_no_identity() {
+        let temp = tempdir().unwrap();
+        let project = temp.path().join("source");
+        copy_tree(Path::new("tests/fixtures/native-smoke"), &project).unwrap();
+        let path = project.join("config.yaml");
+        let mut config = GameConfig::from_yaml(&fs::read_to_string(&path).unwrap()).unwrap();
+        config.project.icon = "app.png".into();
+        let source = include_bytes!("assets/icons/keine-256.png");
+        fs::write(project.join("app.png"), source).unwrap();
+        fs::write(&path, serialize_config_deterministically(&config).unwrap()).unwrap();
+        let original = fs::read(&path).unwrap();
+        let prepared =
+            prepare_project(&project, &keine_loader::LoaderRegistry::default(), false).unwrap();
+        assert!(prepared.icons.join("keine.ico").is_file());
+        assert!(
+            prepared
+                .icons
+                .join("android/mipmap-anydpi-v26/ic_launcher.xml")
+                .is_file()
+        );
+        let staged = GameConfig::from_yaml(
+            &fs::read_to_string(prepared.staged.join("config.yaml")).unwrap(),
+        )
+        .unwrap();
+        assert!(staged.project.icon.is_empty());
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert_eq!(fs::read(project.join("app.png")).unwrap(), source);
+
+        let invalid = temp.path().join("invalid");
+        copy_tree(Path::new("tests/fixtures/native-smoke"), &invalid).unwrap();
+        config.project.icon = "../source/app.png".into();
+        fs::write(
+            invalid.join("config.yaml"),
+            serialize_config_deterministically(&config).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            prepare_project(&invalid, &keine_loader::LoaderRegistry::default(), false).is_err()
+        );
+        assert!(!invalid.join(".keine").exists());
     }
 
     #[test]
@@ -1504,7 +1601,15 @@ mod tests {
         #[cfg(windows)]
         fs::write(engine.with_extension("pdb"), b"symbols").unwrap();
 
-        assemble(&output, "", &engine, true).unwrap();
+        assemble(
+            &output,
+            "",
+            &engine,
+            true,
+            &Default::default(),
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("src/assets/icons"),
+        )
+        .unwrap();
 
         assert!(!output.join("run.sh").exists());
         assert!(!output.join("run.bat").exists());

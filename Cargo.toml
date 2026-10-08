@@ -57,6 +57,7 @@ startup-metrics = ["dep:libc", "dep:windows-sys"]
 # Publisher-only compiler and Hakutaku packer. Release game engines deliberately
 # omit this feature and link only hakutaku-core through keine-loader.
 publisher = [
+    "keine-media/icons",
     "dep:hakutaku-core",
     "dep:hakutaku-pack",
     "dep:noyalib",

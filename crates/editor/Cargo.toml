@@ -21,7 +21,7 @@ image = { workspace = true }
 keine-authoring = { workspace = true }
 keine-core = { workspace = true }
 keine-loader = { workspace = true }
-keine-media = { workspace = true }
+keine-media = { workspace = true, features = ["icons"] }
 postcard = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -46,6 +46,9 @@ bevy = { workspace = true, features = [
     "bevy_sprite_render",
     "bevy_winit",
 ] }
+
+[build-dependencies]
+winresource = "0.1.31"
 
 # Standalone Editor tests do not inherit the engine's Linux window backend.
 [target.'cfg(target_os = "linux")'.dev-dependencies]

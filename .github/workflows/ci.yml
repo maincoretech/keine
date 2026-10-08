@@ -112,6 +112,7 @@ jobs:
       - name: Check benchmark collector boundaries
         if: matrix.quality
         run: |
+          python3 dev/scripts/verify-icons.py
           python3 -m unittest discover -s tests/bench/runtime -p 'test_*.py'
           python3 -m unittest discover -s tests/packaging -p 'test_*.py'
       - name: Check publisher pipeline

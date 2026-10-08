@@ -113,6 +113,10 @@ pub struct ProjectMetadata {
     /// shipping tools derive `moe.maincore.keine.<id>`.
     #[serde(default)]
     pub bundle_identifier: String,
+    /// Publisher/Editor application icon, relative to the project root.
+    /// One square PNG or WebP; platform representations are derived at build time.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub icon: String,
     /// Short description of the currently loaded visual novel.
     #[serde(default)]
     pub description: String,

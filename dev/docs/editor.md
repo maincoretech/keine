@@ -153,6 +153,8 @@ Text 概览的配色、换行与笔画在后台生成；改宽复用配色，新
 复制登记资源、全部 `.shou` 和配置/清单，不复制原格式副本、未登记素材、存档、缓存或私钥。
 源工程和导出副本分别校验，失败清理本次新目录；工程的 scene ID、引用和布局保持不变。
 macOS 输出 `Game.app`，Windows/Linux 输出 `keine.exe` / `keine`；均可直接启动。
+`project.icon` 可指定工程内 PNG/WebP；导出时校验并保留图标，macOS/Linux 自动生成对应应用图标。
+Windows 临时导出复用 Engine 的 EXE 文件图标，窗口使用项目图标；正式发行通过 `bundle` 嵌入，见 [发布](release.md#应用图标)。
 试玩副本包含可读源码，只针对当前操作系统；正式 Hakutaku 发行仍使用 [bundle](release.md)。
 
 ## 资源

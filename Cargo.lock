@@ -5494,6 +5494,7 @@ dependencies = [
  "windows 0.61.3",
  "windows-core 0.61.2",
  "windows-sys 0.61.2",
+ "winresource",
 ]
 
 [[package]]
@@ -5519,6 +5520,7 @@ dependencies = [
 name = "keine-media"
 version = "0.13.1"
 dependencies = [
+ "image",
  "libwebp-sys",
 ]
 

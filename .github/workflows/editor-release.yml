@@ -81,6 +81,10 @@ jobs:
         env:
           BUILD_TARGET: ${{ matrix.target }}
         run: |
+          python3 dev/scripts/build-icons.py target/editor-icons
+          python3 dev/scripts/verify-icons.py --icon-dir target/editor-icons
+          export KEINE_APP_ICON_DIR="$GITHUB_WORKSPACE/target/editor-icons"
+          echo "KEINE_APP_ICON_DIR=$KEINE_APP_ICON_DIR" >> "$GITHUB_ENV"
           args=(--release --locked --no-default-features --features "$KEINE_AUTHORING_FEATURES"
                 --target-dir target/authoring -p keine -p keine-editor --bin keine --bin editor)
           if [[ -n "$BUILD_TARGET" ]]; then

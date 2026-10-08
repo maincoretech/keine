@@ -24,6 +24,7 @@ manifest = subprocess.check_output(
     [tools / "aapt2", "dump", "xmltree", apk, "--file", "AndroidManifest.xml"], text=True
 )
 assert re.search(r":launchMode\(.*\)=(2|0x0*2)$", manifest, re.MULTILINE), manifest
+subprocess.run([sys.executable, Path(__file__).with_name('verify-icons.py'), '--apk', apk], check=True)
 with zipfile.ZipFile(apk) as package:
     entries = package.namelist()
     assert "assets/keine-game/game.haku" in entries, entries

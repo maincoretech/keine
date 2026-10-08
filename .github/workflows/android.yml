@@ -93,6 +93,7 @@ jobs:
             dev/android/app/build/outputs/apk/debug/app-debug.apk --file AndroidManifest.xml \
             > "$RUNNER_TEMP/android-apk-activity.txt"
           grep -E ':launchMode\(.*\)=(2|0x0*2)$' "$RUNNER_TEMP/android-apk-activity.txt"
+          python3 dev/scripts/verify-icons.py --apk dev/android/app/build/outputs/apk/debug/app-debug.apk
       - name: Upload Android Engine artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

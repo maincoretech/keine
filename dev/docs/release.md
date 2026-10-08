@@ -33,6 +33,35 @@ Preview Engine；Windows/Linux 是相邻的 Editor/Engine executable 和运行�
 Editor 的 Build 临时试玩导出不需要 Cargo/密钥；规范媒体播放含对应平台视频后端。
 转换非规范音视频仍须另装 FFmpeg executable，SDK 动态库不是转换工具。
 
+## 应用图标
+
+作者只需在工程内准备一张正方形 PNG/WebP，并在 `config.yaml` 指定：
+
+```yaml
+project:
+  id: my-game
+  icon: app-icon.webp
+```
+
+路径相对工程根目录，不能越出工程。建议 1024×1024，允许 32–4096 px、最多 64 MiB；
+保留透明度。未配置时使用 Kēne 默认图标。`cargo bundle` 和 Project CI 自动派生 Windows
+多尺寸 ICO、macOS ICNS、Linux PNG、Android 各密度与 adaptive icon，不需另交平台文件。
+Android 将完整图标居中留在安全区域；没有自动生成 monochrome 主题图标。
+格式依据 [Windows 图标](https://learn.microsoft.com/en-us/windows/win32/menurc/about-icons)
+和 [Android adaptive icon](https://developer.android.com/develop/ui/views/launch/icon_design_adaptive)。
+
+Editor Build 保留图标源文件，生成 macOS/Linux 应用图标并供窗口使用。
+Windows 临时导出复用已安装 Engine，EXE 文件图标仍为 Engine；正式 `bundle` 会重新嵌入项目 ICO。
+Linux 包中的 `python3 install-desktop.py --install` 可注册应用菜单与图标；应在最终存放目录运行，
+移动包后重新运行。此步骤需要 Python 3，直接启动游戏不需要。
+
+维护者只维护 `src/assets/icons/keine.png`。Release Editor / CI Android 在构建前自动派生，
+项目发行直接调用同一 Rust 生成器；现有 `image` PNG 与 `keine-media` WebP 解码器复用，无额外图片工具。
+手动生成到新目录：`python3 dev/scripts/build-icons.py target/my-icons --source path/to/icon.webp`；
+或 `cargo run --features publisher -- icons path/to/icon.webp target/my-icons`。
+提交默认图标变更时同步生成 `src/assets/icons` 与 Android `icon-res` 回退资源，并运行
+`python3 dev/scripts/verify-icons.py`；CI 另检查派生文件和实际 APK。
+
 CI / 发布使用官方稳定 Actions 并固定完整发布 SHA；JavaScript Actions 使用 Node 24。
 Runner 显式使用 `ubuntu-26.04`、`macos-26`（arm64）和 `windows-2025`（x64）；
 Rust 原生构建缓存按 runner image / architecture 隔离，

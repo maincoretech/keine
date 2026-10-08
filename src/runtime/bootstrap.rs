@@ -319,6 +319,23 @@ fn execute_command(
                 anyhow::bail!("publisher tools are not compiled; run `cargo pack <project>`");
             }
         }
+        CliCommand::Icons { source, output } => {
+            #[cfg(feature = "publisher")]
+            {
+                if output.exists() {
+                    anyhow::bail!("choose a fresh icon output directory");
+                }
+                let icons = keine_media::icons::IconSet::read(std::fs::File::open(source)?)?;
+                return icons
+                    .write(&output)
+                    .context("failed to derive application icons");
+            }
+            #[cfg(not(feature = "publisher"))]
+            {
+                let _ = (source, output);
+                anyhow::bail!("icon tools are not compiled; enable publisher");
+            }
+        }
         CliCommand::Bundle {
             project,
             output,
@@ -1548,6 +1565,12 @@ fn build_opened_app(
         && !options.hidden_window;
     let window_plugin = WindowPlugin {
         primary_window: Some(Window {
+            name: Some(
+                config
+                    .project
+                    .application_identifier()
+                    .unwrap_or_else(|| "moe.maincore.keine".into()),
+            ),
             title: if authoring_preview {
                 format!("{} — Kēne Preview", config.title)
             } else {
@@ -1652,6 +1675,8 @@ fn build_opened_app(
 
 fn set_primary_window_icon(
     window: Query<Entity, With<PrimaryWindow>>,
+    config: Res<GameConfigResource>,
+    project: Res<ContentProjectResource>,
     _main_thread: NonSendMarker,
 ) {
     #[cfg(target_os = "macos")]
@@ -1662,7 +1687,10 @@ fn set_primary_window_icon(
     let Ok(window_entity) = window.single() else {
         return;
     };
-    let icon = match load_window_icon() {
+    let icon = match load_project_window_icon(&config.0, &project.0).or_else(|error| {
+        log::warn!("failed to load project application icon: {error:#}");
+        load_window_icon()
+    }) {
         Ok(icon) => icon,
         Err(error) => {
             log::warn!("failed to load application icon: {error:#}");
@@ -1683,14 +1711,28 @@ fn set_macos_application_icon() -> Result<()> {
     use objc2_app_kit::{NSApplication, NSImage};
     use objc2_foundation::NSData;
 
+    // Native bundles already declare their own project/Editor icon. Do not
+    // replace it with the embedded Engine fallback, including playtest Apps.
+    if std::env::current_exe()?.parent().is_some_and(|parent| {
+        parent.file_name().is_some_and(|name| name == "MacOS")
+            && parent
+                .parent()
+                .and_then(Path::file_name)
+                .is_some_and(|name| name == "Contents")
+    }) {
+        return Ok(());
+    }
+
     let main_thread =
         MainThreadMarker::new().context("application icon must be set on main thread")?;
-    let bytes = include_bytes!("../assets/icons/keine-256.png");
+    // Preserve all representations when launched directly; a 256 px PNG would
+    // replace the packaged application's high-resolution Dock icon.
+    let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/keine.icns"));
     // SAFETY: `NSData` copies exactly `bytes.len()` readable bytes from this
     // process-owned static buffer before returning.
     let data = unsafe { NSData::dataWithBytes_length(bytes.as_ptr().cast(), bytes.len()) };
     let image = NSImage::initWithData(main_thread.alloc(), &data)
-        .context("AppKit rejected the embedded PNG application icon")?;
+        .context("AppKit rejected the embedded ICNS application icon")?;
     let application = NSApplication::sharedApplication(main_thread);
     // SAFETY: This setter is called on AppKit's main thread and retains the
     // supplied NSImage for the application's Dock lifetime.
@@ -1704,9 +1746,64 @@ fn load_window_icon() -> Result<winit::window::Icon> {
         .context("embedded application icon has invalid RGBA data")
 }
 
+fn load_project_window_icon(
+    config: &GameConfig,
+    project: &ContentProject,
+) -> Result<winit::window::Icon> {
+    use std::io::Read;
+    if config.project.icon.is_empty() {
+        return load_window_icon();
+    }
+    let mount = keine_loader::ContentMount::new(
+        keine_loader::ContentBackend::FileSystem(project.root.clone()),
+        "",
+    )?;
+    let mut bytes = Vec::new();
+    mount
+        .open_file(Path::new(&config.project.icon))?
+        .take(64 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)?;
+    anyhow::ensure!(
+        bytes.len() <= 64 * 1024 * 1024,
+        "application icon exceeds 64 MiB"
+    );
+    let (rgba, width, height) = if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        let mut valid = false;
+        let decoded = keine_media::decode_webp(&bytes, |size| {
+            valid = size.width == size.height && (32..=4096).contains(&size.width);
+            keine_media::ImageSize::new(256, 256)
+        })?;
+        anyhow::ensure!(valid, "invalid application icon dimensions");
+        (decoded.into_pixels(), 256, 256)
+    } else {
+        anyhow::ensure!(
+            bytes.starts_with(b"\x89PNG\r\n\x1a\n") && bytes.len() >= 24,
+            "application icon must be PNG or WebP"
+        );
+        let width = u32::from_be_bytes(bytes[16..20].try_into()?);
+        let height = u32::from_be_bytes(bytes[20..24].try_into()?);
+        anyhow::ensure!(
+            width == height && (32..=4096).contains(&width),
+            "invalid application icon dimensions"
+        );
+        let image = Image::from_buffer(
+            &bytes,
+            ImageType::Extension("png"),
+            CompressedImageFormats::NONE,
+            true,
+            ImageSampler::default(),
+            RenderAssetUsages::MAIN_WORLD,
+        )?;
+        let pixels = image.try_into_dynamic()?.thumbnail(256, 256).to_rgba8();
+        let (width, height) = pixels.dimensions();
+        (pixels.into_raw(), width, height)
+    };
+    winit::window::Icon::from_rgba(rgba, width, height).context("invalid application icon RGBA")
+}
+
 fn decode_window_icon() -> Result<(Vec<u8>, u32, u32)> {
     let image = Image::from_buffer(
-        include_bytes!("../assets/icons/keine-256.png"),
+        include_bytes!(concat!(env!("OUT_DIR"), "/keine-256.png")),
         ImageType::Extension("png"),
         CompressedImageFormats::NONE,
         true,

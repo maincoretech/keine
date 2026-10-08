@@ -41,7 +41,7 @@ make_app() {
     mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
     cp "$source" "$bundle/Contents/MacOS/$executable"
     chmod +x "$bundle/Contents/MacOS/$executable"
-    cp "$repo_root/src/assets/icons/keine.icns" "$bundle/Contents/Resources/keine.icns"
+    cp "${KEINE_APP_ICON_DIR:-$repo_root/src/assets/icons}/keine.icns" "$bundle/Contents/Resources/keine.icns"
     cp "$repo_root/LICENSE" "$repo_root/NOTICE" "$bundle/Contents/Resources/"
     cp "$repo_root/src/assets/fonts/FONT-LICENSES.txt" "$bundle/Contents/Resources/"
     printf '%s\n' \

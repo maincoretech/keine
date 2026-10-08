@@ -37,6 +37,7 @@ pub(super) fn assemble(
     key_share_a: &Path,
     key_share_b: &Path,
     public_key: &Path,
+    icons: &Path,
 ) -> Result<()> {
     let id = application_id(&config.project)?;
     let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -70,6 +71,7 @@ pub(super) fn assemble(
         "link-arg=-Wl,-z,common-page-size=16384",
     ]);
     configure_engine_environment(&mut build, key_share_a, key_share_b, public_key);
+    build.env("KEINE_APP_ICON_DIR", icons);
     if !build
         .status()
         .context("failed to build Android Engine")?
@@ -143,6 +145,10 @@ pub(super) fn assemble(
         .arg(format!("-PengineApplicationId={id}"))
         .arg(format!("-PengineTitle={}", config.title))
         .arg(format!("-PengineGameDir={}", assets.path().display()))
+        .arg(format!(
+            "-PengineIconDir={}",
+            icons.join("android").display()
+        ))
         .args(["clean", "assembleRelease"]);
     if !gradle
         .status()

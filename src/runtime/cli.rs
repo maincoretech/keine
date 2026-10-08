@@ -95,6 +95,10 @@ pub(super) enum CliCommand {
         output: PathBuf,
         benchmark: bool,
     },
+    Icons {
+        source: PathBuf,
+        output: PathBuf,
+    },
     BenchmarkReport {
         project: PathBuf,
         runs: usize,
@@ -138,6 +142,12 @@ struct CommandHelp {
 }
 
 const COMMANDS: &[CommandHelp] = &[
+    #[cfg(feature = "publisher")]
+    CommandHelp {
+        name: "icons",
+        args: "<source.png|source.webp> <output-dir>",
+        summary: "Derive application icons for all platforms",
+    },
     CommandHelp {
         name: "validate",
         args: "<project>",
@@ -225,6 +235,13 @@ pub(super) fn parse(args: &[OsString]) -> Result<CliCommand> {
             Ok(CliCommand::Validate { project })
         }
         Some("pack") => parse_pack(args),
+        Some("icons") => {
+            const USAGE: &str = "keine icons <source.png|source.webp> <output-dir>";
+            let source = required_path(args, 1, USAGE)?;
+            let output = required_path(args, 2, USAGE)?;
+            require_no_extra_args(args, 3, USAGE)?;
+            Ok(CliCommand::Icons { source, output })
+        }
         Some("remap") => parse_remap(args),
         Some("bundle") => parse_bundle(args),
         Some("migrate") => {

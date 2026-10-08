@@ -72,6 +72,14 @@ fn export_files(
     config: &GameConfig,
 ) -> Result<BTreeSet<PathBuf>> {
     let mut files = BTreeSet::from([PathBuf::from("config.yaml")]);
+    if !config.project.icon.is_empty() {
+        let path = Path::new(&config.project.icon);
+        safe_relative(path)?;
+        // Validate before allocating an export directory, and retain the source
+        // for the installed Engine's window icon in the playtest copy.
+        keine_media::icons::IconSet::read(mount.open_file(path)?)?;
+        files.insert(path.to_owned());
+    }
     for path in [
         &config.script.assets,
         &config.script.characters,
@@ -153,6 +161,13 @@ fn assemble(
     content: &keine_loader::ContentProject,
     config: &GameConfig,
 ) -> Result<ExportedGame> {
+    let icons = if config.project.icon.is_empty() {
+        None
+    } else {
+        Some(keine_media::icons::IconSet::read(
+            mount.open_file(Path::new(&config.project.icon))?,
+        )?)
+    };
     let (executable, project) = export_layout(directory);
     let notices = if cfg!(target_os = "macos") {
         directory.join("Game.app/Contents/Resources")
@@ -199,11 +214,17 @@ fn assemble(
     #[cfg(target_os = "macos")]
     {
         let contents = directory.join("Game.app/Contents");
+        let icon = icons
+            .as_ref()
+            .map(|icons| icons.icns())
+            .unwrap_or_else(|| include_bytes!("../../../../src/assets/icons/keine.icns").to_vec());
+        fs::write(notices.join("keine.icns"), &icon)?;
+        bytes += icon.len() as u64;
         let identifier = format!("moe.maincore.keine.playtest.{}", config.project.id);
         fs::write(
             contents.join("Info.plist"),
             format!(
-                "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict><key>CFBundleExecutable</key><string>keine</string><key>CFBundleIdentifier</key><string>{}</string><key>CFBundleName</key><string>{}</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>{}</string></dict></plist>",
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict><key>CFBundleExecutable</key><string>keine</string><key>CFBundleIdentifier</key><string>{}</string><key>CFBundleName</key><string>{}</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleIconFile</key><string>keine.icns</string><key>CFBundleShortVersionString</key><string>{}</string></dict></plist>",
                 xml(&identifier),
                 xml(&config.title),
                 env!("CARGO_PKG_VERSION")
@@ -217,11 +238,27 @@ fn assemble(
             bail!("Could not sign the playtest app");
         }
     }
-    #[cfg(not(target_os = "macos"))]
-    let _ = config;
+    #[cfg(target_os = "linux")]
+    {
+        let icon = icons
+            .as_ref()
+            .map(|icons| icons.png(512))
+            .unwrap_or(include_bytes!("../../../../src/assets/icons/keine-512.png"));
+        let installer = include_str!("../../../../dev/scripts/install-desktop.py");
+        fs::write(directory.join("keine.png"), icon)?;
+        fs::write(directory.join("install-desktop.py"), installer)?;
+        let desktop = serde_json::to_vec_pretty(&serde_json::json!({
+            "id": config.project.application_identifier().unwrap_or_else(|| "moe.maincore.keine".into()),
+            "name": config.title, "executable": "keine", "arguments": ["project"], "category": "Game",
+        }))?;
+        fs::write(directory.join("DESKTOP.json"), &desktop)?;
+        bytes += (icon.len() + installer.len() + desktop.len()) as u64;
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let _ = (config, icons);
     fs::write(
         directory.join("PLAYTEST.txt"),
-        "Temporary playtest for this operating system. Launch Game.app (macOS) or keine/keine.exe (Linux/Windows).\nContains readable scripts and registered resources; not a Hakutaku release.\n",
+        "Temporary playtest for this operating system. Launch Game.app (macOS) or keine/keine.exe (Linux/Windows).\nContains readable scripts and registered resources; not a Hakutaku release.\nLinux optional launcher: python3 install-desktop.py --install (after unpacking at its final location).\n",
     )?;
     Ok(ExportedGame {
         directory: directory.to_owned(),
@@ -427,6 +464,30 @@ mod tests {
     }
 
     #[test]
+    fn custom_icon_is_retained_and_missing_or_escaping_icon_fails() {
+        let fixture = Fixture::new();
+        let root = fixture.0.canonicalize().unwrap();
+        let mount = ContentMount::new(ContentBackend::FileSystem(root.clone()), "").unwrap();
+        let mut config =
+            GameConfig::from_yaml(&fs::read_to_string(root.join("config.yaml")).unwrap()).unwrap();
+        config.project.icon = "app.png".into();
+        fs::write(
+            root.join("app.png"),
+            include_bytes!("../../../../src/assets/icons/keine-256.png"),
+        )
+        .unwrap();
+        assert!(
+            export_files(&root, &mount, &config)
+                .unwrap()
+                .contains(Path::new("app.png"))
+        );
+        config.project.icon = "missing.png".into();
+        assert!(export_files(&root, &mount, &config).is_err());
+        config.project.icon = "../app.png".into();
+        assert!(export_files(&root, &mount, &config).is_err());
+    }
+
+    #[test]
     fn copies_registered_resources_and_all_chapters_without_keys_or_originals() {
         let fixture = Fixture::new();
         let root = fixture.0.canonicalize().unwrap();
@@ -506,7 +567,7 @@ mod tests {
             reserve_directory(&parent, fixture.0.file_name().unwrap().to_str().unwrap()).unwrap();
         fs::write(previous.join("keep"), b"existing").unwrap();
         let error = export_game(&fixture.0, &parent, &engine).unwrap_err();
-        assert!(error.to_string().contains("invalid"));
+        assert!(error.to_string().contains("invalid"), "{error:#}");
         assert_eq!(fs::read_dir(&parent).unwrap().count(), 1);
         assert_eq!(fs::read(previous.join("keep")).unwrap(), b"existing");
         assert_eq!(

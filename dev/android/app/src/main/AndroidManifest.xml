@@ -5,6 +5,8 @@
     <application
         android:enableOnBackInvokedCallback="true"
         android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:label="${engineTitle}"
         android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen">
         <activity
