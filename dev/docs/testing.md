@@ -486,6 +486,10 @@ cargo-deny 和 CI actionlint 通过。远程 Android CI 按对应提交的 Actio
 `hardened,ui-sounds` Clippy、全特性 cargo-deny、actionlint 和 native-smoke validate 通过。
 已安装到 Motorola 测试机，`target/android/tday-phone-runtime.log` 确认 tday ready /
 Adreno 829 Vulkan；云端发布结果与手机画面/触摸验收继续单独核对。
+CI 默认功能组合的 Clippy 发现 APK 边界测试误用 publisher 的可选 tempfile；测试改为标准库
+打开后 unlink 的匿名文件，不新增依赖。默认 workspace Clippy 和 tests 重跑通过，
+`target/android/tday-default-clippy-after.log` / `tday-default-tests.log` 保存原始结果，
+publisher/video-native/hot-reload 组合的同一 APK 边界回归也通过。
 
 ## 测试布局
 

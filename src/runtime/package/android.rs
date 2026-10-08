@@ -44,7 +44,20 @@ mod tests {
     use std::io::Write;
     #[test]
     fn apk_reads_cannot_escape_into_adjacent_zip_entries() {
-        let mut file = tempfile::tempfile().unwrap();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("keine-apk-window-{}-{nonce}", std::process::id()));
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        // Unix keeps this descriptor alive after unlinking the test file.
+        std::fs::remove_file(path).unwrap();
         file.write_all(b"prefixPAYLOADsuffix").unwrap();
         assert!(ApkFile::new(file.try_clone().unwrap(), u64::MAX, 7).is_err());
         assert!(ApkFile::new(file.try_clone().unwrap(), 6, 100).is_err());
