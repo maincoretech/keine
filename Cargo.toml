@@ -137,7 +137,7 @@ crc32fast = "1"
 criterion = "0.5"
 crossbeam-channel = "0.5"
 notify = "8.2"
-noyalib = { version = "0.0.15", default-features = false, features = ["std", "fast-int", "fast-float"] }
+noyalib = { version = "0.0.53", default-features = false, features = ["std", "fast-int", "fast-float"] }
 hakutaku-core = { git = "https://github.com/maincoretech/hakutaku", rev = "ce8fe3c" }
 hakutaku-pack = { git = "https://github.com/maincoretech/hakutaku", rev = "ce8fe3c" }
 libc = "0.2"
