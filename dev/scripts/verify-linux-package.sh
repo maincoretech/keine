@@ -32,7 +32,8 @@ done
 cd /tmp
 timeout 30s /tmp/package/keine --version
 project=/native-smoke
-if [[ -f /tmp/package/game.haku ]]; then project=/tmp/package; fi
+# The Hakutaku adapter opens a snapshot file; a directory is an authoring project.
+if [[ -f /tmp/package/game.haku ]]; then project=/tmp/package/game.haku; fi
 timeout 60s /tmp/package/keine validate "$project" | tee /tmp/validation.log
 grep -q '^project valid' /tmp/validation.log
 echo 'Final Linux package: loader and project validation passed on Ubuntu 24.04.'

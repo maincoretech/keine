@@ -17,6 +17,45 @@ spec.loader.exec_module(packaging)
 
 
 class LinuxPackageTests(unittest.TestCase):
+    def test_container_gate_validates_snapshot_or_authoring_fixture_and_rejects_errors(self):
+        script = SCRIPT.with_name('verify-linux-package.sh').read_text()
+        validation_template = script[script.index('# An unrelated cwd'):]
+        # Exercise the actual shell gate without installing container packages.
+        # A failed CLI currently logs an error even when its exit status is zero.
+        for packaged, invalid in [(True, False), (False, False), (True, True)]:
+            with self.subTest(packaged=packaged, invalid=invalid), \
+                    tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                package, fixture = root / 'package', root / 'native-smoke'
+                package.mkdir()
+                fixture.mkdir()
+                (fixture / 'config.yaml').write_text('authoring fixture')
+                if packaged:
+                    (package / 'game.haku').write_bytes(b'snapshot')
+                engine = package / 'keine'
+                engine.write_text('#!/bin/bash\n'
+                    'if [[ "$1" == --version ]]; then echo "Kēne test"; exit 0; fi\n'
+                    'printf "%s\\n" "$2" > "$VALIDATED_PATH"\n'
+                    'if [[ "$1" != validate || "$INVALID_PROJECT" == 1 ]]; then\n'
+                    '  echo "ERROR failed to open project"; exit 0\n'
+                    'fi\n'
+                    'if [[ -f "$2" || -f "$2/config.yaml" ]]; then\n'
+                    '  echo "project valid · test"\n'
+                    'else echo "ERROR project config does not exist"; fi\n')
+                engine.chmod(0o755)
+                validation = validation_template.replace('/tmp/package', str(package)) \
+                    .replace('/native-smoke', str(fixture)) \
+                    .replace('/tmp/validation.log', str(root / 'validation.log'))
+                result = subprocess.run(['bash', '-c',
+                    'set -euo pipefail\ntimeout() { shift; "$@"; }\n' + validation],
+                    env={**os.environ, 'VALIDATED_PATH': str(root / 'validated-path'),
+                         'INVALID_PROJECT': '1' if invalid else '0'},
+                    text=True, capture_output=True)
+                self.assertEqual((root / 'validated-path').read_text().strip(),
+                                 str(package / 'game.haku' if packaged else fixture))
+                self.assertEqual(result.returncode == 0, not invalid, result.stdout + result.stderr)
+                self.assertEqual('validation passed' in result.stdout, not invalid)
+
     def test_second_executable_reuses_packaged_library_and_original_notice(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()

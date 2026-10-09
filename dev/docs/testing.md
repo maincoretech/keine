@@ -70,6 +70,7 @@ fmt、native-smoke validate、workflow actionlint 通过；完整 workspace 测�
 Actions 每月一个普通更新分组 PR；关闭自动 rebase/合并，更新仍由正常 CI 审查。
 Linux 的最终 Engine/benchmark/Editor ZIP 与正式游戏目录，在仅装宿主运行库的
 Ubuntu 24.04 容器中解压、检查全部 ELF 和 executable 动态库，并加载 Engine 与游戏。
+游戏验证传入 `game.haku` 文件；无游戏快照的 Editor 包验证 native-smoke 开发工程目录。
 容器验证不声称窗口、GPU 或音频验收；完整真机 benchmark 仍单独运行。
 
 ## 表达式诊断与深度预算
