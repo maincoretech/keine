@@ -2,7 +2,9 @@ name: CI Android
 
 on:
   push:
+    paths-ignore: ['dev/docs/**', 'README.md', 'AGENTS.md', '.github/dependabot.yml']
   pull_request:
+    paths-ignore: ['dev/docs/**', 'README.md', 'AGENTS.md', '.github/dependabot.yml']
   workflow_dispatch:
 
 concurrency:
@@ -25,13 +27,15 @@ jobs:
       - name: Set up Android toolchain
         uses: ./.github/actions/setup-android
       - name: Restore Android Rust build cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: rust-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target/android
-          key: android-arm64-ubuntu26-ndk28-v1-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ github.sha }}
+            target/icon-tool
+          key: android-arm64-ubuntu26-ndk28-v1-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
           restore-keys: |
             android-arm64-ubuntu26-ndk28-v1-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-
       - name: Guard Android runtime dependencies
@@ -112,3 +116,13 @@ jobs:
             dev/android/app/build/outputs/apk/debug/app-debug.apk
             target/android/jniLibs/arm64-v8a/libkeine.so
             target/android/notices/
+      - name: Save Android dependencies even after validation failure
+        if: ${{ !cancelled() && steps.rust-cache.outputs.cache-primary-key != '' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/android
+            target/icon-tool
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}

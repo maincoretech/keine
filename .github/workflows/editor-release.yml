@@ -26,22 +26,37 @@ jobs:
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_branch == 'main' &&
-       github.event.workflow_run.head_repository.full_name == github.repository)
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.head_sha == github.sha)
     runs-on: ubuntu-26.04
     timeout-minutes: 15
+    outputs:
+      current: ${{ steps.current.outputs.build }}
     steps:
       - name: Check out release source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.RELEASE_SHA }}
+      - name: Skip superseded automatic release before compiling
+        id: current
+        shell: bash
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == workflow_run && "$(git ls-remote origin refs/heads/main | cut -f1)" != "$RELEASE_SHA" ]]; then
+            echo 'Newer main exists; skip this automatic release.'
+            exit 0
+          fi
+          echo 'build=true' >> "$GITHUB_OUTPUT"
       - name: Install Rust toolchain
+        if: steps.current.outputs.build == 'true'
         uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
       - name: Check dependencies
+        if: steps.current.outputs.build == 'true'
         uses: ./.github/actions/check-dependencies
 
   build:
     name: Build ${{ matrix.name }}
     needs: dependencies
+    if: needs.dependencies.outputs.current == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -75,14 +90,16 @@ jobs:
         if: matrix.target != ''
         run: rustup target add ${{ matrix.target }}
       - name: Restore build cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: rust-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           # Separate from encrypted game caches; no publisher/hardened build.
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target/authoring
-          key: editor-rust-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ env.RELEASE_SHA }}
+            target/icon-tool
+          key: editor-rust-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
           restore-keys: |
             editor-rust-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-
             editor-rust-v1-${{ matrix.os }}-${{ runner.arch }}-
@@ -121,9 +138,6 @@ jobs:
           suffix=''
           if [[ "$RUNNER_OS" == 'Windows' ]]; then suffix='.exe'; fi
           python3 dev/scripts/package-authoring.py "$binary_dir/editor$suffix" "$binary_dir/keine$suffix" "target/${{ matrix.artifact }}"
-          if [[ "$RUNNER_OS" == 'Linux' ]]; then
-            python3 dev/scripts/verify-linux-abi.py "target/${{ matrix.artifact }}"
-          fi
       - name: Archive complete package
         shell: bash
         run: |
@@ -148,6 +162,17 @@ jobs:
           path: downloads/*.zip
           if-no-files-found: error
           retention-days: 14
+          compression-level: 0
+      - name: Save authoring dependencies even after validation failure
+        if: ${{ !cancelled() && steps.rust-cache.outputs.cache-primary-key != '' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/authoring
+            target/icon-tool
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
 
   publish:
     name: Publish Editor

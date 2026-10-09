@@ -1,0 +1,46 @@
+name: Verify Linux Download
+
+# Recheck a published ZIP independently; never compile or republish the engine.
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Existing download to verify in clean Ubuntu 24.04
+        type: choice
+        options: [tday-latest, benchmark-latest, editor-latest]
+        required: true
+        default: tday-latest
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify existing Linux package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out verification tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download published Linux archive
+        id: download
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          case "$CHANNEL" in
+            tday-latest) pattern='tday-linux-test.zip' ;;
+            benchmark-latest) pattern='keine-linux-temporary-benchmark.zip' ;;
+            editor-latest) pattern='keine-editor-linux-x64.zip' ;;
+            *) exit 2 ;;
+          esac
+          mkdir downloads
+          gh release view "$CHANNEL" --repo "$GITHUB_REPOSITORY" --json tagName,targetCommitish,name
+          gh release download "$CHANNEL" --repo "$GITHUB_REPOSITORY" --pattern "$pattern" --dir downloads
+          echo "package=downloads/$pattern" >> "$GITHUB_OUTPUT"
+      - name: Validate existing archive without the build SDK
+        uses: ./.github/actions/verify-linux-package
+        with:
+          package: ${{ steps.download.outputs.package }}
+          isolated: 'true'

@@ -47,19 +47,19 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install nightly Rust
         run: rustup toolchain install nightly --profile minimal
-      - name: Set up video dependencies
-        uses: ./.github/actions/setup-video
-        with:
-          enabled: "false"
       - name: Cache cargo-fuzz
+        id: cargo-fuzz-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.tool_cache }}/cargo-fuzz
           key: cargo-fuzz-${{ runner.os }}-${{ env.CARGO_FUZZ_VERSION }}
+      - name: Add cargo-fuzz to PATH
+        shell: bash
+        run: echo "${{ runner.tool_cache }}/cargo-fuzz/bin" >> "$GITHUB_PATH"
       - name: Install cargo-fuzz
+        if: steps.cargo-fuzz-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
-          echo "${{ runner.tool_cache }}/cargo-fuzz/bin" >> "$GITHUB_PATH"
           cargo install --locked --root "${{ runner.tool_cache }}/cargo-fuzz" --version "$CARGO_FUZZ_VERSION" cargo-fuzz
       - name: Fuzz the production WebP decoder
         run: >-

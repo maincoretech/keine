@@ -32,10 +32,13 @@ perf <project> [--startup]  开发测量
 Preview Engine；Windows/Linux 是相邻的 Editor/Engine executable 和运行库，须完整解压。
 Linux 发行构建固定 `ubuntu-24.04` / GLIBC 2.39 基线；游戏、benchmark 与 Editor
 均校验包内每个 ELF 的版本需求，不能用最新构建机启动成功替代旧系统兼容。
-Engine/benchmark 与 Editor 的最终 ZIP、正式 Project 的发布目录，还需在干净的
-Ubuntu 24.04 容器中验证：保留解压执行权限、检查动态库闭包，并从无关 cwd 加载
-Engine 和实际游戏（Editor 用 native-smoke）。容器只装宿主运行库，没有构建 SDK。
-此门禁覆盖 loader/内容加载，不替代原生窗口、GPU、音频及硬件性能验收。
+Engine/benchmark 与 Editor 的最终 ZIP、正式 Project 的发布目录，在同一 Ubuntu
+24.04 runner 上验证一次：保留解压执行权限、检查 ABI/动态库闭包，并从无关 cwd
+加载 Engine 和 `game.haku`（Editor 用 native-smoke 工程目录）。FFmpeg 和已有 bundled
+库必须从包内 `lib/` 解析，不能由 runner SDK 掩盖漏包。
+隔离环境复核用 Actions → **Verify Linux Download**，选择现有下载渠道；只下载 ZIP，
+在仅装宿主运行库的 Ubuntu 24.04 容器中验证，不编译、不重新发布。可独立重跑。
+这些检查覆盖 loader/内容加载，不替代原生窗口、GPU、音频及硬件性能验收。
 glibc 的 loader、libc/libm、libmvec/libresolv 等组件由宿主提供，不随应用复制。
 Windows 的 FFmpeg DLL 使用 EXE 内嵌的 Win32 私有 assembly 声明，从 `lib/lib.manifest`
 列出的 `lib/*.dll` 加载，无启动器、无全局 PATH 修改。开发构建不添加此发行依赖；
@@ -96,8 +99,31 @@ Rust 原生构建缓存按 runner image / architecture 隔离，
    Release 附件更新分别确认。正式游戏发行继续使用下方 Project CI/CLI 与稳定 identity。
 
 自动构建固定使用通过 CI 的 SHA；PR、fork、失败的 CI 不发布。新 main 已出现时，
-旧自动构建只保留 Actions artifact，不覆盖滚动下载。三个 ZIP 在原平台打好再上传，保留
+尚未开始的旧自动构建在安装工具链/编译前跳过；编译期间出现新 main 的运行只保留
+Actions artifact，不覆盖滚动下载。三个 ZIP 在原平台打好再上传，保留
 Unix executable 权限；benchmark 与 tday 均须四个平台成功后才发布。标签/附件更新失败会让发布 job 失败。
+
+## CI 成本与失败重试
+
+- 打包/Python 边界和 workflow 语法先检查，再进入 Rust 矩阵；纯指南、README、AGENTS
+  和 Dependabot 配置提交不触发桌面/Android 全编译。
+- Publisher runner 只编译 `--bin keine`，不顺带构建两个视频测试工具；仅这个构建步骤
+  使用 opt-level 1、关闭 LTO、16 codegen units。后续 Engine 保持原来的 release/profiling
+  参数和功能集合，不改变游戏/benchmark 的优化质量。
+- Rust cache 按 runner/架构/依赖清单与实际功能配置复用，不为每次源码提交存完整副本。
+  CI dev/test 不保存调试信息，保留 assertions；只缓存所用编译树和小型图标工具。
+  Windows vcpkg 按固定 manifest 与 runner image 复用，SDK 安装后立即保存缓存、
+  检查真实私有 DLL assembly 的绑定，再开始 Rust 编译；cargo-ndk 单独缓存固定版本。
+- 发布 cache 用显式 restore/save。验证失败也能保留依赖，但先成功清除 `keine` 和
+  `keine-loader` 的含密钥编译产物；清理失败、取消或没有 restore key 时不保存。
+  Project 正式发行同样执行清理。成品 ZIP/APK 的 artifact 传输不做第二次压缩。
+- fmt/Clippy、默认与 publisher 功能边界、各平台视频/renderer、Android 和媒体安全
+  检查仍保留；这些保护不同入口，不为追求短时间删掉覆盖。WebP fuzz 独立依赖
+  media/libwebp，不安装桌面 SDK；命中 cargo-fuzz 缓存后不重复 cargo install。
+
+缓存的不可变条目及默认仓库容量仍可能导致驱逐；工具链/依赖/profile 首次变化会冷编译。
+没有增加付费缓存容量，也不保证每次满命中。验包失败先用独立验包入口复核已有包，
+不为检查脚本反复启动四平台发布。
 macOS 包是开发签名，未做 Apple 公证；完整跨平台运行验收与硬件性能测试仍是独立关卡。
 
 默认 native-benchmark 三平台使用同一套真实负载，包含媒体。缺少必测时间轴时返回

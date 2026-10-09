@@ -143,15 +143,17 @@ jobs:
           echo "KEINE_RELEASE_CACHE_FEATURES=${features//,/-}" >> "$GITHUB_ENV"
 
       - name: Restore Rust release cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: release-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           # Caller source, finished bundles, and publisher material are never cached.
           path: |
             ~/.cargo/registry
             ~/.cargo/git
+            keine-engine/target/CACHEDIR.TAG
             keine-engine/target/release
             keine-engine/target/runner
-          key: project-release-v1-ubuntu-24.04-${{ runner.arch }}-${{ steps.keine.outputs.sha }}-${{ hashFiles('keine-engine/Cargo.lock', 'keine-engine/**/Cargo.toml', 'keine-engine/rust-toolchain.toml') }}-${{ env.KEINE_RELEASE_CACHE_FEATURES }}
+          key: project-release-v1-ubuntu-24.04-${{ runner.arch }}-${{ steps.keine.outputs.sha }}-${{ hashFiles('keine-engine/Cargo.lock', 'keine-engine/**/Cargo.toml', 'keine-engine/rust-toolchain.toml') }}-${{ env.KEINE_RELEASE_CACHE_FEATURES }}-publisher-fast
           restore-keys: |
             project-release-v1-ubuntu-24.04-${{ runner.arch }}-${{ steps.keine.outputs.sha }}-${{ hashFiles('keine-engine/Cargo.lock', 'keine-engine/**/Cargo.toml', 'keine-engine/rust-toolchain.toml') }}-
 
@@ -161,11 +163,15 @@ jobs:
           enabled: ${{ contains(env.KEINE_RELEASE_FEATURES, 'video-ffmpeg') }}
 
       - name: Build publisher runner from pinned source
+        env:
+          CARGO_PROFILE_RELEASE_OPT_LEVEL: '1'
+          CARGO_PROFILE_RELEASE_LTO: 'false'
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16'
         working-directory: keine-engine
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --release --locked --no-default-features --features publisher --target-dir target/runner
+          cargo build --release --locked --no-default-features --features publisher --target-dir target/runner --bin keine
 
       - name: Restore stable publisher identity
         shell: bash
@@ -220,13 +226,6 @@ jobs:
           test -x "$BUNDLE_PATH/keine"
           test -f "$BUNDLE_PATH/game.haku"
           test -d "$BUNDLE_PATH/data"
-          python3 keine-engine/dev/scripts/verify-linux-abi.py "$BUNDLE_PATH"
-          if ldd "$BUNDLE_PATH/keine" | grep -q 'not found'; then
-            echo 'Linux release has unresolved dynamic libraries.' >&2
-            exit 1
-          fi
-          (cd /tmp && "$BUNDLE_PATH/keine" --version)
-
       - name: Verify formal release on the supported Linux baseline
         uses: ./keine-engine/.github/actions/verify-linux-package
         with:
@@ -263,3 +262,26 @@ jobs:
           path: ${{ steps.bundle.outputs.path }}/
           if-no-files-found: error
           retention-days: ${{ inputs.retention-days }}
+
+      - name: Remove key-bearing compiler outputs before cache save
+        id: scrub
+        if: always()
+        working-directory: keine-engine
+        shell: bash
+        run: |
+          if [[ -d target && ! -f target/CACHEDIR.TAG ]]; then
+            printf 'Signature: 8a477f597d28d172789f06886806bc55\n' > target/CACHEDIR.TAG
+          fi
+          cargo clean --locked --target-dir target -p keine -p keine-loader --profile release
+          echo 'cache-safe=true' >> "$GITHUB_OUTPUT"
+      - name: Save sanitized dependencies even after validation failure
+        if: ${{ !cancelled() && steps.scrub.outputs.cache-safe == 'true' && steps.release-cache.outputs.cache-primary-key != '' && steps.release-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            keine-engine/target/CACHEDIR.TAG
+            keine-engine/target/release
+            keine-engine/target/runner
+          key: ${{ steps.release-cache.outputs.cache-primary-key }}

@@ -9,6 +9,30 @@ import subprocess
 BASELINE = (2, 39)
 
 
+def verify_runtime(root):
+    root = Path(root).resolve(strict=True)
+    for name in ('keine', 'editor'):
+        binary = root / name
+        if name == 'editor' and not binary.exists():
+            continue
+        if not os.access(binary, os.X_OK):
+            raise RuntimeError(f'Missing executable permission: {binary}')
+        result = subprocess.run(['ldd', str(binary)], check=True, capture_output=True, text=True)
+        print(result.stdout, end='')
+        if 'not found' in result.stdout:
+            raise RuntimeError(f'Unresolved runtime library: {binary}')
+        for line in result.stdout.splitlines():
+            if '=>' not in line:
+                continue
+            library, target = line.split('=>', 1)
+            library, target = library.strip(), Path(target.rsplit(' (', 1)[0].strip())
+            # Installed SDKs must not mask a missing/broken bundled FFmpeg library.
+            if library.startswith(('libavcodec.', 'libavformat.', 'libavutil.',
+                                   'libswscale.', 'libswresample.')) or (root / 'lib' / library).exists():
+                if not target.resolve().is_relative_to(root / 'lib'):
+                    raise RuntimeError(f'Packaged dependency escapes lib/: {library} => {target}')
+
+
 def requirements(text):
     # Definitions describe exported versions, not the host's requirements.
     needs = text.split('Version needs section', 1)[-1] if 'Version needs section' in text else ''
@@ -48,4 +72,8 @@ def verify(root):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('package', type=Path)
-    verify(parser.parse_args().package)
+    parser.add_argument('--runtime', action='store_true', help='Check executable permissions and dynamic library closure')
+    args = parser.parse_args()
+    verify(args.package)
+    if args.runtime:
+        verify_runtime(args.package)

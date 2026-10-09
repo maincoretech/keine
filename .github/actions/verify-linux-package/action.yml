@@ -1,10 +1,14 @@
 name: Verify Linux package
-description: Load the final package in a clean Ubuntu 24.04 container without the build SDK
+description: Validate a finished Linux package without rebuilding it
 
 inputs:
   package:
     description: Final ZIP or formal release directory
     required: true
+
+  isolated:
+    description: Use a clean Ubuntu 24.04 container without the build SDK
+    default: 'false'
 
 runs:
   using: composite
@@ -12,14 +16,28 @@ runs:
     - name: Verify final Linux package on the supported baseline
       shell: bash
       env:
+        ISOLATED: ${{ inputs.isolated }}
         PACKAGE_INPUT: ${{ inputs.package }}
       run: |
         set -euo pipefail
         package="$(realpath -e "$PACKAGE_INPUT")"
         checks="$(realpath "$GITHUB_ACTION_PATH/../../../dev/scripts")"
         fixture="$(realpath "$GITHUB_ACTION_PATH/../../../tests/fixtures/native-smoke")"
+        if [[ "$ISOLATED" != 'true' ]]; then
+          bash "$checks/verify-linux-package.sh" "$package" "$fixture"
+          exit 0
+        fi
         docker run --rm \
           --mount "type=bind,source=$package,target=/input,readonly" \
           --mount "type=bind,source=$checks,target=/checks,readonly" \
           --mount "type=bind,source=$fixture,target=/native-smoke,readonly" \
-          ubuntu:24.04 bash /checks/verify-linux-package.sh
+          ubuntu:24.04 bash -euo pipefail -c '
+            export DEBIAN_FRONTEND=noninteractive
+            apt_options=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+            apt-get "${apt_options[@]}" update -qq
+            apt-get "${apt_options[@]}" install -y --no-install-recommends \
+              python3 binutils unzip libasound2t64 libudev1 libfontconfig1 \
+              libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libwayland-cursor0 \
+              libwayland-egl1 libx11-6 libxcb1
+            bash /checks/verify-linux-package.sh /input /native-smoke
+          '

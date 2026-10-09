@@ -68,10 +68,23 @@ fmt、native-smoke validate、workflow actionlint 通过；完整 workspace 测�
 持续维护门禁：每日审计、桌面 CI 和所有发布入口共用 locked/all-features cargo-deny；
 手动 tday/Editor 也须按源提交重新审计。Dependabot 的 Cargo 仅提出分组安全修复，
 Actions 每月一个普通更新分组 PR；关闭自动 rebase/合并，更新仍由正常 CI 审查。
-Linux 的最终 Engine/benchmark/Editor ZIP 与正式游戏目录，在仅装宿主运行库的
-Ubuntu 24.04 容器中解压、检查全部 ELF 和 executable 动态库，并加载 Engine 与游戏。
+Linux 的最终 Engine/benchmark/Editor ZIP 与正式游戏目录，在 Ubuntu 24.04 runner
+检查全部 ELF 和 executable 动态库，并加载 Engine 与游戏；普通发布直接检查最终包，
+隔离 SDK 的容器复核移到手动 **Verify Linux Download**，复用现有 ZIP。
 游戏验证传入 `game.haku` 文件；无游戏快照的 Editor 包验证 native-smoke 开发工程目录。
 容器验证不声称窗口、GPU 或音频验收；完整真机 benchmark 仍单独运行。
+
+CI 耗时审查的原始基线：Release Engine #61 Linux，`cargo build --release --locked
+--no-default-features --features publisher --target-dir target/runner` 828s，
+`target/runner/release/keine bundle ... --benchmark` 935s，最终容器检查 31s。
+该运行用的是旧 CI 的 `8c5d04e`，cache miss 且验证失败后没有保存 cache；不是修复版
+手动 tday #60（`7c81f94`，四平台及发布已成功）。实查缓存总量约 9.45 GiB，单个
+Linux CI cache 4.44 GiB。调整缓存副本/调试信息、publisher 构建和过时发布拦截，
+详见 [发布 guide](release.md#ci-成本与失败重试)。这些是结构性修复；新配置的实际
+编译耗时、cache 大小和命中率需远端运行后比较，不声称已实测提速。
+Windows Editor 的旧自动构建另在打包后出现 WinError 14001；将真实 DLL 私有 assembly
+绑定检查前移到 SDK 安装后，并将两端身份明确为当前发行目标 amd64。本机未执行
+Windows activation context；仍需 Windows runner 验证，不将静态检查记为该错误已修复。
 
 ## 表达式诊断与深度预算
 

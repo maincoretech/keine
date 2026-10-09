@@ -3,6 +3,7 @@ import importlib.util
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import tempfile
 import unittest
 import sys
@@ -17,15 +18,15 @@ spec.loader.exec_module(packaging)
 
 
 class LinuxPackageTests(unittest.TestCase):
-    def test_container_gate_validates_snapshot_or_authoring_fixture_and_rejects_errors(self):
-        script = SCRIPT.with_name('verify-linux-package.sh').read_text()
-        validation_template = script[script.index('# An unrelated cwd'):]
-        # Exercise the actual shell gate without installing container packages.
+    def test_package_gate_validates_snapshot_or_authoring_fixture_and_rejects_errors(self):
+        script = SCRIPT.with_name('verify-linux-package.sh')
+        # Run the entire gate on a directory/ZIP using bounded tool substitutes.
         # A failed CLI currently logs an error even when its exit status is zero.
-        for packaged, invalid in [(True, False), (False, False), (True, True)]:
-            with self.subTest(packaged=packaged, invalid=invalid), \
+        for packaged, invalid, zipped in [(True, False, False), (False, False, False),
+                                          (True, True, False), (True, False, True)]:
+            with self.subTest(packaged=packaged, invalid=invalid, zipped=zipped), \
                     tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
+                root = Path(temporary).resolve()
                 package, fixture = root / 'package', root / 'native-smoke'
                 package.mkdir()
                 fixture.mkdir()
@@ -43,16 +44,34 @@ class LinuxPackageTests(unittest.TestCase):
                     '  echo "project valid · test"\n'
                     'else echo "ERROR project config does not exist"; fi\n')
                 engine.chmod(0o755)
-                validation = validation_template.replace('/tmp/package', str(package)) \
-                    .replace('/native-smoke', str(fixture)) \
-                    .replace('/tmp/validation.log', str(root / 'validation.log'))
-                result = subprocess.run(['bash', '-c',
-                    'set -euo pipefail\ntimeout() { shift; "$@"; }\n' + validation],
-                    env={**os.environ, 'VALIDATED_PATH': str(root / 'validated-path'),
+                # ELF version scanning has its own real-format boundary test below.
+                (package / 'lib').mkdir()
+                (package / 'lib/boundary.so').write_bytes(b'\x7fELFtest')
+                tools = root / 'tools'
+                tools.mkdir()
+                for name, body in {
+                    'timeout': 'shift; exec "$@"',
+                    'readelf': 'echo "Version needs section:"; echo "Name: GLIBC_2.39"',
+                    'ldd': 'echo "libc.so.6 => /lib/libc.so.6 (0x1234)"',
+                }.items():
+                    tool = tools / name
+                    tool.write_text('#!/bin/bash\n' + body + '\n')
+                    tool.chmod(0o755)
+                package_input = package
+                if zipped:
+                    package_input = Path(shutil.make_archive(str(root / 'archive'), 'zip', package))
+                result = subprocess.run(['bash', str(script), str(package_input), str(fixture)],
+                    env={**os.environ, 'PATH': str(tools) + os.pathsep + os.environ['PATH'],
+                         'VALIDATED_PATH': str(root / 'validated-path'),
                          'INVALID_PROJECT': '1' if invalid else '0'},
-                    text=True, capture_output=True)
-                self.assertEqual((root / 'validated-path').read_text().strip(),
-                                 str(package / 'game.haku' if packaged else fixture))
+                    cwd=root, text=True, capture_output=True)
+                self.assertTrue((root / 'validated-path').exists(), result.stdout + result.stderr)
+                validated = Path((root / 'validated-path').read_text().strip())
+                if zipped:
+                    self.assertEqual(validated.name, 'game.haku')
+                    self.assertNotEqual(validated.parent, package)
+                else:
+                    self.assertEqual(validated, package / 'game.haku' if packaged else fixture)
                 self.assertEqual(result.returncode == 0, not invalid, result.stdout + result.stderr)
                 self.assertEqual('validation passed' in result.stdout, not invalid)
 
@@ -130,6 +149,7 @@ class WindowsPackageTests(unittest.TestCase):
             ns = {'a': 'urn:schemas-microsoft-com:asm.v1'}
             assembly = ET.parse(output / 'lib/lib.manifest').getroot()
             identity = assembly.find('a:assemblyIdentity', ns).attrib
+            self.assertEqual(identity['processorArchitecture'], 'amd64')
             app = ET.parse(SCRIPT.parents[1] / 'windows/runtime.manifest').getroot()
             self.assertEqual(app.find('a:dependency/a:dependentAssembly/a:assemblyIdentity', ns).attrib, identity)
             self.assertEqual([file.attrib['name'] for file in assembly.findall('a:file', ns)], ['avcodec.dll'])
@@ -138,6 +158,28 @@ class WindowsPackageTests(unittest.TestCase):
 
 
 class LinuxAbiTests(unittest.TestCase):
+    def test_runtime_closure_rejects_sdk_masking_and_missing_libraries(self):
+        spec = importlib.util.spec_from_file_location('linux_abi', SCRIPT.with_name('verify-linux-abi.py'))
+        abi = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(abi)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'keine').write_bytes(b'executable')
+            (root / 'keine').chmod(0o755)
+            (root / 'lib').mkdir()
+            (root / 'lib/libavcodec.so.60').touch()
+            for target, rejected in [(str(root / 'lib/libavcodec.so.60'), False),
+                                     ('/usr/lib/libavcodec.so.60', True), ('not found', True)]:
+                with self.subTest(target=target):
+                    result = subprocess.CompletedProcess([], 0, f'libavcodec.so.60 => {target}\n', '')
+                    with patch.object(abi.subprocess, 'run', return_value=result), \
+                            patch('builtins.print'):
+                        if rejected:
+                            with self.assertRaises(RuntimeError):
+                                abi.verify_runtime(root)
+                        else:
+                            abi.verify_runtime(root)
+
     def test_required_versions_reject_newer_libc_but_ignore_export_definitions(self):
         spec = importlib.util.spec_from_file_location('linux_abi', SCRIPT.with_name('verify-linux-abi.py'))
         abi = importlib.util.module_from_spec(spec)

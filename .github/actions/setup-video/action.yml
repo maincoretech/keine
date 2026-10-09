@@ -43,7 +43,7 @@ runs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/vcpkg-binary-cache
-        key: vcpkg-ffmpeg-${{ inputs.windows-triplet }}-${{ hashFiles('.github/actions/setup-video/vcpkg.json', '.github/actions/setup-video/triplets/*.cmake') }}-${{ github.sha }}
+        key: vcpkg-ffmpeg-${{ inputs.windows-triplet }}-${{ hashFiles('.github/actions/setup-video/vcpkg.json', '.github/actions/setup-video/triplets/*.cmake') }}-${{ env.ImageVersion }}
         restore-keys: |
           vcpkg-ffmpeg-${{ inputs.windows-triplet }}-${{ hashFiles('.github/actions/setup-video/vcpkg.json', '.github/actions/setup-video/triplets/*.cmake') }}-
 
@@ -75,3 +75,14 @@ runs:
       with:
         path: ${{ runner.temp }}/vcpkg-binary-cache
         key: ${{ steps.windows-ffmpeg-cache.outputs.cache-primary-key }}
+
+    - name: Validate private DLL assembly before Rust compilation
+      if: runner.os == 'Windows' && inputs.enabled == 'true'
+      shell: pwsh
+      run: |
+        $probe = Join-Path $env:RUNNER_TEMP 'keine-runtime-probe'
+        New-Item -ItemType Directory -Force $probe | Out-Null
+        try {
+          python dev/scripts/package_windows.py $probe --verify
+          if ($LASTEXITCODE -ne 0) { throw 'Private runtime assembly binding failed before compilation' }
+        } finally { Remove-Item -Recurse -Force $probe }

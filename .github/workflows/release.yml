@@ -38,24 +38,37 @@ jobs:
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_branch == 'main' &&
-       github.event.workflow_run.head_repository.full_name == github.repository)
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.head_sha == github.sha)
     runs-on: ubuntu-26.04
     timeout-minutes: 15
+    outputs:
+      current: ${{ steps.current.outputs.build }}
     steps:
       - name: Check out release source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.RELEASE_SHA }}
+      - name: Skip superseded automatic release before compiling
+        id: current
+        shell: bash
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == workflow_run && "$(git ls-remote origin refs/heads/main | cut -f1)" != "$RELEASE_SHA" ]]; then
+            echo 'Newer main exists; skip this automatic release.'
+            exit 0
+          fi
+          echo 'build=true' >> "$GITHUB_OUTPUT"
       - name: Install Rust toolchain
+        if: steps.current.outputs.build == 'true'
         uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
       - name: Check dependencies before building any platform
+        if: steps.current.outputs.build == 'true'
         uses: ./.github/actions/check-dependencies
-      - name: Check publisher isolation
-        run: echo 'Test packages use an isolated temporary publisher identity.'
 
   bundle:
     name: Build ${{ matrix.name }}
     needs: source
+    if: needs.source.outputs.current == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -139,7 +152,8 @@ jobs:
           fi
           echo "name=$artifact" >> "$GITHUB_OUTPUT"
       - name: Restore Rust release cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: release-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           # Bundle outputs also live under target/, so cache only Cargo's
           # release trees rather than archiving the finished distributions.
@@ -150,7 +164,7 @@ jobs:
             target/${{ matrix.engine_target_dir }}
             target/${{ matrix.target }}/profiling
             target/runner
-          key: release-rust-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ env.KEINE_RELEASE_CACHE_FEATURES }}-${{ env.RELEASE_SHA }}
+          key: release-rust-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ env.KEINE_RELEASE_CACHE_FEATURES }}-publisher-fast
           restore-keys: |
             release-rust-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ env.KEINE_RELEASE_CACHE_FEATURES }}-
             release-rust-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-
@@ -161,9 +175,14 @@ jobs:
           enabled: ${{ contains(env.KEINE_RELEASE_FEATURES, 'video-ffmpeg') }}
           windows-triplet: ${{ matrix.triplet }}
       - name: Build publisher runner
+        # Build tooling needs no whole-program LTO; shipping builds retain it.
+        env:
+          CARGO_PROFILE_RELEASE_OPT_LEVEL: '1'
+          CARGO_PROFILE_RELEASE_LTO: 'false'
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16'
         # A separate target dir keeps the running publisher out of the engine
         # rebuild that `keine bundle` performs inside target/release.
-        run: cargo build --release --locked --no-default-features --features publisher --target-dir target/runner
+        run: cargo build --release --locked --no-default-features --features publisher --target-dir target/runner --bin keine
       - name: Prepare publisher identity path
         id: publisher_identity
         shell: bash
@@ -195,16 +214,10 @@ jobs:
         shell: bash
         run: |
           test -x "target/${{ steps.artifact.outputs.name }}/keine"
-          python3 dev/scripts/verify-linux-abi.py "target/${{ steps.artifact.outputs.name }}"
           if [[ "$KEINE_RELEASE_FEATURES" == *video-ffmpeg* ]]; then
             test -d "target/${{ steps.artifact.outputs.name }}/lib"
             readelf -d "target/${{ steps.artifact.outputs.name }}/keine" | grep -F '(RPATH)' | grep -F '$ORIGIN/lib'
           fi
-          if ldd "target/${{ steps.artifact.outputs.name }}/keine" | grep -q 'not found'; then
-            echo 'Linux release has unresolved dynamic libraries' >&2
-            exit 1
-          fi
-          (cd /tmp && "$GITHUB_WORKSPACE/target/${{ steps.artifact.outputs.name }}/keine" --version)
       - name: Verify Windows FFmpeg runtime
         if: runner.os == 'Windows' && contains(env.KEINE_RELEASE_FEATURES, 'video-ffmpeg')
         shell: pwsh
@@ -242,7 +255,9 @@ jobs:
           path: bundles/${{ steps.artifact.outputs.name }}.zip
           if-no-files-found: error
           retention-days: 14
+          compression-level: 0
       - name: Remove key-bearing compiler outputs before cache save
+        id: scrub
         if: always()
         shell: bash
         run: |
@@ -257,10 +272,24 @@ jobs:
           fi
           cargo clean "${args[@]}" --profile release
           cargo clean "${args[@]}" --profile profiling
+          echo 'cache-safe=true' >> "$GITHUB_OUTPUT"
+      - name: Save sanitized dependencies even after validation failure
+        if: ${{ !cancelled() && steps.scrub.outputs.cache-safe == 'true' && steps.release-cache.outputs.cache-primary-key != '' && steps.release-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/CACHEDIR.TAG
+            target/${{ matrix.engine_target_dir }}
+            target/${{ matrix.target }}/profiling
+            target/runner
+          key: ${{ steps.release-cache.outputs.cache-primary-key }}
 
   android:
     name: Build Android arm64
     needs: source
+    if: needs.source.outputs.current == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
@@ -289,11 +318,13 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target/android
+            target/icon-tool
           key: android-arm64-ubuntu26-ndk28-v1-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ env.RELEASE_SHA }}
           restore-keys: |
             android-arm64-ubuntu26-ndk28-v1-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-
       - name: Restore isolated Android release cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: release-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -304,10 +335,15 @@ jobs:
             target/android/profiling
             target/android/aarch64-linux-android/profiling
             target/runner
-          key: release-android-arm64-ndk28-v1-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ env.RELEASE_SHA }}
+          key: release-android-arm64-ndk28-v1-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-publisher-fast
           restore-keys: |
             release-android-arm64-ndk28-v1-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-
       - name: Build publisher runner
+        # Build tooling needs no whole-program LTO; shipping builds retain it.
+        env:
+          CARGO_PROFILE_RELEASE_OPT_LEVEL: '1'
+          CARGO_PROFILE_RELEASE_LTO: 'false'
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16'
         run: cargo build --release --locked --no-default-features --features publisher --target-dir target/runner --bin keine
       - name: Bundle encrypted Android release
         env:
@@ -349,6 +385,7 @@ jobs:
           retention-days: 14
           compression-level: 0
       - name: Remove publisher identity and key-bearing outputs before cache save
+        id: scrub
         if: always()
         run: |
           rm -f "$RUNNER_TEMP/keine-android-release-secrets/publisher.key"
@@ -361,6 +398,21 @@ jobs:
             cargo clean --locked --target-dir target/android -p keine -p keine-loader --profile profiling
             cargo clean --locked --target-dir target/android --target aarch64-linux-android -p keine -p keine-loader --profile profiling
           fi
+          echo 'cache-safe=true' >> "$GITHUB_OUTPUT"
+      - name: Save sanitized Android dependencies even after validation failure
+        if: ${{ !cancelled() && steps.scrub.outputs.cache-safe == 'true' && steps.release-cache.outputs.cache-primary-key != '' && steps.release-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/android/CACHEDIR.TAG
+            target/android/release
+            target/android/aarch64-linux-android/release
+            target/android/profiling
+            target/android/aarch64-linux-android/profiling
+            target/runner
+          key: ${{ steps.release-cache.outputs.cache-primary-key }}
 
   publish:
     name: Publish Engine
