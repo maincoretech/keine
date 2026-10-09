@@ -31,6 +31,9 @@ use keine_loader::{
 use crate::render::blur::{BlurCamera, BlurPlugin, DialogCamera, SceneBlurCamera, UiBlurCamera};
 use crate::render::camera_blur::{CameraEffectsPlugin, CompositedCameraEffects};
 use crate::runtime::GamePlugin;
+use crate::runtime::benchmark_supervisor::{
+    BenchmarkSupervisor, IO_LIMIT, SAMPLE_LIMIT, SUITE_LIMIT,
+};
 use crate::runtime::cli::{
     BenchmarkOptions, BenchmarkWindow, CliCommand, InteractiveMode, help_or_version,
     packaged_benchmark_command, parse as parse_cli, resolve_project_path,
@@ -631,6 +634,18 @@ const STARTUP_BENCHMARK_CHILD_ENV: &str = "KEINE_STARTUP_BENCHMARK_CHILD";
 pub(crate) const RUNTIME_BENCHMARK_CHILD_ENV: &str = "KEINE_RUNTIME_BENCHMARK_CHILD";
 
 fn run_startup_suite(project_path: &Path, runs: usize) -> Result<String> {
+    let mut report = String::new();
+    let mut supervisor = BenchmarkSupervisor::new(runs, SUITE_LIMIT, None)?;
+    collect_startup_samples(project_path, runs, &mut report, &mut supervisor)?;
+    Ok(report)
+}
+
+fn collect_startup_samples(
+    project_path: &Path,
+    runs: usize,
+    report: &mut String,
+    supervisor: &mut BenchmarkSupervisor,
+) -> Result<()> {
     let executable =
         std::env::current_exe().context("failed to locate the benchmark executable")?;
     let mut samples = Vec::with_capacity(runs);
@@ -640,9 +655,8 @@ fn run_startup_suite(project_path: &Path, runs: usize) -> Result<String> {
     } else {
         "release"
     };
-    let mut report = String::new();
     emit_report_line(
-        &mut report,
+        report,
         format!(
             "startup baseline · Kēne {} · {profile} · {} / {} · {logical_threads} logical thread(s) · {runs} isolated process run(s) · hidden surface-backed window",
             env!("CARGO_PKG_VERSION"),
@@ -652,7 +666,7 @@ fn run_startup_suite(project_path: &Path, runs: usize) -> Result<String> {
     );
     let features = env!("KEINE_BUILD_FEATURES");
     emit_report_line(
-        &mut report,
+        report,
         format!(
             "build identity · commit {} · built {} · features {}",
             env!("KEINE_BUILD_COMMIT"),
@@ -664,21 +678,30 @@ fn run_startup_suite(project_path: &Path, runs: usize) -> Result<String> {
             },
         ),
     );
-    append_host_environment(&mut report, logical_threads);
+    append_host_environment(report, logical_threads);
     for run in 1..=runs {
-        let output = Command::new(&executable)
+        let mut command = Command::new(&executable);
+        command
             .arg("perf")
             .arg(project_path)
             .args(["--startup", "--runs", "1"])
-            .env(STARTUP_BENCHMARK_CHILD_ENV, "1")
-            .output()
-            .with_context(|| format!("failed to start benchmark child {run}"))?;
+            .env(STARTUP_BENCHMARK_CHILD_ENV, "1");
+        supervisor.checkpoint(report, "")?;
+        let (output, wall) =
+            supervisor.run(&mut command, &format!("startup {run}/{runs}"), SAMPLE_LIMIT)?;
+        emit_report_line(
+            report,
+            format!(
+                "CHILD    | startup {run}/{runs} · {:.2}s total wall",
+                wall.as_secs_f64()
+            ),
+        );
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         if run == 1
             && let Some(gpu) = stderr.lines().find(|line| line.contains("GPU      │"))
         {
-            emit_report_line(&mut report, gpu.trim());
+            emit_report_line(report, gpu.trim());
         }
         let sample = crate::ui::performance::StartupSample::parse(&format!("{stdout}\n{stderr}"));
         if !output.status.success()
@@ -695,7 +718,7 @@ fn run_startup_suite(project_path: &Path, runs: usize) -> Result<String> {
             .peak_rss_mib
             .map_or_else(|| "n/a".to_owned(), |value| format!("{value:.1} MiB"));
         emit_report_line(
-            &mut report,
+            report,
             format!(
                 "run {run:>2} · project {:>7.2} ms · app {:>7.2} ms · first frame {:>7.2} ms · interactive {:>7.2} ms · peak RSS {peak_rss}",
                 sample.project_ms, sample.app_ms, sample.first_frame_ms, sample.interactive_ms,
@@ -706,8 +729,9 @@ fn run_startup_suite(project_path: &Path, runs: usize) -> Result<String> {
             std::thread::sleep(Duration::from_millis(250));
         }
     }
-    append_startup_summary(&samples, &mut report);
-    Ok(report)
+    append_startup_summary(&samples, report);
+    supervisor.checkpoint(report, "")?;
+    Ok(())
 }
 
 fn append_host_environment(report: &mut String, logical_threads: usize) {
@@ -850,14 +874,30 @@ fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) ->
         "RAWFRAME\tworkload\trun\ttotal_runs\ttarget\tcamera_profile\t{}\n",
         crate::ui::performance::TRACE_FIELDS,
     );
+    let render_runs = portable_benchmark_render_runs();
+    let mut supervisor =
+        BenchmarkSupervisor::new(runs + render_runs + 1, SUITE_LIMIT, Some(report_path))?;
+    emit_report_line(
+        &mut report,
+        format!(
+            "PLAN     | {runs} startup + {render_runs} render + 1 I/O sample(s) · {:.1} min minimum render warm-up/sample time · 30 min suite wall-clock limit · 60s per startup/render, 120s I/O",
+            render_runs as f64 * 8.0 / 60.0
+        ),
+    );
+    emit_report_line(
+        &mut report,
+        "REPORT   | incremental evidence saved after each sample; timeout/error means INCOMPLETE, never full coverage",
+    );
+    supervisor.checkpoint(&report, "")?;
     let outcome = (|| -> Result<()> {
         let executable =
             std::env::current_exe().context("failed to locate benchmark executable")?;
-        report.push_str(&run_startup_suite(project_path, runs)?);
+        collect_startup_samples(project_path, runs, &mut report, &mut supervisor)?;
         // Measure real sleep/wake behavior separately from continuous throughput.
         let mut preliminary_failed = false;
         if let Err(error) = run_benchmark_workload(
             BenchmarkWorkloadCapture {
+                supervisor: &mut supervisor,
                 executable: &executable,
                 project_path,
                 label: "opening composition · runtime sleep/wake",
@@ -888,6 +928,7 @@ fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) ->
         );
         let timeline_inventory = run_benchmark_workload(
             BenchmarkWorkloadCapture {
+                supervisor: &mut supervisor,
                 executable: &executable,
                 project_path,
                 label: "opening composition · runtime composition",
@@ -910,6 +951,7 @@ fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) ->
         for (label, cameras) in CAMERA_BENCHMARK_WORKLOADS {
             run_benchmark_workload(
                 BenchmarkWorkloadCapture {
+                    supervisor: &mut supervisor,
                     executable: &executable,
                     project_path,
                     label,
@@ -932,6 +974,7 @@ fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) ->
             emit_report_line(&mut report, "");
             emit_report_line(&mut report, section);
             for (label, target) in *workloads {
+                supervisor.check_budget()?;
                 if !timeline_is_available(&timeline_inventory, target) {
                     missing += 1;
                     emit_report_line(
@@ -943,8 +986,10 @@ fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) ->
                 let total_runs = benchmark_workload_runs(target);
                 let mut summaries = Vec::with_capacity(total_runs);
                 for run in 1..=total_runs {
+                    supervisor.check_budget()?;
                     match run_benchmark_workload(
                         BenchmarkWorkloadCapture {
+                            supervisor: &mut supervisor,
                             executable: &executable,
                             project_path,
                             label,
@@ -1019,6 +1064,7 @@ fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) ->
                 "bench_stress_composition",
             ),
         ] {
+            supervisor.check_budget()?;
             if !timeline_is_available(&timeline_inventory, target) {
                 missing += 1;
                 emit_report_line(
@@ -1029,6 +1075,7 @@ fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) ->
             }
             match run_benchmark_workload(
                 BenchmarkWorkloadCapture {
+                    supervisor: &mut supervisor,
                     executable: &executable,
                     project_path,
                     label,
@@ -1077,11 +1124,17 @@ fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) ->
         );
         let mut package_failed = false;
         let package = (|| -> Result<String> {
-            let output = Command::new(&executable)
-                .arg("__benchmark-package")
-                .arg(project_path)
-                .output()
-                .context("failed to start package I/O benchmark")?;
+            supervisor.checkpoint(&report, &raw_frames)?;
+            let mut command = Command::new(&executable);
+            command.arg("__benchmark-package").arg(project_path);
+            let (output, wall) = supervisor.run(&mut command, "package I/O", IO_LIMIT)?;
+            emit_report_line(
+                &mut report,
+                format!(
+                    "CHILD    | package I/O · {:.2}s total wall",
+                    wall.as_secs_f64()
+                ),
+            );
             if !output.status.success() {
                 anyhow::bail!(
                     "package I/O failed: {}\n{}\n{}",
@@ -1122,6 +1175,8 @@ fn run_benchmark_report(project_path: &Path, runs: usize, report_path: &Path) ->
             format!("FAILED   | suite incomplete · {error:#}"),
         );
     }
+    supervisor.checkpoint(&report, &raw_frames)?;
+    drop(supervisor);
     report.push_str(&raw_frames);
     crate::storage::write_atomically(report_path, report.as_bytes())?;
     println!("benchmark report written to {}", report_path.display());
@@ -1134,6 +1189,7 @@ struct BenchmarkWorkloadOutput {
 }
 
 struct BenchmarkWorkloadCapture<'a> {
+    supervisor: &'a mut BenchmarkSupervisor,
     executable: &'a Path,
     project_path: &'a Path,
     label: &'a str,
@@ -1151,6 +1207,7 @@ fn run_benchmark_workload(
     raw_frames: &mut String,
 ) -> Result<BenchmarkWorkloadOutput> {
     let BenchmarkWorkloadCapture {
+        supervisor,
         executable,
         project_path,
         label,
@@ -1199,9 +1256,12 @@ fn run_benchmark_workload(
     if cameras != BenchmarkCameras::Runtime {
         command.arg("--camera").arg(cameras.id());
     }
-    let output = command
-        .output()
-        .with_context(|| format!("failed to start {label} benchmark"))?;
+    supervisor.checkpoint(report, raw_frames)?;
+    let (output, wall) = supervisor.run(&mut command, label, SAMPLE_LIMIT)?;
+    emit_report_line(
+        report,
+        format!("CHILD    | {label} · {:.2}s total wall", wall.as_secs_f64()),
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     if !output.status.success() {
@@ -1250,10 +1310,21 @@ fn run_benchmark_workload(
     if (continuous || label.starts_with("runtime ")) && summary.frames == 0 {
         anyhow::bail!("{label} has no eligible active render intervals");
     }
+    supervisor.checkpoint(report, raw_frames)?;
     Ok(BenchmarkWorkloadOutput {
         stderr: stderr.into_owned(),
         summary,
     })
+}
+
+fn portable_benchmark_render_runs() -> usize {
+    2 + CAMERA_BENCHMARK_WORKLOADS.len()
+        + PORTABLE_BENCHMARK_SECTIONS
+            .iter()
+            .flat_map(|(_, workloads)| *workloads)
+            .map(|(_, target)| benchmark_workload_runs(target))
+            .sum::<usize>()
+        + 7
 }
 
 fn benchmark_workload_runs(target: &str) -> usize {
@@ -2624,6 +2695,7 @@ mod tests {
         assert_eq!(benchmark_workload_runs("bench_classic_godray"), 3);
         assert_eq!(benchmark_workload_runs("bench_shared_transform_clock"), 1);
         assert_eq!(targets.len(), 71);
+        assert_eq!(portable_benchmark_render_runs(), 121);
         assert_eq!(CAMERA_BENCHMARK_WORKLOADS.len(), 3);
         assert!(
             CAMERA_BENCHMARK_WORKLOADS

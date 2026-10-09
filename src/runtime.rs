@@ -10,6 +10,8 @@ pub(crate) mod authoring;
 #[cfg(any(feature = "publisher", feature = "startup-metrics"))]
 #[path = "runtime/benchmark/android.rs"]
 pub(crate) mod benchmark_android;
+#[path = "runtime/benchmark/supervisor.rs"]
+mod benchmark_supervisor;
 pub(crate) mod bootstrap;
 #[path = "runtime/input/bounded.rs"]
 pub(crate) mod bounded_input;
