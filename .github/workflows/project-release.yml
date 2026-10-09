@@ -32,7 +32,7 @@ permissions:
 jobs:
   bundle-linux:
     name: Build Linux x64
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
       RUST_TOOLCHAIN: 1.97.1
@@ -125,6 +125,11 @@ jobs:
       - name: Select pinned Rust toolchain
         uses: dtolnay/rust-toolchain@4716b85f2fac3e324e64fa2810f6b5c3905760a5 # 1.97.1
 
+      - name: Check dependencies before restoring publisher material
+        uses: ./keine-engine/.github/actions/check-dependencies
+        with:
+          working-directory: keine-engine
+
       - name: Detect canonical shipping features
         shell: bash
         env:
@@ -146,9 +151,9 @@ jobs:
             ~/.cargo/git
             keine-engine/target/release
             keine-engine/target/runner
-          key: project-release-v1-ubuntu-26.04-${{ runner.arch }}-${{ steps.keine.outputs.sha }}-${{ hashFiles('keine-engine/Cargo.lock', 'keine-engine/**/Cargo.toml', 'keine-engine/rust-toolchain.toml') }}-${{ env.KEINE_RELEASE_CACHE_FEATURES }}
+          key: project-release-v1-ubuntu-24.04-${{ runner.arch }}-${{ steps.keine.outputs.sha }}-${{ hashFiles('keine-engine/Cargo.lock', 'keine-engine/**/Cargo.toml', 'keine-engine/rust-toolchain.toml') }}-${{ env.KEINE_RELEASE_CACHE_FEATURES }}
           restore-keys: |
-            project-release-v1-ubuntu-26.04-${{ runner.arch }}-${{ steps.keine.outputs.sha }}-${{ hashFiles('keine-engine/Cargo.lock', 'keine-engine/**/Cargo.toml', 'keine-engine/rust-toolchain.toml') }}-
+            project-release-v1-ubuntu-24.04-${{ runner.arch }}-${{ steps.keine.outputs.sha }}-${{ hashFiles('keine-engine/Cargo.lock', 'keine-engine/**/Cargo.toml', 'keine-engine/rust-toolchain.toml') }}-
 
       - name: Install Linux platform dependencies
         uses: ./keine-engine/.github/actions/setup-video
@@ -215,11 +220,17 @@ jobs:
           test -x "$BUNDLE_PATH/keine"
           test -f "$BUNDLE_PATH/game.haku"
           test -d "$BUNDLE_PATH/data"
+          python3 keine-engine/dev/scripts/verify-linux-abi.py "$BUNDLE_PATH"
           if ldd "$BUNDLE_PATH/keine" | grep -q 'not found'; then
             echo 'Linux release has unresolved dynamic libraries.' >&2
             exit 1
           fi
           (cd /tmp && "$BUNDLE_PATH/keine" --version)
+
+      - name: Verify formal release on the supported Linux baseline
+        uses: ./keine-engine/.github/actions/verify-linux-package
+        with:
+          package: ${{ steps.bundle.outputs.path }}
 
       - name: Write release provenance
         shell: bash
@@ -238,7 +249,7 @@ jobs:
           keine_sha=$KEINE_SHA
           rust_toolchain=$RUST_TOOLCHAIN
           rustc_version=$rustc_version
-          runner_image=ubuntu-26.04
+          runner_image=ubuntu-24.04
           runner_os=$RUNNER_OS
           runner_arch=$RUNNER_ARCH
           release_features=$KEINE_RELEASE_FEATURES

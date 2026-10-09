@@ -1,0 +1,20 @@
+name: Check dependencies
+description: Audit the complete locked workspace against current advisories and redistribution policy
+
+inputs:
+  working-directory:
+    description: Directory containing the Kēne workspace and deny.toml
+    default: .
+
+runs:
+  using: composite
+  steps:
+    - name: Install pinned cargo-deny
+      uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+      with:
+        tool: cargo-deny@0.20.2
+        fallback: none
+    - name: Check advisories, licenses, dependency versions and sources
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: cargo deny --locked --all-features check advisories licenses bans sources

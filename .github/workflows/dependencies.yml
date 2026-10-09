@@ -1,0 +1,23 @@
+name: Audit Dependencies
+
+on:
+  schedule:
+    # 10:17 Asia/Shanghai; avoid the busy start of the UTC hour.
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dependencies:
+    name: Check Dependencies
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+      - name: Check dependencies
+        uses: ./.github/actions/check-dependencies

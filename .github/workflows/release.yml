@@ -40,7 +40,16 @@ jobs:
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-26.04
+    timeout-minutes: 15
     steps:
+      - name: Check out release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+      - name: Check dependencies before building any platform
+        uses: ./.github/actions/check-dependencies
       - name: Check publisher isolation
         run: echo 'Test packages use an isolated temporary publisher identity.'
 
@@ -221,6 +230,11 @@ jobs:
           import shutil
           shutil.make_archive('bundles/${{ steps.artifact.outputs.name }}', 'zip', 'target/${{ steps.artifact.outputs.name }}')
           PYTHON
+      - name: Verify final Linux archive
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/verify-linux-package
+        with:
+          package: bundles/${{ steps.artifact.outputs.name }}.zip
       - name: Upload artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

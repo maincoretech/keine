@@ -32,6 +32,10 @@ perf <project> [--startup]  开发测量
 Preview Engine；Windows/Linux 是相邻的 Editor/Engine executable 和运行库，须完整解压。
 Linux 发行构建固定 `ubuntu-24.04` / GLIBC 2.39 基线；游戏、benchmark 与 Editor
 均校验包内每个 ELF 的版本需求，不能用最新构建机启动成功替代旧系统兼容。
+Engine/benchmark 与 Editor 的最终 ZIP、正式 Project 的发布目录，还需在干净的
+Ubuntu 24.04 容器中验证：保留解压执行权限、检查动态库闭包，并从无关 cwd 加载
+Engine 和实际游戏（Editor 用 native-smoke）。容器只装宿主运行库，没有构建 SDK。
+此门禁覆盖 loader/内容加载，不替代原生窗口、GPU、音频及硬件性能验收。
 glibc 的 loader、libc/libm、libmvec/libresolv 等组件由宿主提供，不随应用复制。
 Windows 的 FFmpeg DLL 使用 EXE 内嵌的 Win32 私有 assembly 声明，从 `lib/lib.manifest`
 列出的 `lib/*.dll` 加载，无启动器、无全局 PATH 修改。开发构建不添加此发行依赖；
@@ -75,7 +79,8 @@ Linux 包中的 `python3 install-desktop.py --install` 可注册应用菜单与�
 `python3 dev/scripts/verify-icons.py`；CI 另检查派生文件和实际 APK。
 
 CI / 发布使用官方稳定 Actions 并固定完整发布 SHA；JavaScript Actions 使用 Node 24。
-Runner 显式使用 `ubuntu-26.04`、`macos-26`（arm64）和 `windows-2025`（x64）；
+Linux 发行和桌面 CI 固定 `ubuntu-24.04`；审计、发布控制和 Android 构建使用
+`ubuntu-26.04`，其他桌面平台使用 `macos-26`（arm64）和 `windows-2025`（x64）；
 Rust 原生构建缓存按 runner image / architecture 隔离，
 避免系统迁移时恢复其他镜像的链接产物。artifact 下载沿用新版默认的哈希校验失败即报错。
 版本与 runner 要求依据 [GitHub Node 20 退役公告](https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/)
@@ -109,6 +114,21 @@ INCOMPLETE 并保留报告，不能当作完整跑分。包内 `lib/profile-runt
 Cargo aliases 与 executable 使用同名动词；具体参数以 `--help` 为准。
 正式内容先验证/编译，再加载或创建 publisher identity；失败保留已有可运行发布目录。
 identity 与内嵌 key 不记录、不提交、不缓存，也不传给无需它的 child build。
+
+## 依赖审计与升级
+
+- `Audit Dependencies` 每日 UTC 02:17（北京时间 10:17）检查 main，可手动触发。
+  GitHub 的定时任务可能延迟；长期无活动的公开仓库也可能停用 schedule，维护者须留意
+  Actions 通知与任务状态。新的 RustSec 公告可让未改动的锁文件失败，旧绿灯不代表当前安全。
+- `.github/dependabot.yml` 每周为 Cargo 与 GitHub Actions 创建更新 PR；Cargo minor/patch
+  分组，major 单独审查，Actions 保持完整 SHA 固定。安全更新由仓库 Dependabot 设置启用。
+  不自动合并；依赖更新须通过正常 CI、许可审查与必要的运行验证。
+- 桌面 CI、每日审计、自动/手动 Engine（含 tday）、Editor 与正式 Project 发布复用
+  `check-dependencies` action；按实际发行的源提交执行完整的 locked/all-features 四项审计。
+  审计失败先阻止后续编译/密钥恢复/上传；不放宽 deny.toml，也不重跑旧源码冒充修复。
+- GLIBC 2.39 是发行合同，更新 runner、原生 SDK、Rust 或依赖时都不能静默抬高。
+  宿主运行库保持安全更新；未来 24.04 runner 退役时，优先用受维护的 24.04 容器保留基线。
+  提高最低系统要求需单独说明，并重新验收最终包。
 
 ## 许可证与发行署名
 
