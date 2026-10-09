@@ -30,17 +30,24 @@ jobs:
           python3 dev/scripts/verify-icons.py
           python3 -m unittest discover -s tests/bench/runtime -p 'test_*.py'
           python3 -m unittest discover -s tests/packaging -p 'test_*.py'
-      - name: Install workflow linter
-        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
-        with:
-          tool: actionlint@1.7.12
-          fallback: none
+      - name: Install pinned official workflow linter
+        run: |
+          # install-action does not support actionlint; use the upstream binary.
+          archive="$RUNNER_TEMP/actionlint_1.7.12_linux_amd64.tar.gz"
+          curl --fail --location --retry 3 --proto '=https' \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            --output "$archive"
+          printf '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  %s\n' "$archive" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/actionlint-bin"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/actionlint-bin" actionlint
+          echo "$RUNNER_TEMP/actionlint-bin" >> "$GITHUB_PATH"
       - name: Check workflow syntax before native compilation
         run: |
           printf 'self-hosted-runner:\n  labels: [ubuntu-26.04]\n' > "$RUNNER_TEMP/actionlint.yaml"
           workflows=(.github/workflows/*.yml)
           # 1.7.12 predates these three documented reusable-workflow job fields.
-          actionlint -config-file "$RUNNER_TEMP/actionlint.yaml" \
+          # Keep this a workflow syntax/expression gate, independent of runner linters.
+          actionlint -shellcheck= -pyflakes= -config-file "$RUNNER_TEMP/actionlint.yaml" \
             -ignore 'property "workflow_(ref|repository|sha)" is not defined in object type' "${workflows[@]}"
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
