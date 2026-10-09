@@ -66,7 +66,8 @@ fmt、native-smoke validate、workflow actionlint 通过；完整 workspace 测�
 旧 Ubuntu 26.04 基线的下载不能用于验证修复，源码检查也不能代替新包实机验收。
 
 持续维护门禁：每日审计、桌面 CI 和所有发布入口共用 locked/all-features cargo-deny；
-手动 tday/Editor 也须按源提交重新审计。Dependabot 每周提出更新 PR，由正常 CI 审查。
+手动 tday/Editor 也须按源提交重新审计。Dependabot 的 Cargo 仅提出分组安全修复，
+Actions 每月一个普通更新分组 PR；关闭自动 rebase/合并，更新仍由正常 CI 审查。
 Linux 的最终 Engine/benchmark/Editor ZIP 与正式游戏目录，在仅装宿主运行库的
 Ubuntu 24.04 容器中解压、检查全部 ELF 和 executable 动态库，并加载 Engine 与游戏。
 容器验证不声称窗口、GPU 或音频验收；完整真机 benchmark 仍单独运行。

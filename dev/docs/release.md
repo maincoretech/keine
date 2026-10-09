@@ -120,9 +120,12 @@ identity 与内嵌 key 不记录、不提交、不缓存，也不传给无需它
 - `Audit Dependencies` 每日 UTC 02:17（北京时间 10:17）检查 main，可手动触发。
   GitHub 的定时任务可能延迟；长期无活动的公开仓库也可能停用 schedule，维护者须留意
   Actions 通知与任务状态。新的 RustSec 公告可让未改动的锁文件失败，旧绿灯不代表当前安全。
-- `.github/dependabot.yml` 每周为 Cargo 与 GitHub Actions 创建更新 PR；Cargo minor/patch
-  分组，major 单独审查，Actions 保持完整 SHA 固定。安全更新由仓库 Dependabot 设置启用。
-  不自动合并；依赖更新须通过正常 CI、许可审查与必要的运行验证。
+- `.github/dependabot.yml` 使用低噪模式：Cargo 关闭普通版本 PR，只提出分组安全修复；
+  Actions 每月检查普通更新，合为一个分组 PR，普通更新同时最多 1 个，保持完整 SHA 固定。
+  两个生态的安全修复各自分组，不受普通 PR 数量限制，也不等待每月检查。
+  关闭自动 rebase 和自动合并，减少重复 CI；需要时手动更新分支并运行正常验收。
+  仓库已启用 Dependabot 告警和安全更新；普通依赖升级由维护者按需要提出，仍须经过
+  CI、许可审查与必要的运行验证。
 - 桌面 CI、每日审计、自动/手动 Engine（含 tday）、Editor 与正式 Project 发布复用
   `check-dependencies` action；按实际发行的源提交执行完整的 locked/all-features 四项审计。
   审计失败先阻止后续编译/密钥恢复/上传；不放宽 deny.toml，也不重跑旧源码冒充修复。
