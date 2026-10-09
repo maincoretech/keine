@@ -18,21 +18,22 @@ perf <project> [--startup]  开发测量
 阻止系统 profiler 附加的反调试措施；普通发行仍使用 hardened release。
 测试包使用临时 identity。包内 `BENCHMARK.txt` 写明运行和采样步骤。
 
-## 三个独立下载渠道
+## 两个独立下载渠道
 
 | 用途 | 下载标签 | 触发方式 | 内容 |
 | --- | --- | --- | --- |
-| 性能定位 | `benchmark-latest` | main 通过 CI 后自动；也可手动 | 三桌面平台自运行 + Android ADB 完整测试、报告与 profiler 工具 |
 | 作者开发 | `editor-latest` | main 通过 CI 后自动；也可手动 | 三平台独立 Editor + 同版本 Preview Engine，无游戏素材 |
 | tday 试玩 | `tday-latest` | **仅手动** | 三平台 ZIP + Android ARM64 APK，含 shiftz 素材版权说明 |
 
-三个渠道都是预发布，互不覆盖。Editor 和 tday 使用 release 优化；benchmark 使用
-同样优化但保留符号的 profiling。macOS 当前 runner 产出 Apple Silicon，Linux/Windows
+两个渠道都是预发布，互不覆盖。Editor 和 tday 使用 release 优化。
+benchmark 的 CI 构建、发布和独立采集器门禁已取消；开发者仍可在本地用 `perf`
+或 `bundle --benchmark` 排查具体问题，旧 `benchmark-latest` 不再更新。
+macOS 当前 runner 产出 Apple Silicon，Linux/Windows
 为 x64；不声称已经覆盖 Intel Mac。macOS Editor 下载是一个 `Kēne Editor.app`，内部带
 Preview Engine；Windows/Linux 是相邻的 Editor/Engine executable 和运行库，须完整解压。
-Linux 发行构建固定 `ubuntu-24.04` / GLIBC 2.39 基线；游戏、benchmark 与 Editor
+Linux 发行构建固定 `ubuntu-24.04` / GLIBC 2.39 基线；游戏与 Editor
 均校验包内每个 ELF 的版本需求，不能用最新构建机启动成功替代旧系统兼容。
-Engine/benchmark 与 Editor 的最终 ZIP、正式 Project 的发布目录，在同一 Ubuntu
+Engine 与 Editor 的最终 ZIP、正式 Project 的发布目录，在同一 Ubuntu
 24.04 runner 上验证一次：保留解压执行权限、检查 ABI/动态库闭包，并从无关 cwd
 加载 Engine 和 `game.haku`（Editor 用 native-smoke 工程目录）。FFmpeg 和已有 bundled
 库必须从包内 `lib/` 解析，不能由 runner SDK 掩盖漏包。
@@ -91,17 +92,17 @@ Rust 原生构建缓存按 runner image / architecture 隔离，
 
 维护者操作：
 
-1. 推送 main 后等待 **CI Desktop**，成功后 **Release Engine** 更新 benchmark，**Release Editor** 更新 Editor。
-2. 发布 tday：Actions → **Release Engine** → **Run workflow** → 选目标 ref → `package=tday`。
+1. 推送 main 后等待 **CI Desktop**，成功后 **Release Editor** 更新 Editor。
+2. 发布 tday：Actions → **Release Engine** → **Run workflow** → 选目标 ref；此 workflow 仅构建 tday。
    同一次触发并行构建桌面三平台和安卓 release APK，游戏资源已内置；普通推送和自动 CI 完成不会触发 tday 打包。此渠道只用隔离临时 identity，不读正式发行密钥。安卓使用测试应用签名，见 [Android](android.md)。
-3. 手动补发 benchmark：同一入口选 `package=benchmark`；补发 Editor 则运行 **Release Editor**。
-4. 下载更新完成后核对标签对应的 SHA、三个桌面 ZIP、benchmark 的 Android ZIP、tday 的安卓 APK 和包内 provenance；代码推送、CI 成功、
+3. 手动补发 Editor：运行 **Release Editor**。
+4. 下载更新完成后核对标签对应的 SHA、三个桌面 ZIP、tday 的安卓 APK 和包内 provenance；代码推送、CI 成功、
    Release 附件更新分别确认。正式游戏发行继续使用下方 Project CI/CLI 与稳定 identity。
 
 自动构建固定使用通过 CI 的 SHA；PR、fork、失败的 CI 不发布。新 main 已出现时，
 尚未开始的旧自动构建在安装工具链/编译前跳过；编译期间出现新 main 的运行只保留
 Actions artifact，不覆盖滚动下载。三个 ZIP 在原平台打好再上传，保留
-Unix executable 权限；benchmark 与 tday 均须四个平台成功后才发布。标签/附件更新失败会让发布 job 失败。
+Unix executable 权限；tday 须四个平台成功后才发布。标签/附件更新失败会让发布 job 失败。
 
 ## CI 成本与失败重试
 

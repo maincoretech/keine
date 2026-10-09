@@ -645,14 +645,19 @@ B native Wayland + `WGPU_BACKEND=gl`、C X11/XWayland + Vulkan；从无关 cwd �
 
 ### CI 的工作范围与缓存
 
-每次推送保留依赖政策、Linux fmt/Clippy/workspace 与 publisher 测试、benchmark
-采集器回归，三平台检查规范发行 features；macOS/Windows 合并视频、进程指标和
+每次推送保留依赖政策、Linux fmt/Clippy/workspace 与 publisher 测试，
+三平台检查规范发行 features；macOS/Windows 合并视频、进程指标和
 系统 Trash 单元测试，仍实际链接并运行视频验收。Linux 的 workspace 测试已包含
 Editor 平台测试，不再另跑同一组。完整优化编译/打包由 Release / Project Release
 执行，常规 CI 不重复编译整个 release profile；发行优化参数保持不变。
 macOS 另检查无音频 `video-native` 测试的编译边界，避免默认音频掩盖意外的 rodio 引用。
-main 的成功 CI 会触发 Release 更新 `benchmark-latest`；发布必须分别确认构建、
+main 的成功 CI 仅自动触发 Editor 发布；benchmark 自动/手动打包和独立采集器
+CI 门禁已取消。本地测量工具保留，不再要求维护者跑整套性能报告。发布必须分别确认构建、
 附件上传、滚动 tag 和 Release 提交匹配，不能把 CI 成功当作发布完成。
+
+窗口退出修复将 surface 与原生句柄保留到最后一次渲染提交之后，再等待 GPU 完成并释放。
+本地 workspace check、Clippy、fmt、1047 项测试（21 ignored）、14 项打包合同与
+workflow actionlint 通过；未重跑性能套件，Windows 原机的退出崩溃尚未复验。
 
 Windows job 总上限为 180 分钟（不是闲置计时），Linux/macOS 为 60 分钟。
 main 的运行中 CI 不被后续推送取消；同组只保留最新待运行提交，其他分支/PR
@@ -707,7 +712,7 @@ publisher/video-native/hot-reload，IPC/Trash 在沙箱外）、native-smoke 零
 cargo-deny 和 CI actionlint 通过。远程 Android CI 按对应提交的 Actions 结果核对；手机画面、触摸、音频、
 后台恢复与性能均未验收；APK 校验只证明构建产物，不代表运行态支持已经完成。
 
-`Release Engine` 的 `package=tday` 增加 Android ARM64 release APK，与三平台 ZIP 一起通过后才发布。
+仅手动的 `Release Engine` 构建 tday Android ARM64 release APK，与三平台 ZIP 一起通过后才发布。
 本机完整打包已通过（13 scenes / 2619 actions / 0 warnings），APK 约 130 MiB；
 `verify-android-release.py` 检查独立应用 ID、非 debuggable、内置加密资源不压缩、许可声明、
 启动/JNI 入口和 ELF LOAD/RELRO 16 KB 对齐，zipalign/apksigner 均通过。
@@ -781,7 +786,7 @@ Linux 使用 `video-ffmpeg`；CI 另跑 FFmpeg ASan。fuzz 的目录参数由
 
 ### 三平台原生完整套件
 
-自动 Release 的 Windows、macOS、Linux 包统一使用 `tests/fixtures/native-benchmark`，
+本地 `bundle --benchmark` 的 Windows、macOS、Linux 包统一使用 `tests/fixtures/native-benchmark`，
 不再用只有一句对白的 smoke。同一份 EYS v2、WebP、Opus、1080p H.264 素材
 经过正常 publisher → Hakutaku → 解码/播放 → MainCore UI/场景渲染路径；macOS 视频
 用 AVFoundation，Windows/Linux 用 FFmpeg。素材自生成，不包含 tday 私有内容。
@@ -823,8 +828,8 @@ check、fmt 通过。新增两个回归验证单项/全套超时、部分输出�
 保留部分报告并返回失败。正常播放必须有前台样本；全程后台暂停不能算作已测。
 启动/开场/I/O 的失败也会使套件返回失败，原始报告仍保留。
 自选工程同样必须提供目标，不能用缺测结果冒充完整套件。
-三平台 CI 都启用进程采样 feature 与本平台媒体后端，检查全部目标唯一、引用完整、
-可重放、透明素材有效及原生打包映射；Linux 也执行 FFmpeg 播放合同。CI 构建/媒体合同
+现有本地回归检查目标唯一、引用完整、可重放、透明素材有效及原生打包映射；
+普通平台 CI 继续执行媒体合同，取消 benchmark 专项采集和打包。CI 构建/媒体合同
 测试不代替实机 GPU 性能验收。存读档事务、回退和 IME 的正确性仍由对应回归测试验证，
 面板场景只测真实 UI 负载；Editor 大文档/拖动基准仍在独立 Editor 测试中。
 
@@ -1202,7 +1207,7 @@ cargo test -p keine --lib scene::assets::tests::speculative_budget_preserves_pri
 
 剩余范围为 Editor 完整帧时/大文档/搜索、Engine 启动与持续 CPU/RSS、实际 Preview FPS/GPU 帧时、粒子 GPU/全屏与瞬时峰值、音视频流与 Hakutaku I/O；使用现有 bench 与 portable benchmark 入口，不建立另一套采集协议。
 
-启动时固定同主机、同 release、同输入及分辨率；先记录基线，再定位与修改热点，最后保存前后原始命令/结果并复验功能。Windows 自动 benchmark 的构建/打包入口保留；平台跑分和性能结论留到此阶段。
+启动时固定同主机、同 release、同输入及分辨率；先记录基线，再定位与修改热点，最后保存前后原始命令/结果并复验功能。benchmark 自动构建/打包入口已取消；性能问题只在需要定位时按场景做本地测量，不要求整套平台跑分。
 
 功能阶段继续运行以下接口/正确性回归，不依赖帧率、耗时或机器性能阈值：
 

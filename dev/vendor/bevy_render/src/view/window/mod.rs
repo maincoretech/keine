@@ -35,6 +35,7 @@ impl Plugin for WindowRenderPlugin {
             render_app
                 .init_gpu_resource::<ExtractedWindows>()
                 .init_gpu_resource::<WindowSurfaces>()
+                .init_gpu_resource::<RetiringWindows>()
                 .add_systems(ExtractSchedule, extract_windows.before(extract_cameras))
                 .add_systems(
                     Render,
@@ -42,7 +43,8 @@ impl Plugin for WindowRenderPlugin {
                         .run_if(need_surface_configuration)
                         .before(prepare_windows),
                 )
-                .add_systems(Render, prepare_windows.in_set(RenderSystems::PrepareViews));
+                .add_systems(Render, prepare_windows.in_set(RenderSystems::PrepareViews))
+                .add_systems(Render, retire_windows.in_set(RenderSystems::Cleanup));
         }
     }
 }
@@ -122,12 +124,17 @@ impl DerefMut for ExtractedWindows {
     }
 }
 
+// Closing views stop rendering immediately, while their native handles and
+// surfaces stay alive until the final render schedule has drained its queue.
+#[derive(Default, Resource)]
+struct RetiringWindows(Vec<(Entity, Option<ExtractedWindow>)>);
+
 fn extract_windows(
     mut extracted_windows: ResMut<ExtractedWindows>,
     mut closing: Extract<MessageReader<WindowClosing>>,
     windows: Extract<Query<(Entity, &Window, &RawHandleWrapper, Option<&PrimaryWindow>)>>,
     mut removed: Extract<RemovedComponents<RawHandleWrapper>>,
-    mut window_surfaces: ResMut<WindowSurfaces>,
+    mut retiring_windows: ResMut<RetiringWindows>,
 ) {
     for (entity, window, handle, primary) in windows.iter() {
         if primary.is_some() {
@@ -189,13 +196,38 @@ fn extract_windows(
         }
     }
 
-    for closing_window in closing.read() {
-        extracted_windows.remove(&closing_window.window);
-        window_surfaces.remove(&closing_window.window);
+    let retiring: EntityHashSet = closing
+        .read()
+        .map(|event| event.window)
+        .chain(removed.read())
+        .collect();
+    for entity in retiring {
+        retiring_windows
+            .0
+            .push((entity, extracted_windows.remove(&entity)));
     }
-    for removed_window in removed.read() {
-        extracted_windows.remove(&removed_window);
-        window_surfaces.remove(&removed_window);
+}
+
+fn retire_windows(
+    mut retiring: ResMut<RetiringWindows>,
+    mut surfaces: ResMut<WindowSurfaces>,
+    device: Res<RenderDevice>,
+) {
+    if retiring.0.is_empty() {
+        return;
+    }
+    // Render still submits final readback/cleanup commands on the closing
+    // frame. Wait after that submission, not during extraction, before losing
+    // the native GL surface/context needed to complete its fences.
+    if let Err(error) = device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+        timeout: Some(core::time::Duration::from_secs(10)),
+    }) {
+        warn!("GPU did not drain before window surface retirement: {error}");
+    }
+    for (entity, window) in retiring.0.drain(..) {
+        surfaces.remove(&entity);
+        drop(window);
     }
 }
 

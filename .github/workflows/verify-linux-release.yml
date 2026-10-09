@@ -7,7 +7,7 @@ on:
       channel:
         description: Existing download to verify in clean Ubuntu 24.04
         type: choice
-        options: [tday-latest, benchmark-latest, editor-latest]
+        options: [tday-latest, editor-latest]
         required: true
         default: tday-latest
 
@@ -31,7 +31,6 @@ jobs:
         run: |
           case "$CHANNEL" in
             tday-latest) pattern='tday-linux-test.zip' ;;
-            benchmark-latest) pattern='keine-linux-temporary-benchmark.zip' ;;
             editor-latest) pattern='keine-editor-linux-x64.zip' ;;
             *) exit 2 ;;
           esac

@@ -11,8 +11,7 @@ Shipping projects use Hakutaku v1, WebP images and Ogg Opus audio.
 ## 下载
 
 - `editor-latest`：独立 Editor，内含同版本 Preview；main 通过 CI 后自动更新。
-- `benchmark-latest`：三平台性能测试包，main 通过 CI 后自动更新。
-- `tday-latest`：tday 试玩，Actions → Release → Run workflow → `package=tday`，仅手动。
+- `tday-latest`：tday 试玩，Actions → Release Engine → Run workflow，仅手动。
 
 下载与正式发行流程见 [发布文档](dev/docs/release.md)。
 

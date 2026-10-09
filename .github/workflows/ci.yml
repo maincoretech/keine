@@ -24,11 +24,10 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Catch packaging/collector regressions before any native Rust compilation.
-      - name: Check packaging and benchmark contracts
+      # Catch packaging regressions before any native Rust compilation.
+      - name: Check packaging contracts
         run: |
           python3 dev/scripts/verify-icons.py
-          python3 -m unittest discover -s tests/bench/runtime -p 'test_*.py'
           python3 -m unittest discover -s tests/packaging -p 'test_*.py'
       - name: Install pinned official workflow linter
         run: |
@@ -142,12 +141,11 @@ jobs:
         run: cargo test --workspace --no-default-features --features publisher
       # Select Engine and Editor together to unify their Bevy dev-dependencies.
       # libtest accepts several filters; Linux's workspace tests cover these too.
-      - name: Check platform video, process metrics, benchmark contracts and system Trash
+      - name: Check platform video, process metrics and system Trash
         run: >-
           cargo test --locked -p keine -p keine-editor --lib --no-default-features
           --features "${{ matrix.test_features }}" --
-          scene::video:: preview::performance:: file_ops::assets:: portable_benchmark_
-          runtime::bootstrap::tests::benchmark_ ui::support::performance::
+          scene::video:: preview::performance:: file_ops::assets::
           publisher::tests::native_release_
       - name: Check native display connection ownership
         run: cargo test --locked -p bevy_render --lib renderer::display_tests

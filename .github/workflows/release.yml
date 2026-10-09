@@ -1,74 +1,39 @@
 name: Release Engine
 
-# Main CI publishes benchmarks automatically; tday is an explicit manual choice.
+# tday is built only on an explicit manual request.
 on:
-  workflow_run:
-    workflows: ["CI Desktop"]
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
-    inputs:
-      package:
-        description: Package to publish (tday is never automatic)
-        required: true
-        type: choice
-        options: [benchmark, tday]
-        default: benchmark
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ inputs.package || 'benchmark' }}
+  group: release-tday
   cancel-in-progress: false
 
 env:
-  # workflow_run's github.sha is the default branch tip, not necessarily the
-  # commit that passed CI. Use the upstream run's immutable source throughout.
-  RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
-  KEINE_BUILD_COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
-  BENCHMARK_PACKAGE: ${{ github.event_name == 'workflow_run' || inputs.package == 'benchmark' }}
-  RELEASE_TAG: ${{ inputs.package == 'tday' && 'tday-latest' || 'benchmark-latest' }}
+  RELEASE_SHA: ${{ github.sha }}
+  KEINE_BUILD_COMMIT: ${{ github.sha }}
+  RELEASE_TAG: tday-latest
 
 jobs:
   source:
     name: Prepare Source
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.head_branch == 'main' &&
-       github.event.workflow_run.head_repository.full_name == github.repository &&
-       github.event.workflow_run.head_sha == github.sha)
     runs-on: ubuntu-26.04
     timeout-minutes: 15
-    outputs:
-      current: ${{ steps.current.outputs.build }}
     steps:
       - name: Check out release source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.RELEASE_SHA }}
-      - name: Skip superseded automatic release before compiling
-        id: current
-        shell: bash
-        run: |
-          if [[ "$GITHUB_EVENT_NAME" == workflow_run && "$(git ls-remote origin refs/heads/main | cut -f1)" != "$RELEASE_SHA" ]]; then
-            echo 'Newer main exists; skip this automatic release.'
-            exit 0
-          fi
-          echo 'build=true' >> "$GITHUB_OUTPUT"
       - name: Install Rust toolchain
-        if: steps.current.outputs.build == 'true'
         uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
       - name: Check dependencies before building any platform
-        if: steps.current.outputs.build == 'true'
         uses: ./.github/actions/check-dependencies
 
   bundle:
     name: Build ${{ matrix.name }}
     needs: source
-    if: needs.source.outputs.current == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -109,7 +74,7 @@ jobs:
         id: project
         shell: bash
         env:
-          PROJECT_INPUT: ${{ inputs.package == 'tday' && 'projects/tday' || 'tests/fixtures/native-benchmark' }}
+          PROJECT_INPUT: projects/tday
         run: |
           if [[ "$PROJECT_INPUT" == *$'\n'* || "$PROJECT_INPUT" == *$'\r'* ]]; then
             echo 'Project path must not contain line breaks' >&2
@@ -145,11 +110,7 @@ jobs:
         env:
           ARTIFACT_BASE: ${{ matrix.artifact }}
         run: |
-          if [[ "$BENCHMARK_PACKAGE" == "true" ]]; then
-            artifact="${ARTIFACT_BASE}-temporary-benchmark"
-          else
-            artifact="tday-${ARTIFACT_BASE#keine-}-test"
-          fi
+          artifact="tday-${ARTIFACT_BASE#keine-}-test"
           echo "name=$artifact" >> "$GITHUB_OUTPUT"
       - name: Restore Rust release cache
         id: release-cache
@@ -162,7 +123,6 @@ jobs:
             ~/.cargo/git
             target/CACHEDIR.TAG
             target/${{ matrix.engine_target_dir }}
-            target/${{ matrix.target }}/profiling
             target/runner
           key: release-rust-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ env.KEINE_RELEASE_CACHE_FEATURES }}-publisher-fast
           restore-keys: |
@@ -199,9 +159,6 @@ jobs:
           KEINE_HAKUTAKU_IDENTITY: ${{ steps.publisher_identity.outputs.path }}
         run: |
           args=(bundle "$PROJECT_PATH" --output "target/${{ steps.artifact.outputs.name }}")
-          if [[ "$BENCHMARK_PACKAGE" == "true" ]]; then
-            args+=(--benchmark)
-          fi
           target/runner/release/keine "${args[@]}"
       - name: Remove publisher identity
         if: always()
@@ -271,7 +228,6 @@ jobs:
             args+=(--target "${{ matrix.target }}")
           fi
           cargo clean "${args[@]}" --profile release
-          cargo clean "${args[@]}" --profile profiling
           echo 'cache-safe=true' >> "$GITHUB_OUTPUT"
       - name: Save sanitized dependencies even after validation failure
         if: ${{ !cancelled() && steps.scrub.outputs.cache-safe == 'true' && steps.release-cache.outputs.cache-primary-key != '' && steps.release-cache.outputs.cache-hit != 'true' }}
@@ -282,14 +238,12 @@ jobs:
             ~/.cargo/git
             target/CACHEDIR.TAG
             target/${{ matrix.engine_target_dir }}
-            target/${{ matrix.target }}/profiling
             target/runner
           key: ${{ steps.release-cache.outputs.cache-primary-key }}
 
   android:
     name: Build Android arm64
     needs: source
-    if: needs.source.outputs.current == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
@@ -332,8 +286,6 @@ jobs:
             target/android/CACHEDIR.TAG
             target/android/release
             target/android/aarch64-linux-android/release
-            target/android/profiling
-            target/android/aarch64-linux-android/profiling
             target/runner
           key: release-android-arm64-ndk28-v1-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-publisher-fast
           restore-keys: |
@@ -353,16 +305,9 @@ jobs:
           umask 077
           mkdir -p "$(dirname "$KEINE_HAKUTAKU_IDENTITY")"
           mkdir -p bundles
-          if [[ "$BENCHMARK_PACKAGE" == "true" ]]; then
-            python3 dev/scripts/prepare-android-benchmark.py "$RUNNER_TEMP/keine-android-fixture"
-            target/runner/release/keine bundle "$RUNNER_TEMP/keine-android-fixture" --output target/keine-android-arm64 --benchmark
-            echo 'ANDROID_OUTPUT=target/keine-android-arm64-benchmark' >> "$GITHUB_ENV"
-            echo 'ANDROID_ARTIFACT=keine-android-arm64-benchmark' >> "$GITHUB_ENV"
-          else
-            target/runner/release/keine bundle projects/tday --output target/tday-android-arm64-test
-            echo 'ANDROID_OUTPUT=target/tday-android-arm64-test' >> "$GITHUB_ENV"
-            echo 'ANDROID_ARTIFACT=tday-android-arm64-test' >> "$GITHUB_ENV"
-          fi
+          target/runner/release/keine bundle projects/tday --output target/tday-android-arm64-test
+          echo 'ANDROID_OUTPUT=target/tday-android-arm64-test' >> "$GITHUB_ENV"
+          echo 'ANDROID_ARTIFACT=tday-android-arm64-test' >> "$GITHUB_ENV"
       - name: Check Android release lint
         run: gradle --no-daemon -p dev/android lintRelease
       - name: Verify Android release package
@@ -370,12 +315,7 @@ jobs:
           python3 dev/scripts/verify-android-release.py "$ANDROID_OUTPUT/game.apk" "$ANDROID_OUTPUT/ANDROID.json"
           "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 4 "$ANDROID_OUTPUT/game.apk"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify "$ANDROID_OUTPUT/game.apk"
-          if [[ "$BENCHMARK_PACKAGE" == "true" ]]; then
-            (cd "$ANDROID_OUTPUT" && zip -0 "$GITHUB_WORKSPACE/bundles/$ANDROID_ARTIFACT.zip" game.apk ANDROID.json android-benchmark.json benchmark-android.py profile-runtime.py BENCHMARK.txt)
-            (cd "$ANDROID_OUTPUT" && zip -6 "$GITHUB_WORKSPACE/bundles/$ANDROID_ARTIFACT.zip" lib/libkeine.so)
-          else
-            cp "$ANDROID_OUTPUT/game.apk" "bundles/$ANDROID_ARTIFACT.apk"
-          fi
+          cp "$ANDROID_OUTPUT/game.apk" "bundles/$ANDROID_ARTIFACT.apk"
       - name: Upload Android release
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -395,8 +335,6 @@ jobs:
           if [[ -f target/android/CACHEDIR.TAG ]]; then
             cargo clean --locked --target-dir target/android -p keine -p keine-loader --profile release
             cargo clean --locked --target-dir target/android --target aarch64-linux-android -p keine -p keine-loader --profile release
-            cargo clean --locked --target-dir target/android -p keine -p keine-loader --profile profiling
-            cargo clean --locked --target-dir target/android --target aarch64-linux-android -p keine -p keine-loader --profile profiling
           fi
           echo 'cache-safe=true' >> "$GITHUB_OUTPUT"
       - name: Save sanitized Android dependencies even after validation failure
@@ -409,8 +347,6 @@ jobs:
             target/android/CACHEDIR.TAG
             target/android/release
             target/android/aarch64-linux-android/release
-            target/android/profiling
-            target/android/aarch64-linux-android/profiling
             target/runner
           key: ${{ steps.release-cache.outputs.cache-primary-key }}
 
@@ -433,7 +369,7 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: ${{ inputs.package == 'tday' && 'tday-*-test' || '*-benchmark' }}
+          pattern: tday-*-test
           path: bundles
           merge-multiple: true
       - name: Verify all platform downloads
@@ -441,15 +377,13 @@ jobs:
         run: |
           shopt -s nullglob
           packages=(bundles/*.zip)
-          expected_zips=4
-          if [[ "$RELEASE_TAG" == "tday-latest" ]]; then expected_zips=3; fi
+          expected_zips=3
           if [[ "${#packages[@]}" -ne "$expected_zips" ]]; then
             echo "Expected $expected_zips platform packages, found ${#packages[@]}" >&2
             exit 1
           fi
           apks=(bundles/*.apk)
-          expected=0
-          if [[ "$RELEASE_TAG" == "tday-latest" ]]; then expected=1; fi
+          expected=1
           if [[ "${#apks[@]}" -ne "$expected" ]]; then
             echo "Expected $expected Android packages, found ${#apks[@]}" >&2
             exit 1
@@ -458,13 +392,6 @@ jobs:
         id: release
         shell: bash
         run: |
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_run" ]]; then
-            current_main="$(git ls-remote origin refs/heads/main | cut -f1)"
-            if [[ "$current_main" != "$RELEASE_SHA" ]]; then
-              echo 'A newer main commit exists; keep these artifacts without replacing the rolling download.'
-              exit 0
-            fi
-          fi
           git tag --force "$RELEASE_TAG" "$RELEASE_SHA"
           git push --force origin "refs/tags/$RELEASE_TAG"
           echo "short_sha=${RELEASE_SHA::7}" >> "$GITHUB_OUTPUT"
@@ -475,17 +402,17 @@ jobs:
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           target_commitish: ${{ env.RELEASE_SHA }}
-          name: ${{ inputs.package == 'tday' && 'tday playtest' || 'Kēne benchmark' }} ${{ steps.release.outputs.short_sha }}
+          name: tday playtest ${{ steps.release.outputs.short_sha }}
           body: |
-            ${{ inputs.package == 'tday' && 'Manually requested tday test game. Original story and media copyright shiftz; see the GAME-LICENSE section in NOTICE.' || 'Automated performance suite. Run the executable; the benchmark report is written beside it.' }}
+            Manually requested tday test game. Original story and media copyright shiftz; see the GAME-LICENSE section in NOTICE.
 
             Source commit: ${{ env.RELEASE_SHA }}.
             Download your platform, extract the complete archive, and run
             `keine.exe` (Windows) or `./keine` (macOS/Linux).
-            ${{ inputs.package == 'tday' && 'Android: install tday-android-arm64-test.apk (ARM64, Android 8+); game content is included. Test signing only.' || 'Android: unzip the ARM64 benchmark and run python3 benchmark-android.py --apk game.apk --output android-report with an authorized ADB device. Full supported workload suite; reports return automatically to the computer. Video/window-size cases are explicit unsupported skips.' }}
+            Android: install tday-android-arm64-test.apk (ARM64, Android 8+); game content is included. Test signing only.
             Temporary test identity; not a formal game update channel.
           prerelease: true
           make_latest: false
-          files: ${{ inputs.package == 'tday' && 'bundles/*' || 'bundles/*.zip' }}
+          files: bundles/*
           fail_on_unmatched_files: true
           overwrite_files: true

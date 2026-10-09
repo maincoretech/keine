@@ -45,6 +45,10 @@ Action 入场初态与 Engine 每帧插值共用同一规则，计时、完成�
 scene、normal UI、dialog camera 职责固定，特效不得改变合成顺序。
 GPU instance 创建前传递 winit 的 owned display connection，连接保留到 instance
 释放，并用于 GPU recovery；不能以离屏 EGL 配置呈现 Wayland/X11 窗口。
+关闭窗口时，extraction 停止对应视图绘制，但保留 surface/native handle 到最后一帧
+提交后的 render cleanup；等待已提交 GPU 工作后再释放，最多 10 秒，失败记录诊断。
+不能依赖 Queue 析构时才等待，
+那时 native GL 的 surface/context 可能已被拆除；这不是挂死驱动的恢复保证。
 三层相机统一使用单采样目标（`Msaa::Off`）：后续相机不能再用 MSAA resolve
 覆盖已经写入目标纹理的模糊和 UI；位图与文字沿用各自的采样与抗锯齿。
 Editor 通过显式开始/停止控制独立原生 Engine；Block 与执行位置双向同步。

@@ -54,7 +54,7 @@ Android 构建队列独立，不等待桌面/视频 workflow 结束。
 [AGP 9.4 构建要求](https://developer.android.com/build/releases/agp-9-4-0-release-notes)、
 [Android 16 KB 对齐要求](https://developer.android.com/guide/practices/page-sizes)。
 
-`Release Engine` → `Run workflow` → `package=tday` 同时生成三平台 ZIP 和
+`Release Engine` → `Run workflow`（仅 tday） 同时生成三平台 ZIP 和
 `tday-android-arm64-test.apk`，四个平台全部通过后更新 `tday-latest`。
 安卓 job 使用隔离临时内容 identity，构建 `hardened,ui-sounds` release 原生库，
 校验 release APK 的内容、入口、签名和 16 KB 对齐；含密钥的编译输出不会进入缓存。
@@ -168,7 +168,7 @@ adb shell am start -n moe.maincore.keine/.EngineActivity
 
 ## 完整 Android benchmark 与 ADB 回传
 
-`benchmark-latest` 增加独立 Android ARM64 ZIP，内含优化的 `game.apk`、与 APK 相同的
+Android benchmark 仅供本地按需打包，CI 不再生成或发布。产物内含优化的 `game.apk`、与 APK 相同的
 `android-benchmark.json`、Python 运行器及分析工具。应用 ID 为
 `moe.maincore.keine.benchmark`，不会覆盖 tday；profiling 与 release 使用相同优化，
 电脑侧 `lib/libkeine.so` 保留匹配的符号（APK 仍正常 strip），仅此 benchmark APK 开启 debuggable，供 `adb run-as` 读取私有报告。
@@ -228,5 +228,5 @@ python3 target/android-test-benchmark/benchmark-android.py --apk target/android-
 ```
 
 派生 fixture 只调整 Android 不支持的内容与独立身份，不修改桌面 fixture 或作者工程。
-Release Engine 自动/手动 benchmark 均生成四平台附件，四个平台都成功后才更新滚动下载；
+Release Engine 仅手动生成 tday 三平台 ZIP 与 Android APK；benchmark 不再由 Actions 构建或更新下载。
 云端 APK 编译/验证仍不代表 Moto 或其他真机已经通过完整运行测试。
