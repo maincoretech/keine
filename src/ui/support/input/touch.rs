@@ -37,6 +37,7 @@ pub(crate) enum Swipe {
 struct Capture {
     id: u64,
     owner: Owner,
+    scroll_parent: Option<Entity>,
     start: Vec2,
     last: Vec2,
     excursion: f32,
@@ -156,6 +157,8 @@ pub(crate) struct TouchContext<'w, 's> {
     pages: Res<'w, SettingsPageTransition>,
     locale: Res<'w, SettingsLocaleTransition>,
     fades: Query<'w, 's, &'static MenuFade>,
+    extra_pages: Res<'w, crate::ui::extra::ExtraPageTransition>,
+    extra_motions: Query<'w, 's, &'static crate::ui::extra::ExtraMotion>,
     mouse: Res<'w, ButtonInput<MouseButton>>,
     input: ResMut<'w, TouchInputState>,
 }
@@ -192,7 +195,12 @@ pub(crate) fn collect(mut context: TouchContext) {
         input.fingers.clear();
         return;
     };
-    let navigation_ready = !context.route.is_animating()
+    let navigation_ready = !context.extra_pages.is_animating()
+        && context
+            .extra_motions
+            .iter()
+            .all(|motion| !motion.is_animating())
+        && !context.route.is_animating()
         && !context.pages.is_animating()
         && !context.locale.is_animating()
         && context
@@ -298,9 +306,25 @@ pub(crate) fn collect(mut context: TouchContext) {
                     continue;
                 }
                 let (owner, camera) = hit(event.position);
+                let mut ancestor = if let Owner::Control(entity) = owner {
+                    Some(entity)
+                } else {
+                    None
+                };
+                let mut scroll_parent = None;
+                while let Some(entity) = ancestor {
+                    if let Ok((_, _, _, _, _, _, _, node, _)) = context.nodes.get(entity)
+                        && node.overflow.y == OverflowAxis::Scroll
+                    {
+                        scroll_parent = Some(entity);
+                        break;
+                    }
+                    ancestor = context.parents.get(entity).ok().map(ChildOf::parent);
+                }
                 input.capture = Some(Capture {
                     id: event.id,
                     owner,
+                    scroll_parent,
                     start: event.position,
                     last: event.position,
                     excursion: 0.0,
@@ -330,6 +354,13 @@ pub(crate) fn collect(mut context: TouchContext) {
                     if capture.owner == Owner::Stage {
                         capture.canceled |= !interior(event.position, window.size())
                             || hit(event.position).0 != capture.owner;
+                    }
+                    if matches!(capture.owner, Owner::Control(_))
+                        && capture.excursion > TAP_SLOP
+                        && let Some(parent) = capture.scroll_parent
+                    {
+                        // A row tap selects; a drag belongs to its scroll list.
+                        capture.owner = Owner::Scroll(parent);
                     }
                     if let Owner::Scroll(entity) = capture.owner
                         && !capture.canceled
@@ -409,6 +440,7 @@ mod tests {
         Capture {
             id: 1,
             owner,
+            scroll_parent: None,
             start: Vec2::new(300.0, 300.0),
             last: Vec2::new(300.0, 300.0),
             excursion: 0.0,
@@ -658,6 +690,81 @@ mod tests {
     }
 
     #[test]
+    fn dragging_a_track_row_scrolls_without_selecting_it() {
+        use bevy::app::{HierarchyPropagatePlugin, PropagateSet};
+        use bevy::ui::{IsDefaultUiCamera, UiScale};
+        let (mut app, window) = app();
+        app.init_resource::<UiScale>()
+            .add_plugins(HierarchyPropagatePlugin::<ComputedUiTargetCamera>::new(
+                PostUpdate,
+            ))
+            .add_systems(
+                PostUpdate,
+                bevy::ui::update::propagate_ui_target_cameras
+                    .before(PropagateSet::<ComputedUiTargetCamera>::default()),
+            );
+        app.world_mut()
+            .spawn((Camera::default(), IsDefaultUiCamera));
+        *app.world_mut().resource_mut::<UiInputScope>() = UiInputScope::Extra;
+        let list = app
+            .world_mut()
+            .spawn((
+                Node {
+                    overflow: Overflow::scroll_y(),
+                    ..default()
+                },
+                ComputedNode {
+                    size: Vec2::splat(400.0),
+                    ..default()
+                },
+                UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::splat(300.0))),
+                InheritedVisibility::VISIBLE,
+                ComputedStackIndex(1),
+            ))
+            .id();
+        let row = app
+            .world_mut()
+            .spawn((
+                Button,
+                ChildOf(list),
+                ComputedNode {
+                    size: Vec2::splat(80.0),
+                    ..default()
+                },
+                UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::splat(300.0))),
+                InheritedVisibility::VISIBLE,
+                ComputedStackIndex(2),
+            ))
+            .id();
+        app.update();
+        let point = Vec2::splat(300.0);
+        send(&mut app, window, 1, TouchPhase::Started, point);
+        send(
+            &mut app,
+            window,
+            1,
+            TouchPhase::Moved,
+            point - Vec2::Y * 30.0,
+        );
+        assert_eq!(
+            app.world().resource::<TouchInputState>().scroll,
+            Some((list, -30.0))
+        );
+        send(
+            &mut app,
+            window,
+            1,
+            TouchPhase::Ended,
+            point - Vec2::Y * 30.0,
+        );
+        assert_eq!(
+            *app.world().get::<Interaction>(row).unwrap(),
+            Interaction::None
+        );
+        assert!(!app.world().resource::<TouchInputState>().tap);
+    }
+
+    #[test]
     fn navigation_requires_a_short_straight_unambiguous_swipe() {
         let mut stage = capture(Owner::Stage);
         stage.moved(Vec2::new(310.0, 220.0));
@@ -691,6 +798,8 @@ mod tests {
         app.add_message::<TouchInput>()
             .init_resource::<TouchInputState>()
             .init_resource::<UiInputScope>()
+            .init_resource::<crate::ui::extra::ExtraUi>()
+            .init_resource::<crate::ui::extra::ExtraPageTransition>()
             .insert_resource(GameState(keine_core::State::new()))
             .init_resource::<SettingsUi>()
             .init_resource::<SaveLoadUi>()
@@ -877,6 +986,8 @@ mod tests {
         let root = std::env::temp_dir().join(format!("keine-touch-slider-{nonce}"));
         let mut app = App::new();
         app.init_resource::<RuntimeSettings>()
+            .init_resource::<crate::ui::extra::ExtraUi>()
+            .init_resource::<crate::ui::extra::ExtraPageTransition>()
             .insert_resource(PersistenceRoot(root.clone()))
             .init_resource::<ActiveSettingSlider>()
             .init_resource::<TouchInputState>()
@@ -943,6 +1054,38 @@ mod tests {
         assert!(!app.world().resource::<ActiveSettingSlider>().is_active());
         assert_eq!(
             crate::storage::settings::load(&root).unwrap().master_volume,
+            0.75
+        );
+        // Extra reuses this handler; letterboxing offsets mouse coordinates,
+        // while touch coordinates above already belong to the UI viewport.
+        *app.world_mut().resource_mut::<TouchInputState>() = TouchInputState::default();
+        *app.world_mut().resource_mut::<UiInputScope>() = UiInputScope::Extra;
+        app.world_mut().resource_mut::<SettingsUi>().open = false;
+        app.world_mut()
+            .resource_mut::<crate::ui::extra::ExtraUi>()
+            .open = true;
+        app.world_mut()
+            .entity_mut(slider)
+            .insert((SettingSlider(SettingKind::BgmVolume), Interaction::Hovered));
+        let mut window = app
+            .world_mut()
+            .query::<&mut Window>()
+            .single_mut(app.world_mut())
+            .unwrap();
+        window.resolution = bevy::window::WindowResolution::new(2560, 1080);
+        window.focused = true;
+        window.set_physical_cursor_position(Some(bevy::math::DVec2::new(1420.0, 500.0)));
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        app.update();
+        assert_eq!(app.world().resource::<RuntimeSettings>().bgm_volume, 0.75);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .release(MouseButton::Left);
+        app.update();
+        assert_eq!(
+            crate::storage::settings::load(&root).unwrap().bgm_volume,
             0.75
         );
         std::fs::remove_dir_all(root).unwrap();

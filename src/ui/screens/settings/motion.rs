@@ -403,14 +403,13 @@ pub fn update_settings_pages(
     transition.elapsed =
         (transition.elapsed + time.delta_secs()).min(SettingsPageTransition::SECONDS);
     let progress = transition.elapsed / SettingsPageTransition::SECONDS;
-    let eased = ease_in_out_cubic(progress);
     let direction = (to.index() - from.index()).signum() as f32;
 
     for (panel, mut node, mut transform) in &mut panels {
         let offset = if panel.page == from {
-            Some(-direction * 100.0 * eased)
+            Some(page_slide_offset(true, direction, progress))
         } else if panel.page == to {
-            Some(direction * 100.0 * (1.0 - eased))
+            Some(page_slide_offset(false, direction, progress))
         } else {
             None
         };
@@ -419,7 +418,7 @@ pub fn update_settings_pages(
                 &mut node,
                 &mut transform,
                 settings_page_display(panel.page),
-                Val2::percent(0.0, offset),
+                offset,
             );
         } else {
             set_page_presentation(&mut node, &mut transform, Display::None, Val2::ZERO);

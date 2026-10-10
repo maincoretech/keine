@@ -160,6 +160,7 @@ scene scene_0011 {
     blocking: true
   ),
   screen.curtain.hide(color: rgba(0, 0, 0, 1), duration: 700ms),
+  gallery.unlock(bgm, asset_00056, name: "shimmer"),
   bgm(asset_00056, volume: 0.29, fade: 1000ms),
   "第二天的早上我是被光照醒的，看来昨天晚上真是太匆忙",
   "连窗帘都没拉",

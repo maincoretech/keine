@@ -97,6 +97,136 @@ pub(crate) fn text_weight(
     )
 }
 
+// Settings and Extra use the same fixed tabs and slider geometry.
+pub(crate) const PAGE_TEXT_IDLE: f32 = 0.175;
+pub(crate) const PAGE_TEXT_HOVER: f32 = 0.5;
+pub(crate) const PAGE_TEXT_ACTIVE: f32 = 0.8;
+pub(crate) const PAGE_SLIDE_SECONDS: f32 = 0.3;
+
+pub(crate) fn page_tab_button() -> impl Bundle {
+    (
+        Button,
+        UiSoundStyle::Switch,
+        Node {
+            height: Val::Px(63.0),
+            flex_shrink: 0.0,
+            padding: UiRect::axes(Val::Px(6.0), Val::Px(4.5)),
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        BackgroundColor(Color::NONE),
+    )
+}
+
+pub(crate) fn page_tab_alpha(active: bool, interaction: Interaction) -> f32 {
+    if active {
+        PAGE_TEXT_ACTIVE
+    } else if interaction != Interaction::None {
+        PAGE_TEXT_HOVER
+    } else {
+        PAGE_TEXT_IDLE
+    }
+}
+
+pub(crate) fn page_slide_offset(outgoing: bool, direction: f32, progress: f32) -> Val2 {
+    let eased = ease_in_out_cubic(progress);
+    Val2::percent(
+        0.0,
+        direction * 100.0 * if outgoing { -eased } else { 1.0 - eased },
+    )
+}
+
+pub(crate) struct SliderEntities {
+    pub(crate) control: Entity,
+    pub(crate) thumb: Entity,
+    pub(crate) bubble: Entity,
+    pub(crate) value: Entity,
+}
+
+/// Fixed Settings slider, with screen-owned values and input handling.
+pub(crate) fn spawn_slider(
+    parent: &mut ChildSpawnerCommands,
+    font: &Handle<Font>,
+    ratio: f32,
+    value: &str,
+    max_width: Val,
+) -> SliderEntities {
+    let mut thumb = Entity::PLACEHOLDER;
+    let mut bubble = Entity::PLACEHOLDER;
+    let mut value_entity = Entity::PLACEHOLDER;
+    let control = parent
+        .spawn((
+            Button,
+            UiSoundStyle::HoverOnly,
+            Node {
+                position_type: PositionType::Relative,
+                width: Val::Percent(100.0),
+                max_width,
+                height: Val::Px(37.5),
+                flex_shrink: 0.0,
+                margin: UiRect::top(Val::Px(7.5)),
+                ..default()
+            },
+            BackgroundColor(Color::NONE),
+        ))
+        .with_children(|slider| {
+            slider.spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::ZERO,
+                    top: Val::Px(15.0),
+                    width: Val::Percent(100.0),
+                    height: Val::Px(7.5),
+                    ..default()
+                },
+                BackgroundColor(Color::BLACK),
+                Outline::new(Val::Px(3.75), Val::ZERO, Color::srgba(1.0, 1.0, 1.0, 0.19)),
+            ));
+            thumb = slider
+                .spawn((
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Percent(ratio.clamp(0.0, 1.0) * 90.0),
+                        top: Val::Px(3.75),
+                        width: Val::Percent(10.0),
+                        height: Val::Px(30.0),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.5)),
+                ))
+                .id();
+            bubble = slider
+                .spawn((
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Percent(ratio.clamp(0.0, 1.0) * 90.0),
+                        top: Val::Px(-31.5),
+                        width: Val::Percent(10.0),
+                        height: Val::Px(27.0),
+                        display: Display::None,
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border_radius: BorderRadius::all(Val::Px(4.5)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.85)),
+                ))
+                .with_children(|label| {
+                    value_entity = label
+                        .spawn(text_weight(value, font, 16.5, 1.0, FontWeight::BOLD))
+                        .id();
+                })
+                .id();
+        })
+        .id();
+    SliderEntities {
+        control,
+        thumb,
+        bubble,
+        value: value_entity,
+    }
+}
+
 pub(crate) fn fill_node() -> Node {
     Node {
         position_type: PositionType::Absolute,

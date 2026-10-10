@@ -1,4 +1,4 @@
-use bevy::audio::{AudioSink, AudioSinkPlayback};
+use bevy::audio::AudioSink;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
@@ -113,8 +113,28 @@ pub(crate) struct UiActivityContext<'w, 's> {
         (&'static Interaction, &'static AboutRepositoryVisual),
         With<AboutRepositoryLink>,
     >,
+    extra_ui: Res<'w, crate::ui::extra::ExtraUi>,
+    extra_tabs: Query<'w, 's, (&'static crate::ui::extra::ExtraTab, &'static Interaction)>,
+    extra_thumbs: Query<'w, 's, &'static crate::ui::extra::ExtraBgmProgressThumb>,
+    extra_bars: Query<
+        'w,
+        's,
+        (
+            &'static crate::ui::extra::ExtraBgmSeekBar,
+            &'static Interaction,
+        ),
+    >,
+    extra_transition: Res<'w, crate::ui::extra::ExtraPageTransition>,
+    extra_scroll: Query<
+        'w,
+        's,
+        (
+            &'static crate::ui::extra::ExtraBgmList,
+            &'static ScrollPosition,
+        ),
+    >,
     extra_motions: Query<'w, 's, &'static ExtraMotion>,
-    extra_players: Query<'w, 's, Option<&'static AudioSink>, With<ExtraBgmPlayer>>,
+    extra_players: Query<'w, 's, (&'static ExtraBgmPlayer, Option<&'static AudioSink>)>,
     extra_seek: Query<'w, 's, &'static ExtraBgmSeekBar>,
     save_load_transition: Res<'w, SaveLoadPageTransition>,
     menu_route_transition: Res<'w, MenuRouteTransition>,
@@ -182,11 +202,27 @@ pub(crate) fn update(mut context: UiActivityContext, mut activity: ResMut<UiAnim
         || context.menu_route_transition.is_animating()
         || context.pending_title.is_some()
         || context.return_to_title.is_some()
+        || context
+            .extra_tabs
+            .iter()
+            .any(|(tab, interaction)| tab.is_animating(*interaction, &context.extra_ui))
+        || context.extra_thumbs.iter().any(|thumb| {
+            thumb.is_animating(
+                context.extra_bars.iter().any(|(bar, interaction)| {
+                    bar.is_dragging() || *interaction != Interaction::None
+                }),
+            )
+        })
+        || context.extra_transition.is_animating()
+        || context
+            .extra_scroll
+            .iter()
+            .any(|(list, position)| list.is_animating(position))
         || context.extra_motions.iter().any(ExtraMotion::is_animating)
         || context
             .extra_players
             .iter()
-            .any(|sink| sink.is_none_or(|sink| !sink.is_paused()))
+            .any(|(player, sink)| player.needs_frames(sink))
         || context.extra_seek.iter().any(ExtraBgmSeekBar::is_dragging)
         || context.pending_window.is_pending()
         || context.active_slider.is_active()

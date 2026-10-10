@@ -315,7 +315,11 @@ pub(super) fn preview_window_controls(root: &Path, cx: &mut App) -> Option<State
                         .flex()
                         .items_center()
                         .justify_center()
+                        .cursor_pointer()
                         .tooltip(icon_hint("Preview failed · see Output"))
+                        .on_click(|_, window, cx| {
+                            window.dispatch_action(Box::new(ShowOutput), cx);
+                        })
                         .child(
                             Icon::new(IconName::TriangleAlert)
                                 .with_size(px(16.))

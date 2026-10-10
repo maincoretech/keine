@@ -226,6 +226,7 @@ actions!(
         ToggleEngine,
         ShowAssets,
         ShowProblems,
+        ShowOutput,
         ShowSearch,
         ShowAssetPreview,
         MigrateEiyashou,

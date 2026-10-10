@@ -395,6 +395,7 @@ scene scene_0009 {
   wait(1000ms),
   "——",
   text.box(visible: false, auto: true),
+  gallery.unlock(bgm, asset_00054, name: "dive"),
   bgm(asset_00054, volume: 0.6, fade: 500ms),
   wait(3000ms),
   "好像有什么东西在接近我",

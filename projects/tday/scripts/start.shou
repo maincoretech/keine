@@ -153,6 +153,7 @@ scene start {
   ),
   se(asset_00082, id: object_0026, loop: true, volume: 0.67, fade: 450ms),
   screen.curtain.hide(color: rgba(0, 0, 0, 1), duration: 620ms),
+  gallery.unlock(bgm, asset_00052, name: "bridge"),
   bgm(asset_00052, volume: 0.15, fade: 1000ms),
   "在我家的旁边有一座跨海大桥",
   "如果是平时我不会选择步行通过",

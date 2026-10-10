@@ -107,6 +107,7 @@ pub(super) enum ToolKind {
     Inspector,
     Problems,
     Performance,
+    Output,
     Build,
 }
 
@@ -120,6 +121,7 @@ impl ToolKind {
             Self::Inspector => INSPECTOR_PANEL,
             Self::Problems => PROBLEMS_PANEL,
             Self::Performance => PERFORMANCE_PANEL,
+            Self::Output => OUTPUT_PANEL,
             Self::Build => BUILD_PANEL,
         }
     }
@@ -136,6 +138,7 @@ impl ToolKind {
             Self::Inspector => PanelPayload::Inspector { root },
             Self::Problems => PanelPayload::Problems { root },
             Self::Performance => PanelPayload::Performance { root },
+            Self::Output => PanelPayload::Output { root },
             Self::Build => PanelPayload::Build { root },
         }
     }

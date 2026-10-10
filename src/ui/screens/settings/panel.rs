@@ -17,8 +17,9 @@ use crate::ui::control_bar::{
     BlurStrength, ButtonAction, ControlInput, SkipMode, ToggleStates, UiBlurSource,
 };
 use crate::ui::foundation::{
-    UiFonts, UiSoundStyle, button_surface, ease_in_out_cubic, exp_lerp, fill_node, smoothstep,
-    text_weight,
+    PAGE_SLIDE_SECONDS, PAGE_TEXT_ACTIVE, PAGE_TEXT_HOVER, PAGE_TEXT_IDLE, UiFonts, UiSoundStyle,
+    button_surface, exp_lerp, fill_node, page_slide_offset, page_tab_alpha, page_tab_button,
+    smoothstep, spawn_slider, text_weight,
 };
 use crate::ui::menu::{
     MenuBack, MenuBlur, MenuFade, MenuHeaderActive, MenuRouteTransition, MenuSurface,
@@ -32,9 +33,6 @@ const OPTION_TRANSITION_RATE: f32 = 18.0;
 const OPTION_TEXT_IDLE: f32 = 0.376;
 const OPTION_TEXT_ACTIVE: f32 = 0.667;
 const OPTION_FILL_ALPHA: f32 = crate::ui::foundation::SURFACE_HOVER_ALPHA;
-const PAGE_TEXT_IDLE: f32 = 0.175;
-const PAGE_TEXT_HOVER: f32 = 0.5;
-const PAGE_TEXT_ACTIVE: f32 = 0.8;
 const SETTINGS_COLUMNS: u16 = 3;
 const SETTINGS_COLUMN_GAP: f32 = 30.0;
 const SETTINGS_ROW_GAP: f32 = 24.0;

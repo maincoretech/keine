@@ -7,7 +7,7 @@
 │   ├── Assets：映射资源 / Unmapped、搜索、类型/目录/标签过滤、List/Grid
 │   ├── Characters
 │   ├── Search：全文搜索，⌘/Ctrl+Shift+F；位于角色下方、分隔线上方
-│   └── 分隔线 → Inspector / Problems / Performance / Build
+│   └── 分隔线 → Inspector / Problems / Performance / Output / Build
 ├── 中央文档
 │   ├── Text：补全、语法着色、诊断、智能缩进/配对、右侧概览
 │   └── Blocks：同一份源码的结构投影、拖动、行内编辑、右侧概览
@@ -212,7 +212,7 @@ Asset Preview 的 X 关闭面板并记住布局，下一次实际选择资源可
 每个物理工程一个工作台与一个 Engine child。右上角图标控制独立原生窗口，
 不传输内嵌画面。源码 revision、cursor 与退出由有界协议协调；不匹配的协议/能力明确报错。
 Engine 发现支持 sibling app、同目录、Resources、PATH 与 `KEINE_ENGINE`。
-Editor 只启动预构建 Engine，不在作者交互中运行 Cargo。
+Editor 只启动预构建 Engine，不在作者交互中运行 Cargo。开发时须同时构建 `keine` 和 `keine-editor`，保持 `target/debug/keine` 与 `editor` 同目录。Preview 错误图标可直接打开 Output；左侧 Output 入口可恢复已关闭的日志面板。
 
 ## Performance
 

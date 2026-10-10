@@ -5,7 +5,7 @@ project:
   bundle_identifier: ""
   description: ""
 features:
-  extra: false
+  extra: true
 adapter:
   asset:
     - path: .

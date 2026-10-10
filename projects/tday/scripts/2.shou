@@ -115,6 +115,7 @@ scene scene_0003 {
   "现代文课的开小差成本总是出奇的低",
   "[wait=500]而且我想起来从早晨到现在都没有解锁过功能机",
   text.box(visible: false, auto: true),
+  gallery.unlock(bgm, asset_00053, name: "distance"),
   bgm(asset_00053, volume: 0.5, fade: 1500ms),
   "还是看看吧",
   "——",

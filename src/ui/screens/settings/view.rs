@@ -141,21 +141,9 @@ pub(super) fn spawn_page_button(
 ) {
     let active = ui.page == page;
     parent.spawn((
-        Button,
-        UiSoundStyle::Switch,
+        page_tab_button(),
         SettingsPageButton(page),
-        SettingsPageButtonVisual(if active {
-            PAGE_TEXT_ACTIVE
-        } else {
-            PAGE_TEXT_IDLE
-        }),
-        Node {
-            height: Val::Px(63.0),
-            padding: UiRect::axes(Val::Px(6.0), Val::Px(4.5)),
-            align_items: AlignItems::Center,
-            ..default()
-        },
-        BackgroundColor(Color::NONE),
+        SettingsPageButtonVisual(page_tab_alpha(active, Interaction::None)),
         children![(
             SettingsPageLabel,
             Text::new(label),
@@ -855,76 +843,26 @@ pub(super) fn spawn_slider_group(
     root.spawn((setting_group_node(cell, 96.0),))
         .with_children(|row| {
             row.spawn(setting_text(label, font, SETTING_LABEL_SIZE, true));
-            row.spawn((
-                Button,
-                UiSoundStyle::HoverOnly,
-                SettingSlider(kind),
-                Node {
-                    position_type: PositionType::Relative,
-                    width: Val::Percent(100.0),
-                    max_width: Val::Px(375.0),
-                    height: Val::Px(37.5),
-                    margin: UiRect::top(Val::Px(7.5)),
-                    ..default()
-                },
-                BackgroundColor(Color::NONE),
-            ))
-            .with_children(|slider| {
-                slider.spawn((
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: Val::Px(0.0),
-                        top: Val::Px(15.0),
-                        width: Val::Percent(100.0),
-                        height: Val::Px(7.5),
-                        ..default()
-                    },
-                    BackgroundColor(Color::BLACK),
-                    Outline::new(Val::Px(3.75), Val::ZERO, Color::srgba(1.0, 1.0, 1.0, 0.19)),
-                ));
-                slider.spawn((
-                    SettingSliderThumb(kind),
-                    SettingSliderThumbVisual(10.0),
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: Val::Percent(ratio.clamp(0.0, 1.0) * 90.0),
-                        top: Val::Px(3.75),
-                        width: Val::Percent(10.0),
-                        height: Val::Px(30.0),
-                        ..default()
-                    },
-                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.5)),
-                ));
-                slider
-                    .spawn((
-                        SettingValueBubble(kind),
-                        Node {
-                            position_type: PositionType::Absolute,
-                            left: Val::Percent(ratio.clamp(0.0, 1.0) * 90.0),
-                            top: Val::Px(-31.5),
-                            width: Val::Percent(10.0),
-                            height: Val::Px(27.0),
-                            display: Display::None,
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            border_radius: BorderRadius::all(Val::Px(4.5)),
-                            ..default()
-                        },
-                        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.85)),
-                    ))
-                    .with_child((
-                        SettingValueText(kind),
-                        Text::new(kind.value_text(ratio)),
-                        TextFont {
-                            font: font.clone().into(),
-                            font_size: FontSize::from(16.5),
-                            weight: FontWeight::BOLD,
-                            ..default()
-                        },
-                        TextColor(Color::WHITE),
-                    ));
-            });
+            spawn_setting_slider(row, font, kind, ratio);
         });
+}
+
+fn spawn_setting_slider(
+    parent: &mut ChildSpawnerCommands,
+    font: &Handle<Font>,
+    kind: SettingKind,
+    ratio: f32,
+) {
+    let slider = spawn_slider(parent, font, ratio, &kind.value_text(ratio), Val::Px(375.0));
+    let mut commands = parent.commands();
+    commands.entity(slider.control).insert(SettingSlider(kind));
+    commands
+        .entity(slider.thumb)
+        .insert((SettingSliderThumb(kind), SettingSliderThumbVisual(10.0)));
+    commands
+        .entity(slider.bubble)
+        .insert(SettingValueBubble(kind));
+    commands.entity(slider.value).insert(SettingValueText(kind));
 }
 
 pub(super) fn setting_group_node(cell: Option<SettingsGridCell>, min_height: f32) -> Node {
@@ -1025,4 +963,28 @@ pub(super) fn setting_text(
             FontWeight::NORMAL
         },
     )
+}
+
+// The gallery volume edits the same persisted BGM setting as the Audio page.
+pub(crate) fn spawn_gallery_volume_slider(
+    parent: &mut ChildSpawnerCommands,
+    settings: &RuntimeSettings,
+    font: &Handle<Font>,
+) {
+    parent
+        .spawn(Node {
+            width: Val::Px(375.0),
+            max_width: Val::Percent(100.0),
+            height: Val::Px(45.0),
+            flex_shrink: 0.0,
+            margin: UiRect {
+                left: Val::Auto,
+                right: Val::Px(4.5),
+                ..default()
+            },
+            ..default()
+        })
+        .with_children(|row| {
+            spawn_setting_slider(row, font, SettingKind::BgmVolume, settings.bgm_volume);
+        });
 }

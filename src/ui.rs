@@ -103,6 +103,7 @@ fn init_resources(app: &mut App) {
         .init_resource::<settings_panel::PendingWindowMode>()
         .init_resource::<settings_panel::ActiveSettingSlider>()
         .init_resource::<extra::ExtraUi>()
+        .init_resource::<extra::ExtraPageTransition>()
         .init_resource::<input_scope::UiInputScope>()
         .init_resource::<touch::TouchInputState>()
         .init_resource::<crate::storage::settings::RuntimeSettings>();
@@ -227,14 +228,26 @@ fn add_overlay_systems(app: &mut App) {
                 .before(textbox::update_textbox),
             (
                 extra::handle_navigation.run_if(input_scope::extra_allowed),
-                extra::handle_page.run_if(input_scope::extra_allowed),
+                extra::handle_section
+                    .run_if(input_scope::extra_allowed)
+                    .run_if(extra::content_ready),
+                extra::handle_page
+                    .run_if(input_scope::extra_allowed)
+                    .run_if(extra::content_ready),
                 extra::handle_cg.run_if(input_scope::extra_allowed),
                 extra::handle_bgm.run_if(input_scope::extra_allowed),
                 extra::sync_bgm_selection,
                 extra::sync_bgm_play_icon,
-                extra::handle_bgm_seek.run_if(input_scope::extra_allowed),
+                extra::handle_bgm_seek
+                    .run_if(input_scope::extra_allowed)
+                    .run_if(extra::content_ready),
                 extra::sync,
+                extra::update_sections,
+                extra::scroll_music,
+                extra::update_image_status,
+                extra::update_bgm_status,
                 extra::update_bgm_progress,
+                extra::animate_full_cg,
                 extra::animate,
             )
                 .chain()
@@ -294,8 +307,10 @@ fn add_menu_systems(app: &mut App) {
                 settings_panel::sync_settings,
                 menu::sync_header,
                 menu::sync_tabs,
-                settings_panel::update_setting_visuals.run_if(settings_panel::settings_open),
-                settings_panel::update_setting_bubbles.run_if(settings_panel::settings_open),
+                settings_panel::update_setting_visuals
+                    .run_if(settings_panel::settings_or_extra_open),
+                settings_panel::update_setting_bubbles
+                    .run_if(settings_panel::settings_or_extra_open),
                 settings_panel::update_setting_preview.run_if(settings_panel::settings_open),
                 settings_panel::update_settings_pages.run_if(settings_panel::settings_open),
                 settings_panel::animate_about_repository_link.run_if(settings_panel::settings_open),

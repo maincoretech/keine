@@ -652,6 +652,7 @@ scene scene_0012 {
     blocking: false
   ),
   screen.curtain.hide(color: rgba(0, 0, 0, 1), duration: 720ms),
+  gallery.unlock(cg, asset_00045, name: "06_tree_shade_path"),
   "我们在树荫下缓缓走着",
   "品尝着刚开盖的汽水一般",
   "转瞬即逝[wait=1000]也难以忘却的夏日",

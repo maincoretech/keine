@@ -37,6 +37,13 @@ pub fn settings_open(ui: Res<SettingsUi>) -> bool {
     ui.open
 }
 
+pub(crate) fn settings_or_extra_open(
+    ui: Res<SettingsUi>,
+    extra: Res<crate::ui::extra::ExtraUi>,
+) -> bool {
+    ui.open || extra.open
+}
+
 pub fn handle_settings_page(
     buttons: Query<(&Interaction, &SettingsPageButton), Changed<Interaction>>,
     mut ui: ResMut<SettingsUi>,
@@ -308,6 +315,9 @@ pub(crate) struct SettingSliderInput<'w, 's> {
     ui: Res<'w, SettingsUi>,
     scope: Res<'w, crate::ui::input_scope::UiInputScope>,
     route: Res<'w, MenuRouteTransition>,
+    extra: Res<'w, crate::ui::extra::ExtraUi>,
+    extra_transition: Res<'w, crate::ui::extra::ExtraPageTransition>,
+    full_cg: Query<'w, 's, (), With<crate::ui::extra::ExtraFullCg>>,
 }
 
 pub fn handle_setting_sliders(
@@ -330,12 +340,19 @@ pub fn handle_setting_sliders(
         ui,
         scope,
         route,
+        extra,
+        extra_transition,
+        full_cg,
     } = input;
     let Ok(window) = windows.single() else { return };
-    let enabled = ui.open
-        && *scope == crate::ui::input_scope::UiInputScope::Menu
-        && !route.is_animating()
-        && window.focused;
+    let enabled = window.focused
+        && (ui.open
+            && *scope == crate::ui::input_scope::UiInputScope::Menu
+            && !route.is_animating()
+            || extra.open
+                && *scope == crate::ui::input_scope::UiInputScope::Extra
+                && !extra_transition.is_animating()
+                && full_cg.is_empty());
     // UI layout and UiGlobalTransform are expressed in physical pixels.
     // Using the logical cursor position on HiDPI displays offsets the hit
     // calculation and commonly clamps the slider to zero.
@@ -364,7 +381,13 @@ pub fn handle_setting_sliders(
             .as_ref()
             .and_then(|touch| touch.control_position(entity))
     } else if mouse.pressed(MouseButton::Left) {
-        window.physical_cursor_position()
+        window.physical_cursor_position().map(|point| {
+            point
+                - crate::runtime::platform::DesignViewport::from_window(window)
+                    .camera_viewport(window)
+                    .physical_position
+                    .as_vec2()
+        })
     } else {
         None
     };

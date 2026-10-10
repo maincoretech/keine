@@ -194,7 +194,7 @@ pub(crate) struct SettingsPageTransition {
 }
 
 impl SettingsPageTransition {
-    pub(super) const SECONDS: f32 = 0.3;
+    pub(super) const SECONDS: f32 = PAGE_SLIDE_SECONDS;
 
     pub(super) fn begin(&mut self, from: SettingsPage, to: SettingsPage) {
         self.from = Some(from);

@@ -32,10 +32,11 @@ use super::prompt_answer;
 use super::{
     ACTIVITY_BRAND_SIZE_PX, ACTIVITY_ICON_SIZE_PX, ACTIVITY_ITEM_SIZE_PX, ACTIVITY_RAIL_WIDTH_PX,
     ASSET_PREVIEW_PANEL, ASSETS_PANEL, BUILD_PANEL, CANVAS, CHARACTERS_PANEL, CHROME,
-    EXPLORER_PANEL, INK, INSPECTOR_PANEL, MUTED, MigrateEiyashou, OpenFolder, PERFORMANCE_PANEL,
-    PRIMARY, PRIMARY_DIM, PROBLEMS_PANEL, RedoSources, ResetLayout, SEARCH_PANEL, SURFACE_HOVER,
-    Save, SaveAll, ShowAssetPreview, ShowAssets, ShowProblems, ShowSearch, ToggleEngine,
-    UndoSources, VIEW_INSET_PX, VIEW_RADIUS_PX, activity_divider, activity_tool, dock, icon_hint,
+    EXPLORER_PANEL, INK, INSPECTOR_PANEL, MUTED, MigrateEiyashou, OUTPUT_PANEL, OpenFolder,
+    PERFORMANCE_PANEL, PRIMARY, PRIMARY_DIM, PROBLEMS_PANEL, RedoSources, ResetLayout,
+    SEARCH_PANEL, SURFACE_HOVER, Save, SaveAll, ShowAssetPreview, ShowAssets, ShowOutput,
+    ShowProblems, ShowSearch, ToggleEngine, UndoSources, VIEW_INSET_PX, VIEW_RADIUS_PX,
+    activity_divider, activity_tool, dock, icon_hint,
 };
 
 struct WindowRegistry<W> {
@@ -623,7 +624,7 @@ impl WorkbenchWindow {
         let tab_anchor = if is_asset {
             cx.global::<EditorDocuments>()
                 .tool_panel(&root, EXPLORER_PANEL)
-        } else if matches!(kind, ToolKind::Explorer) {
+        } else if matches!(kind, ToolKind::Explorer | ToolKind::Output) {
             None
         } else {
             cx.global::<EditorDocuments>()
@@ -633,7 +634,10 @@ impl WorkbenchWindow {
                         .tool_panel(&root, PROBLEMS_PANEL)
                 })
         };
+        let document_panels = cx.global::<EditorDocuments>().document_panels(&root);
         workspace.dock.update(cx, |dock, cx| {
+            let output_target = matches!(kind, ToolKind::Output)
+                .then(|| dock::document_insert_target(dock, None, &document_panels, None));
             let tab_node = tab_anchor.and_then(|anchor| {
                 [
                     DockPlacement::Center,
@@ -646,7 +650,9 @@ impl WorkbenchWindow {
             });
             dock.add_panel_view(
                 panel_handle(panel),
-                if matches!(kind, ToolKind::Explorer) {
+                if matches!(kind, ToolKind::Output) {
+                    DockPlacement::Center
+                } else if matches!(kind, ToolKind::Explorer) {
                     DockPlacement::Left
                 } else if is_asset {
                     if tab_node.is_some() {
@@ -665,7 +671,9 @@ impl WorkbenchWindow {
                 window,
                 cx,
             );
-            if let Some(node) = tab_node {
+            if let Some(target) = output_target {
+                dock.move_panel(panel_id, target, window, cx);
+            } else if let Some(node) = tab_node {
                 dock.move_panel(
                     panel_id,
                     InsertTarget::Tabs {
@@ -940,6 +948,7 @@ impl WorkbenchWindow {
             inspector_open,
             problems_open,
             performance_open,
+            output_open,
             build_open,
         ) = self
             .workspace
@@ -955,6 +964,7 @@ impl WorkbenchWindow {
                     documents.tool_panel(root, INSPECTOR_PANEL).is_some(),
                     documents.tool_panel(root, PROBLEMS_PANEL).is_some(),
                     documents.tool_panel(root, PERFORMANCE_PANEL).is_some(),
+                    documents.tool_panel(root, OUTPUT_PANEL).is_some(),
                     documents.tool_panel(root, BUILD_PANEL).is_some(),
                 )
             })
@@ -1066,6 +1076,17 @@ impl WorkbenchWindow {
                     )
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.show_tool(ToolKind::Performance, window, cx)
+                    })),
+                )
+                .child(
+                    activity_tool(
+                        "activity-output",
+                        AssetIconName::Terminal,
+                        output_open,
+                        "Output",
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.show_tool(ToolKind::Output, window, cx)
                     })),
                 )
                 .child(
@@ -1312,6 +1333,9 @@ impl Render for WorkbenchWindow {
             }))
             .on_action(cx.listener(|this, _: &ShowProblems, window, cx| {
                 this.show_tool(ToolKind::Problems, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ShowOutput, window, cx| {
+                this.show_tool(ToolKind::Output, window, cx)
             }))
             .on_action(cx.listener(Self::show_asset_preview))
             .on_action(cx.listener(Self::migrate_eiyashou))
