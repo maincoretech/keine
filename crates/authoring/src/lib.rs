@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-pub const PROTOCOL_VERSION: u32 = 9;
+pub const PROTOCOL_VERSION: u32 = 10;
 pub const MAX_MESSAGE_BYTES: usize = 256 * 1024;
 pub const MAX_DOCUMENT_BYTES: usize = 1024 * 1024;
 pub const SNAPSHOT_CHUNK_BYTES: usize = 128 * 1024;
@@ -95,6 +95,21 @@ pub struct ServerMessage {
     pub response: ServerResponse,
 }
 
+/// Read-only, latest-wins runtime inspection. Values are bounded display strings;
+/// source positions always belong to the accompanying document revision.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeSnapshot {
+    pub scene: String,
+    /// Zero-based next action; the executed action is cursor.saturating_sub(1).
+    pub cursor: usize,
+    pub waiting: Vec<String>,
+    pub variables: Vec<(String, String)>,
+    pub omitted_variables: usize,
+    pub checkpoint: Option<(PathBuf, usize, usize)>,
+    pub checkpoint_is_live: bool,
+    pub diagnostic: Option<Diagnostic>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ServerResponse {
     Hello {
@@ -125,6 +140,7 @@ pub enum ServerResponse {
     ExecutionLocation {
         document_revision: u64,
         location: Option<(PathBuf, usize, usize)>,
+        snapshot: RuntimeSnapshot,
     },
     Pong,
     AudioAudition {
@@ -148,6 +164,7 @@ pub enum Capability {
     AudioAudition,
     SourceSnapshots,
     SourceCursor,
+    RuntimeInspection,
     Lifecycle,
 }
 

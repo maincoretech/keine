@@ -58,6 +58,7 @@ type FloatingValueQuery<'w, 's> = Query<
         &'static mut Text,
         &'static mut TextFont,
         &'static mut TextColor,
+        &'static mut BoxShadow,
     ),
     (With<FloatingTextValue>, Without<IntroText>),
 >;
@@ -177,6 +178,18 @@ pub(crate) fn ensure_spawned(
         ))
         .with_child((
             FloatingTextValue,
+            Node {
+                padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                border_radius: BorderRadius::all(Val::Px(12.0)),
+                ..default()
+            },
+            BoxShadow::new(
+                Color::NONE,
+                Val::ZERO,
+                Val::Px(2.0),
+                Val::Px(8.0),
+                Val::Px(24.0),
+            ),
             Text::new(""),
             TextFont {
                 font: FontSource::Handle(fonts.text.clone()),
@@ -271,57 +284,238 @@ pub(crate) fn sync(
     }
     let intro = state.intro.as_ref();
     for mut node in &mut intro_roots {
-        node.display = if intro.is_some() {
+        let display = if intro.is_some() {
             Display::Flex
         } else {
             Display::None
         };
+        if node.display != display {
+            node.display = display;
+        }
     }
     for (mut text, mut color) in &mut intro_texts {
         let Some(intro) = intro else {
-            text.0.clear();
+            if !text.0.is_empty() {
+                text.0.clear();
+            }
             continue;
         };
-        text.0 = intro.pages.get(intro.page).cloned().unwrap_or_default();
+        let page = intro
+            .pages
+            .get(intro.page)
+            .map(String::as_str)
+            .unwrap_or_default();
+        if text.0 != page {
+            text.0.clear();
+            text.0.push_str(page);
+        }
         let alpha = (intro.elapsed / 0.22).clamp(0.0, 1.0);
-        color.0 = Color::srgba(1.0, 1.0, 1.0, alpha);
+        color.set_if_neq(TextColor(Color::srgba(1.0, 1.0, 1.0, alpha)));
     }
     for mut node in &mut film_bars {
-        node.display = if state.film_mode {
+        let display = if state.film_mode {
             Display::Flex
         } else {
             Display::None
         };
+        if node.display != display {
+            node.display = display;
+        }
     }
     for (mut node, mut background) in &mut curtains {
         let [red, green, blue, alpha] = state.curtain.color;
         let alpha = alpha * state.curtain.current;
-        node.display = if alpha > 0.001 {
+        let display = if alpha > 0.001 {
             Display::Flex
         } else {
             Display::None
         };
-        background.0 = Color::srgba(red, green, blue, alpha);
+        if node.display != display {
+            node.display = display;
+        }
+        background.set_if_neq(BackgroundColor(Color::srgba(red, green, blue, alpha)));
     }
     for (mut node, mut transform) in &mut floating_roots {
         let Some(floating) = &state.floating_text else {
-            node.display = Display::None;
+            if node.display != Display::None {
+                node.display = Display::None;
+            }
             continue;
         };
-        node.display = Display::Flex;
-        transform.translation = Val2::px(
+        if node.display != Display::Flex {
+            node.display = Display::Flex;
+        }
+        let translation = Val2::px(
             floating.position[0] - DESIGN_WIDTH * 0.5,
             floating.position[1] - DESIGN_HEIGHT * 0.5,
         );
+        if transform.translation != translation {
+            transform.translation = translation;
+        }
     }
-    for (mut text, mut font, mut color) in &mut floating_values {
+    for (mut text, mut font, mut color, mut shadow) in &mut floating_values {
         let Some(floating) = &state.floating_text else {
-            text.0.clear();
+            if !text.0.is_empty() {
+                text.0.clear();
+            }
             continue;
         };
-        text.0.clone_from(&floating.text);
-        font.font_size = FontSize::Px(floating.font_size.max(1.0));
+        if text.0 != floating.text {
+            text.0.clone_from(&floating.text);
+        }
+        let size = FontSize::Px(floating.font_size.max(1.0));
+        if font.font_size != size {
+            font.font_size = size;
+        }
         let [red, green, blue, alpha] = floating.color;
-        color.0 = Color::srgba(red, green, blue, alpha * floating.alpha());
+        let opacity = alpha * floating.alpha();
+        color.set_if_neq(TextColor(Color::srgba(red, green, blue, opacity)));
+        let shadow_color = Color::srgba(0.0, 0.0, 0.0, 0.55 * opacity);
+        if shadow.0.iter().any(|style| style.color != shadow_color) {
+            for style in &mut shadow.0 {
+                style.color = shadow_color;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use keine_core::state::{FloatingTextState, IntroState};
+
+    #[derive(Resource, Default, Debug, PartialEq)]
+    struct Changes {
+        text: usize,
+        font: usize,
+        color: usize,
+        node: usize,
+        position: usize,
+        shadow: usize,
+    }
+
+    fn record(
+        text: Query<(), Changed<Text>>,
+        font: Query<(), Changed<TextFont>>,
+        color: Query<(), Changed<TextColor>>,
+        node: Query<(), Changed<Node>>,
+        position: Query<(), Changed<UiTransform>>,
+        shadow: Query<(), Changed<BoxShadow>>,
+        mut changes: ResMut<Changes>,
+    ) {
+        *changes = Changes {
+            text: text.iter().count(),
+            font: font.iter().count(),
+            color: color.iter().count(),
+            node: node.iter().count(),
+            position: position.iter().count(),
+            shadow: shadow.iter().count(),
+        };
+    }
+
+    #[test]
+    fn presentation_fades_do_not_relayout_unchanged_text() {
+        let mut state = keine_core::State::new();
+        state.intro = Some(IntroState {
+            pages: vec!["first".into(), "second".into()],
+            page: 0,
+            elapsed: 0.05,
+            hold: true,
+            blocking: false,
+        });
+        state.floating_text = Some(FloatingTextState {
+            id: None,
+            text: "floating".into(),
+            position: [960.0, 400.0],
+            font_size: 38.0,
+            color: [1.0; 4],
+            fade_in: 1.0,
+            hold: 1.0,
+            fade_out: 1.0,
+            elapsed: 0.1,
+            blocking: false,
+            infinite: false,
+        });
+        let mut app = App::new();
+        app.insert_resource(GameState(state))
+            .init_resource::<Changes>()
+            .add_systems(Update, (sync, record).chain());
+        app.world_mut().spawn((IntroRoot, Node::default()));
+        let intro = app
+            .world_mut()
+            .spawn((IntroText, Text::default(), TextColor::default()))
+            .id();
+        let root = app
+            .world_mut()
+            .spawn((FloatingTextRoot, Node::default(), UiTransform::default()))
+            .id();
+        let floating = app
+            .world_mut()
+            .spawn((
+                FloatingTextValue,
+                Text::default(),
+                TextFont::default(),
+                TextColor::default(),
+                BoxShadow(vec![ShadowStyle::default()]),
+            ))
+            .id();
+        app.update();
+
+        app.world_mut()
+            .resource_mut::<GameState>()
+            .invalidate_stage();
+        app.update();
+        assert_eq!(*app.world().resource::<Changes>(), Changes::default());
+
+        {
+            let mut state = app.world_mut().resource_mut::<GameState>();
+            state.intro.as_mut().unwrap().elapsed = 0.1;
+            state.floating_text.as_mut().unwrap().elapsed = 0.2;
+        }
+        app.update();
+        assert_eq!(
+            *app.world().resource::<Changes>(),
+            Changes {
+                color: 2,
+                shadow: 1,
+                ..default()
+            }
+        );
+
+        {
+            let mut state = app.world_mut().resource_mut::<GameState>();
+            state.intro.as_mut().unwrap().page = 1;
+            let floating = state.floating_text.as_mut().unwrap();
+            floating.text = "changed".into();
+            floating.font_size = 42.0;
+            floating.position[0] += 20.0;
+        }
+        app.update();
+        let changes = app.world().resource::<Changes>();
+        assert_eq!(changes.text, 2);
+        assert_eq!(changes.font, 1);
+        assert_eq!(app.world().get::<Text>(intro).unwrap().0, "second");
+        assert_eq!(app.world().get::<Text>(floating).unwrap().0, "changed");
+        assert_eq!(
+            app.world().get::<UiTransform>(root).unwrap().translation,
+            Val2::px(20.0, -140.0)
+        );
+
+        {
+            let mut state = app.world_mut().resource_mut::<GameState>();
+            state.intro = None;
+            state.floating_text = None;
+        }
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(root).unwrap().display,
+            Display::None
+        );
+        assert!(app.world().get::<Text>(floating).unwrap().0.is_empty());
+        app.world_mut()
+            .resource_mut::<GameState>()
+            .invalidate_stage();
+        app.update();
+        assert_eq!(*app.world().resource::<Changes>(), Changes::default());
     }
 }

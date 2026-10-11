@@ -20,7 +20,15 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 const EXIT_TIMEOUT: Duration = Duration::from_millis(600);
 static NEXT_TOKEN: AtomicU64 = AtomicU64::new(1);
-type PublishedPosition = (u64, Option<(PathBuf, usize, usize)>);
+pub type RuntimeInspection = (
+    Option<(PathBuf, usize, usize)>,
+    keine_authoring::RuntimeSnapshot,
+);
+type PublishedPosition = (
+    u64,
+    Option<(PathBuf, usize, usize)>,
+    keine_authoring::RuntimeSnapshot,
+);
 
 #[derive(Clone, Debug)]
 pub struct EngineLocator {
@@ -330,7 +338,7 @@ impl EngineProcess {
     pub fn take_published_position(
         &mut self,
         revision: u64,
-    ) -> io::Result<Option<Option<(PathBuf, usize, usize)>>> {
+    ) -> io::Result<Option<RuntimeInspection>> {
         if let Some(status) = self.child.try_wait()? {
             return Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
@@ -342,7 +350,9 @@ impl EngineProcess {
             .lock()
             .expect("preview position lock poisoned")
             .take()
-            .and_then(|(received, position)| (received == revision).then_some(position)))
+            .and_then(|(received, position, snapshot)| {
+                (received == revision).then_some((position, snapshot))
+            }))
     }
 
     pub fn shutdown(&mut self) -> io::Result<()> {
@@ -439,6 +449,7 @@ fn spawn_response_reader(
                             ServerResponse::ExecutionLocation {
                                 document_revision,
                                 location,
+                                snapshot,
                             },
                         ..
                     })) => {
@@ -450,7 +461,7 @@ fn spawn_response_reader(
                             break;
                         }
                         *latest.lock().expect("preview position lock poisoned") =
-                            Some((document_revision, location));
+                            Some((document_revision, location, snapshot));
                     }
                     Ok(Some(response)) => {
                         if sender.send(Ok(response)).is_err() {
@@ -596,6 +607,7 @@ fn require_compatible_hello(response: ServerResponse) -> io::Result<()> {
         Capability::NativePreviewWindow,
         Capability::SourceSnapshots,
         Capability::SourceCursor,
+        Capability::RuntimeInspection,
         Capability::Lifecycle,
     ]
     .into_iter()
@@ -634,6 +646,10 @@ mod tests {
                     response: ServerResponse::ExecutionLocation {
                         document_revision: 2,
                         location: Some((PathBuf::from("scripts/main.shou"), line, 1)),
+                        snapshot: keine_authoring::RuntimeSnapshot {
+                            cursor: line,
+                            ..Default::default()
+                        },
                     },
                 },
             )
@@ -658,7 +674,14 @@ mod tests {
         ));
         assert_eq!(
             *latest.lock().unwrap(),
-            Some((2, Some((PathBuf::from("scripts/main.shou"), 5, 1))))
+            Some((
+                2,
+                Some((PathBuf::from("scripts/main.shou"), 5, 1)),
+                keine_authoring::RuntimeSnapshot {
+                    cursor: 5,
+                    ..Default::default()
+                }
+            ))
         );
     }
 

@@ -314,8 +314,9 @@ fn command_signature(name: &str) -> Option<(usize, &'static [&'static str])> {
 }
 
 fn compile_native(source: &str, validate_semantics: bool) -> (NativeDocument, Vec<ParsedScene>) {
-    let (tokens, lex_diagnostics) = lex(source);
-    let mut parser = Parser::new(source, &tokens, lex_diagnostics);
+    let lines = SourceLineIndex::new(source);
+    let (tokens, lex_diagnostics) = lex_with_lines(source, &lines);
+    let mut parser = Parser::new(source, &lines, &tokens, lex_diagnostics);
     let mut scenes = parser.parse_file();
     if validate_semantics {
         validate_eiyashou_semantics(&mut scenes);
@@ -941,28 +942,32 @@ fn definite_initialization_errors(
     errors
 }
 
-fn action_successors(
+fn action_successors<'a>(
     index: usize,
-    actions: &[Action],
-    labels: &HashMap<String, usize>,
-) -> Vec<usize> {
+    actions: &'a [Action],
+    labels: &'a HashMap<String, usize>,
+) -> impl Iterator<Item = usize> + 'a {
     let next = (index + 1 < actions.len()).then_some(index + 1);
-    match &actions[index] {
-        Action::Jump(label) => labels.get(label).copied().into_iter().collect(),
-        Action::EiyashouJumpIf { label, .. } => {
-            labels.get(label).copied().into_iter().chain(next).collect()
-        }
-        Action::EiyashouMenu { choices, .. } => choices
-            .iter()
-            .filter_map(|choice| match &choice.target {
-                ChoiceTarget::Label(label) => labels.get(label).copied(),
-                ChoiceTarget::Continue | ChoiceTarget::Assign(_) => next,
-                _ => None,
-            })
-            .collect(),
-        Action::ChangeScene(_) | Action::End | Action::ReturnScene => Vec::new(),
-        _ => next.into_iter().collect(),
-    }
+    let empty: &[EiyashouChoice] = &[];
+    let (first, second, choices) = match &actions[index] {
+        Action::Jump(label) => (labels.get(label).copied(), None, empty),
+        Action::EiyashouJumpIf { label, .. } => (labels.get(label).copied(), next, empty),
+        Action::EiyashouMenu { choices, .. } => (None, None, choices.as_slice()),
+        Action::ChangeScene(_) | Action::End | Action::ReturnScene => (None, None, empty),
+        _ => (next, None, empty),
+    };
+    first
+        .into_iter()
+        .chain(second)
+        .chain(
+            choices
+                .iter()
+                .filter_map(move |choice| match &choice.target {
+                    ChoiceTarget::Label(label) => labels.get(label).copied(),
+                    ChoiceTarget::Continue | ChoiceTarget::Assign(_) => next,
+                    _ => None,
+                }),
+        )
 }
 
 fn collect_action_reads(action: &Action, reads: &mut HashSet<String>) {
@@ -1062,8 +1067,12 @@ fn collect_expression_reads(expression: &EiyashouExpr, reads: &mut HashSet<Strin
 
 fn lex(source: &str) -> (Vec<NativeToken>, Vec<Diagnostic>) {
     let lines = SourceLineIndex::new(source);
+    lex_with_lines(source, &lines)
+}
+
+fn lex_with_lines(source: &str, lines: &SourceLineIndex) -> (Vec<NativeToken>, Vec<Diagnostic>) {
     let error_at = |source: &str, offset: usize, message: String| {
-        indexed_error_at(source, &lines, offset, message)
+        indexed_error_at(source, lines, offset, message)
     };
     let bytes = source.as_bytes();
     let mut tokens = Vec::new();
@@ -1214,7 +1223,7 @@ fn push_token(tokens: &mut Vec<NativeToken>, kind: NativeTokenKind, start: usize
 
 struct Parser<'a> {
     source: &'a str,
-    lines: SourceLineIndex,
+    lines: &'a SourceLineIndex,
     tokens: &'a [NativeToken],
     significant: Vec<usize>,
     cursor: usize,
@@ -1227,7 +1236,12 @@ struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn new(source: &'a str, tokens: &'a [NativeToken], diagnostics: Vec<Diagnostic>) -> Self {
+    fn new(
+        source: &'a str,
+        lines: &'a SourceLineIndex,
+        tokens: &'a [NativeToken],
+        diagnostics: Vec<Diagnostic>,
+    ) -> Self {
         let significant = tokens
             .iter()
             .enumerate()
@@ -1241,7 +1255,7 @@ impl<'a> Parser<'a> {
             .collect();
         Self {
             source,
-            lines: SourceLineIndex::new(source),
+            lines,
             tokens,
             significant,
             cursor: 0,
@@ -1663,13 +1677,13 @@ impl<'a> Parser<'a> {
             return explicit;
         }
         let semantic = format!("{}\0{}\0{text:?}", self.current_scene, speaker);
-        let occurrence = self.source_occurrences.entry(semantic.clone()).or_default();
-        *occurrence += 1;
         let mut hash = 0xcbf29ce484222325u64;
         for byte in semantic.bytes() {
             hash ^= u64::from(byte);
             hash = hash.wrapping_mul(0x100000001b3);
         }
+        let occurrence = self.source_occurrences.entry(semantic).or_default();
+        *occurrence += 1;
         format!("{}:{hash:016x}:{}", self.current_scene, *occurrence)
     }
 
@@ -1727,7 +1741,7 @@ impl<'a> Parser<'a> {
         let offset = self.tokens[index].range.start;
         Some(parse_eiyashou_text(
             self.source,
-            &self.lines,
+            self.lines,
             raw,
             offset,
             &mut report.diagnostics,
@@ -3187,7 +3201,7 @@ impl<'a> Parser<'a> {
     }
 
     fn error_at(&self, offset: usize, message: impl Into<String>) -> Diagnostic {
-        indexed_error_at(self.source, &self.lines, offset, message)
+        indexed_error_at(self.source, self.lines, offset, message)
     }
 }
 
@@ -3565,6 +3579,11 @@ fn parse_eiyashou_text(
         .strip_prefix('"')
         .and_then(|value| value.strip_suffix('"'))
         .unwrap_or("");
+    // Plain text needs one owned literal, with the same lowering as the escape
+    // path. `$` keeps interpolation and its slash escape on the checked path.
+    if !content.contains(['\\', '$']) {
+        return EiyashouText::literal(content);
+    }
     let mut parts = Vec::new();
     let mut literal = String::new();
     let mut cursor = 0usize;
@@ -4821,6 +4840,31 @@ scene ending { "Done" }
 
     #[test]
     fn interpolation_escape_and_typed_interpolation_are_lowered() {
+        // IDs are persistent reading-history keys. Freeze values from the
+        // original lowering, including repeated text occurrence suffixes.
+        for (literal, text, id) in [
+            (r#""你好""#, "你好", "a:8a0f9ad96dd222f8"),
+            (
+                r#""ASCII / literal""#,
+                "ASCII / literal",
+                "a:78792837a321d897",
+            ),
+            (r#""""#, "", "a:635e321f59277502"),
+        ] {
+            let scenes = parse_native_scenes(&format!("scene a {{ {literal}, {literal} }}"));
+            assert!(errors(&scenes[0]).is_empty(), "{literal}");
+            for (index, action) in scenes[0].report.actions.iter().enumerate() {
+                let Action::EiyashouSay(dialogue) = action else {
+                    panic!("{literal}: expected text")
+                };
+                assert_eq!(dialogue.text, EiyashouText::literal(text), "{literal}");
+                assert_eq!(
+                    dialogue.source_id,
+                    format!("{id}:{}", index + 1),
+                    "{literal}"
+                );
+            }
+        }
         let escaped =
             parse_native_scenes(r#"scene a { "literal /${amount}; / and $ stay literal" }"#);
         assert!(errors(&escaped[0]).is_empty());

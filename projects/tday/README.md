@@ -12,7 +12,9 @@ cargo editor projects/tday
 ./target/debug/editor ./projects/tday
 ```
 
-`config.yaml` 指定入口 `start`；`scripts/` 保留 13 个章节，各章末尾通过 `goto(scene_id)` 接续，最后一章通过 `story.end()` 结束。资源 ID 与路径登记在 `assets.yaml`，角色和对象分别登记在 `characters.yaml`、`objects.yaml`。
+`config.yaml` 指定入口 `start`；`scripts/` 保留 13 个章节，各章末尾通过 `goto(scene_id)` 接续，最后一章通过 `story.end()` 结束。临时的 `extra_preview` 全解锁入口已移除。音乐按原文件名在首次使用时解锁：bedroom、bridge、distance、dive、night、shimmer；CG 只在最终章节解锁 `06_tree_shade_path`，与主页背景同图。旧测试 profile 已记录的解锁保留，不自动清除玩家数据。
+
+资源 ID 与路径登记在 `assets.yaml`，角色和对象分别登记在 `characters.yaml`、`objects.yaml`。
 
 仓库包含剧本、配置和 WebP/Opus 成品，克隆后无需重新迁移或转换。PNG/WAV 原稿保留在本地并忽略，不影响现有成品编辑与播放；生成缓存、存档、密钥、打包输出和其他本地工程不纳入示例。
 

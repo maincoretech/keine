@@ -98,6 +98,29 @@ fn step_inner(
     cleanup_on_end: bool,
     before_action: &mut impl FnMut(&State, &Action),
 ) -> StepResult {
+    let result = execute_step(state, stop, cleanup_on_end, before_action);
+    state.script_diagnostic = match &result {
+        StepResult::RuntimeError(error) => Some(crate::state::ScriptDiagnostic {
+            scene: state.current_scene.clone(),
+            cursor: state.cursor,
+            message: format!("Script runtime error: {error:?}"),
+        }),
+        StepResult::ExecutionLimit => Some(crate::state::ScriptDiagnostic {
+            scene: state.current_scene.clone(),
+            cursor: state.cursor,
+            message: "Forward-action safety limit reached".into(),
+        }),
+        _ => None,
+    };
+    result
+}
+
+fn execute_step(
+    state: &mut State,
+    stop: Option<(&str, usize)>,
+    cleanup_on_end: bool,
+    before_action: &mut impl FnMut(&State, &Action),
+) -> StepResult {
     if state.menu.is_some() {
         return StepResult::AwaitChoice;
     }
@@ -3634,6 +3657,16 @@ mod tests {
         );
         assert_eq!(state.current_scene, "main");
         assert_eq!(state.cursor, 1);
+        let diagnostic = state.script_diagnostic.as_ref().unwrap();
+        assert_eq!(
+            (&diagnostic.scene, diagnostic.cursor),
+            (&state.current_scene, 1)
+        );
+        assert!(diagnostic.message.contains("ReturnWithoutCall"));
+        state.insert_scene("main".into(), vec![Action::Comment]);
+        state.cursor = 0;
+        let _ = step(&mut state);
+        assert!(state.script_diagnostic.is_none());
     }
 
     #[test]

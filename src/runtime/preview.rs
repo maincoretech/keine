@@ -154,15 +154,30 @@ pub(crate) fn seek_source(world: &mut World, path: &Path, line: usize) -> bool {
     accepted
 }
 
+mod inspection;
+pub(crate) use inspection::runtime_snapshot;
+
 pub(crate) fn source_location(world: &World) -> Option<(PathBuf, usize, usize)> {
     let state = world.get_resource::<GameState>()?;
+    if state.ended || state.cursor == 0 {
+        return None;
+    }
+    state_location(world, state)
+}
+
+fn state_location(world: &World, state: &keine_core::State) -> Option<(PathBuf, usize, usize)> {
+    state_location_at(world, &state.current_scene, state.cursor.saturating_sub(1))
+}
+
+fn state_location_at(
+    world: &World,
+    scene_name: &str,
+    index: usize,
+) -> Option<(PathBuf, usize, usize)> {
     let scene = world
         .get_resource::<LocalAssetManifest>()?
-        .get(&state.current_scene)?;
-    let index = state
-        .cursor
-        .saturating_sub(1)
-        .min(scene.action_spans.len().checked_sub(1)?);
+        .get(scene_name)?;
+    let index = index.min(scene.action_spans.len().checked_sub(1)?);
     let span = scene.action_spans.get(index)?;
     let path = if scene.source_path.starts_with("scripts") {
         scene.source_path.clone()

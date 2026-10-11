@@ -13,7 +13,7 @@ cargo dev tests/fixtures/native-smoke
 cargo migrate /path/to/letsgal/tday projects/tday
 ```
 
-`projects/tday` 是唯一的本机原生 demo，目录与素材均忽略、不提交。
+`projects/tday` 是可编辑、可运行的原生示例，剧本和 WebP/Opus 成品已入库；PNG/WAV 原稿及其他本地工程忽略。
 源 LetsGal 工程独立保留；目标已存在时不要重复迁移。自动回归使用 `tests/fixtures`。
 迁移先验证新工程再发布目标目录，源工程保持只读。
 
@@ -24,9 +24,9 @@ cargo migrate /path/to/letsgal/tday projects/tday
 
 | 负载 | 测量结果（约） |
 | --- | ---: |
-| EYS 十万条文本解析 | 125 ms / 80 万 action/s |
-| EYS 100001 条表达式与文本混合解析 | 134 ms / 75 万 action/s |
-| tday：14 scene / 2665 action 解析 | 3.02 ms |
+| EYS 十万条文本解析 | 115 ms / 87 万 action/s |
+| EYS 100001 条表达式与文本混合解析 | 132 ms / 76 万 action/s |
+| tday 解析语料：14 scene / 2665 action | 2.85 ms |
 | Core：赋值、条件判断、文本插值对白 | 22.5 万轮/s |
 | Core：非阻塞 Comment 执行 | 1.08 亿 action/s |
 
@@ -90,7 +90,7 @@ benchmark 指定的窗口大小不受这些偏好影响。Preview 仍使用隔�
 └── compatibility.md   LetsGal 与 WebGAL 的支持边界
 ```
 
-当前版本 0.14.3。macOS 是当前验收重点；Windows/Linux 的运行态验收暂缓。
+当前版本 0.15.1。macOS 是当前验收重点；Windows/Linux 的运行态验收暂缓。
 编译和自动测试通过不等于 IME、DPI、音视频和运行态验收通过。
 
 ## 许可证

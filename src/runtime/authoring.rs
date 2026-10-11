@@ -22,7 +22,11 @@ use super::bootstrap::{
     OpenedProject, build_authoring_preview_app, open_project, validate_project,
 };
 
-type PublishedPosition = (u64, Option<(PathBuf, usize, usize)>);
+type PublishedPosition = (
+    u64,
+    Option<(PathBuf, usize, usize)>,
+    keine_authoring::RuntimeSnapshot,
+);
 
 struct PendingSnapshot {
     path: PathBuf,
@@ -307,9 +311,11 @@ fn publish_live_position(world: &mut World) {
     let Some(mut host) = world.remove_resource::<LiveHost>() else {
         return;
     };
+    let location = super::preview::source_location(world);
     let current = (
         host.session.document_revision,
-        super::preview::source_location(world),
+        location,
+        super::preview::runtime_snapshot(world),
     );
     if host.published_position.as_ref() != Some(&current) {
         let message = ServerMessage {
@@ -318,6 +324,7 @@ fn publish_live_position(world: &mut World) {
             response: ServerResponse::ExecutionLocation {
                 document_revision: current.0,
                 location: current.1.clone(),
+                snapshot: current.2.clone(),
             },
         };
         if write_message(&mut host.writer, &message).is_err() {
@@ -400,6 +407,7 @@ pub(crate) fn run(endpoint: &str, token: &str, loader: LoaderRegistry) -> Result
                 Capability::AudioAudition,
                 Capability::SourceSnapshots,
                 Capability::SourceCursor,
+                Capability::RuntimeInspection,
                 Capability::Lifecycle,
             ],
         },

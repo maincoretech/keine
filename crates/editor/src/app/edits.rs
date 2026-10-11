@@ -1047,6 +1047,41 @@ fn apply_prepared_edits_impl(
     Ok(())
 }
 
+/// Inspect a runtime position without reconstructing or replaying the scene.
+/// Set the Text observer's known cursor before its normal notification fires.
+pub(super) fn navigate_inspection(
+    root: &Path,
+    relative: &Path,
+    line: usize,
+    column: usize,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    open_workspace_document(root, relative, window, cx);
+    follow_preview_position(root, relative, line, column, window, cx);
+    if let Some(panel) = cx
+        .global::<EditorDocuments>()
+        .panel_entity_for(root, relative)
+    {
+        let _ = panel.update(cx, |panel, _| {
+            panel.document.last_text_cursor =
+                Some((line.saturating_sub(1), column.saturating_sub(1)));
+        });
+    }
+    if let Some(editor) = cx.global::<EditorDocuments>().editor_for(root, relative) {
+        let _ = editor.update(cx, |editor, cx| {
+            editor.set_cursor_position(
+                Position::new(
+                    line.saturating_sub(1) as u32,
+                    column.saturating_sub(1) as u32,
+                ),
+                window,
+                cx,
+            );
+        });
+    }
+}
+
 pub(super) fn navigate_source(
     root: &Path,
     relative: &Path,

@@ -116,7 +116,10 @@ impl ExtraBgmList {
 #[derive(Component)]
 pub(crate) struct ExtraBgmStatus;
 #[derive(Component)]
-pub(crate) struct ExtraImageStatus(Handle<Image>);
+pub(crate) struct ExtraImageStatus(bevy::asset::UntypedHandle);
+
+#[derive(Component)]
+pub(crate) struct ExtraThumbnail(Handle<crate::scene::images::GalleryThumbnail>);
 #[derive(Component)]
 pub(crate) struct ExtraBgmBubble;
 #[derive(Component)]
@@ -910,11 +913,17 @@ fn spawn_cg_cards(
             extra_button(),
         ))
         .with_children(|card| {
-            let image = crate::scene::images::load(
-                assets,
-                image_roles,
-                config.bg_path(file),
-                ImageRole::BACKGROUND,
+            let path = config.bg_path(file);
+            let thumbnail = crate::scene::images::is_webp(&path)
+                .then(|| assets.load::<crate::scene::images::GalleryThumbnail>(path.clone()));
+            let image = if thumbnail.is_some() {
+                Handle::default()
+            } else {
+                crate::scene::images::load(assets, image_roles, path, ImageRole::BACKGROUND)
+            };
+            let status = thumbnail.as_ref().map_or_else(
+                || image.clone().untyped(),
+                |handle| handle.clone().untyped(),
             );
             card.spawn(Node {
                 width: Val::Percent(100.0),
@@ -926,7 +935,7 @@ fn spawn_cg_cards(
                 ..default()
             })
             .with_children(|preview| {
-                preview.spawn((
+                let mut node = preview.spawn((
                     ImageNode::new(image.clone()),
                     Node {
                         max_width: Val::Percent(100.0),
@@ -935,8 +944,11 @@ fn spawn_cg_cards(
                     },
                     FocusPolicy::Pass,
                 ));
+                if let Some(thumbnail) = thumbnail {
+                    node.insert(ExtraThumbnail(thumbnail));
+                }
                 preview.spawn((
-                    ExtraImageStatus(image),
+                    ExtraImageStatus(status),
                     LocalizedText(UiText::GalleryLoading),
                     text("", &fonts.text, 18.75, 0.58),
                     Node {
@@ -1184,7 +1196,7 @@ fn spawn_full_cg(
                 FocusPolicy::Pass,
             ));
             overlay.spawn((
-                ExtraImageStatus(image),
+                ExtraImageStatus(image.untyped()),
                 LocalizedText(UiText::GalleryLoading),
                 text("", &fonts.text, 24.0, 0.78),
                 Node {
@@ -2017,8 +2029,17 @@ pub(crate) fn scroll_music(
 
 pub(crate) fn update_image_status(
     server: Res<AssetServer>,
+    thumbnails: Res<Assets<crate::scene::images::GalleryThumbnail>>,
+    mut cards: Query<(&ExtraThumbnail, &mut ImageNode)>,
     mut labels: Query<(&ExtraImageStatus, &mut LocalizedText, &mut Node)>,
 ) {
+    for (thumbnail, mut image) in &mut cards {
+        if let Some(loaded) = thumbnails.get(&thumbnail.0)
+            && image.image != loaded.image
+        {
+            image.image = loaded.image.clone();
+        }
+    }
     for (image, mut label, mut node) in &mut labels {
         let state = server.load_state(&image.0);
         node.display = if matches!(state, LoadState::Loaded) {

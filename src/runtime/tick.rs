@@ -1277,7 +1277,11 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
         changed = true;
         stage_changed = true;
     }
-    if let Some(text) = &mut state.floating_text {
+    // An infinite caption has no timed work after its entrance. HideFloatingText
+    // starts its authored exit by resetting elapsed and clearing infinite.
+    if let Some(text) = &mut state.floating_text
+        && (!text.infinite || text.elapsed < text.fade_in)
+    {
         changed = true;
         text.elapsed += delta_seconds;
         if !text.infinite && text.elapsed >= text.duration() {
@@ -3332,6 +3336,52 @@ mod tests {
     }
 
     #[test]
+    fn infinite_floating_text_settles_and_keeps_its_authored_exit() {
+        let mut state = State::new();
+        state.floating_text = Some(keine_core::state::FloatingTextState {
+            id: Some("caption".into()),
+            text: "persistent".into(),
+            position: [960.0, 400.0],
+            font_size: 38.0,
+            color: [1.0; 4],
+            fade_in: 0.5,
+            hold: 2.0,
+            fade_out: 0.5,
+            elapsed: 0.0,
+            blocking: false,
+            infinite: true,
+        });
+        assert!(update_transitions(&mut state, 0.25, false));
+        assert_eq!(state.floating_text.as_ref().unwrap().alpha(), 0.5);
+        assert!(update_transitions(&mut state, 0.25, false));
+        let settled = state.floating_text.clone();
+        assert!(!update_transitions(&mut state, 60.0, false));
+        assert_eq!(state.floating_text, settled);
+
+        state.install_program(Program::from_scenes([(
+            "main".into(),
+            vec![
+                Action::HideFloatingText {
+                    id: Some("caption".into()),
+                },
+                Action::Say {
+                    speaker: String::new(),
+                    text: "after caption".into(),
+                    options: Default::default(),
+                },
+            ],
+        )]));
+        state.current_scene = "main".into();
+        step::step(&mut state);
+        assert!(!state.floating_text.as_ref().unwrap().infinite);
+        assert!(update_transitions(&mut state, 0.25, false));
+        assert_eq!(state.floating_text.as_ref().unwrap().alpha(), 0.5);
+        assert!(update_transitions(&mut state, 0.25, false));
+        assert!(state.floating_text.is_none());
+        assert_eq!(state.dialogue.as_ref().unwrap().text, "after caption");
+    }
+
+    #[test]
     fn curtain_resumes_the_script_after_a_2200ms_fade_at_60fps() {
         let mut state = State::new();
         state.install_program(Program::from_scenes([(
@@ -3553,5 +3603,139 @@ mod tests {
         assert_eq!(state.sprites["hero"].image, "frame-2.webp");
         update_transitions(&mut state, 0.13, false);
         assert_eq!(state.sprites["hero"].image, "frame-1.webp");
+    }
+
+    #[test]
+    fn tday_normal_route_reaches_all_chapters_and_restores_live_and_presentation_saves() {
+        use crate::storage::save::{
+            ContinuationCheckpoint, SavePreviewCoordinator, load_game,
+            save_manual_replacing_preview,
+        };
+        use keine_loader::{KeineStore, StoreAdapter};
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("projects/tday");
+        let loader = keine_loader::LoaderRegistry::default();
+        let project = crate::runtime::bootstrap::open_project(&root, &loader).unwrap();
+        assert_eq!(project.config.script.entry, "start");
+        let scenes = keine_loader::load_scenes(&project.content).unwrap();
+        assert_eq!(scenes.len(), 13);
+        assert!(scenes.iter().all(|scene| scene.diagnostics.is_empty()));
+        let mut state = State::new();
+        state.install_program(Program::from_scenes(
+            scenes.into_iter().map(|scene| (scene.name, scene.actions)),
+        ));
+        state.current_scene = "start".into();
+        state.script_entry = Some("start".into());
+        let mut checkpoint = ContinuationCheckpoint::default();
+        let mut chapters = std::collections::BTreeSet::new();
+        let mut saved_chapters = std::collections::BTreeSet::new();
+        let mut fallback_saved = false;
+        let mut dialogue_count = 0;
+        let mut finished = false;
+        let save_root =
+            std::env::temp_dir().join(format!("keine-tday-route-{}", std::process::id()));
+        std::fs::create_dir_all(&save_root).unwrap();
+        for _ in 0..10_000 {
+            let outcome = crate::runtime::script_driver::resume(&mut state, &mut checkpoint);
+            chapters.insert(state.current_scene.clone());
+            assert!(
+                state.script_diagnostic.is_none(),
+                "{:?}",
+                state.script_diagnostic
+            );
+            if outcome.returns_to_title() {
+                assert_eq!(
+                    outcome,
+                    crate::runtime::script_driver::ScriptOutcome::ReturnToTitle(
+                        crate::runtime::script_driver::ReturnReason::EndOfScene
+                    )
+                );
+                finished = true;
+                break;
+            }
+            if state.persistence_safety().is_exact()
+                && state.dialogue.is_some()
+                && saved_chapters.insert(state.current_scene.clone())
+            {
+                let encoded = KeineStore.encode(&state).unwrap();
+                let mut restored = state.clone();
+                restored.current_scene = "start".into();
+                restored.cursor = 0;
+                KeineStore
+                    .decode(&encoded)
+                    .unwrap()
+                    .restore_into(&mut restored)
+                    .unwrap();
+                assert_eq!(
+                    (restored.current_scene.as_str(), restored.cursor),
+                    (state.current_scene.as_str(), state.cursor)
+                );
+                assert_eq!(restored.dialogue, state.dialogue);
+                assert_eq!(restored.unlocked_bgm, state.unlocked_bgm);
+            } else if !fallback_saved
+                && !state.persistence_safety().is_exact()
+                && checkpoint.state_for_continuation(&state).is_some()
+            {
+                let position = (state.current_scene.clone(), state.cursor);
+                let saved = save_manual_replacing_preview(
+                    &KeineStore,
+                    &state,
+                    &checkpoint,
+                    1,
+                    &save_root,
+                    &SavePreviewCoordinator::default(),
+                )
+                .unwrap();
+                assert!(saved.used_checkpoint);
+                let expected = checkpoint.state_for_continuation(&state).unwrap();
+                let mut restored = state.clone();
+                load_game(&KeineStore, 1, &save_root)
+                    .unwrap()
+                    .restore_into(&mut restored)
+                    .unwrap();
+                assert_eq!(
+                    (restored.current_scene.as_str(), restored.cursor),
+                    (expected.current_scene.as_str(), expected.cursor)
+                );
+                assert_eq!(
+                    (state.current_scene.clone(), state.cursor),
+                    position,
+                    "Saving must not advance the live script"
+                );
+                fallback_saved = true;
+            }
+            if state.presentation_blocked() {
+                assert!(finish_editor_presentation(&mut state));
+            } else if state.dialogue.is_some() {
+                dialogue_count += 1;
+                step::advance(&mut state);
+            } else {
+                assert!(state.menu.is_none() && state.user_input.is_none());
+            }
+            // Native audio/UI hosts consume transient events independently.
+            state.effect_queue.clear();
+            state.shell_events.clear();
+            state.host_commands.clear();
+        }
+        std::fs::remove_dir_all(save_root).unwrap();
+        assert!(finished && fallback_saved);
+        assert_eq!(chapters.len(), 13);
+        assert_eq!(saved_chapters.len(), 13);
+        assert!(dialogue_count > 900);
+        assert_eq!(state.unlocked_cg.len(), 1);
+        assert_eq!(
+            state.unlocked_cg.values().next().unwrap(),
+            "06_tree_shade_path"
+        );
+        assert_eq!(
+            state
+                .unlocked_bgm
+                .values()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from([
+                "bedroom", "bridge", "distance", "dive", "night", "shimmer"
+            ])
+        );
+        assert!(state.bgm.file.is_none() && state.looping_effects.is_empty());
     }
 }

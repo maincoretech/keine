@@ -13,6 +13,48 @@
 11 passed，benchmark collector 7 passed；fmt、workspace check、all-targets Clippy
 （同一 feature 组合）及 native-smoke validate 通过。测试整理不改变产品代码、feature 组合或发布流程，不作为性能改善或跨平台运行态验收证据。
 
+## 演出调试与 tday 正式入口
+
+协议 v10 将 revision、当前源码位置和有界只读 RuntimeSnapshot 作为同一最新状态推送。
+测试覆盖 latest-wins 回复分离、协议能力校验、变量排序与 UTF-8 截断、数组长度摘要、
+非阻塞演出与存档精确性的区别、checkpoint 下一条恢复动作的位置，以及回到标题后保留失败源码诊断。
+原有 ReturnWithoutCall 回归增加错误记录/后续正常运行清除诊断断言；未增加另一套 Core 执行器。
+
+`tday_normal_route_reaches_all_chapters_and_restores_live_and_presentation_saves` 使用真实工程、
+原生 Loader、Core driver、已有 transition 更新与 Save v11：检查 13 章全部可达、每章恢复对白/位置、
+演出中存档立即采用 checkpoint 且不推进 live cursor、正常结尾、6 首原名 BGM 和唯一最终花图解锁。
+模拟消费点击和跳过等待验证逻辑；不把这一测试当作时长、视觉或音频主观验收。
+恢复 `start` 并移除临时 Extra scene 改变 Program fingerprint；旧 profile/鉴赏记录保留，
+旧版本 slot 仍按 Save v11 严格匹配，不新增绕过或自动迁移。
+
+实际执行：
+
+```sh
+cargo fmt --all --check
+cargo check --offline --workspace
+cargo clippy --offline --workspace --all-targets --features publisher,video-native,hot-reload -- -D warnings
+cargo check --offline -p keine-loader --all-features
+cargo test --offline --workspace --features publisher,video-native,hot-reload
+target/debug/keine validate tests/fixtures/native-smoke
+target/debug/keine validate projects/tday
+cargo build --offline --bin keine --features publisher,video-native,hot-reload
+cargo build --offline -p keine-editor --bin editor
+bash dev/scripts/package-authoring-macos.sh target/debug/editor target/debug/keine target/authoring-runtime-inspection
+```
+
+1055 passed / 0 failed / 21 ignored。首次沙箱运行被本地 IPC 套接字权限阻止；
+在沙箱外重跑全部工作区通过。check / Clippy / fmt / Loader all-features 通过；
+Native Smoke 1 scene / 1 action、tday 13 scene / 2626 action 均 0 warning。
+原始测试日志在 `target/performance/parser-0143/ca-final-tests.txt`。
+本地 macOS 原生验收使用成对更新的 Editor/Engine：Preview 正常启动，Inspector 显示
+当前动作、对白等待与存档点；点击存档点定位源码后现场动作仍为 scene_0010 / 210，
+Output 显示只读变量区（该现场无变量），停止 Preview 清除快照。普通 Engine 检查
+花图主页、START 正式开场与对白、Extra 上方 tab / 背景模糊、六首原名音乐及播放进度；
+在原为空白的槽位写入新存档，再读取恢复同一背景与完整对白。本次验收存档随后清理，
+原有槽位及 profile 保留，因此旧测试解锁的 CG 仍可见。
+变量边界、失败诊断与演出中 checkpoint 由上述回归覆盖；未逐章进行完整视觉/听感验收，
+Windows/Linux/Android 新功能运行态尚未复验。
+
 ## Android 完整性能采集
 
 Android benchmark 复用桌面场景清单与 runtime 测量器，通过 ADB 逐项冷进程运行、
@@ -41,6 +83,328 @@ fmt、native-smoke 与派生 fixture validate 通过。Python collector 9 passed
 11 passed；Gradle assembleRelease/lintRelease、APK 图标/16 KB/签名/NOTICE/计划校验、
 匹配 host 符号库的 `.text` 校验及 workflow actionlint 通过。此次真机只测试 Vulkan；
 GL、演出画面/触摸与音频听感不由性能采样代替验收，远端新 workflow 尚未运行。
+
+## Engine 空闲内存观察
+
+0.15.0 前的当前工作区 Engine，Apple M5 Pro / 24 GiB / macOS 27.0.1，
+`profile.dev`（opt-level=1），tday 标题页、未进入剧情。此项是开发构建的观察值，
+不是 0.15.0 release、无素材基座或跨平台内存承诺；此节记录优化前的观察值。
+
+```sh
+open -n 'target/authoring-runtime-inspection/Tday Acceptance.app' --args "$PWD/projects/tday"
+vmmap -summary ENGINE_PID > target/performance/idle-memory-0150/title-before.vmmap.txt
+# 标题页保持空闲，约 5 分钟后再取同一进程的摘要
+vmmap -summary ENGINE_PID > target/performance/idle-memory-0150/title-idle.vmmap.txt
+```
+
+物理 footprint 186.1 → 185.9 MiB，启动峰值 343.3 MiB；malloc 实际分配
+63.6 MiB，graphics owned unmapped 52.8 MiB、IOSurface 24.3 MiB。
+这些区域不能当成互斥的跨平台预算，也不能将虚拟保留地址或共享库 resident 直接相加
+作为进程实占。短测未观察到持续增长；尚未做 allocation stack attribution、release
+对照、长期演出循环或 Windows/Linux/Android 内存验收。
+
+当前 WebP 使用 `RENDER_WORLD`，上传后释放 CPU 像素；生产 Opus 使用可重开的流，
+未启用 Bevy system font discovery。非关键预取最多 8 项、128 MiB 是上限而非启动
+预分配。区域模糊中间纹理在首用后保留以复用，是后续回收候选，但不是未打开菜单时
+的固定基座；调整必须同时测重复打开延迟和实际 footprint，不能仅按纹理尺寸宣称收益。
+
+### tday 正常操作采样（0.15.0）
+
+同机 M5 Pro / 24 GiB / macOS 27.0.1，当前工作区 `profile.dev`，
+`cargo build --offline --locked --bin keine --features publisher,video-native,hot-reload`。
+普通 Engine 运行真实 tday，1920×1080 @1× / Metal，13 scenes / 2626 actions。
+原生操作覆盖标题、开场、自动阅读、设置、空白存/读档列表、backlog、已有快进、
+返回标题、历史 profile 已解锁的 31 张 CG（4 页）、一首 BGM 鉴赏，再返回标题。
+未逐章完整播放、未测试视频或有大量槽位缩略图的列表；不作为 release/加密包或跨平台结果。
+
+外部 Python `ctypes` 依据本机 SDK `sys/resource.h` 的 `rusage_info_v4` 调用
+`proc_pid_rusage`，目标间隔 100ms；实际 720.07s / 6913 个样本（平均约 104ms）。
+采用时间加权物理 footprint，独立记录 RSS 和内核 lifetime max；阶段标记由操作前写入，
+含界面过渡，不是逐 action 归因。没有修改 Engine、添加截图 hook 或改变项目脚本。
+采样在 12 分钟上限停止；返回标题后另取 `vmmap -summary`，不把该单点混入流程平均。
+
+| 阶段 | 时长 | 平均物理占用 | 采样最高 |
+|---|---:|---:|---:|
+| 首次标题页（含预加载波动） | 36s | 192.9 MiB | 322.5 MiB |
+| 正常自动阅读、菜单前 | 117s | 298.5 MiB | 346.3 MiB |
+| 设置 | 25s | 365.7 MiB | 406.6 MiB |
+| 空白读档列表 | 44s | 394.1 MiB | 395.3 MiB |
+| 空白存档列表 | 33s | 386.3 MiB | 398.6 MiB |
+| 菜单关闭后继续阅读 | 51s | 375.7 MiB | 380.4 MiB |
+| Backlog | 27s | 385.6 MiB | 401.5 MiB |
+| CG 四页浏览 | 83s | 481.5 MiB | 655.1 MiB |
+| CG 后音乐鉴赏 | 40s | 474.9 MiB | 476.0 MiB |
+
+整个操作序列平均 354.1 MiB；排除启动与快速推进/返回标题过渡段后的混合操作
+平均 352.5 MiB（519s）。它依赖本次各页面停留比例，不能称为整个游戏的普遍平均。
+CG 换页时内核记录最高 675.5 MiB，高于 100ms 采样最高 655.1 MiB；
+超过 500 MiB 的连续采样段约 42.35s，尖峰之外也有较高的换页工作集。
+返回标题单点 footprint 415.7 MiB，malloc allocated 125.0 MiB、graphics owned
+unmapped dirty 185.1 MiB（另有 24.6 MiB swapped）；相对首次标题稳定约 188 MiB
+有明显保留。短测不能判定泄漏，需按重复操作与分配 owner 继续归因。
+
+代码核查：CG 卡片加载设计尺寸背景图，换页动画同时保留旧/新 grid，因此并发解码、
+新旧纹理重叠与退出后的图形/字体/allocator 缓存值得定位；这是候选解释，尚无分配栈
+证明各自贡献。后续缩略图与生命周期核查见下节；加载并发保持不变。
+正常返回标题触发了 Engine 自动快存槽位 0；没有手动写入普通槽位或更改设置。
+
+原始记录位于 `target/performance/normal-project-0150/`：`sample.py`、`samples.csv`、
+`summary.json`、`engine.log`、`title-final.vmmap.txt`。复现实测启动采样器后使用原生
+窗口操作，再读 summary；进程退出或 720s 到期停止，禁止用阶段 marker 驱动游戏。
+
+### CG 卡片与资源退役（0.15.0 工作区）
+
+卡片使用独立 `GalleryThumbnail` 资产及其 labeled Image，WebP 直接解码到最多
+1024×576（覆盖当前四列卡片的 2× 显示）；不产生完整 RGBA 再缩放。舞台/全屏仍使用
+原来的 Image 路径及设计尺寸，两个资产类型不会污染彼此的 first-load settings。
+开发 PNG/JPEG 沿用原加载路径。未改变并发、预取预算、动画或发布格式。
+
+页面销毁发生在本帧资产跟踪之后。移除 ImageNode 后补最多三帧收尾，再进入 reactive
+空闲，使依赖资产、GPU bind group/纹理退役完成；不等待后才响应关闭/换页。
+回归用两种加载顺序检查缩略图/原图独立、最后一个卡片引用释放后图片被移除、
+原图继续有效以及窗口收尾后恢复空闲；不强制清除字体、预取或系统 allocator 缓存。
+
+回收归因的边界：Bevy `Assets::track_assets`/render asset extraction 根据最后一个
+strong handle 的 Unused/Removed 事件回收。缩略图没有进全局保留缓存，旧 grid 在
+现有滑动动画结束后销毁。macOS 优化前退出鉴赏的 vmmap 仍有约 63.4 MiB dirty 的
+`Malloc Large (empty)`，不能将这类已空闲分配当作仍被卡片引用。Bevy FontAtlasSet
+按字号/字体保留 CPU/GPU 字形，模糊中间纹理也复用；这些保留用于避免再次打开的
+重建开销。尚未逐项归因 Metal/allocator 保留量，不据此宣称解决了整个进程的泄漏。
+
+复现的原始记录在 `target/performance/gallery-memory-0150/`；before 是优化前
+Engine，after 是仅缩略图版，final 是含三帧收尾的最终版。使用 tday 的 APFS clone
+副本与相同历史 profile，100ms 外部物理 footprint 采样，原生 Computer Use 浏览四页，
+没有修改原项目存档、添加 GUI hook 或限制加载并发。取每页末 10s 并等权比较，以免
+人工停留时长不同歪曲平均；这是 M5 Pro / 24 GiB / macOS 27.0.1 / Metal /
+1920×1080 @1× 的 profile.dev 短测，系统非独占、期间有编译/系统内存压力，
+不能视为完整剧情、release 或低端设备的普遍收益。
+
+```sh
+cp target/debug/keine target/performance/gallery-memory-0150/keine-before
+cp -cR projects/tday target/performance/gallery-memory-0150/project
+python3 target/performance/gallery-memory-0150/sample.py before
+cargo build --offline --locked --bin keine --features publisher,video-native,hot-reload
+# 将新 binary 复制到采样器使用的本地测试 app，再测同一副本
+python3 target/performance/gallery-memory-0150/sample.py final
+# decoder 对照用该目录 decode.rs，通过同 profile 的 keine_media rlib 链接：
+rustc --edition 2024 -O target/performance/gallery-memory-0150/decode.rs \
+  -L dependency=target/debug/deps --extern keine_media=target/debug/deps/libkeine_media-d567920df6ac4026.rlib \
+  -o target/performance/gallery-memory-0150/decode
+target/performance/gallery-memory-0150/decode
+```
+
+四页稳定窗口的等权平均：325.3 → 253.2 MiB（约 -22.2%）；退出后标题末 10s：
+269.4 → 237.2 MiB。四页浏览截至退出后的内核峰值：615.7 → 459.4 MiB。
+仅缩略图的中间轮为 236.3 MiB，最终轮为 253.2 MiB，说明进程/系统缓存波动不可忽略；
+不把两次 after 的差异解释为三帧收尾的增减贡献，也不将这些数值套到整个剧情。
+逐阶段结果与原始 CSV、vmmap、编译及测试日志保留在上述目录。
+
+31 张真实背景的 RGBA 输出合计 245.2 → 69.8 MiB，减少 71.6%；这只是像素 payload，
+不是进程内存。内存驻留输入、顺序 decode/drop 七轮中的后六轮中位数：原尺寸
+211.7ms、1024×576 为 225.1ms（约 +6.4%，每图平均 +0.43ms）；不包含读取、GPU
+上传或呈现。因此不能声称 codec 本身更快。实际页面仍并行加载，上传 payload 更小；
+本机原生换页未出现可见等待。首次点开全屏原图现在按需加载，沿用打开动画遮蔽加载；
+低端设备、冷磁盘/加密包首次放大和 2× 实机尚未验收，不能承诺所有平台零延迟差异。
+
+本轮 fmt/check/all-targets Clippy（workspace + publisher,video-native,hot-reload,startup-metrics）、
+无默认功能 + publisher check、native-smoke/tday validate 通过；完整 workspace tests
+（publisher,video-native,hot-reload）1056 passed / 21 ignored / 0 failed，IPC/Trash 在
+沙箱外重跑。构建与 native UI 是开发版验收，未重新打包/发行或运行跨平台内存测试。
+
+### 连续播放的内存 / CPU / GPU 曲线
+
+本轮沿用上述 Engine 和环境，在 tday 副本中使用正常自动阅读、原有打字/演出时长；
+文字回退等显式玩家确认仍以原生输入继续。未快进、修改脚本、降低分辨率、限制并发
+或停用特效。阶段标记只记录人工观察，不是精确的章节切换时间。
+
+原始资料位于 `target/performance/continuous-tday-0150/`：`sample.py`、
+`samples.csv`、`gpu.csv`、`metadata.json`、`observations.jsonl`、
+`counter-validation.txt`、`summary.json` 和 `continuous-playback.png/svg`。
+内存/CPU 目标间隔 200ms，GPU 约 1s；曲线保留原始波动并叠加 5s CPU/GPU 均值、
+1 分钟内存中位数。统计按实际采样间隔加权，不将不同停留时长的均值直接平均。
+
+- 内存使用 `ri_phys_footprint`，RSS 与内核 lifetime peak 独立记录。
+- CPU 使用进程累计 user + system 的差分，100% 表示一个核心。按照本机
+  `mach_timebase_info` 的 125/3 转换 Mach tick；不能直接把计数当作 ns。
+  来源为 Apple XNU 的 [fill_task_rusage](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/bsd_kern.c)
+  与 [task_power_info_locked](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/task.c)。
+- GPU 从只读 IORegistry AGX 的目标 PID `AppUsage[].accumulatedGPUTime` 取差分。
+  本机两次原生 Activity Monitor 的 GPU Time（7.68s、9.08s）与驱动的约
+  7.7e9、9.1e9 计数交叉核对后使用 ns；这仍是本机驱动经验口径，非可移植公开 API。
+  GPU 时间占比不等于 GPU 核心容量/着色器饱和度，整机 `Device Utilization %`
+  包括其他应用与桌面，单独成图，不能归给 Engine 或与进程时间占比相加。
+
+采样器独立于游戏，IORegistry 查询约几十 ms/s；测试期间不编译或运行其他压力测试，
+系统其他应用仍在运行。活动监视器核对、开场未启用自动阅读及明确等待玩家确认的
+区间需单独标记；正常持续推进的平均不能包含这些区间。
+本次共记录 1799.97s、8833 个内存/CPU 样本和 1767 个 GPU 样本。保守取
+615–980s、1170–1470s 为明确正常推进区间，合计 664.86s（约 11.1 分钟）；
+其余原始采样仍完整保留，图上以灰色标出，不冒充 30 分钟全程无停顿的自动播放。
+原生观察覆盖开场、夜间走廊、卧室、教室、天台及章节末尾，未验证完整 13 场景路线。
+
+| 正常推进指标 | 时间加权均值 | P95 | 最大采样值 |
+| --- | ---: | ---: | ---: |
+| 物理 footprint | 346.4 MiB | 364.2 MiB | 381.7 MiB |
+| Engine CPU（100% = 单核） | 22.3% | 30.3% | 不作为容量结论 |
+| Engine GPU 时间占比 | 5.7% | 9.4% | 不代表 GPU 核心利用率 |
+
+内核 lifetime footprint 峰值为 383.8 MiB。预热后分钟中位数约 310.8–362.1 MiB，
+有回落而非全程单调增长；末三分钟中位数为 355.2、355.3、355.3 MiB。
+正常推进段仍会随不同画面/资源产生台阶与短峰，这次没有观察到失控持续上涨。
+不同画面的内存基线无法单靠曲线证明无泄漏；未做重复章节循环、完整剧情或 release
+长测，不据此承诺所有平台长期恒定。CPU/GPU 随演出变化，末段没有持续爬升。
+整机 GPU 均值约 53.6%，包括桌面及其他应用，不能当作引擎独占占用。
+
+```sh
+python3 target/performance/continuous-tday-0150/sample.py
+MPLCONFIGDIR=/private/tmp/keine-mpl /private/tmp/keine-plot-env/bin/python \
+  target/performance/continuous-tday-0150/plot.py
+```
+
+采样结束时仍存活的测试进程在后续检查已退出，因此本轮没有取得返回标题后的回收
+采样，不拼接不同进程冒充该结果。clone 与原项目的全部脚本/配置 SHA-256 前后相同；
+运行日志没有 warning/error。本轮仅外部测量与文档更新，没有改动播放策略、发布流程，
+没有新增仓库依赖或重跑此前已通过的完整测试。
+
+### 自动阅读中的演出确认等待
+
+`update_lifecycle` 原先仅因 auto 开启就持续刷新；但 `tick` 在 presentation 被阻塞时
+本来就不会推进 auto 计时。现在静止的玩家确认等待可进入 Idle，进行中的演出、UI、
+音频动画及普通自动阅读仍由原有活动条件驱动。没有修改脚本、画质或普通阅读时长。
+
+沿用上述机器、dev opt-level=1、1920×1080 和原始 tday 副本，分别测量修改前后
+开场海面背景的 `start.shou:195` 文字回退完成后「我」的确认等待，auto 保持开启。
+修改前复用上一轮连续采样；修改后从正常开场自动播放到同一点。每个独立进程均取
+420–480s 的 60s 窗口，按实际采样间隔加权；统计窗口内不编译、运行测试或推进剧情。
+
+| 静止确认等待 | 修改前 | 修改后 |
+| --- | ---: | ---: |
+| Engine CPU（100% = 单核） | 15.64% | 2.24% |
+| Engine GPU 时间占比（非核心利用率） | 10.26% | 0.33% |
+
+原始短峰保留于曲线，不承诺零占用。两个进程的资源预热历史与其他应用负载不同，
+因此不把内存差异归因于这个改动，也不将这些数值外推为正常持续播放的降幅。
+原生验证了打字、转场、背景切换及正常自动推进；等待后按空格显示 `...`，随即恢复
+自动阅读并推进到「太阳正步入海平面」。测试进程正常关闭，退出码 0。
+本轮仅 macOS/Metal 实机验证，Windows/Linux/Android 与 release 构建未复测。
+
+修改前原始命令为上一节的 `sample.py`；修改后及比较命令：
+
+```sh
+cargo build --offline --locked --bin keine --features publisher,video-native,hot-reload
+python3 target/performance/auto-wait-0150/sample-after.py
+MPLCONFIGDIR=/private/tmp/keine-mpl /private/tmp/keine-plot-env/bin/python \
+  target/performance/auto-wait-0150/compare.py
+```
+
+原始 CSV、命令/二进制 SHA-256、`comparison.json`、`idle-comparison.png` 与验证日志
+位于 `target/performance/auto-wait-0150/`。扩展已有生命周期回归，覆盖普通确认等待、
+完成的文字回退、UI 动画唤醒及解除阻塞后 auto 恢复，不新增测试条目。
+fmt、workspace check/Clippy（all targets）、workspace tests 均通过
+（1056 passed、21 ignored）；`--no-default-features --features publisher` check 通过。
+
+### 静态菜单与常驻浮动文字
+
+auto 计时只在 Stage 推进；现在菜单、Backlog、Extra 和 Dialog 不再仅因 auto
+开启而持续刷新。无限浮动文字完成淡入后不再累计 elapsed 或重复标记状态变化；
+`text.float.hide` 仍按原有规则重置计时并淡出，有限时长文字继续更新。
+浮动文字增加局部柔和 BoxShadow，透明度随作者颜色和文字淡入/淡出同步，复用
+现有 UI 渲染，不新增全屏纹理或动画任务。
+
+同一 Apple M5 Pro / 24 GiB / macOS 27.0.1 / Metal，dev opt-level=1，
+1920×1080 @1×。原始 tday 只读副本增加一个受控 scene，分别展示静态设置页
+和 infinite 浮动文字；原项目未改动。独立进程的脚本/配置 SHA-256 一致，最终
+修改后构建含上述阴影。每项取入场完成后的 30s 窗口，按实际间隔加权，不并行
+编译/测试，不在统计窗口内操作 UI。
+
+| 状态 | CPU 修改前 → 后（单核 %） | GPU 时间估计前 → 后（%） |
+| --- | ---: | ---: |
+| 静态设置页，auto 开启 | 24.05 → 0.39 | 19.47 → 0.00 |
+| 稳定的常驻浮动文字 | 19.57 → 0.38 | 5.28 → 0.00 |
+
+GPU 数值沿用上节驱动累计时间估算，不是核心利用率；0.00 仅表示这两个窗口
+没有记录到累计值增加。保留原始短峰，不承诺零开销。footprint/RSS 也完整采集，
+但进程预热/驱动回收历史不同，不把内存差异归因于这个生命周期改动。
+初次修改后的采样另保留于 `after-lifecycle/`，正式比较使用含阴影的 `after/`。
+
+原生操作已验证设置页的模糊、返回舞台后原对白未被 auto 偷跑、菜单 tab 响应、
+浮动文字及阴影的入场/退场，以及返回普通对白、背景切换和打字。
+修改前后测试进程均正常退出。代码回归覆盖四种非 Stage scope 的 auto 休眠/
+UI 唤醒、常驻与有限文字边界，并新增一条常驻文字停止更新到真实 Hide 动作
+淡出完成的回归。仅 macOS dev/Metal 实测，其他平台与 release 尚未复测。
+
+```sh
+cargo build --offline --locked --bin keine --features publisher,video-native,hot-reload
+python3 target/performance/lifecycle-0150/before/sample.py
+python3 target/performance/lifecycle-0150/after/sample.py
+MPLBACKEND=Agg MPLCONFIGDIR=/private/tmp/keine-mpl /private/tmp/keine-plot-env/bin/python \
+  target/performance/lifecycle-0150/compare.py
+vmmap -summary 85306
+malloc_history 85306 -allBySize
+```
+
+采样前分别将保留的修改前二进制和当前构建复制至 `Tday Acceptance.app` 并签名。
+CSV、窗口区间、二进制/输入哈希、`comparison.json/png` 和验证日志均在
+`target/performance/lifecycle-0150/`。fmt、workspace check/all-targets Clippy/tests
+（publisher/video-native/hot-reload）和无默认 feature + publisher check 通过；
+1057 passed / 0 failed / 21 ignored，IPC 测试在允许本地 socket 的环境运行。
+
+基座分配另开启 MallocStackLogging 独立采样，不纳入上述 CPU/内存比较。
+标题页存活分配的主要调用栈包含：字体加载约 9.81 MiB（其中最大原始文件缓冲
+9.34 MiB）、字体图集约 6.10 MiB、网格分配器元数据约 8.06 MiB。
+这是具体栈的分配量，不是完整 footprint 分解；dyld/AppKit/ICU 映射不当作私有
+物理内存相加。折叠的 Rust 泛型符号不能代替完整调用链的归属判断。
+offset-allocator 0.2.0 的 `Allocator::new` 固定预分配 128K 个节点，与 slab
+字节上限无关；Bevy 现有公开设置不能减少这项，暂不新增 vendor 补丁。
+
+模糊 pool 已仅保存一张 scene/UI 共用中间纹理，尺寸/格式改变时替换，不随菜单
+次数累积。1920×1080 RGBA8 的 payload 为 7.91 MiB（不是驱动物理内存测量）。
+对白框与菜单都会使用它；立即回收会引入下一次绘制的创建开销，保留现有复用。
+不削减字体字形、图片预取或渲染质量；本轮降低的是静止状态的 CPU/GPU 工作量，
+没有宣称基座内存已进一步减少。
+
+### 舞台同步与文字布局（0.15.1 工作区）
+
+瓶颈核查：舞台动画 revision 会重复调用图片路径解析 / AssetServer load；
+浮动文字和 Intro 的淡入每帧重写相同 Text / TextFont / Node。Bevy 0.19.1
+`detect_text_needs_rerender` / `measure_text_system` 将这些 Changed 标记作为重新布局条件。
+现有材质 upsert 已比较实际数据，继续保留；本轮不更换渲染管线或调整质量。
+
+当前实体持有图片源与句柄，换图、配置或图片角色映射改变时重新解析；销毁实体即释放，
+不增加全局图片缓存。Sprite / Transform 与文字组件只写实际变化的字段；透明度、
+阴影淡化独立更新，文字/字号/位置变化仍正常更新。
+
+同机 Apple M5 Pro / 24 GiB / macOS 27.0.1 / Metal，dev opt-level=1，
+1920×1080 @1× / 60 Hz。tday 素材副本中的短演出使用背景、立绘层、持续镜头晃动，
+组合场景另含持续浮动文字淡入。每轮采集 20 秒，外部 proc_pid_rusage 约 200ms 采样；
+CPU 按启动后 5–22 秒的计数差除实际时长，100% 为一个核心。缓存未控制。
+
+| 场景 | 修改前 CPU | 修改后 CPU | 相对变化 |
+|---|---:|---:|---:|
+| 镜头动画 | 26.28% | 24.50% | −6.77% |
+| 镜头 + 浮动文字，首轮 | 30.44% | 23.81% | −21.78% |
+| 镜头 + 浮动文字，反序复测 | 26.35% | 23.16% | −12.13% |
+
+各轮平均帧间隔均约 16.67ms；降低的是 CPU 工作量，不宣称提升限帧下的 FPS。
+首轮与复测存在波动，不能把 22% 当成整个游戏的固定收益。GPU 累计时间原始字段
+已保留，没有可重复的 GPU 改善；反序组合的平均 footprint 338.9 → 338.7 MiB，
+也不宣称降低了基座内存。不是 release、完整剧情或跨平台性能结果。
+
+```sh
+cp target/debug/keine target/performance/scene-sync-0151/keine-before
+cargo build --offline --locked --bin keine --features publisher,video-native,hot-reload
+python3 target/performance/scene-sync-0151/sample.py target/performance/scene-sync-0151/keine-before target/performance/scene-sync-0151/before-counters
+python3 target/performance/scene-sync-0151/sample.py target/debug/keine target/performance/scene-sync-0151/after-counters
+# 同一采样器末尾添加 camera_probe：镜头单独对照；组合复测顺序为 after-repeat → before-repeat。
+```
+
+修改前后源码快照、二进制 hash、逐轮命令、CSV、日志、调用栈与 comparison.json
+位于 `target/performance/scene-sync-0151/`；inputs 中源码已与采样 hash 核对。
+新增两项回归覆盖句柄复用/映射刷新、淡入不触发文字布局，以及实际换页、字号、位置、
+文本清除和阴影透明度更新。workspace（publisher/video-native/hot-reload）
+1059 passed / 21 ignored；fmt、check、all-targets Clippy、无默认功能 + publisher check、
+Engine 构建及 native-smoke validate 通过。macOS 原生操作确认文字阴影、换图、镜头移动、
+舞台和设置模糊、Intro 换页/恢复及窗口缩小；其他平台与热加载现场操作尚未验收。
 
 ## 桌面包辅助文件与 Linux ABI
 
@@ -846,6 +1210,77 @@ KEINE_NATIVE_SOURCE_DIR="$PWD/projects/tday/scripts" cargo bench --offline -p ke
 Editor / Preview 当时仍打开，桌面负载未隔离。没有测 GPU 峰值、冷启动、媒体、
 Bevy 场景/UI 调度或多平台表现；限帧 FPS 不能代表最大渲染吞吐。
 日志中的 Criterion change 百分比来自试跑，前一试跑的计时范围不同，不作为优化证据。
+
+#### 解析器分配与小步优化
+
+解析器前后对照使用同一份 14 scene / 2665 action 的语料（含临时 Extra 入口）。
+C 收尾后当前 tday 为 13 scene / 2626 action；不把删除测试入口的输入变化算作解析器优化。
+
+基线为 `1bb2b33`；同一 M5 Pro / 24 GiB / macOS 27.0.1，使用同一
+`program-load` 基准、优化配置和输入测前后值。`sample` 的符号采样显示稳定对白 ID
+生成中的 `Debug` 格式化 / Unicode 可打印字符检查是主要热点之一；分配统计确认
+文本缓冲增长、语义键复制和初始化分析临时容器也有成本。
+
+保留稳定 ID 字节算法及出现次数、token/trivia 范围、诊断顺序/位置、表达式深度预算
+和完整语义检查。只共享 Lexer/Parser 的行索引、移交语义键以省去 clone、直接构建
+无转义/插值的单个文本 literal，以及用迭代器遍历初始化分析的后继节点。
+新增 ID 黄金值案例并入原有文本/插值回归；API、语法、typed Action 和发行流程不变。
+
+计时用未启用分配计数的 Criterion；分配 census 是单独一次解析加输出释放。
+bench 专用 allocator 仅转发到 `System`，按
+[GlobalAlloc 合同](https://doc.rust-lang.org/std/alloc/trait.GlobalAlloc.html)
+使用不分配的线程本地计数；不进入产品二进制。先在未优化 Parser 上编译相同 bench
+辅助代码并保存基线，再执行完全相同的命令。以下命令的两次测量间只修改 Parser：
+
+```sh
+KEINE_NATIVE_SOURCE_DIR="$PWD/projects/tday/scripts" cargo bench --offline -p keine-loader --bench program-load -- native_ --sample-size 10 --warm-up-time 0.5 --measurement-time 1 --nresamples 1000 --noplot --save-baseline allocation-before
+# 修改后用同一命令，将末尾改为 --baseline allocation-before。
+KEINE_PARSE_METRICS=text:1000000 cargo bench --offline -p keine-loader --bench program-load
+KEINE_PARSE_METRICS=mixed:1000000 cargo bench --offline -p keine-loader --bench program-load
+KEINE_NATIVE_SOURCE_DIR="$PWD/projects/tday/scripts" KEINE_PARSE_METRICS=corpus cargo bench --offline -p keine-loader --bench program-load
+```
+
+大小测试将 `1000000` 分别换成 `10000000` / `100000000`；按完整 scene 填充到
+至少该字节数。单位 MB 为十进制；堆内存为 MiB。混合输入含对白、变量、表达式、
+条件、其 lowering 生成的跳转/标签以及 scene call/goto。读取/生成输入不计时。
+100 MB 直接调用裸解析器，属于压力测试：单源文件 32 MiB、Editor 单文档 1 MiB
+入口限制保持原值，不声称该文件可作为正常工程源文件加载。
+
+| Criterion 负载 | 前 → 后 | 耗时变化 |
+| --- | ---: | ---: |
+| 十万条文本 | 126.41 → 115.36 ms | −8.7% |
+| 100001 条表达式/文本 | 135.82 → 132.22 ms | −2.6% |
+| 同一混合解析 + Program | 142.80 → 141.77 ms | −0.7%，未检出显著变化 |
+| tday 解析 | 3.011 → 2.852 ms | −5.3% |
+| tday Editor 文档入口 | 2.880 → 2.716 ms | −5.7% |
+
+大小测试下表的时间是预热后**单次解析、不含输出释放**，仅用于规模观察；与上面的
+10 样本计时范围不同，不作为小幅提速的统计证据。分配数只计 alloc/alloc_zeroed，
+realloc 次数另存原始记录。峰值/保留堆是请求的活跃字节，不含 allocator 元数据、
+页面余量、输入和进程其他开销，不等于 RSS；释放后计数字节均为 0。
+
+| 输入 | 时间前 → 后（ms） | 分配前 → 后（百万次） | 峰值堆前 → 后（MiB） | 保留堆前 → 后（MiB） |
+| --- | ---: | ---: | ---: | ---: |
+| 文本 ≥1 MB | 37.21 → 34.69 | 0.256 → 0.192 | 26.97 → 23.97 | 14.51 → 11.45 |
+| 文本 ≥10 MB | 378.07 → 343.79 | 2.514 → 1.886 | 246.89 → 216.97 | 141.93 → 111.96 |
+| 文本 ≥100 MB | 4021.34 → 3643.04 | 25.091 → 18.826 | 2715.01 → 2415.81 | 1426.77 → 1127.56 |
+| 混合 ≥1 MB | 42.85 → 42.03 | 1.183 → 1.067 | 58.48 → 57.25 | 41.40 → 40.17 |
+| 混合 ≥10 MB | 466.55 → 445.57 | 11.779 → 10.630 | 680.75 → 668.47 | 413.48 → 401.20 |
+| 混合 ≥100 MB | 5667.26 → 5125.55 | 117.775 → 106.288 | 6335.97 → 6213.18 | 4148.15 → 4025.35 |
+
+文本各规模分配数约降 25%，峰值堆约降 11–12%，保留堆约降 21%；混合分配数
+约降 9.8%，峰值堆约降 2%，保留堆约降 3%。tday 分配数 33112 → 29480，
+保留堆 1712485 → 1604629 字节。七组输入 action 数量与 Program fingerprint
+均匹配基线。原始前后日志、采样栈、输入规模、哈希与百分比在
+`target/performance/parser-0143/`；未测其他 CPU/平台、冷 I/O、完整 Editor 投影或热加载。
+
+后续继续先 profile。[Oxc 的性能分析](https://oxc.rs/docs/learn/performance) 支持
+减少分配/复制的方向，但其 arena、AST 生命周期和输入与本项目不同；本轮不引入
+arena 或融合 Parser。现有 token 已借用源码范围，并非逐 token 创建 String；Editor
+还依赖完整 trivia。Tyrano/Oxc/SWC 的外部吞吐缺少同机同输入原始证据，simdjson
+测量 JSON，均不作为本项目速度排名。80–150 MB/s 缺少同一输出合同下的实测依据，
+撤下这一吞吐目标；保留已验证的小步优化与基准，解析器优化在此收尾。
+仅当实际工程的启动、实时编辑或热加载出现可测量的解析延迟/内存问题时重新 profile。
 
 ### 三平台原生完整套件
 

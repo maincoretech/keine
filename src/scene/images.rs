@@ -29,9 +29,48 @@ impl NativeWebpPlugin {
 
 impl Plugin for NativeWebpPlugin {
     fn build(&self, app: &mut App) {
-        app.register_asset_loader(NativeWebpLoader {
-            sprite_height: self.sprite_height,
-        });
+        app.init_asset::<GalleryThumbnail>()
+            .register_asset_loader(GalleryThumbnailLoader)
+            .register_asset_loader(NativeWebpLoader {
+                sprite_height: self.sprite_height,
+            });
+    }
+}
+
+// A separate asset type keeps the thumbnail's first-load settings independent
+// of the stage/fullscreen Image at the same path. The labeled Image is owned
+// by this asset and the visible card, so ordinary handle drops reclaim both.
+#[derive(Asset, TypePath)]
+pub(crate) struct GalleryThumbnail {
+    #[dependency]
+    pub(crate) image: Handle<Image>,
+}
+
+#[derive(TypePath)]
+struct GalleryThumbnailLoader;
+
+impl AssetLoader for GalleryThumbnailLoader {
+    type Asset = GalleryThumbnail;
+    type Settings = ();
+    type Error = io::Error;
+
+    async fn load(
+        &self,
+        reader: &mut dyn Reader,
+        _settings: &(),
+        context: &mut LoadContext<'_>,
+    ) -> io::Result<GalleryThumbnail> {
+        let bytes = read_webp_input(reader).await?;
+        // Covers the current four-column cards at 2x without a full-size RGBA
+        // intermediate. Keep libwebp's parallel decode and UI transitions.
+        let image = decode_webp(&bytes, |size| fit_within(size, UVec2::new(1024, 576)))?;
+        Ok(GalleryThumbnail {
+            image: context.add_labeled_asset("gallery-thumbnail", image),
+        })
+    }
+
+    fn extensions(&self) -> &[&str] {
+        &["webp"]
     }
 }
 
@@ -149,6 +188,37 @@ impl AssetLoader for NativeWebpLoader {
     }
 }
 
+/// Retains only an active stage entity's source handle. Animation changes do
+/// not resolve the same asset again; configuration changes refresh its path.
+#[derive(Component)]
+pub(crate) struct StageImage {
+    source: String,
+    handle: Handle<Image>,
+}
+
+impl StageImage {
+    pub(crate) fn new(source: &str, handle: Handle<Image>) -> Self {
+        Self {
+            source: source.to_owned(),
+            handle,
+        }
+    }
+
+    pub(crate) fn resolve(
+        &mut self,
+        source: &str,
+        refresh: bool,
+        load: impl FnOnce() -> Handle<Image>,
+    ) -> Handle<Image> {
+        if refresh || self.source != source {
+            self.source.clear();
+            self.source.push_str(source);
+            self.handle = load();
+        }
+        self.handle.clone()
+    }
+}
+
 pub(crate) fn load(
     asset_server: &AssetServer,
     roles: &ImageRoleRegistry,
@@ -165,7 +235,7 @@ pub(crate) fn load(
         .load(path)
 }
 
-fn is_webp(path: &str) -> bool {
+pub(crate) fn is_webp(path: &str) -> bool {
     Path::new(path)
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("webp"))
@@ -408,6 +478,30 @@ mod tests {
     use keine_core::config::GameConfig;
     use keine_loader::{ResourceRef, SourceSpan};
 
+    #[test]
+    fn stage_source_reuses_handles_and_refreshes_changed_mappings() {
+        use bevy::prelude::*;
+        use std::cell::Cell;
+        let mut assets = Assets::<Image>::default();
+        let first = assets.add(Image::default());
+        let second = assets.add(Image::default());
+        let mut source = super::StageImage::new("portrait", first.clone());
+        let loads = Cell::new(0);
+        let load = || {
+            loads.set(loads.get() + 1);
+            second.clone()
+        };
+        for _ in 0..120 {
+            assert_eq!(source.resolve("portrait", false, load), first);
+        }
+        assert_eq!(loads.get(), 0);
+        assert_eq!(source.resolve("portrait", true, load), second);
+        assert_eq!(source.resolve("new-portrait", false, load), second);
+        assert_eq!(loads.get(), 2);
+        assert_eq!(source.resolve("new-portrait", false, load), second);
+        assert_eq!(loads.get(), 2);
+    }
+
     fn resource(path: &str, kind: ResourceKind) -> ResourceRef {
         ResourceRef {
             path: path.into(),
@@ -606,6 +700,121 @@ mod tests {
             target_size(ImageRole::RAW, UVec2::new(3840, 2160), 825.0),
             UVec2::new(3840, 2160)
         );
+    }
+
+    #[test]
+    fn gallery_thumbnail_is_independent_and_released_with_its_last_card() {
+        use bevy::asset::io::{
+            AssetSourceBuilder,
+            memory::{Dir, MemoryAssetReader},
+        };
+        use std::time::{Duration, Instant};
+
+        let bytes = encode_preview(&[128, 128, 128, 255].repeat(1920 * 1080), 1920, 1080).unwrap();
+        for thumbnail_first in [true, false] {
+            let dir = Dir::default();
+            dir.insert_asset(Path::new("art.webp"), bytes.clone());
+            let mut app = App::new();
+            app.add_plugins(MinimalPlugins)
+                .register_asset_source(
+                    "test",
+                    AssetSourceBuilder::new(move || {
+                        Box::new(MemoryAssetReader { root: dir.clone() })
+                    }),
+                )
+                .add_plugins(bevy::asset::AssetPlugin::default())
+                .init_asset::<Image>()
+                .add_plugins(NativeWebpPlugin::new(1080.0))
+                .init_resource::<crate::ui::activity::UiAnimationActivity>()
+                .add_systems(
+                    Last,
+                    (
+                        |mut activity: ResMut<crate::ui::activity::UiAnimationActivity>| {
+                            activity.0 = false
+                        },
+                        crate::ui::activity::settle_image_removals,
+                    )
+                        .chain(),
+                );
+            let server = app.world().resource::<AssetServer>().clone();
+            let mut thumbnail = None;
+            let mut stage = None;
+            for small in [thumbnail_first, !thumbnail_first] {
+                let handle = if small {
+                    let handle = server.load::<GalleryThumbnail>("test://art.webp");
+                    thumbnail = Some(handle.clone());
+                    handle.untyped()
+                } else {
+                    let handle = load(
+                        &server,
+                        &ImageRoleRegistry::default(),
+                        "test://art.webp".into(),
+                        ImageRole::BACKGROUND,
+                    );
+                    stage = Some(handle.clone());
+                    handle.untyped()
+                };
+                let deadline = Instant::now() + Duration::from_secs(5);
+                loop {
+                    app.update();
+                    match server.load_state(&handle) {
+                        bevy::asset::LoadState::Loaded => break,
+                        bevy::asset::LoadState::Failed(error) => panic!("{error}"),
+                        _ => assert!(Instant::now() < deadline, "image load timed out"),
+                    }
+                    std::thread::yield_now();
+                }
+            }
+            let thumbnail = thumbnail.unwrap();
+            let stage = stage.unwrap();
+            let small = app
+                .world()
+                .resource::<Assets<GalleryThumbnail>>()
+                .get(&thumbnail)
+                .unwrap()
+                .image
+                .clone();
+            assert_ne!(small.id(), stage.id());
+            let images = app.world().resource::<Assets<Image>>();
+            assert_eq!(images.get(&small).unwrap().size(), UVec2::new(1024, 576));
+            assert_eq!(images.get(&stage).unwrap().size(), UVec2::new(1920, 1080));
+
+            // Render extraction takes pixels, but must not keep the asset alive.
+            app.world_mut()
+                .resource_mut::<Assets<Image>>()
+                .get_mut_untracked(small.id())
+                .unwrap()
+                .data
+                .take();
+            let small_id = small.id();
+            let card = app.world_mut().spawn(ImageNode::new(small.clone())).id();
+            drop(small);
+            drop(thumbnail);
+            app.update();
+            assert!(app.world().resource::<Assets<Image>>().contains(small_id));
+            app.world_mut().despawn(card);
+            app.update();
+            assert!(
+                app.world()
+                    .resource::<crate::ui::activity::UiAnimationActivity>()
+                    .0
+            );
+            for _ in 0..3 {
+                app.update();
+            }
+            assert!(
+                !app.world()
+                    .resource::<crate::ui::activity::UiAnimationActivity>()
+                    .0
+            );
+            assert!(!app.world().resource::<Assets<Image>>().contains(small_id));
+            assert!(app.world().resource::<Assets<Image>>().contains(stage.id()));
+            drop(stage);
+            for _ in 0..8 {
+                app.update();
+            }
+            assert!(app.world().resource::<Assets<Image>>().is_empty());
+        }
     }
 
     #[test]

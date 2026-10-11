@@ -34,6 +34,23 @@ const SETTLED_EPSILON: f32 = 0.001;
 #[derive(Resource, Default)]
 pub(crate) struct UiAnimationActivity(pub(crate) bool);
 
+pub(crate) fn settle_image_removals(
+    mut removed: RemovedComponents<ImageNode>,
+    mut remaining: Local<u8>,
+    mut activity: ResMut<UiAnimationActivity>,
+) {
+    if removed.read().count() != 0 {
+        // Despawn drops handles after asset tracking. Allow subsequent frames
+        // to retire dependent assets, GPU bind groups and the texture cache
+        // before the reactive window sleeps. This does not delay input/fades.
+        *remaining = 3;
+    }
+    if *remaining != 0 {
+        *remaining -= 1;
+        activity.0 = true;
+    }
+}
+
 #[derive(SystemParam)]
 pub(crate) struct UiActivityContext<'w, 's> {
     backlog: Res<'w, BacklogUiState>,

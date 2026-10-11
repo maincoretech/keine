@@ -705,7 +705,18 @@ impl EditorDocuments {
         ProjectKey::from_path(root)
             .ok()
             .and_then(|key| self.workspaces.get(key.path()))
-            .map(|workspace| workspace.diagnostics.clone())
+            .map(|workspace| {
+                let mut diagnostics = workspace.diagnostics.clone();
+                if let Some(diagnostic) = workspace
+                    .preview
+                    .snapshot()
+                    .runtime
+                    .and_then(|runtime| runtime.diagnostic)
+                {
+                    diagnostics.push(diagnostic);
+                }
+                diagnostics
+            })
             .unwrap_or_default()
     }
 

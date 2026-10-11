@@ -7,12 +7,12 @@
 │   ├── Assets：映射资源 / Unmapped、搜索、类型/目录/标签过滤、List/Grid
 │   ├── Characters
 │   ├── Search：全文搜索，⌘/Ctrl+Shift+F；位于角色下方、分隔线上方
-│   └── 分隔线 → Inspector / Problems / Performance / Output / Build
+│   └── 分隔线 → Inspector / Problems / Output / Build / Performance
 ├── 中央文档
 │   ├── Text：补全、语法着色、诊断、智能缩进/配对、右侧概览
 │   └── Blocks：同一份源码的结构投影、拖动、行内编辑、右侧概览
 ├── 右栏：可关闭的 Asset Preview + Inspector
-└── Output：操作、解析、Preview 和加载错误
+└── Output：操作、解析、Preview 状态、只读变量和可点击错误
 ```
 
 ## 单一源码
@@ -213,6 +213,24 @@ Asset Preview 的 X 关闭面板并记住布局，下一次实际选择资源可
 不传输内嵌画面。源码 revision、cursor 与退出由有界协议协调；不匹配的协议/能力明确报错。
 Engine 发现支持 sibling app、同目录、Resources、PATH 与 `KEINE_ENGINE`。
 Editor 只启动预构建 Engine，不在作者交互中运行 Cargo。开发时须同时构建 `keine` 和 `keine-editor`，保持 `target/debug/keine` 与 `editor` 同目录。Preview 错误图标可直接打开 Output；左侧 Output 入口可恢复已关闭的日志面板。
+
+## 演出调试与下一步
+
+Inspector 的 Preview 摘要显示场景/已执行动作（0 起）、等待原因和可恢复存档点；
+Output 同时显示只读局部/全局变量与源码诊断。当前动作、存档点、错误均可跳回 Text/Blocks；
+定位沿用文档导航，不隐式 Replay。定时等待与存档精确性分别显示，活跃演出使用上一个可达 checkpoint。
+结束后没有可保存的继续点。停止、失败和源码 revision 更新清除旧快照。
+协议 v10 要求 RuntimeInspection 能力，Editor/Engine 必须一起更新。
+状态只在已有原生帧上按变化推送，不发送定时轮询请求，不传帧，也不新增后台重绘。
+变量按名称排序，最多 128 项；名称/字符串分别限制 128/512 UTF-8 字节，数组显示长度，超出明确提示。
+运行错误和前进步数超限的诊断保留失败时的源码位置；slot 数据不包含这些瞬态诊断。
+
+- C：tday 恢复 `start`，移除临时全解锁入口；音乐按原文件名首次解锁，最终花图与主页同图。
+  全 13 章接续、每章存档恢复和演出中即时存档由同一工程回归覆盖；玩家旧 profile 不清除。
+- A：现有 Inspector / Output 的上述调试信息，不建立独立调试器或第二套状态模型。
+- B：暂不做 Preview 拖拽构图。后续优先在 Characters 调整固定预置，复用现有表情/Show/Change/Blink/Talk 入口；
+  具体位置、布局和转场预置待需求确定，不引入通用主题或插件系统。
+- D：时间轴明确延后，先由作者参与设计交互与范围。
 
 ## Performance
 

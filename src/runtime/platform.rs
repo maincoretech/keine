@@ -412,6 +412,7 @@ pub(crate) struct LifecycleContext<'w, 's> {
     ui: Res<'w, UiAnimationActivity>,
     audio: Res<'w, AudioAnimationActivity>,
     toggles: Res<'w, ToggleStates>,
+    input_scope: Res<'w, crate::ui::input_scope::UiInputScope>,
     auto_hide: Res<'w, AutoHideTiming>,
     input_caret: Res<'w, UserInputCaretBlink>,
     real_time: ResMut<'w, Time<Real>>,
@@ -476,7 +477,12 @@ pub(crate) fn update_lifecycle(
         || core_is_animating(&context.state, &mut dialogue_length)
         || context.ui.0
         || context.audio.0
-        || context.toggles.auto
+        // Tick does not run the auto timer outside Stage or while presentation is blocked.
+        // Timed presentation work is covered by core_is_animating above;
+        // a settled player-confirmation wait can sleep with auto still enabled.
+        || (context.toggles.auto
+            && *context.input_scope == crate::ui::input_scope::UiInputScope::Stage
+            && !context.state.presentation_blocked())
         || context.toggles.skip
         || auto_hide.0
     {
@@ -635,7 +641,10 @@ fn core_is_animating(state: &GameState, dialogue_length: &mut DialogueLengthCach
             .stage_masks
             .values()
             .any(|mask| (mask.current - mask.target).abs() > f32::EPSILON)
-        || state.floating_text.is_some()
+        || state
+            .floating_text
+            .as_ref()
+            .is_some_and(|text| !text.infinite || text.elapsed < text.fade_in)
         || !state.videos.is_empty()
         || !state.particle_effects.is_empty()
         || state.bg_films.is_time_varying()
@@ -1217,6 +1226,7 @@ mod tests {
             .init_resource::<UiAnimationActivity>()
             .init_resource::<AudioAnimationActivity>()
             .init_resource::<ToggleStates>()
+            .init_resource::<crate::ui::input_scope::UiInputScope>()
             .init_resource::<AutoHideTiming>()
             .init_resource::<UserInputCaretBlink>()
             .init_resource::<Time<Real>>()
@@ -1324,6 +1334,7 @@ mod tests {
             .init_resource::<UiAnimationActivity>()
             .init_resource::<AudioAnimationActivity>()
             .init_resource::<ToggleStates>()
+            .init_resource::<crate::ui::input_scope::UiInputScope>()
             .insert_resource(timing)
             .init_resource::<UserInputCaretBlink>()
             .init_resource::<Time<Real>>()
@@ -1418,6 +1429,102 @@ mod tests {
             UpdateMode::reactive_low_power(std::time::Duration::from_millis(500)),
             "idle sleep must still honor the control-bar fade deadline"
         );
+        // Automatic reading cannot advance a click-gated presentation. It
+        // must sleep there, while its ordinary dialogue delay stays active.
+        app.world_mut().get_mut::<Window>(window).unwrap().focused = true;
+        app.world_mut().resource_mut::<ToggleStates>().auto = true;
+        for retraction in [false, true] {
+            {
+                let mut state = app.world_mut().resource_mut::<GameState>();
+                state.waiting_for_advance = !retraction;
+                state.dialogue_retraction =
+                    retraction.then_some(keine_core::state::DialogueRetraction {
+                        keep: String::new(),
+                        target_visible_chars: 0,
+                        fractional_chars: 0.0,
+                        awaiting_advance: true,
+                    });
+            }
+            app.world_mut().run_system_once(update_lifecycle).unwrap();
+            assert_eq!(
+                *app.world().resource::<RuntimeActivity>(),
+                RuntimeActivity::Idle
+            );
+            assert!(app.world().resource::<Time<Virtual>>().is_paused());
+            assert!(app.world().resource::<ToggleStates>().auto);
+            // Unrelated animation must still wake the same waiting frame.
+            app.world_mut().resource_mut::<UiAnimationActivity>().0 = true;
+            app.world_mut().run_system_once(update_lifecycle).unwrap();
+            assert_eq!(
+                *app.world().resource::<RuntimeActivity>(),
+                RuntimeActivity::Active
+            );
+            assert!(!app.world().resource::<Time<Virtual>>().is_paused());
+            app.world_mut().resource_mut::<UiAnimationActivity>().0 = false;
+        }
+        {
+            let mut state = app.world_mut().resource_mut::<GameState>();
+            state.waiting_for_advance = false;
+            state.dialogue_retraction = None;
+        }
+        app.world_mut().run_system_once(update_lifecycle).unwrap();
+        assert_eq!(
+            *app.world().resource::<RuntimeActivity>(),
+            RuntimeActivity::Active
+        );
+        assert!(!app.world().resource::<Time<Virtual>>().is_paused());
+        for scope in [
+            crate::ui::input_scope::UiInputScope::Menu,
+            crate::ui::input_scope::UiInputScope::Backlog,
+            crate::ui::input_scope::UiInputScope::Extra,
+            crate::ui::input_scope::UiInputScope::Dialog,
+        ] {
+            *app.world_mut()
+                .resource_mut::<crate::ui::input_scope::UiInputScope>() = scope;
+            app.world_mut().run_system_once(update_lifecycle).unwrap();
+            assert_eq!(
+                *app.world().resource::<RuntimeActivity>(),
+                RuntimeActivity::Idle
+            );
+            assert!(app.world().resource::<ToggleStates>().auto);
+            app.world_mut().resource_mut::<UiAnimationActivity>().0 = true;
+            app.world_mut().run_system_once(update_lifecycle).unwrap();
+            assert_eq!(
+                *app.world().resource::<RuntimeActivity>(),
+                RuntimeActivity::Active
+            );
+            app.world_mut().resource_mut::<UiAnimationActivity>().0 = false;
+        }
+        *app.world_mut()
+            .resource_mut::<crate::ui::input_scope::UiInputScope>() =
+            crate::ui::input_scope::UiInputScope::Stage;
+        app.world_mut().resource_mut::<ToggleStates>().auto = false;
+        for (infinite, elapsed, expected) in [
+            (true, 0.0, RuntimeActivity::Active),
+            (true, 0.5, RuntimeActivity::Idle),
+            (false, 0.5, RuntimeActivity::Active),
+        ] {
+            app.world_mut().resource_mut::<GameState>().floating_text =
+                Some(keine_core::state::FloatingTextState {
+                    id: None,
+                    text: "persistent".into(),
+                    position: [960.0, 400.0],
+                    font_size: 38.0,
+                    color: [1.0; 4],
+                    fade_in: 0.5,
+                    hold: 2.0,
+                    fade_out: 0.5,
+                    elapsed,
+                    blocking: false,
+                    infinite,
+                });
+            app.world_mut().run_system_once(update_lifecycle).unwrap();
+            assert_eq!(
+                *app.world().resource::<RuntimeActivity>(),
+                expected,
+                "infinite={infinite}, elapsed={elapsed}"
+            );
+        }
     }
 
     #[test]
@@ -1435,6 +1542,7 @@ mod tests {
                 .init_resource::<UiAnimationActivity>()
                 .init_resource::<AudioAnimationActivity>()
                 .init_resource::<ToggleStates>()
+                .init_resource::<crate::ui::input_scope::UiInputScope>()
                 .init_resource::<AutoHideTiming>()
                 .init_resource::<UserInputCaretBlink>()
                 .init_resource::<RuntimeActivity>()

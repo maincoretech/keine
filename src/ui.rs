@@ -73,7 +73,9 @@ impl Plugin for GameUiPlugin {
         );
         app.add_systems(
             Last,
-            activity::update.before(crate::runtime::platform::update_lifecycle),
+            (activity::update, activity::settle_image_removals)
+                .chain()
+                .before(crate::runtime::platform::update_lifecycle),
         );
     }
 }

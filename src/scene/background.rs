@@ -12,7 +12,7 @@ use crate::scene::effects::material::{
     StageMaterial, StageQuad, active_lut_preset, animation_uniform, effective_post_process,
     upsert_stage_material,
 };
-use crate::scene::images::{ImageRole, ImageRoleRegistry};
+use crate::scene::images::{ImageRole, ImageRoleRegistry, StageImage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum BackgroundLayer {
@@ -23,7 +23,6 @@ pub(crate) enum BackgroundLayer {
 #[derive(Component)]
 pub(crate) struct BackgroundNode {
     pub(crate) layer: BackgroundLayer,
-    pub(crate) image: String,
 }
 
 #[derive(Default)]
@@ -95,7 +94,8 @@ type BackgroundQuery<'w, 's> = Query<
     's,
     (
         Entity,
-        &'static mut BackgroundNode,
+        &'static BackgroundNode,
+        &'static mut StageImage,
         &'static mut Transform,
         Option<&'static MeshMaterial2d<StageMaterial>>,
         Option<&'static mut Sprite>,
@@ -133,7 +133,11 @@ pub fn sync_bg(context: BackgroundSyncContext) {
     let Ok(window) = windows.single() else {
         return;
     };
-    if cache.matches(&state) && !config.is_changed() && !window.is_changed() {
+    if cache.matches(&state)
+        && !config.is_changed()
+        && !image_roles.is_changed()
+        && !window.is_changed()
+    {
         return;
     }
     cache.capture(&state);
@@ -142,7 +146,9 @@ pub fn sync_bg(context: BackgroundSyncContext) {
     let mut previous_exists = false;
     let mut current_exists = false;
 
-    for (entity, mut node, mut transform, existing_material, existing_sprite) in &mut backgrounds {
+    for (entity, node, mut source, mut transform, existing_material, existing_sprite) in
+        &mut backgrounds
+    {
         let Some(background) = desired
             .iter()
             .flatten()
@@ -156,12 +162,17 @@ pub fn sync_bg(context: BackgroundSyncContext) {
             BackgroundLayer::Previous => previous_exists = true,
             BackgroundLayer::Current => current_exists = true,
         }
-        node.image = background.image.to_owned();
-        let image = crate::scene::images::load(
-            &asset_server,
-            &image_roles,
-            config.bg_path(background.image),
-            ImageRole::BACKGROUND,
+        let image = source.bypass_change_detection().resolve(
+            background.image,
+            config.is_changed() || image_roles.is_changed(),
+            || {
+                crate::scene::images::load(
+                    &asset_server,
+                    &image_roles,
+                    config.bg_path(background.image),
+                    ImageRole::BACKGROUND,
+                )
+            },
         );
         let post = effective_post_process(
             &state.camera_effect,
@@ -185,10 +196,11 @@ pub fn sync_bg(context: BackgroundSyncContext) {
             &asset_server,
             &image_roles,
         );
+        let mut desired_transform = *transform;
         apply_background_entity(
             &mut commands,
             entity,
-            &mut transform,
+            &mut desired_transform,
             existing_material,
             &mut materials,
             &quad,
@@ -203,6 +215,7 @@ pub fn sync_bg(context: BackgroundSyncContext) {
             existing_sprite,
             true,
         );
+        transform.set_if_neq(desired_transform);
     }
 
     for background in desired.into_iter().flatten() {
@@ -247,8 +260,8 @@ pub fn sync_bg(context: BackgroundSyncContext) {
                 Name::new(format!("background::{:?}", background.layer)),
                 BackgroundNode {
                     layer: background.layer,
-                    image: background.image.to_owned(),
                 },
+                StageImage::new(background.image, image.clone()),
                 transform,
                 RenderLayers::layer(0),
             ))
@@ -427,7 +440,12 @@ fn apply_background_entity(
             ..default()
         };
         if let Some(mut sprite) = existing_sprite {
-            *sprite = desired;
+            if sprite.image != desired.image
+                || sprite.custom_size != desired.custom_size
+                || sprite.color != desired.color
+            {
+                *sprite = desired;
+            }
         } else {
             commands
                 .entity(entity)

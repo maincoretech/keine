@@ -209,6 +209,7 @@ pub(super) struct WorkbenchWindow {
     _bounds_subscription: Subscription,
     preview_lifecycle: PreviewLifecycle,
     preview_position: Option<(PathBuf, usize, usize)>,
+    preview_runtime: Option<keine_authoring::RuntimeSnapshot>,
     audition_status: (Option<PathBuf>, Option<String>, bool),
     focus: FocusHandle,
 }
@@ -341,6 +342,10 @@ impl WorkbenchWindow {
                         this.audition_status = audition_status;
                         cx.refresh_windows();
                     }
+                    if this.preview_runtime != snapshot.runtime {
+                        this.preview_runtime = snapshot.runtime;
+                        cx.refresh_windows();
+                    }
                     if this.preview_position != snapshot.runtime_position {
                         this.preview_position = snapshot.runtime_position.clone();
                         if let Some((path, line, column)) = snapshot.runtime_position {
@@ -414,6 +419,7 @@ impl WorkbenchWindow {
             _bounds_subscription: bounds_subscription,
             preview_lifecycle: PreviewLifecycle::Off,
             preview_position: None,
+            preview_runtime: None,
             audition_status: (None, None, false),
             focus: cx.focus_handle(),
         }
@@ -444,6 +450,7 @@ impl WorkbenchWindow {
             _bounds_subscription: bounds_subscription,
             preview_lifecycle: PreviewLifecycle::Off,
             preview_position: None,
+            preview_runtime: None,
             audition_status: (None, None, false),
             focus: cx.focus_handle(),
         }
@@ -492,6 +499,7 @@ impl WorkbenchWindow {
         ));
         self.preview_lifecycle = PreviewLifecycle::Off;
         self.preview_position = None;
+        self.preview_runtime = None;
         self.recents.clear();
         cx.notify();
         Ok(())
@@ -1069,17 +1077,6 @@ impl WorkbenchWindow {
                 )
                 .child(
                     activity_tool(
-                        "activity-performance",
-                        IconName::Cpu,
-                        performance_open,
-                        "Performance",
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.show_tool(ToolKind::Performance, window, cx)
-                    })),
-                )
-                .child(
-                    activity_tool(
                         "activity-output",
                         AssetIconName::Terminal,
                         output_open,
@@ -1098,6 +1095,17 @@ impl WorkbenchWindow {
                     )
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.show_tool(ToolKind::Build, window, cx)
+                    })),
+                )
+                .child(
+                    activity_tool(
+                        "activity-performance",
+                        IconName::Cpu,
+                        performance_open,
+                        "Performance",
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.show_tool(ToolKind::Performance, window, cx)
                     })),
                 )
             })

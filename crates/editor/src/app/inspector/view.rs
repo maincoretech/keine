@@ -750,6 +750,9 @@ impl WorkbenchPanel {
             return Empty.into_any_element();
         };
 
+        let root = root.clone();
+        let root = &root;
+        let inspection = super::super::output::runtime_inspection(root, false, cx);
         let document_count = cx.global::<EditorDocuments>().open_document_count(root);
         let index = cx.global::<EditorDocuments>().authoring(root);
         let has_selection = cx.global::<EditorDocuments>().selection(root).is_some();
@@ -779,6 +782,7 @@ impl WorkbenchPanel {
             .px(px(16.))
             .py(px(10.))
             .gap_2()
+            .when_some(inspection, |this, inspection| this.child(inspection))
             .when(!selected_assets.is_empty(), |this| {
                 this.child(section_label("ASSET"))
                     .when(selected_assets.len() == 1, |this| {

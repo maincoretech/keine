@@ -4,6 +4,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+mod metrics;
+
 use criterion::{BatchSize, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use keine_core::config::AssetSourceConfig;
 use keine_core::{Program, State, step};
@@ -127,6 +129,9 @@ fn decode_clone_and_build() -> u64 {
 }
 
 fn bench(c: &mut Criterion) {
+    if metrics::run() {
+        return;
+    }
     bench_native(c);
     let mut group = c.benchmark_group("program_load");
     group.throughput(Throughput::Elements(ACTION_COUNT as u64));
@@ -166,22 +171,7 @@ fn bench_native(c: &mut Criterion) {
     text.push_str("\n}");
     mixed.push_str("\n}");
     let mut sources = vec![("text_100000", text), ("mixed_100001", mixed)];
-    if let Some(directory) = std::env::var_os("KEINE_NATIVE_SOURCE_DIR") {
-        let mut paths = std::fs::read_dir(directory)
-            .expect("native source directory")
-            .map(|entry| entry.expect("source entry").path())
-            .filter(|path| {
-                path.extension()
-                    .is_some_and(|extension| extension == "shou")
-            })
-            .collect::<Vec<_>>();
-        paths.sort();
-        assert!(!paths.is_empty(), "native corpus must contain .shou files");
-        let corpus = paths
-            .iter()
-            .map(|path| std::fs::read_to_string(path).expect("native source"))
-            .collect::<Vec<_>>()
-            .join("\n");
+    if let Some(corpus) = corpus() {
         sources.push(("corpus", corpus));
     }
     let mut group = c.benchmark_group("native_parse");
@@ -225,6 +215,27 @@ fn bench_native(c: &mut Criterion) {
         });
         group.finish();
     }
+}
+
+fn corpus() -> Option<String> {
+    let directory = std::env::var_os("KEINE_NATIVE_SOURCE_DIR")?;
+    let mut paths = std::fs::read_dir(directory)
+        .expect("native source directory")
+        .map(|entry| entry.expect("source entry").path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "shou")
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    assert!(!paths.is_empty(), "native corpus must contain .shou files");
+    Some(
+        paths
+            .iter()
+            .map(|path| std::fs::read_to_string(path).expect("native source"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 criterion_group!(benches, bench);

@@ -150,6 +150,7 @@ gpui_kit::assets::icon_assets!(
         RotateCcw,
         Scissors,
         SlidersHorizontal,
+        Terminal,
         Square,
         Volume2,
         Workflow,
@@ -951,7 +952,7 @@ mod tests {
     }
 
     #[test]
-    fn asset_status_icons_are_embedded() {
+    fn workspace_icons_are_embedded() {
         for icon in [
             AssetIconName::Files,
             AssetIconName::CircleCheck,
@@ -961,6 +962,13 @@ mod tests {
             AssetIconName::Package,
             AssetIconName::Link,
             AssetIconName::TriangleAlert,
+            AssetIconName::FileText,
+            AssetIconName::Images,
+            AssetIconName::User,
+            AssetIconName::Search,
+            AssetIconName::SlidersHorizontal,
+            AssetIconName::Terminal,
+            AssetIconName::Cpu,
         ] {
             assert!(
                 gpui_kit::AssetSource::load(&EditorAssets, icon.path().as_ref())

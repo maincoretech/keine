@@ -19,6 +19,13 @@ use crate::types::{
     SpriteLayout, SpriteTransform, Transition, Value, VideoSpec, VisualFilter,
 };
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptDiagnostic {
+    pub scene: String,
+    pub cursor: usize,
+    pub message: String,
+}
+
 /// The complete game state at any point in time.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct State {
@@ -51,6 +58,9 @@ pub struct State {
     pub scene_stack: Vec<SceneFrame>,
     /// Explicit `end` reached; the presentation layer should show the title.
     pub ended: bool,
+    /// Transient execution failure for native authoring diagnostics, never slot data.
+    #[serde(skip, default)]
+    pub script_diagnostic: Option<ScriptDiagnostic>,
 
     // ── Display state ──
     /// Current background image path.
@@ -1138,6 +1148,7 @@ impl State {
     /// Install a freshly compiled program and clamp every persisted cursor to
     /// the new scene boundaries. Replacing the `Arc` keeps hot reload atomic.
     pub fn install_program(&mut self, program: Program) {
+        self.script_diagnostic = None;
         self.program_fingerprint = program.fingerprint();
         self.program = Arc::new(program);
         self.reconcile_program_positions();

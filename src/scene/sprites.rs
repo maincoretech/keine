@@ -11,7 +11,7 @@ use crate::scene::effects::material::{
     StageMaterial, StageQuad, active_lut_preset, animation_uniform, effective_post_process,
     upsert_stage_material,
 };
-use crate::scene::images::{ImageDimensions, ImageRole, ImageRoleRegistry};
+use crate::scene::images::{ImageDimensions, ImageRole, ImageRoleRegistry, StageImage};
 
 /// Marker for sprite entities with stable IDs used by diff-based synchronization.
 #[derive(Component)]
@@ -176,6 +176,7 @@ type RenderedSpriteQuery<'w, 's> = Query<
         &'static mut Transform,
         Option<&'static mut Sprite>,
         Option<&'static MeshMaterial2d<StageMaterial>>,
+        &'static mut StageImage,
     ),
 >;
 
@@ -228,6 +229,7 @@ pub(crate) fn sync_sprites(
     let sprites_changed = !entities.cache.matches(&state);
     if !sprites_changed
         && !config.is_changed()
+        && !render.image_roles.is_changed()
         && !render.dimensions.is_changed()
         && !window.is_changed()
     {
@@ -258,12 +260,25 @@ pub(crate) fn sync_sprites(
     });
 
     for (id, data) in &state.sprites {
-        let handle = crate::scene::images::load(
-            &render.asset_server,
-            &render.image_roles,
-            config.figure_path(&data.image),
-            ImageRole::FIGURE,
-        );
+        let load_image = || {
+            crate::scene::images::load(
+                &render.asset_server,
+                &render.image_roles,
+                config.figure_path(&data.image),
+                ImageRole::FIGURE,
+            )
+        };
+        let handle = if let Some(entity) = entities.index.0.get(id)
+            && let Ok((_, _, _, mut source)) = entities.rendered.get_mut(*entity)
+        {
+            source.bypass_change_detection().resolve(
+                &data.image,
+                config.is_changed() || render.image_roles.is_changed(),
+                load_image,
+            )
+        } else {
+            load_image()
+        };
         let texture_size = render
             .dimensions
             .size(&handle)
@@ -418,7 +433,7 @@ pub(crate) fn sync_sprites(
             || clip.is_some();
 
         if let Some(entity) = entities.index.0.get(id).copied() {
-            if let Ok((mut current_transform, current_sprite, existing_material)) =
+            if let Ok((mut current_transform, current_sprite, existing_material, _)) =
                 entities.rendered.get_mut(entity)
             {
                 if uses_material {
@@ -436,7 +451,7 @@ pub(crate) fn sync_sprites(
                         height * viewport.scale,
                         1.0,
                     ));
-                    *current_transform = mesh_transform;
+                    current_transform.set_if_neq(mesh_transform);
                     if existing_material.is_none() {
                         entities.commands.entity(entity).remove::<Sprite>().insert((
                             Mesh2d(render.quad.0.clone()),
@@ -444,9 +459,14 @@ pub(crate) fn sync_sprites(
                         ));
                     }
                 } else {
-                    *current_transform = entity_transform;
+                    current_transform.set_if_neq(entity_transform);
                     if let Some(mut current_sprite) = current_sprite {
-                        *current_sprite = sprite;
+                        if current_sprite.image != sprite.image
+                            || current_sprite.custom_size != sprite.custom_size
+                            || current_sprite.color != sprite.color
+                        {
+                            *current_sprite = sprite;
+                        }
                     } else {
                         entities
                             .commands
@@ -464,6 +484,7 @@ pub(crate) fn sync_sprites(
         let mut entity = entities.commands.spawn((
             Name::new(format!("sprite::{id}")),
             SpriteNode(id.clone()),
+            StageImage::new(&data.image, handle.clone()),
             RenderLayers::layer(0),
         ));
         let entity_id = entity.id();

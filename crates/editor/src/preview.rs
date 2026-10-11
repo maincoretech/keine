@@ -34,6 +34,7 @@ pub struct PreviewSnapshot {
     pub lifecycle: PreviewLifecycle,
     pub revision: u64,
     pub runtime_position: Option<(PathBuf, usize, usize)>,
+    pub runtime: Option<keine_authoring::RuntimeSnapshot>,
     pub diagnostics: Vec<keine_authoring::Diagnostic>,
     pub audition_path: Option<PathBuf>,
     pub audition_paused: bool,
@@ -46,6 +47,7 @@ impl Default for PreviewSnapshot {
             lifecycle: PreviewLifecycle::Off,
             revision: 0,
             runtime_position: None,
+            runtime: None,
             diagnostics: Vec::new(),
             audition_path: None,
             audition_paused: false,
@@ -511,6 +513,7 @@ impl Worker {
             snapshot.lifecycle = PreviewLifecycle::Running;
             snapshot.revision = revision;
             snapshot.runtime_position = None;
+            snapshot.runtime = None;
         });
         self.sync_cursor()?;
         Ok(())
@@ -532,6 +535,7 @@ impl Worker {
         self.mutate(|snapshot| {
             snapshot.lifecycle = PreviewLifecycle::Off;
             snapshot.runtime_position = None;
+            snapshot.runtime = None;
         });
     }
 
@@ -557,6 +561,8 @@ impl Worker {
         let revision = self.revision;
         self.mutate(|snapshot| {
             snapshot.revision = revision;
+            snapshot.runtime_position = None;
+            snapshot.runtime = None;
         });
         self.applied_cursor = None;
         self.last_position_poll = None;
@@ -618,7 +624,7 @@ impl Worker {
         let Some(engine) = self.engine.as_mut() else {
             return Ok(());
         };
-        let Some(position) = engine.take_published_position(self.revision)? else {
+        let Some((position, runtime)) = engine.take_published_position(self.revision)? else {
             self.last_position_poll = Some(Instant::now());
             return Ok(());
         };
@@ -633,6 +639,7 @@ impl Worker {
             self.applied_cursor = None;
         }
         self.mutate(|snapshot| {
+            snapshot.runtime = Some(runtime);
             if snapshot.runtime_position != position {
                 snapshot.runtime_position = position;
             }
@@ -650,6 +657,7 @@ impl Worker {
         self.mutate(|snapshot| {
             snapshot.lifecycle = PreviewLifecycle::Failed(error.to_string());
             snapshot.runtime_position = None;
+            snapshot.runtime = None;
         });
     }
 

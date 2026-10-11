@@ -37,9 +37,9 @@ Single-threaded, warm in-memory input, 10 samples:
 
 | Workload | Approximate result |
 | --- | ---: |
-| EYS parsing: 100,000 text statements | 125 ms / 800k actions/s |
-| EYS parsing: 100,001 expression/text actions | 134 ms / 750k actions/s |
-| tday parsing: 14 scenes, 2,665 actions | 3.02 ms |
+| EYS parsing: 100,000 text statements | 115 ms / 870k actions/s |
+| EYS parsing: 100,001 expression/text actions | 132 ms / 760k actions/s |
+| tday parser corpus: 14 scenes, 2,665 actions | 2.85 ms |
 | Core execution: assignment, condition and interpolated dialogue | 225k dialogue turns/s |
 | Core execution: non-blocking Comment actions | 108M actions/s |
 
@@ -78,7 +78,7 @@ dev/scripts/  build and fixture scripts
 - [Publishing](dev/docs/release.md)
 - [Compatibility limits](dev/docs/compatibility.md)
 
-Current version: 0.14.3. macOS is the current acceptance focus; Windows/Linux runtime acceptance is deferred.
+Current version: 0.15.1. macOS is the current acceptance focus; Windows/Linux runtime acceptance is deferred.
 Build/test success and manual input/display/media acceptance are separate gates.
 
 ## License
