@@ -4476,6 +4476,34 @@ scene ending { "Done" }
     }
 
     #[test]
+    fn extra_unlock_preserves_gallery_actions_and_reports_invalid_arguments() {
+        for kind in ["cg", "bgm"] {
+            let extra = parse_native_scenes(&format!(
+                "scene a {{ extra.unlock({kind}, artwork, name: \"Artwork\") }}"
+            ));
+            let gallery = parse_native_scenes(&format!(
+                "scene a {{ gallery.unlock({kind}, artwork, name: \"Artwork\") }}"
+            ));
+            assert!(
+                errors(&extra[0]).is_empty(),
+                "{kind}: {:?}",
+                extra[0].report.diagnostics
+            );
+            assert_eq!(extra[0].report.actions, gallery[0].report.actions);
+            assert!(matches!(extra[0].report.actions[0], Action::Unlock { .. }));
+        }
+        for call in [
+            "extra.unlock(video, artwork)",
+            "extra.unlock(cg)",
+            "extra.unlock(cg, artwork, name: 42)",
+            "extra.unlock(cg, artwork, unknown: true)",
+        ] {
+            let scenes = parse_native_scenes(&format!("scene a {{ {call} }}"));
+            assert!(!errors(&scenes[0]).is_empty(), "{call}");
+        }
+    }
+
+    #[test]
     fn named_effects_keep_single_use_loop_and_fade_distinct() {
         let scenes = parse_native_scenes(
             "scene a { se(door, id: hit, fade: 100ms), se(rain_asset, id: rain, loop: true, fade: 200ms), se.stop(hit, fade: 300ms) }",

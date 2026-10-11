@@ -29,6 +29,36 @@ cargo bundle <project> --output <release-directory>
 The Editor controls a separate native Engine window. Text, Blocks and Inspector edit one source document.
 Compatibility JSON is read-only; migration is explicit and preserves its input.
 
+## Script performance
+
+Measured on **Apple M5 Pro (15 logical CPUs), 24 GiB RAM, macOS 27.0.1**,
+2026-10-11, using the 0.14.3 working tree and optimized Cargo benches.
+Single-threaded, warm in-memory input, 10 samples:
+
+| Workload | Approximate result |
+| --- | ---: |
+| EYS parsing: 100,000 text statements | 125 ms / 800k actions/s |
+| EYS parsing: 100,001 expression/text actions | 134 ms / 750k actions/s |
+| tday parsing: 14 scenes, 2,665 actions | 3.02 ms |
+| Core execution: assignment, condition and interpolated dialogue | 225k dialogue turns/s |
+| Core execution: non-blocking Comment actions | 108M actions/s |
+
+Execution excludes Program installation; each mixed turn contains three authored actions
+and immediately advances dialogue. These CPU microbenchmarks exclude disk I/O, media,
+scene/UI updates and rendering; the desktop was not isolated. Reproduction details:
+[testing guide](dev/docs/testing.md).
+
+For context, these DSLs use different loading/execution paths:
+
+| Engine / DSL | Script path |
+| --- | --- |
+| Kēne / Eiyashou | Source lowered to typed IR; shipping games load a compiled Program and execute through Rust Core |
+| [Ren'Py](https://www.renpy.org/doc/html/language_basics.html) | `.rpy` compiled to `.rpyc`; script expressions use Python |
+| [WebGAL](https://docs.openwebgal.com/en/tech/) | `.txt` parsed into executable scene objects, with a Pixi stage |
+
+Ren'Py and WebGAL were not measured on the same machine/workload. This is an
+architecture comparison, not a cross-engine speed ranking.
+
 ## Repository
 
 ```text

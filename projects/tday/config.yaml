@@ -14,7 +14,7 @@ adapter:
   store: keine
 script:
   version: 2
-  entry: start
+  entry: extra_preview
   assets: assets.yaml
   characters: characters.yaml
   objects: objects.yaml

@@ -894,16 +894,7 @@ pub(super) fn spawn_choice(
         UiSoundStyle::Switch,
         action,
         SettingChoice(action),
-        SettingChoiceVisual {
-            selected,
-            hovered: false,
-            fill: if selected { 100.0 } else { 0.0 },
-            text_alpha: if selected {
-                OPTION_TEXT_ACTIVE
-            } else {
-                OPTION_TEXT_IDLE
-            },
-        },
+        SettingChoiceVisual::new(selected),
         Node {
             min_width: Val::Px(96.0),
             height: Val::Px(43.5),
@@ -914,19 +905,7 @@ pub(super) fn spawn_choice(
         },
         BackgroundColor(Color::NONE),
         children![
-            (
-                SettingChoiceFill,
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: Val::ZERO,
-                    top: Val::ZERO,
-                    width: Val::Percent(if selected { 100.0 } else { 0.0 }),
-                    height: Val::Percent(100.0),
-                    ..default()
-                },
-                BackgroundColor(button_surface(OPTION_FILL_ALPHA)),
-                FocusPolicy::Pass,
-            ),
+            choice_fill(selected),
             text_weight(
                 text,
                 font,
@@ -944,6 +923,22 @@ pub(super) fn spawn_choice(
             )
         ],
     ));
+}
+
+pub(crate) fn choice_fill(selected: bool) -> impl Bundle {
+    (
+        SettingChoiceFill,
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::ZERO,
+            top: Val::ZERO,
+            width: Val::Percent(if selected { 100.0 } else { 0.0 }),
+            height: Val::Percent(100.0),
+            ..default()
+        },
+        BackgroundColor(button_surface(OPTION_FILL_ALPHA)),
+        FocusPolicy::Pass,
+    )
 }
 
 pub(super) fn setting_text(

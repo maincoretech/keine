@@ -38,6 +38,7 @@ pub(super) const SIMPLE_COMMANDS: &[&str] = &[
     "scene.parallax.stop",
     "particle.hide",
     "video.stop",
+    "extra.unlock",
     "gallery.unlock",
     "camera.reset",
     "camera.bind",
@@ -123,7 +124,7 @@ pub(super) fn signature(name: &str) -> Option<(usize, &'static [&'static str])> 
         "text.float.configure" => (0, &["id", "infinite"]),
         "particle.hide" => (1, &["duration"]),
         "video.stop" => (1, &["fade"]),
-        "gallery.unlock" => (2, &["name"]),
+        "extra.unlock" | "gallery.unlock" => (2, &["name"]),
         "camera.bind" | "camera.unbind" => (1, &["distance"]),
         "text.float.hide" => (0, &[]),
         _ => return None,
@@ -264,7 +265,7 @@ impl<'a> Parser<'a> {
                 id: self.v11_optional_star_id(first, "video ID", report)?,
                 fade_out: self.named_duration_checked(args, "fade", report)?,
             }),
-            "gallery.unlock" => {
+            "extra.unlock" | "gallery.unlock" => {
                 let kind = self.v11_identifier(first, "gallery kind", report)?;
                 let kind = match kind.as_str() {
                     "cg" => UnlockKind::Cg,
@@ -272,7 +273,7 @@ impl<'a> Parser<'a> {
                     _ => {
                         report
                             .diagnostics
-                            .push(self.error("gallery.unlock(...) kind must be `cg` or `bgm`"));
+                            .push(self.error(format!("{name}(...) kind must be `cg` or `bgm`")));
                         return None;
                     }
                 };

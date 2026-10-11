@@ -14,13 +14,15 @@ use crate::runtime::resources::{GameConfigResource, GameState};
 use crate::scene::audio::BgmPlayer;
 use crate::scene::images::{ImageRole, ImageRoleRegistry};
 use crate::storage::settings::RuntimeSettings;
-use crate::ui::control_bar::{BlurStrength, HoverAlpha, UiBlurSource};
+use crate::ui::control_bar::{BlurStrength, UiBlurSource};
 use crate::ui::foundation::{
-    PAGE_SLIDE_SECONDS, SURFACE_ACTIVE_ALPHA, SURFACE_HOVER_ALPHA, SURFACE_IDLE_ALPHA,
-    SURFACE_PANEL_ALPHA, UI_MOTION_RATE, UiFonts, button_surface, dark_surface, exp_lerp,
-    logical_node_width, page_slide_offset, smoothstep, spawn_slider, text, text_weight,
+    PAGE_SLIDE_SECONDS, SURFACE_PANEL_ALPHA, UI_MOTION_RATE, UiFonts, dark_surface,
+    ease_in_out_cubic, exp_lerp, logical_node_width, smoothstep, spawn_slider, text, text_weight,
 };
-use crate::ui::settings_panel::{SettingsWatermark, menu_watermark};
+use crate::ui::settings_panel::{
+    SettingChoiceFillQuery, SettingChoiceVisual, SettingsWatermark, animate_choice_visual,
+    choice_fill, menu_watermark,
+};
 use crate::ui::support::i18n::{LocalizedText, UiText};
 use keine_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
@@ -82,13 +84,11 @@ pub(crate) enum ExtraSection {
 #[derive(Component)]
 pub(crate) struct ExtraTab {
     section: ExtraSection,
-    alpha: f32,
 }
-impl ExtraTab {
-    pub(crate) fn is_animating(&self, interaction: Interaction, ui: &ExtraUi) -> bool {
-        (self.alpha - header_tab_alpha(ui.section == self.section, interaction)).abs() > 0.001
-    }
-}
+
+#[derive(Component)]
+pub(crate) struct ExtraButtonVisual;
+
 #[derive(Component)]
 pub(crate) struct ExtraPanel(ExtraSection);
 #[derive(Component)]
@@ -97,10 +97,11 @@ pub(crate) struct ExtraPageLabel;
 pub(crate) struct ExtraPageTransition {
     from: Option<ExtraSection>,
     elapsed: f32,
+    cg_direction: f32,
 }
 impl ExtraPageTransition {
     pub(crate) fn is_animating(&self) -> bool {
-        self.from.is_some()
+        self.from.is_some() || self.cg_direction != 0.0
     }
 }
 #[derive(Component, Default)]
@@ -125,7 +126,9 @@ pub(crate) struct ExtraBgmBubbleText;
 pub(crate) struct ExtraCg(String);
 
 #[derive(Component)]
-pub(crate) struct ExtraCgGrid;
+pub(crate) struct ExtraCgGrid {
+    outgoing: bool,
+}
 
 #[derive(Component)]
 pub(crate) struct ExtraFullCg(String);
@@ -241,6 +244,7 @@ type ExtraBackgroundQuery<'w, 's> = Query<
 pub(crate) struct ExtraFadeContext<'w, 's> {
     parents: Query<'w, 's, &'static ChildOf>,
     texts: Query<'w, 's, (Entity, &'static mut TextColor)>,
+    choices: Query<'w, 's, &'static SettingChoiceVisual>,
     backgrounds: ExtraBackgroundQuery<'w, 's>,
     images: Query<'w, 's, (Entity, &'static mut ImageNode)>,
 }
@@ -269,15 +273,59 @@ pub(crate) struct ExtraAnimationContext<'w, 's> {
     fade: ExtraFadeContext<'w, 's>,
 }
 
-fn hover_surface(idle: f32, selected: bool) -> HoverAlpha {
-    let resting = if selected { SURFACE_ACTIVE_ALPHA } else { idle };
-    HoverAlpha {
-        target: resting,
-        current: resting,
-        idle_alpha: idle,
-        active: selected,
-        active_alpha: SURFACE_ACTIVE_ALPHA,
-        hover_alpha: SURFACE_HOVER_ALPHA,
+fn extra_button() -> impl Bundle {
+    (ExtraButtonVisual, SettingChoiceVisual::new(false))
+}
+
+pub(crate) fn attach_button_visuals(
+    mut commands: Commands,
+    buttons: Query<(Entity, &Children, &SettingChoiceVisual), Added<ExtraButtonVisual>>,
+    mut labels: Query<&mut TextColor>,
+) {
+    for (entity, children, visual) in &buttons {
+        let fill = commands.spawn(choice_fill(false)).id();
+        commands.entity(entity).insert_children(0, &[fill]);
+        for child in children.iter() {
+            if let Ok(mut color) = labels.get_mut(child) {
+                color.0.set_alpha(visual.text_alpha);
+            }
+        }
+    }
+}
+
+type ExtraButtonQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Interaction,
+        Option<&'static ExtraBgm>,
+        Option<&'static ExtraTab>,
+        &'static mut SettingChoiceVisual,
+        &'static Children,
+    ),
+    With<ExtraButtonVisual>,
+>;
+
+pub(crate) fn update_button_visuals(
+    time: Res<Time>,
+    ui: Res<ExtraUi>,
+    mut buttons: ExtraButtonQuery,
+    mut fills: SettingChoiceFillQuery,
+    mut labels: Query<(&mut TextColor, &mut TextFont)>,
+) {
+    let amount = exp_lerp(time.delta_secs(), 18.0);
+    for (interaction, track, tab, mut visual, children) in &mut buttons {
+        let selected = track.is_some_and(|track| ui.selected_bgm.as_deref() == Some(&track.0))
+            || tab.is_some_and(|tab| ui.section == tab.section);
+        animate_choice_visual(
+            *interaction,
+            selected,
+            &mut visual,
+            children,
+            &mut fills,
+            &mut labels,
+            amount,
+        );
     }
 }
 
@@ -305,9 +353,6 @@ pub(crate) fn sync(mut context: ExtraSyncContext) {
         for mut motion in &mut context.roots {
             motion.target = 0.0;
         }
-        return;
-    }
-    if !context.roots.is_empty() {
         return;
     }
     let (Ok(ui_camera), Ok(dialog_camera)) =
@@ -339,6 +384,10 @@ pub(crate) fn sync(mut context: ExtraSyncContext) {
             });
     }
 
+    if !context.roots.is_empty() {
+        return;
+    }
+
     let mut cg = context
         .state
         .unlocked_cg
@@ -366,7 +415,7 @@ pub(crate) fn sync(mut context: ExtraSyncContext) {
                 current: 0.0,
                 target: 1.0,
             },
-            UiTransform::from_translation(Val2::px(0.0, 9.0)),
+            UiTransform::from_translation(Val2::px(31.5, 0.0)),
             Node {
                 position_type: PositionType::Absolute,
                 width: Val::Px(DESIGN_WIDTH),
@@ -434,20 +483,10 @@ pub(crate) fn sync(mut context: ExtraSyncContext) {
         });
 }
 
-fn header_tab_alpha(active: bool, interaction: Interaction) -> f32 {
-    if matches!(interaction, Interaction::Hovered | Interaction::Pressed) {
-        SURFACE_HOVER_ALPHA
-    } else if active {
-        SURFACE_ACTIVE_ALPHA
-    } else {
-        0.0
-    }
-}
-
 fn spawn_header(
     root: &mut ChildSpawnerCommands,
     fonts: &UiFonts,
-    selected: ExtraSection,
+    _selected: ExtraSection,
     locale: crate::storage::settings::UiLocale,
 ) {
     root.spawn((Node {
@@ -470,10 +509,10 @@ fn spawn_header(
                         (ExtraSection::Cg, UiText::GalleryCg, "\u{f42a}"),
                         (ExtraSection::Music, UiText::GalleryMusic, "\u{f49e}"),
                     ] {
-                        let alpha = header_tab_alpha(selected == section, Interaction::None);
                         tabs.spawn((
                             Button,
-                            ExtraTab { section, alpha },
+                            ExtraTab { section },
+                            extra_button(),
                             Node {
                                 min_width: Val::Px(123.75),
                                 height: Val::Percent(100.0),
@@ -484,7 +523,7 @@ fn spawn_header(
                                 align_items: AlignItems::Center,
                                 ..default()
                             },
-                            BackgroundColor(button_surface(alpha)),
+                            BackgroundColor(Color::NONE),
                         ))
                         .with_children(|button| {
                             button.spawn(text(icon, &fonts.icons, 21.0, 0.82));
@@ -504,7 +543,7 @@ fn spawn_header(
                 .spawn((
                     Button,
                     ExtraClose,
-                    HoverAlpha::default(),
+                    extra_button(),
                     Node {
                         min_width: Val::Px(112.5),
                         height: Val::Percent(100.0),
@@ -554,22 +593,6 @@ fn spawn_bgm_panel(
         },
     ))
     .with_children(|panel| {
-        panel.spawn((
-            Node {
-                width: Val::Percent(100.0),
-                height: Val::Px(48.0),
-                flex_shrink: 0.0,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            children![text_weight(
-                "BGM",
-                &fonts.text,
-                24.0,
-                0.72,
-                bevy::text::FontWeight::BOLD,
-            )],
-        ));
         panel
             .spawn((
                 ExtraBgmList::default(),
@@ -592,11 +615,10 @@ fn spawn_bgm_panel(
                     ));
                 }
                 for (file, name) in tracks {
-                    let active = ui.selected_bgm.as_ref() == Some(file);
                     list.spawn((
                         Button,
                         ExtraBgm(file.clone()),
-                        hover_surface(0.0, active),
+                        extra_button(),
                         Node {
                             width: Val::Percent(100.0),
                             flex_shrink: 0.0,
@@ -606,11 +628,7 @@ fn spawn_bgm_panel(
                             margin: UiRect::all(Val::Px(EXTRA_CONTROL_MARGIN)),
                             ..default()
                         },
-                        BackgroundColor(button_surface(if active {
-                            SURFACE_ACTIVE_ALPHA
-                        } else {
-                            0.0
-                        })),
+                        BackgroundColor(Color::NONE),
                         children![(
                             Node {
                                 width: Val::Percent(100.0),
@@ -643,7 +661,11 @@ fn spawn_bgm_panel(
         panel.spawn((
             ExtraBgmStatus,
             LocalizedText(UiText::PlaybackStopped),
-            text("STOPPED", &fonts.text, 18.75, 0.58),
+            Node {
+                display: Display::None,
+                ..default()
+            },
+            text("", &fonts.text, 18.75, 0.58),
         ));
         panel
             .spawn(Node {
@@ -668,9 +690,11 @@ fn spawn_bgm_panel(
                         commands
                             .entity(parts.control)
                             .insert(ExtraBgmSeekBar::default());
-                        commands
-                            .entity(parts.thumb)
-                            .insert(ExtraBgmProgressThumb(10.0));
+                        commands.entity(parts.thumb).insert((
+                            ExtraBgmProgressThumb(10.0),
+                            Interaction::None,
+                            FocusPolicy::Pass,
+                        ));
                         commands.entity(parts.bubble).insert(ExtraBgmBubble);
                         commands.entity(parts.value).insert(ExtraBgmBubbleText);
                     });
@@ -704,7 +728,7 @@ fn spawn_bgm_panel(
                     let mut button = controls.spawn((
                         Button,
                         action,
-                        hover_surface(SURFACE_IDLE_ALPHA, false),
+                        extra_button(),
                         Node {
                             min_width: Val::Px(144.0),
                             height: Val::Px(63.0),
@@ -715,7 +739,7 @@ fn spawn_bgm_panel(
                             align_items: AlignItems::Center,
                             ..default()
                         },
-                        BackgroundColor(button_surface(SURFACE_IDLE_ALPHA)),
+                        BackgroundColor(Color::NONE),
                     ));
                     if matches!(action, ExtraBgmControl::Play) {
                         button.insert(ExtraBgmPlayIcon);
@@ -771,18 +795,11 @@ fn spawn_cg_panel(
                 height: Val::Px(63.0),
                 flex_shrink: 0.0,
                 padding: UiRect::horizontal(Val::Px(12.0)),
-                justify_content: JustifyContent::SpaceBetween,
+                justify_content: JustifyContent::FlexEnd,
                 align_items: AlignItems::Center,
                 ..default()
             },))
             .with_children(|pages| {
-                pages.spawn(text_weight(
-                    "CG",
-                    &fonts.text,
-                    24.0,
-                    0.72,
-                    bevy::text::FontWeight::BOLD,
-                ));
                 pages
                     .spawn((Node {
                         align_items: AlignItems::Center,
@@ -793,7 +810,7 @@ fn spawn_cg_panel(
                             buttons.spawn((
                                 Button,
                                 ExtraPage(step),
-                                HoverAlpha::default(),
+                                extra_button(),
                                 Node {
                                     min_width: Val::Px(126.0),
                                     height: Val::Px(63.0),
@@ -815,23 +832,48 @@ fn spawn_cg_panel(
                     });
             });
         panel
-            .spawn((
-                ExtraCgGrid,
-                Node {
-                    width: Val::Percent(100.0),
-                    flex_grow: 1.0,
-                    padding: UiRect::top(Val::Px(30.0)),
-                    flex_direction: FlexDirection::Row,
-                    flex_wrap: FlexWrap::Wrap,
-                    align_content: AlignContent::FlexStart,
-                    overflow: Overflow::clip(),
-                    ..default()
-                },
-            ))
-            .with_children(|grid| {
-                spawn_cg_cards(grid, images, page, config, fonts, assets, image_roles);
+            .spawn(Node {
+                width: Val::Percent(100.0),
+                flex_grow: 1.0,
+                min_height: Val::ZERO,
+                overflow: Overflow::clip(),
+                ..default()
+            })
+            .with_children(|viewport| {
+                spawn_cg_grid(viewport, images, page, config, fonts, assets, image_roles);
             });
     });
+}
+
+fn spawn_cg_grid(
+    viewport: &mut ChildSpawnerCommands,
+    images: &[(String, String)],
+    page: usize,
+    config: &GameConfigResource,
+    fonts: &UiFonts,
+    assets: &AssetServer,
+    image_roles: &ImageRoleRegistry,
+) {
+    viewport
+        .spawn((
+            ExtraCgGrid { outgoing: false },
+            UiTransform::default(),
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::ZERO,
+                top: Val::ZERO,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                padding: UiRect::top(Val::Px(30.0)),
+                flex_direction: FlexDirection::Row,
+                flex_wrap: FlexWrap::Wrap,
+                align_content: AlignContent::FlexStart,
+                ..default()
+            },
+        ))
+        .with_children(|grid| {
+            spawn_cg_cards(grid, images, page, config, fonts, assets, image_roles);
+        });
 }
 
 fn spawn_cg_cards(
@@ -864,8 +906,8 @@ fn spawn_cg_cards(
                 flex_direction: FlexDirection::Column,
                 ..default()
             },
-            BackgroundColor(button_surface(SURFACE_IDLE_ALPHA)),
-            hover_surface(SURFACE_IDLE_ALPHA, false),
+            BackgroundColor(Color::NONE),
+            extra_button(),
         ))
         .with_children(|card| {
             let image = crate::scene::images::load(
@@ -955,7 +997,8 @@ pub(crate) struct ExtraPageContext<'w, 's> {
     fonts: Res<'w, UiFonts>,
     assets: Res<'w, AssetServer>,
     image_roles: Res<'w, ImageRoleRegistry>,
-    grids: Query<'w, 's, Entity, With<ExtraCgGrid>>,
+    grids: Query<'w, 's, (Entity, &'static ChildOf, &'static ExtraCgGrid)>,
+    transition: ResMut<'w, ExtraPageTransition>,
     page_labels: Query<'w, 's, &'static mut Text, With<ExtraPageLabel>>,
     commands: Commands<'w, 's>,
 }
@@ -968,13 +1011,15 @@ pub(crate) fn handle_page(mut context: ExtraPageContext) {
     else {
         return;
     };
-    if !context.ui.open {
+    if !context.ui.open || context.transition.is_animating() {
         return;
     }
     let mut images = ordered_cg(&context.state);
     let count = images.len().div_ceil(CG_PER_PAGE).max(1);
     let page = (context.ui.page as i64 + i64::from(page)).clamp(1, count as i64) as usize;
     if context.ui.page != page {
+        context.transition.cg_direction = if page > context.ui.page { 1.0 } else { -1.0 };
+        context.transition.elapsed = 0.0;
         context.ui.page = page;
         for mut label in &mut context.page_labels {
             label.0 = format!("{page} / {count}");
@@ -982,14 +1027,20 @@ pub(crate) fn handle_page(mut context: ExtraPageContext) {
         images.sort_unstable_by(|left, right| {
             left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0))
         });
-        for grid in &context.grids {
+        for (grid, parent, phase) in &context.grids {
+            if phase.outgoing {
+                continue;
+            }
             context
                 .commands
                 .entity(grid)
-                .despawn_related::<Children>()
-                .with_children(|cards| {
-                    spawn_cg_cards(
-                        cards,
+                .insert(ExtraCgGrid { outgoing: true });
+            context
+                .commands
+                .entity(parent.parent())
+                .with_children(|viewport| {
+                    spawn_cg_grid(
+                        viewport,
                         &images,
                         page,
                         &context.config,
@@ -1178,7 +1229,7 @@ fn spawn_full_cg(
                                     .spawn((
                                         Button,
                                         action,
-                                        hover_surface(SURFACE_IDLE_ALPHA, false),
+                                        extra_button(),
                                         Node {
                                             min_width: Val::Px(144.0),
                                             height: Val::Px(63.0),
@@ -1191,7 +1242,7 @@ fn spawn_full_cg(
                                             align_items: AlignItems::Center,
                                             ..default()
                                         },
-                                        BackgroundColor(button_surface(SURFACE_IDLE_ALPHA)),
+                                        BackgroundColor(Color::NONE),
                                     ))
                                     .with_children(|button| {
                                         button.spawn(text(label, &fonts.text, 27.0, 0.82));
@@ -1395,7 +1446,6 @@ fn ordered_bgm(state: &GameState) -> Vec<(&str, &str)> {
 pub(crate) fn sync_bgm_selection(
     ui: Res<ExtraUi>,
     state: Res<GameState>,
-    mut tracks: Query<(&ExtraBgm, &mut HoverAlpha)>,
     names: Query<&Children, With<ExtraBgmName>>,
     mut labels: Query<&mut Text>,
 ) {
@@ -1404,15 +1454,6 @@ pub(crate) fn sync_bgm_selection(
     }
 
     let selected = ui.selected_bgm.as_deref();
-    for (track, mut visual) in &mut tracks {
-        visual.active = selected == Some(track.0.as_str());
-        visual.target = if visual.active {
-            SURFACE_ACTIVE_ALPHA
-        } else {
-            visual.idle_alpha
-        };
-    }
-
     let name = selected
         .and_then(|file| state.unlocked_bgm.get(file))
         .map_or("", String::as_str);
@@ -1542,6 +1583,7 @@ pub(crate) struct ExtraBgmProgressUi<'w, 's> {
         's,
         (
             &'static mut ExtraBgmProgressThumb,
+            &'static Interaction,
             &'static mut Node,
             &'static mut BackgroundColor,
         ),
@@ -1594,7 +1636,7 @@ fn set_bgm_progress(
             (elapsed.as_secs_f32() / duration.as_secs_f32() * 100.0).clamp(0.0, 100.0)
         });
     let ratio = percent / 100.0;
-    let (hovered, dragging, width) =
+    let (_, dragging, width) =
         ui.bars
             .single()
             .map_or((false, false, 375.0), |(interaction, seek, node)| {
@@ -1604,20 +1646,21 @@ fn set_bgm_progress(
                     logical_node_width(node).max(45.0),
                 )
             });
-    for (mut visual, mut thumb, mut background) in &mut ui.thumbs {
+    for (mut visual, interaction, mut thumb, mut background) in &mut ui.thumbs {
+        let hovered = *interaction != Interaction::None;
         let target = if hovered || dragging { 12.0 } else { 10.0 };
-        if dragging {
-            visual.0 = target;
-        } else {
-            visual.0 += (target - visual.0) * exp_lerp(ui.time.delta_secs(), 18.0);
-        }
+        visual.0 += (target - visual.0) * exp_lerp(ui.time.delta_secs(), 18.0);
         let thumb_width = (visual.0 * 3.75).min(width);
         thumb.width = Val::Px(thumb_width);
         thumb.left = Val::Px(ratio * (width - thumb_width));
         background.0 = Color::srgba(1.0, 1.0, 1.0, if hovered { 0.67 } else { 0.5 });
     }
+    let thumb_hovered = ui
+        .thumbs
+        .iter()
+        .any(|(_, interaction, _, _)| *interaction != Interaction::None);
     for mut bubble in &mut ui.bubbles {
-        bubble.display = if hovered || dragging {
+        bubble.display = if thumb_hovered || dragging {
             Display::Flex
         } else {
             Display::None
@@ -1676,8 +1719,8 @@ pub(crate) fn animate(
             motion.current = motion.target;
         }
         let eased = smoothstep(motion.current);
-        transform.translation = Val2::px(0.0, 9.0 * (1.0 - eased));
-        transform.scale = Vec2::splat(0.99 + eased * 0.01);
+        transform.translation = Val2::px(31.5 * (1.0 - eased), 0.0);
+        transform.scale = Vec2::ONE;
         progress = Some((entity, eased));
         if motion.current == 0.0 && motion.target == 0.0 {
             commands.entity(entity).despawn();
@@ -1695,7 +1738,9 @@ pub(crate) fn animate(
         for (entity, mut strength, mut background) in &mut context.proxies {
             strength.0 = crate::ui::FULLSCREEN_BLUR_STRENGTH * progress;
             background.0 = Color::srgba(0.0, 0.0, 0.0, 0.6 * progress);
-            if progress == 0.0 {
+            // Zero progress also occurs on the first opening frame. Only
+            // tear down the backdrop when the screen has finished closing.
+            if !ui.open && progress == 0.0 {
                 commands.entity(entity).despawn();
             }
         }
@@ -1717,6 +1762,12 @@ fn fade_extra_content(
     if alpha >= 0.999 {
         for (entity, base) in cache.text.drain() {
             if let Ok((_, mut color)) = context.texts.get_mut(entity) {
+                let base = context
+                    .parents
+                    .get(entity)
+                    .ok()
+                    .and_then(|parent| context.choices.get(parent.parent()).ok())
+                    .map_or(base, |visual| visual.text_alpha);
                 color.0 = color.0.with_alpha(base);
             }
         }
@@ -1745,8 +1796,17 @@ fn fade_extra_content(
     };
     for (entity, mut color) in &mut context.texts {
         if belongs_to_root(entity) {
-            let base = *cache.text.entry(entity).or_insert_with(|| color.0.alpha());
-            color.0 = color.0.with_alpha(base * alpha);
+            let choice_alpha = context
+                .parents
+                .get(entity)
+                .ok()
+                .and_then(|parent| context.choices.get(parent.parent()).ok())
+                .map(|visual| visual.text_alpha);
+            let base = cache.text.entry(entity).or_insert_with(|| color.0.alpha());
+            if let Some(choice_alpha) = choice_alpha {
+                *base = choice_alpha;
+            }
+            color.0 = color.0.with_alpha(*base * alpha);
         }
     }
     for (entity, mut color) in &mut context.backgrounds {
@@ -1821,16 +1881,12 @@ pub(crate) fn update_sections(
     time: Res<Time>,
     ui: Res<ExtraUi>,
     mut transition: ResMut<ExtraPageTransition>,
-    mut buttons: Query<(&Interaction, &mut ExtraTab, &mut BackgroundColor)>,
-    mut panels: Query<(&ExtraPanel, &mut Node, &mut UiTransform)>,
+    mut panels: Query<(&ExtraPanel, &mut Node, &mut UiTransform), Without<ExtraCgGrid>>,
+    mut grids: Query<(Entity, &ExtraCgGrid, &mut UiTransform), Without<ExtraPanel>>,
+    mut commands: Commands,
 ) {
     if !ui.open {
         *transition = ExtraPageTransition::default();
-    }
-    for (interaction, mut tab, mut background) in &mut buttons {
-        let target = header_tab_alpha(ui.section == tab.section, *interaction);
-        tab.alpha += (target - tab.alpha) * exp_lerp(time.delta_secs(), 18.0);
-        background.0 = button_surface(tab.alpha);
     }
     if transition.is_animating() {
         transition.elapsed = (transition.elapsed + time.delta_secs()).min(PAGE_SLIDE_SECONDS);
@@ -1844,8 +1900,8 @@ pub(crate) fn update_sections(
         } else {
             Display::None
         };
-        transform.translation = if transition.is_animating() {
-            page_slide_offset(
+        transform.translation = if transition.from.is_some() {
+            horizontal_page_offset(
                 outgoing,
                 if ui.section == ExtraSection::Music {
                     1.0
@@ -1858,8 +1914,19 @@ pub(crate) fn update_sections(
             Val2::ZERO
         };
     }
+    for (entity, grid, mut transform) in &mut grids {
+        if transition.cg_direction != 0.0 && progress < 1.0 {
+            transform.translation =
+                horizontal_page_offset(grid.outgoing, transition.cg_direction, progress);
+        } else if grid.outgoing {
+            commands.entity(entity).despawn();
+        } else {
+            transform.translation = Val2::ZERO;
+        }
+    }
     if progress >= 1.0 {
         transition.from = None;
+        transition.cg_direction = 0.0;
         for (panel, mut node, mut transform) in &mut panels {
             node.display = if ui.section == panel.0 {
                 Display::Flex
@@ -1869,6 +1936,14 @@ pub(crate) fn update_sections(
             transform.translation = Val2::ZERO;
         }
     }
+}
+
+fn horizontal_page_offset(outgoing: bool, direction: f32, progress: f32) -> Val2 {
+    let eased = ease_in_out_cubic(progress);
+    Val2::percent(
+        direction * 100.0 * if outgoing { -eased } else { 1.0 - eased },
+        0.0,
+    )
 }
 
 #[derive(SystemParam)]
@@ -1966,7 +2041,7 @@ pub(crate) fn update_bgm_status(
         Option<&AudioSink>,
         Option<&GalleryAudio>,
     )>,
-    mut labels: Query<&mut LocalizedText, With<ExtraBgmStatus>>,
+    mut labels: Query<(&mut LocalizedText, &mut Node), With<ExtraBgmStatus>>,
     mut ui: ResMut<ExtraUi>,
     stage: StageBgmQuery<'_, '_>,
 ) {
@@ -1998,8 +2073,13 @@ pub(crate) fn update_bgm_status(
     } else {
         UiText::PlaybackStopped
     };
-    for mut label in &mut labels {
+    for (mut label, mut node) in &mut labels {
         label.0 = status;
+        node.display = if matches!(status, UiText::GalleryLoading | UiText::GalleryUnavailable) {
+            Display::Flex
+        } else {
+            Display::None
+        };
     }
 }
 
@@ -2039,6 +2119,97 @@ pub(crate) fn animate_full_cg(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backdrop_survives_zero_delta_opening_and_is_removed_after_closing() {
+        let mut app = App::new();
+        app.init_resource::<Time>()
+            .insert_resource(ExtraUi {
+                open: true,
+                ..default()
+            })
+            .add_systems(Update, animate);
+        let root = app
+            .world_mut()
+            .spawn((
+                ExtraRoot,
+                ExtraMotion {
+                    current: 0.0,
+                    target: 1.0,
+                },
+                UiTransform::default(),
+            ))
+            .id();
+        let proxy = app
+            .world_mut()
+            .spawn((
+                ExtraBlurProxy,
+                BlurStrength(0.0),
+                BackgroundColor(Color::NONE),
+            ))
+            .id();
+        app.update();
+        assert!(app.world().get_entity(proxy).is_ok());
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_secs(1));
+        app.update();
+        assert_eq!(
+            app.world().get::<BlurStrength>(proxy).unwrap().0,
+            crate::ui::FULLSCREEN_BLUR_STRENGTH
+        );
+        assert_eq!(
+            app.world().get::<BackgroundColor>(proxy).unwrap().0.alpha(),
+            0.6
+        );
+        app.world_mut().resource_mut::<ExtraUi>().open = false;
+        app.world_mut().get_mut::<ExtraMotion>(root).unwrap().target = 0.0;
+        app.update();
+        assert!(app.world().get_entity(root).is_err());
+        assert!(app.world().get_entity(proxy).is_err());
+    }
+
+    #[test]
+    fn cg_page_slide_retains_outgoing_cards_until_horizontal_transition_finishes() {
+        let mut app = App::new();
+        app.init_resource::<Time>()
+            .insert_resource(ExtraUi {
+                open: true,
+                ..default()
+            })
+            .insert_resource(ExtraPageTransition {
+                cg_direction: 1.0,
+                ..default()
+            })
+            .add_systems(Update, update_sections);
+        let old = app
+            .world_mut()
+            .spawn((ExtraCgGrid { outgoing: true }, UiTransform::default()))
+            .id();
+        let new = app
+            .world_mut()
+            .spawn((ExtraCgGrid { outgoing: false }, UiTransform::default()))
+            .id();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_millis(150));
+        app.update();
+        assert_eq!(
+            app.world().get::<UiTransform>(old).unwrap().translation,
+            Val2::percent(-50.0, 0.0)
+        );
+        assert_eq!(
+            app.world().get::<UiTransform>(new).unwrap().translation,
+            Val2::percent(50.0, 0.0)
+        );
+        app.update();
+        assert!(app.world().get_entity(old).is_err());
+        assert_eq!(
+            app.world().get::<UiTransform>(new).unwrap().translation,
+            Val2::ZERO
+        );
+        assert!(!app.world().resource::<ExtraPageTransition>().is_animating());
+    }
 
     #[test]
     fn right_click_returns_from_full_cg_before_leaving_extra() {
@@ -2122,6 +2293,14 @@ mod tests {
         assert_eq!(app.world().get::<Node>(old).unwrap().display, Display::Flex);
         assert_eq!(app.world().get::<Node>(new).unwrap().display, Display::Flex);
         assert!(app.world().resource::<ExtraPageTransition>().is_animating());
+        assert_eq!(
+            app.world().get::<UiTransform>(old).unwrap().translation,
+            Val2::percent(-50.0, 0.0)
+        );
+        assert_eq!(
+            app.world().get::<UiTransform>(new).unwrap().translation,
+            Val2::percent(50.0, 0.0)
+        );
         app.world_mut()
             .resource_mut::<Time>()
             .advance_by(Duration::from_millis(150));

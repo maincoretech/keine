@@ -255,34 +255,53 @@ pub fn update_setting_visuals(
         background.0 = Color::srgba(1.0, 1.0, 1.0, if hovered { 0.67 } else { 0.5 });
     }
     for (interaction, choice, mut visual, children) in &mut choices {
-        if !visual.is_animating(*interaction, choice.0, &resources.settings) {
-            continue;
+        animate_choice_visual(
+            *interaction,
+            choice_is_selected(&resources.settings, choice.0),
+            &mut visual,
+            children,
+            &mut fills,
+            &mut choice_text,
+            amount,
+        );
+    }
+}
+
+pub(crate) fn animate_choice_visual(
+    interaction: Interaction,
+    selected: bool,
+    visual: &mut SettingChoiceVisual,
+    children: &Children,
+    fills: &mut SettingChoiceFillQuery,
+    choice_text: &mut Query<(&mut TextColor, &mut TextFont)>,
+    amount: f32,
+) {
+    if !visual.is_animating_selected(interaction, selected) {
+        return;
+    }
+    let hovered = interaction != Interaction::None;
+    visual.selected = selected;
+    visual.hovered = hovered;
+    let target_fill = if selected || hovered { 100.0 } else { 0.0 };
+    let target_text = if selected || hovered {
+        OPTION_TEXT_ACTIVE
+    } else {
+        OPTION_TEXT_IDLE
+    };
+    visual.fill += (target_fill - visual.fill) * amount;
+    visual.text_alpha += (target_text - visual.text_alpha) * amount;
+    for child in children.iter() {
+        if let Ok((mut node, mut background)) = fills.get_mut(child) {
+            node.width = Val::Percent(visual.fill);
+            background.0 = button_surface(OPTION_FILL_ALPHA);
         }
-        let selected = choice_is_selected(&resources.settings, choice.0);
-        let hovered = matches!(interaction, Interaction::Hovered | Interaction::Pressed);
-        visual.selected = selected;
-        visual.hovered = hovered;
-        let target_fill = if selected || hovered { 100.0 } else { 0.0 };
-        let target_text = if selected || hovered {
-            OPTION_TEXT_ACTIVE
-        } else {
-            OPTION_TEXT_IDLE
-        };
-        visual.fill += (target_fill - visual.fill) * amount;
-        visual.text_alpha += (target_text - visual.text_alpha) * amount;
-        for child in children.iter() {
-            if let Ok((mut node, mut background)) = fills.get_mut(child) {
-                node.width = Val::Percent(visual.fill);
-                background.0 = button_surface(OPTION_FILL_ALPHA);
-            }
-            if let Ok((mut color, mut font)) = choice_text.get_mut(child) {
-                color.0 = Color::srgba(1.0, 1.0, 1.0, visual.text_alpha);
-                font.weight = if selected {
-                    FontWeight::BOLD
-                } else {
-                    FontWeight::NORMAL
-                };
-            }
+        if let Ok((mut color, mut font)) = choice_text.get_mut(child) {
+            color.0 = Color::srgba(1.0, 1.0, 1.0, visual.text_alpha);
+            font.weight = if selected {
+                FontWeight::BOLD
+            } else {
+                FontWeight::NORMAL
+            };
         }
     }
 }

@@ -102,7 +102,7 @@ impl InsertKind {
         Self::Native("scene.parallax.stop"),
         Self::Native("particle.hide"),
         Self::Native("video.stop"),
-        Self::Native("gallery.unlock"),
+        Self::Native("extra.unlock"),
         Self::Native("camera.bind"),
         Self::Native("camera.unbind"),
         Self::Native("sprite.transform"),
@@ -177,7 +177,7 @@ impl InsertKind {
                 "scene.parallax.stop" => "Stop parallax",
                 "particle.hide" => "Hide particles",
                 "video.stop" => "Stop video",
-                "gallery.unlock" => "Unlock gallery",
+                "extra.unlock" => "Unlock gallery",
                 "camera.bind" => "Bind camera",
                 "camera.unbind" => "Unbind camera",
                 "sprite.transform" => "Sprite transform",
@@ -223,6 +223,7 @@ impl InsertKind {
             "goto" => Self::Goto,
             "call" => Self::Call,
             "wait" => Self::Wait,
+            "gallery.unlock" => Self::Native("extra.unlock"),
             "camera.move" => Self::CameraMove,
             "camera.shake" => Self::CameraShake,
             "sprite.focus.configure" => Self::SpriteFocusRule,
@@ -455,8 +456,8 @@ pub fn insertion_statement(
             "scene.parallax.stop" => "scene.parallax.stop()".to_owned(),
             "particle.hide" => "particle.hide(*)".to_owned(),
             "video.stop" => "video.stop(*)".to_owned(),
-            "gallery.unlock" => format!(
-                "gallery.unlock(cg, {}, name: \"Artwork\")",
+            "extra.unlock" => format!(
+                "extra.unlock(cg, {}, name: \"Artwork\")",
                 first_background.ok_or(AuthoringEditError::MissingInsertionPoint)?
             ),
             "camera.bind" | "camera.unbind" => format!(

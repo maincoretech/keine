@@ -211,11 +211,19 @@ scene name { ... }
     ├── screen.film(bool)
     ├── screen.curtain.show(color: rgba(r, g, b, a), duration: ...)
     ├── screen.curtain.hide(color: rgba(r, g, b, a), duration: ...)
-    ├── gallery.unlock(cg | bgm, asset, name: "...")
+    ├── extra.unlock(cg | bgm, asset, name: "...")
     └── assets.loading(mode: auto | manual, lookahead: ..., blocking: ...) {
         └── resource(asset, kind: background | figure)
     }
 ```
+
+### 鉴赏解锁
+
+`extra.unlock(cg, image, name: "Artwork")` 将背景图加入 CG；
+`extra.unlock(bgm, music, name: "Track")` 将音乐加入鉴赏列表。
+资源必须是对应类型的已声明 ID；`name` 必须提供，作为鉴赏页显示名称。
+解锁按资源去重，后续调用可更新显示名；解锁持久化独立于存档回滚。
+新补全和插入使用 `extra.unlock`；已有 `gallery.unlock` 使用同一规则继续读取。
 
 ### 导入角色位置
 

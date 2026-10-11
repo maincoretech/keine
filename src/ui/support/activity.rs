@@ -113,9 +113,20 @@ pub(crate) struct UiActivityContext<'w, 's> {
         (&'static Interaction, &'static AboutRepositoryVisual),
         With<AboutRepositoryLink>,
     >,
-    extra_ui: Res<'w, crate::ui::extra::ExtraUi>,
-    extra_tabs: Query<'w, 's, (&'static crate::ui::extra::ExtraTab, &'static Interaction)>,
-    extra_thumbs: Query<'w, 's, &'static crate::ui::extra::ExtraBgmProgressThumb>,
+    extra_buttons: Query<
+        'w,
+        's,
+        (&'static SettingChoiceVisual, &'static Interaction),
+        With<crate::ui::extra::ExtraButtonVisual>,
+    >,
+    extra_thumbs: Query<
+        'w,
+        's,
+        (
+            &'static crate::ui::extra::ExtraBgmProgressThumb,
+            &'static Interaction,
+        ),
+    >,
     extra_bars: Query<
         'w,
         's,
@@ -202,15 +213,13 @@ pub(crate) fn update(mut context: UiActivityContext, mut activity: ResMut<UiAnim
         || context.menu_route_transition.is_animating()
         || context.pending_title.is_some()
         || context.return_to_title.is_some()
-        || context
-            .extra_tabs
-            .iter()
-            .any(|(tab, interaction)| tab.is_animating(*interaction, &context.extra_ui))
-        || context.extra_thumbs.iter().any(|thumb| {
+        || context.extra_buttons.iter().any(|(visual, interaction)| {
+            visual.is_animating_selected(*interaction, visual.selected)
+        })
+        || context.extra_thumbs.iter().any(|(thumb, interaction)| {
             thumb.is_animating(
-                context.extra_bars.iter().any(|(bar, interaction)| {
-                    bar.is_dragging() || *interaction != Interaction::None
-                }),
+                *interaction != Interaction::None
+                    || context.extra_bars.iter().any(|(bar, _)| bar.is_dragging()),
             )
         })
         || context.extra_transition.is_animating()

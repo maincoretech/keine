@@ -472,21 +472,24 @@ ad hoc codesign 验证通过；未执行正式签名/公证、远程 CI 或跨�
 状态：已实现 CG / 音乐分区；入口为 Engine 的 Extra，主要实现位于
 `src/ui/screens/extra.rs`。保持固定 MainCore 设计语言与原有解锁持久化语义。
 
-- **共用控件**：CG / 音乐位于页面顶部导航，沿用 Config / Load / Save 的字号、图标与背景高亮，分区保留 0.3 秒滑入切换。
+- **共用控件**：CG / 音乐位于页面顶部导航，沿用 Config / Load / Save 的字号、图标与背景高亮，分区使用 0.3 秒左右滑动切换。
+  全屏模糊与深色遮罩在打开首帧及切换期间保持，只在关闭动画完成后移除。
+  曲目、播放控件、CG 卡片和翻页按钮复用 Config 的左到右填充与文字状态动画，不缩放整行。
   深色面板覆盖下方内容区域；进度条铺满面板内的可用宽度，保留左右 padding，
   滑块保持常规尺寸，时间显示在条下方。
-  播放进度和音量复用同一滑动条视图、悬停反馈和值气泡；音量直接修改并保存既有 BGM 设置。
+  播放进度和音量复用同一滑动条视图和值气泡；进度轨道不整体缩放，悬停反馈仅作用于滑块，拖动仍可在整个轨道开始；音量直接修改并保存既有 BGM 设置。
   音量滑动条不显示标题，与播放控件共用底部一行，靠右并保留 padding。
   宽屏留黑的鼠标输入与触控输入均使用既有 viewport 转换。
 - **CG**：保持原比例的缩略图、固定上一页 / 页码 / 下一页，避免页数增多挤出控件。
+  翻页左右滑动，旧页保留至过渡完成，不重建模糊底层。
   全图保留原比例，提供上一张 / 下一张 / 返回与进入、退出动效。
   Esc、右键和 Android Back 先退出全图，退出动画期间不会穿透关闭整个 Extra。
-- **音乐**：可滚动的长曲名列表、选中状态、曲名、加载 / 不可用 / 播放 / 暂停 / 停止状态，
+- **音乐**：可滚动的长曲名列表、选中状态、曲名与加载 / 不可用提示；正常播放状态由播放 / 暂停按钮表达，
   保留时间、跳转进度、前后切曲与停止。触控拖动曲目行会滚动，轻点才选曲。
   鉴赏音乐只暂停正在播放的舞台 BGM；停止、失败或退出只恢复由鉴赏页暂停的实体，
   原本已暂停的 BGM 保持暂停。失败播放器不持续请求动画帧。
 - **语言与边界**：简中、繁中、日文、英文同步新增文案；空列表和失效资源有提示。
-  `gallery.unlock`、存档 fingerprint 和独立解锁持久化规则保持原有语义。
+  `extra.unlock`、存档 fingerprint 和独立解锁持久化规则保持原有语义。
 
 开发验证命令：
 
@@ -499,9 +502,14 @@ cargo test --offline --workspace --features publisher,video-native,hot-reload
 cargo build --offline -p keine --features publisher,video-native,hot-reload
 ```
 
-工作区测试 1049 通过、21 忽略，必要回归覆盖 tab 切换保留选择、CG 返回层级与退出动效、
+工作区测试 1052 通过、21 忽略，必要回归覆盖首帧零进度保留模糊层、横向分区及 CG 分页过渡、tab 切换保留选择、CG 返回层级与退出动效、
 曲目触控拖动不误选，以及 Extra 音量滑动条的宽屏鼠标坐标与释放后保存。
 IPC 测试在允许 Unix socket 的环境重跑通过；默认沙箱的 PermissionDenied 不算代码失败。
+本轮串行复核全部通过；并行运行曾在既有单实例锁释放测试失败。
+macOS 原生 tday 已检查曲目选中、播放 / 暂停按钮填充、暂停提示隐藏、进度跳转轨道稳定，以及 CG 分页和全图返回。
+使用花背景补验全屏模糊与遮罩，确认 CG 翻页、切换音乐和关闭后重开仍保留背景模糊；引擎已重建并更新本地 Editor 的 Preview 引擎。
+`tday` 临时入口 `extra_preview` 解锁 31 张背景 CG 与六首 BGM；恢复正常剧情入口时将 `config.yaml` 的 `script.entry` 改回 `start`。
+本轮 Windows、Linux、Android 实机交互尚未验收。
 macOS 原生临时工程已检查 9 项 CG 分页、纵向全图比例、右键返回、30 首曲目滚动、
 长曲名、播放 / 暂停、点击跳转进度、音量值提示、失效音乐提示及零解锁的空 CG / 音乐页。
 重开临时工程后原有 CG / 音乐解锁仍保留；音量保存由上述回归测试确认。
@@ -806,6 +814,38 @@ Linux 使用 `video-ffmpeg`；CI 另跑 FFmpeg ASan。fuzz 的目录参数由
 合法文件必须读到 EOF 并可 rewind，损坏头在 FS/加密包中均必须拒绝。
 
 ## 性能
+
+### 脚本解析与 Core 理论吞吐
+
+复用 `program-load` / `script-runtime`，增加原生 EYS 文本与表达式负载。
+可通过 `KEINE_NATIVE_SOURCE_DIR` 指定只读、平铺 `.shou` 语料目录；Cargo bench
+会切换包目录，因此传绝对路径。Core `preinstalled` 用 Criterion `iter_batched_ref`
+将 State / Program 安装与释放排除出计时，原含初始化的基准保留。
+
+```sh
+KEINE_NATIVE_SOURCE_DIR="$PWD/projects/tday/scripts" cargo bench --offline -p keine-core -p keine-loader --bench script-runtime --bench program-load -- 'native_|script_runtime' --sample-size 10 --warm-up-time 0.5 --measurement-time 1 --nresamples 1000 --noplot
+```
+
+当前本机：Apple M5 Pro / 24 GiB / macOS 27.0.1，0.14.3、`df922c6` 加当前未提交
+改动，Cargo bench 优化配置（LTO、单 codegen unit）。10 个样本，输入已在内存中。
+原始日志及源码哈希在 `target/performance/theoretical-0143/`，点估计如下：
+
+| 负载 | 每批耗时 | 吞吐 |
+| --- | ---: | ---: |
+| EYS 十万条中文/Latin 文本解析 | 125.10 ms | 约 80 万 action/s、25.83 MiB/s |
+| EYS 100001 条赋值/表达式/插值文本解析 | 134.02 ms | 约 75 万 action/s、26.69 MiB/s |
+| 同一混合脚本解析并构建 Program | 140.86 ms | 约 71 万 action/s |
+| tday 172394 字节 / 14 scene / 2665 action 解析 | 3.02 ms | 54.40 MiB/s |
+| 同一 tday 语料 Editor 文档解析入口 | 2.87 ms | 57.30 MiB/s |
+| Core 已安装 Program，十万条非阻塞 Comment | 0.925 ms | 约 1.08 亿 action/s |
+| Core 已安装 Program，1000 轮赋值/条件/插值对白 | 4.45 ms | 约 22.46 万轮/s |
+
+这是暖输入、单线程 CPU 样本，不是所有脚本的绝对硬件上限。Comment 只给轻负载
+参考；混合负载每轮包含 3 条作者 action，并立即模拟点击推进。Editor 文档入口不含
+完整工作台投影/布局。解析计时包含返回对象分配与释放；语料读取在计时外。
+Editor / Preview 当时仍打开，桌面负载未隔离。没有测 GPU 峰值、冷启动、媒体、
+Bevy 场景/UI 调度或多平台表现；限帧 FPS 不能代表最大渲染吞吐。
+日志中的 Criterion change 百分比来自试跑，前一试跑的计时范围不同，不作为优化证据。
 
 ### 三平台原生完整套件
 

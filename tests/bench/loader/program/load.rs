@@ -1,5 +1,5 @@
-//! Script parse + Program construction throughput for a synthetic 100k-action
-//! WebGAL directory project. Baseline for the compiled `program.bin` path.
+//! Native EYS parsing and Program construction, plus the historical WebGAL
+//! and compiled `program.bin` baselines. Optional real corpus stays read-only.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -8,8 +8,8 @@ use criterion::{BatchSize, Criterion, Throughput, black_box, criterion_group, cr
 use keine_core::config::AssetSourceConfig;
 use keine_core::{Program, State, step};
 use keine_loader::{
-    CompiledSceneV1, EncodeInput, IR_SCHEMA_VERSION, ProgramMetadataV1, decode, encode,
-    load_project, load_scenes,
+    CompiledSceneV1, DiagnosticLevel, EncodeInput, IR_SCHEMA_VERSION, ProgramMetadataV1, decode,
+    encode, load_project, load_scenes, parse_native_document, parse_native_scenes,
 };
 
 const ACTION_COUNT: usize = 100_000;
@@ -127,6 +127,7 @@ fn decode_clone_and_build() -> u64 {
 }
 
 fn bench(c: &mut Criterion) {
+    bench_native(c);
     let mut group = c.benchmark_group("program_load");
     group.throughput(Throughput::Elements(ACTION_COUNT as u64));
     group.bench_function(format!("parse_and_build_{ACTION_COUNT}"), |b| {
@@ -146,6 +147,84 @@ fn bench(c: &mut Criterion) {
         );
     });
     group.finish();
+}
+
+fn bench_native(c: &mut Criterion) {
+    let mut text = String::from("scene bench {\n");
+    let mut mixed = String::from("scene bench {\nlet counter = 0");
+    for index in 0..ACTION_COUNT {
+        if index != 0 {
+            text.push_str(",\n");
+        }
+        text.push_str(&format!("\"Line {index}: 你好，世界。\""));
+        if index % 2 == 0 {
+            mixed.push_str(",\ncounter = (counter + 1) * 2 % 1000");
+        } else {
+            mixed.push_str(",\n\"Line ${counter}: 你好，世界。\"");
+        }
+    }
+    text.push_str("\n}");
+    mixed.push_str("\n}");
+    let mut sources = vec![("text_100000", text), ("mixed_100001", mixed)];
+    if let Some(directory) = std::env::var_os("KEINE_NATIVE_SOURCE_DIR") {
+        let mut paths = std::fs::read_dir(directory)
+            .expect("native source directory")
+            .map(|entry| entry.expect("source entry").path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "shou")
+            })
+            .collect::<Vec<_>>();
+        paths.sort();
+        assert!(!paths.is_empty(), "native corpus must contain .shou files");
+        let corpus = paths
+            .iter()
+            .map(|path| std::fs::read_to_string(path).expect("native source"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        sources.push(("corpus", corpus));
+    }
+    let mut group = c.benchmark_group("native_parse");
+    for (name, source) in &sources {
+        let scenes = parse_native_scenes(source);
+        assert!(
+            scenes
+                .iter()
+                .flat_map(|scene| &scene.report.diagnostics)
+                .all(|diagnostic| diagnostic.level != DiagnosticLevel::Error),
+            "{name}: invalid fixture"
+        );
+        let count: usize = scenes.iter().map(|scene| scene.report.actions.len()).sum();
+        eprintln!(
+            "NATIVE_INPUT {name}: {} bytes, {} scenes, {count} lowered actions",
+            source.len(),
+            scenes.len()
+        );
+        group.throughput(Throughput::Bytes(source.len() as u64));
+        group.bench_function(*name, |b| {
+            b.iter(|| black_box(parse_native_scenes(black_box(source))))
+        });
+    }
+    group.finish();
+    let mut group = c.benchmark_group("native_build");
+    group.throughput(Throughput::Elements((ACTION_COUNT + 1) as u64));
+    group.bench_function("mixed_100001", |b| {
+        b.iter(|| {
+            let scenes = parse_native_scenes(black_box(&sources[1].1));
+            black_box(Program::from_scenes(scenes.into_iter().map(|scene| {
+                (scene.name.expect("native scene name"), scene.report.actions)
+            })))
+        })
+    });
+    group.finish();
+    if let Some((_, corpus)) = sources.iter().find(|(name, _)| *name == "corpus") {
+        let mut group = c.benchmark_group("native_document");
+        group.throughput(Throughput::Bytes(corpus.len() as u64));
+        group.bench_function("corpus", |b| {
+            b.iter(|| black_box(parse_native_document(black_box(corpus))))
+        });
+        group.finish();
+    }
 }
 
 criterion_group!(benches, bench);

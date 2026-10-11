@@ -354,6 +354,8 @@ type ButtonFeedbackFilter = (
     Without<crate::ui::save_load::SaveLoadSlotMotion>,
     Without<crate::ui::save_load::SaveLoadPageVisual>,
     Without<crate::ui::settings_panel::SettingSlider>,
+    Without<crate::ui::extra::ExtraBgmSeekBar>,
+    Without<crate::ui::extra::ExtraButtonVisual>,
 );
 
 type NewButtonQuery<'w, 's> =

@@ -224,7 +224,7 @@ pub(in crate::app) fn insert_kind_icon(kind: InsertKind) -> AssetIconName {
             "sprite.sequence" | "sprite.select" | "sprite.select.when" | "sprite.keyframes"
             | "sprite.update" => AssetIconName::Image,
             "assets.loading" => AssetIconName::Workflow,
-            "gallery.unlock" => AssetIconName::Image,
+            "extra.unlock" => AssetIconName::Image,
             "input.request" => AssetIconName::Braces,
             _ => AssetIconName::Workflow,
         },

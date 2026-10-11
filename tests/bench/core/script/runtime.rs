@@ -6,7 +6,9 @@
 
 use std::sync::OnceLock;
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{
+    BatchSize, BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main,
+};
 use keine_core::{Action, Program, SayOptions, State, StepResult, Value, step};
 
 const ACTION_COUNT: usize = 100_000;
@@ -87,6 +89,18 @@ fn bench(c: &mut Criterion) {
             black_box(run_through(&mut state))
         });
     });
+    group.bench_function(BenchmarkId::new("step_preinstalled", ACTION_COUNT), |b| {
+        b.iter_batched_ref(
+            || {
+                let mut state = State::new();
+                state.current_scene = "bench".to_string();
+                state.install_program(program().clone());
+                state
+            },
+            |state| black_box(run_through(state)),
+            BatchSize::LargeInput,
+        );
+    });
     group.finish();
 
     let mut group = c.benchmark_group("script_runtime_mixed");
@@ -101,6 +115,23 @@ fn bench(c: &mut Criterion) {
             black_box(run_mixed_dialogue(&mut state))
         });
     });
+    group.bench_function(
+        BenchmarkId::new("dialogue_preinstalled", DIALOGUE_TURNS),
+        |b| {
+            b.iter_batched_ref(
+                || {
+                    let mut state = State::new();
+                    state.current_scene = "bench".to_string();
+                    state.vars.insert("counter".to_string(), Value::Int(0));
+                    state.vars.insert("enabled".to_string(), Value::Bool(true));
+                    state.install_program(mixed_program().clone());
+                    state
+                },
+                |state| black_box(run_mixed_dialogue(state)),
+                BatchSize::LargeInput,
+            );
+        },
+    );
     group.finish();
 }
 

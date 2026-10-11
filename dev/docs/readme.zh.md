@@ -17,6 +17,31 @@ cargo migrate /path/to/letsgal/tday projects/tday
 源 LetsGal 工程独立保留；目标已存在时不要重复迁移。自动回归使用 `tests/fixtures`。
 迁移先验证新工程再发布目标目录，源工程保持只读。
 
+## 脚本性能
+
+测试环境：**Apple M5 Pro（15 个逻辑 CPU）、24 GiB 内存、macOS 27.0.1**。
+2026-10-11，0.14.3 工作区、Cargo 优化基准；单线程、输入已在内存中、10 个样本。
+
+| 负载 | 测量结果（约） |
+| --- | ---: |
+| EYS 十万条文本解析 | 125 ms / 80 万 action/s |
+| EYS 100001 条表达式与文本混合解析 | 134 ms / 75 万 action/s |
+| tday：14 scene / 2665 action 解析 | 3.02 ms |
+| Core：赋值、条件判断、文本插值对白 | 22.5 万轮/s |
+| Core：非阻塞 Comment 执行 | 1.08 亿 action/s |
+
+执行计时排除 Program 安装；混合负载每轮含三条作者 action，立即模拟推进对白。
+这些是 CPU 微基准，不含磁盘、媒体、场景/UI 更新及渲染；桌面负载未隔离。
+复现方法见[测试指南](testing.md)。
+
+| 引擎 / DSL | 脚本路径 |
+| --- | --- |
+| Kēne / Eiyashou | 源码转换为 typed IR；发行包加载编译后的 Program，由 Rust Core 执行 |
+| [Ren'Py](https://www.renpy.org/doc/html/language_basics.html) | `.rpy` 编译为 `.rpyc`，脚本表达式使用 Python |
+| [WebGAL](https://docs.openwebgal.com/en/tech/) | `.txt` 解析为可执行场景对象，舞台使用 Pixi |
+
+Ren'Py / WebGAL 尚未做同机同负载测试；上表比较实现路径，不作为跨引擎速度排名。
+
 ## 引擎快捷键
 
 Engine 和 Editor 的独立 Preview 使用相同键位；键盘焦点须在 Engine 窗口。
@@ -65,7 +90,7 @@ benchmark 指定的窗口大小不受这些偏好影响。Preview 仍使用隔�
 └── compatibility.md   LetsGal 与 WebGAL 的支持边界
 ```
 
-当前版本 0.13.1。macOS 是当前验收重点；Windows/Linux 的运行态验收暂缓。
+当前版本 0.14.3。macOS 是当前验收重点；Windows/Linux 的运行态验收暂缓。
 编译和自动测试通过不等于 IME、DPI、音视频和运行态验收通过。
 
 ## 许可证

@@ -243,6 +243,8 @@ fn add_overlay_systems(app: &mut App) {
                     .run_if(extra::content_ready),
                 extra::sync,
                 extra::update_sections,
+                extra::attach_button_visuals,
+                extra::update_button_visuals,
                 extra::scroll_music,
                 extra::update_image_status,
                 extra::update_bgm_status,

@@ -410,10 +410,10 @@ pub(super) type AboutRepositoryAnimationQuery<'w, 's> = Query<
 
 #[derive(Component)]
 pub(crate) struct SettingChoiceVisual {
-    pub(super) selected: bool,
+    pub(crate) selected: bool,
     pub(super) hovered: bool,
     pub(super) fill: f32,
-    pub(super) text_alpha: f32,
+    pub(crate) text_alpha: f32,
 }
 
 impl SettingChoiceVisual {
@@ -423,7 +423,23 @@ impl SettingChoiceVisual {
         action: SettingAction,
         settings: &RuntimeSettings,
     ) -> bool {
-        let selected = choice_is_selected(settings, action);
+        self.is_animating_selected(interaction, choice_is_selected(settings, action))
+    }
+
+    pub(crate) fn new(selected: bool) -> Self {
+        Self {
+            selected,
+            hovered: false,
+            fill: if selected { 100.0 } else { 0.0 },
+            text_alpha: if selected {
+                OPTION_TEXT_ACTIVE
+            } else {
+                OPTION_TEXT_IDLE
+            },
+        }
+    }
+
+    pub(crate) fn is_animating_selected(&self, interaction: Interaction, selected: bool) -> bool {
         let hovered = matches!(interaction, Interaction::Hovered | Interaction::Pressed);
         let target_fill = if selected || hovered { 100.0 } else { 0.0 };
         let target_text = if selected || hovered {
@@ -441,7 +457,7 @@ impl SettingChoiceVisual {
 #[derive(Component)]
 pub(crate) struct SettingChoiceFill;
 
-pub(super) type SettingChoiceFillQuery<'w, 's> = Query<
+pub(crate) type SettingChoiceFillQuery<'w, 's> = Query<
     'w,
     's,
     (&'static mut Node, &'static mut BackgroundColor),
