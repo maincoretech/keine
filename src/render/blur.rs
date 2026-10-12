@@ -795,6 +795,28 @@ fn merge_regions(regions: &mut Vec<BlurRect>, limit: usize) {
         regions[best.0] = merged;
         regions.swap_remove(best.1);
     }
+
+    // The fragment shader chooses the strongest region at each pixel. A
+    // weaker rectangle fully covered by another therefore contributes nothing,
+    // including in the horizontal pass: stronger radii have at least as much
+    // vertical kernel padding. Keep partial overlaps and stronger inner areas.
+    let mut index = 0;
+    while index < regions.len() {
+        let inner = regions[index];
+        let covered = regions.iter().enumerate().any(|(other, outer)| {
+            other != index
+                && outer.coc >= inner.coc
+                && outer.min_x <= inner.min_x
+                && outer.max_x >= inner.max_x
+                && outer.min_y <= inner.min_y
+                && outer.max_y >= inner.max_y
+        });
+        if covered {
+            regions.swap_remove(index);
+        } else {
+            index += 1;
+        }
+    }
 }
 
 impl BlurRect {
@@ -927,13 +949,59 @@ mod tests {
         ];
         merge_regions(&mut regions, 16);
 
-        assert_eq!(regions.len(), 2);
-        assert!(
-            regions.iter().any(|region| {
-                region.coc == 30.0 && region.min_x == 0.0 && region.max_x == 180.0
-            })
-        );
-        assert!(regions.iter().any(|region| region.coc == 12.0));
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].coc, 30.0);
+        assert_eq!((regions[0].min_x, regions[0].max_x), (0.0, 180.0));
+    }
+
+    #[test]
+    fn covered_regions_preserve_both_passes_and_stronger_inner_areas() {
+        let outer = region(0.25, 100.75, 10.25, 100.75, 40.0);
+        for (inner, expected_count) in [
+            (region(20.0, 80.0, 20.0, 80.0, 12.0), 1),
+            (region(20.0, 80.0, 20.0, 80.0, 48.0), 2),
+            (region(80.0, 120.0, 20.0, 80.0, 12.0), 2),
+            (region(20.0, 80.0, 10.0, 80.0, 12.0), 2),
+        ] {
+            // Sample the strongest-radius mask used by the real shader. In
+            // particular, the intermediate's Y padding must stay covered.
+            let strongest = |regions: &[BlurRect], x: f32, y: f32, horizontal: bool| {
+                regions.iter().fold(0.0_f32, |strength, region| {
+                    let padding = if horizontal {
+                        (clamp_blur(region.coc) * 0.25 * 1.5).ceil()
+                    } else {
+                        0.0
+                    };
+                    if x >= region.min_x
+                        && x <= region.max_x
+                        && y >= region.min_y - padding
+                        && y <= region.max_y + padding
+                    {
+                        strength.max(clamp_blur(region.coc))
+                    } else {
+                        strength
+                    }
+                })
+            };
+            // Cover both input orders: swap_remove must never prune the owner.
+            for original in [vec![outer, inner], vec![inner, outer]] {
+                let mut pruned = original.clone();
+                merge_regions(&mut pruned, 16);
+                assert_eq!(pruned.len(), expected_count);
+                for horizontal in [false, true] {
+                    for x in [0.0, 0.25, 20.0, 79.9, 80.0, 100.75, 110.0, 121.0] {
+                        for y in [
+                            -5.0, 0.0, 10.0, 10.25, 19.9, 20.0, 80.0, 100.75, 110.0, 116.0,
+                        ] {
+                            assert_eq!(
+                                strongest(&original, x, y, horizontal),
+                                strongest(&pruned, x, y, horizontal)
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

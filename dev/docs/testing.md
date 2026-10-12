@@ -87,6 +87,19 @@ Reset 后保存的显式默认预置也已核对；Core 回归确认新 Show 清
 测试窗口均正常退出，原 tday 未改动。原始日志与本地测试 app 在
 `target/character-presets-0152/`。Windows/Linux Editor 交互仍由各自实机验收。
 
+Apply saved preset and preview 追加一个案例表入口，覆盖原偏移完整替换、缺省参数、
+多行指令、紧邻转场复用、其他角色/分支规则保留、`sprite.update` 稀疏属性保留、
+重复应用幂等、默认值重置，以及禁用/错误类型/不同角色/非法预置/失效选区拒绝。
+根位置字段写入完整构造式时替换整组；Inspector 的裸锚点更新仍保留旧偏移。
+读取当前角色清单文档覆盖异步索引，避免保存角色后立即应用旧值。
+
+workspace check/all-targets Clippy/tests（publisher,video-native,hot-reload）通过：
+1075 passed / 0 failed / 21 ignored；最后的 Editor tests 为 237 passed / 7 ignored。
+fmt、Editor/Engine 构建、native-smoke/tday/独立预置工程 validate 与本地 app 打包/签名通过。
+原始日志及测试 app 在 `target/character-presets-0154/`。
+新版原生应用/撤销/Preview 验收仍待现有 Editor 正常退出；其单实例将启动转发给
+正在运行的旧版本，不能把旧窗口当作新实现验收。未关闭未保存用户工程。
+
 ## 0.15.2 定向实机验收
 
 Android 使用 `146f037` 的 CI Android #26 artifact（run `38201609991`），
@@ -567,6 +580,57 @@ python3 target/performance/scene-sync-0151/sample.py target/debug/keine target/p
 1059 passed / 21 ignored；fmt、check、all-targets Clippy、无默认功能 + publisher check、
 Engine 构建及 native-smoke validate 通过。macOS 原生操作确认文字阴影、换图、镜头移动、
 舞台和设置模糊、Intro 换页/恢复及窗口缩小；其他平台与热加载现场操作尚未验收。
+
+### 区域模糊 GPU 对照（0.15.4 工作区）
+
+Apple M5 Pro / 24 GiB / macOS 27.0.1 / Metal，dev opt-level=1，
+1920×1080 @1× / 60 Hz，continuous 绘制。使用 native-benchmark 的隔离副本，
+另加强全屏模糊和分散区域场景；正式项目未改动。每项预热 3 秒、采样 10 秒，
+不同时编译或操作窗口。系统 `metalperftrace listen --pid PID --json --output …`
+记录 `Presented Frame Stats / On-GPU Walltime Stats`，剔除启动后前 5 秒的区间，
+按实际 GPU 帧数加权。它是每帧 GPU 执行时间，不是核心利用率，也不是 Bevy 未支持的
+pass 时间戳；定义参见 [Metal HUD metrics](https://developer.apple.com/documentation/xcode/understanding-the-metal-performance-hud-metrics)。
+
+GPU 候选只保留两处：合并后删除被同等或更强区域完全覆盖的弱区域；单个区域覆盖
+完整目标时，shader 跳过逐像素区域判断。采样点、半径、高斯权重、纹理尺寸、两次
+处理、边缘 padding 和相机顺序保持原样，不新增 pipeline variant 或纹理。
+完整权重表和紧凑参数预计算未显示稳定收益，已撤回。
+
+前后各三轮，包含反序对照；取每轮 GPU 均值的中位数：
+
+| 场景 | 修改前 GPU ms/帧 | 修改后 GPU ms/帧 | 变化 |
+|---|---:|---:|---:|
+| 普通背景、双立绘、对白 | 1.545 | 1.561 | +1.0%，小于逐轮波动，不主张改善 |
+| 设置页 | 3.427 | 3.337 | −2.6% |
+| 强全屏区域模糊 | 4.067 | 3.868 | −4.9% |
+
+强全屏模糊逐轮旧值 4.067 / 4.107 / 4.063，新值 3.811 / 3.870 / 3.868。
+分散区域初测没有明显改善，粒子与镜头后处理未修改。各轮仍受 60 Hz 呈现限制；
+没有据此声称 FPS 提升、CPU/内存下降或跨平台收益。初始 `sampling` 场景尾段与
+一次编译重叠，其结果排除，未用于上表。其余采样原始日志保留，不删除不利结果。
+
+```sh
+cp target/debug/keine target/performance/gpu-0154/binaries/before
+cargo build --offline --locked --bin keine --features publisher,video-native,hot-reload
+# measure.py 同步启动上述 metalperftrace；命令、二进制与完整输入哈希记录在 metadata.json。
+python3 target/performance/gpu-0154/measure.py target/performance/gpu-0154/binaries/before target/performance/gpu-0154/before-final opening settings blur_full
+python3 target/performance/gpu-0154/measure.py target/performance/gpu-0154/binaries/final-candidate target/performance/gpu-0154/final-repeat blur_full settings opening
+```
+
+原始 `engine.log`、Metal JSON、CPU/内存观察、源码快照、二进制与比较在
+`target/performance/gpu-0154/`。一项案例表回归检查双向输入顺序、两次处理的强度遮罩、
+水平 padding、较强内区、部分重叠及小数边界；既有合并回归更新弱内区预期。
+fmt、workspace check/all-targets Clippy/tests（publisher,video-native,hot-reload）通过：
+1076 passed / 0 failed / 21 ignored。无默认功能 + publisher check、Engine 构建及
+native-smoke validate 通过。
+macOS 原生确认标题/对白局部模糊、设置进出、Save/Load tab、窗口 zoom/恢复和返回
+舞台，测量进程及原生验收进程均正常退出。Windows/Linux/Android、release 与逐像素
+图像对照未测；截图观察不证明所有平台或逐像素一致。原有 Editor 未关闭。
+
+0.15.5 收尾同步 workspace/lock 和双语 README；fmt/check/all-targets Clippy、
+同版本 Engine/Editor 构建、1076 项 workspace 回归及 native-smoke validate 通过。
+GPU 原始测量仍标明实际的 0.15.4 工作区；角色预置应用的原生验收继续保留待办。
+日志在 `target/closeout-0155/`。
 
 ## 桌面包辅助文件与 Linux ABI
 

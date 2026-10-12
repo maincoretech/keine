@@ -216,6 +216,9 @@ Editor 只启动预构建 Engine，不在作者交互中运行 Cargo。开发时
 
 ## 演出调试与下一步
 
+后续开发面向 MainCore 正式项目的制作工具与运行时。tday 已封存，不再推进其创作
+或新增内容；新增功能以正式项目的实际需求和跨项目复用价值评估。
+
 Inspector 的 Preview 摘要显示场景/已执行动作（0 起）、等待原因和可恢复存档点；
 Output 同时显示只读局部/全局变量与源码诊断。当前动作、存档点、错误均可跳回 Text/Blocks；
 定位沿用文档导航，不隐式 Replay。定时等待与存档精确性分别显示，活跃演出使用上一个可达 checkpoint。
@@ -232,7 +235,13 @@ Output 同时显示只读局部/全局变量与源码诊断。当前动作、存
   自然尺寸或视口高度百分比、内建入场/淡出与时长。保存角色后写入 `characters.yaml`
   的 `display`；Reset 只重置表单，保存后新插入的 Show 显式清除旧转场规则。Show 插入显式位置/尺寸及转场规则，
   Hide 插入退场规则和隐藏；Change/Blink/Talk 保留现场几何，Avatar 不使用显示预置。
-  现有剧本不被自动改写，Runtime 不以角色清单覆盖已有指令；继续暂缓 Preview 拖拽构图。
+  Apply saved preset and preview 显式处理一个选中的本角色 `sprite` / `sprite.update` Block，
+  Text 光标在多行指令内部也可定位。使用已保存角色值；无 `display` 时使用默认居中/自然尺寸/无转场。
+  站位/尺寸完整替换，图像、层级、滤镜及其他属性保留；Show 的旧单次 `transition` 清除，
+  同一容器中紧邻的本角色转场更新，其他情况在当前 Block 前插入显式转场，不跨分支覆盖。
+  重复应用不追加规则；一次文档事务支持撤销/重做，源码仍须保存。复用 Inspector Preview，
+  修改投影同步后启动/定位当前 Block；多选、其他角色、禁用/只读 Block 拒绝。
+  其余剧本不自动改写，Runtime 不以角色清单覆盖已有指令；继续暂缓 Preview 拖拽构图。
 - D：时间轴明确延后，先由作者参与设计交互与范围。
 
 ## Performance

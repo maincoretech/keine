@@ -120,6 +120,9 @@ pub(super) fn render(
             .find(|character| &character.id == id)
     }) {
         content = content
+            .child(tool_action("Apply saved preset and preview").on_click(
+                cx.listener(|panel, _, window, cx| panel.apply_character_preset(window, cx)),
+            ))
             .child(
                 tool_action("Hide").on_click(cx.listener(|panel, _, window, cx| {
                     panel.insert_character_expression("", "hide", window, cx)
@@ -822,6 +825,243 @@ impl WorkbenchPanel {
         }
         cx.refresh_windows();
     }
+
+    fn apply_character_preset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(root) = self.character_root() else {
+            return;
+        };
+        let Some(mut character) = self.selected_character(cx) else {
+            return;
+        };
+        // The index rebuild is asynchronous. Read the current manifest overlay
+        // so Save character followed by Apply never uses the previous preset.
+        let manifest = cx
+            .global::<EditorDocuments>()
+            .authoring(&root)
+            .characters_manifest
+            .as_ref()
+            .and_then(|path| cx.global::<EditorDocuments>().source(&root, path))
+            .and_then(|source| {
+                keine_core::config::EiyashouCharacterManifest::from_yaml(&source).ok()
+            });
+        let Some(saved) = manifest
+            .as_ref()
+            .and_then(|manifest| manifest.characters.get(&character.id))
+        else {
+            window.push_notification(
+                Notification::error("Character manifest changed or is invalid; refresh Characters"),
+                cx,
+            );
+            return;
+        };
+        character.display = saved.display.clone();
+        let selected =
+            if let Some((path, starts)) = cx.global::<EditorDocuments>().block_selection(&root) {
+                (starts.len() == 1).then(|| (path.clone(), starts[0]))
+            } else {
+                cx.global::<EditorDocuments>()
+                    .selection(&root)
+                    .and_then(|(path, line, column)| {
+                        let source = cx.global::<EditorDocuments>().source(&root, path)?;
+                        projected_block_at(&source, *line, *column)
+                            .map(|(_, block)| (path.clone(), block.source_range.start))
+                    })
+            };
+        let Some((path, start)) =
+            selected.filter(|(path, _)| path.extension().is_some_and(|ext| ext == "shou"))
+        else {
+            window.push_notification(
+                Notification::error("Select one native sprite block first"),
+                cx,
+            );
+            return;
+        };
+        let Some(source) = cx.global::<EditorDocuments>().source(&root, &path) else {
+            return;
+        };
+        let result =
+            apply_character_display(&source, start, &character).and_then(|(edited, start)| {
+                if edited != source {
+                    apply_prepared_edits(&root, &[(path.clone(), edited)], window, cx)?;
+                }
+                Ok(start)
+            });
+        match result {
+            Ok(start) => {
+                cx.global_mut::<EditorDocuments>().set_block_selection(
+                    &root,
+                    path.clone(),
+                    vec![start],
+                );
+                cx.global_mut::<EditorDocuments>()
+                    .set_notice(&root, "Saved preset applied; save the script to keep it");
+                // Document Change delivery updates the shared source first.
+                // Reuse the normal Inspector Preview path and current overlays.
+                cx.defer(move |cx| super::inspector::run_source_block(&root, &path, start, cx));
+            }
+            Err(error) => window.push_notification(Notification::error(error), cx),
+        }
+        cx.refresh_windows();
+    }
+}
+
+/// One explicit source transaction, preserving the selected sprite's identity.
+fn apply_character_display(
+    source: &str,
+    start: usize,
+    character: &CharacterEntry,
+) -> Result<(String, usize), String> {
+    let display = character.display.clone().unwrap_or_default();
+    display.validate().map_err(str::to_owned)?;
+    if !valid_identifier(&character.id) {
+        return Err("Character ID is invalid".into());
+    }
+    let projection = EiyashouProjection::parse(source);
+    let scene = projection
+        .scenes
+        .iter()
+        .find(|scene| {
+            scene
+                .blocks
+                .iter()
+                .any(|block| block.source_range.start == start)
+        })
+        .ok_or("Select one native sprite block first")?;
+    let block = scene
+        .blocks
+        .iter()
+        .find(|block| block.source_range.start == start)
+        .unwrap();
+    let command = block.summary.split('(').next().unwrap_or("").trim();
+    if block.disabled || block.read_only || !matches!(command, "sprite" | "sprite.update") {
+        return Err("Select an enabled sprite or sprite.update block".into());
+    }
+    let fields = projection
+        .source_fields(source, start)
+        .ok_or("Sprite fields are unavailable")?;
+    if !fields
+        .iter()
+        .any(|field| field.key == "0" && field.value == character.id)
+    {
+        return Err("Selected sprite belongs to a different character".into());
+    }
+    let mut updates = vec![
+        (
+            "position".into(),
+            Some(format!(
+                "{}(x: {}, y: {})",
+                display.position, display.x, display.y
+            )),
+        ),
+        (
+            "layout".into(),
+            Some(display.height_percent.map_or_else(
+                || "natural".into(),
+                |height| format!("viewport(height: {})", f32::from(height) / 100.0),
+            )),
+        ),
+    ];
+    // A per-show transition overrides the saved rule, so clear it explicitly.
+    if command == "sprite" {
+        updates.push(("transition".into(), None));
+    }
+    let mut edited = projection
+        .replace_block_fields(source, start, &updates)
+        .map_err(|error| error.to_string())?;
+    let container_start = scene
+        .blocks
+        .iter()
+        .filter(|parent| {
+            parent.depth < block.depth
+                && parent.source_range.start < start
+                && parent.source_range.end >= block.source_range.end
+        })
+        .max_by_key(|parent| (parent.depth, parent.source_range.start))
+        .map_or(scene.source_range.start, |parent| parent.source_range.start);
+    let previous = scene
+        .blocks
+        .iter()
+        .filter(|candidate| {
+            candidate.depth == block.depth
+                && candidate.source_range.end <= start
+                && candidate.source_range.start > container_start
+        })
+        .max_by_key(|candidate| candidate.source_range.start);
+    let transition = previous.filter(|previous| {
+        !previous.disabled
+            && !previous.read_only
+            && previous
+                .summary
+                .split('(')
+                .next()
+                .is_some_and(|name| name.trim() == "sprite.transition")
+            && projection
+                .source_fields(source, previous.source_range.start)
+                .is_some_and(|fields| {
+                    fields
+                        .iter()
+                        .any(|field| field.key == "0" && field.value == character.id)
+                })
+    });
+    let checked = EiyashouProjection::parse(&edited);
+    let before = edited.len();
+    if let Some(transition) = transition {
+        edited = checked
+            .replace_block_fields(
+                &edited,
+                transition.source_range.start,
+                &[
+                    (
+                        "enter".into(),
+                        Some(display.enter.unwrap_or_else(|| "none".into())),
+                    ),
+                    (
+                        "exit".into(),
+                        Some(display.exit.unwrap_or_else(|| "none".into())),
+                    ),
+                    (
+                        "duration".into(),
+                        Some(format!("{}ms", display.duration_ms)),
+                    ),
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+    } else {
+        let statement = format!(
+            "sprite.transition({}, enter: {}, exit: {}, duration: {}ms)",
+            character.id,
+            display.enter.as_deref().unwrap_or("none"),
+            display.exit.as_deref().unwrap_or("none"),
+            display.duration_ms,
+        );
+        edited = checked
+            .insert_block_before(&edited, start, &statement)
+            .map_err(|error| error.to_string())?
+            .0;
+    }
+    let start = start
+        .checked_add_signed(edited.len() as isize - before as isize)
+        .ok_or("Source range changed unexpectedly")?;
+    let checked = EiyashouProjection::parse(&edited);
+    if checked.read_only.len() > projection.read_only.len()
+        || !checked
+            .scenes
+            .iter()
+            .flat_map(|scene| &scene.blocks)
+            .any(|block| {
+                block.source_range.start == start
+                    && !block.disabled
+                    && !block.read_only
+                    && block
+                        .summary
+                        .split('(')
+                        .next()
+                        .is_some_and(|name| name.trim() == command)
+            })
+    {
+        return Err("Preset would produce invalid source".into());
+    }
+    Ok((edited, start))
 }
 
 fn character_statement(
@@ -959,6 +1199,164 @@ mod tests {
             ..Default::default()
         };
         (character, index)
+    }
+    #[test]
+    fn saved_display_applies_to_one_sprite_preserving_source_and_reuses_its_rule() {
+        use keine_core::{Action, Anchor, SpriteLayout};
+        let (mut character, _) = fixture();
+        character.display = Some(CharacterDisplayPreset {
+            position: "right".into(),
+            x: -24,
+            y: -10,
+            height_percent: Some(80),
+            enter: Some("enter_from_right".into()),
+            exit: Some("exit".into()),
+            duration_ms: 300,
+        });
+        for (source, selected) in [
+            (
+                "// header\nscene start {\n  sprite(hero, rest, position: left(x: 90, y: 12), layout: viewport(height: 0.2), z: 4, alpha: 0.7, transition: fade(2s)), // keep\n  \"中文\", sprite(other, closed)\n}",
+                "sprite(hero",
+            ),
+            (
+                "scene start { sprite(\n hero,\n rest\n), \"next\" }",
+                "sprite(",
+            ),
+            (
+                "scene start { sprite.transition(hero, enter: enter_from_left, duration: 9s), /* rule note */ sprite(hero, rest), \"next\" }",
+                "sprite(hero",
+            ),
+            (
+                "scene start { sprite.transition(other, enter: enter_from_left, duration: 500ms), sprite(hero, rest), \"next\" }",
+                "sprite(hero",
+            ),
+            (
+                "scene start { sprite(hero, rest), sprite.update(hero, closed, position: center(x: 8), layout: natural, scale: 1.2, duration: 600ms, blocking: false), \"next\" }",
+                "sprite.update(",
+            ),
+        ] {
+            let (edited, start) =
+                apply_character_display(source, source.find(selected).unwrap(), &character)
+                    .unwrap();
+            assert_eq!(
+                edited.as_str().matches("sprite.transition(hero").count(),
+                1,
+                "{edited}"
+            );
+            let parsed = keine_loader::parse_native_scenes(&edited);
+            assert!(
+                parsed[0].report.diagnostics.is_empty(),
+                "{edited}: {:?}",
+                parsed[0].report.diagnostics
+            );
+            let action = parsed[0].report.actions.iter().rev().find(|action| {
+                matches!(action, Action::ShowSprite { id, .. } | Action::PatchSprite { id, .. } if id == "hero")
+            }).unwrap();
+            let (position, layout) = match action {
+                Action::ShowSprite {
+                    image,
+                    position,
+                    layout,
+                    ..
+                } => {
+                    assert_eq!(image, "rest");
+                    (position, layout)
+                }
+                Action::PatchSprite {
+                    image,
+                    position,
+                    layout,
+                    duration,
+                    scale,
+                    blocking,
+                    ..
+                } => {
+                    assert_eq!(image, "closed");
+                    assert_eq!((*duration, *scale, *blocking), (0.6, Some(1.2), false));
+                    (position.as_ref().unwrap(), layout.as_ref().unwrap())
+                }
+                _ => unreachable!(),
+            };
+            assert_eq!(position.x, Anchor::Right(-24.0), "{edited}");
+            assert_eq!(position.y, -10.0);
+            assert!(
+                matches!(layout, SpriteLayout::ViewportHeight(height) if (*height - 0.8).abs() < f32::EPSILON)
+            );
+            if source.contains("// header") {
+                for kept in [
+                    "// header",
+                    "// keep",
+                    "z: 4",
+                    "alpha: 0.7",
+                    "\"中文\"",
+                    "sprite(other, closed)",
+                ] {
+                    assert!(edited.contains(kept), "{kept}: {edited}");
+                }
+                assert!(!edited.contains("fade(2s)"));
+            }
+            if source.contains("/* rule note */") {
+                assert!(edited.contains("/* rule note */"));
+            }
+            if source.contains("sprite.transition(other") {
+                assert!(
+                    edited.contains(
+                        "sprite.transition(other, enter: enter_from_left, duration: 500ms)"
+                    )
+                );
+            }
+            assert_eq!(
+                apply_character_display(&edited, start, &character).unwrap(),
+                (edited, start)
+            );
+        }
+        let nested = "scene start { if (true) { sprite.transition(hero, enter: enter_from_left, duration: 500ms) } else { sprite(hero, rest), \"next\" } }";
+        let (edited, _) =
+            apply_character_display(nested, nested.find("sprite(hero").unwrap(), &character)
+                .unwrap();
+        assert!(edited.contains(
+            "if (true) { sprite.transition(hero, enter: enter_from_left, duration: 500ms) }"
+        ));
+        assert_eq!(edited.as_str().matches("sprite.transition(hero").count(), 2);
+        assert!(
+            keine_loader::parse_native_scenes(&edited)[0]
+                .report
+                .diagnostics
+                .is_empty()
+        );
+        for (source, selected) in [
+            ("scene start { sprite(other, rest) }", "sprite("),
+            ("scene start { wait(1s) }", "wait("),
+            (
+                "scene start { /* disabled\nsprite(hero, rest)\n*/ }",
+                "/* disabled",
+            ),
+        ] {
+            assert!(
+                apply_character_display(source, source.find(selected).unwrap(), &character)
+                    .is_err(),
+                "{source}"
+            );
+        }
+        let source = "scene start { sprite.transition(hero, enter: enter_from_left, duration: 500ms), sprite(hero, rest, position: right(x: 88), layout: viewport(height: 0.8)) }";
+        character.display = None;
+        let (edited, start) =
+            apply_character_display(source, source.find("sprite(hero").unwrap(), &character)
+                .unwrap();
+        assert!(edited.contains("position: center(x: 0, y: 0)"));
+        assert!(edited.contains("layout: natural"));
+        assert!(edited.contains("enter: none"));
+        assert!(edited.contains("exit: none"));
+        assert_eq!(
+            apply_character_display(&edited, start, &character).unwrap(),
+            (edited.clone(), start)
+        );
+        assert!(apply_character_display(&edited, edited.len() + 1, &character).is_err());
+        character.display = Some(CharacterDisplayPreset {
+            height_percent: Some(0),
+            ..Default::default()
+        });
+        assert!(apply_character_display(&edited, start, &character).is_err());
     }
     #[test]
     fn character_presets_emit_explicit_native_commands_and_reject_missing_assets() {

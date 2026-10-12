@@ -16,6 +16,16 @@ struct BlurRect {
 struct BlurUniform { count: u32, _pad: vec3<u32>, rects: array<BlurRect, 16> }
 
 fn region_coc(pos: vec4<f32>, expand_y: bool) -> f32 {
+    if (u.count == 1u) {
+        let r = u.rects[0];
+        let size = vec2<f32>(textureDimensions(src));
+        // Uniform branch: no per-pixel mask is needed when one rectangle
+        // covers the target. Keep one pipeline for entry/exit and resizing.
+        if (r.min_x <= 0.0 && r.min_y <= 0.0 &&
+            r.max_x >= size.x && r.max_y >= size.y) {
+            return clamp(r.coc, 0.0, 48.0);
+        }
+    }
     var coc = 0.0;
     for (var i = 0u; i < u.count; i += 1u) {
         let r = u.rects[i];

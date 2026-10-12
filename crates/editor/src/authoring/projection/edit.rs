@@ -215,11 +215,28 @@ impl EiyashouProjection {
             .flat_map(|scene| &scene.blocks)
             .find(|block| block.source_range.start == start && !block.read_only)
             .ok_or(BlockEditError::MissingSelection)?;
-        let fields = self
+        let mut fields = self
             .source_fields_for_block(source, block)
             .ok_or(BlockEditError::StaleRange)?;
         if updates.iter().any(|(name, _)| name.contains('.')) {
             return replace_grouped_fields(source, block, &fields, updates);
+        }
+        // Inspector's bare position value changes just the anchor. A full
+        // constructor replaces the entire position, including old offsets.
+        if updates.iter().any(|(key, value)| {
+            key == "position" && value.as_ref().is_some_and(|value| value.contains('('))
+        }) && let Some(field) = fields.iter_mut().find(|field| field.key == "position")
+            && field.insertion.is_none()
+            && matches!(field.value.as_str(), "left" | "center" | "right")
+        {
+            let tail = &source[field.range.start..block.source_range.end];
+            if let Some(open) = tail.find('(')
+                && tail[..open].trim() == field.value
+            {
+                field.range.end = field.range.start
+                    + matching_parenthesis(tail, open).ok_or(BlockEditError::StaleRange)?
+                    + 1;
+            }
         }
         let node = source
             .get(block.source_range.clone())
