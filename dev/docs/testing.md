@@ -266,6 +266,100 @@ MPLCONFIGDIR=/private/tmp/keine-mpl /private/tmp/keine-plot-env/bin/python \
 运行日志没有 warning/error。本轮仅外部测量与文档更新，没有改动播放策略、发布流程，
 没有新增仓库依赖或重跑此前已通过的完整测试。
 
+### 0.15.1 同条件复测与黑幕停滞
+
+采样基线为 `cf6cd8c`，沿用上一轮 Apple M5 Pro / 24 GiB / macOS 27.0.1 /
+Metal、1920×1080 @1×、dev opt-level=1 和相同 tday 脚本/配置；SHA-256 前后
+未变。正常自动阅读，不快进。记录 1799.88s、8818 个 RAM/CPU 样本，实际平均
+间隔 204.13ms、最大 210.37ms；CPU 累计计数与按间隔积分相符。
+
+原始资料在 `target/performance/continuous-tday-0151/`：`sample.py`、`samples.csv`、
+`metadata.json`、`observations.jsonl`、`input-verification.json`、`excluded-windows.json`、
+`summary.json`、`plot.py` 和 `continuous-playback.png/svg`。图保留全部样本，灰色为
+启动/玩家确认的保守排除区间，斜线为黑幕停滞的保守区间（528–810.92s；首次目测
+黑屏约 622s，不作为精确发生时间）。其间舞台点击恢复到浴室，随后继续采样。
+末段空文本与 `2.5.shou` 的文字回退对应，但未取得后续确认，亦保守排除。
+合计明确正常推进 600.98s（约 10 分钟），不能称为 30 分钟全程无停顿播放。
+
+| 正常推进指标 | 时间加权均值 | P95 | 最大采样值 |
+| --- | ---: | ---: | ---: |
+| 物理 footprint | 364.7 MiB | 394.2 MiB | 402.1 MiB |
+| Engine CPU（100% = 单核） | 15.9% | 25.7% | 38.3% |
+
+内核 lifetime footprint 峰值 407.2 MiB。包含启动/等待/故障的全程平均为
+301.9 MiB / CPU 10.1%，不用于正常播放比较。天台附近约 387 MiB，后续卧室
+约 371 MiB，确认等待时有明显回落；没有全程单调上涨，但不同场景权重、演出和
+停留时长与上轮不同，不能直接据此计算优化收益或证明长期无泄漏。采样结束时进程
+仍存活，随后窗口检查已退出，未捕获退出码或返回标题后的回收曲线。没有完整剧情、
+release 或跨平台长测；这批曲线来自修复前基线，不是修复后复测。
+
+```sh
+python3 target/performance/continuous-tday-0151/sample.py
+MPLCONFIGDIR=/private/tmp/keine-mpl /private/tmp/keine-plot-env/bin/python \
+  target/performance/continuous-tday-0151/plot.py
+```
+
+黑幕停滞根因位于 `src/runtime/platform.rs` 的活动判断：淡变透明度可在截止时间前
+舍入到目标值，而幕布/遮罩仍 blocking。auto 被 presentation 阻塞时不计时，活动
+判断遂进入 Idle 并暂停虚拟时间，剩余演出无法完成。现在未结束的幕布/遮罩时钟或
+阻塞标记仍保持活动，正的微小 wait 也保持计时；已完成的玩家确认继续正常休眠。
+
+`src/runtime/tick.rs` 的一个表驱动回归覆盖幕布/遮罩显示与隐藏、微小 wait，以及
+auto 开/关共 10 种边界，运行真实 TimePlugin、tick 和 update_lifecycle：旧版首例
+错误进入 Idle，修改后无需玩家输入即继续对白。原始前后日志在
+`target/performance/continuous-tday-0151/regression-before.log` / `regression-after.log`。
+workspace fmt/check、all-targets Clippy、1060 项测试通过（21 ignored；IPC 在沙箱外
+执行）；publisher 无默认功能的同一回归也通过，native-smoke 校验通过。日志在
+`target/performance/black-curtain-0151/`。新版 macOS 原生窗口在 tday 素材副本中自动
+完成六次 260ms 幕布开合，随后停在文字回退确认，单次空格恢复下一句，并正常关闭
+退出 0。此共享运行逻辑修复尚未在 Android 实机、Windows 或 Linux 验收。
+
+### 播放热路径正确性审查
+
+基线为 `cf6cd8c` 加上述未提交的幕布修复。审查 action/yield → tick → Sync 后端 →
+Last 生命周期的交接，逐项对照演出更新与休眠条件，并检查预取身份、读档计时、
+终止清理和音视频失败路径。修复不更改语法、Program/Action、Save v11、IR v7、
+authoring 协议、画质或发布流程；没有新增依赖或用户界面。
+
+| 已确认问题 | 修复与验证 |
+| --- | --- |
+| 纯镜头位移动画漏在活动判断外，可能提前休眠 | `platform.rs` 补齐 camera transform；真实 TimePlugin/tick/lifecycle 回归覆盖 blocking 开/关与动画完成 |
+| 后端在 tick 之后移除视频，下一帧失去续行；保留字幕的阻塞视频也受影响 | `script/driver.rs` 判断尚无交互 owner 或刚结束的阻塞视频；tick 与 lifecycle 共用判断。覆盖 Stage/Menu/Loading、字幕保留、正常完成及错误移除；非阻塞/循环视频不抢对白 |
+| auto、notend 与点击同帧可消费多个 yield；回标题时仍可能执行剧本 | `tick.rs` 每帧只选择一次推进，返回过渡中停止脚本。回归使用零自动延迟和空白下一句，检查 cursor/backlog 不越过边界 |
+| 同一 scene/cursor 恢复沿用旧行内 pause 和 auto timer | `tick.rs` 对照文本/暂停点/显示进度；`save.rs` 的私有 checkpoint generation 在显式恢复边界重置计时。回溯、Preview seek、热重载及旧式 cursor 同步重置；覆盖零字符 timed pause、输入等待、自动延迟及实际热重载 worker 交接 |
+| 预取身份漏掉转场旧图、头像、序列帧和遮罩图片/纹理 | `scene/assets.rs` 只将资源依赖纳入身份。五种同 cursor 变更要求重建计划，单纯 opacity/elapsed/progress 变化保持缓存；转场完成后旧图不再被计划误留为 critical |
+| 失败音频永远等不到 sink，pending fade/handoff 持续请求帧 | `scene/audio.rs` 及 `runtime/audio.rs` 按 typed source 的 Failed 状态清理未启动的运行时播放器。真实 AssetServer 失败回归验证 activity 清零；其他音频 owner 不被删除，原有正常交接测试保留 |
+| 透明度为 0 的正常视频被误当作停止完成 | `tick.rs` 只在 stopping 且 opacity 归零时移除；回归检查不可见视频仍阻塞至后端完成/显式停止 |
+| guard 关闭一个 fd 时，存活的重复描述符仍可保留单实例锁 | `bootstrap.rs` Drop 显式 unlock。无默认功能全测暴露失败后，复现保留 fd 副本的情形，修改后同一回归通过；依据锁定 fs2 0.4.3 的 FileExt/Unix flock 实现 |
+| AVFoundation 的原生音频不属于 AudioSink，失焦时仍可能播放 | `video/avfoundation.rs` 在 Last、生命周期更新之后同帧同步 AVPlayer pause/play，不能等进入休眠后的下一帧；前台 Preview 保持既有策略。调用合同核查锁定 objc2-av-foundation 的 AVPlayer 绑定与 SDK 注释 |
+| 全屏视频 mesh 使用第三层相机，但相机活动判断只看 UI | `platform.rs` 纳入可见 fullscreen video；测试覆盖全屏/混合、透明度 0 和移除。实际窗口检查在修复前发现视频解码但不显示，修复后确认彩条视频可见 |
+
+新增 11 个必要回归入口，参数变体在案例表内，复用同一个播放 App 初始化。
+原幕布回归也使用生产顺序的 Last 生命周期。前后失败证据、命令和完整日志在
+`target/performance/playback-audit-0151/`：`before.log`、`caption-video-before.log`、
+`video-opacity-before.log`、`instance-lock-before.log`、`video-camera-before.log`、
+`hot-reload-before.log`。
+
+```sh
+cargo fmt --all --check
+cargo check --offline --workspace --features publisher,video-native,hot-reload
+cargo clippy --offline --workspace --all-targets --features publisher,video-native,hot-reload -- -D warnings
+cargo test --offline --workspace --features publisher,video-native,hot-reload
+cargo test --offline -p keine --no-default-features --features publisher --lib
+cargo check --offline -p keine --no-default-features --features bundled-opus
+cargo check --offline -p keine --no-default-features --features audio-wav
+cargo check --offline -p keine --no-default-features --features video-ffmpeg
+```
+
+工作区 1071 passed / 0 failed / 21 ignored；无默认功能 + publisher 409 passed /
+0 failed / 1 ignored。IPC 在允许本地套接字的环境执行。fmt/check/Clippy、列出的
+可选功能检查通过；Engine debug 构建及 native-smoke/tday 校验通过。
+macOS/Metal 原生窗口验收使用 tday 副本与仓库视频 fixture（1920×1080）：镜头运动
+完成、全屏视频显示、自然结束与损坏视频后的自动续行均已确认，测试进程正常退出。
+AVFoundation 失焦暂停尚未取得可确认的原生验收结果，保留为待验收，不能算通过。
+这是正确性验证，不构成吞吐、帧时或新的 30 分钟内存改善结论。
+本轮不证明整个仓库零错误；Windows/Linux/Android 实机播放和完整剧情仍需各自验收。
+
 ### 自动阅读中的演出确认等待
 
 `update_lifecycle` 原先仅因 auto 开启就持续刷新；但 `tick` 在 presentation 被阻塞时

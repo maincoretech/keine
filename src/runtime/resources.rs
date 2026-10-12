@@ -27,6 +27,10 @@ pub(crate) struct DialogueLengthCache {
 }
 
 impl DialogueLengthCache {
+    pub(crate) fn matches(&self, text: &str) -> bool {
+        self.text == text
+    }
+
     pub(crate) fn count(&mut self, text: &str) -> usize {
         if self.text != text {
             self.text.clear();

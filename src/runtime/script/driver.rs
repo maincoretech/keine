@@ -26,6 +26,37 @@ impl ScriptOutcome {
     }
 }
 
+/// A backend can finish presentation after tick has already run. With no
+/// remaining yield owner, continue the script on the next stage update.
+pub(crate) fn needs_resume(state: &State) -> bool {
+    !state.ended
+        && state.program.contains_scene(&state.current_scene)
+        && state.script_diagnostic.is_none()
+        && (state.dialogue.is_none()
+            || state
+                .cursor
+                .checked_sub(1)
+                .and_then(|cursor| state.program.scene(&state.current_scene)?.get(cursor))
+                .is_some_and(yielded_for_video))
+        && state.menu.is_none()
+        && state.user_input.is_none()
+        && !state.presentation_blocked()
+}
+
+fn yielded_for_video(mut action: &keine_core::Action) -> bool {
+    use keine_core::Action;
+    loop {
+        match action {
+            Action::Flow { next: true, .. } => return false,
+            Action::Flow { action: inner, .. } | Action::SpriteVisual { action: inner, .. } => {
+                action = inner;
+            }
+            Action::PlayVideo { video } => return video.wait_for_finished && !video.looped,
+            _ => return false,
+        }
+    }
+}
+
 pub(crate) fn resume(state: &mut State, checkpoint: &mut ContinuationCheckpoint) -> ScriptOutcome {
     // Normal resumes already have the exact state captured after the previous
     // yield. Only a fresh/hot-reloaded program needs a pre-step seed; avoiding

@@ -106,7 +106,7 @@ fn current_preview_generation(
 /// Capturing a checkpoint never touches the filesystem. Disk I/O still occurs
 /// only for an explicit save, return-to-title continuation, or graceful exit.
 #[derive(Resource, Default)]
-pub(crate) struct ContinuationCheckpoint(Option<State>);
+pub(crate) struct ContinuationCheckpoint(Option<State>, u64);
 
 impl ContinuationCheckpoint {
     pub(crate) fn capture(&mut self, state: &State) {
@@ -116,8 +116,14 @@ impl ContinuationCheckpoint {
     }
 
     pub(crate) fn reset(&mut self, state: &State) {
+        self.1 = self.1.wrapping_add(1);
         self.0 = None;
         self.capture(state);
+    }
+
+    /// Explicit restore/start/seek boundaries invalidate host-local timers too.
+    pub(crate) const fn generation(&self) -> u64 {
+        self.1
     }
 
     pub(crate) fn ensure_current_program(&mut self, state: &State) {

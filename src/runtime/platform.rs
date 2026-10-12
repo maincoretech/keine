@@ -380,6 +380,7 @@ type DialogTargetRoots<'w, 's> = Query<
 /// line of dialogue wastes a complete camera extraction and render pass.
 pub(crate) fn sync_dialog_camera_activity(
     benchmark: Option<Res<crate::ui::performance::RuntimeCaptureConfig>>,
+    state: Option<Res<GameState>>,
     mut camera: Query<(Entity, &mut Camera), With<DialogCamera>>,
     roots: DialogTargetRoots,
     previews: Query<&Node, With<QuickPreviewSurface>>,
@@ -399,7 +400,13 @@ pub(crate) fn sync_dialog_camera_activity(
         target.0 == camera_entity && node.display != Display::None && visibility.get()
     });
     let visible_preview = previews.iter().any(|node| node.display != Display::None);
-    let needed = visible_root || visible_preview;
+    // Fullscreen video meshes also draw on layer 2; they have no UI Node root.
+    let visible_video = state.as_ref().is_some_and(|state| {
+        state.videos.values().any(|video| {
+            video.spec.mode == keine_core::VideoMode::Fullscreen && video.opacity > 0.0
+        })
+    });
+    let needed = visible_root || visible_preview || visible_video;
     if camera.is_active != needed {
         camera.is_active = needed;
     }
@@ -477,6 +484,9 @@ pub(crate) fn update_lifecycle(
         || core_is_animating(&context.state, &mut dialogue_length)
         || context.ui.0
         || context.audio.0
+        || (*context.input_scope == crate::ui::input_scope::UiInputScope::Stage
+            && (!studio_sync || companion_preview)
+            && crate::runtime::script_driver::needs_resume(&context.state))
         // Tick does not run the auto timer outside Stage or while presentation is blocked.
         // Timed presentation work is covered by core_is_animating above;
         // a settled player-confirmation wait can sleep with auto still enabled.
@@ -634,13 +644,22 @@ fn core_is_animating(state: &GameState, dialogue_length: &mut DialogueLengthCach
             .dialogue_retraction
             .as_ref()
             .is_some_and(|retraction| !retraction.awaiting_advance)
-        || state.wait_remaining > f32::EPSILON
+        || state.wait_remaining > 0.0
         || state.intro.is_some()
+        // A fade can round to its target before its deadline. Keep virtual
+        // time running until tick clears the presentation lock; otherwise
+        // auto playback can sleep on a fully opaque curtain until a click.
+        || state.curtain.elapsed < state.curtain.duration
+        || state.curtain.blocking
         || (state.curtain.current - state.curtain.target).abs() > f32::EPSILON
         || state
             .stage_masks
             .values()
-            .any(|mask| (mask.current - mask.target).abs() > f32::EPSILON)
+            .any(|mask| {
+                mask.elapsed < mask.duration
+                    || mask.blocking
+                    || (mask.current - mask.target).abs() > f32::EPSILON
+            })
         || state
             .floating_text
             .as_ref()
@@ -653,6 +672,7 @@ fn core_is_animating(state: &GameState, dialogue_length: &mut DialogueLengthCach
         || state.bg_keyframe_animation.is_some()
         || state.bg_animation.is_some()
         || state.camera_effect_animation.is_some()
+        || state.camera_transform_animation.is_some()
         || state.camera_shake.is_some()
         || state.stage_animation.is_some()
         || state.camera_effect.is_time_varying()
@@ -1674,6 +1694,52 @@ mod tests {
         ));
         app.update();
         assert!(app.world().get::<Camera>(camera).unwrap().is_active);
+    }
+
+    #[test]
+    fn fullscreen_video_keeps_dialog_camera_active_until_it_is_hidden_or_removed() {
+        let mut app = App::new();
+        app.insert_resource(GameState(keine_core::State::new()))
+            .add_systems(Update, sync_dialog_camera_activity);
+        let camera = app
+            .world_mut()
+            .spawn((Camera::default(), DialogCamera))
+            .id();
+        for (mode, opacity, expected) in [
+            (keine_core::VideoMode::Fullscreen, 1.0, true),
+            (keine_core::VideoMode::Fullscreen, 0.0, false),
+            (keine_core::VideoMode::Mixed, 1.0, false),
+        ] {
+            app.world_mut().resource_mut::<GameState>().videos.insert(
+                "movie".into(),
+                keine_core::VideoState {
+                    spec: keine_core::VideoSpec {
+                        id: "movie".into(),
+                        file: "movie.mp4".into(),
+                        mode,
+                        alpha: opacity,
+                        looped: false,
+                        muted: true,
+                        skippable: true,
+                        wait_for_finished: true,
+                    },
+                    opacity,
+                    revision: 1,
+                    elapsed: 0.0,
+                    stopping: false,
+                    fade_out: 0.0,
+                },
+            );
+            app.update();
+            assert_eq!(
+                app.world().get::<Camera>(camera).unwrap().is_active,
+                expected,
+                "mode={mode:?}, opacity={opacity}"
+            );
+        }
+        app.world_mut().resource_mut::<GameState>().videos.clear();
+        app.update();
+        assert!(!app.world().get::<Camera>(camera).unwrap().is_active);
     }
 
     #[test]

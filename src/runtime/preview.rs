@@ -23,6 +23,13 @@ pub(crate) struct AuthoringPreviewSession {
 const SOURCE_SETTLE_TIME: Duration = Duration::from_millis(250);
 
 fn keep_loading_frames_alive(world: &mut World) {
+    if world.contains_resource::<crate::storage::save::ContinuationCheckpoint>() {
+        world.resource_scope(
+            |world, mut checkpoint: Mut<crate::storage::save::ContinuationCheckpoint>| {
+                checkpoint.reset(world.resource::<GameState>());
+            },
+        );
+    }
     if let Some(mut preview) = world.get_resource_mut::<AuthoringPreviewSession>() {
         preview.settle_until = Some(Instant::now() + SOURCE_SETTLE_TIME);
     }

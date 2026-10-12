@@ -25,6 +25,8 @@ struct TypewriterClock {
     cursor: usize,
     dialogue_length: DialogueLengthCache,
     fractional_chars: f64,
+    last_visible_chars: usize,
+    pauses: Vec<keine_core::DialoguePause>,
     next_pause: usize,
     pause: TypewriterPause,
 }
@@ -120,8 +122,10 @@ pub struct TickContext<'w, 's> {
     loading: Res<'w, AssetLoadingGate>,
     editor_sync: Option<Res<'w, EditorSyncSession>>,
     authoring_preview: Option<Res<'w, super::preview::AuthoringPreviewSession>>,
+    returning_to_title: Option<Res<'w, crate::ui::title::ReturnToTitleTransition>>,
     auto_timer: Local<'s, f64>,
     typewriter_clock: Local<'s, TypewriterClock>,
+    checkpoint_generation: Local<'s, u64>,
     #[cfg(feature = "hot-reload")]
     editor_cursor_sync: Local<'s, EditorCursorSync>,
     #[cfg(feature = "hot-reload")]
@@ -132,6 +136,19 @@ pub struct TickContext<'w, 's> {
 /// Advances input, text timing, script hot reload, and transition state.
 pub fn tick(mut context: TickContext) {
     let delta_seconds = context.time.delta_secs_f64();
+    if *context.checkpoint_generation != context.checkpoint.generation() {
+        *context.checkpoint_generation = context.checkpoint.generation();
+        *context.typewriter_clock = TypewriterClock::default();
+        *context.auto_timer = 0.0;
+    }
+    // A modal or loading gate can consume the frame on which Ctrl is released.
+    if context.actions.auto_released {
+        context.toggles.auto = false;
+        *context.auto_timer = 0.0;
+    }
+    if context.returning_to_title.is_some() {
+        return;
+    }
     // Legacy Studio sync is a view-only cursor follower. The native authoring
     // Preview also owns its source position, but must accept direct input.
     let studio_sync = context.editor_sync.is_some() && context.authoring_preview.is_none();
@@ -139,11 +156,6 @@ pub fn tick(mut context: TickContext) {
     let mut state_changed = reload_scripts_if_changed(&mut context, delta_seconds as f32);
     #[cfg(not(feature = "hot-reload"))]
     let mut state_changed = false;
-    // A modal or loading gate can consume the frame on which Ctrl is released.
-    if context.actions.auto_released {
-        context.toggles.auto = false;
-        *context.auto_timer = 0.0;
-    }
     if context.loading.blocked {
         if context.toggles.skip {
             context.toggles.skip = false;
@@ -201,7 +213,9 @@ pub fn tick(mut context: TickContext) {
         delta_seconds as f32,
         presentation_advance,
     );
-    if presentation_was_blocked {
+    if presentation_was_blocked
+        || (!studio_sync && crate::runtime::script_driver::needs_resume(&context.state))
+    {
         if !studio_sync && !context.state.presentation_blocked() {
             let progress = step_once(
                 context.state.bypass_change_detection(),
@@ -254,43 +268,39 @@ pub fn tick(mut context: TickContext) {
         }
         return;
     }
-    let target_chars = dialogue_target(&context.state, &mut context.typewriter_clock);
-    let notend = update_notend(
-        context.state.bypass_change_detection(),
-        target_chars,
-        &mut context.checkpoint,
-    );
-    state_changed |= notend.changed;
-    let target_chars = dialogue_target(&context.state, &mut context.typewriter_clock);
-    let auto = update_auto_mode(
-        context.state.bypass_change_detection(),
-        context.toggles.auto,
-        delta_seconds,
-        context.settings.auto_delay,
-        &mut context.auto_timer,
-        target_chars,
-        &mut context.checkpoint,
-    );
-    state_changed |= auto.changed;
-    if notend.return_to_title || auto.return_to_title {
-        request_return_to_title(&mut context.commands);
-    }
-
-    if advance_requested(
-        &context.actions,
-        &context.buttons,
-        &context.windows,
-        context.toggles.hide,
-    ) {
-        let progress = advance_once(
+    // One frame may contain both a click and an expired auto/notend timer.
+    // Consume one yield only; never apply the same input to the next line.
+    let progress = if presentation_advance {
+        *context.auto_timer = 0.0;
+        advance_once(
             context.state.bypass_change_detection(),
             &mut context.checkpoint,
+        )
+    } else {
+        let target_chars = dialogue_target(&context.state, &mut context.typewriter_clock);
+        let notend = update_notend(
+            context.state.bypass_change_detection(),
+            target_chars,
+            &mut context.checkpoint,
         );
-        state_changed |= progress.changed;
-        if progress.return_to_title {
-            request_return_to_title(&mut context.commands);
+        if notend.changed || notend.return_to_title {
+            *context.auto_timer = 0.0;
+            notend
+        } else {
+            update_auto_mode(
+                context.state.bypass_change_detection(),
+                context.toggles.auto,
+                delta_seconds,
+                context.settings.auto_delay,
+                &mut context.auto_timer,
+                target_chars,
+                &mut context.checkpoint,
+            )
         }
-        *context.auto_timer = 0.0;
+    };
+    state_changed |= progress.changed;
+    if progress.return_to_title {
+        request_return_to_title(&mut context.commands);
     }
 
     if state_changed {
@@ -450,6 +460,12 @@ fn reload_scripts_if_changed(context: &mut TickContext<'_, '_>, delta_seconds: f
                 }
             }
         }
+    }
+    if changed {
+        context.checkpoint.reset(&context.state);
+        *context.typewriter_clock = TypewriterClock::default();
+        *context.auto_timer = 0.0;
+        *context.checkpoint_generation = context.checkpoint.generation();
     }
     changed
 }
@@ -962,12 +978,33 @@ fn update_typewriter(
     chars_per_second: f64,
     clock: &mut TypewriterClock,
 ) -> bool {
-    let dialogue_changed = clock.scene != state.current_scene || clock.cursor != state.cursor;
+    let changed = advance_typewriter(state, delta_seconds, chars_per_second, clock);
+    clock.last_visible_chars = state.dialogue.as_ref().map_or(0, |line| line.visible_chars);
+    changed
+}
+
+fn advance_typewriter(
+    state: &mut State,
+    delta_seconds: f64,
+    chars_per_second: f64,
+    clock: &mut TypewriterClock,
+) -> bool {
+    let dialogue_changed = clock.scene != state.current_scene
+        || clock.cursor != state.cursor
+        || state.dialogue.as_ref().is_some_and(|line| {
+            !clock.dialogue_length.matches(&line.text)
+                || clock.pauses != line.pauses
+                || line.visible_chars < clock.last_visible_chars
+        });
     if dialogue_changed {
         clock.scene.clone_from(&state.current_scene);
         clock.cursor = state.cursor;
         clock.fractional_chars = 0.0;
-        clock.next_pause = 0;
+        clock.next_pause = state.dialogue.as_ref().map_or(0, |line| {
+            clock.pauses.clone_from(&line.pauses);
+            line.pauses
+                .partition_point(|pause| pause.at < line.visible_chars)
+        });
         clock.pause = TypewriterPause::Idle;
     }
 
@@ -1314,7 +1351,9 @@ fn update_transitions(state: &mut State, delta_seconds: f32, advance_intro: bool
         }
     }
     let video_count = state.videos.len();
-    state.videos.retain(|_, video| video.opacity > 0.0);
+    state
+        .videos
+        .retain(|_, video| !video.stopping || video.opacity > 0.0);
     changed |= state.videos.len() != video_count;
 
     if advance_sprite_transitions(state, delta_seconds) {
@@ -3419,6 +3458,496 @@ mod tests {
 
         assert!(!state.presentation_blocked());
         assert_eq!(state.dialogue.as_ref().unwrap().text, "after curtain");
+    }
+
+    fn playback_test_app(state: State, auto: bool) -> App {
+        use crate::runtime::platform::{RuntimeActivity, update_lifecycle};
+        use crate::ui::control_bar::AutoHideTiming;
+        use bevy::time::{TimePlugin, TimeUpdateStrategy};
+        let mut app = App::new();
+        app.add_plugins(TimePlugin)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_secs_f64(1.0 / 60.0),
+            ))
+            .insert_resource(GameState(state))
+            .init_resource::<crate::storage::save::ContinuationCheckpoint>()
+            .init_resource::<RuntimeSettings>()
+            .init_resource::<InputActions>()
+            .insert_resource(ToggleStates { auto, ..default() })
+            .init_resource::<UiInputScope>()
+            .init_resource::<LocalAssetManifest>()
+            .insert_resource(AssetLoadingGate { blocked: false })
+            .init_resource::<crate::ui::activity::UiAnimationActivity>()
+            .init_resource::<crate::scene::audio::AudioAnimationActivity>()
+            .init_resource::<AutoHideTiming>()
+            .init_resource::<crate::ui::user_input::UserInputCaretBlink>()
+            .init_resource::<RuntimeActivity>()
+            .insert_resource(bevy::winit::WinitSettings::desktop_app())
+            .add_systems(Update, tick)
+            .add_systems(Last, update_lifecycle);
+        #[cfg(feature = "hot-reload")]
+        {
+            let opened = crate::runtime::bootstrap::open_project(
+                std::path::Path::new(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/native-smoke"
+                )),
+                &keine_loader::LoaderRegistry::default(),
+            )
+            .unwrap();
+            app.insert_resource(ContentProjectResource(opened.content))
+                .insert_resource(crate::runtime::resources::GameConfigResource(opened.config))
+                .insert_resource(ScriptLanguages(
+                    keine_loader::ScriptLanguageRegistry::default(),
+                ))
+                .init_resource::<crate::scene::images::ImageRoleRegistry>();
+        }
+        app.world_mut().spawn(Window {
+            focused: true,
+            ..default()
+        });
+        app
+    }
+
+    #[test]
+    fn settled_presentation_clocks_resume_without_player_input() {
+        use crate::runtime::platform::RuntimeActivity;
+
+        for auto in [false, true] {
+            for case in [
+                "curtain-show",
+                "curtain-hide",
+                "mask-show",
+                "mask-hide",
+                "wait",
+            ] {
+                let mut state = State::new();
+                state.install_program(Program::from_scenes([(
+                    "main".into(),
+                    vec![Action::Say {
+                        speaker: String::new(),
+                        text: "after presentation".into(),
+                        options: Default::default(),
+                    }],
+                )]));
+                state.current_scene = "main".into();
+                let target = if case.ends_with("hide") { 0.0 } else { 1.0 };
+                if case.starts_with("curtain") {
+                    state.curtain = keine_core::state::CurtainState {
+                        current: target,
+                        from: 1.0 - target,
+                        target,
+                        elapsed: 0.25999,
+                        duration: 0.26,
+                        blocking: true,
+                        ..default()
+                    };
+                } else if case.starts_with("mask") {
+                    state.stage_masks.insert(
+                        "mask".into(),
+                        keine_core::state::StageMaskState {
+                            mask: Default::default(),
+                            current: target,
+                            from: 1.0 - target,
+                            target,
+                            elapsed: 0.25999,
+                            duration: 0.26,
+                            blocking: true,
+                            order: 0,
+                        },
+                    );
+                } else {
+                    state.wait_remaining = f32::EPSILON * 0.5;
+                    state.wait_blocking = true;
+                }
+                let mut app = playback_test_app(state, auto);
+                // TimePlugin's initial frame has zero delta. A settled visual
+                // must still keep virtual time alive for the unfinished clock.
+                app.update();
+                assert_eq!(
+                    *app.world().resource::<RuntimeActivity>(),
+                    RuntimeActivity::Active,
+                    "{case}, auto={auto}"
+                );
+                assert!(
+                    !app.world().resource::<Time<Virtual>>().is_paused(),
+                    "{case}, auto={auto}"
+                );
+                app.update();
+                let state = app.world().resource::<GameState>();
+                assert!(!state.presentation_blocked(), "{case}, auto={auto}");
+                assert_eq!(
+                    state.dialogue.as_ref().unwrap().text,
+                    "after presentation",
+                    "{case}, auto={auto}"
+                );
+                assert!(!app.world().resource::<InputActions>().advance);
+            }
+        }
+    }
+
+    #[test]
+    fn playback_camera_transform_keeps_time_active_until_completion() {
+        for blocking in [false, true] {
+            let mut state = dialogue_state();
+            state.dialogue.as_mut().unwrap().visible_chars = 100;
+            state.camera_transform_animation = Some(TransformAnimation {
+                from: SpriteTransform::default(),
+                to: SpriteTransform {
+                    offset_x: 100.0,
+                    ..Default::default()
+                },
+                elapsed: 0.0,
+                duration: 0.05,
+                easing: Easing::Linear,
+                blocking,
+            });
+            let mut app = playback_test_app(state, false);
+            app.update();
+            assert_eq!(
+                *app.world()
+                    .resource::<crate::runtime::platform::RuntimeActivity>(),
+                crate::runtime::platform::RuntimeActivity::Active,
+                "blocking={blocking}"
+            );
+            for _ in 0..6 {
+                app.update();
+            }
+            let state = app.world().resource::<GameState>();
+            assert!(
+                state.camera_transform_animation.is_none(),
+                "blocking={blocking}"
+            );
+            assert_eq!(state.camera_transform.offset_x, 100.0);
+        }
+    }
+
+    #[test]
+    fn playback_backend_completion_resumes_after_the_loading_or_menu_gate() {
+        for caption in [false, true] {
+            for scope in [
+                UiInputScope::Stage,
+                UiInputScope::Menu,
+                UiInputScope::Loading,
+            ] {
+                let mut state = State::new();
+                state.current_scene = "main".into();
+                state.install_program(Program::from_scenes([(
+                    "main".into(),
+                    vec![
+                        Action::Flow {
+                            action: Box::new(Action::Say {
+                                speaker: String::new(),
+                                text: "caption during video".into(),
+                                options: Default::default(),
+                            }),
+                            when: Some(caption.to_string()),
+                            next: true,
+                        },
+                        Action::PlayVideo {
+                            video: VideoSpec {
+                                id: "opening".into(),
+                                file: "opening.mp4".into(),
+                                wait_for_finished: true,
+                                looped: false,
+                                muted: true,
+                                alpha: 1.0,
+                                skippable: true,
+                                mode: VideoMode::Fullscreen,
+                            },
+                        },
+                        Action::Say {
+                            speaker: String::new(),
+                            text: "after video".into(),
+                            options: Default::default(),
+                        },
+                    ],
+                )]));
+                let mut checkpoint = crate::storage::save::ContinuationCheckpoint::default();
+                crate::runtime::script_driver::resume(&mut state, &mut checkpoint);
+                assert!(state.presentation_blocked());
+                let mut app = playback_test_app(state, false);
+                *app.world_mut().resource_mut::<UiInputScope>() = scope;
+                app.world_mut().resource_mut::<AssetLoadingGate>().blocked =
+                    scope == UiInputScope::Loading;
+                // Backends run after tick. Completion or rejection clears video state
+                // in Sync, including while a menu is covering the stage.
+                app.add_systems(PostUpdate, |mut state: ResMut<GameState>| {
+                    state.videos.clear();
+                });
+                app.update();
+                if scope != UiInputScope::Stage {
+                    app.update();
+                    assert_eq!(app.world().resource::<GameState>().cursor, 2);
+                    assert_eq!(
+                        app.world().resource::<GameState>().dialogue.is_some(),
+                        caption
+                    );
+                }
+                *app.world_mut().resource_mut::<UiInputScope>() = UiInputScope::Stage;
+                app.world_mut().resource_mut::<AssetLoadingGate>().blocked = false;
+                app.update();
+                let state = app.world().resource::<GameState>();
+                assert_eq!(
+                    state.dialogue.as_ref().map(|d| d.text.as_str()),
+                    Some("after video"),
+                    "scope={scope:?}"
+                );
+                assert_eq!(state.cursor, 3);
+            }
+        }
+    }
+
+    #[test]
+    fn playback_manual_and_automatic_advance_cannot_cross_two_yields_in_one_frame() {
+        for notend in [false, true] {
+            let mut state = State::new();
+            state.current_scene = "main".into();
+            state.install_program(Program::from_scenes([(
+                "main".into(),
+                vec![
+                    Action::Say {
+                        speaker: String::new(),
+                        text: "first".into(),
+                        options: keine_core::SayOptions {
+                            auto_advance: notend,
+                            ..Default::default()
+                        },
+                    },
+                    Action::Say {
+                        speaker: String::new(),
+                        text: String::new(),
+                        options: Default::default(),
+                    },
+                    Action::Say {
+                        speaker: String::new(),
+                        text: "must remain unread".into(),
+                        options: Default::default(),
+                    },
+                ],
+            )]));
+            crate::runtime::script_driver::resume(
+                &mut state,
+                &mut crate::storage::save::ContinuationCheckpoint::default(),
+            );
+            state.dialogue.as_mut().unwrap().visible_chars = 5;
+            let mut app = playback_test_app(state, true);
+            app.world_mut().resource_mut::<RuntimeSettings>().auto_delay = 0.0;
+            app.world_mut().resource_mut::<InputActions>().advance = true;
+            app.update();
+            assert_eq!(
+                app.world().resource::<GameState>().cursor,
+                2,
+                "notend={notend}"
+            );
+            assert_eq!(app.world().resource::<GameState>().backlog.len(), 2);
+        }
+    }
+
+    #[test]
+    fn playback_typewriter_restore_at_the_same_cursor_restarts_inline_timing() {
+        let mut state = dialogue_state();
+        state.install_program(Program::from_scenes([(
+            "main".into(),
+            vec![Action::Comment],
+        )]));
+        state.dialogue.as_mut().unwrap().pauses = vec![DialoguePause {
+            at: 2,
+            duration: None,
+        }];
+        let saved = state.clone();
+        let mut clock = TypewriterClock::default();
+        update_typewriter(&mut state, 0.0, 10.0, &mut clock);
+        update_typewriter(&mut state, 0.2, 10.0, &mut clock);
+        assert_eq!(state.dialogue.as_ref().unwrap().visible_chars, 2);
+        state.restore_saved(saved).unwrap();
+        update_typewriter(&mut state, 0.0, 10.0, &mut clock);
+        assert_eq!(state.dialogue.as_ref().unwrap().visible_chars, 1);
+        update_typewriter(&mut state, 0.2, 10.0, &mut clock);
+        assert_eq!(state.dialogue.as_ref().unwrap().visible_chars, 2);
+        assert!(matches!(clock.pause, TypewriterPause::Input));
+    }
+
+    #[test]
+    fn playback_restore_resets_zero_character_wait_and_auto_delay() {
+        for wait_at_zero in [false, true] {
+            let mut state = State::new();
+            state.current_scene = "main".into();
+            state.install_program(Program::from_scenes([(
+                "main".into(),
+                vec![
+                    Action::Say {
+                        speaker: String::new(),
+                        text: "first".into(),
+                        options: Default::default(),
+                    },
+                    Action::Say {
+                        speaker: String::new(),
+                        text: "second".into(),
+                        options: Default::default(),
+                    },
+                ],
+            )]));
+            crate::runtime::script_driver::resume(
+                &mut state,
+                &mut crate::storage::save::ContinuationCheckpoint::default(),
+            );
+            if wait_at_zero {
+                state.dialogue.as_mut().unwrap().pauses = vec![DialoguePause {
+                    at: 0,
+                    duration: Some(1.0),
+                }];
+            } else {
+                state.dialogue.as_mut().unwrap().visible_chars = 5;
+            }
+            let saved = state.clone();
+            let mut app = playback_test_app(state, !wait_at_zero);
+            app.world_mut().resource_mut::<RuntimeSettings>().auto_delay = 0.25;
+            for _ in 0..if wait_at_zero { 50 } else { 10 } {
+                app.update();
+            }
+            {
+                let mut live = app.world_mut().resource_mut::<GameState>();
+                live.restore_saved(saved).unwrap();
+            }
+            app.world_mut().resource_scope(
+                |world, mut checkpoint: Mut<crate::storage::save::ContinuationCheckpoint>| {
+                    checkpoint.reset(world.resource::<GameState>());
+                },
+            );
+            for _ in 0..10 {
+                app.update();
+            }
+            let live = app.world().resource::<GameState>();
+            assert_eq!(live.cursor, 1, "wait_at_zero={wait_at_zero}");
+            if wait_at_zero {
+                assert_eq!(live.dialogue.as_ref().unwrap().visible_chars, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn playback_return_transition_cannot_restart_or_advance_the_script() {
+        let mut state = State::new();
+        state.current_scene = "main".into();
+        state.install_program(Program::from_scenes([(
+            "main".into(),
+            vec![Action::Say {
+                speaker: String::new(),
+                text: "must not run during return".into(),
+                options: Default::default(),
+            }],
+        )]));
+        let mut app = playback_test_app(state, true);
+        app.insert_resource(crate::ui::title::ReturnToTitleTransition::default());
+        app.world_mut().resource_mut::<InputActions>().advance = true;
+        app.world_mut().resource_mut::<RuntimeSettings>().auto_delay = 0.0;
+        for _ in 0..6 {
+            app.update();
+        }
+        let state = app.world().resource::<GameState>();
+        assert_eq!(state.cursor, 0);
+        assert!(state.dialogue.is_none());
+        assert!(state.backlog.is_empty());
+    }
+
+    #[test]
+    fn playback_invisible_video_waits_for_completion_until_explicitly_stopped() {
+        let mut state = State::new();
+        state.current_scene = "main".into();
+        state.install_program(Program::from_scenes([(
+            "main".into(),
+            vec![Action::PlayVideo {
+                video: VideoSpec {
+                    id: "audio-only".into(),
+                    file: "movie.mp4".into(),
+                    looped: false,
+                    muted: false,
+                    alpha: 0.0,
+                    skippable: true,
+                    wait_for_finished: true,
+                    mode: VideoMode::Fullscreen,
+                },
+            }],
+        )]));
+        crate::runtime::script_driver::resume(
+            &mut state,
+            &mut crate::storage::save::ContinuationCheckpoint::default(),
+        );
+        update_transitions(&mut state, 0.02, false);
+        assert!(state.videos.contains_key("audio-only"));
+        assert!(
+            state.presentation_blocked(),
+            "opacity zero is not a completion signal"
+        );
+        let video = state.videos.get_mut("audio-only").unwrap();
+        video.stopping = true;
+        video.fade_out = 1.0;
+        update_transitions(&mut state, 0.02, false);
+        assert!(state.videos.is_empty());
+        assert!(!state.presentation_blocked());
+    }
+
+    #[cfg(feature = "hot-reload")]
+    #[test]
+    fn playback_hot_reload_resets_same_cursor_clocks_and_checkpoint() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut state = dialogue_state();
+        state.install_program(Program::from_scenes([(
+            "main".into(),
+            vec![Action::Comment],
+        )]));
+        let mut app = playback_test_app(state, true);
+        let worker = std::thread::spawn(|| {
+            Ok(HotReloadBuild {
+                config: None,
+                manifest: LocalAssetManifest::default(),
+                program: Program::from_scenes([(
+                    "main".into(),
+                    vec![Action::Say {
+                        speaker: String::new(),
+                        text: "[wait=1000]abcdefghij".into(),
+                        options: Default::default(),
+                    }],
+                )]),
+                diagnostics: Vec::new(),
+            })
+        });
+        while !worker.is_finished() {
+            std::thread::yield_now();
+        }
+        let mut worker = Some(worker);
+        app.world_mut()
+            .run_system_once(move |mut context: TickContext| {
+                context.hot_reload.running = Some(RunningHotReload {
+                    change_count: 1,
+                    worker: worker.take().unwrap(),
+                });
+                context.typewriter_clock.scene = "main".into();
+                context.typewriter_clock.cursor = 1;
+                context.typewriter_clock.pause = TypewriterPause::Timed(0.1);
+                *context.auto_timer = 0.2;
+                assert!(reload_scripts_if_changed(&mut context, 0.0));
+                assert!(matches!(
+                    context.typewriter_clock.pause,
+                    TypewriterPause::Idle
+                ));
+                assert_eq!(*context.auto_timer, 0.0);
+                assert_eq!(
+                    context.checkpoint.generation(),
+                    *context.checkpoint_generation
+                );
+                assert!(context.checkpoint.generation() > 0);
+                assert_eq!(
+                    context
+                        .checkpoint
+                        .state_for_continuation(&context.state)
+                        .unwrap()
+                        .cursor,
+                    context.state.cursor
+                );
+            })
+            .unwrap();
     }
 
     #[test]

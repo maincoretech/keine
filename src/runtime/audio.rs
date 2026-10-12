@@ -64,10 +64,31 @@ pub(crate) fn configure_audio(app: &mut App, _mounts: Vec<keine_loader::ContentM
     if !app.world().contains_resource::<Assets<AudioSource>>() {
         app.init_asset::<AudioSource>();
     }
+    #[cfg(not(feature = "audio-seekable"))]
+    app.add_systems(
+        PreUpdate,
+        crate::scene::audio::retire_failed_players::<AudioSource>,
+    );
     #[cfg(feature = "audio-opus")]
-    app.add_plugins(OpusAudioPlugin::new(_mounts));
+    {
+        app.add_plugins(OpusAudioPlugin::new(_mounts)).add_systems(
+            PreUpdate,
+            (
+                crate::scene::audio::retire_failed_players::<OpusAudio>,
+                crate::scene::audio::retire_failed_players::<LoopingOpusAudio>,
+            ),
+        );
+    }
     #[cfg(feature = "audio-seekable")]
-    app.add_plugins(SeekableAudioPlugin);
+    {
+        app.add_plugins(SeekableAudioPlugin).add_systems(
+            PreUpdate,
+            (
+                crate::scene::audio::retire_failed_players::<SeekableAudio>,
+                crate::scene::audio::retire_failed_players::<LoopingSeekableAudio>,
+            ),
+        );
+    }
     #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
     tail::configure(app);
 }

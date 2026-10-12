@@ -181,6 +181,7 @@ pub(crate) struct BacklogActionContext<'w, 's> {
     interactions:
         Query<'w, 's, (&'static Interaction, &'static BacklogAction), Changed<Interaction>>,
     state: ResMut<'w, GameState>,
+    checkpoint: ResMut<'w, crate::storage::save::ContinuationCheckpoint>,
     ui: ResMut<'w, BacklogUiState>,
     config: Res<'w, GameConfigResource>,
     settings: Res<'w, RuntimeSettings>,
@@ -705,6 +706,7 @@ pub fn handle_backlog_action(mut context: BacklogActionContext) {
     match action {
         BacklogAction::Restore(index) => {
             if context.state.restore_backlog(index) {
+                context.checkpoint.reset(&context.state);
                 context.ui.open = false;
             }
         }

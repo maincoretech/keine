@@ -1644,6 +1644,16 @@ struct SingleInstanceGuard {
     _file: File,
 }
 
+impl Drop for SingleInstanceGuard {
+    fn drop(&mut self) {
+        // Closing one descriptor is insufficient while a spawned child still
+        // holds a duplicate. Release the guard's lease explicitly before close.
+        if let Err(error) = fs2::FileExt::unlock(&self._file) {
+            log::warn!("failed to release the single-instance lock: {error}");
+        }
+    }
+}
+
 impl SingleInstanceGuard {
     fn acquire(project_root: &Path) -> Result<Self> {
         let path = instance_lock_path(project_root);
@@ -2929,8 +2939,17 @@ mod tests {
         let path = instance_lock_path(&root);
         let first = SingleInstanceGuard::acquire(&root).unwrap();
         assert!(SingleInstanceGuard::acquire(&root).is_err());
+        // A child process can briefly inherit the descriptor during spawn.
+        // Its duplicate must not extend the logical guard's lock lifetime.
+        let inherited_descriptor = first._file.try_clone().unwrap();
         drop(first);
-        assert!(SingleInstanceGuard::acquire(&root).is_ok());
+        let reacquired = SingleInstanceGuard::acquire(&root);
+        assert!(
+            reacquired.is_ok(),
+            "guard drop did not release the lock: {:?}",
+            reacquired.err()
+        );
+        drop(inherited_descriptor);
         std::fs::remove_file(path).unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }

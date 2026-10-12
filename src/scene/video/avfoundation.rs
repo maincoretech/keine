@@ -47,6 +47,10 @@ impl Plugin for BackendPlugin {
             Update,
             sync_video_playback.in_set(crate::runtime::GameSystemSet::Sync),
         );
+        app.add_systems(
+            Last,
+            sync_background_pause.after(crate::runtime::platform::update_lifecycle),
+        );
     }
 }
 
@@ -69,6 +73,7 @@ struct VideoSession {
 }
 
 struct NativePlayer {
+    lifecycle_paused: bool,
     _source: Arc<PreparedSource>,
     _asset: Option<Retained<AVURLAsset>>,
     _resource_delegate: Option<Retained<ResourceLoaderDelegate>>,
@@ -317,6 +322,9 @@ fn sync_video_playback(
             continue;
         };
         player.sync_audio_settings(resources.settings.master_volume, session.muted);
+        if player.lifecycle_paused {
+            continue;
+        }
         match player.next_frame() {
             Ok(Some(frame)) => present_native_frame(
                 id,
@@ -364,6 +372,18 @@ fn sync_video_playback(
     }
     for id in ended {
         state.videos.remove(&id);
+    }
+}
+
+fn sync_background_pause(
+    activity: Res<crate::runtime::platform::RuntimeActivity>,
+    mut playback: NonSendMut<VideoPlayback>,
+) {
+    let paused = *activity == crate::runtime::platform::RuntimeActivity::Background;
+    for session in playback.sessions.values_mut() {
+        if let Some(player) = &mut session.player {
+            player.sync_background_pause(paused);
+        }
     }
 }
 
@@ -445,6 +465,7 @@ impl NativePlayer {
         }
         log::info!("video decoder · AVFoundation");
         Ok(Self {
+            lifecycle_paused: false,
             _source: source,
             _asset: asset,
             _resource_delegate: resource_delegate,
@@ -467,6 +488,22 @@ impl NativePlayer {
             if self.muted != muted {
                 self.player.setMuted(muted);
                 self.muted = muted;
+            }
+        }
+    }
+
+    fn sync_background_pause(&mut self, paused: bool) {
+        if self.lifecycle_paused == paused {
+            return;
+        }
+        self.lifecycle_paused = paused;
+        // Native AVPlayer audio is outside Bevy's AudioSink query. Mirror the
+        // same lifecycle pause without affecting foreground Preview playback.
+        unsafe {
+            if paused {
+                self.player.pause();
+            } else {
+                self.player.play();
             }
         }
     }

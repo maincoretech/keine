@@ -116,6 +116,33 @@ pub struct EffectPlayback {
 #[derive(Resource, Default, Deref)]
 pub struct AudioAnimationActivity(pub bool);
 
+/// Failed source assets never produce a sink. Retire their pending runtime
+/// players so a fade/handoff cannot keep the window drawing forever.
+#[expect(
+    clippy::type_complexity,
+    reason = "typed pending audio players share the three runtime buses"
+)]
+pub(crate) fn retire_failed_players<T: Asset + bevy::audio::Decodable>(
+    server: Res<AssetServer>,
+    players: Query<
+        (Entity, &bevy::audio::AudioPlayer<T>),
+        (
+            Without<AudioSink>,
+            Or<(With<BgmPlayer>, With<EffectPlayer>, With<VocalPlayer>)>,
+        ),
+    >,
+    mut commands: Commands,
+) {
+    for (entity, player) in &players {
+        if matches!(
+            server.load_state(player.0.id()),
+            bevy::asset::LoadState::Failed(_)
+        ) {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
 #[derive(Default)]
 struct EffectEventBatch {
     plays: Vec<EffectCue>,
@@ -771,6 +798,68 @@ pub(crate) fn spawn_vocal(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playback_failed_audio_is_retired_without_repeated_animation_frames() {
+        use bevy::asset::{AssetApp, AssetPlugin, LoadState};
+        use bevy::audio::{AudioPlayer, AudioSource};
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<AudioSource>()
+            .init_resource::<RuntimeSettings>()
+            .insert_resource(GameState(keine_core::State::new()))
+            .init_resource::<AudioAnimationActivity>();
+        let handle = app
+            .world()
+            .resource::<AssetServer>()
+            .load::<AudioSource>("missing-playback-audit.invalid");
+        let failed = app
+            .world_mut()
+            .spawn((
+                BgmPlayer {
+                    current: true,
+                    base_volume: 1.0,
+                    envelope: 0.0,
+                    fade_from: 0.0,
+                    elapsed: 0.0,
+                    duration: 1.0,
+                    direction: FadeDirection::Waiting,
+                    applied_volume: None,
+                },
+                AudioPlayer(handle.clone()),
+            ))
+            .id();
+        // Other audio users own their error UI and are outside this cleanup.
+        let other_owner = app.world_mut().spawn(AudioPlayer(handle.clone())).id();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            app.update();
+            if matches!(
+                app.world()
+                    .resource::<AssetServer>()
+                    .load_state(handle.id()),
+                LoadState::Failed(_)
+            ) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "asset failure was not delivered"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        app.add_systems(Update, animate_audio);
+        app.update();
+        assert!(
+            app.world().resource::<AudioAnimationActivity>().0,
+            "the old pending-player path keeps requesting frames"
+        );
+        app.add_systems(PreUpdate, retire_failed_players::<AudioSource>);
+        app.update();
+        assert!(app.world().get_entity(failed).is_err());
+        assert!(app.world().get_entity(other_owner).is_ok());
+        assert!(!app.world().resource::<AudioAnimationActivity>().0);
+    }
 
     #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
     #[test]

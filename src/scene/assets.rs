@@ -119,6 +119,10 @@ pub(crate) struct PrefetchState {
     cursor: usize,
     ended: bool,
     background: Option<String>,
+    previous_background: Option<String>,
+    mini_avatar: Option<String>,
+    sequence_frames: HashMap<String, Vec<String>>,
+    mask_images: HashMap<String, (Option<String>, Option<String>)>,
     sprites: HashMap<String, String>,
     vocal: Option<String>,
     bgm: Option<String>,
@@ -136,6 +140,23 @@ impl PrefetchState {
             && self.cursor == state.cursor
             && self.ended == state.ended
             && self.background == state.bg
+            && self.previous_background.as_ref()
+                == state
+                    .bg_transition
+                    .as_ref()
+                    .and_then(|transition| transition.from.as_ref())
+            && self.mini_avatar == state.mini_avatar
+            && self.sequence_frames.len() == state.sprite_sequences.len()
+            && state
+                .sprite_sequences
+                .iter()
+                .all(|(id, sequence)| self.sequence_frames.get(id) == Some(&sequence.frames))
+            && self.mask_images.len() == state.stage_masks.len()
+            && state.stage_masks.iter().all(|(id, active)| {
+                self.mask_images.get(id).is_some_and(|(image, texture)| {
+                    image == &active.mask.image && texture == &active.mask.texture
+                })
+            })
             && self.vocal.as_ref()
                 == state
                     .dialogue
@@ -167,6 +188,26 @@ impl PrefetchState {
         self.cursor = state.cursor;
         self.ended = state.ended;
         self.background.clone_from(&state.bg);
+        self.previous_background = state
+            .bg_transition
+            .as_ref()
+            .and_then(|transition| transition.from.clone());
+        self.mini_avatar.clone_from(&state.mini_avatar);
+        self.sequence_frames.clear();
+        self.sequence_frames.extend(
+            state
+                .sprite_sequences
+                .iter()
+                .map(|(id, sequence)| (id.clone(), sequence.frames.clone())),
+        );
+        self.mask_images.clear();
+        self.mask_images
+            .extend(state.stage_masks.iter().map(|(id, active)| {
+                (
+                    id.clone(),
+                    (active.mask.image.clone(), active.mask.texture.clone()),
+                )
+            }));
         self.vocal = state
             .dialogue
             .as_ref()
@@ -505,6 +546,96 @@ mod tests {
         assert!(previous.matches(&GameState(state.clone())));
         state.cursor += 1;
         assert!(!previous.matches(&GameState(state)));
+    }
+
+    #[test]
+    fn playback_asset_plan_tracks_presentation_dependencies_at_the_same_cursor() {
+        for case in [
+            "background-exit",
+            "avatar",
+            "sequence",
+            "mask-image",
+            "mask-texture",
+        ] {
+            let mut state = GameState(keine_core::State::new());
+            state.bg = Some("current.webp".into());
+            state.bg_transition = Some(keine_core::state::BgTransition {
+                from: Some("previous.webp".into()),
+                to: "current.webp".into(),
+                kind: keine_core::Transition::Fade(1.0),
+                progress: 0.0,
+                blocking: false,
+            });
+            state.mini_avatar = Some("avatar.webp".into());
+            state.sprite_sequences.insert(
+                "hero".into(),
+                keine_core::SpriteSequenceState {
+                    frames: vec!["hero-a.webp".into(), "hero-b.webp".into()],
+                    fps: 10.0,
+                    looped: false,
+                    elapsed: 0.0,
+                    frame: 0,
+                    frame_durations: Vec::new(),
+                    playback: None,
+                },
+            );
+            state.stage_masks.insert(
+                "mask".into(),
+                keine_core::StageMaskState {
+                    mask: keine_core::StageMask {
+                        image: Some("mask.webp".into()),
+                        texture: Some("fill.webp".into()),
+                        ..Default::default()
+                    },
+                    current: 0.0,
+                    from: 0.0,
+                    target: 1.0,
+                    elapsed: 0.0,
+                    duration: 1.0,
+                    blocking: false,
+                    order: 0,
+                },
+            );
+            let mut previous = PrefetchState::default();
+            previous.capture(&state);
+            let config = GameConfigResource(keine_core::config::GameConfig::default());
+            let manifest = LocalAssetManifest::default();
+            let before = build_asset_plan(&state, &config, &manifest);
+            state.stage_masks.get_mut("mask").unwrap().elapsed = 0.25;
+            state.stage_masks.get_mut("mask").unwrap().current = 0.25;
+            state.sprite_sequences.get_mut("hero").unwrap().elapsed = 0.25;
+            state.bg_transition.as_mut().unwrap().progress = 0.25;
+            assert!(
+                previous.matches(&state),
+                "animation timing must not rebuild the asset plan"
+            );
+            match case {
+                "background-exit" => state.bg_transition = None,
+                "avatar" => state.mini_avatar = Some("new-avatar.webp".into()),
+                "sequence" => {
+                    state.sprite_sequences.get_mut("hero").unwrap().frames[1] =
+                        "new-frame.webp".into()
+                }
+                "mask-image" => {
+                    state.stage_masks.get_mut("mask").unwrap().mask.image =
+                        Some("new-mask.webp".into())
+                }
+                "mask-texture" => {
+                    state.stage_masks.get_mut("mask").unwrap().mask.texture =
+                        Some("new-fill.webp".into())
+                }
+                _ => unreachable!(),
+            }
+            let after = build_asset_plan(&state, &config, &manifest);
+            assert!(
+                before.critical != after.critical || before.urgent != after.urgent,
+                "case={case}"
+            );
+            assert!(
+                !previous.matches(&state),
+                "changed asset dependencies must refresh the loading gate: {case}"
+            );
+        }
     }
 
     #[test]
