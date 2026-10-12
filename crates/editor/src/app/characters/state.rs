@@ -8,4 +8,5 @@ pub(in crate::app) struct CharactersState {
     pub(in crate::app) character_script: Option<(PathBuf, usize)>,
     pub(in crate::app) character_images: Option<Entity<SelectState<Vec<SourceOption>>>>,
     pub(in crate::app) character_image_options: Vec<SourceOption>,
+    pub(in crate::app) display_selects: Vec<Entity<SelectState<Vec<SourceOption>>>>,
 }

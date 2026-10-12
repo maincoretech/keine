@@ -1553,11 +1553,21 @@ pub(crate) fn handle_bgm_seek(
         None
     };
     if seek.dragging
-        && let Ok((player, _)) = players.single()
+        && let Ok((player, _sink)) = players.single()
         && let (Some(duration), Some(cursor)) = (player.duration, point)
         && let Some(point) = node.normalize_point(*transform, cursor)
     {
-        seek.preview = Some(duration.mul_f64(f64::from((point.x + 0.5).clamp(0.0, 1.0))));
+        let ratio = (point.x + 0.5).clamp(0.0, 1.0);
+        #[cfg(target_os = "android")]
+        if !duration.is_zero() {
+            let before = seek
+                .preview
+                .unwrap_or_else(|| _sink.position())
+                .as_secs_f32()
+                / duration.as_secs_f32();
+            crate::ui::haptics::drag_feedback(before, ratio, 1.0, 0.05);
+        }
+        seek.preview = Some(duration.mul_f64(f64::from(ratio)));
     }
     let finished = if seek.touch {
         touch
@@ -2019,8 +2029,14 @@ pub(crate) fn scroll_music(
         .filter(|(owner, _)| *owner == entity)
         .map_or(0.0, |(_, amount)| amount * node.inverse_scale_factor());
     let max = (node.content_size().y - node.size().y).max(0.0) * node.inverse_scale_factor();
+    #[cfg(target_os = "android")]
+    let before = list.target;
     list.target =
         (list.target - if hovered { wheel_delta } else { 0.0 } - touch_delta).clamp(0.0, max);
+    #[cfg(target_os = "android")]
+    if (hovered && wheel_delta != 0.0) || touch_delta != 0.0 {
+        crate::ui::haptics::drag_feedback(before, list.target, max, 64.0);
+    }
     position.y += (list.target - position.y) * exp_lerp(time.delta_secs(), UI_MOTION_RATE);
     if (list.target - position.y).abs() < 0.01 {
         position.y = list.target;

@@ -15,6 +15,7 @@ pub enum AuthoringEditError {
     DuplicateIdentifier,
     EmptyName,
     InvalidColor,
+    InvalidCharacterPreset,
     MissingInsertionPoint,
     InvalidManifest,
     UnsupportedDynamicText,
@@ -28,6 +29,9 @@ impl fmt::Display for AuthoringEditError {
             Self::DuplicateIdentifier => formatter.write_str("identifier is already used"),
             Self::EmptyName => formatter.write_str("display name cannot be empty"),
             Self::InvalidColor => formatter.write_str("color must use #RRGGBB"),
+            Self::InvalidCharacterPreset => {
+                formatter.write_str("character display preset is invalid")
+            }
             Self::MissingInsertionPoint => formatter.write_str("no stable insertion point exists"),
             Self::InvalidManifest => formatter.write_str("manifest is not valid Eiyashou YAML"),
             Self::UnsupportedDynamicText => {
@@ -312,6 +316,19 @@ pub fn edit_character(
         return Err(AuthoringEditError::EmptyName);
     }
     if character
+        .display
+        .as_ref()
+        .is_some_and(|display| display.validate().is_err())
+    {
+        return Err(AuthoringEditError::InvalidCharacterPreset);
+    }
+    let display = character
+        .display
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|_| AuthoringEditError::InvalidCharacterPreset)?;
+    if character
         .color
         .as_deref()
         .is_some_and(|color| !valid_color(color))
@@ -361,12 +378,14 @@ pub fn edit_character(
                 format!("\n{}", entries.join("\n"))
             }),
         ),
+        ("display", display),
     ] {
         let unchanged = match key {
             "name" => original.name == character.name,
             "color" => original.color == character.color,
             "avatar" => original.avatar == character.avatar,
             "expressions" => original.expressions == character.expressions,
+            "display" => original.display == character.display,
             _ => false,
         };
         if unchanged {
@@ -456,6 +475,7 @@ pub fn rename_character_asset(
             color: character.color,
             avatar: character.avatar,
             expressions: character.expressions,
+            display: character.display,
         };
         let mut changed = false;
         for value in entry

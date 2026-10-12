@@ -142,6 +142,20 @@ Block 遮挡，Pass 容器空白处穿透；顶部透明整页容器不拦截下
 重置真实时钟基点，避免新菜单动画吃进休眠时间；桌面和安卓保持同一套动画时长。
 不提供剧情左右划跳读、列表下划关闭等容易误触的操作。
 
+### 界面触感
+
+Android 默认启用界面触感，遵循系统触感设置，不提供游戏内开关。桌面不注册触感系统。
+有效按钮点击、tab/选项切换与确认使用短系统反馈；复用 `UiSoundStyle`，但不依赖
+`ui-sounds` feature 或音量。Backlog 实际开关状态变化也覆盖上划/滚轮打开与非按钮关闭。
+Backlog 和音乐列表在用户移动目标跨过 64 设计像素刻度时轻震，滑块和音乐进度条
+跨过 5% 刻度时轻震；到达端点单次反馈。值不变、继续顶住同一端点、悬停/松开、
+播放进度自动前进、平滑滚动/回弹及剧情推进不触发，不按帧持续震动。
+按钮与 Backlog 状态变化在同一帧合并，所有反馈由 Java 主线程以 60ms 间隔去重，失焦时丢弃请求。
+桥接沿用 NativeActivity/JNI；使用
+[View.performHapticFeedback](https://developer.android.com/develop/ui/views/haptics/haptics-apis)，
+不添加 VIBRATE 权限或强制绕过系统设置。没有 EYS 震动指令。
+设置文件维持 v4，没有新增持久化偏好或存档字段。
+
 ## 部署测试工程
 
 开发测试可先安装 APK，再通过 debug 包的 `run-as` 部署现有 fixture（不修改 fixture）：

@@ -90,7 +90,7 @@ benchmark 指定的窗口大小不受这些偏好影响。Preview 仍使用隔�
 └── compatibility.md   LetsGal 与 WebGAL 的支持边界
 ```
 
-当前版本 0.15.2。macOS 是当前验收重点；Windows/Linux 的运行态验收暂缓。
+当前版本 0.15.4。macOS 是当前验收重点；Windows/Linux 的运行态验收暂缓。
 编译和自动测试通过不等于 IME、DPI、音视频和运行态验收通过。
 
 ## 许可证

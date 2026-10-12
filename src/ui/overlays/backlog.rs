@@ -682,6 +682,15 @@ pub fn scroll_backlog(mut context: BacklogScrollContext) {
         context.motion.target = max;
         context.motion.initialized = true;
     }
+    #[cfg(target_os = "android")]
+    if delta != 0.0 {
+        crate::ui::haptics::drag_feedback(
+            context.motion.target,
+            (context.motion.target - delta).clamp(0.0, max),
+            max,
+            64.0,
+        );
+    }
     context
         .motion
         .advance(delta, max, context.time.delta_secs());

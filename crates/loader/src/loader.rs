@@ -235,6 +235,11 @@ impl ContentProject {
             {
                 bail!("character `{id}` color must use #RRGGBB");
             }
+            if let Some(display) = &character.display {
+                display
+                    .validate()
+                    .map_err(|error| anyhow::anyhow!("character `{id}` display: {error}"))?;
+            }
             data.warnings.extend(
                 character
                     .unknown_fields()
@@ -710,7 +715,7 @@ mod tests {
         .unwrap();
         fs::write(
             root.join("characters.yaml"),
-            "characters:\n  rin:\n    name: Rin\n    color: '#BAEBFF'\n",
+            "characters:\n  rin:\n    name: Rin\n    color: '#BAEBFF'\n    display: {position: right, height_percent: 85, enter: enter_from_right, exit: exit, duration_ms: 300}\n",
         )
         .unwrap();
         fs::write(
@@ -804,6 +809,28 @@ mod tests {
             );
             assert_eq!(state.sprites["other"].filter.brightness, others);
             keine_core::step::advance(&mut state);
+        }
+        // Authoring defaults must not silently change already-written commands.
+        assert!(state.transition_rules.is_empty());
+        assert_eq!(
+            state.sprites["original-character"].position,
+            keine_core::Position::center(0.0)
+        );
+        for display in [
+            "{height_percent: 0}",
+            "{position: bottom}",
+            "{enter: shake}",
+        ] {
+            fs::write(
+                root.join("characters.yaml"),
+                format!("characters:\n  rin:\n    name: Rin\n    display: {display}\n"),
+            )
+            .unwrap();
+            let error = project.prepare_eiyashou(&mut config).unwrap_err();
+            assert!(
+                format!("{error:#}").contains("character `rin` display"),
+                "{error:#}"
+            );
         }
         let _ = fs::remove_dir_all(root);
     }

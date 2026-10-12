@@ -363,6 +363,9 @@ pub struct EiyashouCharacter {
     pub avatar: Option<String>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub expressions: std::collections::BTreeMap<String, Vec<String>>,
+    /// Editor defaults expanded into explicit commands, never runtime overrides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<CharacterDisplayPreset>,
     #[serde(flatten)]
     unknown: HashMap<String, noyalib::Value>,
 }
@@ -370,6 +373,60 @@ pub struct EiyashouCharacter {
 impl EiyashouCharacter {
     pub fn unknown_fields(&self) -> impl Iterator<Item = &str> {
         self.unknown.keys().map(String::as_str)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CharacterDisplayPreset {
+    pub position: String,
+    pub x: i32,
+    pub y: i32,
+    /// None retains the image's natural size; otherwise percent of viewport height.
+    pub height_percent: Option<u16>,
+    pub enter: Option<String>,
+    pub exit: Option<String>,
+    pub duration_ms: u32,
+}
+
+impl Default for CharacterDisplayPreset {
+    fn default() -> Self {
+        Self {
+            position: "center".into(),
+            x: 0,
+            y: 0,
+            height_percent: None,
+            enter: None,
+            exit: None,
+            duration_ms: 500,
+        }
+    }
+}
+
+impl CharacterDisplayPreset {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if !matches!(self.position.as_str(), "left" | "center" | "right") {
+            return Err("position must be left, center or right");
+        }
+        if self
+            .height_percent
+            .is_some_and(|height| !(1..=400).contains(&height))
+        {
+            return Err("height must be 1–400% of the viewport, or blank for natural size");
+        }
+        if self.enter.as_deref().is_some_and(|preset| {
+            !matches!(
+                preset,
+                "enter" | "enter_from_bottom" | "enter_from_left" | "enter_from_right"
+            )
+        }) || self.exit.as_deref().is_some_and(|preset| preset != "exit")
+        {
+            return Err("display preset uses an unsupported entry or exit animation");
+        }
+        if self.duration_ms > 60_000 {
+            return Err("transition duration must be 0–60000 ms");
+        }
+        Ok(())
     }
 }
 
@@ -1185,6 +1242,45 @@ script:
                 "{source}"
             );
         }
+    }
+
+    #[test]
+    fn character_display_presets_validate_boundaries_and_reject_unknown_fields() {
+        for (fields, valid) in [
+            ("{}", true),
+            (
+                "{position: left, x: -24, y: 10, height_percent: 1, duration_ms: 0}",
+                true,
+            ),
+            (
+                "{position: right, height_percent: 400, enter: enter_from_right, exit: exit, duration_ms: 60000}",
+                true,
+            ),
+            ("{height_percent: 0}", false),
+            ("{height_percent: 401}", false),
+            ("{duration_ms: 60001}", false),
+            ("{position: bottom}", false),
+            ("{enter: shake}", false),
+            ("{exit: enter}", false),
+            ("{height_percent: -1}", false),
+            ("{duration_ms: -1}", false),
+            ("{height_percent: nan}", false),
+            ("{heigth_percent: 85}", false),
+        ] {
+            let yaml = format!("characters:\n  hero:\n    name: Hero\n    display: {fields}\n");
+            let accepted = EiyashouCharacterManifest::from_yaml(&yaml).is_ok_and(|manifest| {
+                manifest.characters["hero"]
+                    .display
+                    .as_ref()
+                    .unwrap()
+                    .validate()
+                    .is_ok()
+            });
+            assert_eq!(accepted, valid, "{fields}");
+        }
+        let legacy =
+            EiyashouCharacterManifest::from_yaml("characters: {hero: {name: Hero}}").unwrap();
+        assert!(legacy.characters["hero"].display.is_none());
     }
 
     #[test]

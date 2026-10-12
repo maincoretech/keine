@@ -14,6 +14,7 @@ use std::sync::{
 };
 
 pub(super) mod backup;
+pub(super) mod haptics;
 
 static BACK_PENDING: AtomicBool = AtomicBool::new(false);
 static BACK_WAKE: Mutex<Option<winit::event_loop::EventLoopProxy<bevy::winit::WinitUserEvent>>> =

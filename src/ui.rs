@@ -10,6 +10,8 @@ pub use overlays::{backlog, dialog};
 pub(crate) use screens::menu;
 pub use screens::{extra, save_load, settings_panel, title};
 pub use stage::{choice, control_bar, textbox};
+#[cfg(target_os = "android")]
+pub(crate) use support::haptics;
 #[cfg(feature = "ui-sounds")]
 pub(crate) use support::sound;
 pub(crate) use support::{activity, foundation, input_scope, touch};
@@ -126,6 +128,13 @@ fn add_startup_systems(app: &mut App) {
 }
 
 fn add_stage_systems(app: &mut App) {
+    #[cfg(target_os = "android")]
+    app.add_systems(
+        Update,
+        haptics::button_feedback
+            .after(backlog::scroll_backlog)
+            .in_set(GameSystemSet::Ui),
+    );
     #[cfg(feature = "ui-sounds")]
     app.add_systems(Update, sound::play_button_sounds.in_set(GameSystemSet::Ui));
     app.add_systems(

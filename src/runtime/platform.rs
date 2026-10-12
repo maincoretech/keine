@@ -20,6 +20,8 @@ use keine_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
 #[cfg(target_os = "android")]
 pub(crate) use super::android::backup::{request_backup, take_backup_result};
+#[cfg(target_os = "android")]
+pub(crate) use super::android::haptics::ui_feedback as ui_haptic_feedback;
 
 use crate::render::blur::{DialogCamera, SceneBlurCamera, UiBlurCamera};
 use crate::runtime::resources::{

@@ -5,6 +5,8 @@ import android.content.Intent;
 import android.os.ParcelFileDescriptor;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.SystemClock;
+import android.view.HapticFeedbackConstants;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
@@ -18,6 +20,19 @@ public final class EngineActivity extends NativeActivity {
     private static final int EXPORT_BACKUP = 101;
     private static final int IMPORT_BACKUP = 102;
     private OnBackInvokedCallback backCallback;
+    private long lastUiHaptic = -60;
+
+    /** Called on the Java main thread. Respect system touch feedback and focus. */
+    public void uiHapticFeedback(boolean switching) {
+        View view = getWindow().getDecorView();
+        long now = SystemClock.uptimeMillis();
+        if (!view.hasWindowFocus() || now - lastUiHaptic < 60) return;
+        // No override flags or VIBRATE permission: user/system settings win.
+        if (view.performHapticFeedback(switching
+                ? HapticFeedbackConstants.CLOCK_TICK : HapticFeedbackConstants.VIRTUAL_KEY)) {
+            lastUiHaptic = now;
+        }
+    }
 
     @Override
     protected void onCreate(Bundle state) {

@@ -55,6 +55,74 @@ Output 显示只读变量区（该现场无变量），停止 Preview 清除快�
 变量边界、失败诊断与演出中 checkpoint 由上述回归覆盖；未逐章进行完整视觉/听感验收，
 Windows/Linux/Android 新功能运行态尚未复验。
 
+## Characters 固定显示预置
+
+每个角色的 `display` 是作者元数据，保存后由 Characters 的 Show/Hide 展开为现有
+`sprite` / `sprite.transition` / `hide` 指令。Change/Blink/Talk 不重设位置、尺寸或
+转场规则，Avatar 沿用原行为；旧角色清单可省略预置，Loader 不用预置覆盖已有剧本。
+控件复用现有 Input/Select、按钮、滚动和文档事务，不增加 Preview 拖拽或另一套场景模型。
+
+新增两个回归入口：预置边界使用同一案例表，指令生成复用原角色 fixture。既有清单
+编辑/重映射及 Loader 工程回归增加预置往返、幂等编辑、保留其他角色/未知字段/注释、
+非法预置拒绝和现有剧本不受影响的断言；没有另建测试工程或扩大运行时 Action/Save 合同。
+
+```sh
+cargo fmt --all --check
+cargo check --offline --locked --workspace --features publisher,video-native,hot-reload
+cargo clippy --offline --locked --workspace --all-targets --features publisher,video-native,hot-reload -- -D warnings
+cargo test --offline --locked --workspace --features publisher,video-native,hot-reload
+cargo check --offline --locked -p keine-loader --all-features
+cargo check --offline --locked -p keine --no-default-features --features publisher
+cargo build --offline --locked --bins --features publisher,video-native,hot-reload
+cargo build --offline --locked -p keine-editor --bin editor
+target/debug/keine validate tests/fixtures/native-smoke
+target/debug/keine validate projects/tday
+```
+
+工作区 1073 passed / 0 failed / 21 ignored；fmt/check/Clippy、列出的 feature 检查、
+两端构建及工程校验通过。macOS 原生表单使用独立测试工程：保存高度 80%，关闭后
+重新打开角色，Right、偏移 -24/-10、From right/Fade out 和 300ms 正确恢复；Show
+插入 `right(x: -24, y: -10)` / `viewport(height: 0.8)` 及显式转场，保存文件核对通过。
+Reset 后保存的显式默认预置也已核对；Core 回归确认新 Show 清除旧入场/退场规则。
+测试窗口均正常退出，原 tday 未改动。原始日志与本地测试 app 在
+`target/character-presets-0152/`。Windows/Linux Editor 交互仍由各自实机验收。
+
+## 0.15.2 定向实机验收
+
+Android 使用 `146f037` 的 CI Android #26 artifact（run `38201609991`），
+独立 Engine 测试应用版本 0.15.2；原有 0.13.1 tday 应用及存档保留。
+设备为 Motorola edge 70 max / Android 16 / Adreno 829 / Vulkan，截图物理尺寸
+3168×1440。工程使用 tday 文件系统副本与独立 `project.id`，复用已有六次幕布场景，
+添加普通八秒镜头演出；不改变正式 tday 入口，也不据此声称 encrypted APK 挂载验收。
+
+| 定向检查 | 结果 |
+| --- | --- |
+| 自动播放六次 260ms 幕布开合 | 无额外点击完成，进入文字回退的确认等待；点击后正常续行 |
+| 演出中快速存档与读档 | 镜头尚未结束即可保存 slot 0，读取恢复演出前对白/检查点并重新进入演出 |
+| 演出中普通存档与读档 | slot 1 立即落盘，卡片显示检查点文本，Save/Load tab 与读取确认正常；读取恢复同一检查点 |
+| 后台恢复 | 手机 `/proc/uptime` 确认后台停留 105.04s；恢复一秒后仍在八秒演出中的对白，后续正常完成 |
+| 返回标题、继续与退出 | 标题页 Continue 恢复同一对白；确认退出后进程结束，测试进程日志无 panic/fatal |
+
+图片、APK SHA-256/commit 身份与日志保留在 `target/character-presets-0152/android/`。
+验收后独立 Engine 应用的私有工程已恢复正常 tday 入口；测试存档仍隔离在测试 project.id。
+跨进程宿主 monotonic 测量出现负值，已弃用，不用它报告后台时长。
+未做新一轮性能跑分，也未验收主观音频听感；Android 当前不支持视频。
+Windows/Linux 原生检查按用户安排由用户使用对应 CI 包测试。
+macOS AVFoundation 失焦暂停仍未取得可确认的原生结果，继续保留为待验收。
+
+## Android 界面触感
+
+新增一个事件回归入口，检查 click/switch、重复 Pressed、悬停/松开、滑块按钮排除，
+以及拖动跨刻度/双向滚动/跳过多刻度/触边/静止/无溢出/非法值。
+触感调用只接在用户驱动的设置滑块、音乐 seek、Backlog 与音乐列表更新中，
+不接动画和自动播放进度同步。桌面不注册触感系统；设置文件仍为 v4，没有开关或剧本 Action。
+
+实际执行 workspace check、all-targets Clippy 与 tests（publisher,video-native,hot-reload），
+1074 passed / 0 failed / 21 ignored；无默认功能 check/Clippy 与 fmt 通过。
+日志在 `target/android-ui-haptics/`。Android ui-sounds 交叉 check 因本机缺 NDK 的
+`aarch64-linux-android-clang` 阻止，尚未到应用代码；APK/Java lint、无 ui-sounds 的
+Android 构建与 Moto 触感/系统关闭/后台抑制尚待 CI 和真机验证，不能用桌面回归替代。
+
 ## Android 完整性能采集
 
 Android benchmark 复用桌面场景清单与 runtime 测量器，通过 ADB 逐项冷进程运行、

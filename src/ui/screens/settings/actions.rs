@@ -405,6 +405,8 @@ pub fn handle_setting_sliders(
             };
             let ratio = (point.x + 0.5).clamp(0.0, 1.0);
             if (slider.0.ratio(&settings) - ratio).abs() > 0.0005 {
+                #[cfg(target_os = "android")]
+                crate::ui::haptics::drag_feedback(slider.0.ratio(&settings), ratio, 1.0, 0.05);
                 slider.0.set_ratio(&mut settings, ratio);
                 drag.dirty = true;
             }

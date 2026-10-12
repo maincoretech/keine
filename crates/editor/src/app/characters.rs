@@ -2,6 +2,7 @@
 use super::*;
 use crate::authoring::CharacterEntry;
 use gpui_kit::component::select::Select;
+use keine_core::config::CharacterDisplayPreset;
 
 pub(super) fn render(
     root: &Path,
@@ -69,7 +70,7 @@ pub(super) fn render(
                 ),
         );
     }
-    if inputs.len() == 6 {
+    if inputs.len() == 10 {
         content = content
             .child(tool_action("New character").on_click(
                 cx.listener(|panel, _, window, cx| panel.select_character(None, window, cx)),
@@ -78,6 +79,31 @@ pub(super) fn render(
             .child(tool_input(&inputs[1]))
             .child(tool_input(&inputs[2]))
             .child(tool_input(&inputs[5]))
+            .child(section_label("DISPLAY PRESET"));
+        for (label, select) in ["Position", "Entry", "Exit"]
+            .into_iter()
+            .zip(&panel.characters.display_selects)
+        {
+            content = content
+                .child(div().text_xs().text_color(rgb(MUTED)).child(label))
+                .child(Select::new(select).small());
+        }
+        for (label, input) in [
+            ("Horizontal offset (px)", &inputs[6]),
+            ("Vertical offset (px)", &inputs[7]),
+            ("Height (% of viewport; blank = natural)", &inputs[8]),
+            ("Transition duration (ms)", &inputs[9]),
+        ] {
+            content = content
+                .child(div().text_xs().text_color(rgb(MUTED)).child(label))
+                .child(tool_input(input));
+        }
+        content = content
+            .child(tool_action("Reset display preset").on_click(cx.listener(
+                |panel, _, window, cx| {
+                    panel.set_character_display(&CharacterDisplayPreset::default(), window, cx)
+                },
+            )))
             .child(
                 tool_action(if selected.is_some() {
                     "Save character"
@@ -94,6 +120,11 @@ pub(super) fn render(
             .find(|character| &character.id == id)
     }) {
         content = content
+            .child(
+                tool_action("Hide").on_click(cx.listener(|panel, _, window, cx| {
+                    panel.insert_character_expression("", "hide", window, cx)
+                })),
+            )
             .when_some(
                 panel.characters.character_script.as_ref(),
                 |this, (path, line)| {
@@ -229,6 +260,104 @@ pub(super) fn render(
 }
 
 impl WorkbenchPanel {
+    pub(super) fn init_character_display(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for options in [
+            vec![("center", "Center"), ("left", "Left"), ("right", "Right")],
+            vec![
+                ("", "None"),
+                ("enter", "Fade in"),
+                ("enter_from_bottom", "From bottom"),
+                ("enter_from_left", "From left"),
+                ("enter_from_right", "From right"),
+            ],
+            vec![("", "None"), ("exit", "Fade out")],
+        ] {
+            let options = options
+                .into_iter()
+                .map(|(value, title)| SourceOption {
+                    value: value.into(),
+                    title: title.into(),
+                    asset: None,
+                })
+                .collect::<Vec<_>>();
+            let first = options[0].value.clone();
+            self.characters.display_selects.push(cx.new(|cx| {
+                let mut select = SelectState::new(options, None, window, cx);
+                select.set_selected_value(&first, window, cx);
+                select
+            }));
+        }
+        self.set_character_display(&CharacterDisplayPreset::default(), window, cx);
+    }
+
+    fn set_character_display(
+        &mut self,
+        preset: &CharacterDisplayPreset,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for (select, value) in self.characters.display_selects.iter().zip([
+            preset.position.as_str(),
+            preset.enter.as_deref().unwrap_or(""),
+            preset.exit.as_deref().unwrap_or(""),
+        ]) {
+            select.update(cx, |select, cx| {
+                select.set_selected_value(&value.to_owned(), window, cx)
+            });
+        }
+        for (input, value) in self.characters.tool_inputs[6..].iter().zip([
+            preset.x.to_string(),
+            preset.y.to_string(),
+            preset
+                .height_percent
+                .map(|height| height.to_string())
+                .unwrap_or_default(),
+            preset.duration_ms.to_string(),
+        ]) {
+            input.update(cx, |input, cx| input.set_value(value, window, cx));
+        }
+        cx.notify();
+    }
+
+    fn character_display(&self, cx: &App) -> Result<CharacterDisplayPreset, String> {
+        let values = self.characters.tool_inputs[6..]
+            .iter()
+            .map(|input| input.read(cx).value().trim().to_owned())
+            .collect::<Vec<_>>();
+        let selected = |index: usize| {
+            self.characters.display_selects[index]
+                .read(cx)
+                .selected_value()
+                .cloned()
+                .unwrap_or_default()
+        };
+        let preset = CharacterDisplayPreset {
+            position: selected(0),
+            x: values[0]
+                .parse()
+                .map_err(|_| "Horizontal offset must be a whole number")?,
+            y: values[1]
+                .parse()
+                .map_err(|_| "Vertical offset must be a whole number")?,
+            height_percent: if values[2].is_empty() {
+                None
+            } else {
+                Some(
+                    values[2]
+                        .parse()
+                        .map_err(|_| "Height must be a whole percentage")?,
+                )
+            },
+            enter: (!selected(1).is_empty()).then(|| selected(1)),
+            exit: (!selected(2).is_empty()).then(|| selected(2)),
+            duration_ms: values[3]
+                .parse()
+                .map_err(|_| "Transition duration must be a non-negative whole number")?,
+        };
+        preset.validate().map_err(str::to_owned)?;
+        Ok(preset)
+    }
+
     fn character_root(&self) -> Option<PathBuf> {
         match &self.content {
             PanelContent::Characters { root } => Some(root.clone()),
@@ -253,6 +382,7 @@ impl WorkbenchPanel {
         self.characters.character_id = id;
         self.characters.character_expression = None;
         let character = self.selected_character(cx).unwrap_or_default();
+        let display = character.display.clone().unwrap_or_default();
         for (input, value) in self.characters.tool_inputs.iter().zip([
             character.id,
             character.name,
@@ -263,6 +393,7 @@ impl WorkbenchPanel {
         ]) {
             input.update(cx, |input, cx| input.set_value(value, window, cx));
         }
+        self.set_character_display(&display, window, cx);
         cx.notify();
     }
     fn sync_character_images(
@@ -377,6 +508,16 @@ impl WorkbenchPanel {
         character.name = values[1].clone();
         character.color = (!values[2].is_empty()).then(|| values[2].clone());
         character.avatar = (!values[5].is_empty()).then(|| values[5].clone());
+        let display = match self.character_display(cx) {
+            Ok(display) => display,
+            Err(error) => {
+                window.push_notification(Notification::error(error), cx);
+                return;
+            }
+        };
+        character.display = (character.display.is_some()
+            || display != CharacterDisplayPreset::default())
+        .then_some(display);
         if character.avatar.as_ref().is_some_and(|id| {
             !cx.global::<EditorDocuments>()
                 .authoring(&root)
@@ -692,6 +833,14 @@ fn character_statement(
     if !valid_identifier(&character.id) {
         return Err("Character ID is invalid".into());
     }
+    if let Some(display) = &character.display {
+        display.validate().map_err(str::to_owned)?;
+    }
+    if mode == "hide" {
+        let mut result = display_transition(character);
+        result.push_str(&format!("hide({})", character.id));
+        return Ok(result);
+    }
     let frames = if mode == "avatar" {
         character.avatar.iter().cloned().collect()
     } else {
@@ -719,7 +868,29 @@ fn character_statement(
     } else {
         "sprite.update"
     };
-    let mut result = format!("{header}({}, {})", character.id, frames[0]);
+    let mut result = if mode == "show" {
+        display_transition(character)
+    } else {
+        String::new()
+    };
+    result.push_str(&format!("{header}({}, {}", character.id, frames[0]));
+    if mode == "show"
+        && let Some(display) = &character.display
+    {
+        result.push_str(&format!(
+            ", position: {}(x: {}, y: {})",
+            display.position, display.x, display.y
+        ));
+        if let Some(height) = display.height_percent {
+            result.push_str(&format!(
+                ", layout: viewport(height: {})",
+                f32::from(height) / 100.0
+            ));
+        } else {
+            result.push_str(", layout: natural");
+        }
+    }
+    result.push(')');
     if frames.len() > 1 {
         let options = match mode {
             "blink" => "mode: blink, interval: 3s".to_owned(),
@@ -740,6 +911,22 @@ fn character_statement(
         ));
     }
     Ok(result)
+}
+
+fn display_transition(character: &CharacterEntry) -> String {
+    character
+        .display
+        .as_ref()
+        .map(|display| {
+            format!(
+                "sprite.transition({}, enter: {}, exit: {}, duration: {}ms),\n",
+                character.id,
+                display.enter.as_deref().unwrap_or("none"),
+                display.exit.as_deref().unwrap_or("none"),
+                display.duration_ms,
+            )
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -806,6 +993,97 @@ mod tests {
             character_statement(&character, "smile", "change", &index).unwrap(),
             "sprite.update(hero, rest)"
         );
+    }
+
+    #[test]
+    fn display_presets_expand_show_and_hide_but_preserve_expression_update_geometry() {
+        use keine_core::{Action, Anchor, SpriteLayout};
+        let (mut character, index) = fixture();
+        for (position, enter, height) in [
+            ("left", "enter_from_left", Some(85)),
+            ("center", "enter", None),
+            ("right", "enter_from_right", Some(100)),
+            ("center", "enter_from_bottom", Some(400)),
+        ] {
+            character.display = Some(CharacterDisplayPreset {
+                position: position.into(),
+                x: 24,
+                y: -10,
+                height_percent: height,
+                enter: Some(enter.into()),
+                exit: Some("exit".into()),
+                duration_ms: 300,
+            });
+            let show = character_statement(&character, "smile", "show", &index).unwrap();
+            let hide =
+                character_statement(&character, "", "hide", &AuthoringIndex::default()).unwrap();
+            let parsed = keine_loader::parse_native_scenes(&format!(
+                "scene start {{ {show}, \"visible\", {hide} }}"
+            ));
+            assert!(
+                parsed[0].report.diagnostics.is_empty(),
+                "{position}: {:?}",
+                parsed[0].report.diagnostics
+            );
+            assert!(
+                matches!(&parsed[0].report.actions[0], Action::SetTransition {target, enter: Some(_), exit: Some(_), duration}
+                if target == "hero" && (*duration - 0.3).abs() < f32::EPSILON)
+            );
+            let expected_anchor = match position {
+                "left" => Anchor::Left(24.0),
+                "right" => Anchor::Right(24.0),
+                _ => Anchor::Center(24.0),
+            };
+            assert!(
+                matches!(&parsed[0].report.actions[1], Action::ShowSprite {position, layout, ..}
+                if position.x == expected_anchor && position.y == -10.0 && *layout == height.map(|height| SpriteLayout::ViewportHeight(f32::from(height)/100.0)).unwrap_or(SpriteLayout::Natural))
+            );
+            for mode in ["change", "blink", "talk"] {
+                let change = character_statement(&character, "blink", mode, &index).unwrap();
+                let parsed =
+                    keine_loader::parse_native_scenes(&format!("scene start {{ {change} }}"));
+                assert!(parsed[0].report.diagnostics.is_empty(), "{mode}");
+                assert!(
+                    matches!(
+                        &parsed[0].report.actions[0],
+                        Action::PatchSprite {
+                            position: None,
+                            layout: None,
+                            ..
+                        }
+                    ),
+                    "{mode}"
+                );
+                assert!(!change.contains("sprite.transition"), "{mode}");
+            }
+        }
+        character.display.as_mut().unwrap().height_percent = Some(0);
+        assert!(character_statement(&character, "smile", "show", &index).is_err());
+        // Resetting a saved preset must actively clear an earlier transition rule.
+        character.display = Some(CharacterDisplayPreset::default());
+        let show = character_statement(&character, "smile", "show", &index).unwrap();
+        let parsed =
+            keine_loader::parse_native_scenes(&format!("scene start {{ {show}, \"ready\" }}"));
+        assert!(parsed[0].report.diagnostics.is_empty());
+        let mut state = keine_core::State::new();
+        state.current_scene = "start".into();
+        state.insert_scene("start".into(), parsed[0].report.actions.clone());
+        state.transition_rules.insert(
+            "hero".into(),
+            keine_core::model::state::TransitionRule {
+                enter: Some(keine_core::AnimationPreset::EnterFromRight),
+                exit: Some(keine_core::AnimationPreset::Exit),
+                duration: 0.3,
+            },
+        );
+        assert_eq!(
+            keine_core::step::step(&mut state),
+            keine_core::StepResult::AwaitClick
+        );
+        assert!(state.transition_rules["hero"].enter.is_none());
+        assert!(state.transition_rules["hero"].exit.is_none());
+        assert!(state.sprites["hero"].animation.is_none());
+        assert_eq!(state.sprites["hero"].layout, SpriteLayout::Natural);
     }
 }
 

@@ -1,5 +1,7 @@
 pub(crate) mod activity;
 pub(crate) mod foundation;
+#[cfg(any(target_os = "android", test))]
+pub(crate) mod haptics;
 pub(crate) mod i18n;
 #[path = "support/input/scope.rs"]
 pub(crate) mod input_scope;

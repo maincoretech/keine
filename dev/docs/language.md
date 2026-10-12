@@ -31,6 +31,23 @@ script:
 ```
 
 清单条目可写 `room: assets/room.webp`，或 `{ path: assets/room.webp, tags: [interior] }`。
+角色可包含 Editor 显示预置；只影响之后显式插入的命令，不改变已有剧本的运行行为：
+
+```yaml
+characters:
+  rin:
+    name: 凛
+    expressions: { smile: [rin_smile] }
+    display:
+      position: right         # left / center / right
+      x: 24                   # 1920×1080 设计空间的整数像素偏移
+      y: -10
+      height_percent: 85      # 1–400；省略或 null 使用自然尺寸
+      enter: enter_from_right # enter / enter_from_bottom / enter_from_left / enter_from_right；省略为无
+      exit: exit              # 省略为无
+      duration_ms: 300        # 0–60000；默认 500
+```
+
 资源/角色/对象使用裸 ID；普通工程不需要对象映射。保留 `none`、`*` 等命令上下文哨兵。
 脚本 ID 中的下划线合法；仓库文件布局规则不限制作者 ID。
 

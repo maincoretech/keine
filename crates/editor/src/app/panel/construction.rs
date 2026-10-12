@@ -137,6 +137,7 @@ impl WorkbenchPanel {
                     character_script: None,
                     character_images: None,
                     character_image_options: Vec::new(),
+                    display_selects: Vec::new(),
                 },
                 document: crate::app::document::DocumentState {
                     document_mode: saved_view.map_or(DocumentMode::Text, |view| view.mode),
@@ -544,12 +545,17 @@ impl WorkbenchPanel {
                     "Expression name",
                     "Frame asset IDs, comma separated",
                     "Avatar asset ID (optional)",
+                    "Horizontal offset (px)",
+                    "Vertical offset (px)",
+                    "Height (% of viewport; blank = natural)",
+                    "Transition duration (ms)",
                 ] {
                     panel
                         .characters
                         .tool_inputs
                         .push(cx.new(|cx| InputState::new(window, cx).placeholder(placeholder)));
                 }
+                panel.init_character_display(window, cx);
             }
             if let Some(view) = saved_view
                 && let PanelContent::Document {

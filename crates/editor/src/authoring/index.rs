@@ -310,6 +310,7 @@ pub struct CharacterEntry {
     pub color: Option<String>,
     pub avatar: Option<String>,
     pub expressions: BTreeMap<String, Vec<String>>,
+    pub display: Option<keine_core::config::CharacterDisplayPreset>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -719,12 +720,24 @@ impl AuthoringIndex {
                             color: character.color,
                             avatar: character.avatar,
                             expressions: character.expressions,
+                            display: character.display,
                         })
                         .collect();
                     index
                         .characters
                         .sort_by(|left, right| left.id.cmp(&right.id));
                     for character in &index.characters {
+                        if let Some(display) = &character.display
+                            && let Err(error) = display.validate()
+                        {
+                            index.problems.push(problem(
+                                ProblemSeverity::Error,
+                                path.clone(),
+                                1,
+                                1,
+                                format!("Character `{}` display: {error}", character.id),
+                            ));
+                        }
                         for id in character
                             .avatar
                             .iter()

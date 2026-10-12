@@ -501,6 +501,15 @@ mod tests {
             id: "hero".into(),
             name: "少女".into(),
             avatar: Some("portrait".into()),
+            display: Some(keine_core::config::CharacterDisplayPreset {
+                position: "right".into(),
+                x: 24,
+                y: -10,
+                height_percent: Some(85),
+                enter: Some("enter_from_right".into()),
+                exit: Some("exit".into()),
+                duration_ms: 300,
+            }),
             expressions: BTreeMap::from([
                 ("smile".into(), vec!["face".into()]),
                 ("blink".into(), vec!["rest".into(), "closed".into()]),
@@ -520,6 +529,8 @@ mod tests {
             ["rest", "closed"]
         );
         assert!(manifest.characters["hero"].color.is_none());
+        assert_eq!(manifest.characters["hero"].display, character.display);
+        assert_eq!(edit_character(&edited, &character).unwrap(), edited);
         let renamed = rename_character_asset(&edited, "rest", "neutral").unwrap();
         let parsed = keine_core::config::EiyashouCharacterManifest::from_yaml(&renamed).unwrap();
         assert_eq!(
@@ -527,6 +538,10 @@ mod tests {
             ["neutral", "closed"]
         );
         assert!(renamed.contains("custom: keep") && renamed.contains("# author note"));
+        assert_eq!(parsed.characters["hero"].display, character.display);
+        let mut invalid = character.clone();
+        invalid.display.as_mut().unwrap().height_percent = Some(0);
+        assert!(edit_character(&edited, &invalid).is_err());
         let deleted = delete_character(&edited, "hero").unwrap();
         assert!(deleted.starts_with("# keep\ncharacters:\n"));
         assert!(deleted.contains("friend:") && !deleted.contains("hero:"));
