@@ -11,6 +11,9 @@ use hakutaku_core::{AssetCursor, OpenPolicy, Package, ResourceBudget};
 
 mod open;
 
+// Engine and publisher must move together across incompatible package formats.
+const _: () = assert!(hakutaku_core::format::FORMAT_MAJOR == 2);
+
 fn packaged_hakutaku_keys() -> Result<([u8; 32], [u8; 32])> {
     let share_a = *include_bytes!(concat!(env!("OUT_DIR"), "/hakutaku-key-share-a.bin"));
     let share_b = *include_bytes!(concat!(env!("OUT_DIR"), "/hakutaku-key-share-b.bin"));
@@ -435,7 +438,7 @@ impl HakutakuArchive {
             ResourceBudget::memory_constrained(),
             policy,
         )
-        .with_context(|| format!("failed to open Hakutaku snapshot {}", path.display()))?;
+        .with_context(|| format!("failed to open Hakutaku v2 snapshot {}", path.display()))?;
         Self::from_package(path, package)
     }
 
@@ -853,6 +856,22 @@ mod tests {
         fs::write(input.join("video.mp4"), &expected).unwrap();
         let identity = Identity::generate().unwrap();
         pack_directory(&PackOptions::new(&input, &release), &identity).unwrap();
+        let snapshot_path = release.join("game.haku");
+        let current = fs::read(&snapshot_path).unwrap();
+        assert_eq!(&current[..8], b"HAKU0002");
+        let mut legacy = current.clone();
+        legacy[..8].copy_from_slice(b"HAKU0001");
+        fs::write(&snapshot_path, legacy).unwrap();
+        assert!(
+            HakutakuArchive::open_with_keys(
+                &snapshot_path,
+                identity.root_key(),
+                identity.public_key(),
+                OpenPolicy::TrustFirstRelease,
+            )
+            .is_err()
+        );
+        fs::write(&snapshot_path, current).unwrap();
         let archive = HakutakuArchive::open_with_keys(
             &release.join("game.haku"),
             identity.root_key(),

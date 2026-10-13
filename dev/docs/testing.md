@@ -67,6 +67,49 @@ Hakutaku 中可解码/回绕，`damaged-header.mp4` 均拒绝；AVFoundation 包
 这些结果不包含新版发行包、游戏 GUI/视听体验或远端 CI；Linux/Windows/Android
 尚待各自运行验收，不能将 macOS 上的 FFmpeg 检查当作其他平台通过。
 
+## Hakutaku v2 接入与压力测试
+
+Hakutaku Core/Pack 升至 0.2.0，只接受 v2；Loader 编译时断言格式代数，回归确认
+v1 magic 被拒绝。Publisher 支持 `KEINE_HAKUTAKU_RELEASE_FLOOR`，配合原身份、
+新输出目录重建旧项目。迁移流程及固定依赖版本见[发行指南](release.md#hakutaku-020--v2)。
+
+macOS arm64 / Rust 1.99.0 本地通过 fmt、workspace/all-targets/all-features
+check 与 Clippy、all-features 工作区测试（1,097 passed / 24 ignored）；
+Loader 196 项、Publisher 29 项专项通过。固定 Git revision 后复跑上述门禁通过。
+Native Smoke 验证为 1 scene / 1 action / 0 warning。AVFoundation 与 FFmpeg
+既有视频验收入口均能读取文件系统及 v2 包、解码/回绕，并拒绝损坏头；这不等于
+完整游戏视听验收。完整 locked/all-features cargo-deny 四项通过，未修改许可策略。
+
+实际 `keine pack` 发布 Native Smoke，独立 Hakutaku CLI 验证格式与序列：下限 42
+首次发布及无变化重打包均为 42，升至 100 后为 100；下限 0 或非法字符串被拒绝，
+原先序列 100 的包仍可验证。临时测试身份随测试目录清理，没有复用项目私钥。
+
+Hakutaku 自身通过 83 项测试，Core/Pack 行覆盖率 97.63%、格式解析 100%、CLI 53.42%。
+同机三轮交替 v1/v2 测量的过程内中位数再取中位数：
+
+| 场景 | v1 基线 | v2 |
+| --- | ---: | ---: |
+| 10 万资源快照 | 8,888,370 B | 6,304,768 B |
+| 10 万资源解码目录 | 10,044,939 B | 7,928,907 B |
+| 打开目录 | 10.484 ms | 9.355 ms |
+| tday 随机音频读取 | 300.538 ms | 130.815 ms |
+| tday 顺序读取 | 49.418 ms | 49.693 ms |
+
+真实素材包含 35 Opus、35 WebP、13 shou，共 80,907,088 B；seek 是合成轨迹，
+不是播放延迟。宿主文件缓存为暖态，包缓存按读取场景清空。音频读取请求字节减少
+57.7%，调用数增加 65.5%；真实素材快照由 42,113 B 增至 73,907 B。视频块及图片
+CDC 保持原策略，不能将音频结果外推为所有媒体加速。
+
+50 万资源测试完成全量、严格增量、开发缓存及查询：快照 31,529,982 B，全量
+103.547 s、严格增量 75.598 s；全过程峰值 RSS 1,326,743,552 B 含发布端和夹具，
+不是运行时缓存预算。1,024 次小补丁全部通过，整理 16 次，段数峰值 64；8 路并发
+完成 65,536 次读取、512 MiB 返回内容逐字节比对，并在读取中反复清缓存。
+
+Kēne 原始日志为 `target/performance/quality-review/v2-*`；Hakutaku 的配对命令、
+二进制校验值、原始日志和统计在相邻仓库 `target/v2-review/`，设计及完整复现方法
+见该仓库 `docs/PERFORMANCE.md`。Hakutaku CI 已加入 10 万资源、512 次更新和
+并发读取门禁。远端 CI、正式发行产物、其他平台运行及新 wire-format fuzz 尚未验收。
+
 ## 演出调试与 tday 正式入口
 
 协议 v10 将 revision、当前源码位置和有界只读 RuntimeSnapshot 作为同一最新状态推送。

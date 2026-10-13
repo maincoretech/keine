@@ -18,7 +18,7 @@
 - 1920×1080 design space and viewport conversion have one owner; preserve scene/UI/dialog composition.
 - Save v11 requires matching Program fingerprint; profile/history/gallery/settings stay outside slot rollback.
 - Shipping user data uses stable project.id platform storage, never the read-only bundle directory.
-- WebP / Ogg Opus and Hakutaku v1 are production formats; development compatibility cannot expand shipping.
+- WebP / Ogg Opus and Hakutaku v2 are production formats; development compatibility cannot expand shipping.
 - WebGAL is frozen: maintain safety and clear regressions, add no new semantics or parity goals.
 - Keep identities/keys out of logs, commits, caches and unrelated child builds.
 - No speculative abstraction, new dependency, theme/plugin/backend framework without demonstrated need.

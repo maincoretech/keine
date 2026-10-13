@@ -236,6 +236,21 @@ Maven Pro 合成版内部名称已改为 Kene Text，字形与排版数据未变
 当前上游页面返回 403，未验证其当前版本。原始合成/图标转换配方和确切源版本未保存，
 不声称已重建来源链。
 
+## Hakutaku 0.2.0 / v2
+
+资源包仅接受 Hakutaku v2。v1 没有兼容读取、旧密文复用或自动迁移；旧项目从原始
+资源重新打包到全新输出目录，保留原 publisher identity，并同时分发新 Engine 与
+新资源包。`KEINE_HAKUTAKU_RELEASE_FLOOR` 可设为上次发行序号加一；已有 v2
+目录始终继续递增序号，不会被较低下限重置。该变量只影响资源发布，不改变 Save/IR。
+
+0.2.0 使用紧凑头、8 字节路径索引、按块位置保存的 chunk ID，音频块为 64 KiB，
+视频仍为 256 KiB；小补丁和高废弃比例的段在发布端有界整理。运行时签名验证、
+密文承诺及 mount 根目录限制不变。
+
+Core/Pack 固定为 `=0.2.0`，Git revision 为
+`8d637d5629b84f99251fd445366892bdb3c7cf2b`，Cargo.lock 同步固定来源；
+检出项目即可构建，无需相邻的 Hakutaku 工作区。
+
 ## 密钥与更新
 
 默认身份文件为 `<project>/.keine/publisher.key`，首次有效打包时生成，后续自动复用；旧 `.hakutaku-key` 名自动迁移并保留相同身份。`KEINE_HAKUTAKU_IDENTITY` 可指定工程外的身份路径。

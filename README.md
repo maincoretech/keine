@@ -2,7 +2,7 @@
 
 Native visual-novel engine and source-backed Editor. Rust 2024, Bevy 0.19.1, GPUI.
 Native authoring uses Eiyashou `.shou`; LetsGal Studio and frozen WebGAL compatibility inputs are supported.
-Shipping projects use Hakutaku v1, WebP images and Ogg Opus audio.
+Shipping projects use Hakutaku v2, WebP images and Ogg Opus audio.
 
 [简体中文](dev/docs/readme.zh.md)
 

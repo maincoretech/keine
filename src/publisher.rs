@@ -874,7 +874,16 @@ fn configure_engine_environment(
 }
 
 fn pack_staging(staged: &Path, output: &Path, identity: &Identity) -> Result<()> {
-    pack_directory(&PackOptions::new(staged, output), identity).context("Hakutaku pack failed")?;
+    let mut options = PackOptions::new(staged, output);
+    if let Some(floor) = env::var_os("KEINE_HAKUTAKU_RELEASE_FLOOR") {
+        options.release_sequence_floor = floor
+            .to_str()
+            .context("KEINE_HAKUTAKU_RELEASE_FLOOR must be a positive integer")?
+            .parse()
+            .context("KEINE_HAKUTAKU_RELEASE_FLOOR must be a positive integer")?;
+    }
+    pack_directory(&options, identity)
+        .context("Hakutaku v2 pack failed; v1 releases require a fresh output directory")?;
     Ok(())
 }
 
