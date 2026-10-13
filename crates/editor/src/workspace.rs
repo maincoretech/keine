@@ -17,6 +17,28 @@ use crate::project_key::ProjectKey;
 
 pub(crate) const MAX_DOCUMENT_BYTES: u64 = 1024 * 1024;
 
+/// Read a project document through the Loader's confined file handle and the
+/// Editor's byte limit, including when an earlier directory scan is stale.
+pub(crate) fn read_project_text(root: &Path, relative: &Path) -> io::Result<String> {
+    use keine_loader::{ContentBackend, ContentMount};
+    let maximum = if relative == Path::new("config.yaml") {
+        keine_loader::MAX_PROJECT_CONFIG_BYTES as u64
+    } else {
+        MAX_DOCUMENT_BYTES
+    };
+    let mount = ContentMount::new(ContentBackend::FileSystem(root.to_owned()), "")
+        .map_err(io::Error::other)?;
+    let file = mount.open_file(relative).map_err(io::Error::other)?;
+    if file.len()? > maximum {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "file exceeds the editor read limit",
+        ));
+    }
+    String::from_utf8(document::read_limited_stream(file, maximum)?)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkspaceFile {
     pub relative_path: PathBuf,
@@ -80,7 +102,7 @@ impl WorkspaceSession {
             .into_iter()
             .take(2)
             .filter_map(|file| {
-                fs::read_to_string(key.path().join(&file.relative_path))
+                read_project_text(key.path(), &file.relative_path)
                     .ok()
                     .map(|contents| TextDocument {
                         relative_path: file.relative_path.clone(),
@@ -208,6 +230,37 @@ mod tests {
         fs::write(root.join("cover.webp"), "media").unwrap();
         fs::write(root.join("target/ignored.txt"), "ignored").unwrap();
         root
+    }
+
+    #[test]
+    fn stale_workspace_metadata_cannot_bypass_the_document_read_limit() {
+        let root = fixture();
+        let session = WorkspaceSession::open(&root).unwrap();
+        let relative = &session.documents()[0].relative_path;
+        fs::OpenOptions::new()
+            .write(true)
+            .open(root.join(relative))
+            .unwrap()
+            .set_len(MAX_DOCUMENT_BYTES + 1)
+            .unwrap();
+        assert_eq!(
+            read_project_text(&root, relative).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert!(read_project_text(&root, Path::new("../outside.shou")).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_text_reads_reject_a_replaced_external_symlink() {
+        let root = fixture();
+        let project = root.join("project");
+        fs::create_dir(&project).unwrap();
+        fs::write(root.join("outside.shou"), "outside").unwrap();
+        std::os::unix::fs::symlink(root.join("outside.shou"), project.join("scene.shou")).unwrap();
+        assert!(read_project_text(&project, Path::new("scene.shou")).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

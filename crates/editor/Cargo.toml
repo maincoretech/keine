@@ -15,9 +15,9 @@ path = "src/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 lsp-types = { version = "=0.97.0", features = ["proposed"] }
-fs2 = { workspace = true }
 gpui-kit = { workspace = true }
-image = { workspace = true }
+# Match the static image formats accepted by the resource importer.
+image = { workspace = true, features = ["bmp", "gif", "jpeg", "png", "tiff", "webp"] }
 keine-authoring = { workspace = true }
 keine-core = { workspace = true }
 keine-loader = { workspace = true }

@@ -241,25 +241,6 @@ fn io_error() -> ffmpeg::Error {
     }
 }
 
-#[cfg(test)]
-mod callback_contract_tests {
-    use std::ptr;
-
-    use super::{io_error, read_packet, seek};
-
-    #[test]
-    fn callbacks_reject_invalid_pointers_before_dereferencing_them() {
-        let expected = i32::from(io_error());
-        // SAFETY: Null pointers are deliberate contract probes. The callbacks
-        // must validate them and return before attempting any dereference.
-        assert_eq!(
-            unsafe { read_packet(ptr::null_mut(), ptr::null_mut(), 0) },
-            expected
-        );
-        assert_eq!(unsafe { seek(ptr::null_mut(), 0, 0) }, i64::from(expected));
-    }
-}
-
 pub(super) struct VideoDecoder {
     input: MediaInput,
     decoder: ffmpeg::decoder::Video,
@@ -342,5 +323,24 @@ impl VideoDecoder {
         self.decoder.flush();
         self.draining = false;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod callback_contract_tests {
+    use std::ptr;
+
+    use super::{io_error, read_packet, seek};
+
+    #[test]
+    fn callbacks_reject_invalid_pointers_before_dereferencing_them() {
+        let expected = i32::from(io_error());
+        // SAFETY: Null pointers are deliberate contract probes. The callbacks
+        // must validate them and return before attempting any dereference.
+        assert_eq!(
+            unsafe { read_packet(ptr::null_mut(), ptr::null_mut(), 0) },
+            expected
+        );
+        assert_eq!(unsafe { seek(ptr::null_mut(), 0, 0) }, i64::from(expected));
     }
 }

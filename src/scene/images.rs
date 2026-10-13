@@ -374,11 +374,7 @@ pub(crate) fn prepare(
         dimensions.0.insert(
             id,
             ImageMetadata {
-                size: if role.is_stage_art() {
-                    target
-                } else {
-                    image.size()
-                },
+                size: image.size(),
                 environment,
                 bytes: image.data.as_ref().map_or(usize::MAX, Vec::len),
             },
@@ -516,6 +512,41 @@ mod tests {
         assert_eq!(
             target_size(ImageRole::FIGURE, UVec2::new(1536, 2742), 825.0),
             UVec2::new(462, 825)
+        );
+    }
+
+    #[test]
+    fn unsupported_resize_keeps_actual_image_dimensions() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()))
+            .init_asset::<Image>()
+            .init_resource::<ImageDimensions>()
+            .init_resource::<PreparedImages>()
+            .insert_resource(GameConfigResource(GameConfig::default()))
+            .add_systems(PostUpdate, prepare.after(bevy::asset::AssetEventSystems));
+        let image = Image::new_fill(
+            Extent3d {
+                width: 4096,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            &[0; 8],
+            TextureFormat::Rgba16Unorm,
+            RenderAssetUsages::RENDER_WORLD,
+        );
+        let handle = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+        let mut roles = ImageRoleRegistry::default();
+        roles.register("wide.png".into(), ImageRole::BACKGROUND);
+        let mut cache = LocalAssetCache::default();
+        cache
+            .handles
+            .insert("wide.png".into(), handle.clone().untyped());
+        app.insert_resource(roles).insert_resource(cache);
+        app.update();
+        assert_eq!(
+            app.world().resource::<ImageDimensions>().size(&handle),
+            Some(UVec2::new(4096, 1))
         );
     }
 

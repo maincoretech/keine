@@ -444,6 +444,7 @@ pub(crate) struct LifecycleContext<'w, 's> {
     input_scope: Res<'w, crate::ui::input_scope::UiInputScope>,
     auto_hide: Res<'w, AutoHideTiming>,
     input_caret: Res<'w, UserInputCaretBlink>,
+    persistence: Option<Res<'w, crate::storage::PersistenceWake>>,
     real_time: ResMut<'w, Time<Real>>,
     render_time: Option<Res<'w, bevy::time::TimeReceiver>>,
     windows: Query<'w, 's, (&'static Window, Option<&'static OnMonitor>)>,
@@ -491,6 +492,9 @@ pub(crate) fn update_lifecycle(
             .input_caret
             .next_toggle_in(context.real_time.elapsed_secs()),
     );
+    if let Some(deadline) = context.persistence.as_ref().and_then(|wake| wake.0) {
+        reactive_wait = reactive_wait.min(deadline);
+    }
     let benchmark_active = context.benchmark.as_ref().is_some_and(|c| c.continuous)
         || context.startup_capture.is_some();
     let next = if benchmark_active || (studio_sync && !focused && !companion_preview) {
@@ -1387,6 +1391,18 @@ mod tests {
             .resource_mut::<Time<Real>>()
             .advance_by(std::time::Duration::from_secs(10));
         let window = app.world_mut().spawn(Window::default()).id();
+
+        app.insert_resource(crate::storage::PersistenceWake(Some(
+            std::time::Duration::from_millis(100),
+        )));
+        app.world_mut().run_system_once(update_lifecycle).unwrap();
+        assert_eq!(
+            app.world().resource::<WinitSettings>().focused_mode,
+            UpdateMode::reactive_low_power(std::time::Duration::from_millis(100))
+        );
+        assert!(app.world().resource::<Time<Virtual>>().is_paused());
+        app.world_mut()
+            .remove_resource::<crate::storage::PersistenceWake>();
 
         for preview in [false, true] {
             if preview {

@@ -1,6 +1,5 @@
 //! Read-only project search. Open documents override disk, just as they do for authoring.
 use super::*;
-use std::io::Read as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const DEBOUNCE: Duration = Duration::from_millis(120);
@@ -447,16 +446,10 @@ fn search_sources(
             results.skipped += 1;
             continue;
         }
-        let source = overrides.get(&file.relative_path).cloned().or_else(|| {
-            let path = confined_existing_file(root, &file.relative_path)?;
-            let mut source = String::new();
-            fs::File::open(path)
-                .ok()?
-                .take(crate::workspace::MAX_DOCUMENT_BYTES + 1)
-                .read_to_string(&mut source)
-                .ok()?;
-            (source.len() as u64 <= crate::workspace::MAX_DOCUMENT_BYTES).then_some(source)
-        });
+        let source = overrides
+            .get(&file.relative_path)
+            .cloned()
+            .or_else(|| crate::workspace::read_project_text(root, &file.relative_path).ok());
         let Some(source) = source else {
             results.skipped += 1;
             continue;

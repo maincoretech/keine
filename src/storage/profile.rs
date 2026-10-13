@@ -13,7 +13,7 @@ use crate::runtime::resources::{
 };
 
 const VERSION: u32 = 1;
-const WRITE_DELAY_SECONDS: f32 = 0.5;
+pub(super) const WRITE_DELAY_SECONDS: f32 = 0.5;
 const MAX_PROFILE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PROFILE_ENTRIES: usize = 65_536;
 
@@ -32,14 +32,15 @@ struct ProfileFileWire {
 #[derive(Resource, Default)]
 pub(crate) struct ProfileWriter {
     pub(super) saved: HashMap<String, Value>,
-    pub(super) dirty_seconds: f32,
+    // None is clean; Some(0.0) keeps a failed write pending for the next delay.
+    pub(super) dirty_seconds: Option<f32>,
 }
 
 impl ProfileWriter {
     pub(crate) fn loaded(global_vars: &HashMap<String, Value>) -> Self {
         Self {
             saved: global_vars.clone(),
-            dirty_seconds: 0.0,
+            dirty_seconds: None,
         }
     }
 }
@@ -60,7 +61,7 @@ pub(crate) fn load(project_root: &Path) -> HashMap<String, Value> {
 }
 
 pub(crate) fn persist(
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     state: Res<GameState>,
     project_root: Res<PersistenceRoot>,
     mut writer: ResMut<ProfileWriter>,
@@ -75,17 +76,16 @@ pub(crate) fn persist(
     ) {
         return;
     }
-    if writer.dirty_seconds == 0.0 && !state.is_changed() {
+    if writer.dirty_seconds.is_none() && !state.is_changed() {
         return;
     }
     if writer.saved == state.global_vars {
-        if writer.dirty_seconds != 0.0 {
-            writer.dirty_seconds = 0.0;
-        }
+        writer.dirty_seconds = None;
         return;
     }
-    writer.dirty_seconds += time.delta_secs();
-    if writer.dirty_seconds < WRITE_DELAY_SECONDS {
+    let elapsed = writer.dirty_seconds.get_or_insert(0.0);
+    *elapsed += time.delta_secs();
+    if *elapsed < WRITE_DELAY_SECONDS {
         return;
     }
     persist_now(&state.global_vars, &project_root, &mut writer);
@@ -116,9 +116,12 @@ fn persist_now(values: &HashMap<String, Value>, project_root: &Path, writer: &mu
     match save(values, project_root) {
         Ok(()) => {
             writer.saved.clone_from(values);
-            writer.dirty_seconds = 0.0;
+            writer.dirty_seconds = None;
         }
-        Err(error) => log::warn!("failed to persist profile: {error:#}"),
+        Err(error) => {
+            writer.dirty_seconds = Some(0.0);
+            log::warn!("failed to persist profile: {error:#}");
+        }
     }
 }
 

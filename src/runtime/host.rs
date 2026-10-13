@@ -21,6 +21,9 @@ pub(crate) fn dispatch_shell(
     mut extra: ResMut<ExtraUi>,
     config: Res<GameConfigResource>,
 ) {
+    if state.shell_events.is_empty() {
+        return;
+    }
     for event in std::mem::take(&mut state.shell_events) {
         match event {
             ShellEvent::SetAutoplay(enabled) => toggles.auto = enabled,
@@ -103,6 +106,9 @@ pub(crate) fn dispatch(
     mut state: ResMut<GameState>,
     mut messages: MessageWriter<HostCommandMessage>,
 ) {
+    if state.host_commands.is_empty() {
+        return;
+    }
     for event in std::mem::take(&mut state.host_commands) {
         messages.write(HostCommandMessage(event));
     }
@@ -134,6 +140,55 @@ pub(crate) fn diagnose_unhandled(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn idle_host_and_audio_sync_preserve_state_change_detection() {
+        use crate::scene::audio::{EffectPlayback, VocalPlayback, sync_effects, sync_vocal};
+        use crate::storage::settings::RuntimeSettings;
+
+        #[derive(Resource, Default)]
+        struct Changes(usize);
+        fn observe(state: Res<GameState>, mut changes: ResMut<Changes>) {
+            changes.0 += usize::from(state.is_changed());
+        }
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()))
+            .insert_resource(GameState(keine_core::State::new()))
+            .insert_resource(GameConfigResource(Default::default()))
+            .init_resource::<RuntimeSettings>()
+            .init_resource::<VocalPlayback>()
+            .init_resource::<EffectPlayback>()
+            .init_resource::<ToggleStates>()
+            .init_resource::<SaveLoadUi>()
+            .init_resource::<SettingsUi>()
+            .init_resource::<BacklogUiState>()
+            .init_resource::<ExtraUi>()
+            .init_resource::<Changes>()
+            .add_message::<HostCommandMessage>()
+            .add_systems(
+                Update,
+                (dispatch_shell, dispatch, sync_vocal, sync_effects, observe).chain(),
+            );
+        app.update();
+        app.world_mut().resource_mut::<Changes>().0 = 0;
+        for _ in 0..10 {
+            app.update();
+        }
+        let changes = app.world().resource::<Changes>().0;
+        println!("idle GameState notifications over 10 frames: {changes}");
+        assert_eq!(changes, 0);
+
+        app.world_mut()
+            .resource_mut::<GameState>()
+            .shell_events
+            .push(ShellEvent::SetAutoplay(true));
+        app.update();
+        assert!(app.world().resource::<ToggleStates>().auto);
+        assert!(app.world().resource::<GameState>().shell_events.is_empty());
+        assert_eq!(app.world().resource::<Changes>().0, 1);
+        app.update();
+        assert_eq!(app.world().resource::<Changes>().0, 1);
+    }
 
     #[test]
     fn typed_system_slots_route_to_the_native_shell() {

@@ -581,13 +581,13 @@ fn spawn_source_worker(
             let source = prepare_source(&mounts, Path::new(&path)).map(Arc::new);
             let _ = sender.send(source);
         })
-        .unwrap_or_else(|error| {
+        .inspect_err(|error| {
             log::error!("failed to start video I/O worker: {error}");
-            thread::spawn(|| {})
-        });
+        })
+        .ok();
     VideoSession {
         source_receiver: receiver,
-        source_worker: Some(worker),
+        source_worker: worker,
         player: None,
         visual: VideoVisual::default(),
         mode,

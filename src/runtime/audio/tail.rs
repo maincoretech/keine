@@ -207,7 +207,7 @@ mod tests {
         let samples: Vec<_> = faded.by_ref().collect();
         assert_eq!(samples.len(), 200);
         assert!(samples[..150].iter().all(|sample| *sample == 1.0));
-        for pair in samples.chunks_exact(2) {
+        for pair in samples.as_chunks::<2>().0 {
             assert_eq!(pair[0], pair[1]);
         }
         assert!((samples[180] - 0.4).abs() < 0.001);

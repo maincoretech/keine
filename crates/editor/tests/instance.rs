@@ -52,5 +52,9 @@ fn secondary_process_forwards_a_real_open_request() {
     );
     assert!(child.wait().unwrap().success());
     drop(primary);
+    let Startup::Primary(restarted) = acquire_or_forward(&root, Vec::new()).unwrap() else {
+        panic!("closing the primary instance must release its lock")
+    };
+    drop(restarted);
     fs::remove_dir_all(root).unwrap();
 }

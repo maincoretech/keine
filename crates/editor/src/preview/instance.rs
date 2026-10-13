@@ -1,4 +1,4 @@
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, BufRead, BufReader, Read as _, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use fs2::FileExt as _;
 use serde::{Deserialize, Serialize};
 
 const INSTANCE_SCHEMA: u32 = 1;
@@ -111,7 +110,7 @@ pub fn acquire_or_forward(app_data: &Path, paths: Vec<PathBuf>) -> io::Result<St
         .truncate(false)
         .open(lock_path)?;
 
-    match lock.try_lock_exclusive() {
+    match lock.try_lock() {
         Ok(()) => {
             let listener = TcpListener::bind(("127.0.0.1", 0))?;
             let token = token();
@@ -131,11 +130,11 @@ pub fn acquire_or_forward(app_data: &Path, paths: Vec<PathBuf>) -> io::Result<St
                 endpoint_path,
             }))
         }
-        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+        Err(TryLockError::WouldBlock) => {
             forward_with_retry(&endpoint_path, OpenRequest { paths })?;
             Ok(Startup::Forwarded)
         }
-        Err(error) => Err(error),
+        Err(TryLockError::Error(error)) => Err(error),
     }
 }
 

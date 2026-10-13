@@ -49,7 +49,7 @@ jobs:
           actionlint -shellcheck= -pyflakes= -config-file "$RUNNER_TEMP/actionlint.yaml" \
             -ignore 'property "workflow_(ref|repository|sha)" is not defined in object type' "${workflows[@]}"
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+        uses: dtolnay/rust-toolchain@fb523f40495206854c36b250850817ae0f83e3d1 # 1.99.0
       - name: Check dependencies
         uses: ./.github/actions/check-dependencies
 
@@ -87,7 +87,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+        uses: dtolnay/rust-toolchain@fb523f40495206854c36b250850817ae0f83e3d1 # 1.99.0
         with:
           components: rustfmt, clippy
       - name: Restore Rust build cache
@@ -132,21 +132,26 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Check Clippy
         if: matrix.quality
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --locked --all-targets --all-features -- -D warnings
       - name: Check workspace tests
         if: matrix.quality
-        run: cargo test --workspace
+        run: cargo test --workspace --locked --all-features
       - name: Check publisher pipeline
         if: matrix.quality
-        run: cargo test --workspace --no-default-features --features publisher
+        run: cargo test --workspace --locked --no-default-features --features publisher
       # Select Engine and Editor together to unify their Bevy dev-dependencies.
       # libtest accepts several filters; Linux's workspace tests cover these too.
-      - name: Check platform video, process metrics and system Trash
+      - name: Check platform video, process metrics, files and instance locks
         run: >-
           cargo test --locked -p keine -p keine-editor --lib --no-default-features
           --features "${{ matrix.test_features }}" --
           scene::video:: preview::performance:: file_ops::assets::
-          publisher::tests::native_release_
+          publisher::tests::native_release_ instance_lock_is_released_with_its_guard
+          workspace::document:: workspace::persistence::
+          workspace::tests:: resource_migration::tests::replacement_
+      - name: Check Editor instance forwarding
+        if: ${{ !matrix.quality }}
+        run: cargo test --locked -p keine-editor --test instance
       - name: Check native display connection ownership
         run: cargo test --locked -p bevy_render --lib renderer::display_tests
       - name: Check platform video acceptance

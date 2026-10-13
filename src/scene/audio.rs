@@ -676,13 +676,18 @@ pub fn sync_vocal(
     mut players: Query<(Entity, &mut PlaybackEnvelope), With<VocalPlayer>>,
     mut commands: Commands,
 ) {
+    if !state.is_changed() && !config.is_changed() {
+        return;
+    }
     let key = state.dialogue.as_ref().and_then(|dialogue| {
         dialogue
             .vocal
             .as_ref()
             .map(|vocal| (state.current_scene.clone(), state.cursor, vocal.clone()))
     });
-    if let Some(cue) = state.vocal_event.take() {
+    if state.vocal_event.is_some()
+        && let Some(cue) = state.vocal_event.take()
+    {
         playback.key.clone_from(&key);
         if let Some(file) = cue.file {
             for (entity, _) in &mut players {

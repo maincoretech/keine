@@ -144,6 +144,42 @@ identity 与内嵌 key 不记录、不提交、不缓存，也不传给无需它
 
 ## 依赖审计与升级
 
+当前工具链和六个 Kēne crate 的 MSRV 统一为
+[Rust 1.99.0 stable](https://blog.rust-lang.org/2026/10/01/Rust-1.99.0/)。
+桌面、Android、依赖审计、Engine/Editor/Project 发行工作流固定官方
+`dtolnay/rust-toolchain` 的 `fb523f40495206854c36b250850817ae0f83e3d1`，
+其 action 定义选择 1.99.0；缓存键包含工具链文件，恢复旧缓存时仍由 Cargo 按编译器版本重建。
+成对前后缀解析使用升级区间内稳定的
+[`str::strip_circumfix`](https://doc.rust-lang.org/stable/std/primitive.str.html#method.strip_circumfix)，
+不改语言语义；固定大小像素/采样切片采用 `as_chunks`，通过新版 Clippy。
+
+单实例锁使用标准库 `File::try_lock` / `unlock`，移除 `fs2`；Editor 显式区分
+锁竞争与真实 I/O 错误，Engine 仍在 guard 释放时主动解锁，避免复制句柄延长租约。
+桌面 CI 在三个平台覆盖 Engine 锁释放与 Editor 跨进程转发/重新取得锁。
+Editor 的 `image` 仅显式请求 BMP/GIF/JPEG/PNG/TIFF/WebP，Media 图标仅请求 PNG。
+同一锁文件下，以 `cargo tree -p keine-editor --target all -e normal,build` 对比
+额外启用 `--features image/default`，实际依赖树少 27 个包（AVIF/rav1e 编码链）；
+GPUI 自身的格式需求保持不变。Cargo.lock 仍记录上游可选依赖，不能把树的差值
+误报为锁文件删包数或二进制体积收益。
+
+本轮只更新四项兼容补丁：anyhow 1.0.103 → 1.0.104、crc32fast 1.5.0 → 1.5.2、
+crossbeam-channel 0.5.16 → 0.5.17、serde_json 1.0.150 → 1.0.154。
+[Crossbeam 上游说明](https://github.com/crossbeam-rs/crossbeam/blob/master/crossbeam-channel/CHANGELOG.md)
+包含 bounded channel 的 UB/溢出修复；
+[serde_json 1.0.153](https://github.com/serde-rs/json/releases/tag/v1.0.153)
+修正非法 UTF-8 的报错位置。没有更改 postcard、Save/IR 布局或 Hakutaku revision，
+Bevy/GPUI 主栈更新仍须单独核对本地补丁与原生平台行为。
+GPUI 的 macOS 依赖链仍含 `block 0.1.6` 的 `uninhabited_static` 未来兼容性警告；
+当前 Rust 1.99 可构建，应随上游 Cocoa/Metal 绑定迁移处理，不新增本地 FFI 替代层。
+
+文件替换复用已有能力：Editor 使用
+[`std::fs::rename`](https://doc.rust-lang.org/std/fs/fn.rename.html) 覆盖目的文件，
+去掉 Windows 的双重改名；Publisher 资源重映射复用已启用的
+[`NamedTempFile::persist`](https://docs.rs/tempfile/3.27.0/tempfile/struct.NamedTempFile.html#method.persist)，
+保持原文件直到替换提交。两者写入后先 sync 文件，再替换及 sync 目录；未增加依赖。
+Authoring 分帧采用 [`postcard::take_from_bytes`](https://docs.rs/postcard/1.1.3/postcard/fn.take_from_bytes.html)
+检查帧内剩余字节，既有合法消息及协议版本保持不变。
+
 - `Audit Dependencies` 每日 UTC 02:17（北京时间 10:17）检查 main，可手动触发。
   GitHub 的定时任务可能延迟；长期无活动的公开仓库也可能停用 schedule，维护者须留意
   Actions 通知与任务状态。新的 RustSec 公告可让未改动的锁文件失败，旧绿灯不代表当前安全。

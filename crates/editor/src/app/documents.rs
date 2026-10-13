@@ -1,10 +1,12 @@
 //! Shared source documents, derived authoring indexes and selections.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+#[cfg(test)]
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::{fs, io};
 
 use gpui_kit::component::dock::{DockArea, NodeId, PanelId};
 use gpui_kit::component::input::EditorState;
@@ -516,7 +518,7 @@ impl EditorDocuments {
                 overrides
                     .get(&file.relative_path)
                     .cloned()
-                    .or_else(|| fs::read_to_string(root.join(&file.relative_path)).ok())
+                    .or_else(|| crate::workspace::read_project_text(root, &file.relative_path).ok())
             })
             .flat_map(|source| {
                 EiyashouProjection::parse(&source)
@@ -536,7 +538,7 @@ impl EditorDocuments {
             .manager
             .document(relative)
             .map(|document| document.borrow().contents().to_owned())
-            .or_else(|| fs::read_to_string(root.join(relative)).ok())
+            .or_else(|| crate::workspace::read_project_text(root, relative).ok())
     }
 
     pub(super) fn projection(

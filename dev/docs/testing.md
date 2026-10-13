@@ -13,6 +13,60 @@
 11 passed，benchmark collector 7 passed；fmt、workspace check、all-targets Clippy
 （同一 feature 组合）及 native-smoke validate 通过。测试整理不改变产品代码、feature 组合或发布流程，不作为性能改善或跨平台运行态验收证据。
 
+## 项目审查与工具链验证
+
+本轮以引擎为主，范围覆盖下表各模块。静态审查深入关键路径，并用工作区及
+feature 组合回归核对；不把范围覆盖表述为逐行证明或跨平台运行验收。
+
+| 范围 | 审查重点与本轮处理 |
+| --- | --- |
+| Core | 类型/表达式、执行步进、动画、Program fingerprint 与回滚；列表只读查询借用已有值，统一对白 tokenizer |
+| Loader | Native/LetsGal/WebGAL 边界、挂载/资源读取、场景合并、编译及存储封包；去掉场景深拷贝，保留覆盖诊断 |
+| Runtime | bootstrap、输入/viewport、Host/Preview、热更新、休眠、Android、测量入口；修正空队列造成的变更通知，接入持久化唤醒期限 |
+| Scene/Render | 图片/缓存预算、背景/立绘、粒子/遮罩/灯光、WGSL/相机与 blur、音频、AVFoundation/FFmpeg；修正实际图片尺寸缓存和线程创建失败处理 |
+| Storage/UI | Save v11、独立域、备份/设置、选择/对白/弹窗/输入捕获；失败写入保留重试，真实时间到期唤醒，退出补写；修复 Unicode 颜色 panic 与非有限字号/透明度 |
+| Media/Publisher/Migration | WebP/FFI 所有权与上限、发布目录/身份隔离、格式转换和资源重映射；复用 tempfile 原子替换，不移动原文件后再发布 |
+| Authoring/Editor | 协议分帧、Preview 生命周期、文档/恢复/索引/搜索/资源操作；拒绝帧内尾部垃圾，复用 Loader 限域读取，删除 Windows 自制替换流程 |
+| 依赖/CI/脚本 | 原生与可选 feature、已有 Bevy 补丁、发行/签名/包验证；Rust/MSRV/CI 同步更新，保留安全及许可证策略 |
+
+持久化回归使用暂停的 Virtual clock 和独立 Real clock，确认静止画面仍可完成
+延迟写入；失败重试有退避，profile/已读/鉴赏在 AppExit 补写。休眠调度只安排
+下一次写入所需的唤醒，不因磁盘工作强制连续渲染。Save/IR/协议版本和合法编码保持不变。
+Editor 的平台文件/恢复测试已加入三平台 CI；Linux 质量任务改为 locked/all-features
+Clippy 和工作区测试，macOS 另显式检查无音频 native video。
+独立 fuzz 工作区的锁文件同步 media 0.16.0，CI 增加 locked metadata 检查，
+防止其继续静默保留旧的路径依赖版本；本地仅验证锁解析，未重跑 fuzz/ASan。
+
+Rust 1.99.0、依赖精简与补丁升级在 macOS arm64 执行：
+
+```sh
+cargo fmt --all -- --check
+cargo check --workspace --locked --all-targets --all-features
+cargo clippy --workspace --locked --all-targets --all-features -- -D warnings
+cargo test --workspace --locked --all-features
+cargo check --locked -p keine --tests --no-default-features --features video-native
+cargo clippy --locked -p keine --all-targets --no-default-features --features publisher,ui-sounds,video-native -- -D warnings
+cargo clippy --locked -p keine --all-targets --no-default-features --features publisher,ui-sounds,video-ffmpeg -- -D warnings
+cargo test --locked -p keine --lib --no-default-features --features publisher,ui-sounds,video-ffmpeg scene::video
+cargo run --locked --all-features --bin keine -- validate tests/fixtures/native-smoke
+target/debug/keine validate projects/tday
+```
+
+以上通过；工作区 1096 passed / 0 failed / 24 ignored（含上游 doc-tests，
+不重复计入 Editor 子进程测试的嵌套输出）。IPC/系统 Trash 沙箱权限失败后，
+沙箱外完整重跑通过；FFmpeg 独立组合另有 13 项 video 回归通过。
+Native Smoke 1 scene / 1 action、tday 13 scene / 2626 action 均 0 warning。
+Python packaging 合同 14 passed、benchmark collector 9 passed；Shell 语法检查、
+同 CI 配置的 actionlint，以及 locked/all-features
+cargo-deny 的 advisories/licenses/bans/sources 四项通过，未改许可策略。
+原始日志在 `target/performance/quality-review/`；依赖范围与上游遗留警告见
+[发行指南](release.md#依赖审计与升级)，对白扫描的同工具链性能对照见下文。
+两个视频后端还通过既有 `keine-video-acceptance` CLI：`playback.mp4` 在文件系统和
+Hakutaku 中可解码/回绕，`damaged-header.mp4` 均拒绝；AVFoundation 包含 Metal 帧导入。
+原始命令见同目录 `commands.txt`，日志为 `video-{native,ffmpeg}-acceptance.log`。
+这些结果不包含新版发行包、游戏 GUI/视听体验或远端 CI；Linux/Windows/Android
+尚待各自运行验收，不能将 macOS 上的 FFmpeg 检查当作其他平台通过。
+
 ## 演出调试与 tday 正式入口
 
 协议 v10 将 revision、当前源码位置和有界只读 RuntimeSnapshot 作为同一最新状态推送。
@@ -1512,6 +1566,81 @@ Linux 使用 `video-ffmpeg`；CI 另跑 FFmpeg ASan。fuzz 的目录参数由
 合法文件必须读到 EOF 并可 rewind，损坏头在 FS/加密包中均必须拒绝。
 
 ## 性能
+
+### 引擎执行、加载与空帧
+
+同一 Apple M5 Pro / 24 GiB / macOS 27.0.1、Rust 1.99.0 和锁文件，构造输入在
+计时外。列表 length/index 原先先复制整个 Array；现在借用变量或字面量，仅复制
+索引选中的返回值，计算表达式、错误顺序与深度限制保留。场景加载使用 BTreeMap
+Entry 直接移动 LoadedScene，覆盖时照常追加先前路径诊断。
+
+```sh
+cargo bench --locked --offline -p keine-core --bench script-runtime -- eiyashou_list_read --sample-size 30 --warm-up-time 0.3 --measurement-time 1 --nresamples 1000 --noplot --save-baseline project-before
+cargo bench --locked --offline -p keine-loader --bench program-load -- program_load/parse_and_build --sample-size 20 --warm-up-time 0.3 --measurement-time 1 --nresamples 1000 --noplot --save-baseline project-before
+# 各自只应用对应实现修改后，使用同一命令，将末尾换为 --baseline project-before。
+```
+
+Criterion mean 点估计：
+
+| 输入 | 前 → 后 |
+| --- | ---: |
+| 65,536 项整数列表 length | 89.353 µs → 12.476 ns |
+| 65,536 项整数列表 index | 89.765 µs → 20.132 ns |
+| 十万条 WebGAL Comment 的加载、解析与 Program 构建 | 29.610 ms → 28.760 ms |
+
+Loader 变化约 -2.87%，95% 区间为 -4.16% 至 -1.63%；列表结果只代表已有列表的
+只读查询，不代表构造、修改数组或全部 VM 指令吞吐。Loader 使用已有历史基准，
+计时包含热文件读取；没有借此扩大 WebGAL 语义。原始 Criterion 数据、日志、
+改前源码及 `engine-results.json` 保留在 `target/performance/quality-review/`。
+
+`idle_host_and_audio_sync_preserve_state_change_detection` 在真实 ECS 系统链中计数：
+10 个无事件更新的 GameState 变更通知从 10 降为 0；随后实际 autoplay 事件仍只消费
+一次。前后命令均为 `cargo test --locked -p keine --lib --all-features idle_host_and_audio_sync_preserve_state_change_detection -- --nocapture`，
+日志为同目录 `idle-notifications-before.log` / `idle-notifications-after.log`。
+这项是通知计数回归，以上均不是游戏 FPS、GPU 或整机功耗测量。
+
+### 对白标记扫描边界
+
+渲染端 `textbox` 也改为复用 Core 的 `rich_text_spans`，删除第二套逐字符扫描；
+编译后留下的 `[wait]` 拼写继续按字面渲染，换行/ruby/style 合同保留。颜色复用
+[Bevy Srgba::hex](https://docs.rs/bevy/0.19.1/bevy/color/struct.Srgba.html#method.hex)，
+保留原有 6/8 位格式，拒绝 Unicode 非十六进制输入及 NaN/inf 字号/透明度。
+定向测试先复现 Unicode 切片 panic 和 NaN，再验证修复；64 KiB 三种畸形输入的
+单次 CPU 耗时从约 695/516/125 ms 降至约 0.097/0.017/0.860 ms。
+这是测试配置下的边界探针，非统计基准或帧耗时；原始命令/结果为同目录
+`commands.txt`、`textbox-before.log`、`textbox-after.log`。
+
+`runtime/text.rs` 的共享 tokenizer 原先对连续未闭合 `[`、未闭合样式参数和
+标签尾部空白重复扫描后缀；Editor 的 wait 标记与运行时对白编译都调用它。
+现在没有 `]` 时整段保留为文字，没有 `)` 后停止搜索样式尾部；无效嵌套标签
+直接保留到最后一个仍可能开始 wait 的 `[`。不引入解析依赖，保留文字、样式、
+Unicode 字符位置及 wait 字节范围；长无效输入和后续合法 wait 有回归覆盖。
+
+基线为 `b5ac7eb` 加相同的 `script-runtime` bench；Apple M5 Pro / 24 GiB /
+macOS 27.0.1，两侧都用 Rust 1.97.1、原锁文件中的 Core 依赖、Cargo bench 优化配置。
+对照在工具链/依赖更新前完成，不把 Rust 1.99 的变化混入结果。测量公开的
+`inline_waits(...).count()`，输入构造在计时外；20 样本，正常输入另复测 30 样本。
+
+```sh
+cargo +1.97.1 bench --locked --offline -p keine-core --bench script-runtime -- dialogue_markup --sample-size 20 --warm-up-time 0.2 --measurement-time 0.5 --nresamples 1000 --noplot --save-baseline quality-before
+# 只修改 tokenizer 后，使用同一命令并将末尾换为 --baseline quality-before。
+cargo +1.97.1 bench --locked --offline -p keine-core --bench script-runtime -- 'dialogue_markup/(plain|styled_waits)' --sample-size 30 --warm-up-time 0.3 --measurement-time 1 --nresamples 1000 --noplot --baseline quality-before
+```
+
+以下是 Criterion mean 点估计；三种输入规模均保留原始值：
+
+| 输入 | 前 → 后 |
+| --- | ---: |
+| 65,536 个未闭合 `[` | 48.967 ms → 1.513 µs |
+| 65,536 个 `[` 加未闭合参数，共约 128 KiB | 144.762 ms → 4.644 µs |
+| 65,536 个 `[` 加同样数量的尾部空白与 `]` | 2,053.264 ms → 69.771 µs |
+| 16,384 次 `[a](`，共 64 KiB | 11.896 ms → 145.174 µs |
+
+正常富文本/wait 复测均值变化约 +0.3–2.1%，最大档 56.578 → 57.745 µs；
+保留这一常见路径成本，不宣称普遍提速。纯文字没有测得退化。原始命令、日志、
+两侧 tokenizer、bench 和统计位于 `target/performance/quality-review/`。
+这是暖输入 CPU 扫描证据，不代表整个 Editor、完整对白编译、GPU/FPS 或其他平台。
+上述旧工具链命令须在对应的升级前源码/manifest 上重现，当前 MSRV 已为 1.99.0。
 
 ### 脚本解析与 Core 理论吞吐
 

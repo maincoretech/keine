@@ -12,6 +12,7 @@ exclude = ["dev/vendor/bevy_winit"]
 name = "keine"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license-file.workspace = true
 description = "Kēne, a native visual-novel engine with WebGAL and LetsGal compatibility"
 repository = "https://github.com/maincoretech/keine"
@@ -86,9 +87,9 @@ video-native = [
 
 [workspace.package]
 license-file = "LICENSE"
-version = "0.15.5"
+version = "0.16.0"
 edition = "2024"
-rust-version = "1.97.1"
+rust-version = "1.99.0"
 
 # Disable icu_provider's debug eprintln! fallback in dev builds.
 # Without this, icu_provider prints "ICU4X data error: ..." to stderr
@@ -154,9 +155,8 @@ ffmpeg-next = { version = "9.0", default-features = false, features = ["codec", 
 tempfile = "3"
 winit = { version = "0.30.13", default-features = false }
 wgpu = { version = "29.0.4", default-features = false, features = ["metal"] }
-fs2 = "0.4"
 gpui-kit = { version = "=0.6.4" }
-image = "0.25.10"
+image = { version = "0.25.10", default-features = false }
 
 # Bevy 0.19.1 requests synthetic macOS redraws from `about_to_wait`. The local
 # fix keeps reactive idle asleep while preserving redraw-driven continuous
@@ -188,7 +188,6 @@ ffmpeg-next = { workspace = true, optional = true }
 crossbeam-channel = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
 winit = { workspace = true }
-fs2 = { workspace = true }
 bevy = { workspace = true, features = ["bevy_winit", "bevy_log", "bevy_render", "bevy_sprite", "bevy_ui", "bevy_ui_render", "bevy_audio", "png", "jpeg"] }
 hakutaku-core = { workspace = true, optional = true }
 hakutaku-pack = { workspace = true, optional = true }

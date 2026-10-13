@@ -14,9 +14,31 @@ pub struct InlineWait {
 
 /// Uses the execution tokenizer, so style labels and malformed waits are not highlighted as waits.
 pub fn inline_waits(source: &str) -> impl Iterator<Item = InlineWait> + '_ {
-    tokens(source).filter_map(|token| match token {
+    tokens(source, true).filter_map(|token| match token {
         Token::Wait(wait) => Some(wait),
         _ => None,
+    })
+}
+
+/// A borrowed part of already compiled dialogue markup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RichTextSpan<'a> {
+    Text(&'a str),
+    Styled { text: &'a str, arguments: &'a str },
+}
+
+/// Uses the execution tokenizer's style boundaries without interpreting waits.
+/// Compilation has already removed waits; any remaining spelling is literal text.
+pub fn rich_text_spans(source: &str) -> impl Iterator<Item = RichTextSpan<'_>> {
+    tokens(source, false).map(|token| match token {
+        Token::Text(text) => RichTextSpan::Text(text),
+        Token::Styled {
+            label, arguments, ..
+        } => RichTextSpan::Styled {
+            text: label,
+            arguments,
+        },
+        Token::Wait(wait) => RichTextSpan::Text(&source[wait.range]),
     })
 }
 
@@ -25,14 +47,14 @@ pub(super) fn compile_rich_text(source: &str) -> (String, String, Vec<DialoguePa
     let mut markup = String::new();
     let mut pauses = Vec::new();
     let mut characters = 0;
-    for token in tokens(source) {
+    for token in tokens(source, true) {
         match token {
             Token::Text(value) => {
                 text.push_str(value);
                 markup.push_str(value);
                 characters += value.chars().count();
             }
-            Token::Styled { label, source } => {
+            Token::Styled { label, source, .. } => {
                 text.push_str(label);
                 markup.push_str(source);
                 characters += label.chars().count();
@@ -48,12 +70,17 @@ pub(super) fn compile_rich_text(source: &str) -> (String, String, Vec<DialoguePa
 
 enum Token<'a> {
     Text(&'a str),
-    Styled { label: &'a str, source: &'a str },
+    Styled {
+        label: &'a str,
+        source: &'a str,
+        arguments: &'a str,
+    },
     Wait(InlineWait),
 }
 
-fn tokens(source: &str) -> impl Iterator<Item = Token<'_>> {
+fn tokens(source: &str, interpret_waits: bool) -> impl Iterator<Item = Token<'_>> {
     let mut cursor = 0;
+    let mut may_have_style = true;
     std::iter::from_fn(move || {
         let rest = source.get(cursor..).filter(|rest| !rest.is_empty())?;
         let start = cursor;
@@ -61,26 +88,34 @@ fn tokens(source: &str) -> impl Iterator<Item = Token<'_>> {
             cursor += rest.find('[').unwrap_or(rest.len());
             return Some(Token::Text(&source[start..cursor]));
         }
-        if let Some(end) = rest.find(']') {
-            let label = &rest[1..end];
-            if let Some(duration) = parse_wait(label) {
-                cursor += end + 1;
-                return Some(Token::Wait(InlineWait {
-                    range: start..cursor,
-                    duration,
-                }));
-            }
-            if let Some(arguments) = rest[end + 1..].strip_prefix('(')
-                && let Some(argument_end) = arguments.find(')')
-            {
+        let Some(end) = rest.find(']') else {
+            cursor = source.len();
+            return Some(Token::Text(rest));
+        };
+        let label = &rest[1..end];
+        if interpret_waits && let Some(duration) = parse_wait(label) {
+            cursor += end + 1;
+            return Some(Token::Wait(InlineWait {
+                range: start..cursor,
+                duration,
+            }));
+        }
+        if may_have_style && let Some(arguments) = rest[end + 1..].strip_prefix('(') {
+            if let Some(argument_end) = arguments.find(')') {
                 cursor += end + 2 + argument_end + 1;
                 return Some(Token::Styled {
                     label,
                     source: &source[start..cursor],
+                    arguments: &arguments[..argument_end],
                 });
             }
+            // No later style can close either; do not rescan the same suffix.
+            may_have_style = false;
         }
-        cursor += 1;
+        // An invalid label containing '[' cannot be a wait. Its nested labels
+        // share this closing bracket and style suffix, so only the final '['
+        // can still begin a wait. Preserve the preceding text in one token.
+        cursor += rest[..end].rfind('[').unwrap_or(0).max(1);
         Some(Token::Text(&source[start..cursor]))
     })
 }
@@ -146,5 +181,82 @@ mod tests {
                 duration: Some(0.25)
             }]
         );
+    }
+
+    #[test]
+    fn rendering_shares_style_boundaries_but_never_consumes_waits_again() {
+        let (text, markup, _) = compile_rich_text("[wai[wait]t]後[蟹](ruby=かに)");
+        assert_eq!(text, "[wait]後蟹");
+        let spans = rich_text_spans(&markup).collect::<Vec<_>>();
+        let rendered = spans
+            .iter()
+            .map(|span| match span {
+                RichTextSpan::Text(text) | RichTextSpan::Styled { text, .. } => *text,
+            })
+            .collect::<String>();
+        assert_eq!(rendered, text);
+        assert_eq!(
+            spans.last(),
+            Some(&RichTextSpan::Styled {
+                text: "蟹",
+                arguments: "ruby=かに"
+            })
+        );
+        assert_eq!(
+            rich_text_spans("[[字](bold)").collect::<Vec<_>>(),
+            [RichTextSpan::Styled {
+                text: "[字",
+                arguments: "bold"
+            }]
+        );
+    }
+
+    #[test]
+    fn malformed_prefixes_preserve_later_waits_and_nested_style_labels() {
+        for (source, text, markup, at) in [
+            ("前[[wait=250]後", "前[後", "前[後", 2),
+            (
+                "[[字](color=#fff)[wait=250]後",
+                "[字後",
+                "[[字](color=#fff)後",
+                2,
+            ),
+            (
+                "[bad](未闭合[wait=250]後",
+                "[bad](未闭合後",
+                "[bad](未闭合後",
+                9,
+            ),
+        ] {
+            assert_eq!(
+                compile_rich_text(source),
+                (
+                    text.into(),
+                    markup.into(),
+                    vec![DialoguePause {
+                        at,
+                        duration: Some(0.25)
+                    }]
+                )
+            );
+            let waits = inline_waits(source).collect::<Vec<_>>();
+            assert_eq!(waits.len(), 1);
+            assert_eq!(&source[waits[0].range.clone()], "[wait=250]");
+        }
+    }
+
+    #[test]
+    fn long_unclosed_markup_remains_literal() {
+        for source in [
+            "[".repeat(16_384),
+            format!("{}{}]", "[".repeat(16_384), " ".repeat(16_384)),
+            "[a](".repeat(4_096),
+        ] {
+            assert_eq!(
+                compile_rich_text(&source),
+                (source.clone(), source.clone(), vec![])
+            );
+            assert!(inline_waits(&source).next().is_none());
+        }
     }
 }

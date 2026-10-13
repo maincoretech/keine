@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use bevy::app::AppExit;
 use bevy::prelude::*;
 use keine_core::state::DialogueKey;
 use serde::{Deserialize, Serialize};
@@ -12,6 +13,7 @@ use crate::runtime::resources::{
 };
 
 const VERSION: u32 = 2;
+pub(super) const WRITE_DELAY_SECONDS: f32 = 1.0;
 const MAX_HISTORY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_HISTORY_ENTRIES: usize = 1_000_000;
 
@@ -30,14 +32,14 @@ struct HistoryFileRef<'a> {
 #[derive(Resource, Default)]
 pub(crate) struct ReadHistoryWriter {
     pub(super) saved_len: usize,
-    pub(super) dirty_seconds: f32,
+    pub(super) dirty_seconds: Option<f32>,
 }
 
 impl ReadHistoryWriter {
     pub(crate) fn loaded(count: usize) -> Self {
         Self {
             saved_len: count,
-            dirty_seconds: 0.0,
+            dirty_seconds: None,
         }
     }
 }
@@ -58,7 +60,7 @@ pub(crate) fn load(project_root: &Path) -> HashSet<DialogueKey> {
 }
 
 pub(crate) fn persist_read_history(
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     state: Res<GameState>,
     project_root: Res<PersistenceRoot>,
     mut writer: ResMut<ReadHistoryWriter>,
@@ -73,25 +75,55 @@ pub(crate) fn persist_read_history(
     ) {
         return;
     }
-    if writer.dirty_seconds == 0.0 && !state.is_changed() {
+    if writer.dirty_seconds.is_none() && !state.is_changed() {
         return;
     }
     if writer.saved_len == state.read_dialogues.len() {
-        if writer.dirty_seconds != 0.0 {
-            writer.dirty_seconds = 0.0;
-        }
+        writer.dirty_seconds = None;
         return;
     }
-    writer.dirty_seconds += time.delta_secs();
-    if writer.dirty_seconds < 1.0 {
+    let elapsed = writer.dirty_seconds.get_or_insert(0.0);
+    *elapsed += time.delta_secs();
+    if *elapsed < WRITE_DELAY_SECONDS {
         return;
     }
-    match save(&state.read_dialogues, &project_root) {
+    persist_now(&state.read_dialogues, &project_root, &mut writer);
+}
+
+pub(crate) fn flush_on_exit(
+    mut exits: MessageReader<AppExit>,
+    state: Res<GameState>,
+    project_root: Res<PersistenceRoot>,
+    mut writer: ResMut<ReadHistoryWriter>,
+    editor_sync: Option<Res<EditorSyncSession>>,
+    authoring_preview: Option<Res<AuthoringPreviewSession>>,
+    persistence_disabled: Option<Res<PersistenceDisabled>>,
+) {
+    if writable_runtime_session(
+        editor_sync.is_some(),
+        authoring_preview.is_some(),
+        persistence_disabled.is_some(),
+    ) && exits.read().next().is_some()
+        && writer.saved_len != state.read_dialogues.len()
+    {
+        persist_now(&state.read_dialogues, &project_root, &mut writer);
+    }
+}
+
+fn persist_now(
+    history: &HashSet<DialogueKey>,
+    project_root: &Path,
+    writer: &mut ReadHistoryWriter,
+) {
+    match save(history, project_root) {
         Ok(()) => {
-            writer.saved_len = state.read_dialogues.len();
-            writer.dirty_seconds = 0.0;
+            writer.saved_len = history.len();
+            writer.dirty_seconds = None;
         }
-        Err(error) => log::warn!("failed to persist read history: {error:#}"),
+        Err(error) => {
+            writer.dirty_seconds = Some(0.0);
+            log::warn!("failed to persist read history: {error:#}");
+        }
     }
 }
 

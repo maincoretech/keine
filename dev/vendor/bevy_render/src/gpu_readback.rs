@@ -354,8 +354,8 @@ pub(crate) fn submit_readback_commands(world: &World, command_encoder: &mut Comm
 
 /// Move requested readbacks to mapped readbacks after commands have been submitted in render system
 fn map_buffers(mut readbacks: ResMut<GpuReadbacks>) {
-    let requested = readbacks.requested.drain(..).collect::<Vec<GpuReadback>>();
-    for readback in requested {
+    let GpuReadbacks { requested, mapped } = &mut *readbacks;
+    for readback in requested.drain(..) {
         let slice = readback.buffer.slice(..);
         let entity = readback.entity;
         let buffer = readback.buffer.clone();
@@ -371,7 +371,7 @@ fn map_buffers(mut readbacks: ResMut<GpuReadbacks>) {
                 warn!("Failed to send readback result: {}", e);
             }
         });
-        readbacks.mapped.push(readback);
+        mapped.push(readback);
     }
 }
 

@@ -11,7 +11,7 @@ fn original(file: &Path) -> Result<image::RgbaImage, ImageCacheError> {
     let mut image = image::DynamicImage::from_decoder(decoder)?;
     image.apply_orientation(orientation);
     let mut pixels = image.thumbnail(WIDTH, HEIGHT).into_rgba8();
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
     Ok(pixels)

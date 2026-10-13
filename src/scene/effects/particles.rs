@@ -1038,7 +1038,7 @@ mod tests {
             else {
                 panic!("positions")
             };
-            for (id, corners) in vertices.chunks_exact(4).enumerate() {
+            for (id, corners) in vertices.as_chunks::<4>().0.iter().enumerate() {
                 assert!(corners.iter().all(|point| point[0] == id as f32));
             }
         }
@@ -1171,7 +1171,7 @@ mod tests {
         let data = snow.data.as_ref().unwrap();
         assert_eq!(data[3], 0);
         assert_ne!(data, soft_particle_texture().data.as_ref().unwrap());
-        assert!(data.chunks_exact(4).any(|pixel| pixel[3] == 255));
+        assert!(data.as_chunks::<4>().0.iter().any(|pixel| pixel[3] == 255));
     }
 
     #[test]

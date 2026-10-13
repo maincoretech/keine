@@ -232,10 +232,7 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|index| self.text(*index))
             .collect::<String>();
-        let Some(inner) = raw
-            .strip_prefix("rgba(")
-            .and_then(|raw| raw.strip_suffix(')'))
-        else {
+        let Some(inner) = raw.strip_circumfix("rgba(", ')') else {
             report
                 .diagnostics
                 .push(self.error(format!("`{name}` requires rgba(r, g, b, a)")));

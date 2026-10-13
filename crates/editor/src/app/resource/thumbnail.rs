@@ -127,7 +127,7 @@ fn decode(file: &Path) -> Result<image::RgbaImage, ImageCacheError> {
         image.thumbnail(WIDTH, HEIGHT).into_rgba8()
     };
     // GPUI expects BGRA, including transparent pixels.
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
     Ok(pixels)

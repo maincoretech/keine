@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
@@ -95,7 +96,8 @@ fn evaluate_at_depth(
             apply_binary(*op, left, right)
         }
         EiyashouExpr::Index { list, index } => {
-            let Value::Array(values) = evaluate_at_depth(list, variables, depth + 1)? else {
+            let list = list_operand(list, variables, depth + 1)?;
+            let Value::Array(values) = list.as_ref() else {
                 return Err(EiyashouRuntimeError::TypeMismatch);
             };
             let index = index_value(evaluate_at_depth(index, variables, depth + 1)?)?;
@@ -105,13 +107,34 @@ fn evaluate_at_depth(
                 .ok_or(EiyashouRuntimeError::IndexOutOfBounds)
         }
         EiyashouExpr::Length(list) => {
-            let Value::Array(values) = evaluate_at_depth(list, variables, depth + 1)? else {
+            let list = list_operand(list, variables, depth + 1)?;
+            let Value::Array(values) = list.as_ref() else {
                 return Err(EiyashouRuntimeError::TypeMismatch);
             };
             i64::try_from(values.len())
                 .map(Value::Int)
                 .map_err(|_| EiyashouRuntimeError::IntegerOverflow)
         }
+    }
+}
+
+// List queries borrow stored values; computed operands retain normal evaluation
+// and the same depth budget. Indexing only clones the selected result.
+fn list_operand<'a>(
+    expression: &'a EiyashouExpr,
+    variables: &'a HashMap<String, Value>,
+    depth: usize,
+) -> Result<Cow<'a, Value>, EiyashouRuntimeError> {
+    if depth > MAX_EXPRESSION_DEPTH {
+        return Err(EiyashouRuntimeError::ExpressionTooDeep);
+    }
+    match expression {
+        EiyashouExpr::Literal(value) => Ok(Cow::Borrowed(value)),
+        EiyashouExpr::Variable(name) => variables
+            .get(name)
+            .map(Cow::Borrowed)
+            .ok_or(EiyashouRuntimeError::UnknownVariable),
+        _ => evaluate_at_depth(expression, variables, depth).map(Cow::Owned),
     }
 }
 
@@ -518,6 +541,61 @@ mod tests {
             assert_eq!(
                 evaluate(&expression, &variables),
                 Err(EiyashouRuntimeError::ExpressionTooDeep)
+            );
+        }
+    }
+
+    #[test]
+    fn list_queries_preserve_values_errors_and_computed_operands() {
+        let stored = Value::Array(vec![Value::Int(3), Value::Int(7)]);
+        let variables = HashMap::from([("items".into(), stored.clone())]);
+        for list in [
+            EiyashouExpr::Variable("items".into()),
+            EiyashouExpr::Literal(stored.clone()),
+            EiyashouExpr::List(vec![integer(3), integer(7)]),
+        ] {
+            assert_eq!(
+                evaluate(&EiyashouExpr::Length(Box::new(list.clone())), &variables),
+                Ok(Value::Int(2))
+            );
+            for (index, expected) in [
+                (1, Ok(Value::Int(7))),
+                (-1, Err(EiyashouRuntimeError::IndexOutOfBounds)),
+                (2, Err(EiyashouRuntimeError::IndexOutOfBounds)),
+            ] {
+                assert_eq!(
+                    evaluate(
+                        &EiyashouExpr::Index {
+                            list: Box::new(list.clone()),
+                            index: Box::new(integer(index)),
+                        },
+                        &variables,
+                    ),
+                    expected
+                );
+            }
+        }
+        assert_eq!(variables["items"], stored);
+        for (list, expected) in [
+            (integer(0), EiyashouRuntimeError::TypeMismatch),
+            (
+                EiyashouExpr::Variable("missing".into()),
+                EiyashouRuntimeError::UnknownVariable,
+            ),
+        ] {
+            assert_eq!(
+                evaluate(&EiyashouExpr::Length(Box::new(list.clone())), &variables),
+                Err(expected)
+            );
+            assert_eq!(
+                evaluate(
+                    &EiyashouExpr::Index {
+                        list: Box::new(list),
+                        index: Box::new(EiyashouExpr::Variable("also_missing".into())),
+                    },
+                    &variables,
+                ),
+                Err(expected)
             );
         }
     }

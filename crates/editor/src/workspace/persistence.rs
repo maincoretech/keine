@@ -299,40 +299,14 @@ fn atomic_json(path: &Path, value: &impl Serialize) -> io::Result<()> {
         serde_json::to_writer_pretty(&mut file, value).map_err(io::Error::other)?;
         file.write_all(b"\n")?;
         file.sync_all()?;
-        replace(&temporary, path)?;
+        drop(file);
+        fs::rename(&temporary, path)?;
         sync_directory(parent)
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
     result
-}
-
-#[cfg(not(target_os = "windows"))]
-fn replace(temporary: &Path, destination: &Path) -> io::Result<()> {
-    fs::rename(temporary, destination)
-}
-
-#[cfg(target_os = "windows")]
-fn replace(temporary: &Path, destination: &Path) -> io::Result<()> {
-    let previous = destination.with_extension("json.previous");
-    let had_destination = destination.exists();
-    if had_destination {
-        let _ = fs::remove_file(&previous);
-        fs::rename(destination, &previous)?;
-    }
-    match fs::rename(temporary, destination) {
-        Ok(()) => {
-            let _ = fs::remove_file(previous);
-            Ok(())
-        }
-        Err(error) => {
-            if had_destination {
-                let _ = fs::rename(previous, destination);
-            }
-            Err(error)
-        }
-    }
 }
 
 #[cfg(unix)]

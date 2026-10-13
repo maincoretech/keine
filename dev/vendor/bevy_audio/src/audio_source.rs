@@ -1,7 +1,3 @@
-#![expect(
-    clippy::std_instead_of_core,
-    reason = "core::io is unstable; keep the upstream stable std::io API"
-)]
 use alloc::sync::Arc;
 use bevy_asset::{Asset, AssetLoader, LoadContext, io::Reader};
 use bevy_reflect::TypePath;

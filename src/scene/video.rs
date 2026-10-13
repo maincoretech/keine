@@ -639,15 +639,15 @@ mod ffmpeg_backend {
                     memory_reservation,
                 )
             })
-            .unwrap_or_else(|error| {
+            .inspect_err(|error| {
                 log::error!("failed to start video decoder thread: {error}");
-                thread::spawn(|| {})
-            });
+            })
+            .ok();
         VideoSession {
             receiver: Mutex::new(receiver),
             cancelled,
             cancel_sender,
-            decoder: Some(decoder),
+            decoder,
             pending: None,
             visual: VideoVisual::default(),
             audio_entity: None,

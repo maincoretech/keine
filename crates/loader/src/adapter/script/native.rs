@@ -3575,10 +3575,7 @@ fn parse_eiyashou_text(
     source_offset: usize,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> EiyashouText {
-    let content = raw
-        .strip_prefix('"')
-        .and_then(|value| value.strip_suffix('"'))
-        .unwrap_or("");
+    let content = raw.strip_circumfix('"', '"').unwrap_or("");
     // Plain text needs one owned literal, with the same lowering as the escape
     // path. `$` keeps interpolation and its slash escape on the checked path.
     if !content.contains(['\\', '$']) {
@@ -3713,8 +3710,7 @@ fn interpolation_end(content: &str, mut cursor: usize) -> Option<usize> {
 
 fn decode_expression_string(raw: &str) -> Result<String, String> {
     let content = raw
-        .strip_prefix('"')
-        .and_then(|value| value.strip_suffix('"'))
+        .strip_circumfix('"', '"')
         .ok_or_else(|| "unterminated string literal".to_owned())?;
     if content
         .match_indices("${")

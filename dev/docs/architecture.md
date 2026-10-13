@@ -99,6 +99,8 @@ Save v11 只恢复到 fingerprint 相同的 Program；不支持的二进制布�
 Runtime 在创建瞬态演出前捕获边界，读档后重新进入该演出，不推进现场剧本或等待演出结束。
 回退存档不捕获较晚的现场画面；卡片显示检查点文本，无匹配截图时使用默认背景。
 profile、read history、gallery、settings、window bounds 不随 slot rollback 回滚。
+profile/已读延迟写入和鉴赏失败重试使用 Real clock；Storage 提供下一次写入期限，
+runtime 复用休眠调度到期唤醒，Virtual clock 可以继续暂停。退出时补写三个独立域。
 窗口布局由 runtime/window.rs 管理，独立版本化 `saves/window.bin` 保存正常窗口
 物理尺寸、位置、DPI 和最大化状态，不改变设置 v4 或 Save v11。启动时按当前 monitor
 限制尺寸和位置，再显示窗口；benchmark 保留显式尺寸及隐藏窗口策略。

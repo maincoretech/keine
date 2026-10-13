@@ -28,7 +28,11 @@ complete. The wait is bounded to ten seconds and logs device/timeout errors.
 This addresses shutdown ordering, not a recovery guarantee for a hung driver.
 
 `sparse_buffer_vec.rs` also removes one redundant formatting borrow so the
-official crate passes the workspace's current Clippy gate. `rustfmt.toml`
+official crate passes the workspace's current Clippy gate. Rust 1.99's
+`drain_collect` lint is addressed in `gpu_readback.rs` and
+`renderer/render_context.rs` by borrowing the source and destination queues
+separately and draining directly, retaining source capacity and command order.
+`rustfmt.toml`
 preserves upstream's 2021 formatting style. Two WGSL files only trim upstream
 trailing whitespace; other source files are byte-identical.
 The crate is a workspace member so its regression tests use the same lockfile.

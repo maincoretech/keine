@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use keine_core::config::GameConfig;
 
 const RECOVERY_SCHEMA: u32 = 1;
-const MAX_DOCUMENT_BYTES: u64 = 1024 * 1024;
+use super::MAX_DOCUMENT_BYTES;
 const MAX_RECOVERY_BYTES: u64 = MAX_DOCUMENT_BYTES * 2 + 4096;
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
 
@@ -453,7 +453,7 @@ struct AuthoringPolicy {
 
 impl AuthoringPolicy {
     fn load(project_root: &Path) -> Self {
-        let Ok(source) = fs::read_to_string(project_root.join("config.yaml")) else {
+        let Ok(source) = super::read_project_text(project_root, Path::new("config.yaml")) else {
             return Self::default();
         };
         let Ok(config) = GameConfig::from_yaml(&source) else {
@@ -525,7 +525,7 @@ fn read_limited_file(file: File, maximum: u64) -> io::Result<Vec<u8>> {
     read_limited_stream(file, maximum)
 }
 
-fn read_limited_stream(reader: impl Read, maximum: u64) -> io::Result<Vec<u8>> {
+pub(super) fn read_limited_stream(reader: impl Read, maximum: u64) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     reader.take(maximum + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > maximum {
@@ -605,7 +605,8 @@ pub(crate) fn atomic_source(path: &Path, bytes: &[u8]) -> io::Result<()> {
         file.set_permissions(permissions)?;
         file.write_all(bytes)?;
         file.sync_all()?;
-        replace(&temporary, path)?;
+        drop(file);
+        fs::rename(&temporary, path)?;
         // The rename is the commit point. A later directory-sync failure is
         // a durability warning, not a failed write: callers may otherwise
         // remove an imported file while its new manifest is already live.
@@ -633,7 +634,8 @@ fn atomic_bytes(path: &Path, bytes: &[u8]) -> io::Result<()> {
             .open(&temporary)?;
         file.write_all(bytes)?;
         file.sync_all()?;
-        replace(&temporary, path)?;
+        drop(file);
+        fs::rename(&temporary, path)?;
         if let Err(error) = sync_directory(parent) {
             eprintln!("Kēne Editor: recovery committed; directory sync failed: {error}");
         }
@@ -653,28 +655,6 @@ fn temporary_path(path: &Path) -> PathBuf {
         .unwrap_or("document");
     let nonce = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
     parent.join(format!(".{name}.tmp-{}-{nonce}", std::process::id()))
-}
-
-#[cfg(not(target_os = "windows"))]
-fn replace(temporary: &Path, destination: &Path) -> io::Result<()> {
-    fs::rename(temporary, destination)
-}
-
-#[cfg(target_os = "windows")]
-fn replace(temporary: &Path, destination: &Path) -> io::Result<()> {
-    let previous = destination.with_extension("keine-editor-previous");
-    let _ = fs::remove_file(&previous);
-    fs::rename(destination, &previous)?;
-    match fs::rename(temporary, destination) {
-        Ok(()) => {
-            let _ = fs::remove_file(previous);
-            Ok(())
-        }
-        Err(error) => {
-            let _ = fs::rename(previous, destination);
-            Err(error)
-        }
-    }
 }
 
 #[cfg(unix)]
@@ -722,6 +702,24 @@ mod tests {
         .unwrap();
         let manager = DocumentManager::new(project.clone(), recovery).unwrap();
         (root, project, manager)
+    }
+
+    #[test]
+    fn authoring_policy_rejects_oversized_project_config() {
+        let (root, project, _) = fixture();
+        let config = project.join("config.yaml");
+        let source = fs::read_to_string(&config).unwrap();
+        assert!(AuthoringPolicy::load(&project).enabled);
+        fs::write(
+            config,
+            format!(
+                "{source}#{}",
+                " ".repeat(keine_loader::MAX_PROJECT_CONFIG_BYTES)
+            ),
+        )
+        .unwrap();
+        assert!(!AuthoringPolicy::load(&project).enabled);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -1648,7 +1648,7 @@ impl Drop for SingleInstanceGuard {
     fn drop(&mut self) {
         // Closing one descriptor is insufficient while a spawned child still
         // holds a duplicate. Release the guard's lease explicitly before close.
-        if let Err(error) = fs2::FileExt::unlock(&self._file) {
+        if let Err(error) = self._file.unlock() {
             log::warn!("failed to release the single-instance lock: {error}");
         }
     }
@@ -1671,7 +1671,7 @@ impl SingleInstanceGuard {
             .truncate(false)
             .open(&path)
             .with_context(|| format!("failed to open instance lock {}", path.display()))?;
-        fs2::FileExt::try_lock_exclusive(&file)
+        file.try_lock()
             .with_context(|| format!("failed to lock {}", path.display()))?;
         Ok(Self { _file: file })
     }
@@ -2773,8 +2773,8 @@ mod tests {
         .unwrap();
         assert_eq!(image.size(), keine_media::ImageSize::new(720, 1440));
         let pixels = image.into_pixels();
-        assert!(pixels.chunks_exact(4).any(|p| p[3] == 0));
-        assert!(pixels.chunks_exact(4).any(|p| p[3] == 255));
+        assert!(pixels.as_chunks::<4>().0.iter().any(|p| p[3] == 0));
+        assert!(pixels.as_chunks::<4>().0.iter().any(|p| p[3] == 255));
     }
 
     #[test]

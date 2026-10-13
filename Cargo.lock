@@ -296,9 +296,9 @@ checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
 
 [[package]]
 name = "anyhow"
-version = "1.0.103"
+version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
+checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "approx"
@@ -2700,9 +2700,9 @@ dependencies = [
 
 [[package]]
 name = "crc32fast"
-version = "1.5.0"
+version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
+checksum = "01a7799fd6b852db0e61728dde9a204c423b44d689dbd432522543614b490e78"
 dependencies = [
  "cfg-if",
 ]
@@ -2751,9 +2751,9 @@ checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
 
 [[package]]
 name = "crossbeam-channel"
-version = "0.5.16"
+version = "0.5.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d85363c37faeca707aef026efa9f3b34d077bce547e48f770770625c6013679e"
+checksum = "98b0cc327b5bc766e7fda9c9260cc0fa81b43a8e240440422dff70788e3f9ef1"
 dependencies = [
  "crossbeam-utils",
 ]
@@ -3551,16 +3551,6 @@ dependencies = [
  "cc",
  "libc",
  "pkg-config",
-]
-
-[[package]]
-name = "fs2"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
-dependencies = [
- "libc",
- "winapi",
 ]
 
 [[package]]
@@ -5111,7 +5101,6 @@ dependencies = [
  "qoi",
  "ravif",
  "rayon",
- "rgb",
  "tiff",
  "zune-core 0.5.1",
  "zune-jpeg 0.5.15",
@@ -5417,7 +5406,7 @@ dependencies = [
 
 [[package]]
 name = "keine"
-version = "0.15.5"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "bevy",
@@ -5426,7 +5415,6 @@ dependencies = [
  "crossbeam-channel",
  "dispatch2",
  "ffmpeg-next",
- "fs2",
  "futures-lite",
  "hakutaku-core",
  "hakutaku-pack",
@@ -5465,7 +5453,7 @@ dependencies = [
 
 [[package]]
 name = "keine-authoring"
-version = "0.15.5"
+version = "0.16.0"
 dependencies = [
  "postcard",
  "serde",
@@ -5473,7 +5461,7 @@ dependencies = [
 
 [[package]]
 name = "keine-core"
-version = "0.15.5"
+version = "0.16.0"
 dependencies = [
  "criterion",
  "log",
@@ -5485,11 +5473,10 @@ dependencies = [
 
 [[package]]
 name = "keine-editor"
-version = "0.15.5"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "bevy",
- "fs2",
  "gpui-kit",
  "image",
  "keine-authoring",
@@ -5510,7 +5497,7 @@ dependencies = [
 
 [[package]]
 name = "keine-loader"
-version = "0.15.5"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "crc32fast",
@@ -5529,7 +5516,7 @@ dependencies = [
 
 [[package]]
 name = "keine-media"
-version = "0.15.5"
+version = "0.16.0"
 dependencies = [
  "image",
  "libwebp-sys",
@@ -8757,10 +8744,11 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.150"
+version = "1.0.154"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8014e44b4736ed0538adeecded0fce2a272f22dc9578a7eb6b2d9993c74cfb9"
+checksum = "e7e9cc8b1b85264074fbcc02a88680c4096b1e47df8f739dceb03bf482f04bd6"
 dependencies = [
+ "foldhash 0.2.0",
  "indexmap",
  "itoa",
  "memchr",

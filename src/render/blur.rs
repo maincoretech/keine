@@ -979,9 +979,9 @@ mod tests {
             .unwrap()
             .unwrap();
         let bytes = readback.slice(..).get_mapped_range();
-        for pixel in bytes.chunks_exact(16) {
-            for (actual, expected) in pixel.chunks_exact(4).zip([64., 128., 192., 255.]) {
-                let actual = f32::from_ne_bytes(actual.try_into().unwrap());
+        for pixel in bytes.as_chunks::<16>().0 {
+            for (actual, expected) in pixel.as_chunks::<4>().0.iter().zip([64., 128., 192., 255.]) {
+                let actual = f32::from_ne_bytes(*actual);
                 assert!(actual.is_finite() && (actual - expected / 255.).abs() < 1e-5);
             }
         }

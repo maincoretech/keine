@@ -17,8 +17,8 @@ in `recovery.rs` use the repository's Defold License 1.0.
   streams](https://developer.android.com/ndk/guides/audio/aaudio/aaudio#disconnected_audio_stream).
 - Output absence freezes source consumption. Submitted playback time drives
   engine fades; availability notifications wake the native event loop.
-- `audio_source.rs` retains upstream `std::io::Cursor`: Rust 1.97 Clippy suggests
-  the unstable `core::io` API; one module-level lint expectation records this.
+- `audio_source.rs` retains upstream `std::io::Cursor`; the obsolete Rust 1.97
+  Clippy workaround is removed for Rust 1.99.
 
 No new shipping dependency. Cargo.toml is the official normalized manifest.
 The workspace member's optional upstream codec features add lockfile entries

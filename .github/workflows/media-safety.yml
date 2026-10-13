@@ -61,6 +61,8 @@ jobs:
         shell: bash
         run: |
           cargo install --locked --root "${{ runner.tool_cache }}/cargo-fuzz" --version "$CARGO_FUZZ_VERSION" cargo-fuzz
+      - name: Check the independent fuzz lockfile
+        run: cargo +nightly metadata --locked --manifest-path tests/fuzz/Cargo.toml --format-version 1 > /dev/null
       - name: Fuzz the production WebP decoder
         run: >-
           cargo +nightly fuzz run --fuzz-dir tests/fuzz webp tests/fuzz/corpus/webp

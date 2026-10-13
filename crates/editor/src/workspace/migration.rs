@@ -107,7 +107,8 @@ fn collect(root: &Path, directory: &Path, changes: &mut Vec<MigrationChange>) ->
         if !file_type.is_file() || path.extension().is_none_or(|value| value != "txt") {
             continue;
         }
-        let source = fs::read_to_string(&path)?;
+        let relative = path.strip_prefix(root).map_err(io::Error::other)?;
+        let source = super::read_project_text(root, relative)?;
         let document = parse_native_document(&source);
         if document.scenes.is_empty()
             || document
@@ -117,7 +118,6 @@ fn collect(root: &Path, directory: &Path, changes: &mut Vec<MigrationChange>) ->
         {
             continue;
         }
-        let relative = path.strip_prefix(root).map_err(io::Error::other)?;
         let to = relative.with_extension("shou");
         if !root.join(&to).exists() {
             changes.push(MigrationChange {

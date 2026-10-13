@@ -224,7 +224,7 @@ impl PanelContent {
                 };
                 let contents = match &document {
                     Some(document) => document.borrow().contents().to_owned(),
-                    None => std::fs::read_to_string(root.join(&relative))?,
+                    None => crate::workspace::read_project_text(&root, &relative)?,
                 };
                 let language = language_for_path(&relative);
                 let editor = cx.new(|cx| {

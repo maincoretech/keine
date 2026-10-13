@@ -19,6 +19,34 @@ use crate::runtime::GameSystemSet;
 
 pub(crate) struct StoragePlugin;
 
+/// Pending disk work can wake a resting window without advancing the game clock.
+#[derive(Resource, Default, PartialEq)]
+pub(crate) struct PersistenceWake(pub(crate) Option<std::time::Duration>);
+
+fn update_write_deadline(
+    profile: Res<profile::ProfileWriter>,
+    history: Res<read_history::ReadHistoryWriter>,
+    gallery: Res<gallery::GallerySnapshot>,
+    mut wake: ResMut<PersistenceWake>,
+) {
+    let next = [
+        profile
+            .dirty_seconds
+            .map(|elapsed| profile::WRITE_DELAY_SECONDS - elapsed),
+        history
+            .dirty_seconds
+            .map(|elapsed| read_history::WRITE_DELAY_SECONDS - elapsed),
+        gallery
+            .retry_seconds
+            .map(|elapsed| gallery::RETRY_DELAY_SECONDS - elapsed),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|remaining| std::time::Duration::from_secs_f32(remaining.max(0.0)))
+    .min();
+    wake.set_if_neq(PersistenceWake(next));
+}
+
 pub(crate) use persistence::{prepare as prepare_persistence, root as persistence_root};
 
 pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -97,19 +125,32 @@ pub(crate) fn sync_directory(path: &Path) -> Result<()> {
 impl Plugin for StoragePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<gallery::GallerySnapshot>();
+        app.init_resource::<PersistenceWake>();
         app.init_resource::<save::ContinuationCheckpoint>();
         app.init_resource::<save::SavePreviewCoordinator>();
         app.add_systems(Startup, settings::load_settings);
         app.add_systems(
             Update,
             (
-                read_history::persist_read_history,
-                gallery::persist,
-                profile::persist,
+                (
+                    read_history::persist_read_history,
+                    gallery::persist,
+                    profile::persist,
+                ),
+                update_write_deadline,
             )
+                .chain()
                 .in_set(GameSystemSet::Sync),
         );
-        app.add_systems(Last, (save::quick_save_on_exit, profile::flush_on_exit));
+        app.add_systems(
+            Last,
+            (
+                save::quick_save_on_exit,
+                profile::flush_on_exit,
+                read_history::flush_on_exit,
+                gallery::flush_on_exit,
+            ),
+        );
     }
 }
 
@@ -119,6 +160,142 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
+
+    fn persistence_app(root: &Path) -> App {
+        use crate::runtime::resources::{GameState, PersistenceRoot};
+        let mut state = keine_core::State::new();
+        state
+            .global_vars
+            .insert("ending".into(), keine_core::Value::Int(1));
+        state.read_dialogues.insert(keine_core::state::DialogueKey {
+            scene: "main".into(),
+            action_index: 7,
+            source_id: None,
+        });
+        state
+            .unlocked_cg
+            .insert("memory.webp".into(), "Memory".into());
+        let mut app = App::new();
+        app.insert_resource(Time::<Real>::default())
+            .init_resource::<Time<Virtual>>()
+            .init_resource::<PersistenceWake>()
+            .insert_resource(GameState(state))
+            .insert_resource(PersistenceRoot(root.to_owned()))
+            .init_resource::<profile::ProfileWriter>()
+            .init_resource::<read_history::ReadHistoryWriter>()
+            .init_resource::<gallery::GallerySnapshot>()
+            .add_message::<bevy::app::AppExit>()
+            .add_systems(
+                Update,
+                (
+                    (
+                        profile::persist,
+                        read_history::persist_read_history,
+                        gallery::persist,
+                    ),
+                    update_write_deadline,
+                )
+                    .chain(),
+            )
+            .add_systems(
+                Last,
+                (
+                    profile::flush_on_exit,
+                    read_history::flush_on_exit,
+                    gallery::flush_on_exit,
+                ),
+            );
+        app
+    }
+
+    #[test]
+    fn failed_background_writes_wait_and_retry_without_further_state_changes() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("keine-persistence-retry-{nonce}"));
+        fs::write(&root, b"block the data directory").unwrap();
+        let mut app = persistence_app(&root);
+        app.world_mut()
+            .resource_mut::<Time<Real>>()
+            .advance_by(std::time::Duration::from_secs(1));
+        app.update();
+        fs::remove_file(&root).unwrap();
+        app.world_mut()
+            .resource_mut::<Time<Real>>()
+            .advance_by(std::time::Duration::from_millis(100));
+        app.update();
+        assert!(
+            !root.exists(),
+            "failed writes must not retry on the next frame"
+        );
+        app.world_mut()
+            .resource_mut::<Time<Real>>()
+            .advance_by(std::time::Duration::from_secs(1));
+        app.update();
+        for file in ["profile.bin", "read_history.bin", "gallery.bin"] {
+            assert!(
+                root.join("saves").join(file).is_file(),
+                "{file} retry was lost"
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn exit_flushes_profile_history_and_pending_gallery_before_the_write_delay() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("keine-persistence-exit-{nonce}"));
+        fs::write(&root, b"block the initial gallery write").unwrap();
+        let mut app = persistence_app(&root);
+        app.update();
+        assert!(!root.join("saves/read_history.bin").exists());
+        assert!(!root.join("saves/profile.bin").exists());
+        fs::remove_file(&root).unwrap();
+        app.world_mut().write_message(bevy::app::AppExit::Success);
+        app.update();
+        let state = app
+            .world()
+            .resource::<crate::runtime::resources::GameState>();
+        assert_eq!(profile::load(&root), state.global_vars);
+        assert_eq!(read_history::load(&root), state.read_dialogues);
+        let mut loaded = keine_core::State::new();
+        gallery::load(&mut loaded, &root);
+        assert_eq!(loaded.unlocked_cg, state.unlocked_cg);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn delayed_writes_finish_while_the_game_clock_is_paused() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("keine-persistence-idle-{nonce}"));
+        let mut app = persistence_app(&root);
+        app.world_mut().resource_mut::<Time<Virtual>>().pause();
+        app.update();
+        assert_eq!(
+            app.world().resource::<PersistenceWake>().0,
+            Some(std::time::Duration::from_millis(500))
+        );
+        app.world_mut()
+            .resource_mut::<Time<Real>>()
+            .advance_by(std::time::Duration::from_secs(1));
+        app.update();
+        assert_eq!(app.world().resource::<PersistenceWake>().0, None);
+        assert!(app.world().resource::<Time<Virtual>>().elapsed().is_zero());
+        let state = app
+            .world()
+            .resource::<crate::runtime::resources::GameState>();
+        assert_eq!(profile::load(&root), state.global_vars);
+        assert_eq!(read_history::load(&root), state.read_dialogues);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn atomic_write_replaces_existing_data_and_limited_read_rejects_oversize_files() {

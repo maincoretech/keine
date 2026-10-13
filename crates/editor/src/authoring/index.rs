@@ -1,6 +1,5 @@
 //! Project resources, references, dialogue and scene indexes derived from source.
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs;
 use std::ops::Range;
 use std::path::{Component, Path, PathBuf};
 
@@ -15,7 +14,7 @@ use keine_loader::{
 use crate::projection::{BlockKind, EiyashouProjection};
 use crate::workspace::WorkspaceFile;
 
-const MAX_INDEXED_SOURCE_BYTES: u64 = 1024 * 1024;
+const MAX_INDEXED_SOURCE_BYTES: u64 = crate::workspace::MAX_DOCUMENT_BYTES;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AssetKind {
@@ -550,7 +549,7 @@ impl AuthoringIndex {
                 config_path,
                 1,
                 1,
-                "config.yaml is missing or is not UTF-8",
+                "config.yaml is missing, outside the project, not UTF-8, or exceeds the read limit",
             ));
             return index;
         };
@@ -1244,7 +1243,7 @@ fn read_text(
     overrides
         .get(relative)
         .cloned()
-        .or_else(|| fs::read_to_string(root.join(relative)).ok())
+        .or_else(|| crate::workspace::read_project_text(root, relative).ok())
 }
 
 pub(super) fn confined_relative(value: &str) -> Option<PathBuf> {

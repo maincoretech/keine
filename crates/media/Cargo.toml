@@ -11,7 +11,7 @@ icons = ["dep:image"]
 
 [dependencies]
 libwebp-sys = { workspace = true }
-image = { version = "0.25.10", default-features = false, features = ["png"], optional = true }
+image = { workspace = true, features = ["png"], optional = true }
 
 [[example]]
 name = "icons"

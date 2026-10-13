@@ -244,9 +244,15 @@ pub fn read_message<T: DeserializeOwned>(reader: &mut impl BufRead) -> io::Resul
     }
     let mut bytes = vec![0; length];
     reader.read_exact(&mut bytes)?;
-    postcard::from_bytes(&bytes)
-        .map(Some)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    let (message, remaining) = postcard::take_from_bytes(&bytes)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    if !remaining.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "authoring message contains trailing bytes",
+        ));
+    }
+    Ok(Some(message))
 }
 
 #[cfg(test)]
@@ -284,6 +290,29 @@ mod tests {
         assert!(read_message::<ClientMessage>(&mut BufReader::new(oversized.as_slice())).is_err());
         assert!(
             read_message::<ClientMessage>(&mut BufReader::new([0, 0, 0, 8, 1].as_slice())).is_err()
+        );
+    }
+
+    #[test]
+    fn frames_reject_unused_payload_but_allow_successive_messages() {
+        let mut bytes = Vec::new();
+        write_message(&mut bytes, &7_u32).unwrap();
+        write_message(&mut bytes, &9_u32).unwrap();
+        let mut reader = BufReader::new(bytes.as_slice());
+        assert_eq!(read_message::<u32>(&mut reader).unwrap(), Some(7));
+        assert_eq!(read_message::<u32>(&mut reader).unwrap(), Some(9));
+        assert_eq!(read_message::<u32>(&mut reader).unwrap(), None);
+
+        let mut bytes = Vec::new();
+        write_message(&mut bytes, &7_u32).unwrap();
+        bytes.push(0);
+        let length = (bytes.len() - 4) as u32;
+        bytes[..4].copy_from_slice(&length.to_be_bytes());
+        assert_eq!(
+            read_message::<u32>(&mut BufReader::new(bytes.as_slice()))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
         );
     }
 }

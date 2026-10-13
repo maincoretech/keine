@@ -40,8 +40,7 @@ pub(super) fn build(
         let alias = if prefix == "scene-layer:" {
             "scene_layer_".into()
         } else if let Some(character) = prefix
-            .strip_prefix("character-layer:")
-            .and_then(|id| id.strip_suffix(':'))
+            .strip_circumfix("character-layer:", ':')
             .and_then(|id| ids.get(id))
         {
             format!("{character}_layer_")

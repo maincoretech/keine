@@ -1334,68 +1334,45 @@ fn glyph_visibility(reveal_at: usize, visible_chars: usize) -> Visibility {
 }
 
 fn parse_rich_markup(source: &str) -> Vec<RichRun> {
-    let chars = source.chars().collect::<Vec<_>>();
+    use keine_core::runtime::text::{RichTextSpan, rich_text_spans};
+
     let mut runs = Vec::new();
     let mut plain = String::new();
-    let mut cursor = 0;
-    while cursor < chars.len() {
-        if chars[cursor] == '\n' {
-            push_plain(&mut runs, &mut plain);
-            runs.push(RichRun {
-                base: "\n".into(),
-                ruby: None,
-                style: RichStyle::default(),
-            });
-            cursor += 1;
-            continue;
-        }
-        if chars[cursor] != '[' {
-            plain.push(chars[cursor]);
-            cursor += 1;
-            continue;
-        }
-        let Some(label_offset) = chars[cursor + 1..].iter().position(|value| *value == ']') else {
-            plain.push(chars[cursor]);
-            cursor += 1;
-            continue;
-        };
-        let label_end = cursor + 1 + label_offset;
-        if chars.get(label_end + 1) != Some(&'(') {
-            plain.push(chars[cursor]);
-            cursor += 1;
-            continue;
-        }
-        let Some(argument_offset) = chars[label_end + 2..]
-            .iter()
-            .position(|value| *value == ')')
-        else {
-            plain.push(chars[cursor]);
-            cursor += 1;
-            continue;
+    for span in rich_text_spans(source) {
+        let (text, argument) = match span {
+            RichTextSpan::Text(text) => {
+                for line in text.split_inclusive('\n') {
+                    if let Some(line) = line.strip_suffix('\n') {
+                        plain.push_str(line);
+                        push_plain(&mut runs, &mut plain);
+                        runs.push(RichRun {
+                            base: "\n".into(),
+                            ruby: None,
+                            style: RichStyle::default(),
+                        });
+                    } else {
+                        plain.push_str(line);
+                    }
+                }
+                continue;
+            }
+            RichTextSpan::Styled { text, arguments } => (text, arguments),
         };
         push_plain(&mut runs, &mut plain);
-        let argument_end = label_end + 2 + argument_offset;
-        let base = chars[cursor + 1..label_end].iter().collect::<String>();
-        let argument = chars[label_end + 2..argument_end]
-            .iter()
-            .collect::<String>();
-        let explicit_ruby = rich_attribute(&argument, "ruby");
+        let explicit_ruby = rich_attribute(argument, "ruby");
         let styled = argument.contains('=')
-            || matches!(
-                argument.as_str(),
-                "bold" | "italic" | "bold,italic" | "strike"
-            );
+            || matches!(argument, "bold" | "italic" | "bold,italic" | "strike");
         let style = if styled {
-            parse_rich_style(&argument)
+            parse_rich_style(argument)
         } else {
             RichStyle::default()
         };
         runs.push(RichRun {
-            base,
-            ruby: explicit_ruby.or_else(|| (!styled && !argument.is_empty()).then_some(argument)),
+            base: text.to_owned(),
+            ruby: explicit_ruby
+                .or_else(|| (!styled && !argument.is_empty()).then(|| argument.to_owned())),
             style,
         });
-        cursor = argument_end + 1;
     }
     push_plain(&mut runs, &mut plain);
     runs
@@ -1428,7 +1405,9 @@ fn parse_rich_style(source: &str) -> RichStyle {
             }
             "size" | "fontSize" => {
                 let value = value.trim().trim_end_matches("px");
-                if let Ok(value) = value.parse::<f32>() {
+                if let Ok(value) = value.parse::<f32>()
+                    && value.is_finite()
+                {
                     style.scale = if value > 4.0 { value / 60.0 } else { value };
                     style.scale = style.scale.clamp(0.5, 2.0);
                 }
@@ -1442,7 +1421,9 @@ fn parse_rich_style(source: &str) -> RichStyle {
                 style.font_style = FontStyle::Italic;
             }
             "opacity" | "alpha" => {
-                if let Ok(alpha) = value.parse::<f32>() {
+                if let Ok(alpha) = value.parse::<f32>()
+                    && alpha.is_finite()
+                {
                     style.color = style.color.with_alpha(alpha.clamp(0.0, 1.0));
                 }
             }
@@ -1461,15 +1442,8 @@ fn rich_attribute(source: &str, target: &str) -> Option<String> {
 
 fn parse_hex_color(value: &str) -> Option<Color> {
     let value = value.trim().strip_prefix('#').unwrap_or(value.trim());
-    let parse = |range| u8::from_str_radix(&value[range], 16).ok();
     match value.len() {
-        6 => Some(Color::srgb_u8(parse(0..2)?, parse(2..4)?, parse(4..6)?)),
-        8 => Some(Color::srgba_u8(
-            parse(0..2)?,
-            parse(2..4)?,
-            parse(4..6)?,
-            parse(6..8)?,
-        )),
+        6 | 8 => Srgba::hex(value).ok().map(Color::Srgba),
         _ => None,
     }
 }
@@ -1642,9 +1616,59 @@ mod rich_text_tests {
     }
 
     #[test]
+    fn rendering_retains_literal_waits_and_line_breaks() {
+        let runs = parse_rich_markup("[wait]\n[字](ruby=じ)\n");
+        assert_eq!(
+            runs.iter().map(|run| run.base.as_str()).collect::<Vec<_>>(),
+            ["[wait]", "\n", "字", "\n"]
+        );
+        assert_eq!(runs[2].ruby.as_deref(), Some("じ"));
+    }
+
+    #[test]
     fn rejects_invalid_color_without_panicking() {
         assert!(parse_hex_color("#xyz").is_none());
         assert!(parse_hex_color("#12345").is_none());
+        assert!(parse_hex_color("#中文").is_none());
+        assert!(parse_hex_color("#中12345").is_none());
+        assert!(parse_hex_color("#fff").is_none());
+        assert_eq!(
+            parse_hex_color("#ffb7c5"),
+            Some(Color::srgb_u8(255, 183, 197))
+        );
+        assert_eq!(
+            parse_hex_color("ffb7c580"),
+            Some(Color::srgba_u8(255, 183, 197, 128))
+        );
+    }
+
+    #[test]
+    fn long_malformed_markup_stays_literal() {
+        for source in [
+            "[".repeat(65_536),
+            format!("{}{}]", "[".repeat(32_768), " ".repeat(32_768)),
+            "[a](".repeat(16_384),
+        ] {
+            let started = std::time::Instant::now();
+            let runs = parse_rich_markup(&source);
+            eprintln!(
+                "textbox markup: {} bytes in {:?}",
+                source.len(),
+                started.elapsed()
+            );
+            assert_eq!(runs.len(), 1);
+            assert_eq!(runs[0].base, source);
+            assert!(runs[0].ruby.is_none());
+        }
+    }
+
+    #[test]
+    fn non_finite_rich_styles_leave_defaults_intact() {
+        for value in ["NaN", "inf", "-inf"] {
+            let style = parse_rich_style(&format!("size={value},opacity={value}"));
+            assert_eq!(style.scale, 1.0);
+            assert_eq!(style.color, Color::WHITE);
+        }
     }
 
     #[test]

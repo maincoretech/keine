@@ -44,11 +44,11 @@ impl PendingCommandBuffers {
     }
 
     pub fn take(&mut self) -> Vec<CommandBuffer> {
-        let encoders: Vec<_> = self.0.encoders.drain(..).collect();
-        for encoder in encoders {
-            self.0.buffers.push(encoder.finish());
+        let inner = &mut *self.0;
+        for encoder in inner.encoders.drain(..) {
+            inner.buffers.push(encoder.finish());
         }
-        core::mem::take(&mut self.0.buffers)
+        core::mem::take(&mut inner.buffers)
     }
 
     pub fn is_empty(&self) -> bool {

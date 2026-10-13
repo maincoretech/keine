@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
-      RUST_TOOLCHAIN: 1.97.1
+      RUST_TOOLCHAIN: 1.99.0
     steps:
       - name: Verify immutable Kēne workflow reference
         id: keine
@@ -123,7 +123,7 @@ jobs:
           echo "path=$project_path" >> "$GITHUB_OUTPUT"
 
       - name: Select pinned Rust toolchain
-        uses: dtolnay/rust-toolchain@4716b85f2fac3e324e64fa2810f6b5c3905760a5 # 1.97.1
+        uses: dtolnay/rust-toolchain@fb523f40495206854c36b250850817ae0f83e3d1 # 1.99.0
 
       - name: Check dependencies before restoring publisher material
         uses: ./keine-engine/.github/actions/check-dependencies

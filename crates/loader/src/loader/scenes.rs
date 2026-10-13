@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque, btree_map::Entry};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -45,17 +45,23 @@ pub fn load_scenes_with(
     let source_reader = SourceReader::for_mounts();
     for script_mount in project.script_mounts() {
         for mut scene in load_directory(&script_mount, languages, &source_reader)? {
-            if let Some(previous) = merged.insert(scene.name.clone(), scene.clone()) {
-                scene.diagnostics.push(Diagnostic {
-                    level: DiagnosticLevel::Warning,
-                    span: crate::SourceSpan { line: 1, column: 1 },
-                    message: format!(
-                        "scene {:?} overrides {}",
-                        scene.name,
-                        previous.path.display()
-                    ),
-                });
-                merged.insert(scene.name.clone(), scene);
+            match merged.entry(scene.name.clone()) {
+                Entry::Occupied(mut entry) => {
+                    let previous: &LoadedScene = entry.get();
+                    scene.diagnostics.push(Diagnostic {
+                        level: DiagnosticLevel::Warning,
+                        span: crate::SourceSpan { line: 1, column: 1 },
+                        message: format!(
+                            "scene {:?} overrides {}",
+                            scene.name,
+                            previous.path.display()
+                        ),
+                    });
+                    entry.insert(scene);
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(scene);
+                }
             }
         }
     }

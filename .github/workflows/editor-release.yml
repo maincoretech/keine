@@ -48,7 +48,7 @@ jobs:
           echo 'build=true' >> "$GITHUB_OUTPUT"
       - name: Install Rust toolchain
         if: steps.current.outputs.build == 'true'
-        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+        uses: dtolnay/rust-toolchain@fb523f40495206854c36b250850817ae0f83e3d1 # 1.99.0
       - name: Check dependencies
         if: steps.current.outputs.build == 'true'
         uses: ./.github/actions/check-dependencies
@@ -85,7 +85,7 @@ jobs:
         with:
           ref: ${{ env.RELEASE_SHA }}
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+        uses: dtolnay/rust-toolchain@fb523f40495206854c36b250850817ae0f83e3d1 # 1.99.0
       - name: Install cross-compilation target
         if: matrix.target != ''
         run: rustup target add ${{ matrix.target }}

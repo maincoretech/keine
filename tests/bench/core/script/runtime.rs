@@ -135,5 +135,72 @@ fn bench(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench);
+fn bench_markup(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dialogue_markup");
+    for size in [4_096, 16_384, 65_536] {
+        for (name, source) in [
+            ("unclosed_brackets", "[".repeat(size)),
+            ("unclosed_styles", "[a](".repeat(size / 4)),
+            (
+                "unclosed_arguments",
+                format!("{}]({}", "[".repeat(size), "x".repeat(size)),
+            ),
+            (
+                "trailing_whitespace",
+                format!("{}{}]", "[".repeat(size), " ".repeat(size)),
+            ),
+            ("plain", "普通对白 text ".repeat(size / 20)),
+            (
+                "styled_waits",
+                "[字](color=#fff)[wait=100]后[wait]".repeat(size / 34),
+            ),
+        ] {
+            group.throughput(Throughput::Bytes(source.len() as u64));
+            group.bench_with_input(BenchmarkId::new(name, size), &source, |b, source| {
+                b.iter(|| {
+                    black_box(keine_core::runtime::text::inline_waits(black_box(source)).count())
+                });
+            });
+        }
+    }
+    group.finish();
+}
+
+fn bench_list_reads(c: &mut Criterion) {
+    use keine_core::EiyashouExpr;
+    use keine_core::runtime::eiyashou::evaluate;
+    use std::collections::HashMap;
+
+    let mut group = c.benchmark_group("eiyashou_list_read");
+    for size in [16, 4_096, 65_536] {
+        let variables = HashMap::from([(
+            "items".to_owned(),
+            Value::Array((0..size).map(|index| Value::Int(index as i64)).collect()),
+        )]);
+        let list = EiyashouExpr::Variable("items".into());
+        for (name, expression) in [
+            ("length", EiyashouExpr::Length(Box::new(list.clone()))),
+            (
+                "index",
+                EiyashouExpr::Index {
+                    list: Box::new(list),
+                    index: Box::new(EiyashouExpr::Literal(Value::Int((size - 1) as i64))),
+                },
+            ),
+        ] {
+            group.bench_with_input(
+                BenchmarkId::new(name, size),
+                &expression,
+                |b, expression| {
+                    b.iter(|| {
+                        black_box(evaluate(black_box(expression), black_box(&variables)).unwrap())
+                    });
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench, bench_markup, bench_list_reads);
 criterion_main!(benches);

@@ -28,7 +28,7 @@ fn run() -> anyhow::Result<()> {
     let mut state = 0x4d59_5df4_d0f3_3173_u64;
     let mut block = [0_u8; 64 * 1024];
     for _ in 0..MEDIA_BYTES / block.len() {
-        for chunk in block.chunks_exact_mut(8) {
+        for chunk in block.as_chunks_mut::<8>().0 {
             state ^= state << 13;
             state ^= state >> 7;
             state ^= state << 17;

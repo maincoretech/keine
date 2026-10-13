@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use bevy::app::AppExit;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -10,6 +11,7 @@ use crate::runtime::resources::{
 };
 
 const VERSION: u32 = 2;
+pub(super) const RETRY_DELAY_SECONDS: f32 = 1.0;
 const MAX_GALLERY_BYTES: usize = 16 * 1024 * 1024;
 const MAX_GALLERY_ENTRIES: usize = 65_536;
 
@@ -31,6 +33,7 @@ struct GalleryFileWire {
 pub(crate) struct GallerySnapshot {
     pub(super) cg: HashMap<String, String>,
     pub(super) bgm: HashMap<String, String>,
+    pub(super) retry_seconds: Option<f32>,
 }
 
 impl GallerySnapshot {
@@ -38,6 +41,7 @@ impl GallerySnapshot {
         Self {
             cg: state.unlocked_cg.clone(),
             bgm: state.unlocked_bgm.clone(),
+            retry_seconds: None,
         }
     }
 }
@@ -56,6 +60,7 @@ pub(crate) fn load(state: &mut keine_core::State, project_root: &Path) {
 }
 
 pub(crate) fn persist(
+    time: Res<Time<Real>>,
     state: Res<GameState>,
     project_root: Res<PersistenceRoot>,
     mut previous: ResMut<GallerySnapshot>,
@@ -70,25 +75,60 @@ pub(crate) fn persist(
     ) {
         return;
     }
-    if !state.is_changed()
-        || (previous.cg == state.unlocked_cg && previous.bgm == state.unlocked_bgm)
-    {
+    if let Some(elapsed) = &mut previous.retry_seconds {
+        *elapsed += time.delta_secs();
+        if *elapsed < RETRY_DELAY_SECONDS {
+            return;
+        }
+    } else if !state.is_changed() {
         return;
     }
+    if previous.cg == state.unlocked_cg && previous.bgm == state.unlocked_bgm {
+        previous.retry_seconds = None;
+        return;
+    }
+    persist_now(&state, &project_root, &mut previous);
+}
+
+pub(crate) fn flush_on_exit(
+    mut exits: MessageReader<AppExit>,
+    state: Res<GameState>,
+    project_root: Res<PersistenceRoot>,
+    mut previous: ResMut<GallerySnapshot>,
+    editor_sync: Option<Res<EditorSyncSession>>,
+    authoring_preview: Option<Res<AuthoringPreviewSession>>,
+    persistence_disabled: Option<Res<PersistenceDisabled>>,
+) {
+    if writable_runtime_session(
+        editor_sync.is_some(),
+        authoring_preview.is_some(),
+        persistence_disabled.is_some(),
+    ) && exits.read().next().is_some()
+        && (previous.cg != state.unlocked_cg || previous.bgm != state.unlocked_bgm)
+    {
+        persist_now(&state, &project_root, &mut previous);
+    }
+}
+
+fn persist_now(state: &GameState, project_root: &Path, previous: &mut GallerySnapshot) {
     let file = GalleryFile {
         version: VERSION,
         cg: &state.unlocked_cg,
         bgm: &state.unlocked_bgm,
     };
-    let target = path(&project_root);
+    let target = path(project_root);
     let result = super::encode_postcard_limited(&file, MAX_GALLERY_BYTES, "gallery")
         .and_then(|bytes| super::write_atomically(&target, &bytes));
     match result {
         Ok(()) => {
             previous.cg.clone_from(&state.unlocked_cg);
             previous.bgm.clone_from(&state.unlocked_bgm);
+            previous.retry_seconds = None;
         }
-        Err(error) => log::error!("failed to persist gallery: {error:#}"),
+        Err(error) => {
+            previous.retry_seconds = Some(0.0);
+            log::error!("failed to persist gallery: {error:#}");
+        }
     }
 }
 

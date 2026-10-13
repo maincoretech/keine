@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -887,31 +887,17 @@ fn apply_edits(edits: &[Edit]) -> Result<()> {
 
 fn replace_file(path: &Path, contents: &[u8]) -> Result<()> {
     let parent = path.parent().context("source file has no parent")?;
-    let nonce = format!(".keine-remap-{}", std::process::id());
-    let temporary = parent.join(format!(
-        "{}{nonce}.tmp",
-        path.file_name().unwrap_or_default().to_string_lossy()
-    ));
-    let displaced = parent.join(format!(
-        "{}{nonce}.original",
-        path.file_name().unwrap_or_default().to_string_lossy()
-    ));
-    let mut output = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)?;
-    output.write_all(contents)?;
-    output.sync_all()?;
-    drop(output);
     let permissions = fs::metadata(path)?.permissions();
-    fs::set_permissions(&temporary, permissions)?;
-    fs::rename(path, &displaced)?;
-    if let Err(error) = fs::rename(&temporary, path) {
-        let _ = fs::rename(&displaced, path);
-        let _ = fs::remove_file(&temporary);
-        return Err(error.into());
+    let mut output = tempfile::NamedTempFile::new_in(parent)?;
+    output.as_file().set_permissions(permissions)?;
+    output.write_all(contents)?;
+    output.as_file().sync_all()?;
+    output.persist(path).map_err(|error| error.error)?;
+    // Replacement is committed; an fsync warning must not be reported as an
+    // uncommitted edit. The project-level backup owns rollback when requested.
+    if let Err(error) = crate::storage::sync_directory(parent) {
+        log::warn!("resource remap committed; directory sync failed: {error:#}");
     }
-    fs::remove_file(displaced)?;
     Ok(())
 }
 
@@ -967,6 +953,22 @@ fn validate_after_apply(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replacement_preserves_existing_data_on_failure_and_cleans_temporary_files() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source.txt");
+        fs::write(&source, b"old").unwrap();
+        replace_file(&source, b"new").unwrap();
+        assert_eq!(fs::read(&source).unwrap(), b"new");
+
+        let blocked = root.path().join("directory");
+        fs::create_dir(&blocked).unwrap();
+        fs::write(blocked.join("keep"), b"owned").unwrap();
+        assert!(replace_file(&blocked, b"replacement").is_err());
+        assert_eq!(fs::read(blocked.join("keep")).unwrap(), b"owned");
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 2);
+    }
 
     #[test]
     fn json_rewrite_changes_only_complete_string_values() {
