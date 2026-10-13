@@ -84,6 +84,7 @@ impl Plugin for RuntimePlugin {
             Last,
             (
                 platform::sync_dialog_camera_activity,
+                platform::sync_camera_output,
                 platform::update_lifecycle,
                 platform::sync_background_audio,
             )

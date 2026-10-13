@@ -6,6 +6,7 @@ use std::time::Instant;
 use anyhow::Error;
 use bevy::app::AppExit;
 use bevy::audio::{AudioSink, AudioSinkPlayback};
+use bevy::camera::CameraOutputMode;
 use bevy::camera::Viewport;
 use bevy::ecs::system::SystemParam;
 use bevy::log::{BoxedFmtLayer, Level, LogPlugin, tracing_subscriber};
@@ -411,6 +412,25 @@ pub(crate) fn sync_dialog_camera_activity(
     let needed = visible_root || visible_preview || visible_video;
     if camera.is_active != needed {
         camera.is_active = needed;
+    }
+}
+
+/// The fixed stage/UI/dialog cameras compose into the same single-sample
+/// target. Only its last active layer needs to copy that target to the window.
+pub(crate) fn sync_camera_output(mut cameras: Query<(Entity, &mut Camera), DesignCameraFilter>) {
+    let last = cameras
+        .iter()
+        .filter(|(_, camera)| camera.is_active)
+        .max_by_key(|(_, camera)| camera.order)
+        .map(|(entity, _)| entity);
+    for (entity, mut camera) in &mut cameras {
+        if Some(entity) == last {
+            if matches!(camera.output_mode, CameraOutputMode::Skip) {
+                camera.output_mode = CameraOutputMode::default();
+            }
+        } else if !matches!(camera.output_mode, CameraOutputMode::Skip) {
+            camera.output_mode = CameraOutputMode::Skip;
+        }
     }
 }
 
@@ -1634,6 +1654,69 @@ mod tests {
         assert!(!should_pause_for_background(false, true));
         assert!(should_pause_for_background(false, false));
         assert!(!should_pause_for_background(true, false));
+    }
+
+    #[test]
+    fn only_last_active_design_camera_writes_the_shared_target() {
+        let mut app = App::new();
+        app.add_systems(Update, sync_camera_output);
+        let scene = app
+            .world_mut()
+            .spawn((
+                Camera {
+                    order: 0,
+                    ..default()
+                },
+                SceneBlurCamera,
+            ))
+            .id();
+        let ui = app
+            .world_mut()
+            .spawn((
+                Camera {
+                    order: 1,
+                    ..default()
+                },
+                UiBlurCamera,
+            ))
+            .id();
+        let dialog = app
+            .world_mut()
+            .spawn((
+                Camera {
+                    order: 2,
+                    ..default()
+                },
+                DialogCamera,
+            ))
+            .id();
+        let unrelated = app.world_mut().spawn(Camera::default()).id();
+        for (active, writer) in [
+            ([true, true, true], Some(dialog)),
+            ([true, true, false], Some(ui)),
+            ([true, false, true], Some(dialog)),
+            ([true, false, false], Some(scene)),
+            ([false, false, false], None),
+            ([true, true, true], Some(dialog)),
+        ] {
+            for (entity, active) in [scene, ui, dialog].into_iter().zip(active) {
+                app.world_mut().get_mut::<Camera>(entity).unwrap().is_active = active;
+            }
+            app.update();
+            for entity in [scene, ui, dialog] {
+                assert_eq!(
+                    matches!(
+                        app.world().get::<Camera>(entity).unwrap().output_mode,
+                        CameraOutputMode::Write { .. }
+                    ),
+                    Some(entity) == writer
+                );
+            }
+            assert!(matches!(
+                app.world().get::<Camera>(unrelated).unwrap().output_mode,
+                CameraOutputMode::Write { .. }
+            ));
+        }
     }
 
     #[test]

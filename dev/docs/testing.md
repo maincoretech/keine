@@ -581,6 +581,114 @@ python3 target/performance/scene-sync-0151/sample.py target/debug/keine target/p
 Engine 构建及 native-smoke validate 通过。macOS 原生操作确认文字阴影、换图、镜头移动、
 舞台和设置模糊、Intro 换页/恢复及窗口缩小；其他平台与热加载现场操作尚未验收。
 
+### 窗口输出 GPU 对照与测试包核查（0.15.5 工作区）
+
+M5 Pro / 24 GiB / macOS 27.0.1 / Metal，1920×1080 @1×，dev opt-level=1，
+同一个隔离的双立绘 300ms 往返演出。场景/UI/弹窗在共享中间目标上继续合成，
+只有最后一个活动相机写入窗口，省去较早相机的重复全屏输出。
+新增一项边界回归覆盖三层组合、弹窗休眠/唤醒、全部关闭与其他相机不受影响。
+
+每轮 10 秒、排除进程启动后前 5 秒的 GPU 区间，原始均值取三轮中位数：
+1.2585 → 1.0934 ms/帧（−13.1%）；随后原二进制反序两轮为 1.2548、1.2361，
+仍支持约 −12.2% 的差异。第一轮基线 1.8893 保留在原始数据，没有按结果删除。
+模糊临时附件改 clear 的候选为 1.3374–1.3689，未见收益，已撤回。
+macOS 原生确认标题、设置模糊、确认弹窗/取消、动态舞台、读档/返回及窗口缩放，
+验收进程退出 0。当前不主张 FPS、CPU、其他平台或 release 候选同等改善。
+fmt、workspace check / all-targets Clippy（publisher,video-native,hot-reload）、
+无默认功能 + publisher check 通过；同组合 workspace tests 为
+1077 passed / 0 failed / 21 ignored（废纸篓与 Unix socket 在沙箱外执行）。
+
+原始命令、输入/二进制 hash、Metal 日志和 comparison.json 在
+`target/performance/package-gpu-0155/`；采样复用已有 measure.py：
+`python3 target/performance/package-gpu-0155/measure.py BINARY OUTPUT bench_idle --seconds 10`。
+前后构建均为 `cargo build --offline --locked --bin keine --features publisher,video-native,hot-reload`。
+
+继续拆分同一演出：临时二进制仅跳过区域模糊，GPU 两轮为 0.5984、0.5953 ms/帧；
+正式实现已恢复模糊。这是成本拆分，不能作为保留画质的优化结果。同期带模糊的
+基线波动为 1.0871、1.5142，后续三轮为 1.1738、1.2063、1.1804。
+跳过 UI 相机空世界 pass 的候选为 1.1755、1.7303、1.1809；交替三轮中位数
+1.1804 → 1.1809（+0.05%），没有稳定收益，已撤回新增的调度条件。
+原始二进制、输入 hash、命令和 Metal JSON 在 `target/performance/gpu-followup-0155/`；
+`run-ab.py` 交替调用上述 measure.py，每轮仍为 10 秒，排除启动前 5 秒。
+
+保留四个正确性边界修复：弱模糊权重下溢不再产生 0/0 UV；水平/垂直管线同时
+就绪才开始两次处理；视频旧帧重排不覆盖期间到达的新帧；设备更换重建 Core Video
+纹理缓存，遵守锁定 wgpu `create_texture_from_hal` 的设备归属合同。
+裁剪后无像素的模糊区域直接跳过。一项区域边界表和一项帧交接竞态回归通过；
+两项显式 Metal 回归通过：实际 WGSL 的十个淡入/常用/最大半径输出保持有限且
+保留常量色，两个实际 device 的缓存分别建立、同一 device 复用缓存。
+它们默认 ignored，由本机显式运行，不等于已复现真实 device-loss 后的完整恢复。
+macOS 原生确认标题/设置/弹窗模糊、取消返回与双立绘舞台，验收进程退出 0。
+fmt、workspace check / all-targets Clippy（publisher,video-native,hot-reload）、
+无默认功能 + publisher check 通过；同组合 workspace tests 为
+1079 passed / 0 failed / 23 ignored（Unix socket/废纸篓在沙箱外运行）。
+Metal 专项命令为 `cargo test --offline --locked --lib --features publisher,video-native,hot-reload on_gpu -- --ignored`
+及同配置 `metal_cache_follows_replacement_device -- --ignored`。
+已有 `keine-video-acceptance tests/fixtures/video/playback.mp4` 也通过文件系统与
+Hakutaku 挂载的 AVFoundation 解码、循环重启和实际 Metal 帧导入/复制。
+本轮未做 release 性能、Windows/Linux/Android 运行态或强制设备丢失验收。
+
+Suika3 对照包版本 26.07.13 的原始三轮 GPU 均值为 0.5262、0.5393、0.5352 ms；
+已核对该 tag 的 [Metal renderer](https://github.com/awemorris/suika3/blob/26.07.13/external/PlayfieldEngine/external/StratoHAL/src/GameRenderer.m)
+和 [shader](https://github.com/awemorris/suika3/blob/26.07.13/external/PlayfieldEngine/external/StratoHAL/src/GameShaders.metal)：
+普通图层单次纹理采样，背景/立绘/已栅格化文字共用 drawable 的一个 render pass，
+此 fixture 没有 Kēne 的区域高斯玻璃处理。结合临时成本拆分，额外模糊与合成是
+差距的重要来源；没有量化语言、抽象层或半精度各自的贡献。
+0.53 ms 是 GPU 执行时间，不是输入响应延迟；Suika 原报告的呈现管线时间约
+62 ms，仍不包含输入事件时间点。不同 build/画面路径的数字不能当作等画质排名。
+
+继续对照 Suika 的实际绘制范围，测试了裁小模糊中间纹理与按强度排序后首个命中即返回。
+同机/输入/构建配置，每个候选前后各三轮 10 秒，顺序为旧→新、新→旧、旧→新：
+裁小纹理的 GPU 均值中位数 1.2222 → 1.6868 ms，三对均变慢；提前返回为
+1.1795 → 1.6552 ms，前两对变慢、末对改善约 3.6%，没有稳定收益，两项均撤回。
+另外一个单区域直达分支的时序差异不作为收益：短程区域日志确认该演出实际有
+对白框和姓名框两个区域，未覆盖该分支；该候选及临时日志也已撤回。
+构建命令沿用上文；源码/二进制快照、18 次 Metal 原始采样、完整输入哈希、
+`run-ab.py` / `run-single-ab.py` / `run-ordered-ab.py` 与比较结果在
+`target/performance/gpu-crop-0155/`。本轮没有新增运行时代码，不将候选构建或
+短程采样作为视觉等价、release 或其他平台验收。
+
+源码对照还确认：[Suika stage](https://github.com/awemorris/suika3/blob/26.07.13/src/stage.c)
+在普通交叉淡化时用一个双纹理绘制混合新旧图片。Kēne 本轮将无变换/滤镜/遮罩、
+没有视频/粒子且其他图层均在背景上方的 Fade/Crossfade 合并为一次绘制；其他情况
+沿用原路径。透明图片保持原有 source-over 合成，而非简单 mix。原两层实体保留，
+仅在 render queue 完成后核对管线及当前 GPU 纹理/采样器绑定，再移除当帧两层绘制；
+未就绪或资源更换时跳过合并绘制，保留回退并在下一帧重试。
+不能据此承诺持续对白场景改善。普通单纹理路径、图片复用和文字图集批量绘制在
+Kēne/Bevy 已存在；Suika 每帧 `waitUntilCompleted` 的同步等待也不应照搬为优化。
+
+同机/Metal/dev opt-level=1/1920×1080 @1×，隔离副本使用两张背景、对白局部模糊与
+60 秒非阻塞淡化，每轮采样 10 秒。无保护的初始原型三轮中位数 1.4041 → 1.2390 ms；
+加入资源保护后的五轮 GPU 均值中位数 1.4006 → 1.2463 ms（−11.0%）。逐轮旧值
+2.3395 / 1.5848 / 1.3481 / 1.4006 / 1.3926，新值
+3.0966 / 1.5222 / 1.2455 / 1.2445 / 1.2463；首对变慢约 32%，保留该波动，
+后两轮反序复测支持约 11% 收益。最后减少重复几何/组件更新，一组反序对照为
+1.3950 → 1.1921 ms（−14.5%，仅一组）；CPU 28.40% → 30.22%，增加约 1.82 个
+百分点（单核 100%）。静态背景单组 1.2299 → 1.2334 ms，基本持平。
+全程仍受 60 Hz 呈现限制，不声称 FPS、输入延迟或平均 CPU 改善。
+
+构建沿用上述命令；采样为
+`python3 target/performance/crossfade-0155/measure.py BINARY OUTPUT cross_fade --seconds 10`。
+输入/二进制 hash、每轮命令、Metal JSON、CPU 数据、失败尝试及 comparison.json 均在
+`target/performance/crossfade-0155/`。嵌入路径/保留字错误的早期尝试、未正确移除
+回退绘制的调度尝试不计入收益；原始记录保留。两项回归覆盖适用边界与管线等待/
+就绪丢失/恢复；实际 Metal 测试对比十组透明/不透明 source-over 输出，最大差异
+1/255（少一次中间 8-bit 舍入），并检查 GPU 纹理及采样器更换后的回退判断。
+该测试默认 ignored，本机显式执行
+`cargo test --offline --locked --lib --features publisher,video-native,hot-reload transparent_crossfade_and_replaced_bindings_on_gpu -- --ignored --nocapture`
+通过。fmt、workspace check/all-targets Clippy、无默认功能 + publisher check 及同功能组合
+workspace tests 全部通过：1081 passed / 0 failed / 24 ignored。
+macOS 原生检查旧背景/新背景对白画面、局部模糊和返回标题，独立验收进程退出 0；
+未捕获反向淡化全过程，不以截图证明没有任何单帧闪黑。未做 release、其他平台、
+强制 device-loss 或发布包验收；未修改 tday 源工程、素材、发行流程或默认画质。
+
+横向图中的 135.9 MiB Kēne app 包含 48.3 MiB 开发功能 release 引擎和约 87.6 MiB
+完整素材；Ren’Py 的 69.8 MiB app 不含包外游戏素材。此组总量不是等内容发行包排名。
+同 SHA `24e3b42` 的 Release Engine #66 macOS 产物核查为 124.7 MiB 解压逻辑大小、
+99.4 MiB ZIP、46.1 MiB 发行引擎（ZIP 中约 21.1 MiB）。已启用 LTO、strip、
+单 codegen unit 与 panic=abort；内嵌字体约 9.8 MiB，移除字体或改小优化级别需要
+另行验证文字覆盖和运行性能。未改素材、发行流程、默认画质或编译优化级别。
+
 ### 区域模糊 GPU 对照（0.15.4 工作区）
 
 Apple M5 Pro / 24 GiB / macOS 27.0.1 / Metal，dev opt-level=1，

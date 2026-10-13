@@ -14,6 +14,7 @@ pub(crate) struct StageMaterialPlugin;
 impl Plugin for StageMaterialPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "../../assets/shaders/stage/material.wgsl");
+        app.add_plugins(crate::scene::background::crossfade::BackgroundCrossfadePlugin);
         app.add_plugins(Material2dPlugin::<StageMaterial>::default())
             .add_systems(Startup, setup_quad);
     }

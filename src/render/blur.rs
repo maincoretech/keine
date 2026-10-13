@@ -310,7 +310,7 @@ fn run_blur(
     vt: &ViewTarget,
     bc: &BlurCamera,
     uniform_index: &DynamicUniformIndex<BlurCamera>,
-    mut resources: BlurRunResources,
+    resources: BlurRunResources,
     intermediate: &mut Option<BlurIntermediate>,
     ctx: &mut RenderContext,
 ) {
@@ -351,7 +351,20 @@ fn run_blur(
             vertical: true,
         },
     );
+    // Both passes must be ready before touching the intermediate. Otherwise a
+    // ready vertical pipeline can sample an older frame (or a new blank target).
+    let (Some(horizontal), Some(vertical)) = (
+        resources.pipeline_cache.get_render_pipeline(horizontal),
+        resources.pipeline_cache.get_render_pipeline(vertical),
+    ) else {
+        return;
+    };
     let size = vt.main_texture().size();
+    let horizontal_scissor = blur_scissor(bc, size, true);
+    let vertical_scissor = blur_scissor(bc, size, false);
+    if vertical_scissor.width == 0 || vertical_scissor.height == 0 {
+        return;
+    }
     let recreate_intermediate = intermediate
         .as_ref()
         .is_none_or(|texture| texture.size != size || texture.format != format);
@@ -376,8 +389,6 @@ fn run_blur(
     }
     let intermediate_view = &intermediate.as_ref().expect("created above").view;
     let original = vt.main_texture_view().clone();
-    let horizontal_scissor = blur_scissor(bc, size, true);
-    let vertical_scissor = blur_scissor(bc, size, false);
     run_blur_pass(
         BlurPassTargets {
             source: &original,
@@ -387,7 +398,7 @@ fn run_blur(
         horizontal,
         uniform_index,
         &uniform_binding,
-        &mut resources,
+        &resources,
         ctx,
     );
     run_blur_pass(
@@ -399,22 +410,19 @@ fn run_blur(
         vertical,
         uniform_index,
         &uniform_binding,
-        &mut resources,
+        &resources,
         ctx,
     );
 }
 
 fn run_blur_pass(
     targets: BlurPassTargets,
-    pipeline_id: CachedRenderPipelineId,
+    pipeline: &RenderPipeline,
     uniform_index: &DynamicUniformIndex<BlurCamera>,
     uniform_binding: &BindingResource<'_>,
-    resources: &mut BlurRunResources,
+    resources: &BlurRunResources,
     ctx: &mut RenderContext,
 ) {
-    let Some(pipeline) = resources.pipeline_cache.get_render_pipeline(pipeline_id) else {
-        return;
-    };
     // ViewTarget textures can change after resize or render recovery. Creating
     // these two small bind groups per active blur avoids caching against wgpu
     // implementation details and follows Bevy's post-process pattern.
@@ -848,6 +856,137 @@ mod tests {
     use super::*;
     use bevy::math::Affine2;
 
+    #[cfg(all(target_os = "macos", feature = "video-native"))]
+    #[test]
+    #[ignore = "requires a real Metal device"]
+    fn gaussian_fade_boundaries_preserve_constant_color_on_gpu() {
+        use wgpu::util::DeviceExt;
+
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::METAL,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = futures_lite::future::block_on(
+            instance.request_adapter(&wgpu::RequestAdapterOptions::default()),
+        )
+        .unwrap();
+        let (device, queue) = futures_lite::future::block_on(
+            adapter.request_device(&wgpu::DeviceDescriptor::default()),
+        )
+        .unwrap();
+        // Execute the real Gaussian function with weak fade-in radii that
+        // underflow f32 weights, plus ordinary and maximum-radius kernels.
+        let source = format!(
+            "{}\n{}",
+            include_str!("../assets/shaders/blur.wgsl"),
+            r#"
+@group(0) @binding(3) var<storage, read_write> results: array<vec4<f32>>;
+@compute @workgroup_size(1) fn probe(@builtin(global_invocation_id) id: vec3<u32>) {
+    let radii = array<f32, 10>(0.0001, 0.01, 0.1, 0.25, 0.3, 0.5, 1.0, 12.0, 30.0, 48.0);
+    results[id.x] = gaussian_blur(vec4<f32>(16.5, 0.5, 0.0, 1.0), radii[id.x], vec2<f32>(1.0, 0.0));
+}"#,
+        );
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("gaussian-boundaries"),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: None,
+            layout: None,
+            module: &shader,
+            entry_point: Some("probe"),
+            compilation_options: default(),
+            cache: None,
+        });
+        let texture = device.create_texture_with_data(
+            &queue,
+            &wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: 32,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &[64, 128, 192, 255].repeat(32),
+        );
+        let view = texture.create_view(&default());
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..default()
+        });
+        let output = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 160,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 160,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: output.as_entire_binding(),
+                },
+            ],
+        });
+        let mut encoder = device.create_command_encoder(&default());
+        {
+            let mut pass = encoder.begin_compute_pass(&default());
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(10, 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(&output, 0, &readback, 0, 160);
+        let submission = queue.submit([encoder.finish()]);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                sender.send(result).unwrap();
+            });
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(submission),
+                timeout: Some(std::time::Duration::from_secs(10)),
+            })
+            .unwrap();
+        receiver
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        let bytes = readback.slice(..).get_mapped_range();
+        for pixel in bytes.chunks_exact(16) {
+            for (actual, expected) in pixel.chunks_exact(4).zip([64., 128., 192., 255.]) {
+                let actual = f32::from_ne_bytes(actual.try_into().unwrap());
+                assert!(actual.is_finite() && (actual - expected / 255.).abs() < 1e-5);
+            }
+        }
+    }
+
     fn region(min_x: f32, max_x: f32, min_y: f32, max_y: f32, coc: f32) -> BlurRect {
         BlurRect {
             min_x,
@@ -1071,5 +1210,28 @@ mod tests {
         let vertical = blur_scissor(&camera, size, false);
         assert_eq!((vertical.x, vertical.y), (11, 21));
         assert_eq!((vertical.width, vertical.height), (89, 59));
+    }
+
+    #[test]
+    fn clipped_or_subpixel_regions_have_no_final_draw_area() {
+        let size = Extent3d {
+            width: 200,
+            height: 100,
+            depth_or_array_layers: 1,
+        };
+        for region in [
+            region(10.1, 10.2, 20.0, 80.0, 40.0),
+            region(10.0, 100.0, 20.1, 20.2, 40.0),
+            region(-50.0, -10.0, 20.0, 80.0, 40.0),
+            region(210.0, 250.0, 20.0, 80.0, 40.0),
+        ] {
+            let mut camera = BlurCamera::default();
+            let mut regions = vec![region];
+            write_regions(&mut camera, &mut regions);
+            let scissor = blur_scissor(&camera, size, false);
+            assert!(scissor.width == 0 || scissor.height == 0);
+            assert!(scissor.x + scissor.width <= size.width);
+            assert!(scissor.y + scissor.height <= size.height);
+        }
     }
 }

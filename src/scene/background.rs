@@ -1,3 +1,5 @@
+pub(crate) mod crossfade;
+
 use bevy::camera::visibility::RenderLayers;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -112,6 +114,8 @@ pub(crate) struct BackgroundSyncContext<'w, 's> {
     backgrounds: BackgroundQuery<'w, 's>,
     quad: Res<'w, StageQuad>,
     materials: ResMut<'w, Assets<StageMaterial>>,
+    crossfades: ResMut<'w, Assets<crossfade::BackgroundCrossfade>>,
+    crossfade_visual: Local<'s, crossfade::CrossfadeVisual>,
     windows: Query<'w, 's, Ref<'static, Window>>,
     cache: Local<'s, BackgroundRenderCache>,
 }
@@ -127,6 +131,8 @@ pub fn sync_bg(context: BackgroundSyncContext) {
         mut backgrounds,
         quad,
         mut materials,
+        mut crossfades,
+        mut crossfade_visual,
         windows,
         mut cache,
     } = context;
@@ -143,6 +149,8 @@ pub fn sync_bg(context: BackgroundSyncContext) {
     cache.capture(&state);
     let viewport = DesignViewport::from_window(&window);
     let desired = desired_backgrounds(&state);
+    let mut fallback_entities = [None, None];
+    let mut source_images = [None, None];
     let mut previous_exists = false;
     let mut current_exists = false;
 
@@ -174,6 +182,9 @@ pub fn sync_bg(context: BackgroundSyncContext) {
                 )
             },
         );
+        let layer_index = usize::from(node.layer == BackgroundLayer::Current);
+        fallback_entities[layer_index] = Some(entity);
+        source_images[layer_index] = Some(image.clone());
         let post = effective_post_process(
             &state.camera_effect,
             state.camera_effect_targets,
@@ -266,6 +277,9 @@ pub fn sync_bg(context: BackgroundSyncContext) {
                 RenderLayers::layer(0),
             ))
             .id();
+        let layer_index = usize::from(background.layer == BackgroundLayer::Current);
+        fallback_entities[layer_index] = Some(entity);
+        source_images[layer_index] = Some(image.clone());
         apply_background_entity(
             &mut commands,
             entity,
@@ -285,6 +299,24 @@ pub fn sync_bg(context: BackgroundSyncContext) {
             false,
         );
     }
+    let merged = crossfade::eligible_progress(&state).and_then(|progress| {
+        Some((
+            crossfade::BackgroundCrossfade::new(
+                source_images[0].take()?,
+                source_images[1].take()?,
+                progress,
+            ),
+            [fallback_entities[0]?, fallback_entities[1]?],
+        ))
+    });
+    crossfade_visual.sync(
+        &mut commands,
+        &mut crossfades,
+        &quad,
+        merged,
+        Transform::from_translation(viewport.content_center().extend(0.0))
+            .with_scale((Vec2::new(DESIGN_WIDTH, DESIGN_HEIGHT) * viewport.scale).extend(1.0)),
+    );
 }
 
 fn camera_transform(state: &GameState) -> Option<(SpriteTransform, f32)> {

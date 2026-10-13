@@ -104,8 +104,15 @@ impl<K: Copy + Eq + Hash, V> LatestFrameQueue<K, V> {
         if self.discarded.remove(&key) {
             return false;
         }
-        self.pending.insert(key, value);
-        true
+        // A newer frame may have arrived while the render world was trying to
+        // prepare this one. Requeue only into a vacant slot, preserving latest.
+        match self.pending.entry(key) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(value);
+                true
+            }
+            std::collections::hash_map::Entry::Occupied(_) => false,
+        }
     }
 }
 
@@ -189,6 +196,7 @@ pub(super) fn present_native_frame(
 #[derive(Default)]
 struct MetalUploadState {
     cache: Option<Retained<CVMetalTextureCache>>,
+    device: Option<wgpu::Device>,
 }
 
 // SAFETY: this is `Local` state owned exclusively by one render system. Bevy
@@ -278,6 +286,13 @@ fn metal_texture_cache<'a>(
     render_device: &RenderDevice,
     state: &'a mut MetalUploadState,
 ) -> Result<&'a Retained<CVMetalTextureCache>, String> {
+    // Local system state survives RenderStartup/device recovery. An imported
+    // HAL texture must belong to the current wgpu device, so discard the old
+    // Core Video cache before creating textures for a replacement device.
+    if state.device.as_ref() != Some(render_device.wgpu_device()) {
+        state.cache = None;
+        state.device = Some(render_device.wgpu_device().clone());
+    }
     if state.cache.is_none() {
         let hal_device = unsafe { render_device.wgpu_device().as_hal::<Metal>() }
             .ok_or_else(|| "wgpu is not using the Metal backend".to_owned())?;
@@ -455,6 +470,57 @@ mod tests {
         queue.publish(7, "new-frame");
 
         assert_eq!(queue.drain().remove(&7), Some("new-frame"));
+    }
+
+    #[test]
+    fn deferred_frame_never_replaces_a_newer_publish() {
+        for discard in [false, true] {
+            let mut queue = LatestFrameQueue::default();
+            queue.publish(7, "old-frame");
+            let frame = queue.drain().remove(&7).unwrap();
+            if discard {
+                queue.discard(7);
+            }
+            queue.publish(7, "new-frame");
+
+            assert!(!queue.defer(7, frame));
+            assert_eq!(queue.drain().remove(&7), Some("new-frame"));
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a real Metal device"]
+    fn metal_cache_follows_replacement_device() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::METAL,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = futures_lite::future::block_on(
+            instance.request_adapter(&wgpu::RequestAdapterOptions::default()),
+        )
+        .unwrap();
+        let mut state = MetalUploadState::default();
+        let mut previous = None;
+        for _ in 0..2 {
+            let (device, _) = futures_lite::future::block_on(
+                adapter.request_device(&wgpu::DeviceDescriptor::default()),
+            )
+            .unwrap();
+            let render_device = RenderDevice::from(device.clone());
+            let cache = metal_texture_cache(&render_device, &mut state)
+                .unwrap()
+                .clone();
+            if let Some(previous) = &previous {
+                assert_ne!(Retained::as_ptr(previous), Retained::as_ptr(&cache));
+            }
+            assert_eq!(state.device.as_ref(), Some(&device));
+            // The same live device keeps its existing cache.
+            assert_eq!(
+                Retained::as_ptr(&cache),
+                Retained::as_ptr(metal_texture_cache(&render_device, &mut state).unwrap())
+            );
+            previous = Some(cache);
+        }
     }
 
     #[test]

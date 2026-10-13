@@ -62,8 +62,11 @@ fn gaussian_blur(frag_coord: vec4<f32>, coc: f32, frag_offset: vec2<f32>) -> vec
         if (i + 1 <= support) {
             w1 = w0 * ratio;
         }
-        let uv_offset = offset * (f32(i) + w1 / (w0 + w1));
         let weight = w0 + w1;
+        // Faint fade-in radii can underflow both coefficients to zero.
+        // Later weights are even smaller: stop before forming a 0/0 offset.
+        if (weight <= 0.0) { break; }
+        let uv_offset = offset * (f32(i) + w1 / weight);
         sum += (textureSampleLevel(src, smp, uv + uv_offset, 0.0) +
                 textureSampleLevel(src, smp, uv - uv_offset, 0.0)) * weight;
         weight_sum += weight * 2.0;
