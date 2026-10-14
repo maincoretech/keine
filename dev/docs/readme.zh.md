@@ -1,26 +1,40 @@
 # Kēne
 
-原生视觉小说引擎与编辑器，Rust 2024 / Bevy 0.19.1 / GPUI。
+原生视觉小说引擎与编辑器，Rust 2024（MSRV 1.99.0）/ Bevy 0.19.1 / GPUI。
 原生项目使用 Eiyashou `.shou`；支持 LetsGal Studio 工程与冻结的 WebGAL 兼容输入。
 正式发行只使用 Hakutaku v2、WebP 图片与 Ogg Opus 音频。
+
+[English](../../README.md)
+
+## 下载
+
+- [`editor-latest`](https://github.com/maincoretech/keine/releases/tag/editor-latest)：独立 Editor，内含同版本 Preview Engine；main 的 CI Desktop 成功后自动更新。
+- [`tday-latest`](https://github.com/maincoretech/keine/releases/tag/tday-latest)：tday 试玩，仅手动运行 **Release Engine** 构建。
+
+包目录、签名与正式项目发行见[发布指南](release.md)。
 
 ## 开始
 
 ```sh
+cargo build --locked -p keine --bin keine --features video-native,video-ffmpeg
 cargo editor projects/tday
 cargo validate tests/fixtures/native-smoke
 cargo dev tests/fixtures/native-smoke
-cargo migrate /path/to/letsgal/tday projects/tday
 ```
 
-`projects/tday` 是可编辑、可运行的原生示例，剧本和 WebP/Opus 成品已入库；PNG/WAV 原稿及其他本地工程忽略。
-源 LetsGal 工程独立保留；目标已存在时不要重复迁移。自动回归使用 `tests/fixtures`。
-迁移先验证新工程再发布目标目录，源工程保持只读。
+使用仓库固定工具链，并安装[开发环境](testing.md#开发环境)列出的原生 SDK。
+上述开发入口启用 FFmpeg；macOS 优先使用原生视频后端。Editor 只启动预构建 Engine，
+不会自动运行 Cargo，所以先构建 Engine 再启动 Preview。迁移与正式打包见[发布命令](release.md#cli)。
+
+`projects/tday` 是已封存的可运行示例，剧本和 WebP/Opus 成品已入库；实验请使用副本。
+PNG/WAV 原稿及其他本地工程忽略。自动回归使用 `tests/fixtures`。
+Text、Blocks、Inspector 编辑同一源文档；兼容 JSON 只读，迁移显式执行并保留源工程。
 
 ## 脚本性能
 
 测试环境：**Apple M5 Pro（15 个逻辑 CPU）、24 GiB 内存、macOS 27.0.1**。
 2026-10-11，0.14.3 工作区、Cargo 优化基准；单线程、输入已在内存中、10 个样本。
+这是历史测量，不代表 0.16.0 已重跑。
 
 | 负载 | 测量结果（约） |
 | --- | ---: |
@@ -80,15 +94,15 @@ F11 只改变当前窗口，设置页的全屏选项仍可保存为偏好。
 全屏和最小化不覆盖正常窗口尺寸；Wayland 的窗口位置由合成器决定。
 benchmark 指定的窗口大小不受这些偏好影响。Preview 仍使用隔离的临时数据目录。
 
-```text
-文档
-├── architecture.md    职责、资源、格式与安全边界
-├── language.md        当前 Eiyashou v2.0 语法
-├── editor.md          Text / Blocks / Inspector / Preview
-├── testing.md         开发检查、基准与验收缺口
-├── release.md         打包、macOS 与 Project CI
-└── compatibility.md   LetsGal 与 WebGAL 的支持边界
-```
+## 文档
+
+- [架构与数据合同](architecture.md)
+- [Eiyashou v2.0](language.md)
+- [Editor](editor.md)
+- [开发、测试与验收](testing.md)
+- [发布](release.md)
+- [Android 构建与实机验收](android.md)
+- [兼容输入边界](compatibility.md)
 
 当前版本 0.16.0。macOS 是当前验收重点；Windows/Linux 的运行态验收暂缓。
 编译和自动测试通过不等于 IME、DPI、音视频和运行态验收通过。
@@ -98,4 +112,5 @@ benchmark 指定的窗口大小不受这些偏好影响。Preview 仍使用隔�
 Kēne 原创代码和文档采用 [Defold License 1.0](../../LICENSE)。允许制作和销售商业游戏，
 禁止将引擎或 Editor 本身作为游戏引擎产品商业化；项目属于源码公开软件。
 第三方依赖、字体、图标、音效、美术和游戏内容保留各自许可，见 [NOTICE](../../NOTICE)。
+tday 剧本和素材由 shiftz 原创并保留独立版权，见[示例许可](../../projects/tday/LICENSE)。
 除另有书面约定，提交给项目的贡献采用同一许可证；不要求转让版权。

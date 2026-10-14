@@ -1,1618 +1,220 @@
 # 开发与验收
 
-## 测试用例组织
+本文维护当前检查入口、证据口径和已测性能，不作为开发日记。
+职责与格式见[架构](architecture.md)，构建/签名见[发布](release.md)，设备操作见 [Android](android.md)。
 
-- 同一规则的参数变化优先使用带案例名的表驱动测试；保留每个输入、期望值和边界断言，合并测试入口不等于删除覆盖。
-- 独立故障保持独立回归，特别是 parser panic、递归预算、存档恢复、文件事务、IPC 与平台行为。Parser、Core 求值、Editor 投影保护不同入口，不能因输入相似而去重。
-- 不以测试数量设目标，也不只为减少数量合并不相关的合同。新增回归先检查同规则案例表，避免复制初始化代码。
-- CI 的默认、无默认功能 + publisher、平台音视频专项覆盖不同 feature 组合；合并前必须证明配置与路径等价，不能只看测试名称重叠。
+## 开发环境
 
-当前整理将配置默认值/资源路径、archive 路径规范化、Editor 工程身份、立绘基线、Unicode 输入上限与 APK 图标错误的 18 个测试入口收敛为 8 个；原有案例与断言保留，Rust 案例包含输入/路径等失败上下文，Python 使用 `subTest` 独立报告三个错误案例。
-实际验证：`cargo test --offline --workspace --features publisher,video-native,hot-reload`
-1043 passed / 21 ignored / 0 failed（IPC/Trash 在沙箱外）；Python packaging
-11 passed，benchmark collector 7 passed；fmt、workspace check、all-targets Clippy
-（同一 feature 组合）及 native-smoke validate 通过。测试整理不改变产品代码、feature 组合或发布流程，不作为性能改善或跨平台运行态验收证据。
+- 使用根目录 `rust-toolchain.toml` 的 Rust 1.99.0、Cargo.lock 和本地 Bevy 补丁。
+- macOS 需要 Xcode Command Line Tools；`video-native` 使用系统 AVFoundation。
+  `video-ffmpeg` 另需 FFmpeg 开发库和 pkg-config。`.cargo/config.toml` 的 `dev`/`perf` 同时启用两个视频 feature，macOS 优先 native；只测 native 时显式传 feature。
+- Linux 需要 ALSA、Fontconfig、udev、Wayland、XKB 开发库；FFmpeg feature 另需
+  avcodec/avformat/avutil/swscale/swresample。Windows 使用匹配架构的 FFmpeg vcpkg SDK。
+  可复用的安装清单以 [`setup-video`](../../.github/actions/setup-video/action.yml) 为准。
+- Android 的 SDK/NDK/JDK 与构建步骤由 [Android guide](android.md) 维护；不启用视频 feature。
+- Editor Preview 启动已构建的 Engine，不自动执行 Cargo。开发时 `target/debug/editor`
+  和 `target/debug/keine` 应来自同一源码；覆盖路径及发现规则见 [Editor](editor.md#engine)。
 
-## 项目审查与工具链验证
+macOS 无需 FFmpeg SDK 的最小开发入口：
 
-本轮以引擎为主，范围覆盖下表各模块。静态审查深入关键路径，并用工作区及
-feature 组合回归核对；不把范围覆盖表述为逐行证明或跨平台运行验收。
+```sh
+cargo build --locked -p keine --bin keine --features video-native
+cargo editor projects/tday
+cargo run --locked --bin keine --features hot-reload,video-native -- dev tests/fixtures/native-smoke
+```
 
-| 范围 | 审查重点与本轮处理 |
-| --- | --- |
-| Core | 类型/表达式、执行步进、动画、Program fingerprint 与回滚；列表只读查询借用已有值，统一对白 tokenizer |
-| Loader | Native/LetsGal/WebGAL 边界、挂载/资源读取、场景合并、编译及存储封包；去掉场景深拷贝，保留覆盖诊断 |
-| Runtime | bootstrap、输入/viewport、Host/Preview、热更新、休眠、Android、测量入口；修正空队列造成的变更通知，接入持久化唤醒期限 |
-| Scene/Render | 图片/缓存预算、背景/立绘、粒子/遮罩/灯光、WGSL/相机与 blur、音频、AVFoundation/FFmpeg；修正实际图片尺寸缓存和线程创建失败处理 |
-| Storage/UI | Save v11、独立域、备份/设置、选择/对白/弹窗/输入捕获；失败写入保留重试，真实时间到期唤醒，退出补写；修复 Unicode 颜色 panic 与非有限字号/透明度 |
-| Media/Publisher/Migration | WebP/FFI 所有权与上限、发布目录/身份隔离、格式转换和资源重映射；复用 tempfile 原子替换，不移动原文件后再发布 |
-| Authoring/Editor | 协议分帧、Preview 生命周期、文档/恢复/索引/搜索/资源操作；拒绝帧内尾部垃圾，复用 Loader 限域读取，删除 Windows 自制替换流程 |
-| 依赖/CI/脚本 | 原生与可选 feature、已有 Bevy 补丁、发行/签名/包验证；Rust/MSRV/CI 同步更新，保留安全及许可证策略 |
+`projects/tday` 已封存；仅用于只读校验或副本实测，不再追加测试剧情。
+固定回归使用 `tests/fixtures`，临时素材/报告放 `target/`，不提交密钥、存档或测量二进制。
 
-持久化回归使用暂停的 Virtual clock 和独立 Real clock，确认静止画面仍可完成
-延迟写入；失败重试有退避，profile/已读/鉴赏在 AppExit 补写。休眠调度只安排
-下一次写入所需的唤醒，不因磁盘工作强制连续渲染。Save/IR/协议版本和合法编码保持不变。
-Editor 的平台文件/恢复测试已加入三平台 CI；Linux 质量任务改为 locked/all-features
-Clippy 和工作区测试，macOS 另显式检查无音频 native video。
-独立 fuzz 工作区的锁文件同步 media 0.16.0，CI 增加 locked metadata 检查，
-防止其继续静默保留旧的路径依赖版本；本地仅验证锁解析，未重跑 fuzz/ASan。
+## 质量检查
 
-Rust 1.99.0、依赖精简与补丁升级在 macOS arm64 执行：
+修改先运行受影响 owner 的回归；合并前完成工作区及受影响 feature 检查。
+下列全功能门禁需要对应平台的原生 SDK，不能将缺少 SDK 当作功能回归：
 
 ```sh
 cargo fmt --all -- --check
 cargo check --workspace --locked --all-targets --all-features
 cargo clippy --workspace --locked --all-targets --all-features -- -D warnings
 cargo test --workspace --locked --all-features
+cargo test --workspace --locked --no-default-features --features publisher
+```
+
+按变更选择补充检查；不同配置保护不同入口，不因名称相似而删减：
+
+| 变更 | 补充门禁 |
+| --- | --- |
+| Loader / 工程 / Publisher | native-smoke validate；项目输入变更时验证对应项目；pack/bundle 合同 |
+| 序列化 / IPC / 存档 | 版本、长度、尾部字节、损坏输入、回滚与跨进程边界 |
+| 视频 / 原生句柄 | 对应后端 feature、实际媒体验收；修改 GPU 导入时显式运行 Metal 回归 |
+| Editor 源码 / 文件操作 | 投影、格式化、撤销、外部冲突、恢复、路径及 instance 集成测试 |
+| 打包 / 图标 / 声明 | `tests/packaging`、`verify-icons.py`、实际目标产物验证 |
+| 依赖 / feature / 本地补丁 | locked/all-features cargo-deny、受影响平台链接与运行；独立 fuzz 锁文件 |
+| 纯文档 | 检查链接/锚点、源码路径、版本与命令；无须重跑性能套件 |
+
+常用专项入口：
+
+```sh
+cargo run --locked --bin keine -- validate tests/fixtures/native-smoke
+cargo run --locked --bin keine -- validate projects/tday
 cargo check --locked -p keine --tests --no-default-features --features video-native
-cargo clippy --locked -p keine --all-targets --no-default-features --features publisher,ui-sounds,video-native -- -D warnings
-cargo clippy --locked -p keine --all-targets --no-default-features --features publisher,ui-sounds,video-ffmpeg -- -D warnings
-cargo test --locked -p keine --lib --no-default-features --features publisher,ui-sounds,video-ffmpeg scene::video
-cargo run --locked --all-features --bin keine -- validate tests/fixtures/native-smoke
-target/debug/keine validate projects/tday
+cargo check --locked -p keine --no-default-features --features ui-sounds,video-ffmpeg
+python3 -m unittest discover -s tests/packaging -p 'test_*.py'
+python3 dev/scripts/verify-icons.py
+cargo deny --locked --all-features check advisories licenses bans sources
+cargo metadata --locked --manifest-path tests/fuzz/Cargo.toml --no-deps --format-version 1 > /dev/null
 ```
 
-以上通过；工作区 1096 passed / 0 failed / 24 ignored（含上游 doc-tests，
-不重复计入 Editor 子进程测试的嵌套输出）。IPC/系统 Trash 沙箱权限失败后，
-沙箱外完整重跑通过；FFmpeg 独立组合另有 13 项 video 回归通过。
-Native Smoke 1 scene / 1 action、tday 13 scene / 2626 action 均 0 warning。
-Python packaging 合同 14 passed、benchmark collector 9 passed；Shell 语法检查、
-同 CI 配置的 actionlint，以及 locked/all-features
-cargo-deny 的 advisories/licenses/bans/sources 四项通过，未改许可策略。
-原始日志在 `target/performance/quality-review/`；依赖范围与上游遗留警告见
-[发行指南](release.md#依赖审计与升级)，对白扫描的同工具链性能对照见下文。
-两个视频后端还通过既有 `keine-video-acceptance` CLI：`playback.mp4` 在文件系统和
-Hakutaku 中可解码/回绕，`damaged-header.mp4` 均拒绝；AVFoundation 包含 Metal 帧导入。
-原始命令见同目录 `commands.txt`，日志为 `video-{native,ffmpeg}-acceptance.log`。
-这些结果不包含新版发行包、游戏 GUI/视听体验或远端 CI；Linux/Windows/Android
-尚待各自运行验收，不能将 macOS 上的 FFmpeg 检查当作其他平台通过。
+macOS 的 IPC/系统 Trash 测试可能被本地沙箱拒绝（`Operation not permitted` /
+`PermissionDenied`）。在允许本地 socket/系统文件服务的环境重跑受影响测试，不能跳过后报通过。
+显式 `ignored` 的 GPU/性能测试也不能计作工作区测试已覆盖。
+不以测试数量作为目标：同规则参数边界用表驱动；独立故障保留独立回归，失败信息包含案例名。
 
-## Hakutaku v2 接入与压力测试
+## 测试入口与 CI
 
-Hakutaku Core/Pack 升至 0.2.0，只接受 v2；Loader 编译时断言格式代数，回归确认
-v1 magic 被拒绝。Publisher 支持 `KEINE_HAKUTAKU_RELEASE_FLOOR`，配合原身份、
-新输出目录重建旧项目。迁移流程及固定依赖版本见[发行指南](release.md#hakutaku-020--v2)。
-
-macOS arm64 / Rust 1.99.0 本地通过 fmt、workspace/all-targets/all-features
-check 与 Clippy、all-features 工作区测试（1,097 passed / 24 ignored）；
-Loader 196 项、Publisher 29 项专项通过。固定 Git revision 后复跑上述门禁通过。
-Native Smoke 验证为 1 scene / 1 action / 0 warning。AVFoundation 与 FFmpeg
-既有视频验收入口均能读取文件系统及 v2 包、解码/回绕，并拒绝损坏头；这不等于
-完整游戏视听验收。完整 locked/all-features cargo-deny 四项通过，未修改许可策略。
-
-实际 `keine pack` 发布 Native Smoke，独立 Hakutaku CLI 验证格式与序列：下限 42
-首次发布及无变化重打包均为 42，升至 100 后为 100；下限 0 或非法字符串被拒绝，
-原先序列 100 的包仍可验证。临时测试身份随测试目录清理，没有复用项目私钥。
-
-Hakutaku 自身通过 83 项测试，Core/Pack 行覆盖率 97.63%、格式解析 100%、CLI 53.42%。
-同机三轮交替 v1/v2 测量的过程内中位数再取中位数：
-
-| 场景 | v1 基线 | v2 |
-| --- | ---: | ---: |
-| 10 万资源快照 | 8,888,370 B | 6,304,768 B |
-| 10 万资源解码目录 | 10,044,939 B | 7,928,907 B |
-| 打开目录 | 10.484 ms | 9.355 ms |
-| tday 随机音频读取 | 300.538 ms | 130.815 ms |
-| tday 顺序读取 | 49.418 ms | 49.693 ms |
-
-真实素材包含 35 Opus、35 WebP、13 shou，共 80,907,088 B；seek 是合成轨迹，
-不是播放延迟。宿主文件缓存为暖态，包缓存按读取场景清空。音频读取请求字节减少
-57.7%，调用数增加 65.5%；真实素材快照由 42,113 B 增至 73,907 B。视频块及图片
-CDC 保持原策略，不能将音频结果外推为所有媒体加速。
-
-50 万资源测试完成全量、严格增量、开发缓存及查询：快照 31,529,982 B，全量
-103.547 s、严格增量 75.598 s；全过程峰值 RSS 1,326,743,552 B 含发布端和夹具，
-不是运行时缓存预算。1,024 次小补丁全部通过，整理 16 次，段数峰值 64；8 路并发
-完成 65,536 次读取、512 MiB 返回内容逐字节比对，并在读取中反复清缓存。
-
-Kēne 原始日志为 `target/performance/quality-review/v2-*`；Hakutaku 的配对命令、
-二进制校验值、原始日志和统计在相邻仓库 `target/v2-review/`，设计及完整复现方法
-见该仓库 `docs/PERFORMANCE.md`。Hakutaku CI 已加入 10 万资源、512 次更新和
-并发读取门禁。远端 CI、正式发行产物、其他平台运行及新 wire-format fuzz 尚未验收。
-
-## 演出调试与 tday 正式入口
-
-协议 v10 将 revision、当前源码位置和有界只读 RuntimeSnapshot 作为同一最新状态推送。
-测试覆盖 latest-wins 回复分离、协议能力校验、变量排序与 UTF-8 截断、数组长度摘要、
-非阻塞演出与存档精确性的区别、checkpoint 下一条恢复动作的位置，以及回到标题后保留失败源码诊断。
-原有 ReturnWithoutCall 回归增加错误记录/后续正常运行清除诊断断言；未增加另一套 Core 执行器。
-
-`tday_normal_route_reaches_all_chapters_and_restores_live_and_presentation_saves` 使用真实工程、
-原生 Loader、Core driver、已有 transition 更新与 Save v11：检查 13 章全部可达、每章恢复对白/位置、
-演出中存档立即采用 checkpoint 且不推进 live cursor、正常结尾、6 首原名 BGM 和唯一最终花图解锁。
-模拟消费点击和跳过等待验证逻辑；不把这一测试当作时长、视觉或音频主观验收。
-恢复 `start` 并移除临时 Extra scene 改变 Program fingerprint；旧 profile/鉴赏记录保留，
-旧版本 slot 仍按 Save v11 严格匹配，不新增绕过或自动迁移。
-
-实际执行：
-
-```sh
-cargo fmt --all --check
-cargo check --offline --workspace
-cargo clippy --offline --workspace --all-targets --features publisher,video-native,hot-reload -- -D warnings
-cargo check --offline -p keine-loader --all-features
-cargo test --offline --workspace --features publisher,video-native,hot-reload
-target/debug/keine validate tests/fixtures/native-smoke
-target/debug/keine validate projects/tday
-cargo build --offline --bin keine --features publisher,video-native,hot-reload
-cargo build --offline -p keine-editor --bin editor
-bash dev/scripts/package-authoring-macos.sh target/debug/editor target/debug/keine target/authoring-runtime-inspection
-```
-
-1055 passed / 0 failed / 21 ignored。首次沙箱运行被本地 IPC 套接字权限阻止；
-在沙箱外重跑全部工作区通过。check / Clippy / fmt / Loader all-features 通过；
-Native Smoke 1 scene / 1 action、tday 13 scene / 2626 action 均 0 warning。
-原始测试日志在 `target/performance/parser-0143/ca-final-tests.txt`。
-本地 macOS 原生验收使用成对更新的 Editor/Engine：Preview 正常启动，Inspector 显示
-当前动作、对白等待与存档点；点击存档点定位源码后现场动作仍为 scene_0010 / 210，
-Output 显示只读变量区（该现场无变量），停止 Preview 清除快照。普通 Engine 检查
-花图主页、START 正式开场与对白、Extra 上方 tab / 背景模糊、六首原名音乐及播放进度；
-在原为空白的槽位写入新存档，再读取恢复同一背景与完整对白。本次验收存档随后清理，
-原有槽位及 profile 保留，因此旧测试解锁的 CG 仍可见。
-变量边界、失败诊断与演出中 checkpoint 由上述回归覆盖；未逐章进行完整视觉/听感验收，
-Windows/Linux/Android 新功能运行态尚未复验。
-
-## Characters 固定显示预置
-
-每个角色的 `display` 是作者元数据，保存后由 Characters 的 Show/Hide 展开为现有
-`sprite` / `sprite.transition` / `hide` 指令。Change/Blink/Talk 不重设位置、尺寸或
-转场规则，Avatar 沿用原行为；旧角色清单可省略预置，Loader 不用预置覆盖已有剧本。
-控件复用现有 Input/Select、按钮、滚动和文档事务，不增加 Preview 拖拽或另一套场景模型。
-
-新增两个回归入口：预置边界使用同一案例表，指令生成复用原角色 fixture。既有清单
-编辑/重映射及 Loader 工程回归增加预置往返、幂等编辑、保留其他角色/未知字段/注释、
-非法预置拒绝和现有剧本不受影响的断言；没有另建测试工程或扩大运行时 Action/Save 合同。
-
-```sh
-cargo fmt --all --check
-cargo check --offline --locked --workspace --features publisher,video-native,hot-reload
-cargo clippy --offline --locked --workspace --all-targets --features publisher,video-native,hot-reload -- -D warnings
-cargo test --offline --locked --workspace --features publisher,video-native,hot-reload
-cargo check --offline --locked -p keine-loader --all-features
-cargo check --offline --locked -p keine --no-default-features --features publisher
-cargo build --offline --locked --bins --features publisher,video-native,hot-reload
-cargo build --offline --locked -p keine-editor --bin editor
-target/debug/keine validate tests/fixtures/native-smoke
-target/debug/keine validate projects/tday
-```
-
-工作区 1073 passed / 0 failed / 21 ignored；fmt/check/Clippy、列出的 feature 检查、
-两端构建及工程校验通过。macOS 原生表单使用独立测试工程：保存高度 80%，关闭后
-重新打开角色，Right、偏移 -24/-10、From right/Fade out 和 300ms 正确恢复；Show
-插入 `right(x: -24, y: -10)` / `viewport(height: 0.8)` 及显式转场，保存文件核对通过。
-Reset 后保存的显式默认预置也已核对；Core 回归确认新 Show 清除旧入场/退场规则。
-测试窗口均正常退出，原 tday 未改动。原始日志与本地测试 app 在
-`target/character-presets-0152/`。Windows/Linux Editor 交互仍由各自实机验收。
-
-Apply saved preset and preview 追加一个案例表入口，覆盖原偏移完整替换、缺省参数、
-多行指令、紧邻转场复用、其他角色/分支规则保留、`sprite.update` 稀疏属性保留、
-重复应用幂等、默认值重置，以及禁用/错误类型/不同角色/非法预置/失效选区拒绝。
-根位置字段写入完整构造式时替换整组；Inspector 的裸锚点更新仍保留旧偏移。
-读取当前角色清单文档覆盖异步索引，避免保存角色后立即应用旧值。
-
-workspace check/all-targets Clippy/tests（publisher,video-native,hot-reload）通过：
-1075 passed / 0 failed / 21 ignored；最后的 Editor tests 为 237 passed / 7 ignored。
-fmt、Editor/Engine 构建、native-smoke/tday/独立预置工程 validate 与本地 app 打包/签名通过。
-原始日志及测试 app 在 `target/character-presets-0154/`。
-新版原生应用/撤销/Preview 验收仍待现有 Editor 正常退出；其单实例将启动转发给
-正在运行的旧版本，不能把旧窗口当作新实现验收。未关闭未保存用户工程。
-
-## 0.15.2 定向实机验收
-
-Android 使用 `146f037` 的 CI Android #26 artifact（run `38201609991`），
-独立 Engine 测试应用版本 0.15.2；原有 0.13.1 tday 应用及存档保留。
-设备为 Motorola edge 70 max / Android 16 / Adreno 829 / Vulkan，截图物理尺寸
-3168×1440。工程使用 tday 文件系统副本与独立 `project.id`，复用已有六次幕布场景，
-添加普通八秒镜头演出；不改变正式 tday 入口，也不据此声称 encrypted APK 挂载验收。
-
-| 定向检查 | 结果 |
+| Owner | 入口 |
 | --- | --- |
-| 自动播放六次 260ms 幕布开合 | 无额外点击完成，进入文字回退的确认等待；点击后正常续行 |
-| 演出中快速存档与读档 | 镜头尚未结束即可保存 slot 0，读取恢复演出前对白/检查点并重新进入演出 |
-| 演出中普通存档与读档 | slot 1 立即落盘，卡片显示检查点文本，Save/Load tab 与读取确认正常；读取恢复同一检查点 |
-| 后台恢复 | 手机 `/proc/uptime` 确认后台停留 105.04s；恢复一秒后仍在八秒演出中的对白，后续正常完成 |
-| 返回标题、继续与退出 | 标题页 Continue 恢复同一对白；确认退出后进程结束，测试进程日志无 panic/fatal |
+| Core / Loader / Runtime / Editor 单元回归 | 各 Rust 模块 `#[cfg(test)]` |
+| 跨进程 Editor–Engine | [`tests/authoring/process.rs`](../../tests/authoring/process.rs) |
+| 视频解码/回绕/损坏输入 | [`tests/video/acceptance.rs`](../../tests/video/acceptance.rs) |
+| Python 包目录、图标、许可与 Engine discovery | [`tests/packaging`](../../tests/packaging/) |
+| CPU 微基准与本地采集器 | [`tests/bench`](../../tests/bench/) |
+| WebP 边界 fuzz | [`tests/fuzz`](../../tests/fuzz/)（独立 workspace） |
+| 固定项目与媒体 | [`tests/fixtures`](../../tests/fixtures/) |
 
-图片、APK SHA-256/commit 身份与日志保留在 `target/character-presets-0152/android/`。
-验收后独立 Engine 应用的私有工程已恢复正常 tday 入口；测试存档仍隔离在测试 project.id。
-跨进程宿主 monotonic 测量出现负值，已弃用，不用它报告后台时长。
-未做新一轮性能跑分，也未验收主观音频听感；Android 当前不支持视频。
-Windows/Linux 原生检查按用户安排由用户使用对应 CI 包测试。
-macOS AVFoundation 失焦暂停仍未取得可确认的原生结果，继续保留为待验收。
-
-## Android 界面触感
-
-新增一个事件回归入口，检查 click/switch、重复 Pressed、悬停/松开、滑块按钮排除，
-以及拖动跨刻度/双向滚动/跳过多刻度/触边/静止/无溢出/非法值。
-触感调用只接在用户驱动的设置滑块、音乐 seek、Backlog 与音乐列表更新中，
-不接动画和自动播放进度同步。桌面不注册触感系统；设置文件仍为 v4，没有开关或剧本 Action。
-
-实际执行 workspace check、all-targets Clippy 与 tests（publisher,video-native,hot-reload），
-1074 passed / 0 failed / 21 ignored；无默认功能 check/Clippy 与 fmt 通过。
-日志在 `target/android-ui-haptics/`。Android ui-sounds 交叉 check 因本机缺 NDK 的
-`aarch64-linux-android-clang` 阻止，尚未到应用代码；APK/Java lint、无 ui-sounds 的
-Android 构建与 Moto 触感/系统关闭/后台抑制尚待 CI 和真机验证，不能用桌面回归替代。
-
-## Android 完整性能采集
-
-Android benchmark 复用桌面场景清单与 runtime 测量器，通过 ADB 逐项冷进程运行、
-回传原始结果。73 个支持的必测 render 场景；视频/桌面窗口尺寸 5 项明确标为不支持，
-另有 7 次启动、opening/相机拆分及真实 APK 挂载 I/O。压力场景明确不含视频。
-运行命令、温度/后端/尺寸证据与非独占 CPU 归因边界见 [Android guide](android.md#完整-android-benchmark-与-adb-回传)。
-不以移动 GPU 必须满帧为门槛；在可接受功耗/温度、分辨率与视觉质量下比较真实负载。
-
-本地实测：Motorola edge 70 max / Android 16 / Adreno 829 / Vulkan，物理显示
-1440×3168；以下完整命令完成 124 次样本、73/73 个支持场景，0 failed，5 项明确不支持：
-
-```sh
-python3 target/keine-android-arm64-local-benchmark/benchmark-android.py \
-  --apk target/keine-android-arm64-local-benchmark/game.apk --serial DEVICE_SERIAL \
-  --output target/moto-edge-70-max-benchmark-auto-full
-```
-
-报告与逐次日志、原始帧、设备/温度信息均自动回传。
-当前窗口接口未提供刷新预算，报告保留 unknown；pass 时间与 CPU/RSS 仍可分析，
-不能把 VSync 限帧下的 interval 排名或空的超预算排名解释为没有热点。
-
-实际验证：`cargo test --offline --workspace --features publisher,video-native,hot-reload,startup-metrics`
-1045 passed / 21 ignored / 0 failed（IPC/Trash 在沙箱外）；相同功能的 workspace
-check/all-targets Clippy、无默认功能 check/Clippy、Android ui-sounds/startup-metrics Clippy、
-fmt、native-smoke 与派生 fixture validate 通过。Python collector 9 passed、packaging
-11 passed；Gradle assembleRelease/lintRelease、APK 图标/16 KB/签名/NOTICE/计划校验、
-匹配 host 符号库的 `.text` 校验及 workflow actionlint 通过。此次真机只测试 Vulkan；
-GL、演出画面/触摸与音频听感不由性能采样代替验收，远端新 workflow 尚未运行。
-
-## Engine 空闲内存观察
-
-0.15.0 前的当前工作区 Engine，Apple M5 Pro / 24 GiB / macOS 27.0.1，
-`profile.dev`（opt-level=1），tday 标题页、未进入剧情。此项是开发构建的观察值，
-不是 0.15.0 release、无素材基座或跨平台内存承诺；此节记录优化前的观察值。
-
-```sh
-open -n 'target/authoring-runtime-inspection/Tday Acceptance.app' --args "$PWD/projects/tday"
-vmmap -summary ENGINE_PID > target/performance/idle-memory-0150/title-before.vmmap.txt
-# 标题页保持空闲，约 5 分钟后再取同一进程的摘要
-vmmap -summary ENGINE_PID > target/performance/idle-memory-0150/title-idle.vmmap.txt
-```
-
-物理 footprint 186.1 → 185.9 MiB，启动峰值 343.3 MiB；malloc 实际分配
-63.6 MiB，graphics owned unmapped 52.8 MiB、IOSurface 24.3 MiB。
-这些区域不能当成互斥的跨平台预算，也不能将虚拟保留地址或共享库 resident 直接相加
-作为进程实占。短测未观察到持续增长；尚未做 allocation stack attribution、release
-对照、长期演出循环或 Windows/Linux/Android 内存验收。
-
-当前 WebP 使用 `RENDER_WORLD`，上传后释放 CPU 像素；生产 Opus 使用可重开的流，
-未启用 Bevy system font discovery。非关键预取最多 8 项、128 MiB 是上限而非启动
-预分配。区域模糊中间纹理在首用后保留以复用，是后续回收候选，但不是未打开菜单时
-的固定基座；调整必须同时测重复打开延迟和实际 footprint，不能仅按纹理尺寸宣称收益。
-
-### tday 正常操作采样（0.15.0）
-
-同机 M5 Pro / 24 GiB / macOS 27.0.1，当前工作区 `profile.dev`，
-`cargo build --offline --locked --bin keine --features publisher,video-native,hot-reload`。
-普通 Engine 运行真实 tday，1920×1080 @1× / Metal，13 scenes / 2626 actions。
-原生操作覆盖标题、开场、自动阅读、设置、空白存/读档列表、backlog、已有快进、
-返回标题、历史 profile 已解锁的 31 张 CG（4 页）、一首 BGM 鉴赏，再返回标题。
-未逐章完整播放、未测试视频或有大量槽位缩略图的列表；不作为 release/加密包或跨平台结果。
-
-外部 Python `ctypes` 依据本机 SDK `sys/resource.h` 的 `rusage_info_v4` 调用
-`proc_pid_rusage`，目标间隔 100ms；实际 720.07s / 6913 个样本（平均约 104ms）。
-采用时间加权物理 footprint，独立记录 RSS 和内核 lifetime max；阶段标记由操作前写入，
-含界面过渡，不是逐 action 归因。没有修改 Engine、添加截图 hook 或改变项目脚本。
-采样在 12 分钟上限停止；返回标题后另取 `vmmap -summary`，不把该单点混入流程平均。
-
-| 阶段 | 时长 | 平均物理占用 | 采样最高 |
-|---|---:|---:|---:|
-| 首次标题页（含预加载波动） | 36s | 192.9 MiB | 322.5 MiB |
-| 正常自动阅读、菜单前 | 117s | 298.5 MiB | 346.3 MiB |
-| 设置 | 25s | 365.7 MiB | 406.6 MiB |
-| 空白读档列表 | 44s | 394.1 MiB | 395.3 MiB |
-| 空白存档列表 | 33s | 386.3 MiB | 398.6 MiB |
-| 菜单关闭后继续阅读 | 51s | 375.7 MiB | 380.4 MiB |
-| Backlog | 27s | 385.6 MiB | 401.5 MiB |
-| CG 四页浏览 | 83s | 481.5 MiB | 655.1 MiB |
-| CG 后音乐鉴赏 | 40s | 474.9 MiB | 476.0 MiB |
-
-整个操作序列平均 354.1 MiB；排除启动与快速推进/返回标题过渡段后的混合操作
-平均 352.5 MiB（519s）。它依赖本次各页面停留比例，不能称为整个游戏的普遍平均。
-CG 换页时内核记录最高 675.5 MiB，高于 100ms 采样最高 655.1 MiB；
-超过 500 MiB 的连续采样段约 42.35s，尖峰之外也有较高的换页工作集。
-返回标题单点 footprint 415.7 MiB，malloc allocated 125.0 MiB、graphics owned
-unmapped dirty 185.1 MiB（另有 24.6 MiB swapped）；相对首次标题稳定约 188 MiB
-有明显保留。短测不能判定泄漏，需按重复操作与分配 owner 继续归因。
-
-代码核查：CG 卡片加载设计尺寸背景图，换页动画同时保留旧/新 grid，因此并发解码、
-新旧纹理重叠与退出后的图形/字体/allocator 缓存值得定位；这是候选解释，尚无分配栈
-证明各自贡献。后续缩略图与生命周期核查见下节；加载并发保持不变。
-正常返回标题触发了 Engine 自动快存槽位 0；没有手动写入普通槽位或更改设置。
-
-原始记录位于 `target/performance/normal-project-0150/`：`sample.py`、`samples.csv`、
-`summary.json`、`engine.log`、`title-final.vmmap.txt`。复现实测启动采样器后使用原生
-窗口操作，再读 summary；进程退出或 720s 到期停止，禁止用阶段 marker 驱动游戏。
-
-### CG 卡片与资源退役（0.15.0 工作区）
-
-卡片使用独立 `GalleryThumbnail` 资产及其 labeled Image，WebP 直接解码到最多
-1024×576（覆盖当前四列卡片的 2× 显示）；不产生完整 RGBA 再缩放。舞台/全屏仍使用
-原来的 Image 路径及设计尺寸，两个资产类型不会污染彼此的 first-load settings。
-开发 PNG/JPEG 沿用原加载路径。未改变并发、预取预算、动画或发布格式。
-
-页面销毁发生在本帧资产跟踪之后。移除 ImageNode 后补最多三帧收尾，再进入 reactive
-空闲，使依赖资产、GPU bind group/纹理退役完成；不等待后才响应关闭/换页。
-回归用两种加载顺序检查缩略图/原图独立、最后一个卡片引用释放后图片被移除、
-原图继续有效以及窗口收尾后恢复空闲；不强制清除字体、预取或系统 allocator 缓存。
-
-回收归因的边界：Bevy `Assets::track_assets`/render asset extraction 根据最后一个
-strong handle 的 Unused/Removed 事件回收。缩略图没有进全局保留缓存，旧 grid 在
-现有滑动动画结束后销毁。macOS 优化前退出鉴赏的 vmmap 仍有约 63.4 MiB dirty 的
-`Malloc Large (empty)`，不能将这类已空闲分配当作仍被卡片引用。Bevy FontAtlasSet
-按字号/字体保留 CPU/GPU 字形，模糊中间纹理也复用；这些保留用于避免再次打开的
-重建开销。尚未逐项归因 Metal/allocator 保留量，不据此宣称解决了整个进程的泄漏。
-
-复现的原始记录在 `target/performance/gallery-memory-0150/`；before 是优化前
-Engine，after 是仅缩略图版，final 是含三帧收尾的最终版。使用 tday 的 APFS clone
-副本与相同历史 profile，100ms 外部物理 footprint 采样，原生 Computer Use 浏览四页，
-没有修改原项目存档、添加 GUI hook 或限制加载并发。取每页末 10s 并等权比较，以免
-人工停留时长不同歪曲平均；这是 M5 Pro / 24 GiB / macOS 27.0.1 / Metal /
-1920×1080 @1× 的 profile.dev 短测，系统非独占、期间有编译/系统内存压力，
-不能视为完整剧情、release 或低端设备的普遍收益。
-
-```sh
-cp target/debug/keine target/performance/gallery-memory-0150/keine-before
-cp -cR projects/tday target/performance/gallery-memory-0150/project
-python3 target/performance/gallery-memory-0150/sample.py before
-cargo build --offline --locked --bin keine --features publisher,video-native,hot-reload
-# 将新 binary 复制到采样器使用的本地测试 app，再测同一副本
-python3 target/performance/gallery-memory-0150/sample.py final
-# decoder 对照用该目录 decode.rs，通过同 profile 的 keine_media rlib 链接：
-rustc --edition 2024 -O target/performance/gallery-memory-0150/decode.rs \
-  -L dependency=target/debug/deps --extern keine_media=target/debug/deps/libkeine_media-d567920df6ac4026.rlib \
-  -o target/performance/gallery-memory-0150/decode
-target/performance/gallery-memory-0150/decode
-```
-
-四页稳定窗口的等权平均：325.3 → 253.2 MiB（约 -22.2%）；退出后标题末 10s：
-269.4 → 237.2 MiB。四页浏览截至退出后的内核峰值：615.7 → 459.4 MiB。
-仅缩略图的中间轮为 236.3 MiB，最终轮为 253.2 MiB，说明进程/系统缓存波动不可忽略；
-不把两次 after 的差异解释为三帧收尾的增减贡献，也不将这些数值套到整个剧情。
-逐阶段结果与原始 CSV、vmmap、编译及测试日志保留在上述目录。
-
-31 张真实背景的 RGBA 输出合计 245.2 → 69.8 MiB，减少 71.6%；这只是像素 payload，
-不是进程内存。内存驻留输入、顺序 decode/drop 七轮中的后六轮中位数：原尺寸
-211.7ms、1024×576 为 225.1ms（约 +6.4%，每图平均 +0.43ms）；不包含读取、GPU
-上传或呈现。因此不能声称 codec 本身更快。实际页面仍并行加载，上传 payload 更小；
-本机原生换页未出现可见等待。首次点开全屏原图现在按需加载，沿用打开动画遮蔽加载；
-低端设备、冷磁盘/加密包首次放大和 2× 实机尚未验收，不能承诺所有平台零延迟差异。
-
-本轮 fmt/check/all-targets Clippy（workspace + publisher,video-native,hot-reload,startup-metrics）、
-无默认功能 + publisher check、native-smoke/tday validate 通过；完整 workspace tests
-（publisher,video-native,hot-reload）1056 passed / 21 ignored / 0 failed，IPC/Trash 在
-沙箱外重跑。构建与 native UI 是开发版验收，未重新打包/发行或运行跨平台内存测试。
-
-### 连续播放的内存 / CPU / GPU 曲线
-
-本轮沿用上述 Engine 和环境，在 tday 副本中使用正常自动阅读、原有打字/演出时长；
-文字回退等显式玩家确认仍以原生输入继续。未快进、修改脚本、降低分辨率、限制并发
-或停用特效。阶段标记只记录人工观察，不是精确的章节切换时间。
-
-原始资料位于 `target/performance/continuous-tday-0150/`：`sample.py`、
-`samples.csv`、`gpu.csv`、`metadata.json`、`observations.jsonl`、
-`counter-validation.txt`、`summary.json` 和 `continuous-playback.png/svg`。
-内存/CPU 目标间隔 200ms，GPU 约 1s；曲线保留原始波动并叠加 5s CPU/GPU 均值、
-1 分钟内存中位数。统计按实际采样间隔加权，不将不同停留时长的均值直接平均。
-
-- 内存使用 `ri_phys_footprint`，RSS 与内核 lifetime peak 独立记录。
-- CPU 使用进程累计 user + system 的差分，100% 表示一个核心。按照本机
-  `mach_timebase_info` 的 125/3 转换 Mach tick；不能直接把计数当作 ns。
-  来源为 Apple XNU 的 [fill_task_rusage](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/bsd_kern.c)
-  与 [task_power_info_locked](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/task.c)。
-- GPU 从只读 IORegistry AGX 的目标 PID `AppUsage[].accumulatedGPUTime` 取差分。
-  本机两次原生 Activity Monitor 的 GPU Time（7.68s、9.08s）与驱动的约
-  7.7e9、9.1e9 计数交叉核对后使用 ns；这仍是本机驱动经验口径，非可移植公开 API。
-  GPU 时间占比不等于 GPU 核心容量/着色器饱和度，整机 `Device Utilization %`
-  包括其他应用与桌面，单独成图，不能归给 Engine 或与进程时间占比相加。
-
-采样器独立于游戏，IORegistry 查询约几十 ms/s；测试期间不编译或运行其他压力测试，
-系统其他应用仍在运行。活动监视器核对、开场未启用自动阅读及明确等待玩家确认的
-区间需单独标记；正常持续推进的平均不能包含这些区间。
-本次共记录 1799.97s、8833 个内存/CPU 样本和 1767 个 GPU 样本。保守取
-615–980s、1170–1470s 为明确正常推进区间，合计 664.86s（约 11.1 分钟）；
-其余原始采样仍完整保留，图上以灰色标出，不冒充 30 分钟全程无停顿的自动播放。
-原生观察覆盖开场、夜间走廊、卧室、教室、天台及章节末尾，未验证完整 13 场景路线。
-
-| 正常推进指标 | 时间加权均值 | P95 | 最大采样值 |
-| --- | ---: | ---: | ---: |
-| 物理 footprint | 346.4 MiB | 364.2 MiB | 381.7 MiB |
-| Engine CPU（100% = 单核） | 22.3% | 30.3% | 不作为容量结论 |
-| Engine GPU 时间占比 | 5.7% | 9.4% | 不代表 GPU 核心利用率 |
-
-内核 lifetime footprint 峰值为 383.8 MiB。预热后分钟中位数约 310.8–362.1 MiB，
-有回落而非全程单调增长；末三分钟中位数为 355.2、355.3、355.3 MiB。
-正常推进段仍会随不同画面/资源产生台阶与短峰，这次没有观察到失控持续上涨。
-不同画面的内存基线无法单靠曲线证明无泄漏；未做重复章节循环、完整剧情或 release
-长测，不据此承诺所有平台长期恒定。CPU/GPU 随演出变化，末段没有持续爬升。
-整机 GPU 均值约 53.6%，包括桌面及其他应用，不能当作引擎独占占用。
-
-```sh
-python3 target/performance/continuous-tday-0150/sample.py
-MPLCONFIGDIR=/private/tmp/keine-mpl /private/tmp/keine-plot-env/bin/python \
-  target/performance/continuous-tday-0150/plot.py
-```
-
-采样结束时仍存活的测试进程在后续检查已退出，因此本轮没有取得返回标题后的回收
-采样，不拼接不同进程冒充该结果。clone 与原项目的全部脚本/配置 SHA-256 前后相同；
-运行日志没有 warning/error。本轮仅外部测量与文档更新，没有改动播放策略、发布流程，
-没有新增仓库依赖或重跑此前已通过的完整测试。
-
-### 0.15.1 同条件复测与黑幕停滞
-
-采样基线为 `cf6cd8c`，沿用上一轮 Apple M5 Pro / 24 GiB / macOS 27.0.1 /
-Metal、1920×1080 @1×、dev opt-level=1 和相同 tday 脚本/配置；SHA-256 前后
-未变。正常自动阅读，不快进。记录 1799.88s、8818 个 RAM/CPU 样本，实际平均
-间隔 204.13ms、最大 210.37ms；CPU 累计计数与按间隔积分相符。
-
-原始资料在 `target/performance/continuous-tday-0151/`：`sample.py`、`samples.csv`、
-`metadata.json`、`observations.jsonl`、`input-verification.json`、`excluded-windows.json`、
-`summary.json`、`plot.py` 和 `continuous-playback.png/svg`。图保留全部样本，灰色为
-启动/玩家确认的保守排除区间，斜线为黑幕停滞的保守区间（528–810.92s；首次目测
-黑屏约 622s，不作为精确发生时间）。其间舞台点击恢复到浴室，随后继续采样。
-末段空文本与 `2.5.shou` 的文字回退对应，但未取得后续确认，亦保守排除。
-合计明确正常推进 600.98s（约 10 分钟），不能称为 30 分钟全程无停顿播放。
-
-| 正常推进指标 | 时间加权均值 | P95 | 最大采样值 |
-| --- | ---: | ---: | ---: |
-| 物理 footprint | 364.7 MiB | 394.2 MiB | 402.1 MiB |
-| Engine CPU（100% = 单核） | 15.9% | 25.7% | 38.3% |
-
-内核 lifetime footprint 峰值 407.2 MiB。包含启动/等待/故障的全程平均为
-301.9 MiB / CPU 10.1%，不用于正常播放比较。天台附近约 387 MiB，后续卧室
-约 371 MiB，确认等待时有明显回落；没有全程单调上涨，但不同场景权重、演出和
-停留时长与上轮不同，不能直接据此计算优化收益或证明长期无泄漏。采样结束时进程
-仍存活，随后窗口检查已退出，未捕获退出码或返回标题后的回收曲线。没有完整剧情、
-release 或跨平台长测；这批曲线来自修复前基线，不是修复后复测。
-
-```sh
-python3 target/performance/continuous-tday-0151/sample.py
-MPLCONFIGDIR=/private/tmp/keine-mpl /private/tmp/keine-plot-env/bin/python \
-  target/performance/continuous-tday-0151/plot.py
-```
-
-黑幕停滞根因位于 `src/runtime/platform.rs` 的活动判断：淡变透明度可在截止时间前
-舍入到目标值，而幕布/遮罩仍 blocking。auto 被 presentation 阻塞时不计时，活动
-判断遂进入 Idle 并暂停虚拟时间，剩余演出无法完成。现在未结束的幕布/遮罩时钟或
-阻塞标记仍保持活动，正的微小 wait 也保持计时；已完成的玩家确认继续正常休眠。
-
-`src/runtime/tick.rs` 的一个表驱动回归覆盖幕布/遮罩显示与隐藏、微小 wait，以及
-auto 开/关共 10 种边界，运行真实 TimePlugin、tick 和 update_lifecycle：旧版首例
-错误进入 Idle，修改后无需玩家输入即继续对白。原始前后日志在
-`target/performance/continuous-tday-0151/regression-before.log` / `regression-after.log`。
-workspace fmt/check、all-targets Clippy、1060 项测试通过（21 ignored；IPC 在沙箱外
-执行）；publisher 无默认功能的同一回归也通过，native-smoke 校验通过。日志在
-`target/performance/black-curtain-0151/`。新版 macOS 原生窗口在 tday 素材副本中自动
-完成六次 260ms 幕布开合，随后停在文字回退确认，单次空格恢复下一句，并正常关闭
-退出 0。此共享运行逻辑修复尚未在 Android 实机、Windows 或 Linux 验收。
-
-### 播放热路径正确性审查
-
-基线为 `cf6cd8c` 加上述未提交的幕布修复。审查 action/yield → tick → Sync 后端 →
-Last 生命周期的交接，逐项对照演出更新与休眠条件，并检查预取身份、读档计时、
-终止清理和音视频失败路径。修复不更改语法、Program/Action、Save v11、IR v7、
-authoring 协议、画质或发布流程；没有新增依赖或用户界面。
-
-| 已确认问题 | 修复与验证 |
+| Workflow | 责任与触发 |
 | --- | --- |
-| 纯镜头位移动画漏在活动判断外，可能提前休眠 | `platform.rs` 补齐 camera transform；真实 TimePlugin/tick/lifecycle 回归覆盖 blocking 开/关与动画完成 |
-| 后端在 tick 之后移除视频，下一帧失去续行；保留字幕的阻塞视频也受影响 | `script/driver.rs` 判断尚无交互 owner 或刚结束的阻塞视频；tick 与 lifecycle 共用判断。覆盖 Stage/Menu/Loading、字幕保留、正常完成及错误移除；非阻塞/循环视频不抢对白 |
-| auto、notend 与点击同帧可消费多个 yield；回标题时仍可能执行剧本 | `tick.rs` 每帧只选择一次推进，返回过渡中停止脚本。回归使用零自动延迟和空白下一句，检查 cursor/backlog 不越过边界 |
-| 同一 scene/cursor 恢复沿用旧行内 pause 和 auto timer | `tick.rs` 对照文本/暂停点/显示进度；`save.rs` 的私有 checkpoint generation 在显式恢复边界重置计时。回溯、Preview seek、热重载及旧式 cursor 同步重置；覆盖零字符 timed pause、输入等待、自动延迟及实际热重载 worker 交接 |
-| 预取身份漏掉转场旧图、头像、序列帧和遮罩图片/纹理 | `scene/assets.rs` 只将资源依赖纳入身份。五种同 cursor 变更要求重建计划，单纯 opacity/elapsed/progress 变化保持缓存；转场完成后旧图不再被计划误留为 critical |
-| 失败音频永远等不到 sink，pending fade/handoff 持续请求帧 | `scene/audio.rs` 及 `runtime/audio.rs` 按 typed source 的 Failed 状态清理未启动的运行时播放器。真实 AssetServer 失败回归验证 activity 清零；其他音频 owner 不被删除，原有正常交接测试保留 |
-| 透明度为 0 的正常视频被误当作停止完成 | `tick.rs` 只在 stopping 且 opacity 归零时移除；回归检查不可见视频仍阻塞至后端完成/显式停止 |
-| guard 关闭一个 fd 时，存活的重复描述符仍可保留单实例锁 | `bootstrap.rs` Drop 显式 unlock。无默认功能全测暴露失败后，复现保留 fd 副本的情形，修改后同一回归通过；依据锁定 fs2 0.4.3 的 FileExt/Unix flock 实现 |
-| AVFoundation 的原生音频不属于 AudioSink，失焦时仍可能播放 | `video/avfoundation.rs` 在 Last、生命周期更新之后同帧同步 AVPlayer pause/play，不能等进入休眠后的下一帧；前台 Preview 保持既有策略。调用合同核查锁定 objc2-av-foundation 的 AVPlayer 绑定与 SDK 注释 |
-| 全屏视频 mesh 使用第三层相机，但相机活动判断只看 UI | `platform.rs` 纳入可见 fullscreen video；测试覆盖全屏/混合、透明度 0 和移除。实际窗口检查在修复前发现视频解码但不显示，修复后确认彩条视频可见 |
+| [CI Desktop](../../.github/workflows/ci.yml) | push/PR；依赖/打包合同先行；Linux 全功能 Clippy、workspace/publisher 测试；三平台文件/进程/视频/发行 feature 边界 |
+| [CI Android](../../.github/workflows/android.yml) | push/PR/手动；Native Engine APK 构建、lint 与包校验，无实机结论 |
+| [CI Media Safety](../../.github/workflows/media-safety.yml) | 相关路径变更、定时或手动；WebP fuzz、FFmpeg ASan |
+| [Audit Dependencies](../../.github/workflows/dependencies.yml) | 每日/手动；完整锁文件安全、许可、来源及版本策略 |
+| [Release Editor](../../.github/workflows/editor-release.yml) | main Desktop CI 成功后或手动；同 SHA Editor 与 Preview |
+| [Release Engine](../../.github/workflows/release.yml) | 仅手动 tday 四平台打包 |
+| [Release Project](../../.github/workflows/project-release.yml) | 游戏仓库按完整 Engine SHA 调用；当前 Linux x64 |
+| [Verify Linux Download](../../.github/workflows/verify-linux-release.yml) | 手动复核已有 ZIP 的基线兼容性；不编译、不重新发布 |
 
-新增 11 个必要回归入口，参数变体在案例表内，复用同一个播放 App 初始化。
-原幕布回归也使用生产顺序的 Last 生命周期。前后失败证据、命令和完整日志在
-`target/performance/playback-audit-0151/`：`before.log`、`caption-video-before.log`、
-`video-opacity-before.log`、`instance-lock-before.log`、`video-camera-before.log`、
-`hot-reload-before.log`。
+纯 README、`dev/docs`、AGENTS 与 Dependabot 配置变更跳过桌面/Android 全编译。
+Android 另跳过仅修改 `crates/editor/**` 的提交；Core、Loader、Authoring、Engine、
+共享资源、根依赖清单或锁文件变化仍触发检查，手动入口保留。
+benchmark CI 已取消；现有本地基准与正确性测试保留。发布缓存、ABI、密钥与签名规则统一见[发布指南](release.md)。
 
-```sh
-cargo fmt --all --check
-cargo check --offline --workspace --features publisher,video-native,hot-reload
-cargo clippy --offline --workspace --all-targets --features publisher,video-native,hot-reload -- -D warnings
-cargo test --offline --workspace --features publisher,video-native,hot-reload
-cargo test --offline -p keine --no-default-features --features publisher --lib
-cargo check --offline -p keine --no-default-features --features bundled-opus
-cargo check --offline -p keine --no-default-features --features audio-wav
-cargo check --offline -p keine --no-default-features --features video-ffmpeg
-```
+Desktop 将格式、打包合同、工作流语法及依赖检查前置。Linux 跑完整工作区测试，
+直接复用该调用生成的视频验收工具，不再另编一组平台测试。视频验收必须在
+publisher-only 测试之前运行，避免同名工具被无视频后端的构建覆盖。
+macOS/Windows 在同一 Cargo 调用中运行 Engine/Editor lib、Editor instance 及
+`bevy_render` display 定向回归；视频工具按相同依赖组合预编译后直接运行。
+publisher-only、无音频与规范发行 feature 检查仍独立保留。
+桌面三平台的 dev/test 优化等级统一沿用 Cargo.toml，当前为 `opt-level=1`；
+CI 只关闭调试符号，保留调试断言和溢出检查，不单独覆盖优化等级。
 
-工作区 1071 passed / 0 failed / 21 ignored；无默认功能 + publisher 409 passed /
-0 failed / 1 ignored。IPC 在允许本地套接字的环境执行。fmt/check/Clippy、列出的
-可选功能检查通过；Engine debug 构建及 native-smoke/tday 校验通过。
-macOS/Metal 原生窗口验收使用 tday 副本与仓库视频 fixture（1920×1080）：镜头运动
-完成、全屏视频显示、自然结束与损坏视频后的自动续行均已确认，测试进程正常退出。
-AVFoundation 失焦暂停尚未取得可确认的原生验收结果，保留为待验收，不能算通过。
-这是正确性验证，不构成吞吐、帧时或新的 30 分钟内存改善结论。
-本轮不证明整个仓库零错误；Windows/Linux/Android 实机播放和完整剧情仍需各自验收。
+### 视频与 Metal 专项
 
-### 自动阅读中的演出确认等待
-
-`update_lifecycle` 原先仅因 auto 开启就持续刷新；但 `tick` 在 presentation 被阻塞时
-本来就不会推进 auto 计时。现在静止的玩家确认等待可进入 Idle，进行中的演出、UI、
-音频动画及普通自动阅读仍由原有活动条件驱动。没有修改脚本、画质或普通阅读时长。
-
-沿用上述机器、dev opt-level=1、1920×1080 和原始 tday 副本，分别测量修改前后
-开场海面背景的 `start.shou:195` 文字回退完成后「我」的确认等待，auto 保持开启。
-修改前复用上一轮连续采样；修改后从正常开场自动播放到同一点。每个独立进程均取
-420–480s 的 60s 窗口，按实际采样间隔加权；统计窗口内不编译、运行测试或推进剧情。
-
-| 静止确认等待 | 修改前 | 修改后 |
-| --- | ---: | ---: |
-| Engine CPU（100% = 单核） | 15.64% | 2.24% |
-| Engine GPU 时间占比（非核心利用率） | 10.26% | 0.33% |
-
-原始短峰保留于曲线，不承诺零占用。两个进程的资源预热历史与其他应用负载不同，
-因此不把内存差异归因于这个改动，也不将这些数值外推为正常持续播放的降幅。
-原生验证了打字、转场、背景切换及正常自动推进；等待后按空格显示 `...`，随即恢复
-自动阅读并推进到「太阳正步入海平面」。测试进程正常关闭，退出码 0。
-本轮仅 macOS/Metal 实机验证，Windows/Linux/Android 与 release 构建未复测。
-
-修改前原始命令为上一节的 `sample.py`；修改后及比较命令：
+已有视频 fixtures 可直接使用；只有重建夹具时才运行 `bash dev/scripts/video-fixtures.sh`。
+选择目标平台的后端，macOS `video-native`，Windows/Linux `video-ffmpeg`：
 
 ```sh
-cargo build --offline --locked --bin keine --features publisher,video-native,hot-reload
-python3 target/performance/auto-wait-0150/sample-after.py
-MPLCONFIGDIR=/private/tmp/keine-mpl /private/tmp/keine-plot-env/bin/python \
-  target/performance/auto-wait-0150/compare.py
+cargo run --locked --no-default-features --features publisher,ui-sounds,video-native --bin keine-video-acceptance -- tests/fixtures/video/playback.mp4
+cargo run --locked --no-default-features --features publisher,ui-sounds,video-native --bin keine-video-acceptance -- --expect-error tests/fixtures/video/damaged-header.mp4
+# macOS 实际设备；管线输出与 HAL 设备归属，不是整游戏视觉验收。
+cargo test --locked --lib --features publisher,video-native,hot-reload on_gpu -- --ignored
+cargo test --locked --lib --features publisher,video-native,hot-reload metal_cache_follows_replacement_device -- --ignored
 ```
 
-原始 CSV、命令/二进制 SHA-256、`comparison.json`、`idle-comparison.png` 与验证日志
-位于 `target/performance/auto-wait-0150/`。扩展已有生命周期回归，覆盖普通确认等待、
-完成的文字回退、UI 动画唤醒及解除阻塞后 auto 恢复，不新增测试条目。
-fmt、workspace check/Clippy（all targets）、workspace tests 均通过
-（1056 passed、21 ignored）；`--no-default-features --features publisher` check 通过。
+不要把 `video-native` 的 no-audio 编译检查替换为默认音频构建；两者覆盖不同边界。
+Fuzz/ASan 的工具链、时间预算和调用以 Media Safety workflow 为准，不纳入每次 UI/文档修改的常规循环。
 
-### 静态菜单与常驻浮动文字
+## 运行与发行验收
 
-auto 计时只在 Stage 推进；现在菜单、Backlog、Extra 和 Dialog 不再仅因 auto
-开启而持续刷新。无限浮动文字完成淡入后不再累计 elapsed 或重复标记状态变化；
-`text.float.hide` 仍按原有规则重置计时并淡出，有限时长文字继续更新。
-浮动文字增加局部柔和 BoxShadow，透明度随作者颜色和文字淡入/淡出同步，复用
-现有 UI 渲染，不新增全屏纹理或动画任务。
+静态检查、构建、单元/集成测试、包验证和真实交互是独立证据。每次验收记录：
+源码 SHA、features/profile、产物摘要、平台/设备/后端、实际覆盖项和未测项。
 
-同一 Apple M5 Pro / 24 GiB / macOS 27.0.1 / Metal，dev opt-level=1，
-1920×1080 @1×。原始 tday 只读副本增加一个受控 scene，分别展示静态设置页
-和 infinite 浮动文字；原项目未改动。独立进程的脚本/配置 SHA-256 一致，最终
-修改后构建含上述阴影。每项取入场完成后的 30s 窗口，按实际间隔加权，不并行
-编译/测试，不在统计窗口内操作 UI。
+- Editor：中文 IME、Text/Blocks/Inspector 同步、撤销/保存/恢复、资源导入、Preview 启停与错误定位。
+- Engine：对白/分支、长演出与跳过、存读档/回退、菜单模糊/过渡、音视频和资源恢复；黑幕须区分作者演出与阻塞。
+- 显示：正常/高 DPI、缩放/全屏、多屏与屏幕移除；Windows DX12/Vulkan/GL、Linux X11/Wayland 与实际可用 GPU 后端分别记录。
+  不要求无 Vulkan 驱动的机器完成 Vulkan 测试；必须覆盖其可用回退路径。
+- Android：安装版本和来源、前台/后台恢复、触摸/Backlog/滑块触感、系统关闭触感后的行为；详见设备指南。
+- 发行包：完整解压、无关 cwd 启动、动态库闭包、只读资源/用户数据隔离、升级身份及对应平台签名验证。
+  macOS ad hoc 包不是 Developer ID 公证通过。
 
-| 状态 | CPU 修改前 → 后（单核 %） | GPU 时间估计前 → 后（%） |
-| --- | ---: | ---: |
-| 静态设置页，auto 开启 | 24.05 → 0.39 | 19.47 → 0.00 |
-| 稳定的常驻浮动文字 | 19.57 → 0.38 | 5.28 → 0.00 |
+原生视觉验收直接操作应用；不以截图 hook、构建成功或 headless tests 代替。
+维护者负责可重复的构建/合同与错误定位；作者确认实际画面、交互、听感及触感。
+当前 Windows/Linux 游戏运行态仍需对应设备证据，不用 macOS 结果推定。
 
-GPU 数值沿用上节驱动累计时间估算，不是核心利用率；0.00 仅表示这两个窗口
-没有记录到累计值增加。保留原始短峰，不承诺零开销。footprint/RSS 也完整采集，
-但进程预热/驱动回收历史不同，不把内存差异归因于这个生命周期改动。
-初次修改后的采样另保留于 `after-lifecycle/`，正式比较使用含阴影的 `after/`。
+### 0.16.0 已有证据
 
-原生操作已验证设置页的模糊、返回舞台后原对白未被 auto 偷跑、菜单 tab 响应、
-浮动文字及阴影的入场/退场，以及返回普通对白、背景切换和打字。
-修改前后测试进程均正常退出。代码回归覆盖四种非 Stage scope 的 auto 休眠/
-UI 唤醒、常驻与有限文字边界，并新增一条常驻文字停止更新到真实 Hide 动作
-淡出完成的回归。仅 macOS dev/Metal 实测，其他平台与 release 尚未复测。
+在 `83b00c2` 源码上整理文档时，macOS arm64 / Rust 1.99.0 复跑通过 fmt、
+workspace/all-targets/all-features check/Clippy 和工作区测试：**1096 passed / 24 ignored**。
+先前的 1097 汇总重复计入一次 Editor instance 子进程输出，这里按外层测试入口修正。
+系统 Trash 受沙箱阻止后，在沙箱外完整重跑通过。Native Smoke 为 1 scene / 1 action，
+tday 为 13 scene / 2626 action，均 0 warning。日志在 `target/documentation-audit/`。
+
+原 v2 接入另有 Loader 196 项、Publisher 29 项专项及完整 cargo-deny 记录；
+AVFoundation 与 FFmpeg 验收入口覆盖文件系统/v2 包解码、回绕与损坏头拒绝。
+这些专项未因文档修改重新执行，原始命令/日志在 `target/performance/quality-review/`，含 `v2-*`。
+
+2026-10-14 核对该 SHA 的 Actions：
+[CI Android](https://github.com/maincoretech/keine/actions/runs/38443828921) 和
+[CI Media Safety](https://github.com/maincoretech/keine/actions/runs/38443828943) 成功；
+[CI Desktop](https://github.com/maincoretech/keine/actions/runs/38443828831) 已取消，不能登记为通过。
+其 macOS job 冷缓存下切换依赖组合，四次编译 Bevy，最后在发行 feature 检查时达到
+60 分钟上限。工作流修复统一平台构建组合并将 macOS 上限调至 90 分钟；本机按新命令
+验证 **59 passed / 1 ignored**、视频验收、no-audio/shipping check、14 项打包合同与
+actionlint 通过。45 个 Bevy 库产物在后续测试中复用，仅额外编译必要的测试程序；
+命令、原 CI 时序及 Cargo artifact 日志在 `target/ci-timeout/`。进一步去掉 Linux
+重复平台构建前，复跑全量工作区仍为 **1096 passed / 24 ignored**，确认该调用已生成
+可直接验收的视频工具，Android normal/build 依赖不含 Editor；记录在 `target/ci-simplify/`。
+新工作流尚未远端复跑，本机耗时不能作为 hosted runner 的加速比例。
+
+这些状态不证明新版游戏的三平台运行、Moto 操作或正式发行包已验收。
+
+## 性能测量方法
+
+先定位实际瓶颈，再固定输入/版本/工具链/功能/构建配置、分辨率、后端和前后台状态做前后对照。
+交替顺序复测；保留不利结果、超时、窗口切换和排除原因。输入构造、I/O、初始化、释放是否计时必须说明。
+原始命令、源码/二进制与输入哈希、逐轮结果保存在对应 `target/` 目录；目录是本机证据，干净检出不会自带。
+
+- CPU 100% 为一个逻辑核心；按真实采样间隔差分，不把 Mach tick 直接当 ns。
+- RSS、physical footprint、Metal 资源分配、活跃堆字节分别报告，不相加，也不将 cache budget 当作进程上限。
+- GPU 每帧执行时间、进程累计 GPU 时间占比、整机 GPU 利用率、呈现间隔和输入延迟是不同指标。
+- Fifo/限帧下 FPS 相同不能证明 CPU/GPU 成本相同；不支持的计数留空，不写零。
+- 微基准、dev GPU 短测和 release 游戏验收分别记录；不以关闭模糊、降低分辨率或更换素材宣称等画质优化。
+- 跨引擎比较须对齐输入和实际绘制路径。原始包素材范围、SDK、符号不同，包体积不是等内容排名。
+
+### 本地完整套件
+
+只在需要平台全覆盖时运行 `bundle --benchmark`；普通优化优先定向复测。
+[`native-benchmark`](../../tests/fixtures/native-benchmark/README.md) 为桌面共同输入，
+包含 71 个作者场景和运行/分辨率对照，共 78 个必测负载。
+预热/采样之外还有子进程初始化、首帧与退出开销。当前 supervisor 限制整套 30 分钟，
+单次启动/render 60 秒、I/O 120 秒；超时保留部分报告并返回 INCOMPLETE，不把低帧率判作失败。
+完整结果必须为 **78 completed / 0 missing / 0 failed**，正常模式还须有前台样本。
+Android 为 73 个支持项、5 个明确视频跳过项，回传步骤见 [Android benchmark](android.md#完整-android-benchmark-与-adb-回传)。
 
 ```sh
-cargo build --offline --locked --bin keine --features publisher,video-native,hot-reload
-python3 target/performance/lifecycle-0150/before/sample.py
-python3 target/performance/lifecycle-0150/after/sample.py
-MPLBACKEND=Agg MPLCONFIGDIR=/private/tmp/keine-mpl /private/tmp/keine-plot-env/bin/python \
-  target/performance/lifecycle-0150/compare.py
-vmmap -summary 85306
-malloc_history 85306 -allBySize
+cargo validate tests/fixtures/native-benchmark
+# 使用隔离的测试 identity；不要复用正式游戏的签名身份。
+cargo bundle tests/fixtures/native-benchmark --output target/native-bench --benchmark
+# 运行实际生成的 benchmark 目录内的 executable，完整报告写到包旁。
+python3 dev/scripts/profile-runtime.py --report /path/to/keine-benchmark-report.txt --output target/native-bench-report
 ```
 
-采样前分别将保留的修改前二进制和当前构建复制至 `Tday Acceptance.app` 并签名。
-CSV、窗口区间、二进制/输入哈希、`comparison.json/png` 和验证日志均在
-`target/performance/lifecycle-0150/`。fmt、workspace check/all-targets Clippy/tests
-（publisher/video-native/hot-reload）和无默认 feature + publisher check 通过；
-1057 passed / 0 failed / 21 ignored，IPC 测试在允许本地 socket 的环境运行。
-
-基座分配另开启 MallocStackLogging 独立采样，不纳入上述 CPU/内存比较。
-标题页存活分配的主要调用栈包含：字体加载约 9.81 MiB（其中最大原始文件缓冲
-9.34 MiB）、字体图集约 6.10 MiB、网格分配器元数据约 8.06 MiB。
-这是具体栈的分配量，不是完整 footprint 分解；dyld/AppKit/ICU 映射不当作私有
-物理内存相加。折叠的 Rust 泛型符号不能代替完整调用链的归属判断。
-offset-allocator 0.2.0 的 `Allocator::new` 固定预分配 128K 个节点，与 slab
-字节上限无关；Bevy 现有公开设置不能减少这项，暂不新增 vendor 补丁。
-
-模糊 pool 已仅保存一张 scene/UI 共用中间纹理，尺寸/格式改变时替换，不随菜单
-次数累积。1920×1080 RGBA8 的 payload 为 7.91 MiB（不是驱动物理内存测量）。
-对白框与菜单都会使用它；立即回收会引入下一次绘制的创建开销，保留现有复用。
-不削减字体字形、图片预取或渲染质量；本轮降低的是静止状态的 CPU/GPU 工作量，
-没有宣称基座内存已进一步减少。
-
-### 舞台同步与文字布局（0.15.1 工作区）
-
-瓶颈核查：舞台动画 revision 会重复调用图片路径解析 / AssetServer load；
-浮动文字和 Intro 的淡入每帧重写相同 Text / TextFont / Node。Bevy 0.19.1
-`detect_text_needs_rerender` / `measure_text_system` 将这些 Changed 标记作为重新布局条件。
-现有材质 upsert 已比较实际数据，继续保留；本轮不更换渲染管线或调整质量。
-
-当前实体持有图片源与句柄，换图、配置或图片角色映射改变时重新解析；销毁实体即释放，
-不增加全局图片缓存。Sprite / Transform 与文字组件只写实际变化的字段；透明度、
-阴影淡化独立更新，文字/字号/位置变化仍正常更新。
-
-同机 Apple M5 Pro / 24 GiB / macOS 27.0.1 / Metal，dev opt-level=1，
-1920×1080 @1× / 60 Hz。tday 素材副本中的短演出使用背景、立绘层、持续镜头晃动，
-组合场景另含持续浮动文字淡入。每轮采集 20 秒，外部 proc_pid_rusage 约 200ms 采样；
-CPU 按启动后 5–22 秒的计数差除实际时长，100% 为一个核心。缓存未控制。
-
-| 场景 | 修改前 CPU | 修改后 CPU | 相对变化 |
-|---|---:|---:|---:|
-| 镜头动画 | 26.28% | 24.50% | −6.77% |
-| 镜头 + 浮动文字，首轮 | 30.44% | 23.81% | −21.78% |
-| 镜头 + 浮动文字，反序复测 | 26.35% | 23.16% | −12.13% |
-
-各轮平均帧间隔均约 16.67ms；降低的是 CPU 工作量，不宣称提升限帧下的 FPS。
-首轮与复测存在波动，不能把 22% 当成整个游戏的固定收益。GPU 累计时间原始字段
-已保留，没有可重复的 GPU 改善；反序组合的平均 footprint 338.9 → 338.7 MiB，
-也不宣称降低了基座内存。不是 release、完整剧情或跨平台性能结果。
+`--benchmark` 输出目录规则以命令报告为准；包中 collector、符号和标记位于 `lib/`。
+无须 Python 即可跑整套；额外调用栈采集需要 Python 和平台 profiler。
+短测示例（macOS native；其他桌面换为 `video-ffmpeg`）：
 
 ```sh
-cp target/debug/keine target/performance/scene-sync-0151/keine-before
-cargo build --offline --locked --bin keine --features publisher,video-native,hot-reload
-python3 target/performance/scene-sync-0151/sample.py target/performance/scene-sync-0151/keine-before target/performance/scene-sync-0151/before-counters
-python3 target/performance/scene-sync-0151/sample.py target/debug/keine target/performance/scene-sync-0151/after-counters
-# 同一采样器末尾添加 camera_probe：镜头单独对照；组合复测顺序为 after-repeat → before-repeat。
+cargo run --locked --profile profiling --no-default-features --features ui-sounds,startup-metrics,video-native --bin keine -- perf tests/fixtures/native-benchmark --timeline bench_particle_layers_768 --window 1920x1080 --mode continuous --seconds 10 --raw
 ```
 
-修改前后源码快照、二进制 hash、逐轮命令、CSV、日志、调用栈与 comparison.json
-位于 `target/performance/scene-sync-0151/`；inputs 中源码已与采样 hash 核对。
-新增两项回归覆盖句柄复用/映射刷新、淡入不触发文字布局，以及实际换页、字号、位置、
-文本清除和阴影透明度更新。workspace（publisher/video-native/hot-reload）
-1059 passed / 21 ignored；fmt、check、all-targets Clippy、无默认功能 + publisher check、
-Engine 构建及 native-smoke validate 通过。macOS 原生操作确认文字阴影、换图、镜头移动、
-舞台和设置模糊、Intro 换页/恢复及窗口缩小；其他平台与热加载现场操作尚未验收。
-
-### 窗口输出 GPU 对照与测试包核查（0.15.5 工作区）
-
-M5 Pro / 24 GiB / macOS 27.0.1 / Metal，1920×1080 @1×，dev opt-level=1，
-同一个隔离的双立绘 300ms 往返演出。场景/UI/弹窗在共享中间目标上继续合成，
-只有最后一个活动相机写入窗口，省去较早相机的重复全屏输出。
-新增一项边界回归覆盖三层组合、弹窗休眠/唤醒、全部关闭与其他相机不受影响。
-
-每轮 10 秒、排除进程启动后前 5 秒的 GPU 区间，原始均值取三轮中位数：
-1.2585 → 1.0934 ms/帧（−13.1%）；随后原二进制反序两轮为 1.2548、1.2361，
-仍支持约 −12.2% 的差异。第一轮基线 1.8893 保留在原始数据，没有按结果删除。
-模糊临时附件改 clear 的候选为 1.3374–1.3689，未见收益，已撤回。
-macOS 原生确认标题、设置模糊、确认弹窗/取消、动态舞台、读档/返回及窗口缩放，
-验收进程退出 0。当前不主张 FPS、CPU、其他平台或 release 候选同等改善。
-fmt、workspace check / all-targets Clippy（publisher,video-native,hot-reload）、
-无默认功能 + publisher check 通过；同组合 workspace tests 为
-1077 passed / 0 failed / 21 ignored（废纸篓与 Unix socket 在沙箱外执行）。
-
-原始命令、输入/二进制 hash、Metal 日志和 comparison.json 在
-`target/performance/package-gpu-0155/`；采样复用已有 measure.py：
-`python3 target/performance/package-gpu-0155/measure.py BINARY OUTPUT bench_idle --seconds 10`。
-前后构建均为 `cargo build --offline --locked --bin keine --features publisher,video-native,hot-reload`。
-
-继续拆分同一演出：临时二进制仅跳过区域模糊，GPU 两轮为 0.5984、0.5953 ms/帧；
-正式实现已恢复模糊。这是成本拆分，不能作为保留画质的优化结果。同期带模糊的
-基线波动为 1.0871、1.5142，后续三轮为 1.1738、1.2063、1.1804。
-跳过 UI 相机空世界 pass 的候选为 1.1755、1.7303、1.1809；交替三轮中位数
-1.1804 → 1.1809（+0.05%），没有稳定收益，已撤回新增的调度条件。
-原始二进制、输入 hash、命令和 Metal JSON 在 `target/performance/gpu-followup-0155/`；
-`run-ab.py` 交替调用上述 measure.py，每轮仍为 10 秒，排除启动前 5 秒。
-
-保留四个正确性边界修复：弱模糊权重下溢不再产生 0/0 UV；水平/垂直管线同时
-就绪才开始两次处理；视频旧帧重排不覆盖期间到达的新帧；设备更换重建 Core Video
-纹理缓存，遵守锁定 wgpu `create_texture_from_hal` 的设备归属合同。
-裁剪后无像素的模糊区域直接跳过。一项区域边界表和一项帧交接竞态回归通过；
-两项显式 Metal 回归通过：实际 WGSL 的十个淡入/常用/最大半径输出保持有限且
-保留常量色，两个实际 device 的缓存分别建立、同一 device 复用缓存。
-它们默认 ignored，由本机显式运行，不等于已复现真实 device-loss 后的完整恢复。
-macOS 原生确认标题/设置/弹窗模糊、取消返回与双立绘舞台，验收进程退出 0。
-fmt、workspace check / all-targets Clippy（publisher,video-native,hot-reload）、
-无默认功能 + publisher check 通过；同组合 workspace tests 为
-1079 passed / 0 failed / 23 ignored（Unix socket/废纸篓在沙箱外运行）。
-Metal 专项命令为 `cargo test --offline --locked --lib --features publisher,video-native,hot-reload on_gpu -- --ignored`
-及同配置 `metal_cache_follows_replacement_device -- --ignored`。
-已有 `keine-video-acceptance tests/fixtures/video/playback.mp4` 也通过文件系统与
-Hakutaku 挂载的 AVFoundation 解码、循环重启和实际 Metal 帧导入/复制。
-本轮未做 release 性能、Windows/Linux/Android 运行态或强制设备丢失验收。
-
-Suika3 对照包版本 26.07.13 的原始三轮 GPU 均值为 0.5262、0.5393、0.5352 ms；
-已核对该 tag 的 [Metal renderer](https://github.com/awemorris/suika3/blob/26.07.13/external/PlayfieldEngine/external/StratoHAL/src/GameRenderer.m)
-和 [shader](https://github.com/awemorris/suika3/blob/26.07.13/external/PlayfieldEngine/external/StratoHAL/src/GameShaders.metal)：
-普通图层单次纹理采样，背景/立绘/已栅格化文字共用 drawable 的一个 render pass，
-此 fixture 没有 Kēne 的区域高斯玻璃处理。结合临时成本拆分，额外模糊与合成是
-差距的重要来源；没有量化语言、抽象层或半精度各自的贡献。
-0.53 ms 是 GPU 执行时间，不是输入响应延迟；Suika 原报告的呈现管线时间约
-62 ms，仍不包含输入事件时间点。不同 build/画面路径的数字不能当作等画质排名。
-
-继续对照 Suika 的实际绘制范围，测试了裁小模糊中间纹理与按强度排序后首个命中即返回。
-同机/输入/构建配置，每个候选前后各三轮 10 秒，顺序为旧→新、新→旧、旧→新：
-裁小纹理的 GPU 均值中位数 1.2222 → 1.6868 ms，三对均变慢；提前返回为
-1.1795 → 1.6552 ms，前两对变慢、末对改善约 3.6%，没有稳定收益，两项均撤回。
-另外一个单区域直达分支的时序差异不作为收益：短程区域日志确认该演出实际有
-对白框和姓名框两个区域，未覆盖该分支；该候选及临时日志也已撤回。
-构建命令沿用上文；源码/二进制快照、18 次 Metal 原始采样、完整输入哈希、
-`run-ab.py` / `run-single-ab.py` / `run-ordered-ab.py` 与比较结果在
-`target/performance/gpu-crop-0155/`。本轮没有新增运行时代码，不将候选构建或
-短程采样作为视觉等价、release 或其他平台验收。
-
-源码对照还确认：[Suika stage](https://github.com/awemorris/suika3/blob/26.07.13/src/stage.c)
-在普通交叉淡化时用一个双纹理绘制混合新旧图片。Kēne 本轮将无变换/滤镜/遮罩、
-没有视频/粒子且其他图层均在背景上方的 Fade/Crossfade 合并为一次绘制；其他情况
-沿用原路径。透明图片保持原有 source-over 合成，而非简单 mix。原两层实体保留，
-仅在 render queue 完成后核对管线及当前 GPU 纹理/采样器绑定，再移除当帧两层绘制；
-未就绪或资源更换时跳过合并绘制，保留回退并在下一帧重试。
-不能据此承诺持续对白场景改善。普通单纹理路径、图片复用和文字图集批量绘制在
-Kēne/Bevy 已存在；Suika 每帧 `waitUntilCompleted` 的同步等待也不应照搬为优化。
-
-同机/Metal/dev opt-level=1/1920×1080 @1×，隔离副本使用两张背景、对白局部模糊与
-60 秒非阻塞淡化，每轮采样 10 秒。无保护的初始原型三轮中位数 1.4041 → 1.2390 ms；
-加入资源保护后的五轮 GPU 均值中位数 1.4006 → 1.2463 ms（−11.0%）。逐轮旧值
-2.3395 / 1.5848 / 1.3481 / 1.4006 / 1.3926，新值
-3.0966 / 1.5222 / 1.2455 / 1.2445 / 1.2463；首对变慢约 32%，保留该波动，
-后两轮反序复测支持约 11% 收益。最后减少重复几何/组件更新，一组反序对照为
-1.3950 → 1.1921 ms（−14.5%，仅一组）；CPU 28.40% → 30.22%，增加约 1.82 个
-百分点（单核 100%）。静态背景单组 1.2299 → 1.2334 ms，基本持平。
-全程仍受 60 Hz 呈现限制，不声称 FPS、输入延迟或平均 CPU 改善。
-
-构建沿用上述命令；采样为
-`python3 target/performance/crossfade-0155/measure.py BINARY OUTPUT cross_fade --seconds 10`。
-输入/二进制 hash、每轮命令、Metal JSON、CPU 数据、失败尝试及 comparison.json 均在
-`target/performance/crossfade-0155/`。嵌入路径/保留字错误的早期尝试、未正确移除
-回退绘制的调度尝试不计入收益；原始记录保留。两项回归覆盖适用边界与管线等待/
-就绪丢失/恢复；实际 Metal 测试对比十组透明/不透明 source-over 输出，最大差异
-1/255（少一次中间 8-bit 舍入），并检查 GPU 纹理及采样器更换后的回退判断。
-该测试默认 ignored，本机显式执行
-`cargo test --offline --locked --lib --features publisher,video-native,hot-reload transparent_crossfade_and_replaced_bindings_on_gpu -- --ignored --nocapture`
-通过。fmt、workspace check/all-targets Clippy、无默认功能 + publisher check 及同功能组合
-workspace tests 全部通过：1081 passed / 0 failed / 24 ignored。
-macOS 原生检查旧背景/新背景对白画面、局部模糊和返回标题，独立验收进程退出 0；
-未捕获反向淡化全过程，不以截图证明没有任何单帧闪黑。未做 release、其他平台、
-强制 device-loss 或发布包验收；未修改 tday 源工程、素材、发行流程或默认画质。
-
-横向图中的 135.9 MiB Kēne app 包含 48.3 MiB 开发功能 release 引擎和约 87.6 MiB
-完整素材；Ren’Py 的 69.8 MiB app 不含包外游戏素材。此组总量不是等内容发行包排名。
-同 SHA `24e3b42` 的 Release Engine #66 macOS 产物核查为 124.7 MiB 解压逻辑大小、
-99.4 MiB ZIP、46.1 MiB 发行引擎（ZIP 中约 21.1 MiB）。已启用 LTO、strip、
-单 codegen unit 与 panic=abort；内嵌字体约 9.8 MiB，移除字体或改小优化级别需要
-另行验证文字覆盖和运行性能。未改素材、发行流程、默认画质或编译优化级别。
-
-### 区域模糊 GPU 对照（0.15.4 工作区）
-
-Apple M5 Pro / 24 GiB / macOS 27.0.1 / Metal，dev opt-level=1，
-1920×1080 @1× / 60 Hz，continuous 绘制。使用 native-benchmark 的隔离副本，
-另加强全屏模糊和分散区域场景；正式项目未改动。每项预热 3 秒、采样 10 秒，
-不同时编译或操作窗口。系统 `metalperftrace listen --pid PID --json --output …`
-记录 `Presented Frame Stats / On-GPU Walltime Stats`，剔除启动后前 5 秒的区间，
-按实际 GPU 帧数加权。它是每帧 GPU 执行时间，不是核心利用率，也不是 Bevy 未支持的
-pass 时间戳；定义参见 [Metal HUD metrics](https://developer.apple.com/documentation/xcode/understanding-the-metal-performance-hud-metrics)。
-
-GPU 候选只保留两处：合并后删除被同等或更强区域完全覆盖的弱区域；单个区域覆盖
-完整目标时，shader 跳过逐像素区域判断。采样点、半径、高斯权重、纹理尺寸、两次
-处理、边缘 padding 和相机顺序保持原样，不新增 pipeline variant 或纹理。
-完整权重表和紧凑参数预计算未显示稳定收益，已撤回。
-
-前后各三轮，包含反序对照；取每轮 GPU 均值的中位数：
-
-| 场景 | 修改前 GPU ms/帧 | 修改后 GPU ms/帧 | 变化 |
-|---|---:|---:|---:|
-| 普通背景、双立绘、对白 | 1.545 | 1.561 | +1.0%，小于逐轮波动，不主张改善 |
-| 设置页 | 3.427 | 3.337 | −2.6% |
-| 强全屏区域模糊 | 4.067 | 3.868 | −4.9% |
-
-强全屏模糊逐轮旧值 4.067 / 4.107 / 4.063，新值 3.811 / 3.870 / 3.868。
-分散区域初测没有明显改善，粒子与镜头后处理未修改。各轮仍受 60 Hz 呈现限制；
-没有据此声称 FPS 提升、CPU/内存下降或跨平台收益。初始 `sampling` 场景尾段与
-一次编译重叠，其结果排除，未用于上表。其余采样原始日志保留，不删除不利结果。
-
-```sh
-cp target/debug/keine target/performance/gpu-0154/binaries/before
-cargo build --offline --locked --bin keine --features publisher,video-native,hot-reload
-# measure.py 同步启动上述 metalperftrace；命令、二进制与完整输入哈希记录在 metadata.json。
-python3 target/performance/gpu-0154/measure.py target/performance/gpu-0154/binaries/before target/performance/gpu-0154/before-final opening settings blur_full
-python3 target/performance/gpu-0154/measure.py target/performance/gpu-0154/binaries/final-candidate target/performance/gpu-0154/final-repeat blur_full settings opening
-```
-
-原始 `engine.log`、Metal JSON、CPU/内存观察、源码快照、二进制与比较在
-`target/performance/gpu-0154/`。一项案例表回归检查双向输入顺序、两次处理的强度遮罩、
-水平 padding、较强内区、部分重叠及小数边界；既有合并回归更新弱内区预期。
-fmt、workspace check/all-targets Clippy/tests（publisher,video-native,hot-reload）通过：
-1076 passed / 0 failed / 21 ignored。无默认功能 + publisher check、Engine 构建及
-native-smoke validate 通过。
-macOS 原生确认标题/对白局部模糊、设置进出、Save/Load tab、窗口 zoom/恢复和返回
-舞台，测量进程及原生验收进程均正常退出。Windows/Linux/Android、release 与逐像素
-图像对照未测；截图观察不证明所有平台或逐像素一致。原有 Editor 未关闭。
-
-0.15.5 收尾同步 workspace/lock 和双语 README；fmt/check/all-targets Clippy、
-同版本 Engine/Editor 构建、1076 项 workspace 回归及 native-smoke validate 通过。
-GPU 原始测量仍标明实际的 0.15.4 工作区；角色预置应用的原生验收继续保留待办。
-日志在 `target/closeout-0155/`。
-
-## 桌面包辅助文件与 Linux ABI
-
-`2423505` 将 Linux 发行 runner 从 `ubuntu-latest` 改为 `ubuntu-26.04`，用户的旧系统
-随后无法加载程序/附带库所需的 GLIBC 2.42/2.43 和 `GLIBC_ABI_DT_X86_64_PLT`。
-发行游戏/benchmark/Editor 与桌面 Linux CI 改用 `ubuntu-24.04`，明确 GLIBC 2.39
-上限；发布前扫描每个 ELF 的 version needs，超过上限或要求未知/private ABI 即拒绝。
-libmvec、libresolv、libnss、libanl、libutil 与 libc/loader 一样由宿主提供。
-
-Windows DLL、benchmark PDB/dSYM、Python 采集器和启动标记统一放进 `lib/`。
-Windows shipping Engine 内嵌私有 assembly 依赖，打包的 `lib/lib.manifest` 列出 SDK
-DLL；用受限 PATH 和不相关 cwd 启动包内 Engine 验证，避免构建机 SDK 掩盖漏包。
-Editor 的匹配 Preview Engine 同用此布局，临时 Build 导出沿用已有 lib 树复制。
-新布局的 marker、默认游戏路径、移动后采集与 ELF/DLL 边界纳入既有回归。
-
-实测验证：workspace check/all-targets Clippy（publisher,video-native,hot-reload,startup-metrics）、
-fmt、native-smoke validate、workflow actionlint 通过；完整 workspace 测试
-1045 passed / 21 ignored / 0 failed，IPC/Trash 在 macOS 沙箱外重跑；Python packaging
-12 passed、benchmark collector 9 passed。用 NDK Clang/LLD 生成真实 ELF version-needs
-边界样本，GLIBC 2.39 正确接受，2.43 正确拒绝；这仅验证门禁，不代替发行程序启动。
-
-此批修复以 0.14.3 发行。Windows/Linux 新包须按对应提交的远端 CI 和实机运行分别验收；
-旧 Ubuntu 26.04 基线的下载不能用于验证修复，源码检查也不能代替新包实机验收。
-
-持续维护门禁：每日审计、桌面 CI 和所有发布入口共用 locked/all-features cargo-deny；
-手动 tday/Editor 也须按源提交重新审计。Dependabot 的 Cargo 仅提出分组安全修复，
-Actions 每月一个普通更新分组 PR；关闭自动 rebase/合并，更新仍由正常 CI 审查。
-Linux 的最终 Engine/benchmark/Editor ZIP 与正式游戏目录，在 Ubuntu 24.04 runner
-检查全部 ELF 和 executable 动态库，并加载 Engine 与游戏；普通发布直接检查最终包，
-隔离 SDK 的容器复核移到手动 **Verify Linux Download**，复用现有 ZIP。
-游戏验证传入 `game.haku` 文件；无游戏快照的 Editor 包验证 native-smoke 开发工程目录。
-容器验证不声称窗口、GPU 或音频验收；完整真机 benchmark 仍单独运行。
-
-CI 耗时审查的原始基线：Release Engine #61 Linux，`cargo build --release --locked
---no-default-features --features publisher --target-dir target/runner` 828s，
-`target/runner/release/keine bundle ... --benchmark` 935s，最终容器检查 31s。
-该运行用的是旧 CI 的 `8c5d04e`，cache miss 且验证失败后没有保存 cache；不是修复版
-手动 tday #60（`7c81f94`，四平台及发布已成功）。实查缓存总量约 9.45 GiB，单个
-Linux CI cache 4.44 GiB。调整缓存副本/调试信息、publisher 构建和过时发布拦截，
-详见 [发布 guide](release.md#ci-成本与失败重试)。这些是结构性修复；新配置的实际
-编译耗时、cache 大小和命中率需远端运行后比较，不声称已实测提速。
-Windows Editor 的旧自动构建另在打包后出现 WinError 14001；将真实 DLL 私有 assembly
-绑定检查前移到 SDK 安装后，并将两端身份明确为当前发行目标 amd64。本机未执行
-Windows activation context；仍需 Windows runner 验证，不将静态检查记为该错误已修复。
-
-## 表达式诊断与深度预算
-
-在 `1dc025b` 上复现 `scene x { let a = ) == 1 }`：分组分类栈弹空后
-`last_mut().unwrap()` panic。现在多余、错配及未闭合括号返回准确行/列诊断，
-插值诊断也映射到实际出错 token；Editor 投影可报告错误，修正源码后恢复正常 blocks。
-
-`MAX_EXPRESSION_DEPTH = 64` 由 core model 统一定义；原生 parser 限制递归嵌套，
-并在构造时迭代检查树深度，覆盖无括号的长二元运算、索引和 `.length` 链。
-typed 求值逐层检查实际访问的子表达式（短路规则保留），超限返回
-`ExpressionTooDeep`；兼容字符串求值仅补相同递归保护，不扩展语义。
-回归覆盖 64/65 层与 4096 次嵌套、一元运算、列表、索引、二元链、插值及 Editor 修正恢复。
-
-```sh
-cargo test --offline -p keine-loader expression_ -- --nocapture
-cargo test --offline -p keine-core
-cargo test --offline -p keine-editor malformed_expression_projection_recovers_after_source_correction
-cargo test --offline --workspace --features publisher,video-native,hot-reload
-cargo check --offline --workspace --features publisher,video-native,hot-reload
-cargo clippy --offline --workspace --all-targets --features publisher,video-native,hot-reload -- -D warnings
-cargo check --offline -p keine --no-default-features
-cargo build --offline -p keine --features publisher,video-native,hot-reload
-target/debug/keine validate tests/fixtures/native-smoke
-target/debug/keine validate projects/tday
-target/debug/keine --version
-```
-
-验证：专项 Loader 3 passed、Core 123 passed、Editor 1 passed；工作区
-1051 passed / 21 ignored / 0 failed（包含沙箱外 IPC/Trash）；check、Clippy
-与无默认功能 check 通过；当前 Engine debug 构建通过，native-smoke 与 tday 均零警告，
-`--version` 输出 `Kēne 0.14.2`。依赖版本、IR schema 与 Save v11 未改变。
-原生 Editor 交互、Windows/Linux/Android 运行态及 release 二进制尚未复验；
-以上表达式预算不作为嵌套 statement 或编译包反序列化的完整防护证明。
-
-## 发行声明合并与 Android 沉浸模式
-
-- 桌面游戏包、Editor 安装包、Build 临时导出和 Android APK 共用单个发行 `NOTICE`。
-  完整保留引擎许可、原署名、字体文本、已收集的 native 版权/专利/源码地址和游戏版权；
-  工程根目录的 `LICENSE` 作为 `GAME-LICENSE` 章节，不再额外复制 `TDAY-LICENSE`。
-  Editor 导出沿用已安装 Engine 的 native SDK 声明；项目声明通过受根目录约束的 mount 有界读取。
-  Android staging 清除之前生成的零散文件，游戏包之后重建引擎测试包不会残留游戏版权。
-- Activity 补上系统导航栏隐藏，创建、恢复及获得焦点时应用；API 30+ 使用原生
-  WindowInsetsController，API 26–29 使用 immersive sticky，无新增 AndroidX/Kotlin 依赖。
-  系统边缘滑动仍可临时呼出导航栏；不拦截 Home/返回手势。
-
-验证：workspace publisher/video-native/hot-reload tests 为 1046 passed / 21 ignored / 0 failed
-（IPC/Trash 在沙箱外运行）；workspace all-targets Clippy、check、fmt 和 diff 检查通过。
-Python 包装回归 13 passed，覆盖原文/换行完整保留、缺失或截断 native 文本拒绝、缓存清理、
-游戏→引擎声明切换、Linux/Windows SDK 版权合并。native-smoke 0 warnings。
-Android 离线 debug/release 组装与 lintDebug 通过，两份引擎 APK 的 assets 只有 `NOTICE`；
-使用既有 tday 密文资源重组的 release APK 通过完整内容/图标/入口/16 KB 校验，
-声明根目录只有 `NOTICE`，包含完整 shiftz 游戏版权。macOS Editor app 组装、签名及内置声明检查通过。
-APK 包装验证复用了已有原生库，未重新编译当前分支的 ARM64 原生库或覆盖安装手机；
-Pixel 的手势条隐藏、临时呼出、输入法及系统文件选择器/前后台恢复仍待新版实机验收。
-Windows/Linux 发行目录通过包装回归检查，未在对应系统重新组装或原生运行；远端 CI 未触发。
-
-## 演出中存档与音频输出恢复
-
-- 普通新槽位、覆盖存档和快速存档共用即时检查点选择：现场可完整恢复时保存现场，
-  否则保存最近一个可恢复 action 边界。创建瞬态演出前捕获边界，连续 forward batch
-  中的变量修改保留，读档重新执行演出入口；不推进现场、不等待演出结束。
-- 同 Program 检查点才能回退；缺少/外部 Program 检查点不覆盖已有槽位。
-  回退卡片文本取检查点的当前/上一句，删除旧缩略图且不截取较晚现场；Save v11 不变。
-- Bevy 音频同版 patch 保留逻辑 mixer、Player 和解码器，只重建设备 stream。
-  回归覆盖无设备静音、不推进源位置、断流恢复、暂停与音量保留、不同物理格式、
-  Windows 无错误的默认 endpoint 切换、CoreAudio 健康路由不重建、退避上限。
-  淡化时钟按健康 stream 提交时间计算，输出缺失不会消耗淡入/淡出或持续要求重绘。
-
-验证命令：
-
-```sh
-cargo test --workspace --features publisher,video-native,hot-reload
-cargo clippy --workspace --all-targets --features publisher,video-native,hot-reload -- -D warnings
-cargo clippy -p keine --no-default-features --all-targets -- -D warnings
-cargo ndk -t arm64-v8a -P 26 clippy --locked -p keine --lib --no-default-features --features ui-sounds -- -D warnings
-cargo deny --all-features check
-target/debug/keine validate tests/fixtures/native-smoke
-target/debug/keine validate projects/tday
-```
-
-验证结果：workspace 1043 passed / 21 ignored / 0 failed（IPC 在沙箱外运行）；
-fmt、workspace all-targets Clippy、Engine debug 构建、Android ui-sounds Clippy、
-all-features cargo-deny 通过。native-smoke 与 tday validate 均为 0 warning。
-无默认音频的 all-targets Clippy 覆盖关闭 Rodio 直接依赖的测试边界。
-
-当前手机截图及用户确认定位到旧版“当前演出结束后才能保存”提示。
-自动回归不能代替新版手机实际存档/读档、蓝牙/有线/USB 切换听感、Windows/Linux
-原生默认设备切换、Android 前后台路由和恢复时间验收。未覆盖安装当前手机 APK。
-
-
-## 应用图标派生
-
-release 图标校验回归：本地 `assembleRelease` 复现源码路径被替换成 `res/BW.xml`、`res/TO.png`，
-旧脚本失败；校验改为沿 manifest ID → compiled resource table → adaptive XML → foreground → bitmap。
-修复后同一 release APK 和 debug APK 均通过 `verify-icons.py --apk`。
-`python3 -m unittest discover -s tests/packaging -p 'test_*.py'`：8 passed，覆盖原路径/缩短路径、
-资源名不同、悬空 manifest 引用、缺失 bitmap 和错误密度尺寸；Android workflow actionlint 通过。
-CI Android 增加同一原生库的 release 包资源校验；不关闭 AAPT2 优化，也不跳过图标检查。
-同一次 `clean assembleDebug assembleRelease lintDebug` 使用派生资源通过，release APK 的 16 KB ZIP 对齐通过；
-fmt、workspace check/all-targets Clippy、publisher/video-native/hot-reload workspace tests（1016 passed / 21 ignored）
-和 native-smoke validate（0 warning）复验通过。此处不代表新远端 tday release 已发布或手机画面验收。
-
-`cargo test --workspace --features publisher,video-native,hot-reload`：1016 passed / 21 ignored / 0 failed
-（IPC/Trash 在沙箱外运行）。同组合 fmt/check/all-targets Clippy、Engine/Editor debug 构建、
-无默认功能 + ui-sounds 的 Android Clippy，以及 all-features cargo-deny 均通过；native-smoke validate
-为 1 scene / 1 action / 1 source / 0 warning。
-PNG/WebP 回归覆盖派生一致性、透明隐藏 RGB 不产生彩边、尺寸/输入大小限制、路径越界/缺失、
-原工程不改写、发行配置移除图标源引用及临时导出保留图标。包装 Python 测试 4 passed。
-
-`python3 dev/scripts/build-icons.py target/icons-final-review` 与 `verify-icons.py --icon-dir target/icons-final-review`
-通过；macOS `iconutil -c iconset` 可读取生成的全部 ICNS 条目。
-现有 JDK/SDK/Gradle 离线运行 `assembleDebug lintDebug -PengineIconDir=.../target/icons-derived-review/android`
-通过；`verify-icons.py --apk .../app-debug.apk` 检查实际 adaptive 资源和 manifest，zipalign 16 KB 检查通过。
-workflow actionlint 通过（本地规则补充已有 ubuntu-26.04 runner 名称）。
-这些是格式、构建与包内容证据；Windows EXE/桌面、Linux 应用菜单、macOS Dock 及 Android launcher
-的实际显示尚未重新目测；远端新 CI 未触发，APK 未覆盖安装到手机。已有 Android 缩略图/滑块修改保持不变，tday 未改写。
-
-## UI 模块与资源页
-
-Editor 的面板状态与视图归各功能模块，工作台保留分派、Dock 和共享输入；文件/场景名
-Enter 提交移到输入事件，回归确认渲染不提交、Enter 只提交一次，且不改原剧本。
-Engine 的 Settings、Save/Load、Dialog 分离 state/view/actions/motion/sync，保留系统入口与顺序；
-槽位截图仍在 UI，后台编码和落盘归 storage，沿用有界队列与代际保护。
-
-存档截图相机复用 `DesignViewport` 的逻辑画布尺寸，排除手机宽屏/桌面窗口的 letterbox；
-回归覆盖 3168×1440、HiDPI、宽屏及高窗口的取景范围和 480×270 目标。
-滑块数值气泡同时读取捕获的拖动状态，回归覆盖实时更新、仅当前滑块显示、松手隐藏和鼠标悬停。
-`cargo test --workspace`：947 passed / 21 ignored / 0 failed；fmt、workspace check/all-targets Clippy、
-Android Clippy 与 release APK 校验通过。修复包已同签名覆盖安装，Vulkan 启动日志正常；
-用户已确认手机滑块气泡持续显示、实时更新和松手隐藏正常；新存档缩略图仍待实测，
-旧缩略图须重新存档生成。
-
-Assets 增加可移除筛选标签、结果/选择计数、导入及多选操作、空结果提示和状态跳转。
-回归确认清除筛选保留视图偏好与跨筛选选择。macOS 原生新版已检查统计卡、搜索无结果及恢复、
-Missing 筛选、多选/清除选择，以及约 190 逻辑像素窄栏中计数完整、操作按钮整组换行。
-导入/删除沿用已有事务回归，本次未在真实工程执行；Engine 菜单及 Windows/Linux 原生视觉未复测。
-
-`cargo test --workspace --features publisher,video-native,hot-reload`：993 passed / 21 ignored / 0 failed；
-IPC 沙箱权限失败后完整放行重跑。fmt、上述组合的 workspace check/all-targets Clippy、
-无默认功能 + video-native check、Engine/Editor debug 构建通过；native-smoke validate 为
-1 scene / 1 action / 1 source / 0 warning。tday、依赖清单和 lockfile 未改动；
-验证偏好已逐字节恢复，临时 App 已清理。模块拆分不作为性能提升的证据。
-
-## Editor 动效
-
-展开/收起 UX：资源统计卡、资源筛选分组、文件树和搜索分组共用 160 ms 可反向过渡；
-统计卡/筛选复用 GPUI 的测量展开，文件树/搜索用实际动画行高的前缀位置做可见区裁剪。
-Block 右键菜单补淡入/淡出及关闭任务代际保护，旧菜单动画和 Build 旋转遵循减少动态效果。
-检查范围与即时反馈规则见 [Editor 交互](editor.md#交互)。
-GPUI 回归覆盖资源统计卡带动实际列表 viewport、快速反向无跳变、窄栏换行重新测量、
-减少动态效果直接到达端点、Block 菜单关闭后快速重开不被旧任务清除；几何边界覆盖
-部分行高、零高行、空列表及滚动底部。Computer Use 未发现可操作的运行中 Editor；
-fmt、workspace check（publisher/video-native/hot-reload）、all-targets Clippy、
-workspace tests 992 passed / 21 ignored（IPC 在沙箱外）及 Editor debug 构建通过。
-原生动效目测仍待重启新版，三平台的验收不由这些布局测试代替。
-
-Block 插入弹窗：180 ms 轻微上移淡入、90 ms 关闭淡出；右上角 X 与 Esc/Tab/选择条目共用关闭流程，
-沿用 Editor 动画和减少动态效果设置。Favorites 置顶并默认打开，All 放底部；预置常用收藏，
-收藏按自身顺序显示。自定义列表改为拖动柄排序，复用 Block 预览卡、200 ms 位移插值和边缘滚动，
-占位让位后只在松手保存偏好。GPUI 鼠标回归覆盖跨分类多位置移动、拖动中不写入、
-外部取消、分类切换使拖动失效、点击不插入剧本及偏好落盘；位移回归覆盖中途改目标连续性。
-持久化回归覆盖旧收藏保留、旧空收藏补入默认及新版主动清空。fmt/check、workspace all-targets Clippy、988 项工作区测试
-（21 ignored，publisher/video-native/hot-reload，IPC 在沙箱外）与 Editor debug 构建通过。
-Computer Use 未发现可操作的运行中 Editor；本次未做原生拖动/动画目测，Windows/Linux 交互仍待实机验收。
-
-设置页数据管理简化为“还原设置 / 清除存档”，保留分别确认，移除整项目数据清除入口及其专用路径。
-简体、繁体、日语、英语的标题、按钮和确认文案已同步；存档清除沿用保留设置的现有回归。
-workspace tests（publisher/video-native/hot-reload）984 passed / 21 ignored，fmt、check 和
-workspace all-targets Clippy 与 Engine debug 构建通过；IPC 在沙箱外运行。本次界面尚未原生目测。
-
-Editor 关闭确认：统一 macOS NSAlert 的 1000 起始返回值与 GPUI 的零起始按钮索引，
-修复 Close Without Saving 被当作 Cancel；共享流程中恢复草稿写入失败不再取消不保存关闭。
-真实 GPUI 窗口回归覆盖 Cancel 保留窗口/修改、Save and Close 保存并移除窗口、
-不保存关闭不改源文件，以及恢复目录不可写时仍关闭；后一边界在修复前复现失败、修复后通过。
-workspace tests（publisher/video-native/hot-reload）985 passed / 21 ignored，fmt、
-workspace all-targets Clippy 与 Editor debug 构建通过；IPC 在沙箱外运行。
-macOS 新 Editor 原生已验证 Cancel 后保留草稿，再选择不保存关闭后进程退出；
-Windows/Linux 原生弹窗尚待新构建复测。临时 app 与验证产生的 Editor 偏好/恢复记录已清理或恢复。
-
-对白排版：默认字号及 tday 显式字号 45→43，字形行高 1.2→1.1 倍，flex 行间距
-10.5→2.5 设计像素；保留原文本框尺寸和按钮位置。macOS 新 Engine 用截图中的三行
-实际文本检查，第三行完整且不覆盖底部按钮。workspace tests（publisher/video-native/hot-reload）
-983 passed / 21 ignored；fmt、all-targets Clippy、Engine debug 构建与 native-smoke validate 通过。
-临时验证剧本已逐字节恢复，临时 app/存档已清理；Windows/Linux 排版未实机复测。
-
-## 窗口与菜单输入
-
-Android 触摸由一个共享 owner 捕获，控件和列表不转为导航；设置 tab 仅点击切换，左右划识别已移除；剧情上划 backlog、
-backlog 正文拖动滚动及系统返回复用现有屏幕操作。回归覆盖轻点松手只推进一次、上划不推进、
-多指/取消/失焦/路由与剧本变化/边缘拒绝、折返与斜划、控件/列表不导航，以及 HiDPI 滑块
-拖出轨道仍夹取自身数值、拖动中不写盘、松手与弹窗打断才持久化。
-控件松手才点击，拖动不触发起点按钮；命中回归覆盖父级裁剪和层叠遮挡，滚动 owner
-仅识别实际 scroll overflow。手势超时使用单调时钟，不随游戏时钟暂停或唤醒重置改变。
-`cargo test --workspace --features publisher,video-native,hot-reload`：1008 passed / 21 ignored / 0 failed；
-系统回收站/IPC 在 macOS 沙箱外重跑。fmt、workspace check/all-targets Clippy、Android
-`cargo ndk -t arm64-v8a -P 26 clippy --locked -p keine --lib --target-dir target/android --no-default-features --features ui-sounds -- -D warnings` 通过。
-
-唤醒动画回归用 `cargo test --lib waking_animation_does_not_consume_sleep_from_the_render_clock -- --nocapture`：
-模拟两条休眠前渲染时间戳，修复前新动画第二帧吃进 250 ms；恢复时清空队列并重置真实时钟后，
-60/120 Hz 的步进分别为 16.667/8.333 ms，两者 100 ms 累积进度一致。原始输出在
-`target/android/animation-wake-before.log` 和 `target/android/animation-wake-after.log`。
-保持菜单原时长；手机反馈确认动画、滑块、返回、剧情上划与退出重开正常；左右划切 tab
-未通过，按用户要求完全删除。最终测试 APK 的 JNI 返回入口、
-ELF LOAD/RELRO 与 APK 16 KB 对齐、签名、空 Java runtime classpath 均通过；已安装到
-Motorola 测试机，`target/android/gestures-phone-final.log` 确认 Native Smoke ready / Adreno 829 Vulkan。
-该 fixture 仅一句对白，不能作为长 backlog 列表滚动的真机验收。
-
-设置页避免重复写 `Node.display` / `UiTransform`，保持原动画。原始前后命令相同：
-`cargo test --lib settled_settings_panels_do_not_dirty_layout -- --nocapture`；60 次静止帧更新后，
-每帧被标记布局变化的面板从 4 个降为 0 个。
-原始输出在 `target/android/tab-layout-before.log` 和 `target/android/touch-regression.log`；
-移除左右划后的回归在 `target/android/no-horizontal-tests.log`；覆盖设置/Save/Load 横划无导航，
-以及菜单空白处不触发下层控件。
-这证明重复变更已消除，不代表手机切 tab 的帧率；移除左右划后的测试包仍需单独确认。
-
-Android 后台恢复：旧包日志显示 Home 后点击桌面图标以 LAUNCH_MULTIPLE 新建第二个
-EngineActivity，随后进程被结束。入口改为 singleTask，复用活动中的 Activity；本次目标为
-保留进程内当前界面/剧情，不新增冷启动自动恢复。安卓导入/导出使用 SAF 文档选择器，
-JNI 转交唯一文件描述符，公共存储逻辑支持无 seek 的有界流。回归覆盖桌面/流格式互通、
-读取失败时恢复旧事务、截断/无效备份保留旧数据、导出 flush 失败。最新完整测试在
-`target/android/backup-tests.log`，check/Clippy 和 all-features cargo-deny 均通过；
-增加的直接 jni 依赖已有于锁文件闭包中，没有新增 crate 或 Java runtime 依赖。
-最终 APK 构建、Java lint（0 errors / 5 既有 warnings）、16 KB/签名/JNI/singleTask 检查通过，
-Java runtime classpath 为空；已安装，21 个既有用户数据文件逐个 SHA256 一致。
-打包检查记录在 `target/android/backup-package.log`，真机运行记录在
-`target/android/backup-phone-runtime.log`。用户确认后台往返和移除横划正常；系统日志也确认
-桌面图标两次复用活动中的进程（LAUNCH_SINGLE_TASK）。清除最近任务后系统 remove task
-结束进程属于冷启动边界。设置按钮漏点阻挡了文件选择器测试，导出/导入/取消仍未验收。
-漏点专项重现了透明 MenuHeader 整页容器误捕获，以及普通按钮被 800 ms 手势超时拒绝；
-触摸现在遵守 FocusPolicy::Pass/Block，按钮松手点击保留拖动/裁剪/遮挡检查但不受手势超时限制。
-专项前后原始记录为 `target/android/control-pass-before.log` / `control-pass-after.log`，
-按住超过两秒的旧版失败记录为 `target/android/control-hold-before.log`；修复后的同一系统回归通过。
-修复后完整 workspace 回归仍为 1008 passed / 21 ignored / 0 failed，记录在
-`target/android/control-pass-tests.log`；workspace check/Clippy、Android Clippy、fmt/actionlint 通过。
-新 APK 的 JNI/16 KB/签名/singleTask 与 Java lint 检查通过，记录在
-`target/android/control-pass-package.log` / `control-pass-java-lint.log`。本机 ADB 在沙箱内
-无法创建 USB interface plug-in；沙箱外重启后恢复通信，已安装新包，21 个用户文件校验一致
-（`target/android/continue-phone-{before,after}.sha256`）。漏点修复与备份文件选择器的
-最终真机验收待用户确认，日志在 `target/android/control-pass-phone-runtime.log`。
-
-非 Stage 右键使用现有 Esc 返回路径；Stage 仍只切换文本框，存档删除改为悬停后 Delete 并确认。
-窗口正常关闭时单独保存大小、位置与最大化状态；首次打开适配显示器，恢复时处理 DPI 改变、
-显示器移除及越界位置，不把全屏/最小化尺寸写成普通窗口大小。benchmark/隐藏启动不受此策略影响。
-Wayland 的窗口位置由合成器决定，Windows/Linux 原生恢复与首次显示尚待实机复测。
-
-Load 重建卡片时立即套用当前透明度，修复缓存跳过更新造成的不透明首帧；内容与背景使用同帧淡入进度。
-回归覆盖重建首帧、各菜单返回、窗口边界/DPI/显示器移除、持久化与只读会话。
-`cargo test --workspace --features publisher,video-native,hot-reload` 为 983 passed / 21 ignored
-（IPC/Trash 在沙箱外运行）；最终全屏保护调整后窗口专项 6 passed。
-fmt、workspace all-targets Clippy、上述功能组合 check、无默认功能 + video-native check、
-Engine debug 构建及 native-smoke validate（0 warning）通过。
-macOS 原生已检查设置/Load 右键返回、标题退出确认及取消、Stage 右键不推进对白；
-1404×790 窗口移动、关闭重开与全屏往返后保存的边界逐字节一致。
-Load 重开已观察正常显示，首帧修复由回归验证；不将静态截图记作逐帧闪屏验收。
-本次临时 app 和 native-smoke 生成的存档已清理，tday 未改写。
-
-## 发布渠道验证
-
-缓存 key 单独将 feature 分隔逗号编码为连字符，Cargo feature 参数保留原值；Release 与
-Project Release 的 key/restore-key 已按三平台、三个 feature 组合验证。Linux Editor 打包
-保留已复制库到原 SDK 文件的来源映射，新增回归覆盖第二个 executable 的 RPATH 复用及
-未解析依赖拒绝。上次 CI 成功，Release 三平台缓存失败；Editor macOS/Windows 成功、
-Linux 来源查找失败，修复后的远端构建和附件发布尚待确认。
-
-`Release` 分开发布 benchmark 自动包与 tday 手动试玩；`Editor Release` 发布独立
-Editor + 同版本 Preview。actionlint 1.7.12 对本次两个 workflow 检查通过，shell 语法与
-Python 编译检查通过。用本轮已构建的 macOS debug 二进制执行 `package-authoring.py`，
-产出单个 App；ZIP 解压后两 executable 的执行位、`codesign --verify --deep --strict`
-和内置 Engine 的 native-smoke validate 均通过（1 scene / 1 action / 0 warning）。
-输出目录冲突被拒绝，未覆盖已有包；无游戏包/私钥文件。此次没有另建持久化安装 App。
-这些证据确认打包布局，不等于 release profile、Windows/Linux 动态库打包或 GUI 验收通过；
-远端三平台构建和下载更新须按实际 Actions 结果核对。此前 engine/editor 回归结果见下文。
-
-## 剩余事项与分工
-
-本轮审计、预取预算、密钥文件改名、跨平台废纸篓与进程采样已实现。
-Windows/Linux 新代码已交叉编译；三平台 CI 的运行结果须按本次推送的提交核对。
-下面列的是实际剩余动作；已通过的本机输入、拖放、音频循环和全屏目测无需重新整轮验收。
-
-迁移资源分类修复：workspace（publisher，含默认音频）835 项通过、8 项性能测试忽略；
-fmt/check/clippy、native-smoke 与 tday 校验通过。回归覆盖背景层分类、同路径别名去重、
-sprite 引用背景及错误音频类型拒绝、Editor 增量引用计数和资源选项。tday 的 45 张误分类背景
-已移动并更新清单，保持文件字节、ID 和剧本不变；新 Editor 的目录、预览和资源下拉已目测。
-完整剧情验收仍按下表安排。
-
-迁移文件名与 Explorer 排序：publisher workspace 856 passed / 8 ignored，fmt/check/Clippy、Editor 构建、native-smoke 与 tday validate 通过。回归覆盖源文件名/子目录保留、中文路径、大小写重名、路径隔离，以及入口优先、场景自然排序、多场景文件和增量更新。现有 tday 的 84 个资源恢复原名，168 个原素材/转换成品 SHA256 和 13 个剧本均未变，ID 与引用保留；新版 Editor 已目测原名缩略图、`bedroom.opus` 及全部 13 个剧本的排列。tday 保留 1 条未引用背景警告。
-
-章节接续与右键菜单：publisher workspace 857 passed / 8 ignored，fmt/check/Clippy、Editor 构建及 native-smoke 校验通过；追加菜单焦点修正后 Editor Clippy 和 208 项测试通过（7 项性能测试忽略，IPC/Trash 放行重跑）。线性章节隐式结束回归覆盖下一章、空末章、禁用章、预处理与辅助 fragment 返回；迁移后的实际执行覆盖主线→支线→返回→下一章→结束。当前 tday 的 13 个剧本仅追加章末 goto/结束，删除新增内容可逐字节恢复原正文；validate 为 13 scene / 2659 action，保留原有 1 条未引用背景警告。macOS 新版实测微小滚动不关闭菜单且不滚动下方卡片，点击外部和 Esc 正常关闭；Preview 从 start.shou 章末进入 1.shou，下一章画面、对白及 Editor 文件定位正常。完整剧情仍由用户后续验收。
-
-tday 图片复用清理：逐文件 SHA256 与解码后 RGBA 核对，50 张登记图片中 15 份完全重复；合并 19 处引用后为 35 张图片、69 个资源，保留场景参数和当前正文。重复原素材/成品移到 `projects/.backups/tday-image-merge-20261004`，保留文件哈希未变。validate 为 13 scene / 2659 action / 0 warning；Editor 已显示 69 files / 136.6 MB。登记媒体由 177,273,165 降至 143,211,885 bytes；使用隔离测试密钥执行 `target/debug/keine pack projects/tday --output target/authoring/tday-image-merge-{before,after}`，两次成功，实际 `.haku`/`.taku` 合计由 143,371,230 降至 143,369,230 bytes，仅减少 2,000 bytes：现有 Hakutaku 已按内容去重，此次没有修改引擎。
-
-Build 临时试玩导出：`cargo check --workspace --features publisher`、
-`cargo clippy --workspace --all-targets --features publisher -- -D warnings`、
-`cargo test --workspace --features publisher`（862 passed / 8 ignored；IPC 放行沙箱重跑）、
-Editor 与含 publisher/video-native 的 Engine debug 构建通过；native-smoke 与 tday validate
-分别为 1 scene / 1 action、13 scene / 2659 action，均无警告。
-macOS 新 Editor 从 Build 选择目录导出 tday，显示 Export ready；输出 13 个剧本、69 个媒体及
-4 个 YAML，86 个项目文件均与源文件 SHA256 一致，未复制原素材或私有文件。
-导出的 Game.app 独立启动，标题菜单、Start 后的排练室背景与对白已目测。
-目录冲突、越界路径、失败清理和开发版默认工程查找有回归；Windows/Linux 实机导出、
-音视频与完整剧情未验收。临时试玩不使用发行密钥，正式发行仍按 release.md 的 bundle 流程。
-
-背景转换 Q80：`cargo test --workspace --features publisher` 为 862 passed / 8 ignored，
-Clippy、fmt、Editor 构建以及 native-smoke/tday validate 通过。导入回归覆盖 Q80 有损编码、
-尺寸/透明度/ICC/EXIF 保留、只读原文件和立绘/粒子无损编码；已有合规 WebP 仍直接复制。
-tday 的 31 张背景用 `cwebp -q 80 -m 4 -alpha_q 100 -metadata icc` 从匹配的原 PNG 转换，
-登记背景由 70,275,364 降至 4,444,576 bytes，全部媒体为 77,381,097 bytes。
-124 个其他项目文件哈希未变，原 WebP 备份在 `projects/.backups/tday-background-q80`。
-新版 macOS Editor 已显示 69 files / 73.8 MB（界面使用二进制单位），夕阳背景预览正常。
-检查时误触重置布局产生重复栏目，已修复重置遗漏外围 dock 的问题，并恢复三列布局。
-旧试玩导出仍保留旧资源，需重新导出；本轮没有新 release 包或完整剧情验收。
-
-引擎快捷键：publisher workspace 868 passed / 8 ignored，无默认功能 + video-native
-的 Engine lib 282 passed / 1 ignored；fmt、workspace Clippy、含 publisher/video-native/hot-reload
-的 workspace check 与 Engine debug 构建通过。Ctrl 按住自动播放、松开停止，保留正常打字
-速度与自动播放间隔；A/Ctrl+A 快捷键取消，画面自动播放按钮保留。回归覆盖持续按键不重启
-自动播放计时、组合键抑制、输入框/弹窗/加载隔离、失焦后不恢复自动播放、弹窗中的停止，
-右键只在舞台切换文本框且不推进对白，以及 Esc 和全屏状态切换。
-macOS 新 Preview 已目测右键隐藏/恢复文本框、A 不激活自动播放；此前已目测 H 文本框开关、
-B 历史、Esc 设置与关闭、F5/F9 确认框及取消、F11 全屏往返。Ctrl 持续按住与输入框边界由回归测试验证，
-未执行物理键盘持续按键及 Windows/Linux 原生快捷键验收；键位见 readme.zh.md。
-
-### 常用创作能力收尾
-
-原生粒子稀疏控制、blink/talk 帧序列、角色清单编辑入口，以及迁移的条件/选项、
-候选素材登记、静态头像、BGM loop、富文本和未知时间轴诊断已实现。
-本轮 `cargo test --workspace --features publisher` 为 879 passed / 8 ignored；
-Unix socket 测试先被沙箱阻断，放行后完整重跑通过。
-`cargo check --workspace --features publisher,video-native,hot-reload`、workspace Clippy 和 fmt 通过；
-`cargo test -p keine --no-default-features --features video-native --lib` 为 284 passed / 1 ignored，
-最终粒子颜色 alpha 修正后 10 项粒子回归通过；native-smoke validate 零警告。
-回归包含分支内变量改变不执行 else、有序赋值失败不部分提交、空选项继续、
-迁移→原生解析→执行、动态帧边界、blink 休息保持低频计时、粒子数量上限/零速有限值、
-GPU 颜色透明度与缓冲更新、Save v11 瞬态回放标记及回滚保留参数。
-
-Editor debug 构建与本地 app 组装通过。Computer Use 两次读取新版 app 超时，
-本轮未完成原生界面及动画目测；此限制不算 GUI 验收通过。
-未做新的 CPU/帧时采样、完整剧情或 Windows/Linux 原生运行验收；不主张性能提速或完整上游兼容。
-`projects/tday` 未改动。新能力使用方式及明确的导入边界见 language.md / compatibility.md。
-
-Editor 补全与角色维护已补齐：复用 Loader 命令/参数表，原生候选支持命令、上下文参数、
-资源原文件名/ID、角色、章节、变量及合法值；悬停提供参数提示。Inspector 原子切换动态序列模式，
-角色面板支持增改删、对白引用、头像/表情帧关联、批量图片登记和显式剧本插入。
-0.13.0 的 `cargo test --workspace --features publisher` 为 889 passed / 8 ignored，IPC/Trash 测试在沙箱外执行；
-`cargo check --workspace --features publisher,video-native,hot-reload`、
-`cargo clippy --workspace --all-targets --features publisher -- -D warnings` 与 fmt 通过。
-Editor debug 构建和 app 组装通过；`keine validate tests/fixtures/native-smoke` 为 1 scene / 1 action / 0 warnings。
-macOS 原生实测自动候选、Enter 接受、Esc 关闭及 Alt+/ 手动菜单；Ctrl+Space 在本机未触发，
-可能受到输入法快捷键拦截，保留 Alt+/ 备用入口。实测角色新增、改名、删除确认，以及空根清单 `{}`
-的首次新增；在既有临时工程中选图登记表情/头像并在记忆的剧本位置插入 Show，原文保持完整。
-验收输入已丢弃，fixture 和 `projects/tday` 未改动。中文已提交文字输入正常；本轮未重做物理 IME
-组词验收，组合态保护由 GPUI 事件路径和回归覆盖。blink/talk 的新界面入口有解析/参数联动回归，
-动态画面尚未目测；场景构图、时间轴和变量调试按用户要求暂缓。
-
-DL1 与依赖许可门禁：cargo-deny 0.20.2 的 `--locked --all-features check advisories licenses bans sources`
-通过，保留上游重复版本/路径依赖警告；DL1 条款与官方原文一致，仅替换版权主体。
-fmt/check/Clippy、publisher workspace 889 passed / 8 ignored、无默认功能 + video-native
-284 passed / 1 ignored 通过；IPC/Trash 测试在沙箱外执行。最新 publisher 组装回归、workspace
-bins 构建与 native-smoke 零警告通过。macOS Editor/Engine 开发 app 的三份许可文件逐字节匹配，
-ad hoc codesign 验证通过；未执行正式签名/公证、远程 CI 或跨平台发行验收。
-合成字体只改变 name/head 表，其余 13 个表的 SHA256 未变；没有主张新的 GUI 目测验收。
-第三方正式发行许可清单和字体来源验证边界见 [发布](release.md#许可证与发行署名)。tday 未改动。
-
-### 项目所有者（用户）
-
-| 何时 | 你要做什么 | 完成标准 |
-|---|---|---|
-| 后续剧情验收 | 在 Editor 打开 `projects/tday`，从入口播放完整剧情，检查分支、画面、字幕、BGM/SE/语音及自动/手动继续。问题反馈带章节、场景或 Block 编号、操作步骤和预期结果 | 确认剧情与视听效果符合原工程意图；缺失的 3 个 SE 按已批准方案跳过并标注 |
-| 有多屏设备后 | 提供可测试的显示器与缩放配置，协助跨屏移动 Editor/Preview、切换全屏并检查输入与坐标 | 开发者完成跨屏复验并记录配置与结果；此项继续延后 |
-| 正式发行前 | 决定发行平台与时机；备份游戏 `publisher.key`；发行 macOS 版时准备 Developer ID Application 证书与 notarytool Keychain profile，提供名称供打包使用 | 发行凭据就绪；具体准备步骤见 [发布](release.md#发行前的用户准备) |
-| 准备收尾时 | 审阅当前改动并明确授权提交/推送 | 开发者完成提交、推送及 CI 核对；不需要你手动修改引擎代码 |
-
-### 后续开发者 / 维护者
-
-| 工作 | 具体动作 | 完成标准 |
-|---|---|---|
-| 集成收尾 | 审查当前 diff，保留无关修改，按下方门禁复验；用户授权后提交推送，检查 Linux/macOS/Windows CI，修复真实失败 | 记录提交 SHA 与 CI 结果；不能把本机交叉编译当作远程 CI 通过 |
-| Extra 页面验收 | 沿用下方已实现范围完成各平台鉴赏页验收 | 布局、交互、多语言和实际设备验收分别记录；当前存档与音频恢复的实机验收仍需完成 |
-| Windows/Linux 与显示验收 | 在对应系统原生运行 Editor/Engine；验证入篓→撤销→重做、同名冲突保护、CPU/内存采样与进程重启；检查保存重开、IME、Preview、音视频。用可用设备补测 1× DPI、Preview 极端比例；多屏设备到位后再测跨屏 | 各系统/显示配置分别记录通过、失败与未测；CI 单元测试不能替代 GUI/音视频实机验收 |
-| 独立性能阶段（仍延后） | 复用现有 bench、`cargo perf` 和 portable benchmark，测 Editor 滚动/大文档/搜索、启动与持续 CPU/RSS、Preview CPU/GPU 帧时、粒子全屏/瞬时峰值、媒体流与 Hakutaku I/O；先定位实际热点，再修改 | 同主机、同输入、同 release 配置保留前后原始命令/日志，报告 p99、最大帧时及超过刷新预算的帧数。结合硬件、分辨率和可承受开销评价视觉质量与性能，窗口切换单独标记；平均 FPS 或 p99 单项不能证明零掉帧 |
-| 正式发行 | 在发行副本规范化存量 tday 媒体为 WebP/Opus 并保持 ID/引用，原工程只读；复用稳定 project.id 与 identity，验证并完整打包。macOS 在用户凭据就绪后执行正式签名/公证；测试解压、独立安装启动、Engine discovery、媒体播放、用户数据位置与更新 | 发行包满足生产格式，签名/公证检查通过，包中没有私有 identity；实际安装运行通过后才记录为发行验收完成 |
-
-### Extra 鉴赏页
-
-状态：已实现 CG / 音乐分区；入口为 Engine 的 Extra，主要实现位于
-`src/ui/screens/extra.rs`。保持固定 MainCore 设计语言与原有解锁持久化语义。
-
-- **共用控件**：CG / 音乐位于页面顶部导航，沿用 Config / Load / Save 的字号、图标与背景高亮，分区使用 0.3 秒左右滑动切换。
-  全屏模糊与深色遮罩在打开首帧及切换期间保持，只在关闭动画完成后移除。
-  曲目、播放控件、CG 卡片和翻页按钮复用 Config 的左到右填充与文字状态动画，不缩放整行。
-  深色面板覆盖下方内容区域；进度条铺满面板内的可用宽度，保留左右 padding，
-  滑块保持常规尺寸，时间显示在条下方。
-  播放进度和音量复用同一滑动条视图和值气泡；进度轨道不整体缩放，悬停反馈仅作用于滑块，拖动仍可在整个轨道开始；音量直接修改并保存既有 BGM 设置。
-  音量滑动条不显示标题，与播放控件共用底部一行，靠右并保留 padding。
-  宽屏留黑的鼠标输入与触控输入均使用既有 viewport 转换。
-- **CG**：保持原比例的缩略图、固定上一页 / 页码 / 下一页，避免页数增多挤出控件。
-  翻页左右滑动，旧页保留至过渡完成，不重建模糊底层。
-  全图保留原比例，提供上一张 / 下一张 / 返回与进入、退出动效。
-  Esc、右键和 Android Back 先退出全图，退出动画期间不会穿透关闭整个 Extra。
-- **音乐**：可滚动的长曲名列表、选中状态、曲名与加载 / 不可用提示；正常播放状态由播放 / 暂停按钮表达，
-  保留时间、跳转进度、前后切曲与停止。触控拖动曲目行会滚动，轻点才选曲。
-  鉴赏音乐只暂停正在播放的舞台 BGM；停止、失败或退出只恢复由鉴赏页暂停的实体，
-  原本已暂停的 BGM 保持暂停。失败播放器不持续请求动画帧。
-- **语言与边界**：简中、繁中、日文、英文同步新增文案；空列表和失效资源有提示。
-  `extra.unlock`、存档 fingerprint 和独立解锁持久化规则保持原有语义。
-
-开发验证命令：
-
-```sh
-cargo fmt --all --check
-cargo check --offline --workspace --features publisher,video-native,hot-reload
-cargo check --offline -p keine --no-default-features --features video-native
-cargo clippy --offline --workspace --all-targets --features publisher,video-native,hot-reload -- -D warnings
-cargo test --offline --workspace --features publisher,video-native,hot-reload
-cargo build --offline -p keine --features publisher,video-native,hot-reload
-```
-
-工作区测试 1052 通过、21 忽略，必要回归覆盖首帧零进度保留模糊层、横向分区及 CG 分页过渡、tab 切换保留选择、CG 返回层级与退出动效、
-曲目触控拖动不误选，以及 Extra 音量滑动条的宽屏鼠标坐标与释放后保存。
-IPC 测试在允许 Unix socket 的环境重跑通过；默认沙箱的 PermissionDenied 不算代码失败。
-本轮串行复核全部通过；并行运行曾在既有单实例锁释放测试失败。
-macOS 原生 tday 已检查曲目选中、播放 / 暂停按钮填充、暂停提示隐藏、进度跳转轨道稳定，以及 CG 分页和全图返回。
-使用花背景补验全屏模糊与遮罩，确认 CG 翻页、切换音乐和关闭后重开仍保留背景模糊；引擎已重建并更新本地 Editor 的 Preview 引擎。
-`tday` 临时入口 `extra_preview` 解锁 31 张背景 CG 与六首 BGM；恢复正常剧情入口时将 `config.yaml` 的 `script.entry` 改回 `start`。
-本轮 Windows、Linux、Android 实机交互尚未验收。
-macOS 原生临时工程已检查 9 项 CG 分页、纵向全图比例、右键返回、30 首曲目滚动、
-长曲名、播放 / 暂停、点击跳转进度、音量值提示、失效音乐提示及零解锁的空 CG / 音乐页。
-重开临时工程后原有 CG / 音乐解锁仍保留；音量保存由上述回归测试确认。
-
-待验收：Windows、Linux、Android 原生布局与触控、听感、舞台 BGM 衔接和音频输出恢复；
-极端窗口比例、CG 失效资源、四种语言的长文案、系统手势中断拖动仍需实机检查。
-构建和状态显示不能替代上述视听验收。
-
-维护者只按当前架构与已选政策收尾：Save 仍严格匹配 fingerprint，预取保持现有数量
-限制及 128 MiB 非关键预算，合法包版本回退允许，密钥仅显式轮换。
-不把跨版本存档迁移、自动轮换或额外框架列为欠缺功能。
-状态与证据更新本指南；密钥/发行步骤更新 `release.md`，不另建重复计划或阶段报告。
-
-## 每次集成
-
-从当前 checkout 的分支、worktree list、status、diff 开始。保留未提交修改。
-
-```sh
-cargo fmt --all --check
-cargo check --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cargo validate tests/fixtures/native-smoke
-```
-
-Feature 变更再检查相应 feature；发布者/媒体路径使用：
-
-```sh
-cargo check --features hot-reload,video-native,video-ffmpeg,publisher
-```
-
-Linux 单独运行 `cargo test --locked -p keine-editor --lib` 时，Editor 的测试依赖必须
-自行启用 Bevy `x11`，不能依赖 workspace 构建时引擎的 feature 合并。Linux 依赖树已确认
-包含 `winit/x11`；本机 fmt/check/clippy、publisher workspace 835 项测试通过（8 项忽略）。
-完整 Linux 交叉检查受本机缺少 `x86_64-linux-gnu-gcc` 限制，远程 CI 仍需重跑确认。
-
-### Windows renderer
-
-Windows HD 4600 / `Gl` 旧包已通过远程原生窗口复现：设置/存档页背景清晰且底色缺失，
-启动日志没有 shader 错误。三层相机默认 4× MSAA，已发现后续空透明 pass 的 resolve
-可能覆盖单采样纹理上的模糊和 UI；现统一为 `Msaa::Off`，不更改模糊参数与合成顺序。
-回归覆盖 runtime 与三个 benchmark 相机组合；fmt、workspace check/Clippy、workspace
-866 passed / 8 ignored 通过（IPC 在沙箱外重跑）。macOS Engine debug 构建及 native-smoke
-validate 通过（1 scene / 1 action / 0 warning）；新版 Windows 是否恢复及 macOS 未显现
-异常的具体原因尚待实机比对，MSAA 覆盖尚不能作为此次故障的已验证根因。
-
-Windows shipping / benchmark 编译 DX12、Vulkan 和 OpenGL；原生 GL 复用锁定的
-wgpu 29.0.4 WGL 实现，不附带 ANGLE 或额外渲染 DLL。`bevy_render/gles` 与 Linux
-共用同版本 feature 合并，CI 检查 Windows 三项 backend 均存在。
-启动沿用 Bevy 的 `Backends::all()` 与 HighPerformance 默认值：wgpu 在所有可用
-backend 中按 device type 排序，硬件 GPU 优先于 CPU 软件 adapter，窗口兼容性
-仍由 wgpu 检查。没有自建 adapter 选择器、重启或降级特效框架；显式环境变量
-`WGPU_BACKEND`、`WGPU_ADAPTER_NAME`、`WGPU_FORCE_FALLBACK_ADAPTER` 仍按上游规则生效。
-实现依据锁定源码 `bevy_render/src/settings.rs`、`wgpu-core/src/instance.rs` 和
-`wgpu-hal/src/gles/{mod,wgl,adapter}.rs`；Bevy 0.19.1 文档中的 Windows ANGLE
-说明未反映此锁定 wgpu 的 WGL 实现。
-
-HD 4600 的 Intel Windows 驱动不支持 Vulkan，较新驱动撤销 DX12；OpenGL 是这台
-机器的硬件兼容路径（[Intel API 表](https://www.intel.com/content/www/us/en/support/articles/000005524/graphics.html)、
-[DX12 撤销说明](https://www.intel.com/content/www/us/en/support/articles/000057520/graphics.html)）。
-已有舞台、遮罩和模糊 shader 使用 uniform/纹理采样；粒子
-额外要求 vertex storage buffer（GL 4.3/相应扩展及实际 limits），不能把 backend
-编译通过当作全部 shader 已被该驱动接受。不改变 1920×1080、镜头合成、粒子或特效语义。
-
-实体机先默认运行，再在 PowerShell 中做 GL 对照：
-
-```powershell
-Remove-Item Env:WGPU_BACKEND, Env:WGPU_ADAPTER_NAME, Env:WGPU_FORCE_FALLBACK_ADAPTER -ErrorAction SilentlyContinue
-.\keine.exe
-Copy-Item .\keine-benchmark-report.txt .\benchmark-auto.txt
-$env:WGPU_BACKEND = 'gl'
-.\keine.exe
-Copy-Item .\keine-benchmark-report.txt .\benchmark-gl.txt
-Remove-Item Env:WGPU_BACKEND
-```
-
-核对两份报告的 `GPU` / `GPUINFO` 为实际 Intel adapter（GL 对照应为 `Gl`），
-不是 `Microsoft Basic Render Driver · Cpu`；CPU adapter 的计时只能算软件渲染。
-GL GPU timestamp 未提供时记为 unavailable，不补零。基本包缺少 authored timeline
-时，粒子/特效/压力项仍为 skipped，完整验收必须提供这些时间轴。
-用户原始 Windows 报告 `26100601.txt`（b772dc0）为软件 Dx12：opening continuous
-606.19 ms / 1.6 FPS、scene-only 386.76 ms / 2.6 FPS，不能作为硬件 GPU 基线。
-新版 HD 4600 的 adapter、画面、粒子与性能验收 **NOT TESTED**；测试包需在新提交的
-CI / Release 完成后取得，旧包仅设置 `WGPU_BACKEND=gl` 不会增加未编译的 backend。
-
-本机验证：`cargo check --locked -p wgpu-hal --target x86_64-pc-windows-gnu` 和
-`cargo check --locked -p bevy_render --target x86_64-pc-windows-gnu` 通过，包含 WGL；
-Windows 的 dx12/vulkan/gles、Linux 的 vulkan/gles feature closure 均通过。
-macOS shipping check、publisher/video-native/hot-reload workspace check、publisher
-workspace Clippy、fmt/actionlint/cargo-deny、native-smoke 零警告和采集器 7 项通过；publisher workspace tests
-899 passed / 8 ignored（IPC/Trash 在沙箱外执行）。完整 Windows Engine target check
-在 native C 依赖因缺少 `x86_64-w64-mingw32-gcc` 受阻，仍需 Windows CI；没有新性能
-采样，不宣称比软件 Dx12 的旧报告提升了多少。
-
-### Linux 窗口、renderer 与 portable benchmark
-
-kids（openSUSE Leap 16 / Mesa 24.3.3 / HD 4400）的旧 tday 包在 Wayland/GL
-和 XWayland/GL 均由用户复现 `Fifo, Options: []` 崩溃。SSH 只读检查确认
-Wayland EGL 支持硬件 GL 4.6，但 Vulkan loader 没有可用 ICD；不能要求切换
-Vulkan作为现成解决方案。Bevy 0.19.1 的 instance 初始化固定 `display: None`，
-wgpu 29 的 Mesa EGL 因此进入 surfaceless 分支，生成不能呈现的 surface。
-
-现对官方 `bevy_render` 0.19.1 做局部 vendor patch，游戏和启动错误页均在
-RenderPlugin 前传入 winit owned display；GPU recovery 复用同一连接。
-保留原 public 初始化 API、无窗口调用和后端选择规则；未增加 unsafe 或运行时依赖。
-源文件/上游许可证与差异范围见 `dev/vendor/bevy_render/KEINE-PATCH.md`。
-新增 descriptor 的连接转发/生命周期及无窗口回归，并接入三平台 CI；新版
-Linux 实机启动和效果验收待构建后完成，当前不记为通过。
-
-本轮 fmt、workspace check/Clippy、actionlint、all-features cargo-deny 通过。
-workspace 单元/集成测试 889 passed / 8 ignored（含 renderer 23 项），另有上游
-doctest 18 passed / 13 ignored；IPC 在沙箱外执行。Linux/Windows renderer 的
-gles 交叉 check 与 Linux raw_vulkan_init check 通过；macOS Engine debug 构建、
-native-smoke validate（1 scene / 1 action / 0 warning）与 640×360 短窗口运行
-通过，实际为 Metal / Fifo / 120 个渲染样本。此项只确认初始化与正常退出，
-不作为性能改善或 Linux 画面验收证据。
-
-Linux shipping / benchmark 同时编译 native Wayland 与 X11（含 XWayland），以及
-wgpu Vulkan 与 native OpenGL/GLES compatibility backend；Bevy 保持 0.19.1。
-Linux target 的同版本 `bevy_render/gles` 合并到既有 wgpu，未使用 `webgl2`。
-正常启动沿用 Bevy/wgpu 自动选择；下面只用于测试或故障排查：
-
-```sh
-WGPU_BACKEND=vulkan ./keine
-WGPU_BACKEND=gl ./keine
-# Wayland 桌面上测试 X11/XWayland，须有可用的 DISPLAY。
-env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET WGPU_BACKEND=vulkan ./keine
-# 便宜的 feature closure 检查，不编译或启动 GUI；CI 检查相同的四项。
-cargo tree --locked --target x86_64-unknown-linux-gnu -p keine --no-default-features --features ui-sounds -e normal,build,features -i winit
-cargo tree --locked --target x86_64-unknown-linux-gnu -p keine --no-default-features --features ui-sounds -e normal,build,features -i wgpu
-```
-
-依赖树必须包含 `winit/x11`、`winit/wayland`、`wgpu/vulkan` 与 `wgpu/gles`。
-Linux CI/Release 共用 setup-video action 安装 `libwayland-dev`。
-GL 驱动需提供 EGL 和满足 wgpu/Bevy features/limits 的 OpenGL/GLES；编译进 backend
-不代表所有老 GPU 均能运行。选择规则沿用
-[Bevy WgpuSettings](https://docs.rs/bevy_render/0.19.1/bevy_render/settings/struct.WgpuSettings.html)
-及锁定版本的 `settings.rs`，不增加重启或软件渲染兜底。
-
-无参数启动 portable benchmark 时，package root 是 `current_exe()` 的父目录；
-`game.haku`、marker `keine-benchmark.conf`、`keine-benchmark-report.txt` 均在该目录，
-Hakutaku 按 snapshot 位置寻找 sibling `data/`，与启动 cwd 无关。Linux executable
-名为 `keine`；搬移时保留整个包，含可能存在的 `lib/`。Python collector 按自身所在目录
-的 marker 自动发现包、`keine` 与 `game.haku`，不访问 Git 或作者工程；显式 `--output`
-等相对参数仍相对调用者 cwd；无参数启动引擎的 suite 报告写在包旁。
-
-报告保留实际 GPU/adapter、Vulkan/Gl backend、OS 和 architecture。Linux 新增
-`WINDOWSYS`，来自 primary window 的实际 raw handle；Wayland 表示 native Wayland，
-X11 表示应用使用 X11，无法仅靠 handle 区分原生 X server 与 XWayland。
-缺少 handle 会明确输出 unavailable；`XDG_SESSION_TYPE` 不作为 native Wayland 证据。
-Python metadata 同样保留 GPU 与 WINDOWSYS 日志。
-
-本轮 macOS 验证：default / `ui-sounds` locked check、publisher/hot-reload/video-native
-workspace check、publisher Clippy、fmt、collector 7 项与 native-smoke 零警告通过；
-default / 无默认功能 publisher workspace tests 的 IPC 沙箱失败已放行后完整重跑。
-Linux 四项 feature closure 与 all-features cargo-deny 通过，但两条 Linux target check
-均在 `alsa-sys` 因缺少交叉 sysroot/pkg-config 配置受阻；Linux 编译及远程 CI 尚未通过验收。
-
-实体机验收 **NOT TESTED**：openSUSE Leap 16 / KDE Plasma Wayland /
-Intel HD Graphics 4400 / Mesa，至少分别跑 A native Wayland + Vulkan、
-B native Wayland + `WGPU_BACKEND=gl`、C X11/XWayland + Vulkan；从无关 cwd 启动
-解压后搬移的包并检查报告、资源与 collector。记录实际 adapter/backend/WINDOWSYS
-及失败的驱动原因，不把 llvmpipe 或 hosted runner 编译通过当作实体 GPU 验收。
-
-### CI 的工作范围与缓存
-
-每次推送保留依赖政策、Linux fmt/Clippy/workspace 与 publisher 测试，
-三平台检查规范发行 features；macOS/Windows 合并视频、进程指标和
-系统 Trash 单元测试，仍实际链接并运行视频验收。Linux 的 workspace 测试已包含
-Editor 平台测试，不再另跑同一组。完整优化编译/打包由 Release / Project Release
-执行，常规 CI 不重复编译整个 release profile；发行优化参数保持不变。
-macOS 另检查无音频 `video-native` 测试的编译边界，避免默认音频掩盖意外的 rodio 引用。
-main 的成功 CI 仅自动触发 Editor 发布；benchmark 自动/手动打包和独立采集器
-CI 门禁已取消。本地测量工具保留，不再要求维护者跑整套性能报告。发布必须分别确认构建、
-附件上传、滚动 tag 和 Release 提交匹配，不能把 CI 成功当作发布完成。
-
-窗口退出修复将 surface 与原生句柄保留到最后一次渲染提交之后，再等待 GPU 完成并释放。
-本地 workspace check、Clippy、fmt、1047 项测试（21 ignored）、14 项打包合同与
-workflow actionlint 通过；未重跑性能套件，Windows 原机的退出崩溃尚未复验。
-
-Windows job 总上限为 180 分钟（不是闲置计时），Linux/macOS 为 60 分钟。
-main 的运行中 CI 不被后续推送取消；同组只保留最新待运行提交，其他分支/PR
-继续取消过时任务。Rust 缓存在普通测试失败后也保存，取消/硬超时不保证保存。
-常规 CI 不注入发行 identity；发行 workflow 仍独立清理含密钥的 Engine/Loader 产物。
-
-Windows FFmpeg SDK 仅编译动态 Release 库：ffmpeg-sys-next 使用 vcpkg-rs 的
-`installed/<triplet>/lib`，不使用 `debug/lib`。SDK 缓存按 manifest、triplet 与提交建键，
-允许恢复同配方的前次缓存；vcpkg 自行校验 ABI，编译器变化引发重建后可保存新键。
-改为 Release-only 的首次运行须重新编译；SDK 安装成功即保存，不等待 Rust 测试。
-
-调整前 CI #238（`722dc7f`）Windows 冷缓存在 90 分钟超时：FFmpeg 的 Release / Debug
-分别约 10m47s / 10m15s，视频单测 31m31s、视频验收 17m32s、独立 Editor 指标
-测试 15m46s，之后才开始完整 release 编译。原命令及日志摘录保存在
-`target/performance/ci-audit/`；调整后的 Windows 时长待新 CI，不能以本机暖缓存
-结果推算跨平台加速。
-
-本机新命令验证：fmt/check/Clippy、默认 workspace 845 passed / 8 ignored、合并平台
-单测 20 passed、AVFoundation 文件/Hakutaku 视频解码、规范发行与无音频 native 测试 check、
-benchmark collector 6 项、native-smoke 零警告通过；Windows SDK 与新总耗时待远程 CI。
-工作流 YAML 与 actionlint 检查通过；发行模板的 `job.workflow_*` 字段由 GitHub 官方
-文档确认支持，actionlint 1.7.12 对这三个字段的误报仅在本次本地检查中精确排除。
-提交 `e9cec0d` 的远程 CI #239 与 Media safety 已全部通过，包括 Windows 平台测试、
-视频验收和规范发行 feature check；GUI / 硬件 benchmark 验收仍独立。
-
-## CI 命名
-
-Workflow 使用空格分隔的 `类别 范围`：`CI Desktop`、`CI Android`、`CI Media Safety`，
-以及 `Release Engine`、`Release Editor`、`Release Project`。
-Job 使用 `阶段 平台 架构`（如 `Check Linux x64`、`Build macOS arm64`），
-专项检查使用 `Check 对象`，发布辅助 job 使用 `Prepare Source` / `Publish 产物`。
-步骤以 Check out、Install、Restore、Check、Build、Package、Upload、Publish 等动词开头。
-文件名、job ID、产物名称保持稳定；发布监听 `CI Desktop`，concurrency group
-固定为原队列标识，改名不会绕开仍在运行的旧任务。
-
-## Android Engine
-
-实验性 ARM64 Engine 使用 `--no-default-features --features ui-sounds`，安卓明确不支持视频。
-默认先初始化 Vulkan，surface/adapter/device 返回错误时释放该次资源并重试 GLES；
-单独指定 gl/vulkan 时保留指定后端。游戏与缺失资源提示页使用同一平台配置。
-独立 `CI Android` workflow 构建 release 原生库及 debug 签名 APK，检查桌面/Editor/FFmpeg 依赖隔离、
-Vulkan/GLES feature closure、NativeActivity 启动符号、ELF LOAD/RELRO 与 APK 的 16 KB
-对齐、APK 签名与硬件声明，再上传 artifact；可单独手动触发，不等待桌面 CI 队列。
-构建入口、资源部署及限制见 [Android guide](android.md)。
-
-本机 NDK 28.2.13676358 交叉 Clippy、原生库链接、APK 打包及上述校验通过；无新增 Rust
-依赖，Cargo.lock 未变。视频 feature 在安卓上明确拒绝编译，存储回归覆盖稳定项目 ID、
-私有目录及路径逃逸拒绝；renderer 回归验证不存在 adapter 时返回可恢复错误。
-GLES 交叉 Clippy、raw_vulkan_init 交叉 check、双后端 APK、LOAD/RELRO 显式 16 KB
-链接与 APK 原生段一致性校验通过。workspace check/all-targets Clippy、989 项本机工作区测试（含并行 Editor 修改，21 ignored，
-publisher/video-native/hot-reload，IPC/Trash 在沙箱外）、native-smoke 零警告、全特性
-cargo-deny 和 CI actionlint 通过。远程 Android CI 按对应提交的 Actions 结果核对；手机画面、触摸、音频、
-后台恢复与性能均未验收；APK 校验只证明构建产物，不代表运行态支持已经完成。
-
-仅手动的 `Release Engine` 构建 tday Android ARM64 release APK，与三平台 ZIP 一起通过后才发布。
-本机完整打包已通过（13 scenes / 2619 actions / 0 warnings），APK 约 130 MiB；
-`verify-android-release.py` 检查独立应用 ID、非 debuggable、内置加密资源不压缩、许可声明、
-启动/JNI 入口和 ELF LOAD/RELRO 16 KB 对齐，zipalign/apksigner 均通过。
-有界 APK 读取回归拒绝相邻条目与整数溢出，Loader 回归验证平台源保留验签、目录索引和流式读取。
-完整 workspace 回归 1010 passed / 21 ignored / 0 failed，记录在
-`target/android/tday-full-tests.log`；workspace fmt/check/all-targets Clippy、Android
-`hardened,ui-sounds` Clippy、全特性 cargo-deny、actionlint 和 native-smoke validate 通过。
-已安装到 Motorola 测试机，`target/android/tday-phone-runtime.log` 确认 tday ready /
-Adreno 829 Vulkan；云端发布结果与手机画面/触摸验收继续单独核对。
-CI 默认功能组合的 Clippy 发现 APK 边界测试误用 publisher 的可选 tempfile；测试改为标准库
-打开后 unlink 的匿名文件，不新增依赖。默认 workspace Clippy 和 tests 重跑通过，
-`target/android/tday-default-clippy-after.log` / `tday-default-tests.log` 保存原始结果，
-publisher/video-native/hot-reload 组合的同一 APK 边界回归也通过。
-
-## 测试布局
-
-```text
-tests/
-├── authoring/process.rs       真实 Engine IPC / 生命周期 / 协议 / GPU Preview
-├── coverage.rs               冻结兼容输入与 Stage 属性/事件覆盖
-├── letsgal/sample.rs          本机官方示例资源与内容完整性
-├── fixtures/
-│   ├── native-smoke/          最小 tracked 原生工程
-│   ├── native-benchmark/      三平台同负载原生性能工程
-│   ├── letsgal-timeline/      舞台/镜头/退格/音频回归与 benchmark 场景
-│   ├── webgal-showcase/       只作 parser / IR 冻结回归
-│   └── video/                生成的合法与损坏视频
-├── bench/                    core、loader、runtime、save、backup、video
-├── fuzz/                     独立 nightly workspace，生产 WebP decoder
-└── video/acceptance.rs        文件系统与加密 Hakutaku 视频验收
-```
-
-各 crate 的私有 unit tests 贴近 owner；Editor 的真实单实例进程回归位于
-`crates/editor/tests/instance.rs`。不再保留只测试上游 Dock prototype 的 spike。
-保留格式边界、路径隔离、事务/恢复、协议、执行和资源回归；不为了界面目测新增测试工程。
-
-输入边界回归覆盖 Editor 文档/恢复草稿限量读取、三类原生清单超限拒绝、
-真实签名 Hakutaku 配置的 256 KiB 边界和编译 Program roundtrip；编译头超限/长度错配
-在读取正文前拒绝，读取中增长或截断也必须失败。Unix 路径回归在检查后确定性替换
-文件/父目录，验证外部链接拒绝、已打开句柄稳定、目录内链接与搜索权限保留、FIFO 不阻塞。
-这些不代替 Windows/Linux 上对应系统调用的运行态验收，也不证明整个进程的内存上限。
-
-持久化回归覆盖实际字节总量、备份危险/冲突文件名、包内 `.tmp` 名碰撞、
-有效 CRC 下 metadata/state 尾部垃圾拒绝、独立域严格解码、非有限设置恢复默认值，
-以及源文档已保存后的草稿清理失败。恶意备份拒绝时原存档保持不变；合法 v11/V2 格式不变。
-状态恢复沿用 fingerprint、游标/调用栈校正及独立域保留回归；WebP 补测损坏与截断输入。
-本轮 workspace 780 项通过、8 项显式忽略；publisher lib 320 项、video-native 无默认音频 8 项、文档 18 项通过。
-fmt/check/clippy、可选 feature 构建和 native-smoke validate 通过。IPC 沙箱权限失败后在放宽沙箱的同一 checkout 重跑通过。
-
-官方 LetsGal 示例验收和 loader benchmark 通过 `KEINE_LETSGAL_PROJECT` 指定外部原工程；
-不依赖本地 demo。`projects/tday` 是唯一忽略的开发 demo，CI 打包默认使用 tracked native-benchmark；native-smoke 保留作最小回归。
-
-显式 Cargo `path` 注册嵌套 tests/benches，参见 [Cargo targets](https://doc.rust-lang.org/cargo/reference/cargo-targets.html)。
-
-```sh
-cargo bench -p keine-core
-cargo bench -p keine-loader
-cargo bench -p keine
-cargo +nightly fuzz run --fuzz-dir tests/fuzz webp tests/fuzz/corpus/webp -- -max_total_time=60
-cargo run --no-default-features --features publisher,video-native --bin keine-video-acceptance -- tests/fixtures/video/playback.mp4
-cargo run --no-default-features --features publisher,video-native --bin keine-video-acceptance -- --expect-error tests/fixtures/video/damaged-header.mp4
-bash dev/scripts/video-fixtures.sh
-```
-
-Linux 使用 `video-ffmpeg`；CI 另跑 FFmpeg ASan。fuzz 的目录参数由
-[cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz/blob/main/src/options.rs) 提供。
-视频 fixtures 只有生成的 pattern/tone：1 秒 H.264+AAC、无音轨、4 秒长 GOP、尾部 moov、截断头。
-合法文件必须读到 EOF 并可 rewind，损坏头在 FS/加密包中均必须拒绝。
-
-## 性能
+## 已测性能与复现记录
+
+以下是对应版本/工作区的历史测量，不是当前版本的性能承诺。
+完整旧记录（包括未采纳实验和历史验收）固定在
+[83b00c2 的测试文档](https://github.com/maincoretech/keine/blob/83b00c2091bb447f40bf8d262cc94165b52346df/dev/docs/testing.md)；
+当前指南只保留可用的测量方法、主要结果与限制，不继续累积阶段待办或历次测试数量。
 
 ### 引擎执行、加载与空帧
 
-同一 Apple M5 Pro / 24 GiB / macOS 27.0.1、Rust 1.99.0 和锁文件，构造输入在
+0.16.0 审查期间，同一 Apple M5 Pro / 24 GiB / macOS 27.0.1、Rust 1.99.0 和锁文件，构造输入在
 计时外。列表 length/index 原先先复制整个 Array；现在借用变量或字面量，仅复制
 索引选中的返回值，计算表达式、错误顺序与深度限制保留。场景加载使用 BTreeMap
 Entry 直接移动 LoadedScene，覆盖时照常追加先前路径诊断。
@@ -1639,7 +241,7 @@ Loader 变化约 -2.87%，95% 区间为 -4.16% 至 -1.63%；列表结果只代�
 `idle_host_and_audio_sync_preserve_state_change_detection` 在真实 ECS 系统链中计数：
 10 个无事件更新的 GameState 变更通知从 10 降为 0；随后实际 autoplay 事件仍只消费
 一次。前后命令均为 `cargo test --locked -p keine --lib --all-features idle_host_and_audio_sync_preserve_state_change_detection -- --nocapture`，
-日志为同目录 `idle-notifications-before.log` / `idle-notifications-after.log`。
+日志为`target/performance/quality-review/` `idle-notifications-before.log` / `idle-notifications-after.log`。
 这项是通知计数回归，以上均不是游戏 FPS、GPU 或整机功耗测量。
 
 ### 对白标记扫描边界
@@ -1650,7 +252,7 @@ Loader 变化约 -2.87%，95% 区间为 -4.16% 至 -1.63%；列表结果只代�
 保留原有 6/8 位格式，拒绝 Unicode 非十六进制输入及 NaN/inf 字号/透明度。
 定向测试先复现 Unicode 切片 panic 和 NaN，再验证修复；64 KiB 三种畸形输入的
 单次 CPU 耗时从约 695/516/125 ms 降至约 0.097/0.017/0.860 ms。
-这是测试配置下的边界探针，非统计基准或帧耗时；原始命令/结果为同目录
+这是测试配置下的边界探针，非统计基准或帧耗时；原始命令/结果为`target/performance/quality-review/`
 `commands.txt`、`textbox-before.log`、`textbox-after.log`。
 
 `runtime/text.rs` 的共享 tokenizer 原先对连续未闭合 `[`、未闭合样式参数和
@@ -1696,7 +298,7 @@ cargo +1.97.1 bench --locked --offline -p keine-core --bench script-runtime -- '
 KEINE_NATIVE_SOURCE_DIR="$PWD/projects/tday/scripts" cargo bench --offline -p keine-core -p keine-loader --bench script-runtime --bench program-load -- 'native_|script_runtime' --sample-size 10 --warm-up-time 0.5 --measurement-time 1 --nresamples 1000 --noplot
 ```
 
-当前本机：Apple M5 Pro / 24 GiB / macOS 27.0.1，0.14.3、`df922c6` 加当前未提交
+历史环境：Apple M5 Pro / 24 GiB / macOS 27.0.1，0.14.3、`df922c6` 加当时未提交
 改动，Cargo bench 优化配置（LTO、单 codegen unit）。10 个样本，输入已在内存中。
 原始日志及源码哈希在 `target/performance/theoretical-0143/`，点估计如下：
 
@@ -1720,7 +322,7 @@ Bevy 场景/UI 调度或多平台表现；限帧 FPS 不能代表最大渲染吞
 #### 解析器分配与小步优化
 
 解析器前后对照使用同一份 14 scene / 2665 action 的语料（含临时 Extra 入口）。
-C 收尾后当前 tday 为 13 scene / 2626 action；不把删除测试入口的输入变化算作解析器优化。
+临时测试入口移除后 tday 为 13 scene / 2626 action；不把删除测试入口的输入变化算作解析器优化。
 
 基线为 `1bb2b33`；同一 M5 Pro / 24 GiB / macOS 27.0.1，使用同一
 `program-load` 基准、优化配置和输入测前后值。`sample` 的符号采样显示稳定对白 ID
@@ -1788,661 +390,150 @@ arena 或融合 Parser。现有 token 已借用源码范围，并非逐 token �
 撤下这一吞吐目标；保留已验证的小步优化与基准，解析器优化在此收尾。
 仅当实际工程的启动、实时编辑或热加载出现可测量的解析延迟/内存问题时重新 profile。
 
-### 三平台原生完整套件
+### GPU 合成与模糊
 
-本地 `bundle --benchmark` 的 Windows、macOS、Linux 包统一使用 `tests/fixtures/native-benchmark`，
-不再用只有一句对白的 smoke。同一份 EYS v2、WebP、Opus、1080p H.264 素材
-经过正常 publisher → Hakutaku → 解码/播放 → MainCore UI/场景渲染路径；macOS 视频
-用 AVFoundation，Windows/Linux 用 FFmpeg。素材自生成，不包含 tday 私有内容。
-71 个作者场景加 7 个运行模式/显示对照，共 78 个必测负载：
+0.15.4–0.15.5 工作区；Apple M5 Pro / 24 GiB / macOS 27.0.1 / Metal，
+1920×1080 @1×，dev opt-level=1。每轮 10 秒，剔除启动前 5 秒区间；
+Metal `On-GPU Walltime Stats` 按实际 GPU 帧数加权，取多轮均值的中位数。
+它是 GPU 执行时间，不是核心利用率或输入响应延迟。
 
-| 范围 | 场景 |
-| --- | --- |
-| 对照与日常 | 同画面无特效基线、中文/Latin 打字与自动翻页、双立绘移动/缩放、背景切换 |
-| Shader | 32 个独立特效族、4 个经典镜头分组、8 个属性/事件组合 |
-| 粒子 | 雪/雨/花瓣、80/256/768 密度、自定义纹理、大尺寸填充、多层 emitter |
-| 媒体 | Opus 循环/淡入淡出/语音/SE、1080p 视频全屏/混合/循环/音轨 |
-| UI/立绘 | 浮动文字、幕布、滤镜、环境光开关、16 项选择、输入、设置/存档/读档/80 条历史/鉴赏面板 |
-| 压力与显示 | 粒子+视频+镜头+媒体、720p/1080p 粒子、实际屏幕全屏；对白/粒子/音频/视频正常 runtime 模式 |
+| 改动 / 隔离负载 | 前 → 后（ms/帧） | 证据范围 |
+| --- | ---: | --- |
+| 覆盖区域裁减与全屏快路径 / 普通对白 | 1.545 → 1.561 | 三轮，无改善主张 |
+| 同上 / 设置页 | 3.427 → 3.337 | 三轮，−2.6% |
+| 同上 / 强全屏区域模糊 | 4.067 → 3.868 | 三轮，−4.9% |
+| 仅最后一个活动相机输出 / 双立绘往返 | 1.2585 → 1.0934 | 三轮，−13.1%；反序复测支持约 −12.2% |
+| 带资源保护的背景双纹理淡化 | 1.4006 → 1.2463 | 五轮，−11.0%；首对变慢约 32%，保留原始波动 |
+| 最后减少淡化重复几何更新 | 1.3950 → 1.1921 | 仅一组反序，−14.5%；CPU 28.40% → 30.22%，不能宣称 CPU 改善 |
+| 静态背景对照 | 1.2299 → 1.2334 | 仅一组，基本持平 |
 
-另测 7 次隔离启动、开场正常休眠/唤醒、连续绘制、3 个 camera 分解及真实资源+
-204.2 MiB 确定性 payload 的暖缓存 I/O。阶段预热 3 秒、采样 5 秒；基线、粒子、
-主要组合热点跑 3 次，保留每次原始帧及中位数。总计 121 次 render 采样，加 7 次
-启动和 1 次 I/O，共 129 次子进程采样；仅 render 预热/采样需要 16 分 8 秒，
-进程启动、GPU 初始化、首帧与退出另计，不能把采样窗口当作整套预计时长。
-关闭其他重负载，保持显示模式固定；窗口切换等排除记录不可删除。
-
-桌面父进程以墙钟限制整套 30 分钟，启动/render 单次最多 60 秒，I/O 最多 120 秒；
-单次超时终止并回收子进程，剩余总预算允许时继续后续负载。总预算耗尽停止启动
-剩余采样，明确标记 `INCOMPLETE` 并返回失败，不减少场景或把超时当作通过。
-控制覆盖子进程初始化、采样和退出，避免首帧未出现或退出卡住时无限等待。
-`PROGRESS` 显示当前采样序号和累计时长；`CHILD` 记录每次完整墙钟耗时，便于
-区分固定的 8 秒预热/采样与初始化/退出开销。每次采样之间追加并刷新报告，强制中断
-后仍有已完成结果；运行中的 raw 行可与摘要交错，正常结束再原子写入最终布局。
-慢机器触及预算可能得到不完整报告，这不表示低帧率本身不合格。
-
-时长保护验证：`cargo test --offline --workspace --features
-publisher,video-native,hot-reload,startup-metrics` 1047 passed / 21 ignored / 0 failed
-（IPC/Trash 在沙箱外）；相同功能的 workspace check/all-targets Clippy、无默认功能
-check、fmt 通过。新增两个回归验证单项/全套超时、部分输出与报告保留、预算耗尽后
-不启动下一项，以及超过管道缓冲区的输出不会阻塞。尚未在 Windows/Linux 上实跑
-这版完整套件；以上测试不证明用户那次一小时运行具体卡在哪项，也不代表帧性能改善。
-
-`COVERAGE` 必须是 78 completed / 0 missing / 0 failed；单项失败继续后续场景，
-保留部分报告并返回失败。正常播放必须有前台样本；全程后台暂停不能算作已测。
-启动/开场/I/O 的失败也会使套件返回失败，原始报告仍保留。
-自选工程同样必须提供目标，不能用缺测结果冒充完整套件。
-现有本地回归检查目标唯一、引用完整、可重放、透明素材有效及原生打包映射；
-普通平台 CI 继续执行媒体合同，取消 benchmark 专项采集和打包。CI 构建/媒体合同
-测试不代替实机 GPU 性能验收。存读档事务、回退和 IME 的正确性仍由对应回归测试验证，
-面板场景只测真实 UI 负载；Editor 大文档/拖动基准仍在独立 Editor 测试中。
-
-报告首先定位优化候选：`HOTSPOT` 按同画面基线的帧时差排序并给复测命令；
-结合各负载的 `PROCESS` CPU、`MEMORY` RSS、`UPDATE` 脚本/场景/布局/UI 调度耗时、
-`RENDER` CPU/GPU span 与 `SLOW` 源码位置区分方向，再采调用栈确认函数。
-UPDATE 是墙钟窗口，包含等待及并行重叠，不能加总作独占 CPU；Fifo 帧时会受垂直同步
-限制，帧时相同也需比较 CPU 和阶段耗时。时间戳不可用明确标出，不能写零。
-Windows 自动调用栈尚未实现，可用 PDB 与外部 profiler；这项缺口不冒充已覆盖。
+背景淡化五轮旧值为 2.3395 / 1.5848 / 1.3481 / 1.4006 / 1.3926，
+新值为 3.0966 / 1.5222 / 1.2455 / 1.2445 / 1.2463。
+各实验分别使用隔离 fixture 和匹配旧/新二进制，不将表内百分比连乘为累计收益。
+全程受 60 Hz 呈现限制；没有 release、其他平台、完整剧情或输入延迟对照。
 
 ```sh
-cargo validate tests/fixtures/native-benchmark
-cargo test -p keine --lib portable_benchmark_
-# 包内执行；无需源工程/Python，完整套件生成 keine-benchmark-report.txt。
-./keine
-# 定位候选后，同硬件/尺寸/后端复测，再单独采栈，避免 sampler 扰动基线。
-python3 profile-runtime.py --timeline bench_particle_layers_768 --window 1920x1080 --mode continuous --seconds 30 --stacks off --output particle-baseline
-python3 profile-runtime.py --timeline bench_particle_layers_768 --window 1920x1080 --mode continuous --seconds 30 --output particle-stacks
+cargo build --offline --locked --bin keine --features publisher,video-native,hot-reload
+# 各目录保存对应实验的 before/after binary、输入 hash 和逐轮命令；不能用新 binary 冒充旧基线。
+python3 target/performance/package-gpu-0155/measure.py BINARY OUTPUT bench_idle --seconds 10
+python3 target/performance/crossfade-0155/measure.py BINARY OUTPUT cross_fade --seconds 10
+python3 target/performance/gpu-0154/measure.py target/performance/gpu-0154/binaries/before target/performance/gpu-0154/before-final opening settings blur_full
+python3 target/performance/gpu-0154/measure.py target/performance/gpu-0154/binaries/final-candidate target/performance/gpu-0154/final-repeat blur_full settings opening
 ```
 
-当前本地证据：macOS / Apple M5 Pro / Metal / 120 Hz，优化且保留符号的包完成
-74/78 个负载、7 次启动和暖缓存 I/O；4 个 `runtime` 对话/粒子/音频/视频负载全程
-失焦，按合同判失败，整套结果为 INCOMPLETE，不能称为全覆盖验收。
-Windows/Linux 新套件尚待实机运行，修改后的远端 CI 尚未执行。
-报告在 `target/performance/native-0131-verified-benchmark/keine-benchmark-report.txt`，
-69,882 条含排除记录的帧已转换为同级 `native-0131-report-json/`。
-基线 CPU 三次中位数 14.81%，组合压力 21.53%（一核为 100%）；两者帧时均约
-8.33 ms，因此优先进一步分解 CPU/渲染提交，而不能据 FPS 判断没有优化空间。
-GPU span 本机不可用，未填零。另采的 scene+UI 调用栈成功且输入哈希未变，
-主线程多为事件等待，采样覆盖启动且会扰动结果，暂未确认单个函数热点。
+原始统计、CPU/Metal JSON、构建和失败尝试分别在 `target/performance/gpu-0154/`、
+`package-gpu-0155/`、`crossfade-0155/`；后两个路径同样位于 `target/performance/`。
+采样器调用系统 `metalperftrace listen --pid PID --json --output …`，
+口径见 [Metal HUD metrics](https://developer.apple.com/documentation/xcode/understanding-the-metal-performance-hud-metrics)。
 
-实际命令（bundle 的一次性测试 identity 通过 `KEINE_HAKUTAKU_IDENTITY` 指定，
-测试后删除；不使用开发/发行密钥）：
+不保留的候选也有原始记录：
+
+| 候选 | 结果 | 原始目录（`target/performance/` 下） |
+| --- | --- | --- |
+| 跳过 UI 空世界 pass | 1.1804 → 1.1809 ms，中位数无稳定收益，撤回 | `gpu-followup-0155/` |
+| 裁小模糊中间纹理 | 1.2222 → 1.6868 ms，三对均慢，撤回 | `gpu-crop-0155/` |
+| 按强度排序首命中返回 | 1.1795 → 1.6552 ms，无稳定收益，撤回 | `gpu-crop-0155/` |
+| 暂停模糊的成本拆分 | 约 0.60 ms；正式实现恢复模糊，不属于等画质优化 | `gpu-followup-0155/` |
+
+正确性回归保留弱模糊下溢、双管线就绪、纹理/采样器更换回退、旧视频帧重排与
+Core Video device 归属。Metal 淡化测试覆盖十组透明/不透明 source-over，最大差异
+1/255（少一次中间 8-bit 舍入）。上述专项曾显式执行；原生 macOS 检查过标题、
+菜单/对白模糊和舞台，但未捕获完整反向淡化，不以截图证明没有任何单帧闪黑；
+也未模拟真实 device-loss 后完整恢复。
+
+Suika3 26.07.13 的该 fixture GPU 三轮均值为 0.5262 / 0.5393 / 0.5352 ms。
+其 [Metal renderer](https://github.com/awemorris/suika3/blob/26.07.13/external/PlayfieldEngine/external/StratoHAL/src/GameRenderer.m)
+与 [shader](https://github.com/awemorris/suika3/blob/26.07.13/external/PlayfieldEngine/external/StratoHAL/src/GameShaders.metal)
+在单个 drawable pass 合成背景、立绘与栅格文字，没有此 Kēne fixture 的区域高斯模糊。
+这支持额外模糊/合成是差距的重要来源，不能量化语言或抽象层各自贡献，也不是等画质排名。
+Suika 每帧同步等待不应照搬。横向图的包体积包含不同素材/SDK范围，同样不能作为最小发行包排名。
+
+### 内存、空闲与连续播放
+
+均为 M5 Pro / 24 GiB / macOS 27.0.1 / Metal、dev opt-level=1 的历史记录；
+窗口 1920×1080 @1×。physical footprint 与 RSS 分别采集，不能混称 RAM。
+
+| 观察 / 改动 | 结果 | 原始目录（`target/performance/` 下） |
+| --- | --- | --- |
+| 0.15.0 前标题空闲约 5 分钟 | footprint 186.1 → 185.9 MiB；启动峰值 343.3 MiB | `idle-memory-0150/` |
+| 正常操作约 12 分钟 | 混合平均 354.1 MiB；CG 引起采样峰值 655.1 MiB，不能泛化为游戏平均 | `normal-project-0150/` |
+| CG 缩略图与资产退役 | 四页等权稳定均值 325.3 → 253.2 MiB；退出后标题 269.4 → 237.2 MiB；内核峰值 615.7 → 459.4 MiB | `gallery-memory-0150/` |
+| 菜单开启 auto 时休眠 | CPU 24.05% → 0.39%（单核口径） | `lifecycle-0150/` |
+| 常驻浮动文字停止无效更新 | CPU 19.57% → 0.38% | `lifecycle-0150/` |
+| 镜头与文字同步反序复测 | CPU 26.35% → 23.16%；footprint 338.9 → 338.7 MiB，无基座内存改善主张 | `scene-sync-0151/` |
+
+CG 输出 RGBA 245.2 → 69.8 MiB 是像素 payload，不是进程内存；顺序解码
+211.7 → 225.1 ms（+6.4%，每图约 +0.43 ms），不能宣称 codec 更快。
+页面仍并行加载，首开全屏原图改为按需加载；低端设备、冷包和 2× 设备延迟尚未验收。
+三帧收尾使资源退役得以完成，不清空字体/模糊/allocator 缓存；缓存保留与泄漏不能凭单点占用区分。
 
 ```sh
-CARGO_NET_OFFLINE=true target/debug/keine bundle tests/fixtures/native-benchmark --output target/performance/native-0131-verified --benchmark
-target/performance/native-0131-verified-benchmark/keine
-python3 dev/scripts/profile-runtime.py --report target/performance/native-0131-verified-benchmark/keine-benchmark-report.txt --output target/performance/native-0131-report-json
-python3 dev/scripts/profile-runtime.py target/performance/native-0131-verified-benchmark --binary target/performance/native-0131-verified-benchmark/keine --mode continuous --camera scene-ui --seconds 10 --output target/performance/native-0131-scene-ui-stacks
+# 使用各实验保存的输入、副本、before/after binary 和本地测试 app。
+python3 target/performance/gallery-memory-0150/sample.py before
+python3 target/performance/gallery-memory-0150/sample.py final
+python3 target/performance/lifecycle-0150/before/sample.py
+python3 target/performance/lifecycle-0150/after/sample.py
+python3 target/performance/scene-sync-0151/sample.py target/performance/scene-sync-0151/keine-before target/performance/scene-sync-0151/before-counters
+python3 target/performance/scene-sync-0151/sample.py target/debug/keine target/performance/scene-sync-0151/after-counters
+python3 target/performance/continuous-tday-0150/sample.py
 ```
 
-代码门槛已通过：workspace 909 测试（8 个既有 ignored）、collector 7 测试、
-fmt/clippy、原生项目与 smoke validate、原生及 FFmpeg feature check、Actionlint。
-IPC 测试先遇到本地沙箱 PermissionDenied，提权重跑完整 workspace 后通过。
+连续播放记录为 1799.97s / 8833 个 RAM/CPU 样本；仅 664.86s 可确认为持续推进，
+其余启动、计数核对和显式玩家确认另行标记。推进段 footprint 均值 346.4 MiB、
+P95 364.2 MiB，CPU 均值 22.3%；末三分钟内存中位数 355.2 / 355.3 / 355.3 MiB。
+未观察到失控增长，但未完整播放 13 章、未循环章节、未取得同进程返回标题后的采样，不能证明无泄漏。
+驱动累计 GPU 时间占比均值 5.7% 不等于整机 GPU 利用率（同期约 53.6%）。
+CPU 先按 Mach timebase 换算；AGX 非公开驱动计数经本机 Activity Monitor 交叉核对，不能直接移植口径。
+CSV、GPU 序列、标记、计数验证及图均保存在 `target/performance/continuous-tday-0150/`。
+0.15.1 后续压力样本及黑幕修复记录见上述固定历史文档，不混入此组统计。
 
-### 实际运行热点采样
+### Editor、粒子与预取
 
-`tests/bench` 保留调用真实模块的基准；真实热点使用同一个 `perf` 入口与系统调用栈。
-原 `runtime-hotspots` 只测了复制的算法和空操作，无法反映现有引擎，已由本采集流程替换。
-默认 `--mode runtime` 保留正常休眠/失焦策略，采集只在预热结束和测量结束增加唤醒；
-`--mode continuous` 才持续绘制，并允许 camera 分解和循环选中的时间轴。
-`--scene ID --cursor N` 可定位原生章节的实际 action，cursor 从 0 开始；不存在或无法
-重放的目标报错退出，不能悄悄改测开场。不会修改项目或保存用户状态。
+这些是旧版特定路径的结果，不代表升级 GPUI/工具链后的全窗口帧时。
+完整环境、原始命令与限制见固定历史文档的同名章节。
+
+| 路径 | 前 → 后 | 原始证据目录 |
+| --- | --- | --- |
+| GPUI Scene replay，19,200 笔画 | 67.795 → 0.339 ms，5×30 次组均值中位数 | `target/authoring/performance/scroll/` |
+| 5,000 行 Text 概览 | 3.239 → 1.881 ms，11 次中位数，不含整窗绘制 | `target/authoring/performance/layout/` |
+| 5,000 资源空搜索，缓存未命中 | 0.500 → 0.039 ms | `target/authoring/performance/resources/` |
+| 1080p 有损 WebP 缩略图 | 34.026 → 11.750 ms；PNG/无损 WebP 无明显改善 | 同上 |
+| 粒子每项动态上传 | 216 → 64 B；192 粒子 CPU 15.81% → 12.49%，压力项仅 22.12% → 21.86% | `target/particle-profile/` |
+| 128 MiB 预取预算 | 按解码 payload 计费，当前画面/阻塞资源受保护；不是进程内存硬上限 | [`scene/assets.rs`](../../src/scene/assets.rs) |
 
 ```sh
-# macOS：与 release 相同优化，保留符号供系统 profiler 解析。
-# Linux 视频改用 video-ffmpeg；需安装对应开发库。
-cargo build --profile profiling --no-default-features --features bundled-opus,ui-sounds,startup-metrics,video-native --bin keine
-python3 dev/scripts/profile-runtime.py projects/tday --output target/performance/baseline --seconds 30 --stacks off
-python3 dev/scripts/profile-runtime.py projects/tday --output target/performance/stacks --seconds 30
-# 动态场景/全屏粒子用实际章节和 action；先由 Editor 核对目标。
-python3 dev/scripts/profile-runtime.py projects/tday --scene scene_0002 --cursor 10 --mode continuous --output target/performance/scene --seconds 30
-python3 -m unittest discover -s tests/bench/runtime -p 'test_*.py'
+cargo bench --locked -p keine-editor --bench browser
+cargo test --locked -p keine-editor --release --lib benchmark:: -- --ignored --nocapture --test-threads=1
+cargo test --locked -p keine-editor --release --lib index::benchmark:: -- --ignored --nocapture --test-threads=1
 ```
 
-输出目录必须不存在，旧结果不会覆盖。`metadata.json` 保留命令、主机、构建工作区状态、
-二进制和源码清单哈希、退出状态及引擎汇总；`frames.json` 保留每帧 scene、next cursor、
-源码行、窗口物理尺寸、刷新预算、活动/焦点状态与排除原因；`slow-locations.json` 按超预算
-时间定位剧本位置，它是相关性，不能替代调用栈或宣称该 block 本身耗时。
-next cursor 是 Core 下一条指令的位置，源码行对应刚执行的 action；不是 Editor 视觉序号。
-活动状态来自本帧更新后的 lifecycle；是否经历休眠以上一帧安排的活动状态为准。
-源码增删改、非零退出、引擎 ERROR 或缺少逐帧输出均使采集失败；结果不能冒充有效基线。
-哈希清单覆盖项目目录内的剧本/配置；外部 mount、素材和用户设置须保持相同，不能宣称已冻结全部输入。
-运行窗口需保持前台；若全程失焦，保留排除记录及进程 CPU，但没有活跃帧时结论。
-
-系统调用栈在 macOS 用 `sample` 的 10 ms 间隔与 `-mayDie`，Linux 用 `perf record`
-的 99 Hz DWARF 栈；未安装/权限失败明确记录，Windows 自动调用栈采集尚未实现。
-采样涵盖进程启动，需区分初始化、活跃函数和系统等待；macOS `sample` 是所有线程的栈
-命中次数，不能当作函数的精确 CPU 百分比。安装了支持 Rust 的 `c++filt`/`llvm-cxxfilt`
-时另输出 `stacks-readable.txt`，原始符号和源码位置保留；缺少工具明确记录。
-Linux 在本机用 `perf report -i <输出目录>/perf.data` 阅读调用栈。
-系统采样会扰动被测进程，性能门槛以
-`--stacks off` 同条件基线为准，另一次栈采样用于定位。
-
-独立 benchmark 包完整复用上述采集 owner：增加单独的正常 runtime 休眠/唤醒样本，
-连续负载和 camera 分解另测；报告 RAWFRAME 附录保留全部 14 项逐帧字段及 workload/run。
-被排除的间隔同样保留。benchmark 单独附加源码文件名/行列映射，与 Program 指纹和 action
-数量校验匹配；有界读取上限 4 MiB，拒绝尾部字节、绝对路径与不匹配表。它不包含剧本正文，
-不改变正式 Program envelope/schema。没有映射的普通发行包不冒用 Loader 的合成 line 1。
-包内附同一 `profile-runtime.py`，省略 project/binary 时自动使用旁边的 Engine 和 Hakutaku
-包，不要求 Git 或作者工程；采集前后验证 game.haku 与所有 .taku 内容哈希。
-
-```sh
-# 在解压后的 benchmark 目录中；output 必须尚不存在。
-python3 profile-runtime.py --output baseline --seconds 30 --mode continuous --stacks off
-python3 profile-runtime.py --output stacks --seconds 30 --mode continuous
-# 将自运行 suite 的完整逐帧报告转为 JSON，不重复跑分。
-python3 profile-runtime.py --report keine-benchmark-report.txt --output report-json
-```
-
-benchmark 用 profiling 优化/符号构建，不启用阻断系统采样的 hardened；普通发行不变。
-自运行 suite 无需 Python，调用栈作为单独受扰动采样；Windows 自动栈采样和不支持的 GPU
-阶段计时仍明确缺测。完整渲染 coverage 依赖所选项目已有时间轴，缺少时不得声称全覆盖。
-正常 runtime 样本使用可见窗口，持续负载可使用隐藏窗口；保持各自模式，不能混合比较。
-采样的 reactive wait 在同一休眠阶段保持稳定，避免递减倒计时不断触发 Bevy 重排程；
-临近边界时有界缩短等待，避免 winit 的提前唤醒重复等待整个测量区间。
-
-Bevy 组件统一为 0.19.1；Core/Loader/authoring 仍不依赖 Bevy。版本修复覆盖文字测量/性能、2D 保留绘制项
-闪烁、UI 裁剪/颜色/相机、窗口 resolution 与缩放、mesh 重新分配和 MP4 音频解码。
-依据 [官方差异](https://github.com/bevyengine/bevy/compare/v0.19.0...v0.19.1)。
-Windows DX12 锁文件约束：`wgpu-hal 29.0.4` 与 `gpu-allocator 0.28.0` 必须
-共同使用 `windows 0.62.2` 的 D3D12 类型。后者的宽版本范围可能在依赖更新时选中
-`0.57`/`0.58`；即使图中其他依赖合法使用旧版本，也不能让这两个 crate 的接口分裂。
-本次修复只对齐 Cargo.lock 中 gpu-allocator 的一条依赖，不新增 shim、依赖或关闭 DX12。
-`cargo check --locked --target x86_64-pc-windows-gnu -p wgpu-hal` 已通过，实际启用 dx12/vulkan；
-它验证后端 Rust 编译，不代替 Windows MSVC 完整 CI、链接与 benchmark 实机验收。
-修复后 publisher workspace check/Clippy、898 项测试（8 ignored）、fmt 与四项 cargo-deny 审计通过。
-
-0.19.1 未修复 macOS reactive 空闲循环；`dev/vendor/bevy_winit` 使用官方同版完整源码，
-只保留 `about_to_wait` 的待办/定时判断，包含新版 DPI/窗口修复。来源和单一改动见该目录
-KEINE-PATCH.md；上游许可随源码保留。无需求的 3D/光追等 feature 不自动扩大引擎范围。
-
-刷新预算优先取 `--hz`，否则取所在 Monitor；未知刷新率明确缺测，不假定 60 Hz。
-严格超过预算的次数、最长连续次数与估算错过刷新槽分别报告；提交间隔不是屏幕实际呈现，
-VSync 的微小抖动也可能超预算，不能把这些次数直接说成实际掉帧。跨越预热/结束边界的
-活跃间隔单独标记 `sample-boundary`，保留原始记录，不混入有效区间统计。正常模式排除有意休眠、
-失焦及窗口尺寸/刷新率改变的跨界间隔。CPU 是测量区间全进程累计时间之差，1 个核心为 100%；
-CPU 实际计数跨度见 PROCESS 的 wall seconds，唤醒偏晚时不能宣称覆盖整个名义采样区间。
-RSS 是进程生存期峰值，不能称作采样区间内峰值。逐帧记录最多 240,000 条，超限报告 omitted。
-CPU/GPU 渲染阶段分别排名，不相加嵌套 span；GPU 排名要求实际设备同时支持 encoder/pass
-时间戳写入。不满足时明确缺测，省略不足以证明渲染阶段成本的 encoder 零值。
-本机 Metal 不满足该条件；shader 热点需要另用 Instruments Metal GPU trace。
-阶段排名只覆盖已经记录 diagnostic span 的渲染工作，不能当作整个 Renderer 的成本清单。
-没有有效活跃间隔时，帧时/FPS 明确不可用；旧 portable 数值协议仍保留 frames=0 哨兵。
-
-设计/ABI 依据：[Cargo profiles](https://doc.rust-lang.org/cargo/reference/profiles.html)、
-[getrusage](https://man7.org/linux/man-pages/man2/getrusage.2.html)、
-[GetProcessTimes](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getprocesstimes)，
-以及锁定 `bevy_render 0.19.1/src/diagnostic/mod.rs` 的 Supported platforms。
-
-采集工具验证使用 Apple M5 Pro / 24 GiB / macOS 27.0.1、1920×1080、120 Hz、
-上述 profiling 构建，缓存未控制。原始命令：
-
-```sh
-python3 dev/scripts/profile-runtime.py tests/fixtures/native-smoke --output target/performance/verified-runtime-cpu --seconds 3 --stacks off
-python3 dev/scripts/profile-runtime.py projects/tday --scene start --cursor 16 --mode continuous --output target/performance/verified-stacks-cpu --seconds 3
-```
-
-静止/失焦采集保留 1 条排除记录，CPU 为 0.006 秒 / 3.000 秒，FPS 不可用；
-修复前同一命令的 `verified-runtime/` 漏记 CPU 起始计数，报告不可用。
-tday 采集保留 360 条，359 条有效、1 条 sample-boundary，调用栈已解析 Rust 函数和源码位置，
-CPU 区间为 3.000 秒；两个项目源码清单均未变化。该验证证明采集路径可用，
-不是引擎提速或“不掉帧”验收。日志/哈希见各输出目录；901 项 workspace 测试、
-3 项 Python 边界测试、clippy 与 `video-native` 无默认 feature 检查通过。
-Windows/Linux 交叉检查分别缺少 `x86_64-w64-mingw32-gcc` / `x86_64-linux-gnu-gcc`，
-未完成目标平台编译及实机采样；不标为通过。
-
-#### Bevy 0.19.1 与独立包验证
-
-同一 M5 Pro / 24 GiB / 120 Hz，profiling 优化构建，缓存未控制。三次 tday 命令均为：
-
-```sh
-python3 dev/scripts/profile-runtime.py projects/tday --scene start --cursor 16 --mode continuous --output target/performance/bevy0190-before --seconds 3 --stacks off
-# 更新后 output 分别为 bevy0191-after 和 bevy0191-after-repeat。
-```
-
-旧 0.19.0 记录平均 8.33 ms / p99 8.89 ms / CPU 26.76%；试开 multi_threaded 的
-0.19.1 两次为平均 8.36 ms / p99 8.79、8.77 ms / CPU 50.53%、54.06%，平均 FPS
-都约 120。试验期间有后台编译，这组记录不用于选择线程配置；下面补做同配置对照。
-未开多线程的独立 profiling Engine 只读复测 tday，记录平均 8.38 ms / p99 8.82 ms /
-max 24.88 ms / CPU 24.25%，源码哈希不变。此包没有 video-native feature，与前两组不同，
-不能宣称同配置提速；原始记录见 `target/performance/bevy0191-single-final/`。
-
-多线程复核：两版均为当前代码、Bevy 0.19.1、profiling、
-`--no-default-features --features bundled-opus,ui-sounds,startup-metrics`；实验版额外使用
-`bevy/multi_threaded`。关闭该 feature 指 Bevy 的并行调度开关，不表示整个 Engine
-没有渲染线程或其他工作线程。两版使用各自的内嵌 key，但只读加载明文项目，未使用 key。
-采样期间没有后台编译，不采集调用栈；三轮交替运行，持续画面每轮 8 秒、静止 5 秒，
-各预热 3 秒，缓存未控制。复现构建与采样命令：
-
-```sh
-cargo build --locked --profile profiling --no-default-features --features bundled-opus,ui-sounds,startup-metrics --bin keine
-# 将结果复制到 target/performance/threading-ab/binaries/single 后，再构建实验版：
-cargo build --locked --profile profiling --no-default-features --features bundled-opus,ui-sounds,startup-metrics,bevy/multi_threaded --bin keine
-# 将结果复制到 target/performance/threading-ab/binaries/multi。
-python3 dev/scripts/profile-runtime.py projects/tday --scene start --cursor 16 --mode continuous --binary target/performance/threading-ab/binaries/single --output target/performance/threading-ab/opening-r1-single --seconds 8 --stacks off
-python3 dev/scripts/profile-runtime.py tests/fixtures/letsgal-timeline --timeline 'benchmark stress composition' --mode continuous --binary target/performance/threading-ab/binaries/single --output target/performance/threading-ab/stress-r1-single --seconds 8 --stacks off
-python3 dev/scripts/profile-runtime.py tests/fixtures/native-smoke --mode runtime --binary target/performance/threading-ab/binaries/single --output target/performance/threading-ab/idle-r1-single --seconds 5 --stacks off
-# 每种负载再测试 multi；三轮顺序为 single/multi、multi/single、single/multi。
-```
-
-| 负载 | feature 关闭 CPU，三轮 | feature 开启 CPU，三轮 | 帧间隔 p99 关闭 / 开启，中位数 |
-| --- | --- | --- | --- |
-| tday start:16 | 13.32 / 15.12 / 13.67% | 48.65 / 44.74 / 52.78% | 9.30 / 10.22 ms |
-| 256 粒子与镜头特效 | 25.20 / 14.80 / 14.66% | 60.27 / 47.77 / 45.45% | 9.34 / 9.72 ms |
-| native-smoke 静止 | 0.62 / 0.40 / 0.28% | 0.35 / 0.40 / 0.36% | 休眠，无有效 FPS |
-
-CPU 按一个核心 100% 计算。持续画面多数平均约 120 FPS；特效开启版第二轮有一次
-1007.22 ms 停顿，该记录处于失焦状态，continuous 模式按约定保留，未确定原因，
-不能归因为多线程。静止关闭版第一轮的 CPU 计数区间为 4.183 秒，其余接近 5 秒；
-比例使用各自实际区间，不将其当作完整 5 秒。所有原始记录、命令、二进制 SHA256、
-输入前后哈希和比较 JSON 均在 `target/performance/threading-ab/`；33 个输入文件未改变，
-其中外层清单覆盖 LetsGal fixture 的 JSON 和素材，弥补采集工具原清单只包含本地剧本格式的范围。
-当前机器/负载下，开启 feature 未显示稳定帧时收益而持续 CPU 成本较高，默认继续关闭；
-Bevy 版本保持 0.19.1。这不是 Windows/Linux 或更大 ECS 负载的结论，也没有证明根因。
-
-采集自身的定时回归另用 debug 优化构建隔离验证：
-
-```sh
-target/debug/keine perf tests/fixtures/native-smoke --seconds 5 --mode runtime --raw
-```
-
-两次 CPU 为 0.018 / 5.000 秒（0.37%）与 0.016 / 4.999 秒（0.32%）；各保留
-2 条休眠记录，无有效活跃 FPS。验证的是采样器不再制造忙循环/重复等待，不能当作
-动态画面提速或跨平台性能验收。原始日志保存在 `target/performance/bevy0191-gates/`。
-
-独立包使用临时 identity 构建；自运行、报告转换与包内调用栈采集均从工程目录外运行：
-
-```sh
-# identity 仅用临时目录，结束后清理；不写 native-smoke 或 tday。
-(
-    umask 077
-    task_identity_dir="$(mktemp -d /private/tmp/keine-benchmark-identity.XXXXXX)"
-    trap 'rm -rf "$task_identity_dir"' EXIT
-    KEINE_HAKUTAKU_IDENTITY="$task_identity_dir/test.key" target/debug/keine bundle tests/fixtures/native-smoke --output target/performance/portable-0191-complete --benchmark
-)
-cd /private/tmp
-/Users/shiftz/dev/keine/target/performance/portable-0191-complete-benchmark/keine
-python3 /Users/shiftz/dev/keine/target/performance/portable-0191-complete-benchmark/profile-runtime.py --report /Users/shiftz/dev/keine/target/performance/portable-0191-complete-benchmark/keine-benchmark-report.txt --output /Users/shiftz/dev/keine/target/performance/portable-0191-complete-json
-python3 /Users/shiftz/dev/keine/target/performance/portable-0191-complete-benchmark/profile-runtime.py --output /Users/shiftz/dev/keine/target/performance/portable-0191-complete-stacks --seconds 3 --mode continuous
-```
-
-本机没有 GPU 阶段时间戳数据，报告明确 unavailable；native-smoke 没有作者特效时间轴，
-相应项明确 skipped。Windows/Linux 的 CI 构建定义已接入同一采集链路，尚未执行远端
-构建和目标平台实机采样。构建/接口回归、系统采样和视觉验收分别记录。
-最终独立包 suite 正常退出，JSON 保留 2,402 条记录、5 个 workload，源码均正确定位
-到 `main.shou:2`。其 runtime 区间为 0.018 CPU 秒 / 5.000 秒（0.37%），两条休眠记录
-不参与 FPS；包内独立采样脚本还能输出 native Rust 调用栈，采集前后包内容哈希一致。
-903 项 workspace 回归通过 / 8 ignored，6 项 Python 边界回归通过；fmt、Clippy、
-无默认 feature 的 video-native/publisher 检查和 cargo-deny 的四项审计通过。
-CI 缓存清理脚本已检查 native/Windows 参数语法，Cargo dry-run 覆盖 Engine/Loader
-产物及密钥份额 OUT_DIR；未实际删除本机编译缓存，远端执行尚未验证。
-
-### Engine 静止 CPU
-
-本机 macOS ARM64、`publisher,video-native` debug 优化构建，tday 的夕阳背景和
-“虽然已经过去很久了”对白停稳，BGM 继续播放，同一窗口尺寸、无操作。
-每 5 秒读取 `ps` 的累计 CPU 时间，四次读数跨度约 15 秒：旧版增加 7.36 CPU 秒
-（49.02%），新版增加 0.23 CPU 秒（1.53%）。这是整个 Engine 进程的时间增量，
-包含 Opus 解码和系统音频线程；不使用瞬时 `%CPU` 的 0.0 读数替代它。
-移除临时诊断后的最终构建复测增加 0.24 CPU 秒 / 15.02 秒（1.60%），见 `final.cpu.json`。
-
-锁定的 Bevy 0.19 窗口循环用 `Instant::checked_add(wait)` 安排唤醒，
-`Duration::MAX` 溢出时保留旧的动画 deadline/control flow，导致静态画面继续跑整帧。
-Runtime 的静止/后台等待改用最多 60 秒的有限 deadline；输入与 IPC 仍可立即唤醒，
-控制栏淡出和光标闪烁仍用更近的 deadline，动画/粒子/视频/自动播放保持原有节奏。
-新版 10 秒调用栈中，主线程 8,130/8,139 个样本等待系统事件，持续非等待工作主要为
-Opus；此次结果不能外推为动态画面提速或其他平台的实测结果。
-
-原始数据及旧二进制在 `target/authoring/performance/idle/`；采样命令：
-
-```sh
-cargo build --features publisher,video-native
-# Editor 启动 Preview，定位到上述对白，等画面停稳；前后使用各自 Engine PID。
-python3 target/authoring/performance/idle/measure.py <PID> <before-or-after>.cpu.json
-sample <PID> 10 1 -file <before-or-after>.sample.txt
-```
-
-fmt/check/Clippy、publisher workspace 869 passed / 8 ignored（IPC 放行沙箱重跑）、
-无默认音频的 video-native 生命周期 21 项回归及最终 Engine 构建通过。
-原生 Preview 已检查休眠后的空格推进、Textbox 隐藏/恢复及菜单唤醒。
-Windows/Linux 静止 CPU 尚未实测。
-
-性能修改必须提供同主机、同输入、同 release 配置的前后命令与原始结果。
-`cargo perf --startup` 测隔离启动；`cargo bundle <project> --benchmark` 生成独立 portable 发行基准。
-bench 源码保留可重复的热点测量，日志放忽略的 `target/`，不持续新增日期报告。
-
-### Editor 滚动热点
-
-本轮针对 tday 的 Assets 掉帧启动 Editor 性能检查；粒子 CPU 已定位，GPU 专项仍待测。
-macOS arm64 / GPUI 0.3.5：滚动采样定位到未变化 Text 概览的 Scene replay，
-逐笔画插入 bounds tree 占主要活跃主线程样本。Text/Blocks 概览现使用同一绘制图层，
-保留笔画顺序、视口/选择标识与导航。浏览器使用后台生成的 384×256 内存缩略图，
-64 项 LRU（像素数据上限 24 MiB/面板）；大小/mtime 参与缓存键，淘汰和关闭释放图片。
-路径约束和解码在 worker 中执行，原图与 Asset Preview 不变，不新增磁盘缓存。
-
-实际 GPUI Scene replay 的 release A/B：5 组各 30 次，取组均值的中位数。
-
-| 笔画数 | 原方式 ms | 单图层 ms |
-|---:|---:|---:|
-| 1,200 | 0.311 | 0.029 |
-| 4,800 | 2.918 | 0.081 |
-| 19,200 | 67.795 | 0.339 |
-
-```sh
-cargo bench -p keine-editor --bench browser
-sample <editor-pid> 20 2 -file target/authoring/performance/scroll/paired-before.txt
-sample <editor-pid> 20 2 -file target/authoring/performance/scroll/paired-after.txt
-```
-
-原始命令、release 输出和调用栈保存在 `target/authoring/performance/scroll/`；
-bench 源码为 `tests/bench/editor/browser.rs`，直接调用锁定 GPUI 的 Scene replay。
-原生应用另以相同 dev profile、tday、3024×1772 / 2× 窗口与 24 次交替上下 3 页滚动对照：
-physical footprint 1.1 GiB → 388.9 MiB，观测 peak 1.1 GiB → 465.5 MiB。
-这些是该次样本的进程 footprint，并非 RSS 或跨机器保证；release A/B 是绘制路径微基准，
-不能当作整窗 FPS/GPU 帧时。首见图片仍需解码，原图预览仍占用原图内存。
-搜索、透明立绘、音频列表、原图预览及两个概览导航已做原生检查；
-缩略图尺寸/通道/透明度、缓存容量/更新键回归通过。
-
-Blocks 继续按源码版本缓存文本/索引/顺序/结束关联、几何与概览；普通滚动仅定位并挂载可见行，折叠、实测行高或源码变化使几何失效。当前行/执行行也复用索引。拖放和折叠动画保留原有冻结布局。Text 配色、原生换行与笔画构建移到后台，改宽复用配色；新任务取消旧任务并拒绝过期结果，不添加输入延迟。
-
-资源拖放的整窗采样（`sample <editor-pid> 45 2 -file target/authoring/performance/drag/after-confirmation.txt`）
-显示忙时热点在 GPUI 根视图 prepaint、Taffy 布局、元素 ID/样式复制与分配；字段缓存微基准不能代表 CPU 占用，试验改动已撤回。
-锁定 GPUI 的鼠标拖动路径调用 `Window::refresh`，绕过视图缓存；Blocks 拖放期间也禁用稳定几何路径。
-后续优化须以相同窗口/剧本/拖动操作的进程 CPU、帧耗时和松手后空闲占用对照，保留原始日志，不能据字段微基准宣称流畅。
-
-同主机 release 微基准（`tests/bench/editor/{blocks,text}.rs`）：Block 为 11 组 × 100 次，Text 为 11 次，取中位数；测试串行运行。
-
-| 路径 / 规模 | 原计算 ms | 新计算 ms |
-|---|---:|---:|
-| Block 静态准备 / 1,000 | 0.062621 | 0.000132 |
-| Block 静态准备 / 5,000 | 0.283800 | 0.000152 |
-| Text 概览 / 1,000 行 | 0.589 | 0.348 |
-| Text 概览 / 5,000 行 | 3.239 | 1.881 |
-
-Block 测量包括源码复制、行索引、顺序、行位置与概览，对照实际缓存命中和可见行定位；不包含控件/绘制。Text 在 GPUI 测试平台比较原 DisplayMap 构建与新 worker 构建；5,000 行改宽复用配色为 1.905 ms。它们是计算微基准，不代表原生输入延迟或整窗 FPS。
-
-```sh
-cargo test -p keine-editor --release --lib benchmark:: -- --ignored --nocapture --test-threads=1
-sample <editor-pid> 20 2 -file target/authoring/performance/layout/blocks-before.txt
-sample <editor-pid> 20 2 -file target/authoring/performance/layout/blocks-after-final.txt
-sample <editor-pid> 20 2 -file target/authoring/performance/layout/text-before-ascii.txt
-sample <editor-pid> 20 2 -file target/authoring/performance/layout/text-after-final.txt
-```
-
-原始命令、输出和 dev 调用栈位于 `target/authoring/performance/layout/`。tday、3024×1772 / 2×、相同三列布局下，24 次交替上下 3 页滚动：原采样中全文行索引重建累计 291 栈样本，最终采样未出现该调用；这仅是本次采样热点消除证据。24 次 ASCII 插入/删除的最终采样中，概览构建在 default-qos worker，而非主线程。
-原生检查覆盖概览导航、改宽换行、折叠/展开、普通及嵌套重排/撤销、多行文本增高/撤销；tday 测试输入已恢复。回归覆盖行高增加/移除、折叠、版本/冻结源码，以及中文、emoji、Tab、CRLF、空行和极窄宽度与原 DisplayMap 的映射一致性、取消/过期发布。workspace 785 通过、5 个显式忽略的性能测试；fmt/check/clippy 通过。
-
-中低项：Assets 缓存筛选/排序、目录、选择顺序与行布局，空搜索不转换所有字段；脚本索引只复制保留下来的贡献，旧任务在文件之间取消；缩略图低优先级且最多同时两项，静态 WebP 用现有 media 解码器直接缩小输出。未变文件的公共 Vec 索引仍需要复制，未新增持久化缓存或另一套索引模型。
-
-同主机 release、11 次中位数（筛选每组 100 次），原始输出位于 `target/authoring/performance/resources/`：
-
-| 计算路径 | 原方式 ms | 新方式 ms |
-|---|---:|---:|
-| 5,000 句对白 / 5,000 资源，更新 1/10 个文件 | 2.227 | 1.556 |
-| 同规模，更新全部 10 个文件 | 9.034 | 8.414 |
-| 5,000 资源，空搜索筛选（缓存未命中） | 0.500 | 0.039 |
-| 1920×1080 背景，派生有损 WebP 缩略图 | 34.026 | 11.750 |
-
-PNG 为 17.976 → 18.041 ms，无损 WebP 为 26.964 → 26.507 ms，单张解码没有明显改善；并发上限用于限制竞争。浏览缓存命中微基准约 0.000006 ms，只测结果复用；所有结果均不等于整窗帧时或首屏延迟。生产解码库复用 `keine-media`，没有增加外部 codec 依赖。缩放后的输出缓冲有界，但 codec 工作内存另计。
-
-```sh
-cargo test -p keine-editor --release --lib index::benchmark:: -- --ignored --nocapture --test-threads=1
-KEINE_BENCH_IMAGE=/absolute/path/to/background.png cargo test -p keine-editor --release --lib benchmark:: -- --ignored --nocapture --test-threads=1
-```
-
-第二条使用同一背景派生无损/有损 WebP，交替执行原解码与缩放解码；未指定图片时生成固定图案。计时不包含编码、任务排队或 GPU 绘制。回归涵盖索引错误恢复/未变文件/取消、浏览结果失效/时间筛选/Unmapped、解码并发上限、透明度与 EXIF 旋转。
-
-本轮 workspace 791 通过、8 个显式忽略的性能测试；fmt/check/clippy、关闭音频的视频构建及 audio-opus/audio-seekable 检查、native-smoke validate 通过。原生 tday 检查音频卡片紧凑行距/上下留白、同一 Asset Preview 的播放→暂停→继续、重播和列表按钮同步；暂停沿用当前 Player，继续不重建解码器。协议升至 v9，旧 Editor/Engine 必须成对更新。系统输出的听感未代替用户验收。
-
-### 运行时预取预算
-
-原数量限制继续保留；非关键图片纹理 payload 与内存音频另受 128 MiB 保留预算约束，当前显示/显式 blocking 不淘汰，流式 Opus 不按文件长度计费。尺寸未知时暂停追加，超限项延后到新计划，避免同计划重复解码。
-
-固定计费输入对照原来的 8 项数量保留与新增预算：8×4 MiB 为 32→32 MiB；8×64 MiB 为 512→128 MiB。命令/原始输出在 `target/authoring/performance/prefetch/policy.log`：
-
-```sh
-cargo test -p keine --lib scene::assets::tests::speculative_budget_preserves_priority_and_never_evicts_current_assets -- --nocapture
-```
-
-这是缓存计费合同回归，不是进程 RSS、GPU 实占或 FPS 测量；128 MiB 是初始政策，机器性能测量仍在独立阶段。回归覆盖优先级、当前资源保护、未知尺寸/延后、render extraction 后计费保留，以及流式/内存音频区分。
-当前 workspace 783 项通过、8 项显式忽略；publisher 324 项、无音频 video-native 8 项通过；fmt/check/clippy、可选功能构建、native-smoke 与发布 workflow YAML 解析通过。publisher.key 迁移验证身份、公钥与根密钥保持不变。
-
-### 独立性能阶段（其余项目待测）
-
-剩余范围为 Editor 完整帧时/大文档/搜索、Engine 启动与持续 CPU/RSS、实际 Preview FPS/GPU 帧时、粒子 GPU/全屏与瞬时峰值、音视频流与 Hakutaku I/O；使用现有 bench 与 portable benchmark 入口，不建立另一套采集协议。
-
-启动时固定同主机、同 release、同输入及分辨率；先记录基线，再定位与修改热点，最后保存前后原始命令/结果并复验功能。benchmark 自动构建/打包入口已取消；性能问题只在需要定位时按场景做本地测量，不要求整套平台跑分。
-
-功能阶段继续运行以下接口/正确性回归，不依赖帧率、耗时或机器性能阈值：
-
-| 接口 | 当前保留的测试合同 |
-|---|---|
-| Editor → Engine | 协议版本、长度边界、启动握手、崩溃重开、不同工程隔离 |
-| Performance 采样 | 实际采样间隔、CPU >100%、计数回退、缺测、PID 重用、peak 重置、有界历史 |
-| 源码 → Parser → Block | 全部 70 个插入入口、EYS 旧入口拒绝、分组字段与精确写回、换图省略保留；保存格式化的 token/语义不变、幂等、共享文档写入与撤销、外部冲突保护；保存前后 Text 选区、焦点与屏幕纵坐标保持，重复保存视口不动；自动聚焦的角色别名、旁白与角色继承 |
-| 资源与文件 | 改名/类型迁移、映射/文件共同撤销、冲突与路径隔离、导入失败回滚 |
-| Editor 交互模型 | 拖放取消/过期版本/嵌套几何、概览两端和独立平移、失去文档容器后的开页落点 |
-| Audio / Video / Media | 循环 rewind/Opus pre-skip、BGM sink 交接、视频 EOF/rewind/损坏输入、队列与解码预算 |
-| 发行与 benchmark | 正常包与 benchmark 分离、挂载覆盖、确定性 payload、保留目录识别；不执行跑分 |
-
-对应 owner：`tests/authoring/process.rs`、`crates/authoring`、`crates/editor`、`src/runtime/audio.rs`、`src/runtime/package/benchmark.rs`、`src/scene/video`、`crates/media`。现有 `tests/bench` 与 CI 正确性检查保持可编译，不因暂缓删除测试或接口。
-
-### 雨雪视觉与成本
-
-性能目标是合理开销下的良好表现，按相同硬件、分辨率和负载比较。
-HD 4600 在 5120×2880 的压力结果不能按 1080p 的帧率目标判错：像素量是后者约 7.1 倍。
-参考本机 LetsGal Studio 的 `ParticleObject` / `ParticleObjectsEffect` 与雨雪预设，
-保留平滑风变化、个体摆动和远近层次的思路；[官方粒子说明](https://docs.avg-engine.com/manual/writing/blocks/particle/)介绍预设与自定义参数。
-
-现有 emitter 批处理、每粒子 64 字节、60 Hz 模拟及每 emitter 256 上限不变。
-雨丝缩短并按落速/风向倾斜；雪片以轻微纵横飘动、旋转及边缘朝向变化增加层次。
-省略 wind 时有缓慢阵风；显式 wind 固定风速。默认落速保持稳定，显式重力/阻力继续生效。
-原纹理优先，程序生成纹理只用于没有指定纹理的粒子。
-
-对照命令与原始日志保留在 `target/performance/weather-behavior/`。
-使用同一 M5 Pro / Metal、profiling 优化构建、1280×720 可见窗口与 continuous 模式；
-编译和原生画面检查结束后交替运行旧/新各三轮，预热 3 秒、采样 8 秒。
-CPU 为采样期间 `(user+system)/wall`，一个核心为 100%；p99 是帧间隔，包含呈现节奏。
-三轮中位数如下；CPU 跨轮波动明显（雨：旧 19.07–20.61%、新 10.06–20.53%；
-雪：旧 9.65–19.97%、新 9.73–18.51%），因此不据此宣称提速。
-
-| 用例 | 数量 | CPU % 旧 → 新 | FPS 旧 → 新 | p99 ms 旧 → 新 |
-|---|---:|---:|---:|---:|
-| 雨 | 256 | 19.81 → 18.92 | 60.0 → 60.0 | 18.23 → 18.03 |
-| 雪 | 256 | 14.39 → 10.94 | 60.0 → 60.0 | 17.61 → 17.54 |
-
-旧雨第二轮有未归因的 102.87 ms 长帧；保留完整日志，不声称零掉帧。
-
-```sh
-cargo build --locked --profile profiling --no-default-features --features bundled-opus,ui-sounds,startup-metrics,video-native --bin keine
-# before/after/keine 分别保留修改前后构建；run.py 顺序运行以下雨/雪命令各三轮。
-target/performance/weather-behavior/before/keine perf tests/fixtures/native-benchmark --timeline bench_particle_rain_256 --seconds 8 --mode continuous --window 1280x720 --raw
-target/performance/weather-behavior/after/keine perf tests/fixtures/native-benchmark --timeline bench_particle_rain_256 --seconds 8 --mode continuous --window 1280x720 --raw
-target/performance/weather-behavior/before/keine perf tests/fixtures/native-benchmark --timeline bench_particle_snow_256 --seconds 8 --mode continuous --window 1280x720 --raw
-target/performance/weather-behavior/after/keine perf tests/fixtures/native-benchmark --timeline bench_particle_snow_256 --seconds 8 --mode continuous --window 1280x720 --raw
-```
-
-fmt/check/Clippy、workspace 909 passed / 21 ignored（含 vendor 测试，IPC 放行重跑）、
-无默认音频的 video-native 粒子回归 12 passed，以及 native-smoke validate 通过。
-Computer Use 直接检查了原生雨雪画面。Windows/Linux 核显上的成本和实际项目的视觉效果仍需对应硬件验收。
-
-粒子优化实测：Apple M5 Pro / Metal，release LTO，仅额外保留采样符号。
-tday 临时追加独立 benchmark fragment，复用同一背景，结束后逐字节恢复脚本。
-可见窗口 1920×1080 / scale 1 / Fifo，`scene` profile 隔离 UI/对白绘制。
-本组 CPU 对照使用旧 `perf` 的 60 Hz 唤醒模式，不作为高刷新率/全屏验收证据。
-旧/新二进制交替运行三轮；每轮预热 3 秒、采帧 12 秒，下表为中位数。
-
-| 用例 | 粒子数 | CPU % 前 → 后 | FPS 前 / 后 | p99 帧间隔 ms 前 → 后 |
-|---|---:|---:|---:|---:|
-| 无粒子对照 | 0 | 12.69 → 12.09 | 60.0 / 60.0 | 17.89 → 18.04 |
-| 大雪 | 192 | 15.81 → 12.49 | 60.0 / 60.0 | 17.97 → 17.79 |
-| 16 层大雪（压力用例） | 3,072 | 22.12 → 21.86 | 60.0 / 60.0 | 18.41 → 17.92 |
-
-CPU 为 `time` 的 `(user+sys)/real`，含启动和预热；帧间隔排除预热，并非 GPU 执行时长。
-18 次短测均为 720 帧；新版最大帧间隔 28.11 ms。
-已移除 `perf` 独有的固定 60 Hz 唤醒计时，采用与正常播放一致的更新方式。
-macOS 活跃帧按 `OnMonitor` 的实际刷新率安排 deadline，合成 redraw 不再额外触发更新；
-输入在下一个显示周期消费，静态/后台休眠规则保持不变。未知刷新率及其他平台保持 Continuous + Fifo。
-旧 60 秒测试片段结束早于采帧结束，其结果只供诊断，不能作为帧边界验收；
-全屏检查延长临时片段持有时间，覆盖预热和完整采帧。
-普通雪景 CPU 下降，压力场景 CPU 变化很小，不能声称全局提速或 FPS 提升。
-“不因优化新增掉帧”为验收硬边界，粒子数量、质量及运动插值保持不变。
-
-原始 `sample` 7 秒 / 1 ms：旧版压力场景网格分配/上传路径 252/627 个非等待叶样本，
-其中顶点打包/拷贝 112 个样本，不能相加；粒子运动仅 26 个样本。
-新版对应 Mesh 分配/打包路径为 0，粒子更新 18/437 个非等待叶样本；
-仍有 ShaderBuffer 上传与 Metal staging 成本，采样分布不能替代前后帧耗时测量。
-锁定 Bevy 0.19 源码确认：旧 Mesh 修改会释放并重建顶点/索引分配；
-现用固定 ID/角点网格和 ShaderBuffer，同尺寸更新通过 `RenderQueue::write_buffer` 复用目标 GPU 缓冲。
-四顶点展开放到顶点着色器；每粒子动态数据由 216 降至 64 字节（减少约 70%），
-固定 UV/索引只在创建时上传，移除无效动态 AABB 重算，密度变更/清除同步释放缓冲。
-
-```sh
-cargo rustc --release --bin keine -- -C strip=none -C debuginfo=1
-/usr/bin/time -lp target/particle-profile/before/keine perf projects/tday --seconds 12 --timeline profile_snow --camera scene
-/usr/bin/time -lp target/release/keine perf projects/tday --seconds 12 --timeline profile_snow --camera scene
-sample <engine-pid> 7 1 -file target/particle-profile/after-snow16.sample.txt
-```
-
-原始临时源码、旧二进制、逐轮命令/日志/调用栈、分析与构建记录在 `target/particle-profile/`；
-交替结果在 `paired/`，长时间帧边界检查在 `frame-gate/`。这些 timeline 已从 demo 恢复移除。
-隐藏窗口仅作准备路径对照，不作为绘制/FPS 证据；采样器运行不计入帧边界验收。
-fmt/check/clippy 通过；workspace 752 passed / 8 ignored（IPC 在沙箱外重跑），
-粒子默认功能和 `--no-default-features --features video-native` 各 10 passed。
-原生 Metal 窗口确认雪/雨绘制；用户目测确认全屏无卡顿并要求停止窗口验收。
-120 Hz 全屏压力场景常态 p99 从 17.14 降至 10.28 ms；完整日志包含窗口切换/操作，
-用户确认验收期间操作过窗口，不能把这些运行当成零长帧或零丢帧的客观证明。
-其他平台和有效 GPU pass 时间尚未测量。
-Metal 的 Bevy RenderDiagnostics 输出 0 不能作为 GPU 时间；
-透明混合、场景/文本框模糊及原先瞬时峰值不在本轮性能结论内。
-
-最近已记录的 0.11.0 → 0.11.1 macOS arm64 / Rust 1.97.1、warm-cache 中位数：
-
-| 操作 | 输入 | 前 ms | 后 ms |
-|---|---|---:|---:|
-| Block projection | 5,000 commands | 156.142 | 3.759 |
-| Native parser | 5,000 commands | 87.422 | 2.476 |
-| 完整索引 | 500 files / 25,000 lines | 40.521 | 35.754 |
-| WorkspaceSession | 165 LetsGal entries | 1.032 | 0.702 |
-
-原始 probe/paired logs：`target/authoring/editor-audit-20260929/0111/`。
-普通 probe 为 11 samples；增量单文档索引 31 samples，中位数 2.341 ms。
-小输入完整索引有变慢；这些数字不是 UI FPS、GPU、磁盘或长期内存结果，不声称全局改善。
-
-Performance 进程采样的 release probe（macOS arm64，11×5,000 次）复用实际
-`preview/performance/process.rs`：关闭采样中位数 0.0002 µs，启用系统查询 0.3869 µs/次。
-Mach timebase 换算的 CPU 增量 0.299014 s，`getrusage` 对照 0.299035 s（ratio 0.9999）。
-这只测本机系统查询，不代表完整 View/渲染开销；原始命令与结果位于
-`target/authoring/performance/probe.rs`、`process-probe.txt`。
-Focused tests 覆盖实际 elapsed / >100% / counter reset、有界过期、PID 重用时 peak 重置、
-unavailable 缺测和 Mach 换算边界；不新增验收工程。
-
-## 当前验收边界
-
-当前唯一 demo 为 `projects/tday`：按当前已修改剧本拆为 13 个章节文件与小型入口 `main.shou`，共 14 scene / 2644 action。拆分逐段字节可重组为原 main，Loader 前后完整动作内容摘要相同；源文件和资源/角色/对象清单未变。
-原工程 4403 个文件的路径与 SHA256 均未改变。副本跳过缺失的 equipment_power_down.wav、
-window_slam.wav、convenience_store_chime.wav，位置标注在脚本开头；旧本地 demo 已移入废纸篓。
-分文件迁移回归覆盖 LetsGal 同章多 fragment、独立入口、跨文件 call/goto、嵌套目录、文件名冲突、初始变量及跨文件聚焦规则；11 项通过。publisher workspace 845 项通过 / 8 项忽略，新增 LetsGal 分组用例另行通过；fmt、publisher Clippy、native-smoke 与当前 tday 校验通过，Editor 中入口及独立章节已打开检查。
-
-保存位置修复：格式化后恢复映射选区和滚动位置，Blocks 保留映射后的测量行高与编辑框。屏幕坐标回归通过；publisher workspace 847 项通过 / 8 项忽略（IPC 在沙箱外重跑），fmt、Clippy 与 Editor 构建通过。macOS 新 Editor 已打开，用户确认 Ctrl+S 保存位置验收成功。
-完整 `letsgal-timeline` fixture 的 migrate 因既有 `SelectSpriteImage` 不支持而拒绝发布目标；本轮未扩展该能力。
-震动振幅/频率补间、混合镜头原子动作、带 ID 单次/循环音效及淡入淡出、退格和点击等待的
-解析/执行/迁移 roundtrip 回归通过。IR schema v6，Editor–Engine 协议 v9，save 仍为 v11。
-fmt、workspace check/clippy/tests（publisher）、官方 LetsGal 外部示例验收、native-smoke 与 tday
-校验通过；无默认 feature + video-native 的 tests check 通过。tday 唯一警告为标题背景未被脚本引用。
-macOS 新 Editor/Preview 已启动 tday，日期字幕、排练室背景与开场对白可见。
-按用户要求，完整剧情、画面和实际音效验收交由用户后续完成；素材仍为开发格式，未做发行规范化。
-
-Editor 资源导入已实现即时规范化，源文件只读、成品留在目标资源目录；PNG 透明像素、
-JPEG 方向、动态图片拒绝、冲突/失败清理和文件/映射共同撤销回归通过。
-本机显式运行 FFmpeg 验收：WAV/FLAC/MP3/Vorbis → Opus 的解码样本数不变、
-合规 Opus 字节不变、损坏音频失败不留输出，以及 MOV → H.264 MP4 实际解码均通过。
-这两项外部工具测试默认 ignored，安装 FFmpeg 后运行：
-`cargo test -p keine-editor --lib workspace::file_ops::tests:: -- --include-ignored`。
-fmt、workspace check/clippy（publisher）、workspace tests（781 passed / 3 ignored）、
-Editor debug 构建与 native-smoke/tday 校验通过；Trash/IPC 测试在沙箱放行后通过。
-本轮新导入的界面操作与主观媒体验收留给用户；存量 tday 素材仍保留迁移时的开发格式。
-后续资源状态提示已通过 workspace check/clippy/tests 与 Editor 构建；macOS 新 Editor
-打开 tday 的 Assets 已目测 `Resource · PNG` 信息行，保留完整缩略图及既有 ID/引用数。
-
-资源统计/转换：publisher workspace 854 passed / 8 ignored，fmt、Clippy、构建和 native-smoke 通过；FFmpeg 音频转换测试另行显式通过。回归覆盖文件头格式识别、别名体积去重、精确缺失引用范围、转换冲突/失败与原文件保护，以及发行副本排除未登记的兼容源素材。
-macOS Editor 实测图标统计卡、Convert all 和完成文件数进度条（收起卡片仍可见）：tday 50 张 WebP / 34 条 Opus 全部完成，登记资源从 757.1 MB 降至 169.1 MB；85 个原文件 SHA256 与 13 个脚本未变，清单仅改变资源路径和引号。转换后 tday validate 通过，保留 1 条未引用背景警告。源码红色波浪线与 Explorer 错误数已有模型回归，完整交互验收仍需用户确认。
-
-```text
-0.13.0 / EYS v2.0
-├── macOS：原生 Engine、Text/Block/Inspector 写回、保存重开、故障恢复已有运行态证据
-├── 最新工作台：下拉框、Text 概览、全文搜索、Asset Preview 关闭/重开已目测
-├── 每句文本结束开关：灰/蓝状态、增删关联指令、Inspector 同步及 Cmd+Z 恢复已目测
-├── Asset 生命周期：macOS 改名、Unmapped/Remap、系统 Trash、Type 迁移、撤销/重做与保存重开已目测
-├── Performance：macOS 启停/失败恢复、关闭后持续采样、重开历史、重启 peak 重置已目测
-├── UI 容器简化：多标签圆角、切换、面板缩放/滚动与跨分组拖放已用新 release 目测
-├── 中文 IME：用户已通过本轮无固定延迟输入验收
-├── Audio：macOS 两秒 Opus 循环与两次 BGM 交接已由用户实听通过
-├── 单屏：2× 默认/最小/宽矮 Editor 窗口、Preview 最大化与全屏黑色留白已目测
-├── 待显示验收：1× 与 Preview 极端比例；多显示器按用户要求延后
-├── 独立性能阶段（暂缓）：实际 Preview FPS/GPU 帧时、持续 CPU/RSS、粒子与其他热点
-├── Windows x64 / Linux：构建 CI 与运行态验收分别看待；运行态暂缓
-└── 发行：正式签名/notarization 脚本已接入；实际公证待证书与凭据
-```
-
-当前代码已通过 fmt、workspace check、clippy、Editor debug 构建与 native-smoke validate；默认 workspace tests 729 passed / 1 ignored，no-default-features + publisher workspace tests 763 passed / 1 ignored。无默认 feature 与 bundled-opus 的音频边界各 2 项及 video-native 视频 8 项回归通过。audio-opus 单独配置的 check 通过，测试链接因本机缺少系统 libopus 未完成；bundled-opus 覆盖相同的无 seekable 路径。组合 hot-reload/video-native/video-ffmpeg/publisher 的 check 通过。
-测试覆盖源码/文件事务、macOS 废纸篓恢复、对白尾部参数解析/执行/迁移；这些不代替完整运行态验收。
-
-功能约定核对：EYS 统一入口/旧写法拒绝、Position/Layout 分组、稀疏换图与 scale、逐立绘 light、对白尾部选项和行内 wait；工作台下拉框、Text/Block 概览、全文搜索、Preview 关闭、拖放、序号/执行标识、结束开关、输入检测；资源网格/音频列表、筛选/Tags、物理改名/类型移动、Unmapped/Remap/Trash；迁移裸 ID/objects 映射/particles 清单和原子镜头动作均有当前实现与功能回归。原生视觉证据与用户通过项以上表为准。
-本轮补齐：sprite.update 插入模板省略位置/缩放，Loader 与 Block 投影不再把对白后的 return/break 吞作语音 ID。插入模板回归扩展为全部 70 个入口。
-这两项新修复已换上新 Editor/Engine 原生复验：插入模板只生成目标与图片参数；对白后的 Return/Break 各自显示为 Block，实际执行能返回调用处、退出循环，换图后位置与缩放保持。原有未保存草稿保留，项目文件未改写。
-无解码器配置的 Preview 曾因 AudioSource 未注册而 SIGABRT；现在由音频配置入口补齐类型注册，并保留已有音频资源。回归覆盖普通/图库播放及已有 registry 不被重建；无音频构建原生 Preview 已验证缺少 Opus 时不崩溃、对白仍能继续。Preview 失败长提示改为固定尺寸图标，详情留在 tooltip/Output；最小窗口已检查图标不遮挡 Text/Blocks 标签。
-宽矮 Editor 的 Text/Blocks、概览、资源框和 Inspector 滚动已目测。按用户确认，极窄窗口通过调整分隔线或关闭一列 View 使用，不要求三列同时保留的极限布局适配；撤销专为此添加的类型标识收缩/裁剪，不再列为本轮待修复项。
-音频复验复用临时环境工程，播放无首尾静音的两秒 Opus 纯音；用户确认循环无停顿/爆音、第一首→第二首→第一首的 1 秒淡入淡出均正常。停止指令后脚本继续到下一句。此结果只覆盖本机该输入，不推定所有设备/素材已通过。临时新增脚本/音频已移除；环境工程 53 个文件和 letsgal-native 95 个文件的路径与 SHA256 均恢复基线。
-Windows/Linux 系统废纸篓与进程指标已实现，CI 对三平台增加实际进程查询与系统入篓/撤销测试；本机交叉编译只证明平台代码可编译，不代替 Windows/Linux 原生运行态验收。正式签名/notarization 已有可选脚本入口，实际执行仍需用户证书和 Keychain profile。跨平台/显示适配、完整 tday 剧情及主观媒体保持独立验收，不混入性能阶段。
-平台补齐验证：fmt/check、publisher clippy、默认 workspace 787 passed / 8 ignored、
-无默认功能 + publisher workspace 821 passed / 8 ignored；macOS 系统 Trash 与 IPC
-在沙箱放行后通过。CPU/RSS 查询与单位/非法计数回归、Linux 恢复记录/冲突/不安全
-Trash 拒绝回归通过；新增平台 owner 与测试在 Windows GNU、Linux GNU 目标交叉编译。
-平台编译隔离依赖 GPUI，实际 Editor 原生测试接入三平台 CI；该 CI 本轮未远程执行。
-macOS 新 Editor debug 构建与开发包签名通过，ZIP 解压后的两个 app 严格验签通过；
-正式 Developer ID 公证、Windows/Linux GUI 与显示验收未执行。
-
-EYS v2.0 的配置版本为 2；默认值、显式旧版/未知版拒绝及迁移输出版本已通过回归。0.12.0 的 Editor/Engine 构建与版本输出、fmt/check/clippy、workspace tests、可选 feature 和 native-smoke/letsgal-native 校验通过。
-统一入口的解析、执行、迁移及旧入口拒绝已通过回归；IR schema 为 v6。
-Position/Layout 分组语法覆盖解析、旧平铺字段拒绝、嵌套补全、Inspector 精确范围/批量写回及迁移 Action 对等回归。
-当前 publisher workspace tests、clippy、含 hot-reload/video-native/video-ffmpeg/publisher 的 check 与 debug 构建通过。
-macOS 原生界面已检查 Position X、viewport Height 修改保存保留其他参数，以及淡色 viewport 补全用右方向键接受。
-Block 拖放采用固定尺寸/布局快照、中央落点判断、200 ms 位移预览和一次写回。macOS 新构建已目测普通行重排、Option 携带 Goto、整个 Choice 移动、跨分支拒绝、面板外取消及一次撤销；连续操作后嵌套高度/间距未增长，试改已撤销。用户已通过本轮 Block 拖放验收。几何、取消、文档身份/版本、结构与重复行映射回归通过。
-sprite.update 的省略保留、显式重设、缺席目标、动画目标与编译包 roundtrip 回归通过；迁移保留旧输入的重设行为，统一缩放输出 scale。无默认 feature 的 video-native 视频测试已有 8 项通过证据。本地沙箱阻断 IPC socket 时放行后重跑，通过才算完成。
-现有 letsgal-native（10 scene / 1008 action）重新校验通过，仅一条未使用背景资源警告；环境光工程（65 scene / 1137 action）已有分组写法校验证据；native-smoke 无警告。
-环境光的线性取样、明暗/色偏分离、透明像素、GPU 提取后缓存及重载边界已通过回归。
-macOS debug 原生预览用只读复制的 tday 教室、海边夕阳、暴雨卧室目测；
-用户通过夕阳和夜景，采用验收强度 1.0 为默认。临时工程位于
-`/private/tmp/keine-environment-tday`，已只读复制全部 46 张背景并逐文件校验内容一致，
-按章节提供目录及前后切换，先展示画面再打开导航；工程校验无警告。
-用户反馈大部分画面正常并结束本轮验收；这不等于逐张无条件通过。
-逐立绘 light 开关覆盖严格布尔解析、独立对象状态、恢复开启及存储回归；
-原生 Inspector 的 Light 灰/蓝状态切换与保存写回已检查；旧作者字段 environment_light 被拒绝。
-同背景双立绘的开启/关闭对照已检查。
-no-default-features + video-native 测试也通过。
-临时工程未加入仓库，原背景未修改。
-这些是本机画面证据，不代表物理光照、全素材效果或 Windows/Linux 运行态验收。
-
-遮幕/遮罩以计时完成解除等待，不能因透明度提前舍入到目标值而停止更新。2.2 秒 / 60 FPS 的脚本续行与已到目标透明度的等待解除回归通过（默认 feature 和 no-default-features + video-native）；fmt、workspace check/clippy/tests 通过。macOS 新 Engine 在 letsgal-native 的铁路雪景已检查开幕后进入对白，以及自动播放后续对白、收幕并返回标题；未重跑迁移。
-
-引擎窗口底色显式设为黑色。macOS 新 Engine 全屏雪景已目测上下留白为黑色，舞台和对白正常；fmt、workspace check/clippy/tests 与 debug 构建通过。
-
-macOS 新 Editor 在现有 letsgal-native 验收 Keep files → Unmapped → Remap、映射/未映射资源的系统 Trash、每种操作的撤销/重做；解绑和 Background → Figure 物理迁移均保存并关闭重开验证。PNG → Voice 被格式检查拒绝；改变类型后不兼容引用进入 Problems，撤销后消失。文件内容始终保持同一 SHA256；验收后 demo 的全部 95 个文件路径和内容恢复至基线。
-关闭所有源码页后，资源撤销重新开页曾落入左侧窄栏；现在按存活文档组、Output 组、新文档组依次选择。落点只读取已登记的面板 ID 与布局，避免资源回调内重复借用正在更新的面板。macOS 新构建已验证无源码页时解绑开页，以及保存/关闭后撤销、再次关闭后重做，均落在中央且文件可恢复。容器消失及重新插入回归、fmt、workspace check/clippy/tests（727 passed、1 ignored）与 Editor debug 构建通过；IPC 测试放行沙箱后重跑。
-
-视觉验收直接操作当前构建的原生应用；不得为采证新增 screenshot hook、环境变量协议或自动化。
-输入检测由确认文字的 Change 事件触发，取消补全 120 ms、语法检查 180 ms 与派生索引 60 ms 固定等待；后台任务保留取消和过期结果保护，语法诊断写回前检查组合状态。fmt、workspace check/clippy/tests（727 passed、1 ignored）和 Editor debug 构建通过；macOS 新构建已目测淡色补全、右方向键接受、错误提示及撤销恢复。用户按本轮验证步骤反馈通过，中文 IME 组合/候选及确认后检测记为本机验收通过；不扩展为所有输入法或其他平台通过。
-构建、测试、包签名和 UI/音视频验收必须分别报告。历史一次通过不替代当前代码复验。
-
-Editor 输入与窄窗回归：`cargo test --workspace --features publisher,video-native` 为 910 passed / 8 ignored（IPC/Trash 在沙箱外运行）；fmt、workspace check（另含 hot-reload）、all-targets Clippy 和 Editor debug 构建通过。GPUI 回归覆盖 1222 px 右侧文档 Dock 在 1200/640/480/900 px 窗口中的控件边界，以及连续退格保持输入实体/焦点/选择、不逐字刷新索引、Enter 提交和输入中保存。新原生窗口的并排布局与退格手感尚待重启后目测；这些正确性回归不代表 CPU/帧时性能采样。
-
-镜头首次晃动修复：已有晃动之间仍按选定振幅/频率补间；无前序晃动时直接采用指定值，避免公交场景的 600 秒持续时长变成从零渐强。`cargo test --workspace --features publisher,video-native` 为 912 passed / 8 ignored（沙箱外运行），fmt、workspace check（含 hot-reload）、all-targets Clippy 和 Engine debug 构建通过。回归覆盖首次启动一秒内的非零位移、持续时长终点、外层等待边界、既有震动补间、迁移→原生解析→启动，以及 Preview 跳到公交对白后继续晃动；无默认功能 + video-native 的公交 Preview 回归另行通过。native-smoke 与当前 tday validate 均为零警告。tday 文件未改写，实际公交场景仍待新 Preview 目测。
-
-音效统一与自然尾部淡出：`se(asset, id: ..., loop: true, volume: ..., fade: ...)` 为唯一循环写法，旧 `se.loop` 已移除；Parser、迁移、Editor 补全与 Inspector 同步。单次 `fade_out` 按解码样本在结尾渐隐，不截断音频；循环换资源等新 sink 实际就绪后交叉淡化，`se.stop(*, fade: ...)` 清理单次和循环音效。回归覆盖立体声一致增益、短音频、seek、加载/暂停时序、全局停止顺序、同 ID 重新播放与迁移 round-trip。IR schema 为 v7，旧编译包须重新编译；Save v11 布局与 authoring 协议 v9 不变。BGM 无效 fade/loop/volume 报错，不再静默采用默认值。
-
-`cargo test --workspace --features publisher,video-native` 为 924 passed / 8 ignored（IPC/Trash 在沙箱外运行）；fmt、workspace check（含 hot-reload）、all-targets Clippy 通过。无默认音频的 video-native check、仅 bundled-opus 与仅 audio-wav 的尾部淡出专项测试通过；Engine/Editor debug 构建及 native-smoke、native-benchmark、tday validate 均通过、零警告。tday 按磁盘内容局部修复：替换 32 条旧音效语句，按用户确认将 4 处开水阀改单次播放，补回缺失播放 ID、删除无对应播放的停止，浴室雾气/水波淡入为 450ms，7750ms 镜头补间等待完成后再重置，8 处单次音效显式添加尾部淡出。13 章连接、立绘目标和音效停止目标检查通过，979 条对白与修改前逐字一致，结束时没有遗留循环音效；资源和其他演出参数保留。当前修改前剧本及哈希记录保存在 `projects/.backups/tday-script-audio`。原生全剧情视听与 Windows/Linux 运行尚未验收；代码回归不代表这些验收通过。
-
-LetsGal v2 角色位置修复：画布中心百分比转换为 Kēne 的水平中心偏移与底部基线，基准高度按表情→角色→全局优先级计算；旧无版本基线 fixture 保持原行为。登场/更新、局部距离方案覆盖、表情高度覆盖、原生渲染中心和缩放边界回归通过。当前 tday 的 6 个章节共 45 个位置字段已修正，逐字比较确认其余内容不变，修改前副本在 `/tmp/keine-portrait-position-backup`；不重新迁移或替换资源。`cargo test --workspace --features publisher,video-native` 为 917 passed / 8 ignored（IPC/Trash 在沙箱外运行）；fmt、check（含 hot-reload）、all-targets Clippy、无默认功能 + video-native check 和 Engine/Editor debug 构建通过。native-smoke、native-benchmark、tday validate 均为零警告。新版 Editor 已启动；Computer Use 无法定位未打包的 `target/debug/editor`，未记为画面验收通过。
-
-Backlog 旧记录透明度修复：逐条错开入场仅用于最近 14 条，较早记录跟随面板淡入，避免动画停止后仍透明但能滚动/回跳。100 条实际记录生成的对白、姓名、回跳和语音图标在动画结束后全部可见，关闭时一致淡出；原有滚动方向和弹性边界回归保持通过。workspace（publisher/video-native）918 passed / 8 ignored；fmt、check（含 hot-reload）与 all-targets Clippy 通过。记录内容及回跳边界未改动；当前未打包 Preview 无法由 Computer Use 定位，实际画面验收待重启新版 Preview。
+历史粒子对照使用旧 perf 的 60 Hz 唤醒策略；不能作为当前高刷新率 GPU 证据。
+雨/雪视觉调整在 `target/performance/weather-behavior/` 有交替三轮数据，CPU 波动明显，未主张提速。
+资源拖放热点仍含 GPUI 根视图 prepaint/布局/样式分配；曾撤回无进程级收益的字段缓存试验。
+后续仅在实际工作流出现可测问题时再定位，不按历史待办重复启动全面跑分。
+
+### Hakutaku v2
+
+独立库的格式、完整配对命令和测试 owner 位于锁定版本的
+[FORMAT](https://github.com/maincoretech/hakutaku/blob/8d637d5629b84f99251fd445366892bdb3c7cf2b/docs/FORMAT.md)、
+[PERFORMANCE](https://github.com/maincoretech/hakutaku/blob/8d637d5629b84f99251fd445366892bdb3c7cf2b/docs/PERFORMANCE.md)。
+Kēne 的接入证据在 `target/performance/quality-review/v2-*`；库的原始日志在相邻仓库 `target/v2-review/`。
+
+同机三轮交替 v1/v2、过程内中位数再取中位数：
+
+| 场景 | v1 → v2 |
+| --- | ---: |
+| 10 万资源快照 | 8,888,370 → 6,304,768 B |
+| 10 万资源解码目录 | 10,044,939 → 7,928,907 B |
+| 打开目录 | 10.484 → 9.355 ms |
+| tday 随机音频读取 | 300.538 → 130.815 ms |
+| tday 顺序读取 | 49.418 → 49.693 ms，无改善主张 |
+
+真实输入含 35 Opus、35 WebP、13 shou，共 80,907,088 B；是暖宿主缓存下的合成 seek，
+不是播放延迟。音频请求字节 −57.7%、调用数 +65.5%；真实素材快照反而
+42,113 → 73,907 B。视频块与图片 CDC 未改，不外推为全部媒体加速。
+50 万资源、1024 次小补丁和 8 路并发读取曾通过；发布夹具峰值 RSS 约 1.33 GB，不是运行时预算。
+新 wire-format fuzz、其他平台 GUI/游戏运行仍须各自验证。
+
+Kēne 发布端实测序列下限 42、无变化重打包 42、提高下限后 100；非法/零下限拒绝且
+原序列 100 包仍有效。v1 必须从源素材重建 v2；升级流程与客户端回退策略见[发布指南](release.md#hakutaku-020--v2)。

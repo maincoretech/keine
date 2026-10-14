@@ -1,6 +1,6 @@
 # Kēne
 
-Native visual-novel engine and source-backed Editor. Rust 2024, Bevy 0.19.1, GPUI.
+Native visual-novel engine and source-backed Editor. Rust 2024 (MSRV 1.99.0), Bevy 0.19.1, GPUI.
 Native authoring uses Eiyashou `.shou`; LetsGal Studio and frozen WebGAL compatibility inputs are supported.
 Shipping projects use Hakutaku v2, WebP images and Ogg Opus audio.
 
@@ -8,31 +8,34 @@ Shipping projects use Hakutaku v2, WebP images and Ogg Opus audio.
 
 <img src="src/assets/branding/keine-portrait.png" width="180" alt="Kēne character artwork">
 
-## 下载
+## Downloads
 
-- `editor-latest`：独立 Editor，内含同版本 Preview；main 通过 CI 后自动更新。
-- `tday-latest`：tday 试玩，Actions → Release Engine → Run workflow，仅手动。
+- [`editor-latest`](https://github.com/maincoretech/keine/releases/tag/editor-latest): standalone Editor with a matching Preview Engine; updated after successful main-branch Desktop CI.
+- [`tday-latest`](https://github.com/maincoretech/keine/releases/tag/tday-latest): tday demo; built only by manually running **Release Engine**.
 
-下载与正式发行流程见 [发布文档](dev/docs/release.md)。
+See [publishing](dev/docs/release.md) for package layouts, signatures and project releases.
 
 ## Run
 
 ```sh
+cargo build --locked -p keine --bin keine --features video-native,video-ffmpeg
 cargo editor projects/tday
 cargo validate tests/fixtures/native-smoke
 cargo dev tests/fixtures/native-smoke
-cargo migrate /path/to/letsgal/tday projects/tday
-cargo bundle <project> --output <release-directory>
 ```
 
-`projects/tday/` contains the playable authoring demo with WebP/Opus media. Its PNG/WAV originals and other local projects are ignored; `tests/fixtures/` contains the regression projects.
+Use the pinned toolchain and install the native SDKs listed in the [development guide](dev/docs/testing.md#开发环境). The development alias above enables FFmpeg; macOS prefers its native video backend.
+Build the Engine before starting Editor Preview: Editor launches an existing executable and does not run Cargo.
+Migration and formal bundling are separate [publisher operations](dev/docs/release.md#cli).
+
+`projects/tday/` is a sealed, playable demo with tracked WebP/Opus media. Use a copy for experiments; its PNG/WAV originals and other local projects are ignored. `tests/fixtures/` contains the regression projects.
 The Editor controls a separate native Engine window. Text, Blocks and Inspector edit one source document.
 Compatibility JSON is read-only; migration is explicit and preserves its input.
 
 ## Script performance
 
 Measured on **Apple M5 Pro (15 logical CPUs), 24 GiB RAM, macOS 27.0.1**,
-2026-10-11, using the 0.14.3 working tree and optimized Cargo benches.
+2026-10-11, using the 0.14.3 working tree and optimized Cargo benches. These are historical measurements, not a 0.16.0 rerun.
 Single-threaded, warm in-memory input, 10 samples:
 
 | Workload | Approximate result |
@@ -76,6 +79,7 @@ dev/scripts/  build and fixture scripts
 - [Editor](dev/docs/editor.md)
 - [Development, testing and acceptance](dev/docs/testing.md)
 - [Publishing](dev/docs/release.md)
+- [Android build and device acceptance](dev/docs/android.md)
 - [Compatibility limits](dev/docs/compatibility.md)
 
 Current version: 0.16.0. macOS is the current acceptance focus; Windows/Linux runtime acceptance is deferred.

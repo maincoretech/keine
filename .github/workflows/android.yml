@@ -2,9 +2,9 @@ name: CI Android
 
 on:
   push:
-    paths-ignore: ['dev/docs/**', 'README.md', 'AGENTS.md', '.github/dependabot.yml']
+    paths-ignore: ['dev/docs/**', 'README.md', 'AGENTS.md', '.github/dependabot.yml', 'crates/editor/**']
   pull_request:
-    paths-ignore: ['dev/docs/**', 'README.md', 'AGENTS.md', '.github/dependabot.yml']
+    paths-ignore: ['dev/docs/**', 'README.md', 'AGENTS.md', '.github/dependabot.yml', 'crates/editor/**']
   workflow_dispatch:
 
 concurrency:

@@ -1,5 +1,10 @@
 # 架构与数据合同
 
+本文描述当前源码的职责和运行合同；语言、操作步骤、验收结果分别由其他指南维护。
+版本以 [`Cargo.toml`](../../Cargo.toml) 和各格式 owner 为准，历史测量不代表新版已重新验收。
+
+## 模块与依赖
+
 ```text
 keine/
 ├── crates/
@@ -21,9 +26,46 @@ keine/
 └── projects/        tday 示例工程；其他本机作者工程忽略
 ```
 
-依赖方向为 `core ← loader ← engine`。Runtime 只消费 typed `Program` / `State`，
+下表为正常依赖；测试依赖不改变运行时分层。
+
+| Owner | 直接依赖与职责边界 |
+| --- | --- |
+| `keine-core` | typed Action / Program / State、表达式和确定性执行；不依赖其他 Kēne crate 或 Bevy |
+| `keine-loader` | 依赖 Core、Hakutaku Core；适配源工程/挂载内容，产生 typed Program 与诊断 |
+| `keine-authoring` | 独立的版本化消息结构与有界分帧；不依赖 Core、Loader 或 UI |
+| `keine-media` | 有界 WebP 解码；可选 `icons` 支持图标输入，不拥有场景或文件事务 |
+| `keine` | Bevy 宿主，依赖 Core、Loader、Authoring、Media；`publisher` 才引入 Hakutaku Pack |
+| `keine-editor` | GPUI 工作台，依赖 Core、Loader、Authoring、Media；Bevy 仅用于 dev-dependencies |
+
+Runtime 只消费 typed `Program` / `State`，
 不解析 Editor JSON、工程兼容字段或包格式细节。外部编辑器逻辑留在 editor adapter。
 已有 Rust 模块/API 名保持兼容，文件按目录职责组织；不新增通用 backend、主题或插件框架。
+
+```text
+作者工程 → Loader adapters / 校验 → Program
+Program + 输入/宿主 → Runtime 调度 / Core 执行 → State → Scene / UI → Render
+Editor 源文档 → Authoring IPC → 独立 Engine Preview（临时持久化根）
+作者工程 → publisher 编译/规范媒体检查 → Hakutaku Pack → 发行包
+发行包 → Hakutaku Core / Loader → 编译 Program + 只读资源流
+```
+
+运行调度由 [`src/runtime.rs`](../../src/runtime.rs) 组装：PreUpdate 在 Bevy 输入之后收集事件；
+Update 按 Input → Sync → Layout → Ui 的系统集合排序；Last 协调相机输出、窗口生命周期和后台音频。
+Core 不拥有 OS/GPU/音频句柄；Scene/Render/UI 不另建剧本状态真源。
+Bevy 的局部改动分别记录在 [render](../vendor/bevy_render/KEINE-PATCH.md)、
+[winit](../vendor/bevy_winit/KEINE-PATCH.md)、[audio](../vendor/bevy_audio/KEINE-PATCH.md) 的补丁说明中。
+
+## 版本合同
+
+这些版本各自演进，不能用应用版本号推断 wire compatibility。
+
+| 合同 | 当前值 | 实现 owner |
+| --- | --- | --- |
+| Eiyashou 配置 | `script.version: 2` | Loader Native adapter；[语言指南](language.md) |
+| 编译 Program | envelope 1 / IR 7 | [`compiled.rs`](../../crates/loader/src/compiled.rs) |
+| 存档 / 设置 / 窗口 | 11 / 4 / 1 | Loader Store adapter / Storage / Runtime window |
+| Editor–Engine IPC | 10 | [`authoring`](../../crates/authoring/src/lib.rs)；两端成对更新 |
+| Hakutaku | 库 0.2.0 / wire v2 | 固定 Git revision；[发行指南](release.md#hakutaku-020--v2) |
 
 ## 内容与资源
 
@@ -129,9 +171,12 @@ release/
 
 编译 Program envelope v1 / IR schema v7 保存 typed 内容；发行资源由 allowlist 重建。
 包中不包含 `.shou`、WebGAL 脚本、LetsGal 作者工程或 publisher identity。
-Hakutaku 的字节布局以锁定依赖自身 `FORMAT.md` 为准；Kēne 不维护第二套 wire spec。
+Hakutaku 的字节布局以[锁定依赖的格式规范](https://github.com/maincoretech/hakutaku/blob/8d637d5629b84f99251fd445366892bdb3c7cf2b/docs/FORMAT.md)为准；Kēne 不维护第二套 wire spec。
 每个文件直接引用物理块；快照更新复用旧块并原子切换。随机读取不先解密整包到磁盘。
 签名和 AEAD 保证身份与完整性；离线内嵌密钥不承诺抵抗能调试客户端的攻击者。
+Kēne 当前以 `OpenPolicy::TrustFirstRelease` 打开包，没有持久化已接受的最高发行序号。
+`KEINE_HAKUTAKU_RELEASE_FLOOR` 只控制发布端新序号，不构成客户端防回退；
+未来若需要防回退，须由安装/更新 owner 持久化并传入 `RequireAtLeast`，不能只改打包变量。
 
 ## 必要限制
 

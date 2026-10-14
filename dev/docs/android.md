@@ -47,6 +47,7 @@ APK 校验沿 manifest 资源 ID 检查编译资源表、各密度 PNG 和 adapt
 独立 **CI Android** workflow 在 push/PR 或手动触发时检查依赖隔离、Android Clippy 与 Java lint，构建原生库与 APK，验证 NativeActivity
 启动符号、ELF 16 KB 对齐、APK 对齐及签名，确认 Vulkan/GLES feature closure，
 复核 APK 的 GLES/Vulkan 硬件声明，上传 `keine-android-arm64-engine` artifact。
+纯文档或仅修改 `crates/editor/**` 时跳过自动构建；混合修改共享源码/根 Cargo 清单/锁文件仍运行，手动入口不受路径过滤影响。
 此引擎 CI 不读取 publisher identity，也不打包 tday；原生构建缓存与桌面分开。
 Android 构建队列独立，不等待桌面/视频 workflow 结束。
 
@@ -178,7 +179,8 @@ adb shell am start -n moe.maincore.keine/.EngineActivity
 ## 验收边界
 
 交叉编译和 APK 校验不能代替手机运行。真机仍需验证启动/恢复、菜单触摸、滚动/滑块、
-输入法、音频与 GPU 效果；当前只承诺构建入口，不声称已经通过这些验收。
+输入法、音频与 GPU 效果。每次候选版本记录设备、包 SHA、后端与实际结果；
+旧版设备记录不能自动沿用到新版。统一证据边界见[运行与发行验收](testing.md#运行与发行验收)。
 
 ## 完整 Android benchmark 与 ADB 回传
 

@@ -50,6 +50,10 @@ jobs:
             -ignore 'property "workflow_(ref|repository|sha)" is not defined in object type' "${workflows[@]}"
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@fb523f40495206854c36b250850817ae0f83e3d1 # 1.99.0
+        with:
+          components: rustfmt
+      - name: Check formatting
+        run: cargo fmt --all -- --check
       - name: Check dependencies
         uses: ./.github/actions/check-dependencies
 
@@ -64,7 +68,6 @@ jobs:
             os: ubuntu-24.04
             quality: true
             backend: ffmpeg
-            test_features: audio-all,ui-sounds,publisher,startup-metrics,video-ffmpeg
             shipping_features: ui-sounds,video-ffmpeg
             timeout: 60
           - name: macOS arm64
@@ -73,7 +76,8 @@ jobs:
             backend: native
             test_features: audio-all,ui-sounds,publisher,startup-metrics,video-native
             shipping_features: ui-sounds,video-native
-            timeout: 60
+            # Leave cold-cache compilation and cache upload enough headroom.
+            timeout: 90
           - name: Windows x64
             os: windows-2025
             quality: false
@@ -89,7 +93,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@fb523f40495206854c36b250850817ae0f83e3d1 # 1.99.0
         with:
-          components: rustfmt, clippy
+          components: ${{ matrix.quality && 'clippy' || '' }}
       - name: Restore Rust build cache
         id: rust-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -101,12 +105,10 @@ jobs:
             target/icon-tool
           key: rust-v2-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
           restore-keys: |
-            rust-v2-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-
             rust-v2-${{ matrix.os }}-${{ runner.arch }}-
       - name: Set up video dependencies
+        if: matrix.backend == 'ffmpeg'
         uses: ./.github/actions/setup-video
-        with:
-          enabled: ${{ matrix.backend == 'ffmpeg' }}
       - name: Guard Linux window and renderer features
         if: runner.os == 'Linux'
         shell: bash
@@ -127,37 +129,46 @@ jobs:
           for feature in dx12 vulkan gles; do
             grep -E "(^|[[:space:]])wgpu feature \"$feature\"" "$RUNNER_TEMP/wgpu-features.txt"
           done
-      - name: Check formatting
-        if: matrix.quality
-        run: cargo fmt --all -- --check
       - name: Check Clippy
         if: matrix.quality
         run: cargo clippy --workspace --locked --all-targets --all-features -- -D warnings
       - name: Check workspace tests
         if: matrix.quality
         run: cargo test --workspace --locked --all-features
-      - name: Check publisher pipeline
-        if: matrix.quality
-        run: cargo test --workspace --locked --no-default-features --features publisher
-      # Select Engine and Editor together to unify their Bevy dev-dependencies.
-      # libtest accepts several filters; Linux's workspace tests cover these too.
-      - name: Check platform video, process metrics, files and instance locks
+      # Linux's full workspace tests already cover these regressions and build
+      # the video executable for the integration tests. Only macOS/Windows need
+      # this subset; keep their package/feature/dev-dependency graph identical.
+      - name: Build platform test and video targets
+        if: ${{ !matrix.quality }}
         run: >-
-          cargo test --locked -p keine -p keine-editor --lib --no-default-features
+          cargo build --locked -p keine -p keine-editor -p bevy_render
+          --lib --test instance --bin keine-video-acceptance --no-default-features
+          --features "${{ matrix.test_features }}"
+      # libtest accepts several filters across unit and integration targets.
+      - name: Check platform regressions
+        if: ${{ !matrix.quality }}
+        run: >-
+          cargo test --locked -p keine -p keine-editor -p bevy_render
+          --lib --test instance --no-default-features
           --features "${{ matrix.test_features }}" --
           scene::video:: preview::performance:: file_ops::assets::
           publisher::tests::native_release_ instance_lock_is_released_with_its_guard
           workspace::document:: workspace::persistence::
           workspace::tests:: resource_migration::tests::replacement_
-      - name: Check Editor instance forwarding
-        if: ${{ !matrix.quality }}
-        run: cargo test --locked -p keine-editor --test instance
-      - name: Check native display connection ownership
-        run: cargo test --locked -p bevy_render --lib renderer::display_tests
+          renderer::display_tests secondary_
       - name: Check platform video acceptance
-        run: >-
-          cargo run --locked --no-default-features --features "${{ matrix.test_features }}"
-          --bin keine-video-acceptance -- tests/fixtures/video/playback.mp4
+        shell: bash
+        run: |
+          # Direct execution does not get Cargo's native DLL search paths.
+          if [[ "$RUNNER_OS" == 'Windows' ]]; then
+            export PATH="$(cygpath -u "$VCPKG_ROOT")/installed/$VCPKG_TARGET_TRIPLET/bin:$PATH"
+          fi
+          ./target/debug/keine-video-acceptance${{ runner.os == 'Windows' && '.exe' || '' }} tests/fixtures/video/playback.mp4
+      # Run after video acceptance: the publisher-only tests can replace the
+      # shared video executable with a build that has no video backend enabled.
+      - name: Check publisher pipeline
+        if: matrix.quality
+        run: cargo test --workspace --locked --no-default-features --features publisher
       # Keep the native test boundary without rodio; developer audio above must
       # not hide accidental audio references in otherwise audio-free tests.
       - name: Check native video tests without audio

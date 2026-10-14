@@ -22,7 +22,7 @@ perf <project> [--startup]  开发测量
 
 | 用途 | 下载标签 | 触发方式 | 内容 |
 | --- | --- | --- | --- |
-| 作者开发 | `editor-latest` | main 通过 CI 后自动；也可手动 | 三平台独立 Editor + 同版本 Preview Engine，无游戏素材 |
+| 作者开发 | `editor-latest` | main 的 CI Desktop 成功后自动；也可手动 | 三平台独立 Editor + 同版本 Preview Engine，无游戏素材 |
 | tday 试玩 | `tday-latest` | **仅手动** | 三平台 ZIP + Android ARM64 APK，含 shiftz 素材版权说明 |
 
 两个渠道都是预发布，互不覆盖。Editor 和 tday 使用 release 优化。
@@ -82,6 +82,8 @@ Linux 包中的 `python3 install-desktop.py --install` 可注册应用菜单与�
 提交默认图标变更时同步生成 `src/assets/icons` 与 Android `icon-res` 回退资源，并运行
 `python3 dev/scripts/verify-icons.py`；CI 另检查派生文件和实际 APK。
 
+## CI 与发布操作
+
 CI / 发布使用官方稳定 Actions 并固定完整发布 SHA；JavaScript Actions 使用 Node 24。
 Linux 发行和桌面 CI 固定 `ubuntu-24.04`；审计、发布控制和 Android 构建使用
 `ubuntu-26.04`，其他桌面平台使用 `macos-26`（arm64）和 `windows-2025`（x64）；
@@ -106,15 +108,24 @@ Unix executable 权限；tday 须四个平台成功后才发布。标签/附件�
 
 ## CI 成本与失败重试
 
-- 打包/Python 边界和 workflow 语法先检查，再进入 Rust 矩阵；纯指南、README、AGENTS
-  和 Dependabot 配置提交不触发桌面/Android 全编译。
+- 格式、打包/Python 边界、workflow 语法与依赖先检查，再进入 Rust 矩阵；纯指南、
+  README、AGENTS 和 Dependabot 配置提交不触发桌面/Android 全编译。
+  仅修改 `crates/editor/**` 时跳过 Android；共享源码、根 Cargo 清单/锁文件变化仍检查。
 - Publisher runner 只编译 `--bin keine`，不顺带构建两个视频测试工具；仅这个构建步骤
   使用 opt-level 1、关闭 LTO、16 codegen units。后续 Engine 保持原来的 release/profiling
   参数和功能集合，不改变游戏/benchmark 的优化质量。
 - Rust cache 按 runner/架构/依赖清单与实际功能配置复用，不为每次源码提交存完整副本。
   CI dev/test 不保存调试信息，保留 assertions；只缓存所用编译树和小型图标工具。
+  桌面三平台的优化等级统一沿用 Cargo.toml，不在 CI 中单独覆盖，缓存前缀保持 `rust-v2`。
+  Clippy 仅在负责质量检查的 Linux 安装；macOS 使用系统 AVFoundation，跳过 FFmpeg SDK 准备。
   Windows vcpkg 按固定 manifest 与 runner image 复用，SDK 安装后立即保存缓存、
   检查真实私有 DLL assembly 的绑定，再开始 Rust 编译；cargo-ndk 单独缓存固定版本。
+- Linux 完整工作区测试覆盖平台回归并生成视频验收工具，直接复用，不另编同一批测试。
+  先完成视频验收，再运行可能覆盖同名工具的 publisher-only 测试。
+  macOS/Windows 的平台回归、Editor instance 和 display 测试统一选择 Engine、Editor、
+  `bevy_render` 与同一平台 features；视频工具连同 instance target 一起构建后直接运行。
+  避免分开选择包、再用 `cargo run` 切换 dev-dependency 图而重复编译 Bevy。
+  macOS job 上限为 90 分钟，包含冷编译和缓存上传；这不是预期运行时长。
 - 发布 cache 用显式 restore/save。验证失败也能保留依赖，但先成功清除 `keine` 和
   `keine-loader` 的含密钥编译产物；清理失败、取消或没有 restore key 时不保存。
   Project 正式发行同样执行清理。成品 ZIP/APK 的 artifact 传输不做第二次压缩。
@@ -144,41 +155,17 @@ identity 与内嵌 key 不记录、不提交、不缓存，也不传给无需它
 
 ## 依赖审计与升级
 
-当前工具链和六个 Kēne crate 的 MSRV 统一为
-[Rust 1.99.0 stable](https://blog.rust-lang.org/2026/10/01/Rust-1.99.0/)。
-桌面、Android、依赖审计、Engine/Editor/Project 发行工作流固定官方
-`dtolnay/rust-toolchain` 的 `fb523f40495206854c36b250850817ae0f83e3d1`，
-其 action 定义选择 1.99.0；缓存键包含工具链文件，恢复旧缓存时仍由 Cargo 按编译器版本重建。
-成对前后缀解析使用升级区间内稳定的
-[`str::strip_circumfix`](https://doc.rust-lang.org/stable/std/primitive.str.html#method.strip_circumfix)，
-不改语言语义；固定大小像素/采样切片采用 `as_chunks`，通过新版 Clippy。
+工具链以 [`rust-toolchain.toml`](../../rust-toolchain.toml) 为准，当前六个 Kēne crate
+的 MSRV 为 Rust 1.99.0。依赖与 feature 以 Cargo manifest/lock 为准；不要把某次升级
+清单当作当前依赖规范。升级时同步 CI 工具链、独立 fuzz 锁文件，并执行
+[质量检查与相关 feature 门禁](testing.md#质量检查)。
 
-单实例锁使用标准库 `File::try_lock` / `unlock`，移除 `fs2`；Editor 显式区分
-锁竞争与真实 I/O 错误，Engine 仍在 guard 释放时主动解锁，避免复制句柄延长租约。
-桌面 CI 在三个平台覆盖 Engine 锁释放与 Editor 跨进程转发/重新取得锁。
-Editor 的 `image` 仅显式请求 BMP/GIF/JPEG/PNG/TIFF/WebP，Media 图标仅请求 PNG。
-同一锁文件下，以 `cargo tree -p keine-editor --target all -e normal,build` 对比
-额外启用 `--features image/default`，实际依赖树少 27 个包（AVIF/rav1e 编码链）；
-GPUI 自身的格式需求保持不变。Cargo.lock 仍记录上游可选依赖，不能把树的差值
-误报为锁文件删包数或二进制体积收益。
-
-本轮只更新四项兼容补丁：anyhow 1.0.103 → 1.0.104、crc32fast 1.5.0 → 1.5.2、
-crossbeam-channel 0.5.16 → 0.5.17、serde_json 1.0.150 → 1.0.154。
-[Crossbeam 上游说明](https://github.com/crossbeam-rs/crossbeam/blob/master/crossbeam-channel/CHANGELOG.md)
-包含 bounded channel 的 UB/溢出修复；
-[serde_json 1.0.153](https://github.com/serde-rs/json/releases/tag/v1.0.153)
-修正非法 UTF-8 的报错位置。没有更改 postcard、Save/IR 布局或 Hakutaku revision，
-Bevy/GPUI 主栈更新仍须单独核对本地补丁与原生平台行为。
+Bevy 的三个本地补丁、GPUI 原生平台行为和 Hakutaku 格式边界须随对应依赖单独复核。
+Editor 的 `image` 仅请求 BMP/GIF/JPEG/PNG/TIFF/WebP，Media 图标仅请求 PNG；
+不要为了方便恢复默认编码器集合。锁文件仍可包含上游可选依赖，实际依赖树须按目标与
+features 查询，不能用锁文件包数推断运行时体积。
 GPUI 的 macOS 依赖链仍含 `block 0.1.6` 的 `uninhabited_static` 未来兼容性警告；
 当前 Rust 1.99 可构建，应随上游 Cocoa/Metal 绑定迁移处理，不新增本地 FFI 替代层。
-
-文件替换复用已有能力：Editor 使用
-[`std::fs::rename`](https://doc.rust-lang.org/std/fs/fn.rename.html) 覆盖目的文件，
-去掉 Windows 的双重改名；Publisher 资源重映射复用已启用的
-[`NamedTempFile::persist`](https://docs.rs/tempfile/3.27.0/tempfile/struct.NamedTempFile.html#method.persist)，
-保持原文件直到替换提交。两者写入后先 sync 文件，再替换及 sync 目录；未增加依赖。
-Authoring 分帧采用 [`postcard::take_from_bytes`](https://docs.rs/postcard/1.1.3/postcard/fn.take_from_bytes.html)
-检查帧内剩余字节，既有合法消息及协议版本保持不变。
 
 - `Audit Dependencies` 每日 UTC 02:17（北京时间 10:17）检查 main，可手动触发。
   GitHub 的定时任务可能延迟；长期无活动的公开仓库也可能停用 schedule，维护者须留意
@@ -189,7 +176,7 @@ Authoring 分帧采用 [`postcard::take_from_bytes`](https://docs.rs/postcard/1.
   关闭自动 rebase 和自动合并，减少重复 CI；需要时手动更新分支并运行正常验收。
   仓库已启用 Dependabot 告警和安全更新；普通依赖升级由维护者按需要提出，仍须经过
   CI、许可审查与必要的运行验证。
-- 桌面 CI、每日审计、自动/手动 Engine（含 tday）、Editor 与正式 Project 发布复用
+- 桌面 CI、每日审计、手动 Release Engine、Release Editor 与正式 Project 发布复用
   `check-dependencies` action；按实际发行的源提交执行完整的 locked/all-features 四项审计。
   审计失败先阻止后续编译/密钥恢复/上传；不放宽 deny.toml，也不重跑旧源码冒充修复。
 - GLIBC 2.39 是发行合同，更新 runner、原生 SDK、Rust 或依赖时都不能静默抬高。
@@ -233,7 +220,7 @@ cargo deny --locked --all-features check advisories licenses bans sources
 合成字体来源与完整 OFL/MIT 文本见 `src/assets/fonts/FONT-LICENSES.txt`。
 Maven Pro 合成版内部名称已改为 Kene Text，字形与排版数据未变；CJK 来源由项目所有者确认
 为 HanaMinAFDKO，作者仓库声明遵循 GlyphWiki 数据许可。已附 Mozilla 分发的 GlyphWiki 历史许可原文；
-当前上游页面返回 403，未验证其当前版本。原始合成/图标转换配方和确切源版本未保存，
+此前来源核查时上游页面返回 403，未验证其最新版本。原始合成/图标转换配方和确切源版本未保存，
 不声称已重建来源链。
 
 ## Hakutaku 0.2.0 / v2
@@ -241,11 +228,11 @@ Maven Pro 合成版内部名称已改为 Kene Text，字形与排版数据未变
 资源包仅接受 Hakutaku v2。v1 没有兼容读取、旧密文复用或自动迁移；旧项目从原始
 资源重新打包到全新输出目录，保留原 publisher identity，并同时分发新 Engine 与
 新资源包。`KEINE_HAKUTAKU_RELEASE_FLOOR` 可设为上次发行序号加一；已有 v2
-目录始终继续递增序号，不会被较低下限重置。该变量只影响资源发布，不改变 Save/IR。
+目录有变化时继续递增；无变化时可保留原序号，较低下限不会使其回退。该变量只影响资源发布，不改变 Save/IR。
 
-0.2.0 使用紧凑头、8 字节路径索引、按块位置保存的 chunk ID，音频块为 64 KiB，
-视频仍为 256 KiB；小补丁和高废弃比例的段在发布端有界整理。运行时签名验证、
-密文承诺及 mount 根目录限制不变。
+wire layout 与块策略分别见锁定 Hakutaku 的 [FORMAT](https://github.com/maincoretech/hakutaku/blob/8d637d5629b84f99251fd445366892bdb3c7cf2b/docs/FORMAT.md)
+和 [PERFORMANCE](https://github.com/maincoretech/hakutaku/blob/8d637d5629b84f99251fd445366892bdb3c7cf2b/docs/PERFORMANCE.md)。
+Kēne 保留编译 Program、资源 allowlist、挂载根目录和 identity 注入的职责，不复制包格式规范。
 
 Core/Pack 固定为 `=0.2.0`，Git revision 为
 `8d637d5629b84f99251fd445366892bdb3c7cf2b`，Cargo.lock 同步固定来源；
@@ -259,7 +246,7 @@ Core/Pack 固定为 `=0.2.0`，Git revision 为
 
 发行步骤仍为 `cargo bundle <project> --output target/bundle/<game>`，macOS 沿用下方 app 打包脚本。更新继续使用同一身份与稳定 `project.id`；CI 继续将同一身份文件的 base64 放在 `HAKUTAKU_IDENTITY_BASE64` secret，无需用户手动处理每次生成的运行时材料。
 
-显式轮换只在确有需要时进行：备份原身份，指定新身份并使用全新输出目录完整打包，分发配套新 Engine 和资源。当前客户端只信任一组密钥；新旧身份的程序/包不可任意混用。包允许合法版本回退，slot 仍要求剧本 fingerprint 匹配。
+显式轮换只在确有需要时进行：备份原身份，指定新身份并使用全新输出目录完整打包，分发配套新 Engine 和资源。当前客户端只信任一组密钥；新旧身份的程序/包不可任意混用。Kēne 当前使用 `OpenPolicy::TrustFirstRelease`，未保存客户端最高发行序号，因此允许同身份的合法包回退；发布端的 `KEINE_HAKUTAKU_RELEASE_FLOOR` 不改变这一点。slot 仍要求剧本 fingerprint 匹配。
 
 ## 发行前的用户准备
 
@@ -273,7 +260,7 @@ Core/Pack 固定为 `=0.2.0`，Git revision 为
 
 `publisher.key` 用于游戏内容签名/加密；Apple 证书与 profile 用于 macOS 应用签名/公证，
 两者分别保管。维护者负责媒体规范化、执行下方打包命令、检查公证/安装/更新结果。
-正式公证前只具备开发包证据；完整分工和完成标准见 [验收分工](testing.md#剩余事项与分工)。
+正式公证前只具备开发包证据；完整分工和完成标准见 [运行与发行验收](testing.md#运行与发行验收)。
 
 ## macOS
 

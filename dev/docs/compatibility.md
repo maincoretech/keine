@@ -18,7 +18,7 @@ Kēne 独立定义原生语法与交互；参考上游的常用创作能力，�
 
 - 检测 Studio project，读取 chapters/scenes/characters、资源清单与默认壳配置。
 - 已接入舞台 track/key/event、镜头、场景层/分层立绘、皮肤/视口高度、对焦、音频和退格。
-- 时间轴共用一个时钟；camera、character、sceneLayer 与 79 个 StageProperty 的回归在 fixtures。
+- 时间轴共用一个时钟；camera、character、sceneLayer 与已映射 StageProperty 的回归在 fixtures。
 - 支持跨 fragment/章节调用、waitForInput、repeat/muted/playbackRate 与已映射默认壳行为。
 - 完整官方示例是忽略的本机内容，不提交商业资源。
 - Editor 中兼容 JSON 只读；`migrate` 输出原生清单/脚本，转换失败不发布目标。

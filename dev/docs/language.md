@@ -1,5 +1,8 @@
 # Eiyashou v2.0
 
+本指南维护作者语法与默认值；工程适配边界见[兼容性](compatibility.md)，
+编译/存档/IPC 的独立版本及输入上限见[架构合同](architecture.md#版本合同)。
+
 当前原生脚本为 UTF-8 `.shou`，命令按对象职责分组。
 sprite.update、transform 与 camera 稀疏修改中省略的字段保留当前值；创建使用默认值。
 每条作者命令 lower 为 typed Engine Action，Editor 只编辑同一份源码。
