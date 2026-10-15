@@ -1,10 +1,7 @@
 name: Release Editor
 
 on:
-  workflow_run:
-    workflows: ["CI Desktop"]
-    types: [completed]
-    branches: [main]
+  workflow_call:
   workflow_dispatch:
 
 permissions:
@@ -15,19 +12,13 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
-  KEINE_BUILD_COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
+  RELEASE_SHA: ${{ github.sha }}
+  KEINE_BUILD_COMMIT: ${{ github.sha }}
 
 jobs:
   dependencies:
     name: Check Dependencies
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.head_branch == 'main' &&
-       github.event.workflow_run.head_repository.full_name == github.repository &&
-       github.event.workflow_run.head_sha == github.sha)
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     outputs:
@@ -41,7 +32,7 @@ jobs:
         id: current
         shell: bash
         run: |
-          if [[ "$GITHUB_EVENT_NAME" == workflow_run && "$(git ls-remote origin refs/heads/main | cut -f1)" != "$RELEASE_SHA" ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == push && "$(git ls-remote origin refs/heads/main | cut -f1)" != "$RELEASE_SHA" ]]; then
             echo 'Newer main exists; skip this automatic release.'
             exit 0
           fi
@@ -54,31 +45,18 @@ jobs:
         uses: ./.github/actions/check-dependencies
 
   build:
-    name: Build ${{ matrix.name }}
     needs: dependencies
     if: needs.dependencies.outputs.current == 'true'
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: Linux x64
-            os: ubuntu-24.04
-            artifact: keine-editor-linux-x64
-            target: ''
-            features: audio-all,ui-sounds,hot-reload,video-ffmpeg
-          - name: macOS arm64
-            os: macos-26
-            artifact: keine-editor-macos-arm64
-            target: ''
-            features: audio-all,ui-sounds,hot-reload,video-native
-          - name: Windows x64
-            os: windows-2025
-            artifact: keine-editor-windows-x64
-            target: x86_64-pc-windows-msvc
-            features: audio-all,ui-sounds,hot-reload,video-ffmpeg
-    runs-on: ${{ matrix.os }}
+        platform: [Linux x64, macOS arm64, Windows x64]
+    runs-on: ${{ matrix.platform == 'Linux x64' && 'ubuntu-24.04' || matrix.platform == 'macOS arm64' && 'macos-26' || 'windows-2025' }}
     env:
-      KEINE_AUTHORING_FEATURES: ${{ matrix.features }}
+      RUNNER_IMAGE: ${{ matrix.platform == 'Linux x64' && 'ubuntu-24.04' || matrix.platform == 'macOS arm64' && 'macos-26' || 'windows-2025' }}
+      BUILD_TARGET: ${{ matrix.platform == 'Windows x64' && 'x86_64-pc-windows-msvc' || '' }}
+      ARTIFACT: ${{ matrix.platform == 'Linux x64' && 'keine-editor-linux-x64' || matrix.platform == 'macOS arm64' && 'keine-editor-macos-arm64' || 'keine-editor-windows-x64' }}
+      KEINE_AUTHORING_FEATURES: ${{ matrix.platform == 'macOS arm64' && 'audio-all,ui-sounds,hot-reload,video-native' || 'audio-all,ui-sounds,hot-reload,video-ffmpeg' }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -87,8 +65,8 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@fb523f40495206854c36b250850817ae0f83e3d1 # 1.99.0
       - name: Install cross-compilation target
-        if: matrix.target != ''
-        run: rustup target add ${{ matrix.target }}
+        if: env.BUILD_TARGET != ''
+        run: rustup target add ${{ env.BUILD_TARGET }}
       - name: Restore build cache
         id: rust-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -99,10 +77,10 @@ jobs:
             ~/.cargo/git
             target/authoring
             target/icon-tool
-          key: editor-rust-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
+          key: editor-rust-v1-${{ env.RUNNER_IMAGE }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
           restore-keys: |
-            editor-rust-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-
-            editor-rust-v1-${{ matrix.os }}-${{ runner.arch }}-
+            editor-rust-v1-${{ env.RUNNER_IMAGE }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-
+            editor-rust-v1-${{ env.RUNNER_IMAGE }}-${{ runner.arch }}-
       - name: Set up video dependencies
         uses: ./.github/actions/setup-video
         with:
@@ -110,8 +88,6 @@ jobs:
           windows-triplet: x64-windows
       - name: Build standalone authoring tools
         shell: bash
-        env:
-          BUILD_TARGET: ${{ matrix.target }}
         run: |
           python3 dev/scripts/build-icons.py target/editor-icons
           python3 dev/scripts/verify-icons.py --icon-dir target/editor-icons
@@ -131,34 +107,32 @@ jobs:
           cargo build "${args[@]}"
       - name: Package and validate installed runtime
         shell: bash
-        env:
-          BUILD_TARGET: ${{ matrix.target }}
         run: |
           binary_dir="target/authoring/${BUILD_TARGET:+$BUILD_TARGET/}release"
           suffix=''
           if [[ "$RUNNER_OS" == 'Windows' ]]; then suffix='.exe'; fi
-          python3 dev/scripts/package-authoring.py "$binary_dir/editor$suffix" "$binary_dir/keine$suffix" "target/${{ matrix.artifact }}"
+          python3 dev/scripts/package-authoring.py "$binary_dir/editor$suffix" "$binary_dir/keine$suffix" "target/${{ env.ARTIFACT }}"
       - name: Archive complete package
         shell: bash
         run: |
           mkdir -p downloads
           if [[ "$RUNNER_OS" == 'macOS' ]]; then
-            ditto -c -k --keepParent "target/${{ matrix.artifact }}" "downloads/${{ matrix.artifact }}.zip"
+            ditto -c -k --keepParent "target/${{ env.ARTIFACT }}" "downloads/${{ env.ARTIFACT }}.zip"
           else
             python3 - <<'PY'
           import shutil
-          shutil.make_archive('downloads/${{ matrix.artifact }}', 'zip', 'target/${{ matrix.artifact }}')
+          shutil.make_archive('downloads/${{ env.ARTIFACT }}', 'zip', 'target/${{ env.ARTIFACT }}')
           PY
           fi
       - name: Verify final Linux archive
         if: runner.os == 'Linux'
         uses: ./.github/actions/verify-linux-package
         with:
-          package: downloads/${{ matrix.artifact }}.zip
+          package: downloads/${{ env.ARTIFACT }}.zip
       - name: Upload artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ${{ matrix.artifact }}
+          name: ${{ env.ARTIFACT }}
           path: downloads/*.zip
           if-no-files-found: error
           retention-days: 14
@@ -200,7 +174,7 @@ jobs:
           shopt -s nullglob
           packages=(downloads/keine-editor-*.zip)
           [[ "${#packages[@]}" -eq 3 ]] || { echo 'Expected three Editor downloads' >&2; exit 1; }
-          if [[ "$GITHUB_EVENT_NAME" == 'workflow_run' ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == 'push' ]]; then
             current_main="$(git ls-remote origin refs/heads/main | cut -f1)"
             if [[ "$current_main" != "$RELEASE_SHA" ]]; then
               echo 'Newer main exists; retain artifacts without replacing editor-latest.'

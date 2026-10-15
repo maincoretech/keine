@@ -6,7 +6,7 @@ Editor、publisher、桌面文件选择器不进入安卓运行依赖。Core、L
 
 ## 构建与 CI
 
-日常推荐使用 GitHub Actions：打开独立的 **CI Android** workflow，点击 Run workflow；
+日常推荐使用 GitHub Actions：打开 **CI** → **Run workflow**，将 `checks` 选为 `android`；
 结束后下载 `keine-android-arm64-engine` artifact 中的 APK。
 GitHub 的 [Ubuntu runner](https://github.com/actions/runner-images) 已有 Android SDK；
 workflow 安装固定 NDK/Gradle/Rust 工具，无需开发机常驻整套环境。
@@ -44,18 +44,18 @@ APK 校验沿 manifest 资源 ID 检查编译资源表、各密度 PNG 和 adapt
 不要求源码文件名与 APK ZIP 路径相同。release 可由 [AAPT2 optimize](https://developer.android.com/tools/aapt2#optimize)
 缩短资源路径，Android CI 同时校验 debug/release。配置及桌面派生见 [发布](release.md#应用图标)。
 
-独立 **CI Android** workflow 在 push/PR 或手动触发时检查依赖隔离、Android Clippy 与 Java lint，构建原生库与 APK，验证 NativeActivity
+**CI** 中的 Android job 在相关 push/PR 或手动选择 `android` 时检查依赖隔离、Android Clippy 与 Java lint，构建原生库与 APK，验证 NativeActivity
 启动符号、ELF 16 KB 对齐、APK 对齐及签名，确认 Vulkan/GLES feature closure，
 复核 APK 的 GLES/Vulkan 硬件声明，上传 `keine-android-arm64-engine` artifact。
 纯文档或仅修改 `crates/editor/**` 时跳过自动构建；混合修改共享源码/根 Cargo 清单/锁文件仍运行，手动入口不受路径过滤影响。
 此引擎 CI 不读取 publisher identity，也不打包 tday；原生构建缓存与桌面分开。
-Android 构建队列独立，不等待桌面/视频 workflow 结束。
+Android 与桌面/媒体 job 在前置检查通过后并行，不等待桌面编译完成。
 
 工具和平台入口依据 [Bevy 0.19.1 Android 示例](https://github.com/bevyengine/bevy/blob/v0.19.1/examples/README.md#android)、
 [AGP 9.4 构建要求](https://developer.android.com/build/releases/agp-9-4-0-release-notes)、
 [Android 16 KB 对齐要求](https://developer.android.com/guide/practices/page-sizes)。
 
-`Release Engine` → `Run workflow`（仅 tday） 同时生成三平台 ZIP 和
+`Build tday` → `Run workflow`（仅 tday） 同时生成三平台 ZIP 和
 `tday-android-arm64-test.apk`，四个平台全部通过后更新 `tday-latest`。
 安卓 job 使用隔离临时内容 identity，构建 `hardened,ui-sounds` release 原生库，
 校验 release APK 的内容、入口、签名和 16 KB 对齐；含密钥的编译输出不会进入缓存。
@@ -244,5 +244,5 @@ python3 target/android-test-benchmark/benchmark-android.py --apk target/android-
 ```
 
 派生 fixture 只调整 Android 不支持的内容与独立身份，不修改桌面 fixture 或作者工程。
-Release Engine 仅手动生成 tday 三平台 ZIP 与 Android APK；benchmark 不再由 Actions 构建或更新下载。
+Build tday 仅手动生成 tday 三平台 ZIP 与 Android APK；benchmark 不再由 Actions 构建或更新下载。
 云端 APK 编译/验证仍不代表 Moto 或其他真机已经通过完整运行测试。

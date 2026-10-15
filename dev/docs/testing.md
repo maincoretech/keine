@@ -83,21 +83,17 @@ macOS 的 IPC/系统 Trash 测试可能被本地沙箱拒绝（`Operation not pe
 
 | Workflow | 责任与触发 |
 | --- | --- |
-| [CI Desktop](../../.github/workflows/ci.yml) | push/PR；依赖/打包合同先行；Linux 全功能 Clippy、workspace/publisher 测试；三平台文件/进程/视频/发行 feature 边界 |
-| [CI Android](../../.github/workflows/android.yml) | push/PR/手动；Native Engine APK 构建、lint 与包校验，无实机结论 |
-| [CI Media Safety](../../.github/workflows/media-safety.yml) | 相关路径变更、定时或手动；WebP fuzz、FFmpeg ASan |
-| [Audit Dependencies](../../.github/workflows/dependencies.yml) | 每日/手动；完整锁文件安全、许可、来源及版本策略 |
-| [Release Editor](../../.github/workflows/editor-release.yml) | main Desktop CI 成功后或手动；同 SHA Editor 与 Preview |
-| [Release Engine](../../.github/workflows/release.yml) | 仅手动 tday 四平台打包 |
+| [CI](../../.github/workflows/ci.yml) | push/PR；依赖/打包合同先行；桌面三平台、Android 与相关媒体安全并行；每日依赖审计、每周媒体安全；手动可选择检查范围 |
+| [Release Editor](../../.github/workflows/editor-release.yml) | main 的 CI 桌面检查通过后在同次运行内调用，或手动；同 SHA Editor 与 Preview |
+| [Build tday](../../.github/workflows/release.yml) | 仅手动 tday 四平台打包，保持无额外参数 |
 | [Release Project](../../.github/workflows/project-release.yml) | 游戏仓库按完整 Engine SHA 调用；当前 Linux x64 |
-| [Verify Linux Download](../../.github/workflows/verify-linux-release.yml) | 手动复核已有 ZIP 的基线兼容性；不编译、不重新发布 |
 
 纯 README、`dev/docs`、AGENTS 与 Dependabot 配置变更跳过桌面/Android 全编译。
 Android 另跳过仅修改 `crates/editor/**` 的提交；Core、Loader、Authoring、Engine、
 共享资源、根依赖清单或锁文件变化仍触发检查，手动入口保留。
 benchmark CI 已取消；现有本地基准与正确性测试保留。发布缓存、ABI、密钥与签名规则统一见[发布指南](release.md)。
 
-Desktop 将格式、打包合同、工作流语法及依赖检查前置。Linux 跑完整工作区测试，
+CI 将格式、打包合同、工作流语法及依赖检查前置。Linux 跑完整工作区测试，
 直接复用该调用生成的视频验收工具，不再另编一组平台测试。视频验收必须在
 publisher-only 测试之前运行，避免同名工具被无视频后端的构建覆盖。
 macOS/Windows 在同一 Cargo 调用中运行 Engine/Editor lib、Editor instance 及

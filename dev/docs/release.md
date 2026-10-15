@@ -22,7 +22,7 @@ perf <project> [--startup]  开发测量
 
 | 用途 | 下载标签 | 触发方式 | 内容 |
 | --- | --- | --- | --- |
-| 作者开发 | `editor-latest` | main 的 CI Desktop 成功后自动；也可手动 | 三平台独立 Editor + 同版本 Preview Engine，无游戏素材 |
+| 作者开发 | `editor-latest` | main 的 CI 桌面检查通过后自动；也可手动 | 三平台独立 Editor + 同版本 Preview Engine，无游戏素材 |
 | tday 试玩 | `tday-latest` | **仅手动** | 三平台 ZIP + Android ARM64 APK，含 shiftz 素材版权说明 |
 
 两个渠道都是预发布，互不覆盖。Editor 和 tday 使用 release 优化。
@@ -37,8 +37,9 @@ Engine 与 Editor 的最终 ZIP、正式 Project 的发布目录，在同一 Ubu
 24.04 runner 上验证一次：保留解压执行权限、检查 ABI/动态库闭包，并从无关 cwd
 加载 Engine 和 `game.haku`（Editor 用 native-smoke 工程目录）。FFmpeg 和已有 bundled
 库必须从包内 `lib/` 解析，不能由 runner SDK 掩盖漏包。
-隔离环境复核用 Actions → **Verify Linux Download**，选择现有下载渠道；只下载 ZIP，
-在仅装宿主运行库的 Ubuntu 24.04 容器中验证，不编译、不重新发布。可独立重跑。
+复核已有 ZIP 可在 Ubuntu 24.04 运行
+`bash dev/scripts/verify-linux-package.sh <zip> tests/fixtures/native-smoke`；无需重新编译。
+发布流程已包含最终验包，不再为同一检查保留独立 workflow。
 这些检查覆盖 loader/内容加载，不替代原生窗口、GPU、音频及硬件性能验收。
 glibc 的 loader、libc/libm、libmvec/libresolv 等组件由宿主提供，不随应用复制。
 Windows 的 FFmpeg DLL 使用 EXE 内嵌的 Win32 私有 assembly 声明，从 `lib/lib.manifest`
@@ -75,7 +76,7 @@ Linux 包中的 `python3 install-desktop.py --install` 可注册应用菜单与�
 移动包后重新运行。它需要包内 `keine.png`，窗口本身仍使用内嵌图标；
 此步骤需要 Python 3，直接启动游戏不需要。
 
-维护者只维护 `src/assets/icons/keine.png`。Release Editor / CI Android 在构建前自动派生，
+维护者只维护 `src/assets/icons/keine.png`。Release Editor / CI 的 Android job 在构建前自动派生，
 项目发行直接调用同一 Rust 生成器；现有 `image` PNG 与 `keine-media` WebP 解码器复用，无额外图片工具。
 手动生成到新目录：`python3 dev/scripts/build-icons.py target/my-icons --source path/to/icon.webp`；
 或 `cargo run --features publisher -- icons path/to/icon.webp target/my-icons`。
@@ -94,14 +95,16 @@ Rust 原生构建缓存按 runner image / architecture 隔离，
 
 维护者操作：
 
-1. 推送 main 后等待 **CI Desktop**，成功后 **Release Editor** 更新 Editor。
-2. 发布 tday：Actions → **Release Engine** → **Run workflow** → 选目标 ref；此 workflow 仅构建 tday。
+1. 推送 main 后查看 **CI**；桌面检查通过后，在同一次运行中调用 **Release Editor** 更新 Editor。
+2. 发布 tday：Actions → **Build tday** → **Run workflow** → 选目标 ref；此 workflow 仅构建 tday。
    同一次触发并行构建桌面三平台和安卓 release APK，游戏资源已内置；普通推送和自动 CI 完成不会触发 tday 打包。此渠道只用隔离临时 identity，不读正式发行密钥。安卓使用测试应用签名，见 [Android](android.md)。
-3. 手动补发 Editor：运行 **Release Editor**。
+3. 手动补发 Editor：运行 **Release Editor**。只重跑检查用 **CI** 的 `checks` 选择
+   `all`、`android`、`media` 或 `dependencies`；不会发布 Editor 或 tday。
 4. 下载更新完成后核对标签对应的 SHA、三个桌面 ZIP、tday 的安卓 APK 和包内 provenance；代码推送、CI 成功、
    Release 附件更新分别确认。正式游戏发行继续使用下方 Project CI/CLI 与稳定 identity。
 
-自动构建固定使用通过 CI 的 SHA；PR、fork、失败的 CI 不发布。新 main 已出现时，
+Editor 自动构建固定使用通过桌面检查的 main push SHA；PR、fork、失败的桌面检查、
+定时审计和手动检查不发布，也不创建独立的全跳过 Release Editor 记录。新 main 已出现时，
 尚未开始的旧自动构建在安装工具链/编译前跳过；编译期间出现新 main 的运行只保留
 Actions artifact，不覆盖滚动下载。三个 ZIP 在原平台打好再上传，保留
 Unix executable 权限；tday 须四个平台成功后才发布。标签/附件更新失败会让发布 job 失败。
@@ -134,7 +137,7 @@ Unix executable 权限；tday 须四个平台成功后才发布。标签/附件�
   media/libwebp，不安装桌面 SDK；命中 cargo-fuzz 缓存后不重复 cargo install。
 
 缓存的不可变条目及默认仓库容量仍可能导致驱逐；工具链/依赖/profile 首次变化会冷编译。
-没有增加付费缓存容量，也不保证每次满命中。验包失败先用独立验包入口复核已有包，
+没有增加付费缓存容量，也不保证每次满命中。验包失败先用验包脚本复核已有包，
 不为检查脚本反复启动四平台发布。
 macOS 包是开发签名，未做 Apple 公证；完整跨平台运行验收与硬件性能测试仍是独立关卡。
 
@@ -146,7 +149,7 @@ INCOMPLETE 并保留报告，不能当作完整跑分。包内 `lib/profile-runt
 游戏打包保存 Cargo 缓存前清理 Engine/Loader 的 release/profiling 密钥产物，保留依赖
 与不含密钥的 publisher runner；必要时补写 `target/CACHEDIR.TAG`，清理失败阻止缓存保存
 和发布。Editor 使用独立 `target/authoring` 缓存，不启用 publisher/hardened，也不接收 identity。
-发布依据见 [workflow_run](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run)
+发布复用依据见 [workflow_call](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows)
 与 [Release 上传 action](https://github.com/softprops/action-gh-release)。
 
 Cargo aliases 与 executable 使用同名动词；具体参数以 `--help` 为准。
@@ -167,7 +170,8 @@ features 查询，不能用锁文件包数推断运行时体积。
 GPUI 的 macOS 依赖链仍含 `block 0.1.6` 的 `uninhabited_static` 未来兼容性警告；
 当前 Rust 1.99 可构建，应随上游 Cocoa/Metal 绑定迁移处理，不新增本地 FFI 替代层。
 
-- `Audit Dependencies` 每日 UTC 02:17（北京时间 10:17）检查 main，可手动触发。
+- `CI` 每日 UTC 02:17（北京时间 10:17）仅审计依赖；每周一 UTC 03:17 另跑媒体安全。
+  定时任务不编译桌面/Android 或发布 Editor，手动审计选择 `checks: dependencies`。
   GitHub 的定时任务可能延迟；长期无活动的公开仓库也可能停用 schedule，维护者须留意
   Actions 通知与任务状态。新的 RustSec 公告可让未改动的锁文件失败，旧绿灯不代表当前安全。
 - `.github/dependabot.yml` 使用低噪模式：Cargo 关闭普通版本 PR，只提出分组安全修复；
@@ -176,7 +180,7 @@ GPUI 的 macOS 依赖链仍含 `block 0.1.6` 的 `uninhabited_static` 未来兼�
   关闭自动 rebase 和自动合并，减少重复 CI；需要时手动更新分支并运行正常验收。
   仓库已启用 Dependabot 告警和安全更新；普通依赖升级由维护者按需要提出，仍须经过
   CI、许可审查与必要的运行验证。
-- 桌面 CI、每日审计、手动 Release Engine、Release Editor 与正式 Project 发布复用
+- 桌面 CI、每日审计、手动 Build tday、Release Editor 与正式 Project 发布复用
   `check-dependencies` action；按实际发行的源提交执行完整的 locked/all-features 四项审计。
   审计失败先阻止后续编译/密钥恢复/上传；不放宽 deny.toml，也不重跑旧源码冒充修复。
 - GLIBC 2.39 是发行合同，更新 runner、原生 SDK、Rust 或依赖时都不能静默抬高。

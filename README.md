@@ -11,7 +11,7 @@ Shipping projects use Hakutaku v2, WebP images and Ogg Opus audio.
 ## Downloads
 
 - [`editor-latest`](https://github.com/maincoretech/keine/releases/tag/editor-latest): standalone Editor with a matching Preview Engine; updated after successful main-branch Desktop CI.
-- [`tday-latest`](https://github.com/maincoretech/keine/releases/tag/tday-latest): tday demo; built only by manually running **Release Engine**.
+- [`tday-latest`](https://github.com/maincoretech/keine/releases/tag/tday-latest): tday demo; built only by manually running **Build tday**.
 
 See [publishing](dev/docs/release.md) for package layouts, signatures and project releases.
 

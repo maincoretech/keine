@@ -1,4 +1,4 @@
-name: CI Desktop
+name: CI
 
 on:
   push:
@@ -6,30 +6,48 @@ on:
   pull_request:
     paths-ignore: ['dev/docs/**', 'README.md', 'AGENTS.md', '.github/dependabot.yml']
 
+  workflow_dispatch:
+    inputs:
+      checks:
+        description: Checks to run
+        type: choice
+        options: [all, android, media, dependencies]
+        default: all
+  schedule:
+    - cron: '17 2 * * *' # Daily dependency audit, 10:17 Asia/Shanghai.
+    - cron: '17 3 * * 1' # Weekly media safety checks.
+
+permissions:
+  contents: read
+
 concurrency:
-  group: CI-${{ github.ref }}
+  group: CI-${{ github.event_name }}-${{ github.event.schedule || inputs.checks || github.ref }}
   # Let main finish and save its cold build; superseded PR/branch runs can stop.
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
-env:
-  # Assertions remain enabled; full debug symbols do not help deterministic CI tests.
-  CARGO_PROFILE_DEV_DEBUG: '0'
-  CARGO_PROFILE_TEST_DEBUG: '0'
-
 jobs:
   dependencies:
-    name: Check Dependencies
+    name: Checks
     runs-on: ubuntu-26.04
     timeout-minutes: 15
+    outputs:
+      desktop: ${{ steps.scope.outputs.desktop }}
+      android: ${{ steps.scope.outputs.android }}
+      media: ${{ steps.scope.outputs.media }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Select affected checks
+        id: scope
+        run: python3 dev/scripts/ci-scope.py
       # Catch packaging regressions before any native Rust compilation.
       - name: Check packaging contracts
+        if: steps.scope.outputs.desktop == 'true'
         run: |
           python3 dev/scripts/verify-icons.py
           python3 -m unittest discover -s tests/packaging -p 'test_*.py'
       - name: Install pinned official workflow linter
+        if: steps.scope.outputs.desktop == 'true'
         run: |
           # install-action does not support actionlint; use the upstream binary.
           archive="$RUNNER_TEMP/actionlint_1.7.12_linux_amd64.tar.gz"
@@ -41,6 +59,7 @@ jobs:
           tar -xzf "$archive" -C "$RUNNER_TEMP/actionlint-bin" actionlint
           echo "$RUNNER_TEMP/actionlint-bin" >> "$GITHUB_PATH"
       - name: Check workflow syntax before native compilation
+        if: steps.scope.outputs.desktop == 'true'
         run: |
           printf 'self-hosted-runner:\n  labels: [ubuntu-26.04]\n' > "$RUNNER_TEMP/actionlint.yaml"
           workflows=(.github/workflows/*.yml)
@@ -53,47 +72,34 @@ jobs:
         with:
           components: rustfmt
       - name: Check formatting
+        if: steps.scope.outputs.desktop == 'true'
         run: cargo fmt --all -- --check
       - name: Check dependencies
         uses: ./.github/actions/check-dependencies
 
-  rust:
-    name: Check ${{ matrix.name }}
+  desktop:
     needs: dependencies
+    if: needs.dependencies.outputs.desktop == 'true'
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: Linux x64
-            os: ubuntu-24.04
-            quality: true
-            backend: ffmpeg
-            shipping_features: ui-sounds,video-ffmpeg
-            timeout: 60
-          - name: macOS arm64
-            os: macos-26
-            quality: false
-            backend: native
-            test_features: audio-all,ui-sounds,publisher,startup-metrics,video-native
-            shipping_features: ui-sounds,video-native
-            # Leave cold-cache compilation and cache upload enough headroom.
-            timeout: 90
-          - name: Windows x64
-            os: windows-2025
-            quality: false
-            backend: ffmpeg
-            test_features: audio-all,ui-sounds,publisher,startup-metrics,video-ffmpeg
-            shipping_features: ui-sounds,video-ffmpeg
-            timeout: 180
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.timeout }}
+        platform: [Linux x64, macOS arm64, Windows x64]
+    runs-on: ${{ matrix.platform == 'Linux x64' && 'ubuntu-24.04' || matrix.platform == 'macOS arm64' && 'macos-26' || 'windows-2025' }}
+    timeout-minutes: ${{ matrix.platform == 'Linux x64' && 60 || matrix.platform == 'macOS arm64' && 90 || 180 }}
+    env:
+      # Keep Cargo optimization and assertions; only omit debug symbols.
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      RUNNER_IMAGE: ${{ matrix.platform == 'Linux x64' && 'ubuntu-24.04' || matrix.platform == 'macOS arm64' && 'macos-26' || 'windows-2025' }}
+      TEST_FEATURES: ${{ matrix.platform == 'macOS arm64' && 'audio-all,ui-sounds,publisher,startup-metrics,video-native' || 'audio-all,ui-sounds,publisher,startup-metrics,video-ffmpeg' }}
+      SHIPPING_FEATURES: ${{ matrix.platform == 'macOS arm64' && 'ui-sounds,video-native' || 'ui-sounds,video-ffmpeg' }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@fb523f40495206854c36b250850817ae0f83e3d1 # 1.99.0
         with:
-          components: ${{ matrix.quality && 'clippy' || '' }}
+          components: ${{ matrix.platform == 'Linux x64' && 'clippy' || '' }}
       - name: Restore Rust build cache
         id: rust-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -103,11 +109,11 @@ jobs:
             ~/.cargo/git
             target/debug
             target/icon-tool
-          key: rust-v2-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
+          key: rust-v2-${{ env.RUNNER_IMAGE }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
           restore-keys: |
-            rust-v2-${{ matrix.os }}-${{ runner.arch }}-
+            rust-v2-${{ env.RUNNER_IMAGE }}-${{ runner.arch }}-
       - name: Set up video dependencies
-        if: matrix.backend == 'ffmpeg'
+        if: matrix.platform != 'macOS arm64'
         uses: ./.github/actions/setup-video
       - name: Guard Linux window and renderer features
         if: runner.os == 'Linux'
@@ -130,27 +136,27 @@ jobs:
             grep -E "(^|[[:space:]])wgpu feature \"$feature\"" "$RUNNER_TEMP/wgpu-features.txt"
           done
       - name: Check Clippy
-        if: matrix.quality
+        if: matrix.platform == 'Linux x64'
         run: cargo clippy --workspace --locked --all-targets --all-features -- -D warnings
       - name: Check workspace tests
-        if: matrix.quality
+        if: matrix.platform == 'Linux x64'
         run: cargo test --workspace --locked --all-features
       # Linux's full workspace tests already cover these regressions and build
       # the video executable for the integration tests. Only macOS/Windows need
       # this subset; keep their package/feature/dev-dependency graph identical.
       - name: Build platform test and video targets
-        if: ${{ !matrix.quality }}
+        if: ${{ matrix.platform != 'Linux x64' }}
         run: >-
           cargo build --locked -p keine -p keine-editor -p bevy_render
           --lib --test instance --bin keine-video-acceptance --no-default-features
-          --features "${{ matrix.test_features }}"
+          --features "${{ env.TEST_FEATURES }}"
       # libtest accepts several filters across unit and integration targets.
       - name: Check platform regressions
-        if: ${{ !matrix.quality }}
+        if: ${{ matrix.platform != 'Linux x64' }}
         run: >-
           cargo test --locked -p keine -p keine-editor -p bevy_render
           --lib --test instance --no-default-features
-          --features "${{ matrix.test_features }}" --
+          --features "${{ env.TEST_FEATURES }}" --
           scene::video:: preview::performance:: file_ops::assets::
           publisher::tests::native_release_ instance_lock_is_released_with_its_guard
           workspace::document:: workspace::persistence::
@@ -167,19 +173,19 @@ jobs:
       # Run after video acceptance: the publisher-only tests can replace the
       # shared video executable with a build that has no video backend enabled.
       - name: Check publisher pipeline
-        if: matrix.quality
+        if: matrix.platform == 'Linux x64'
         run: cargo test --workspace --locked --no-default-features --features publisher
       # Keep the native test boundary without rodio; developer audio above must
       # not hide accidental audio references in otherwise audio-free tests.
       - name: Check native video tests without audio
-        if: matrix.backend == 'native'
+        if: matrix.platform == 'macOS arm64'
         run: cargo check --locked -p keine --tests --no-default-features --features video-native
       # Optimized linking/packaging belongs to Release and Project Release.
       # Platform tests above still link developer formats; check shipping separately.
       - name: Check canonical shipping feature set
         run: >-
           cargo check --locked --no-default-features
-          --features "${{ matrix.shipping_features }}"
+          --features "${{ env.SHIPPING_FEATURES }}"
       - name: Save Rust build cache even after a test failure
         if: ${{ !cancelled() && steps.rust-cache.outputs.cache-primary-key != '' && steps.rust-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -190,3 +196,209 @@ jobs:
             target/debug
             target/icon-tool
           key: ${{ steps.rust-cache.outputs.cache-primary-key }}
+
+  android:
+    name: Android
+    needs: dependencies
+    if: needs.dependencies.outputs.android == 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@fb523f40495206854c36b250850817ae0f83e3d1 # 1.99.0
+        with:
+          targets: aarch64-linux-android
+          components: clippy
+      - name: Set up Android toolchain
+        uses: ./.github/actions/setup-android
+      - name: Restore Android Rust build cache
+        id: rust-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/android
+            target/icon-tool
+          key: android-arm64-ubuntu26-ndk28-v1-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            android-arm64-ubuntu26-ndk28-v1-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-
+      - name: Guard Android runtime dependencies
+        run: |
+          cargo tree --locked -p keine --target aarch64-linux-android \
+            --no-default-features --features ui-sounds -e normal,build --prefix none \
+            > "$RUNNER_TEMP/android-dependencies.txt"
+          if grep -E '^(keine-editor|gpui|rfd|ffmpeg-next) ' "$RUNNER_TEMP/android-dependencies.txt"; then
+            echo 'Android Engine must not include Editor, desktop file dialogs or FFmpeg.'
+            exit 1
+          fi
+          cargo tree --locked -p keine --target aarch64-linux-android \
+            --no-default-features --features ui-sounds -e features -i wgpu \
+            > "$RUNNER_TEMP/android-render-features.txt"
+          for backend in vulkan gles; do
+            grep -F "wgpu feature \"$backend\"" "$RUNNER_TEMP/android-render-features.txt"
+          done
+      - name: Build and lint Android debug/release APKs
+        run: |
+          cargo ndk -t arm64-v8a -P 26 clippy --locked -p keine --lib \
+            --target-dir target/android --no-default-features --features ui-sounds -- -D warnings
+          cargo ndk -t arm64-v8a -P 26 clippy --locked -p keine --lib \
+            --target-dir target/android --no-default-features --features ui-sounds,startup-metrics -- -D warnings
+          dev/scripts/build-android.sh
+      - name: Verify native entry point and 16 KB alignment
+        run: |
+          library=target/android/jniLibs/arm64-v8a/libkeine.so
+          readelf --dyn-syms --wide "$library" | grep ' ANativeActivity_onCreate$'
+          readelf --dyn-syms --wide "$library" | grep ' Java_moe_maincore_keine_EngineActivity_nativeBack$'
+          readelf --dyn-syms --wide "$library" | grep ' Java_moe_maincore_keine_EngineActivity_nativeBackupResult$'
+          gradle --no-daemon -p dev/android :app:dependencies --configuration debugRuntimeClasspath \
+            > "$RUNNER_TEMP/android-runtime-dependencies.txt"
+          grep -F 'No dependencies' "$RUNNER_TEMP/android-runtime-dependencies.txt"
+          python3 - <<'PY'
+          import subprocess
+          import zipfile
+          library = 'target/android/jniLibs/arm64-v8a/libkeine.so'
+          headers = subprocess.check_output(['readelf', '-lW', library], text=True)
+          loads = [line.split() for line in headers.splitlines() if line.strip().startswith('LOAD ')]
+          assert loads and all(int(line[-1], 16) >= 16384 for line in loads), headers
+          relro = [line.split() for line in headers.splitlines() if line.strip().startswith('GNU_RELRO ')]
+          assert all((int(line[2], 16) + int(line[5], 16)) % 16384 == 0 for line in relro), headers
+          with zipfile.ZipFile('dev/android/app/build/outputs/apk/debug/app-debug.apk') as apk:
+              entries = apk.namelist()
+              assert not any(name.startswith('kotlin/') or 'kotlin-stdlib' in name for name in entries), entries
+          PY
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 4 \
+            dev/android/app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify \
+            dev/android/app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging \
+            dev/android/app/build/outputs/apk/debug/app-debug.apk > "$RUNNER_TEMP/android-apk-manifest.txt"
+          grep -F "launchable-activity: name='moe.maincore.keine.EngineActivity'" \
+            "$RUNNER_TEMP/android-apk-manifest.txt"
+          grep -F "uses-gl-es: '0x30000'" "$RUNNER_TEMP/android-apk-manifest.txt"
+          grep -F "uses-feature-not-required: name='android.hardware.vulkan.level'" \
+            "$RUNNER_TEMP/android-apk-manifest.txt"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump xmltree \
+            dev/android/app/build/outputs/apk/debug/app-debug.apk --file AndroidManifest.xml \
+            > "$RUNNER_TEMP/android-apk-activity.txt"
+          grep -E ':launchMode\(.*\)=(2|0x0*2)$' "$RUNNER_TEMP/android-apk-activity.txt"
+          python3 dev/scripts/verify-icons.py --apk dev/android/app/build/outputs/apk/debug/app-debug.apk
+          python3 dev/scripts/verify-icons.py --apk dev/android/app/build/outputs/apk/release/app-release.apk
+          python3 - <<'PY'
+          import sys, zipfile
+          sys.path.insert(0, 'dev/scripts')
+          from package_notices import verify_apk
+          for kind in ('debug', 'release'):
+              with zipfile.ZipFile(f'dev/android/app/build/outputs/apk/{kind}/app-{kind}.apk') as apk:
+                  verify_apk(apk)
+          PY
+      - name: Upload Android Engine artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: keine-android-arm64-engine
+          if-no-files-found: error
+          path: |
+            dev/android/app/build/outputs/apk/debug/app-debug.apk
+            target/android/jniLibs/arm64-v8a/libkeine.so
+            target/android/notices/
+      - name: Save Android dependencies even after validation failure
+        if: ${{ !cancelled() && steps.rust-cache.outputs.cache-primary-key != '' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/android
+            target/icon-tool
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
+
+  webp-fuzz:
+    name: Check WebP Fuzz
+    needs: dependencies
+    if: needs.dependencies.outputs.media == 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    env:
+      CARGO_FUZZ_VERSION: 0.13.2
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install nightly Rust
+        run: rustup toolchain install nightly --profile minimal
+      - name: Cache cargo-fuzz
+        id: cargo-fuzz-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.tool_cache }}/cargo-fuzz
+          key: cargo-fuzz-${{ runner.os }}-${{ env.CARGO_FUZZ_VERSION }}
+      - name: Add cargo-fuzz to PATH
+        shell: bash
+        run: echo "${{ runner.tool_cache }}/cargo-fuzz/bin" >> "$GITHUB_PATH"
+      - name: Install cargo-fuzz
+        if: steps.cargo-fuzz-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          cargo install --locked --root "${{ runner.tool_cache }}/cargo-fuzz" --version "$CARGO_FUZZ_VERSION" cargo-fuzz
+      - name: Check the independent fuzz lockfile
+        run: cargo +nightly metadata --locked --manifest-path tests/fuzz/Cargo.toml --format-version 1 > /dev/null
+      - name: Fuzz the production WebP decoder
+        run: >-
+          cargo +nightly fuzz run --fuzz-dir tests/fuzz webp tests/fuzz/corpus/webp
+          tests/fixtures/letsgal-timeline/assets/backgrounds/calibration --
+          -max_total_time=60 -max_len=4194304 -rss_limit_mb=2048
+      - name: Upload reproducer
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: webp-fuzz-artifacts-${{ github.sha }}
+          path: tests/fuzz/artifacts/
+          if-no-files-found: ignore
+
+  ffmpeg-asan:
+    name: Check FFmpeg ASan
+    needs: dependencies
+    if: needs.dependencies.outputs.media == 'true'
+    timeout-minutes: 60
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install nightly Rust and rust-src
+        run: rustup toolchain install nightly --profile minimal --component rust-src
+      - name: Set up video dependencies
+        uses: ./.github/actions/setup-video
+        with:
+          enabled: "true"
+      - name: Resolve sanitizer target
+        shell: bash
+        run: |
+          host="$(rustc +nightly -vV | sed -n 's/^host: //p')"
+          test -n "$host"
+          echo "RUST_HOST=$host" >> "$GITHUB_ENV"
+      - name: Exercise filesystem and Hakutaku media under ASan
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=0:halt_on_error=1
+          RUSTFLAGS: -Zsanitizer=address
+          RUSTDOCFLAGS: -Zsanitizer=address
+        run: |
+          cargo_args=(
+            +nightly run -Zbuild-std --target "$RUST_HOST" --locked
+            --no-default-features --features publisher,video-ffmpeg
+            --bin keine-video-acceptance --
+          )
+          for fixture in playback.mp4 no-audio.mp4 long-gop.mp4 tail-moov.mp4; do
+            cargo "${cargo_args[@]}" "tests/fixtures/video/$fixture"
+          done
+          cargo "${cargo_args[@]}" --expect-error tests/fixtures/video/damaged-header.mp4
+
+  editor:
+    name: Editor release
+    needs: desktop
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      actions: read
+      contents: write
+    uses: ./.github/workflows/editor-release.yml

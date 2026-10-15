@@ -1,4 +1,4 @@
-name: Release Engine
+name: Build tday
 
 # tday is built only on an explicit manual request.
 on:
@@ -32,34 +32,18 @@ jobs:
         uses: ./.github/actions/check-dependencies
 
   bundle:
-    name: Build ${{ matrix.name }}
     needs: source
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: Linux x64
-            # Shipping floor: GLIBC 2.39, including all bundled native libraries.
-            os: ubuntu-24.04
-            artifact: keine-linux
-            target: ''
-            engine_target_dir: release
-            triplet: x64-windows
-          - name: macOS arm64
-            os: macos-26
-            artifact: keine-macos
-            target: ''
-            engine_target_dir: release
-            triplet: x64-windows
-          - name: Windows x64
-            os: windows-2025
-            artifact: keine-windows-x64
-            target: x86_64-pc-windows-msvc
-            engine_target_dir: x86_64-pc-windows-msvc
-            triplet: x64-windows
-    runs-on: ${{ matrix.os }}
+        platform: [Linux x64, macOS arm64, Windows x64]
+    # Shipping floor remains Ubuntu 24.04 / GLIBC 2.39.
+    runs-on: ${{ matrix.platform == 'Linux x64' && 'ubuntu-24.04' || matrix.platform == 'macOS arm64' && 'macos-26' || 'windows-2025' }}
     env:
-      KEINE_BUILD_TARGET: ${{ matrix.target }}
+      RUNNER_IMAGE: ${{ matrix.platform == 'Linux x64' && 'ubuntu-24.04' || matrix.platform == 'macOS arm64' && 'macos-26' || 'windows-2025' }}
+      KEINE_BUILD_TARGET: ${{ matrix.platform == 'Windows x64' && 'x86_64-pc-windows-msvc' || '' }}
+      ARTIFACT_BASE: ${{ matrix.platform == 'Linux x64' && 'keine-linux' || matrix.platform == 'macOS arm64' && 'keine-macos' || 'keine-windows-x64' }}
+      ENGINE_TARGET_DIR: ${{ matrix.platform == 'Windows x64' && 'x86_64-pc-windows-msvc' || 'release' }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -68,8 +52,8 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@fb523f40495206854c36b250850817ae0f83e3d1 # 1.99.0
       - name: Install cross-compilation target
-        if: matrix.target != ''
-        run: rustup target add ${{ matrix.target }}
+        if: env.KEINE_BUILD_TARGET != ''
+        run: rustup target add ${{ env.KEINE_BUILD_TARGET }}
       - name: Resolve project input
         id: project
         shell: bash
@@ -107,8 +91,6 @@ jobs:
       - name: Resolve artifact name
         id: artifact
         shell: bash
-        env:
-          ARTIFACT_BASE: ${{ matrix.artifact }}
         run: |
           artifact="tday-${ARTIFACT_BASE#keine-}-test"
           echo "name=$artifact" >> "$GITHUB_OUTPUT"
@@ -122,18 +104,18 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target/CACHEDIR.TAG
-            target/${{ matrix.engine_target_dir }}
+            target/${{ env.ENGINE_TARGET_DIR }}
             target/runner
-          key: release-rust-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ env.KEINE_RELEASE_CACHE_FEATURES }}-publisher-fast
+          key: release-rust-v1-${{ env.RUNNER_IMAGE }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ env.KEINE_RELEASE_CACHE_FEATURES }}-publisher-fast
           restore-keys: |
-            release-rust-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ env.KEINE_RELEASE_CACHE_FEATURES }}-
-            release-rust-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-
-            release-rust-v1-${{ matrix.os }}-${{ runner.arch }}-
+            release-rust-v1-${{ env.RUNNER_IMAGE }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-${{ env.KEINE_RELEASE_CACHE_FEATURES }}-
+            release-rust-v1-${{ env.RUNNER_IMAGE }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}-
+            release-rust-v1-${{ env.RUNNER_IMAGE }}-${{ runner.arch }}-
       - name: Set up video dependencies
         uses: ./.github/actions/setup-video
         with:
           enabled: ${{ contains(env.KEINE_RELEASE_FEATURES, 'video-ffmpeg') }}
-          windows-triplet: ${{ matrix.triplet }}
+          windows-triplet: x64-windows
       - name: Build publisher runner
         # Build tooling needs no whole-program LTO; shipping builds retain it.
         env:
@@ -224,8 +206,8 @@ jobs:
             printf 'Signature: 8a477f597d28d172789f06886806bc55\n' > target/CACHEDIR.TAG
           fi
           args=(--locked --target-dir target -p keine -p keine-loader)
-          if [[ -n "${{ matrix.target }}" ]]; then
-            args+=(--target "${{ matrix.target }}")
+          if [[ -n "${{ env.KEINE_BUILD_TARGET }}" ]]; then
+            args+=(--target "${{ env.KEINE_BUILD_TARGET }}")
           fi
           cargo clean "${args[@]}" --profile release
           echo 'cache-safe=true' >> "$GITHUB_OUTPUT"
@@ -237,7 +219,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target/CACHEDIR.TAG
-            target/${{ matrix.engine_target_dir }}
+            target/${{ env.ENGINE_TARGET_DIR }}
             target/runner
           key: ${{ steps.release-cache.outputs.cache-primary-key }}
 

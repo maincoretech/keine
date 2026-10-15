@@ -8,8 +8,8 @@
 
 ## 下载
 
-- [`editor-latest`](https://github.com/maincoretech/keine/releases/tag/editor-latest)：独立 Editor，内含同版本 Preview Engine；main 的 CI Desktop 成功后自动更新。
-- [`tday-latest`](https://github.com/maincoretech/keine/releases/tag/tday-latest)：tday 试玩，仅手动运行 **Release Engine** 构建。
+- [`editor-latest`](https://github.com/maincoretech/keine/releases/tag/editor-latest)：独立 Editor，内含同版本 Preview Engine；main 的 CI 桌面检查通过后自动更新。
+- [`tday-latest`](https://github.com/maincoretech/keine/releases/tag/tday-latest)：tday 试玩，仅手动运行 **Build tday** 构建。
 
 包目录、签名与正式项目发行见[发布指南](release.md)。
 
