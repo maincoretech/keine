@@ -1,14 +1,12 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+use bevy::ecs::system::SystemState;
 use bevy::prelude::*;
-use keine_core::Program;
-use keine_loader::{DiagnosticLevel, load_scenes_with};
 
 use super::resources::{
-    ContentProjectResource, GameConfigResource, GameState, LocalAssetManifest, LocalSceneAssets,
-    ScriptLanguages,
+    ContentProjectResource, GameConfigResource, GameState, LocalAssetManifest, ScriptLanguages,
 };
 
 pub(crate) struct AuthoringPreviewConfig {
@@ -63,10 +61,16 @@ impl Plugin for AuthoringPreviewPlugin {
     }
 }
 
-pub(crate) fn set_document_revision(world: &mut World, revision: u64) {
+fn set_document_revision(world: &mut World, revision: u64) {
     if let Some(mut current) = world.get_resource_mut::<PreviewDocumentRevision>() {
         current.0 = revision;
     }
+}
+
+pub(crate) fn document_revision(world: &World) -> Option<u64> {
+    world
+        .get_resource::<PreviewDocumentRevision>()
+        .map(|revision| revision.0)
 }
 
 /// Swap only the authored Program. The native window, GPU surfaces, and
@@ -74,61 +78,38 @@ pub(crate) fn set_document_revision(world: &mut World, revision: u64) {
 pub(crate) fn reload_source(world: &mut World, revision: u64) -> Result<()> {
     let content = &world.resource::<ContentProjectResource>().0;
     let languages = &world.resource::<ScriptLanguages>().0;
-    let config = &world.resource::<GameConfigResource>().0;
-    let mut scenes =
-        load_scenes_with(content, languages).context("failed to reload preview source")?;
-    let native = config.adapter.script.eq_ignore_ascii_case("keine");
-    if native {
-        keine_loader::validate_native_entry_flow(&mut scenes, &config.script.entry);
-        anyhow::ensure!(
-            scenes.iter().any(|scene| scene.name == config.script.entry),
-            "preview entry scene is missing"
-        );
-        anyhow::ensure!(
-            !scenes.iter().any(|scene| scene
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.level == DiagnosticLevel::Error)),
-            "preview source has script errors"
-        );
-    }
-    let mut manifest = LocalAssetManifest::default();
-    let mut program_scenes = Vec::with_capacity(scenes.len());
-    for scene in scenes {
-        for diagnostic in &scene.diagnostics {
-            let message = format!(
-                "{}:{}:{}: {}",
-                scene.path.display(),
-                diagnostic.span.line,
-                diagnostic.span.column,
-                diagnostic.message
-            );
-            match diagnostic.level {
-                DiagnosticLevel::Warning => log::warn!("{message}"),
-                DiagnosticLevel::Error => log::error!("{message}"),
-            }
-        }
-        manifest.insert(
-            scene.name.clone(),
-            LocalSceneAssets {
-                source_path: scene.path,
-                resources: scene.resources,
-                sub_scenes: scene.sub_scenes,
-                action_spans: scene.action_spans,
-            },
-        );
-        program_scenes.push((scene.name, scene.actions));
-    }
-    let mut image_roles = crate::scene::images::ImageRoleRegistry::default();
-    image_roles.rebuild(world.resource::<GameConfigResource>(), &manifest);
-    *world.resource_mut::<LocalAssetManifest>() = manifest;
-    *world.resource_mut::<crate::scene::images::ImageRoleRegistry>() = image_roles;
-    super::tick::restart_after_program_reload(
-        &mut world.resource_mut::<GameState>(),
-        Program::from_scenes(program_scenes),
+    let build = super::tick::reload::build_hot_reload(
+        content,
+        languages,
+        &world.resource::<GameConfigResource>().0,
+    )?;
+    // Borrow in place: resource_scope removes/reinserts resources and marks
+    // them changed even when only source spans were updated in Bevy 0.19.
+    type ReloadResources<'w> = (
+        ResMut<'w, GameState>,
+        ResMut<'w, LocalAssetManifest>,
+        ResMut<'w, GameConfigResource>,
+        ResMut<'w, crate::scene::images::ImageRoleRegistry>,
     );
+    let mut resources: SystemState<ReloadResources<'_>> = SystemState::new(world);
+    let (mut state, mut manifest, mut config, mut image_roles) = resources
+        .get_mut(world)
+        .map_err(|error| anyhow::anyhow!("preview resources unavailable: {error}"))?;
+    let restarted = super::tick::reload::apply_hot_reload(
+        build,
+        state.bypass_change_detection(),
+        manifest.reborrow(),
+        config.reborrow(),
+        image_roles.reborrow(),
+        true,
+    );
+    if restarted {
+        world.resource_mut::<GameState>().set_changed();
+    }
     set_document_revision(world, revision);
-    keep_loading_frames_alive(world);
+    if restarted {
+        keep_loading_frames_alive(world);
+    }
     Ok(())
 }
 
@@ -198,6 +179,7 @@ fn state_location_at(
 mod tests {
     use std::collections::HashMap;
 
+    use super::super::resources::LocalSceneAssets;
     use keine_core::State;
     use keine_loader::SourceSpan;
 

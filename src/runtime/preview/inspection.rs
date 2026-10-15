@@ -64,9 +64,7 @@ pub(crate) fn runtime_snapshot(world: &World) -> RuntimeSnapshot {
     {
         snapshot.waiting.push("Asset loading".into());
     }
-    snapshot
-        .waiting
-        .extend(wait_reasons(state).into_iter().map(str::to_owned));
+    append_wait_reasons(state, &mut snapshot.waiting);
     let mut variables = state
         .vars
         .iter()
@@ -124,144 +122,45 @@ pub(crate) fn runtime_snapshot(world: &World) -> RuntimeSnapshot {
     snapshot
 }
 
-fn wait_reasons(state: &State) -> Vec<&'static str> {
-    let mut reasons = Vec::new();
+fn append_wait_reasons(state: &State, reasons: &mut Vec<String>) {
     if state.menu.is_some() {
-        reasons.push("Choice");
+        reasons.push("Choice".into());
     }
     if state.user_input.is_some() {
-        reasons.push("Text input");
+        reasons.push("Text input".into());
     }
-    if state.wait_remaining > 0. && state.wait_blocking {
-        reasons.push("Timed wait");
-    }
-    if state.waiting_for_advance {
-        reasons.push("Advance input");
-    }
-    if state.dialogue_retraction.is_some() {
-        reasons.push("Text retraction / advance input");
-    }
-    if state.system_message.is_some() {
-        reasons.push("Script dialog");
-    }
-    if state.intro.as_ref().is_some_and(|value| value.blocking) {
-        reasons.push("Intro pages");
-    }
-    if state.curtain.blocking {
-        reasons.push("Curtain");
-    }
-    if state.stage_masks.values().any(|value| value.blocking) {
-        reasons.push("Stage mask");
-    }
-    if state
-        .stage_animation
-        .as_ref()
-        .is_some_and(|value| value.animation.blocking)
-    {
-        reasons.push("Stage animation");
-    }
-    if state
-        .videos
-        .values()
-        .any(|value| value.spec.wait_for_finished && !value.spec.looped && !value.stopping)
-    {
-        reasons.push("Video");
-    }
-    if state
-        .floating_text
-        .as_ref()
-        .is_some_and(|value| value.blocking)
-    {
-        reasons.push("Floating text");
-    }
-    for (blocking, label) in [
-        (
-            state
-                .camera_transform_animation
-                .as_ref()
-                .is_some_and(|value| value.blocking),
-            "Camera transform",
-        ),
-        (
-            state
-                .camera_effect_animation
-                .as_ref()
-                .is_some_and(|value| value.blocking),
-            "Camera effect",
-        ),
-        (
-            state
-                .camera_shake
-                .as_ref()
-                .is_some_and(|value| value.blocking),
-            "Camera shake",
-        ),
-        (
-            state
-                .bg_transition
-                .as_ref()
-                .is_some_and(|value| value.blocking),
-            "Background transition",
-        ),
-        (
-            state
-                .bg_transform_animation
-                .as_ref()
-                .is_some_and(|value| value.blocking),
-            "Background transform",
-        ),
-        (
-            state
-                .bg_keyframe_animation
-                .as_ref()
-                .is_some_and(|value| value.blocking),
-            "Background keyframes",
-        ),
-        (
-            state
-                .bg_animation
-                .as_ref()
-                .is_some_and(|value| value.blocking),
-            "Background animation",
-        ),
-        (
-            state.sprites.values().any(|sprite| {
-                sprite
-                    .animation
-                    .as_ref()
-                    .is_some_and(|value| value.blocking)
-                    || sprite
-                        .transform_animation
-                        .as_ref()
-                        .is_some_and(|value| value.blocking)
-                    || sprite
-                        .position_animation
-                        .as_ref()
-                        .is_some_and(|value| value.blocking)
-                    || sprite
-                        .keyframe_animation
-                        .as_ref()
-                        .is_some_and(|value| value.blocking)
-                    || (sprite.transition_blocking
-                        && ((sprite.entering && sprite.transition_progress < 1.)
-                            || (!sprite.entering && sprite.transition_progress > 0.)))
-            }),
-            "Sprite animation / transition",
-        ),
-    ] {
-        if blocking {
-            reasons.push(label);
+    let mut blocked = false;
+    let _ = state.visit_presentation_blocks(|reason| {
+        use keine_core::PresentationBlock as B;
+        blocked = true;
+        let label = match reason {
+            B::TextRetraction => "Text retraction / advance input",
+            B::TimedWait => "Timed wait",
+            B::AdvanceInput => "Advance input",
+            B::ScriptDialog => "Script dialog",
+            B::IntroPages => "Intro pages",
+            B::Curtain => "Curtain",
+            B::StageMask => "Stage mask",
+            B::FloatingText => "Floating text",
+            B::Video => "Video",
+            B::CameraEffect => "Camera effect",
+            B::CameraTransform => "Camera transform",
+            B::CameraShake => "Camera shake",
+            B::StageAnimation => "Stage animation",
+            B::BackgroundAnimation => "Background animation",
+            B::BackgroundTransition => "Background transition",
+            B::BackgroundTransform => "Background transform",
+            B::BackgroundKeyframes => "Background keyframes",
+            B::SpriteAnimation | B::SpriteTransform => "Sprite animation / transition",
+        };
+        if !reasons.iter().any(|existing| existing == label) {
+            reasons.push(label.into());
         }
+        std::ops::ControlFlow::<()>::Continue(())
+    });
+    if state.dialogue.is_some() && !blocked {
+        reasons.push("Dialogue / advance input".into());
     }
-    // Core still owns whether execution is blocked. Unknown future blockers
-    // stay visible until their authoring label is added here.
-    if state.presentation_blocked() && reasons.is_empty() {
-        reasons.push("Presentation");
-    }
-    if state.dialogue.is_some() && !state.presentation_blocked() {
-        reasons.push("Dialogue / advance input");
-    }
-    reasons
 }
 
 #[cfg(test)]

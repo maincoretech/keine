@@ -311,9 +311,13 @@ fn publish_live_position(world: &mut World) {
     let Some(mut host) = world.remove_resource::<LiveHost>() else {
         return;
     };
+    let Some(applied_revision) = super::preview::document_revision(world) else {
+        world.insert_resource(host);
+        return;
+    };
     let location = super::preview::source_location(world);
     let current = (
-        host.session.document_revision,
+        applied_revision,
         location,
         super::preview::runtime_snapshot(world),
     );
@@ -642,6 +646,13 @@ fn handle(
             let Some(runtime) = runtime else {
                 return Err((ErrorCode::InvalidRequest, "preview is not running".into()));
             };
+            if super::preview::document_revision(runtime) != Some(*document_revision) {
+                return Err((
+                    ErrorCode::InvalidRequest,
+                    "preview still uses the last valid source; fix script errors before seeking"
+                        .into(),
+                ));
+            }
             if !super::preview::seek_source(runtime, path, *line) {
                 return Err((
                     ErrorCode::InvalidRequest,
@@ -843,7 +854,6 @@ fn reload_live_source(runtime: Option<&mut World>, revision: u64) {
     if let Err(error) = super::preview::reload_source(world, revision) {
         // Invalid in-progress text must leave the last valid Program live.
         log::warn!("preview kept the last valid source: {error:#}");
-        super::preview::set_document_revision(world, revision);
     }
 }
 
@@ -914,6 +924,177 @@ fn send_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_reload_rejects_errors_tracks_applied_revision_and_keeps_noop_state() {
+        use crate::runtime::{preview, resources::*};
+        use crate::scene::images::ImageRoleRegistry;
+        use crate::storage::save::ContinuationCheckpoint;
+        use bevy::prelude::*;
+        use keine_core::{State, Value, config::GameConfig};
+        use std::sync::Arc;
+
+        let mut session = Session::new("reload-regression").unwrap();
+        let root = &session.overlay.root;
+        fs::create_dir_all(root.join("scripts")).unwrap();
+        let path = root.join("scripts/main.shou");
+        let source = "scene main {\n background(room),\n let score = 0,\n score += 1,\n \"old\",\n call(helper)\n}\nscene helper { \"helper\" }\n";
+        fs::write(&path, source).unwrap();
+        let config = GameConfig {
+            adapter: keine_core::config::AdapterConfig {
+                script: "keine".into(),
+                ..Default::default()
+            },
+            script: keine_core::config::ScriptConfig {
+                entry: "main".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let content =
+            keine_loader::load_project(root, &[keine_core::config::AssetSourceConfig::default()])
+                .unwrap();
+        let mut app = App::new();
+        app.add_plugins(preview::AuthoringPreviewPlugin::new(
+            preview::AuthoringPreviewConfig {
+                document_revision: 0,
+            },
+        ))
+        .insert_resource(GameState(State::new()))
+        .insert_resource(ContentProjectResource(content))
+        .insert_resource(ScriptLanguages(
+            LoaderRegistry::default().languages("keine").unwrap(),
+        ))
+        .insert_resource(GameConfigResource(config))
+        .init_resource::<LocalAssetManifest>()
+        .init_resource::<ImageRoleRegistry>()
+        .init_resource::<ContinuationCheckpoint>();
+        let world = app.world_mut();
+        preview::reload_source(world, 1).unwrap();
+        assert_eq!(preview::document_revision(world), Some(1));
+        assert_eq!(
+            world.resource::<GameState>().vars.get("score"),
+            Some(&Value::Int(1))
+        );
+        // Simulate live presentation progress that must survive a comment edit.
+        world.resource_mut::<GameState>().wait_remaining = 0.42;
+        let old = world.resource::<GameState>().0.clone();
+        let checkpoint = world.resource::<ContinuationCheckpoint>().generation();
+        assert!(
+            !world.resource::<LocalAssetManifest>()["main"]
+                .resources
+                .is_empty()
+        );
+        assert!(
+            !world.resource::<LocalAssetManifest>()["main"]
+                .sub_scenes
+                .is_empty()
+        );
+        world
+            .resource_mut::<preview::AuthoringPreviewSession>()
+            .settle_until = None;
+        world.clear_trackers();
+        fs::write(&path, format!("// comment\n{source}")).unwrap();
+        reload_live_source(Some(world), 2);
+        assert_eq!(preview::document_revision(world), Some(2));
+        assert_eq!(world.resource::<GameState>().0, old);
+        assert!(Arc::ptr_eq(
+            &world.resource::<GameState>().program,
+            &old.program
+        ));
+        assert_eq!(
+            world.resource::<ContinuationCheckpoint>().generation(),
+            checkpoint
+        );
+        assert_eq!(preview::source_location(world).unwrap().1, 6);
+        assert!(!world.get_resource_ref::<GameState>().unwrap().is_changed());
+        assert!(
+            !world
+                .get_resource_ref::<GameConfigResource>()
+                .unwrap()
+                .is_changed()
+        );
+        assert!(
+            !world
+                .get_resource_ref::<ImageRoleRegistry>()
+                .unwrap()
+                .is_changed()
+        );
+        assert!(
+            !world
+                .get_resource_ref::<LocalAssetManifest>()
+                .unwrap()
+                .is_changed()
+        );
+        assert!(
+            world
+                .resource::<preview::AuthoringPreviewSession>()
+                .settle_until
+                .is_none()
+        );
+
+        let spans = world
+            .resource::<LocalAssetManifest>()
+            .get("main")
+            .unwrap()
+            .action_spans
+            .clone();
+        // Parse errors, entry-flow errors, missing entry and reference errors
+        // must all leave both the live Program and its source map intact.
+        for invalid in [
+            "scene main { let a = ) == 1 }",
+            "scene main { return() }",
+            "scene other { \"other\" }",
+            "scene main { goto(missing) }",
+        ] {
+            fs::write(&path, invalid).unwrap();
+            session.document_revision = 3;
+            reload_live_source(Some(world), 3);
+            assert_eq!(preview::document_revision(world), Some(2), "{invalid}");
+            assert_eq!(world.resource::<GameState>().0, old, "{invalid}");
+            assert_eq!(
+                world
+                    .resource::<LocalAssetManifest>()
+                    .get("main")
+                    .unwrap()
+                    .action_spans,
+                spans
+            );
+            assert_eq!(
+                world.resource::<ContinuationCheckpoint>().generation(),
+                checkpoint
+            );
+            let result = handle(
+                &LoaderRegistry::default(),
+                &mut session,
+                Some(world),
+                &ClientCommand::SetExecutionCursor {
+                    document_revision: 3,
+                    path: "scripts/main.shou".into(),
+                    line: 1,
+                    column: 1,
+                },
+            );
+            assert!(matches!(result, Err((ErrorCode::InvalidRequest, _))));
+        }
+        fs::write(&path, source.replace("old", "fixed")).unwrap();
+        reload_live_source(Some(world), 4);
+        assert_eq!(preview::document_revision(world), Some(4));
+        assert_eq!(
+            world.resource::<GameState>().vars.get("score"),
+            Some(&Value::Int(1))
+        );
+        assert_eq!(
+            world
+                .resource::<GameState>()
+                .dialogue
+                .as_ref()
+                .unwrap()
+                .text,
+            "fixed"
+        );
+        assert!(world.resource::<ContinuationCheckpoint>().generation() > checkpoint);
+    }
 
     #[test]
     fn preview_snapshot_paths_are_confined_to_native_scripts() {

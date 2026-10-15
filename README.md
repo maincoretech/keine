@@ -35,7 +35,7 @@ Compatibility JSON is read-only; migration is explicit and preserves its input.
 ## Script performance
 
 Measured on **Apple M5 Pro (15 logical CPUs), 24 GiB RAM, macOS 27.0.1**,
-2026-10-11, using the 0.14.3 working tree and optimized Cargo benches. These are historical measurements, not a 0.16.0 rerun.
+2026-10-11, using the 0.14.3 working tree and optimized Cargo benches. These are historical measurements, not a rerun on the current release.
 Single-threaded, warm in-memory input, 10 samples:
 
 | Workload | Approximate result |
@@ -82,7 +82,7 @@ dev/scripts/  build and fixture scripts
 - [Android build and device acceptance](dev/docs/android.md)
 - [Compatibility limits](dev/docs/compatibility.md)
 
-Current version: 0.16.0. macOS is the current acceptance focus; Windows/Linux runtime acceptance is deferred.
+Current version: 0.16.1. macOS is the current acceptance focus; Windows/Linux runtime acceptance is deferred.
 Build/test success and manual input/display/media acceptance are separate gates.
 
 ## License

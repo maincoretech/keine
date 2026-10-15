@@ -1400,61 +1400,110 @@ impl State {
         true
     }
 
+    /// Fast boolean query: monomorphized visitor stops at the first blocker.
     pub fn presentation_blocked(&self) -> bool {
-        self.dialogue_retraction.is_some()
-            || (self.wait_blocking && self.wait_remaining > 0.0)
-            || self.waiting_for_advance
-            || self.system_message.is_some()
-            || self.intro.as_ref().is_some_and(|intro| intro.blocking)
-            || self.curtain.blocking
-            || self.stage_masks.values().any(|mask| mask.blocking)
-            || self
-                .floating_text
+        self.visit_presentation_blocks(std::ops::ControlFlow::Break)
+            .is_break()
+    }
+
+    /// Visits active presentation blockers without allocating. Choice/text-input
+    /// interactions and host/UI waits are separate from presentation blocking.
+    #[inline]
+    pub fn visit_presentation_blocks<B>(
+        &self,
+        mut visit: impl FnMut(PresentationBlock) -> std::ops::ControlFlow<B>,
+    ) -> std::ops::ControlFlow<B> {
+        macro_rules! blocked {
+            ($condition:expr, $reason:ident) => {
+                if $condition {
+                    visit(PresentationBlock::$reason)?;
+                }
+            };
+        }
+        blocked!(self.dialogue_retraction.is_some(), TextRetraction);
+        blocked!(self.wait_blocking && self.wait_remaining > 0.0, TimedWait);
+        blocked!(self.waiting_for_advance, AdvanceInput);
+        blocked!(self.system_message.is_some(), ScriptDialog);
+        blocked!(
+            self.intro.as_ref().is_some_and(|intro| intro.blocking),
+            IntroPages
+        );
+        blocked!(self.curtain.blocking, Curtain);
+        blocked!(
+            self.stage_masks.values().any(|mask| mask.blocking),
+            StageMask
+        );
+        blocked!(
+            self.floating_text
                 .as_ref()
-                .is_some_and(|text| text.blocking)
-            || self
-                .videos
+                .is_some_and(|text| text.blocking),
+            FloatingText
+        );
+        blocked!(
+            self.videos
                 .values()
-                .any(|video| video.spec.wait_for_finished && !video.spec.looped && !video.stopping)
-            || self
-                .camera_effect_animation
+                .any(|video| video.spec.wait_for_finished && !video.spec.looped && !video.stopping),
+            Video
+        );
+        blocked!(
+            self.camera_effect_animation
                 .as_ref()
-                .is_some_and(|animation| animation.blocking)
-            || self
-                .camera_transform_animation
+                .is_some_and(|animation| animation.blocking),
+            CameraEffect
+        );
+        blocked!(
+            self.camera_transform_animation
                 .as_ref()
-                .is_some_and(|animation| animation.blocking)
-            || self
-                .camera_shake
+                .is_some_and(|animation| animation.blocking),
+            CameraTransform
+        );
+        blocked!(
+            self.camera_shake
                 .as_ref()
-                .is_some_and(|animation| animation.blocking)
-            || self
-                .stage_animation
+                .is_some_and(|animation| animation.blocking),
+            CameraShake
+        );
+        blocked!(
+            self.stage_animation
                 .as_ref()
-                .is_some_and(|animation| animation.animation.blocking)
-            || self
-                .bg_animation
+                .is_some_and(|animation| animation.animation.blocking),
+            StageAnimation
+        );
+        blocked!(
+            self.bg_animation
                 .as_ref()
-                .is_some_and(|animation| animation.blocking)
-            || self.sprites.values().any(|sprite| {
+                .is_some_and(|animation| animation.blocking),
+            BackgroundAnimation
+        );
+        blocked!(
+            self.sprites.values().any(|sprite| {
                 sprite
                     .animation
                     .as_ref()
                     .is_some_and(|animation| animation.blocking)
-            })
-            || self
-                .bg_transition
+            }),
+            SpriteAnimation
+        );
+        blocked!(
+            self.bg_transition
                 .as_ref()
-                .is_some_and(|transition| transition.blocking)
-            || self
-                .bg_transform_animation
+                .is_some_and(|transition| transition.blocking),
+            BackgroundTransition
+        );
+        blocked!(
+            self.bg_transform_animation
                 .as_ref()
-                .is_some_and(|animation| animation.blocking)
-            || self
-                .bg_keyframe_animation
+                .is_some_and(|animation| animation.blocking),
+            BackgroundTransform
+        );
+        blocked!(
+            self.bg_keyframe_animation
                 .as_ref()
-                .is_some_and(|animation| animation.blocking)
-            || self.sprites.values().any(|sprite| {
+                .is_some_and(|animation| animation.blocking),
+            BackgroundKeyframes
+        );
+        blocked!(
+            self.sprites.values().any(|sprite| {
                 sprite
                     .transform_animation
                     .as_ref()
@@ -1470,8 +1519,35 @@ impl State {
                     || (sprite.transition_blocking
                         && ((sprite.entering && sprite.transition_progress < 1.0)
                             || (!sprite.entering && sprite.transition_progress > 0.0)))
-            })
+            }),
+            SpriteTransform
+        );
+        std::ops::ControlFlow::Continue(())
     }
+}
+
+/// Core presentation causes, independent of Inspector labels or wire formats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PresentationBlock {
+    TextRetraction,
+    TimedWait,
+    AdvanceInput,
+    ScriptDialog,
+    IntroPages,
+    Curtain,
+    StageMask,
+    FloatingText,
+    Video,
+    CameraEffect,
+    CameraTransform,
+    CameraShake,
+    StageAnimation,
+    BackgroundAnimation,
+    SpriteAnimation,
+    BackgroundTransition,
+    BackgroundTransform,
+    BackgroundKeyframes,
+    SpriteTransform,
 }
 
 fn reconcile_scene_stack(program: &Program, scene_stack: &mut Vec<SceneFrame>) {
@@ -1516,6 +1592,60 @@ fn reconcile_backlog_entry(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn presentation_visiting_short_circuits_and_separates_waits_from_persistence() {
+        use std::ops::ControlFlow;
+        for blocking in [false, true] {
+            let mut state = State::new();
+            state.wait_remaining = 1.0;
+            state.wait_blocking = blocking;
+            // A serializable timed wait may block execution; a nonblocking
+            // transient may require replay without blocking execution.
+            state.camera_shake = Some(CameraShakeState::new(
+                CameraShakeSpec {
+                    amplitude: 1.0,
+                    frequency: 2.0,
+                    duration: 3.0,
+                    axis: Default::default(),
+                    falloff: Default::default(),
+                },
+                Default::default(),
+                1,
+                false,
+            ));
+            assert!(!state.persistence_safety().is_exact());
+            assert_eq!(state.presentation_blocked(), blocking);
+            let mut seen = Vec::new();
+            let _ = state.visit_presentation_blocks(|reason| {
+                seen.push(reason);
+                ControlFlow::<()>::Continue(())
+            });
+            assert_eq!(
+                seen,
+                if blocking {
+                    vec![PresentationBlock::TimedWait]
+                } else {
+                    vec![]
+                }
+            );
+            state.camera_shake.as_mut().unwrap().blocking = true;
+            seen.clear();
+            let stopped = state.visit_presentation_blocks(|reason| {
+                seen.push(reason);
+                ControlFlow::Break(())
+            });
+            assert!(stopped.is_break());
+            assert_eq!(
+                seen,
+                [if blocking {
+                    PresentationBlock::TimedWait
+                } else {
+                    PresentationBlock::CameraShake
+                }]
+            );
+        }
+    }
 
     #[test]
     fn dynamic_sequences_rest_and_repeat_at_the_authored_boundaries() {

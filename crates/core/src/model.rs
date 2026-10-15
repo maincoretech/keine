@@ -19,7 +19,7 @@ pub use eiyashou::{
 pub use state::{
     ActiveParticleEffect, BgmState, CameraShakeState, DialoguePause, EffectCue, EffectEvent,
     EffectState, HostCommandEvent, MenuChoice, MenuState, PersistenceHazard, PersistenceSafety,
-    PostProcessAnimation, RestoreError, SceneFrame, ShellEvent, SpriteSequenceState,
-    StageAnimationState, StageMaskState, State, VideoState, VocalCue,
+    PostProcessAnimation, PresentationBlock, RestoreError, SceneFrame, ShellEvent,
+    SpriteSequenceState, StageAnimationState, StageMaskState, State, VideoState, VocalCue,
 };
 pub use types::*;

@@ -202,5 +202,39 @@ fn bench_list_reads(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench, bench_markup, bench_list_reads);
+// The hot boolean query must stay allocation-free and short-circuiting.
+fn bench_presentation_blocked(c: &mut Criterion) {
+    let mut group = c.benchmark_group("presentation_blocked");
+    for (name, state) in [
+        ("idle", State::new()),
+        (
+            "timed_wait",
+            State {
+                wait_blocking: true,
+                wait_remaining: 1.0,
+                ..State::new()
+            },
+        ),
+        (
+            "advance",
+            State {
+                waiting_for_advance: true,
+                ..State::new()
+            },
+        ),
+    ] {
+        group.bench_function(name, |b| {
+            b.iter(|| black_box(black_box(&state).presentation_blocked()))
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench,
+    bench_markup,
+    bench_list_reads,
+    bench_presentation_blocked
+);
 criterion_main!(benches);

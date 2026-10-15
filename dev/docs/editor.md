@@ -214,6 +214,11 @@ Asset Preview 的 X 关闭面板并记住布局，下一次实际选择资源可
 Engine 发现支持 sibling app、同目录、Resources、PATH 与 `KEINE_ENGINE`。
 Editor 只启动预构建 Engine，不在作者交互中运行 Cargo。开发时须同时构建 `keine` 和 `keine-editor`，保持 `target/debug/keine` 与 `editor` 同目录。Preview 错误图标可直接打开 Output；左侧 Output 入口可恢复已关闭的日志面板。
 
+源码暂时有错误时，Preview 保持上一份有效现场，Output 报告首个错误位置；
+此时新文档的位置不会被用于执行旧程序，修正后可继续同步。只改注释/空白且执行内容
+与资源引用未变时保留现场，仅刷新源位置。原生脚本的有效语义修改会在 Output 说明
+从工程入口和初始变量重建；需要查看后续位置时仍使用现有 Block Replay，不声称恢复了玩家路线。
+
 ## 演出调试
 
 后续开发面向 MainCore 正式项目的制作工具与运行时。tday 已封存，不再推进其创作

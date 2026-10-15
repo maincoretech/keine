@@ -287,6 +287,36 @@ cargo +1.97.1 bench --locked --offline -p keine-core --bench script-runtime -- '
 这是暖输入 CPU 扫描证据，不代表整个 Editor、完整对白编译、GPU/FPS 或其他平台。
 上述旧工具链命令须在对应的升级前源码/manifest 上重现，当前 MSRV 已为 1.99.0。
 
+### 热重载与阻塞查询
+
+0.16.0 工作区，Apple M5 Pro / 24 GB / macOS 27.0.1，Rust 1.99.0、原 Cargo bench
+优化配置。共享阻塞规则前后同一输入、30 个样本；不含 Inspector 字符串构造或渲染。
+
+```sh
+cargo bench --offline --locked -p keine-core --bench script-runtime -- presentation_blocked --sample-size 30 --warm-up-time 0.3 --measurement-time 1 --nresamples 1000 --noplot --save-baseline reload-before
+# 修改后原命令将 --save-baseline reload-before 改为 --baseline reload-before。
+```
+
+| 查询 | 前 → 后（ns/次，Criterion 点估计） |
+| --- | ---: |
+| 无演出阻塞 | 3.7357 → 3.8545 |
+| 定时等待 | 1.1256 → 1.1287 |
+| 等待玩家推进 | 1.1260 → 1.1456 |
+
+保留首轮小幅增加，不宣称提速；最大绝对差约 0.12 ns。规则仍短路且无堆分配，
+未引入每帧诊断列表、轮询或额外重绘。前后日志在 `target/reload-review/{before,after}.log`。
+没有整游戏 CPU/GPU、UI 或跨平台性能结论。
+
+必要回归覆盖原生源码有效→错误→修复、入口/引用错误、已接受/实际应用 revision
+分离、过期后台结果丢弃、含资源与场景引用的纯位置变更不改变 State/资源变更标记/
+checkpoint/加载帧期限、原生 Preview 重建不重复叠加变量，以及阻塞与存档安全性的区别。
+相同 Program 的存档 fingerprint 合同和既有持久化回归保持不变。
+本机 fmt、workspace/all-targets/all-features check/Clippy、最小 video-native tests check
+通过；全功能工作区 **1100 passed / 24 ignored**，publisher-only **1073 passed / 21 ignored**
+（不重复计入 instance 子进程）。系统 Trash 被沙箱阻止后，在允许系统服务的环境重跑通过。
+最终 8 项 reload 定向回归通过；Native Smoke 为 1 scene / 1 action / 0 warning。
+日志位于 `target/reload-review/`；本轮未做原生 GUI、发行包或跨平台实机验收。
+
 ### 脚本解析与 Core 理论吞吐
 
 复用 `program-load` / `script-runtime`，增加原生 EYS 文本与表达式负载。

@@ -19,11 +19,11 @@ pub use model::{
     EiyashouBinaryOp, EiyashouChoice, EiyashouDialogue, EiyashouExpr, EiyashouListOperation,
     EiyashouPlace, EiyashouScalarType, EiyashouText, EiyashouTextPart, EiyashouType,
     EiyashouUnaryOp, HostCommandEvent, LoadingStrategy, LoadingStrategyMode, MenuChoice, MenuState,
-    PersistenceHazard, PersistenceSafety, PostProcessAnimation, Program, RestoreError, SayOptions,
-    SceneFrame, SpriteSequenceState, StageAnimation, StageAnimationState, StageAudioCue,
-    StageAudioKind, StageEvent, StageEventKind, StageKeyframe, StageMaskState, StageProperty,
-    StageSceneCue, StageSceneLayer, StageTarget, StageTrack, State, SystemMessageMode,
-    SystemMessageSpec, SystemUiSlot, TransformKeyframe, VideoState, VocalCue,
+    PersistenceHazard, PersistenceSafety, PostProcessAnimation, PresentationBlock, Program,
+    RestoreError, SayOptions, SceneFrame, SpriteSequenceState, StageAnimation, StageAnimationState,
+    StageAudioCue, StageAudioKind, StageEvent, StageEventKind, StageKeyframe, StageMaskState,
+    StageProperty, StageSceneCue, StageSceneLayer, StageTarget, StageTrack, State,
+    SystemMessageMode, SystemMessageSpec, SystemUiSlot, TransformKeyframe, VideoState, VocalCue,
 };
 pub use runtime::{ScriptRuntimeError, StepResult};
 

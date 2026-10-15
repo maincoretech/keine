@@ -55,6 +55,36 @@ Core 不拥有 OS/GPU/音频句柄；Scene/Render/UI 不另建剧本状态真源
 Bevy 的局部改动分别记录在 [render](../vendor/bevy_render/KEINE-PATCH.md)、
 [winit](../vendor/bevy_winit/KEINE-PATCH.md)、[audio](../vendor/bevy_audio/KEINE-PATCH.md) 的补丁说明中。
 
+Runtime 内部按以下职责定位代码，原有入口继续由对应模块导出：
+
+| 文件 | 职责 |
+| --- | --- |
+| `runtime/bootstrap.rs` | CLI 分派、工程打开/校验、App 与相机组装 |
+| `runtime/benchmark/workloads.rs` / `report.rs` | 共用测试负载与目标定位 / 有界子进程采样和报告 |
+| `runtime/tick.rs` | 每帧播放调度、文字时钟、演出推进；统一维护执行顺序 |
+| `runtime/script/reload.rs` | 后台脚本重建、完成后的状态安装、旧 Editor 光标轮询 |
+| `runtime/preview/seek.rs` | Editor 源位置定位、确定性重放与 Program 替换后的状态重建 |
+
+`reload` / `seek` 由 `tick` 装配为内部子模块，已有 `tick::*` 调用路径保持兼容。
+
+## 源码热重载
+
+文件监听 worker 与原生 Preview 共用 `runtime/script/reload.rs` 的候选构建与安装。
+原生脚本的语法/语义、入口与入口控制流校验全部成功后才替换 Program、资源映射及
+适配器提供的刷新配置；失败保留上一份有效现场。后台构建完成时若已有更新的文件
+事件，丢弃该结果。兼容适配器原有诊断等级政策不变；本合同不扩展配置/资源清单的监听范围。
+
+Authoring 已接受的文档 revision 与 Preview 实际应用的 revision 分离；执行位置和
+Inspector 快照使用后者，未应用的新源码不允许定位到旧 Program。完整 Program 与
+资源引用语义相同、且没有适配器配置刷新时，仅更新源位置，不重建现场、重置 checkpoint、
+标记渲染/音频资源变化或追加加载帧。原生 Editor Preview 的语义修改从工程入口及
+初始变量重建，避免把现场变量作为重放输入；不迁移跨 Program 的 checkpoint。
+普通 dev 与兼容适配器保留场景头恢复政策及当前变量，不把此路径称为安全路线恢复。
+
+Core 的 `visit_presentation_blocks` 提供类型化、无分配且可提前停止的演出阻塞遍历；
+`presentation_blocked` 与 Inspector 复用同一规则。宿主/UI 等待仍由 Runtime 追加，
+字符串只在已有 Inspector 查询中生成，Authoring wire 与 Save 格式不变。
+
 ## 版本合同
 
 这些版本各自演进，不能用应用版本号推断 wire compatibility。
@@ -128,8 +158,9 @@ Asset audition 与同一 authoring Session 的 Preview 共用输出 owner。Linu
 ## UI 职责
 
 Editor（GPUI）按功能拥有面板状态及视图，工作台只负责分派、Dock 与共享输入。
-Engine（Bevy）的 Settings、Save/Load、Dialog 各自拆为 `state/view/actions/motion/sync`；
+Engine（Bevy）的 Settings、Save/Load、Dialog、Extra 各自拆为 `state/view/actions/motion/sync`；
 原有系统入口由 facade 重新导出，保持注册顺序、相机层和共享菜单路由。
+Extra 的 `music.rs` 单独拥有曲目播放、拖动进度、列表滚动和音频状态；按钮反馈仍复用 Settings 的实现。
 槽位截图采集属于 `ui/screens/save/capture`；预览编码与落盘属于 `storage/save/preview`，
 继续使用容量为 2 的后台队列和存档代际校验，删除/替换后不写回过期缩略图。
 这两套 UI 共用 authoring 协议与 typed 状态，不共享渲染框架。
