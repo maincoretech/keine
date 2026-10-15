@@ -65,6 +65,7 @@ impl WorkbenchPanel {
                     picker_drag: None,
                     picker_row_bounds: Rc::new(RefCell::new(HashMap::new())),
                     picker_scroll: ScrollHandle::new(),
+                    return_focus: None,
                     block_picker_open: false,
                     block_picker_closing: false,
                     block_picker_epoch: 0,
@@ -74,6 +75,7 @@ impl WorkbenchPanel {
                     block_picker_input: block_picker_input.clone(),
                 },
                 inspector: crate::app::inspector::InspectorState {
+                    advanced_open: false,
                     inspector_key: None,
                     inspector_inputs: Vec::new(),
                     text_lifetime_inputs: Vec::new(),

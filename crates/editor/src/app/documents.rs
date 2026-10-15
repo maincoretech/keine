@@ -41,6 +41,7 @@ pub(super) struct WorkspaceDocuments {
     asset_preview: Option<AssetPreviewSelection>,
     diagnostics: Vec<keine_authoring::Diagnostic>,
     pub(super) source_history: SourceHistory,
+    pub(super) navigation: super::navigation::NavigationHistory,
     pub(super) dock: Option<WeakEntity<DockArea>>,
     document_node: Option<NodeId>,
     panels: HashMap<PathBuf, PanelId>,
@@ -261,6 +262,7 @@ impl EditorDocuments {
                     asset_preview: None,
                     diagnostics: Vec::new(),
                     source_history: SourceHistory::default(),
+                    navigation: super::navigation::NavigationHistory::default(),
                     dock: None,
                     document_node: None,
                     panels: HashMap::new(),
@@ -678,6 +680,15 @@ impl EditorDocuments {
             .panels
             .get(relative)
             .copied()
+    }
+
+    pub(super) fn path_for_panel(&self, root: &Path, panel: PanelId) -> Option<PathBuf> {
+        let key = ProjectKey::from_path(root).ok()?;
+        self.workspaces
+            .get(key.path())?
+            .panels
+            .iter()
+            .find_map(|(path, id)| (*id == panel).then(|| path.clone()))
     }
 
     pub(super) fn open_document_count(&self, root: &Path) -> usize {

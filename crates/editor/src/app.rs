@@ -42,8 +42,9 @@ use gpui_kit::{
 
 use crate::authoring::fields::{
     EFFECT_GROUPS, SourceNumber, asset_source_value, camera_field_tweens, camera_tween_field,
-    source_asset_kind, source_effect_group, source_field_enabled, source_input_commit,
-    source_input_value, source_number, source_property_group, toggle_camera_tween,
+    source_asset_kind, source_effect_group, source_field_disabled_reason, source_field_enabled,
+    source_field_is_primary, source_input_commit, source_input_value, source_number,
+    source_property_group, toggle_camera_tween,
 };
 use crate::authoring::{
     AssetKey, AssetKind, AssetQuery, AssetSort, AuthoringIndex, AuthoringSelection, InsertKind,
@@ -85,6 +86,7 @@ mod edits;
 mod files;
 mod inspector;
 mod minimap;
+mod navigation;
 mod output;
 mod panel;
 mod performance;
@@ -221,6 +223,13 @@ actions!(
     keine_editor,
     [
         OpenFolder,
+        ShowQuickOpen,
+        NavigateBack,
+        NavigateForward,
+        QuickOpenNext,
+        QuickOpenPrevious,
+        QuickOpenAccept,
+        QuickOpenClose,
         ResetLayout,
         Save,
         SaveAll,
@@ -382,7 +391,11 @@ fn activity_divider() -> Div {
     div().w(px(22.)).h(px(1.)).my(px(1.)).bg(rgb(BORDER))
 }
 
-fn file_action_icon(id: &'static str, icon: AssetIconName, hint: &'static str) -> Stateful<Div> {
+fn file_action_icon(
+    id: impl Into<gpui_kit::ElementId>,
+    icon: AssetIconName,
+    hint: &'static str,
+) -> Stateful<Div> {
     div()
         .id(id)
         .size(px(22.))
@@ -391,6 +404,9 @@ fn file_action_icon(id: &'static str, icon: AssetIconName, hint: &'static str) -
         .items_center()
         .justify_center()
         .rounded(px(5.))
+        .focusable()
+        .focus_visible(|style| style.bg(rgb(PRIMARY_DIM)).text_color(rgb(PRIMARY)))
+        .active(|style| style.bg(rgb(PRIMARY_DIM)))
         .cursor_pointer()
         .hover(|style| style.bg(rgb(SURFACE_HOVER)))
         .tooltip(icon_hint(hint))
@@ -416,6 +432,9 @@ fn file_context_menu_item(
         .rounded(px(5.))
         .text_xs()
         .text_color(rgb(color))
+        .focusable()
+        .focus_visible(|style| style.bg(rgb(PRIMARY_DIM)).text_color(rgb(PRIMARY)))
+        .active(|style| style.bg(rgb(PRIMARY_DIM)))
         .cursor_pointer()
         .hover(|style| style.bg(rgb(SURFACE_HOVER)))
         .child(Icon::new(icon).xsmall().text_color(rgb(color)))
@@ -555,6 +574,50 @@ pub fn run() -> ExitCode {
                 KeyBinding::new("ctrl-space", ShowSourceCompletions, Some("Input")),
                 KeyBinding::new("alt-/", ShowSourceCompletions, Some("Input")),
                 KeyBinding::new("cmd-o", OpenFolder, Some("KeineWorkbench")),
+                KeyBinding::new("cmd-p", ShowQuickOpen, Some("KeineWorkbench")),
+                KeyBinding::new("ctrl-p", ShowQuickOpen, Some("KeineWorkbench")),
+                KeyBinding::new(
+                    if cfg!(target_os = "macos") {
+                        "cmd-["
+                    } else {
+                        "alt-left"
+                    },
+                    NavigateBack,
+                    Some("KeineWorkbench"),
+                ),
+                KeyBinding::new(
+                    if cfg!(target_os = "macos") {
+                        "cmd-]"
+                    } else {
+                        "alt-right"
+                    },
+                    NavigateForward,
+                    Some("KeineWorkbench"),
+                ),
+                KeyBinding::new("cmd-p", ShowQuickOpen, Some("KeineWorkbench > Input")),
+                KeyBinding::new("ctrl-p", ShowQuickOpen, Some("KeineWorkbench > Input")),
+                KeyBinding::new(
+                    if cfg!(target_os = "macos") {
+                        "cmd-["
+                    } else {
+                        "alt-left"
+                    },
+                    NavigateBack,
+                    Some("KeineWorkbench > Input"),
+                ),
+                KeyBinding::new(
+                    if cfg!(target_os = "macos") {
+                        "cmd-]"
+                    } else {
+                        "alt-right"
+                    },
+                    NavigateForward,
+                    Some("KeineWorkbench > Input"),
+                ),
+                KeyBinding::new("up", QuickOpenPrevious, Some("KeineQuickOpen > Input")),
+                KeyBinding::new("down", QuickOpenNext, Some("KeineQuickOpen > Input")),
+                KeyBinding::new("enter", QuickOpenAccept, Some("KeineQuickOpen > Input")),
+                KeyBinding::new("escape", QuickOpenClose, Some("KeineQuickOpen > Input")),
                 KeyBinding::new("ctrl-o", OpenFolder, Some("KeineWorkbench")),
                 KeyBinding::new("cmd-s", Save, Some("KeineWorkbench")),
                 KeyBinding::new("ctrl-s", Save, Some("KeineWorkbench")),

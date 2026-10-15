@@ -117,6 +117,31 @@ pub(in crate::app) fn run_source_block(root: &Path, path: &Path, start: usize, c
     cx.refresh_windows();
 }
 
+fn source_property_label(key: &SourceInspectorKey, field: &SourceField) -> impl IntoElement {
+    let written = field.insertion.is_none();
+    div()
+        .w_full()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .when(camera_tween_field(key, field), |this| this.pr(px(24.)))
+        .text_size(px(11.))
+        .text_color(rgb(MUTED))
+        .child(source_field_label(key, field))
+        .child(
+            div()
+                .id(format!("field-origin-{}-{}", key.block_start, field.key))
+                .text_size(px(10.))
+                .child(if written { "Set" } else { "Default" })
+                .tooltip(icon_hint(if written {
+                    "Written explicitly in source."
+                } else {
+                    "Not written in source; command defaults or current state apply."
+                })),
+        )
+}
+
 pub(in crate::app) fn segmented_source_property(
     root: &Path,
     key: &SourceInspectorKey,
@@ -124,6 +149,7 @@ pub(in crate::app) fn segmented_source_property(
     cx: &mut Context<WorkbenchPanel>,
 ) -> Option<AnyElement> {
     let field = &key.fields[position];
+    let enabled = source_field_enabled(key, field);
     let default = match field.key.as_str() {
         "axis" => "both",
         "falloff" => "linear",
@@ -140,12 +166,7 @@ pub(in crate::app) fn segmented_source_property(
             .flex()
             .flex_col()
             .gap_1()
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(rgb(MUTED))
-                    .child(source_field_label(key, field)),
-            )
+            .child(source_property_label(key, field))
             .child(div().flex().gap_1().children(choices.iter().map(|choice| {
                 let root = root.to_owned();
                 let key = key.clone();
@@ -171,9 +192,18 @@ pub(in crate::app) fn segmented_source_property(
                     .bg(rgb(if active { PRIMARY_DIM } else { CANVAS }))
                     .text_size(px(11.))
                     .text_color(rgb(if active { PRIMARY } else { MUTED }))
-                    .cursor_pointer()
-                    .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                    .when(enabled, |this| {
+                        this.cursor_pointer()
+                            .focusable()
+                            .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                            .active(|style| style.bg(rgb(PRIMARY_DIM)))
+                            .focus_visible(|style| style.border_color(rgb(PRIMARY)))
+                    })
+                    .when(!enabled, |this| this.opacity(0.4).cursor_default())
                     .on_click(cx.listener(move |panel, _, window, cx| {
+                        if !enabled {
+                            return;
+                        }
                         panel.commit_source_field(
                             &root,
                             &key,
@@ -392,7 +422,6 @@ pub(in crate::app) fn typed_source_property(
 ) -> Option<AnyElement> {
     let field = &key.fields[position];
     let enabled = source_field_enabled(key, field);
-    let label = source_field_label(key, field);
     if select.is_some() {
         return Some(
             div()
@@ -400,12 +429,7 @@ pub(in crate::app) fn typed_source_property(
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(
-                    div()
-                        .text_size(px(11.))
-                        .text_color(rgb(MUTED))
-                        .child(label.clone()),
-                )
+                .child(source_property_label(key, field))
                 .child(
                     div()
                         .opacity(if enabled { 1. } else { 0.4 })
@@ -429,7 +453,7 @@ pub(in crate::app) fn typed_source_property(
             .flex()
             .flex_col()
             .gap_1()
-            .child(div().text_size(px(11.)).text_color(rgb(MUTED)).child(label))
+            .child(source_property_label(key, field))
             .child(
                 div()
                     .h(px(28.))
@@ -500,9 +524,13 @@ pub(super) fn replay_button(root: &Path, key: &SourceInspectorKey) -> impl IntoE
         .text_size(px(11.))
         .text_color(rgb(INK))
         .cursor_pointer()
+        .focusable()
+        .focus_visible(|style| style.border_color(rgb(PRIMARY)))
+        .active(|style| style.bg(rgb(PRIMARY_DIM)))
         .hover(|style| style.bg(rgb(SURFACE_HOVER)))
         .on_click(move |_, _, cx| run_source_block(&root, &path, start, cx))
         .child(Icon::new(AssetIconName::Play).xsmall())
+        .tooltip(icon_hint("Rebuild from project entry to this block; unreachable blocks use their scene entry. Player choices are not restored."))
         .child("Replay")
 }
 
@@ -705,12 +733,7 @@ pub(in crate::app) fn source_property_editor(
             .flex()
             .flex_col()
             .gap_1()
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(rgb(MUTED))
-                    .child(source_field_label(key, &key.fields[position])),
-            )
+            .child(source_property_label(key, &key.fields[position]))
             .child(resource_trigger(
                 root,
                 ResourceTarget::Source(key.clone(), position),
@@ -750,7 +773,7 @@ pub(in crate::app) fn source_property_editor(
             .items_center()
             .justify_between()
             .gap_2()
-            .child(div().text_sm().text_color(rgb(INK)).child(label.clone()))
+            .child(div().flex_1().child(source_property_label(&key, field)))
             .child(
                 Switch::new(format!("source-switch-{}-{}", key.block_start, field.key))
                     .disabled(!enabled)
@@ -777,13 +800,7 @@ pub(in crate::app) fn source_property_editor(
         .flex_col()
         .gap_1()
         .pb_3()
-        .child(
-            div()
-                .text_xs()
-                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                .text_color(rgb(MUTED))
-                .child(label),
-        )
+        .child(source_property_label(&key, field))
         .child(
             div()
                 .h(px(34.))
@@ -831,10 +848,19 @@ pub(in crate::app) fn source_property_editor(
                             .bg(rgb(if selected { PRIMARY_DIM } else { PANEL }))
                             .text_xs()
                             .text_color(rgb(if selected { PRIMARY } else { MUTED }))
-                            .cursor_pointer()
-                            .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                            .when(enabled, |this| {
+                                this.cursor_pointer()
+                                    .focusable()
+                                    .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                                    .active(|style| style.bg(rgb(PRIMARY_DIM)))
+                                    .focus_visible(|style| style.border_color(rgb(PRIMARY)))
+                            })
+                            .when(!enabled, |this| this.opacity(0.4).cursor_default())
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
+                                if !enabled {
+                                    return;
+                                }
                                 this.commit_source_field(
                                     &root,
                                     &key,

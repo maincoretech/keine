@@ -79,6 +79,9 @@ pub(super) fn preview_transport_button(running: bool) -> Stateful<Div> {
         .justify_center()
         .rounded(px(8.))
         .bg(rgb(SURFACE))
+        .focusable()
+        .focus_visible(|style| style.bg(rgb(PRIMARY_DIM)).text_color(rgb(PRIMARY)))
+        .active(|style| style.bg(rgb(PRIMARY_DIM)))
         .cursor_pointer()
         .hover(|style| style.bg(rgb(SURFACE_HOVER)))
         .tooltip(icon_hint(if running {
@@ -193,6 +196,9 @@ pub(super) fn document_mode_button(label: &'static str, selected: bool) -> State
         .bg(rgb(if selected { SURFACE } else { CHROME }))
         .text_xs()
         .text_color(rgb(if selected { INK } else { MUTED }))
+        .focusable()
+        .focus_visible(|style| style.bg(rgb(PRIMARY_DIM)).text_color(rgb(PRIMARY)))
+        .active(|style| style.bg(rgb(PRIMARY_DIM)))
         .cursor_pointer()
         .hover(|style| style.bg(rgb(SURFACE_HOVER)).text_color(rgb(INK)))
         .child(label)
@@ -226,6 +232,9 @@ pub(super) fn tool_action(label: &'static str) -> Stateful<Div> {
         .bg(rgb(PRIMARY_DIM))
         .text_xs()
         .text_color(rgb(PRIMARY))
+        .focusable()
+        .focus_visible(|style| style.bg(rgb(PRIMARY_DIM)).text_color(rgb(PRIMARY)))
+        .active(|style| style.bg(rgb(PRIMARY_DIM)))
         .cursor_pointer()
         .hover(|style| style.bg(rgb(SURFACE_HOVER)).text_color(rgb(INK)))
         .child(label)
@@ -289,7 +298,13 @@ where
 pub(super) fn preview_window_controls(root: &Path, cx: &mut App) -> Option<Stateful<Div>> {
     use crate::preview::PreviewLifecycle;
     let controller = cx.global_mut::<EditorDocuments>().preview(root).ok()?;
-    let lifecycle = controller.snapshot().lifecycle;
+    let snapshot = controller.snapshot();
+    let status = snapshot.source_status();
+    let rejected = matches!(
+        snapshot.reload,
+        Some(keine_authoring::PreviewReload::Rejected { .. })
+    );
+    let lifecycle = snapshot.lifecycle;
     let running = matches!(
         lifecycle,
         PreviewLifecycle::Running | PreviewLifecycle::Starting
@@ -307,26 +322,42 @@ pub(super) fn preview_window_controls(root: &Path, cx: &mut App) -> Option<State
             .flex()
             .items_center()
             .gap_1()
-            .when(matches!(lifecycle, PreviewLifecycle::Failed(_)), |this| {
-                this.child(
-                    div()
-                        .id("preview-failure-hint")
-                        .size(px(28.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .cursor_pointer()
-                        .tooltip(icon_hint("Preview failed · see Output"))
-                        .on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(ShowOutput), cx);
-                        })
-                        .child(
-                            Icon::new(IconName::TriangleAlert)
+            .when(
+                status.is_some() || matches!(lifecycle, PreviewLifecycle::Failed(_)),
+                |this| {
+                    this.child(
+                        div()
+                            .id("preview-failure-hint")
+                            .size(px(28.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .tooltip(icon_hint(status.unwrap_or("Preview failed · see Output")))
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(ShowOutput), cx);
+                            })
+                            .child(
+                                Icon::new(
+                                    if rejected || matches!(lifecycle, PreviewLifecycle::Failed(_))
+                                    {
+                                        IconName::TriangleAlert
+                                    } else {
+                                        IconName::Check
+                                    },
+                                )
                                 .with_size(px(16.))
-                                .text_color(rgb(0xdb7780)),
-                        ),
-                )
-            })
+                                .text_color(rgb(if rejected {
+                                    0xe0bd78
+                                } else if running {
+                                    PRIMARY
+                                } else {
+                                    0xdb7780
+                                })),
+                            ),
+                    )
+                },
+            )
             .when(running, |this| {
                 this.child(
                     div()

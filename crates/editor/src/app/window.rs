@@ -22,7 +22,7 @@ use crate::migration::MigrationPlan;
 use crate::persistence::AppPersistence;
 use crate::preview::PreviewLifecycle;
 use crate::project_key::ProjectKey;
-use crate::workspace::WorkspaceSession;
+use crate::workspace::{RecentProject, WorkspaceSession};
 
 use super::dock::{ProjectWorkspace, install_default_layout};
 use super::documents::EditorDocuments;
@@ -201,13 +201,14 @@ pub(super) struct WorkbenchWindow {
     editor: WeakEntity<EditorApp>,
     persistence: AppPersistence,
     workspace: Option<ProjectWorkspace>,
-    recents: Vec<PathBuf>,
+    recents: Vec<RecentProject>,
     allow_close: bool,
     close_prompt_open: bool,
     last_windowed_bounds: Bounds<Pixels>,
     bounds_epoch: u64,
     _bounds_subscription: Subscription,
     preview_lifecycle: PreviewLifecycle,
+    preview_reload: Option<keine_authoring::PreviewReload>,
     preview_position: Option<(PathBuf, usize, usize)>,
     preview_runtime: Option<keine_authoring::RuntimeSnapshot>,
     audition_status: (Option<PathBuf>, Option<String>, bool),
@@ -320,6 +321,19 @@ impl WorkbenchWindow {
                         return false;
                     };
                     let snapshot = controller.snapshot();
+                    if this.preview_reload != snapshot.reload {
+                        if let Some(status) = snapshot.source_status() {
+                            let notice = match &snapshot.reload {
+                                Some(keine_authoring::PreviewReload::Rejected {
+                                    message, ..
+                                }) => format!("{status}: {message}"),
+                                _ => status.to_owned(),
+                            };
+                            cx.global_mut::<EditorDocuments>().set_notice(&root, notice);
+                        }
+                        this.preview_reload = snapshot.reload.clone();
+                        cx.refresh_windows();
+                    }
                     if this.preview_lifecycle != snapshot.lifecycle {
                         if let PreviewLifecycle::Failed(error) = &snapshot.lifecycle {
                             cx.global_mut::<EditorDocuments>()
@@ -407,17 +421,42 @@ impl WorkbenchWindow {
         install_close_guard(window, cx.weak_entity(), cx);
         Self::watch_preview(window, cx);
         let bounds_subscription = Self::watch_window_bounds(window, cx);
+        let recent_paths = recents.clone();
+        let background = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            let loaded = background
+                .spawn(async move {
+                    recent_paths
+                        .into_iter()
+                        .take(12)
+                        .map(RecentProject::load)
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.workspace.is_none() {
+                    // Removing a row while metadata loads must not bring it back.
+                    this.recents = loaded
+                        .into_iter()
+                        .filter(|entry| this.recents.iter().any(|old| old.path == entry.path))
+                        .collect();
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
         Self {
             editor,
             persistence,
             workspace: None,
-            recents,
+            recents: recents.into_iter().map(RecentProject::pending).collect(),
             allow_close: false,
             close_prompt_open: false,
             last_windowed_bounds: initial_windowed_bounds,
             bounds_epoch: 0,
             _bounds_subscription: bounds_subscription,
             preview_lifecycle: PreviewLifecycle::Off,
+            preview_reload: None,
             preview_position: None,
             preview_runtime: None,
             audition_status: (None, None, false),
@@ -449,6 +488,7 @@ impl WorkbenchWindow {
             bounds_epoch: 0,
             _bounds_subscription: bounds_subscription,
             preview_lifecycle: PreviewLifecycle::Off,
+            preview_reload: None,
             preview_position: None,
             preview_runtime: None,
             audition_status: (None, None, false),
@@ -498,6 +538,7 @@ impl WorkbenchWindow {
             cx,
         ));
         self.preview_lifecycle = PreviewLifecycle::Off;
+        self.preview_reload = None;
         self.preview_position = None;
         self.preview_runtime = None;
         self.recents.clear();
@@ -564,7 +605,11 @@ impl WorkbenchWindow {
             Ok(0) => "No changes to save".to_owned(),
             Ok(1) => "Saved 1 document".to_owned(),
             Ok(count) => format!("Saved {count} documents"),
-            Err(error) => format!("Save blocked: {error}"),
+            Err(error) => {
+                let message = format!("Save blocked: {error}");
+                window.push_notification(Notification::error(message.clone()), cx);
+                message
+            }
         };
         cx.global_mut::<EditorDocuments>().set_notice(&root, notice);
         cx.notify();
@@ -931,6 +976,10 @@ impl WorkbenchWindow {
                             this.finish_close(window, cx);
                         }
                         Err(error) => {
+                            window.push_notification(
+                                Notification::error(format!("Save blocked: {error}")),
+                                cx,
+                            );
                             cx.global_mut::<EditorDocuments>()
                                 .set_notice(&root, format!("Save blocked: {error}"));
                             cx.refresh_windows();
@@ -1183,7 +1232,7 @@ impl WorkbenchWindow {
             .child(rail)
     }
 
-    fn render_empty(&self) -> impl IntoElement {
+    fn render_empty(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let editor = self.editor.clone();
         let recents = self.recents.clone();
         div()
@@ -1255,9 +1304,11 @@ impl WorkbenchWindow {
                                         .child("RECENT"),
                                 )
                                 .children(recents.into_iter().take(6).enumerate().map(
-                                    |(index, path)| {
+                                    |(index, entry)| {
                                         let editor = self.editor.clone();
-                                        let open_path = path.clone();
+                                        let open_path = entry.path.clone();
+                                        let remove_path = entry.path.clone();
+                                        let path_hint = entry.path.display().to_string();
                                         div()
                                             .id(("recent-project", index))
                                             .h(px(34.))
@@ -1267,9 +1318,13 @@ impl WorkbenchWindow {
                                             .px_3()
                                             .rounded(px(7.))
                                             .bg(rgb(CHROME))
-                                            .cursor_pointer()
+                                            .when(entry.available, |this| this.cursor_pointer())
+                                            .tooltip(icon_hint(path_hint))
                                             .hover(|style| style.bg(rgb(SURFACE_HOVER)))
                                             .on_click(move |_, _, cx| {
+                                                if !entry.available {
+                                                    return;
+                                                }
                                                 let editor = editor.clone();
                                                 let path = open_path.clone();
                                                 cx.spawn(async move |cx| {
@@ -1279,28 +1334,62 @@ impl WorkbenchWindow {
                                                 })
                                                 .detach();
                                             })
-                                            .child(
-                                                Icon::new(IconName::Folder)
-                                                    .xsmall()
-                                                    .text_color(rgb(PRIMARY)),
-                                            )
+                                            .child(Icon::new(IconName::Folder).xsmall().text_color(
+                                                rgb(if entry.available { PRIMARY } else { MUTED }),
+                                            ))
                                             .child(
                                                 div()
                                                     .flex_1()
+                                                    .min_w_0()
+                                                    .overflow_hidden()
+                                                    .text_ellipsis()
+                                                    .whitespace_nowrap()
                                                     .text_sm()
                                                     .text_color(rgb(INK))
-                                                    .child(
-                                                        path.file_name()
-                                                            .and_then(|name| name.to_str())
-                                                            .unwrap_or("Project")
-                                                            .to_owned(),
-                                                    ),
+                                                    .child(entry.title.clone()),
                                             )
                                             .child(
                                                 div()
                                                     .text_xs()
                                                     .text_color(rgb(MUTED))
-                                                    .child(path.display().to_string()),
+                                                    .max_w(px(210.))
+                                                    .overflow_hidden()
+                                                    .text_ellipsis()
+                                                    .whitespace_nowrap()
+                                                    .child(if entry.available {
+                                                        entry.short_path()
+                                                    } else {
+                                                        "Folder unavailable".to_owned()
+                                                    }),
+                                            )
+                                            .child(
+                                                super::file_action_icon(
+                                                    ("remove-recent", index),
+                                                    AssetIconName::X,
+                                                    "Remove from recent projects",
+                                                )
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        cx.stop_propagation();
+                                                        match this
+                                                            .persistence
+                                                            .remove_recent(&remove_path)
+                                                        {
+                                                            Ok(()) => {
+                                                                this.recents.retain(|entry| {
+                                                                    entry.path != remove_path
+                                                                })
+                                                            }
+                                                            Err(error) => window.push_notification(
+                                                                Notification::error(
+                                                                    error.to_string(),
+                                                                ),
+                                                                cx,
+                                                            ),
+                                                        }
+                                                        cx.notify();
+                                                    },
+                                                )),
                                             )
                                     },
                                 )),
@@ -1311,7 +1400,9 @@ impl WorkbenchWindow {
 }
 
 impl Render for WorkbenchWindow {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let dialogs = Root::render_dialog_layer(window, cx);
+        let notifications = Root::render_notification_layer(window, cx);
         let main = if let Some(workspace) = &self.workspace {
             div()
                 .id("dock-host")
@@ -1322,13 +1413,28 @@ impl Render for WorkbenchWindow {
                 .child(workspace.dock.clone())
                 .into_any_element()
         } else {
-            self.render_empty().into_any_element()
+            self.render_empty(cx).into_any_element()
         };
         div()
             .id("project-window")
             .key_context("KeineWorkbench")
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::open_folder))
+            .on_action(cx.listener(|this, _: &super::ShowQuickOpen, window, cx| {
+                if let Some(workspace) = &this.workspace {
+                    super::navigation::open_quick(workspace.session.root(), window, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &super::NavigateBack, window, cx| {
+                if let Some(workspace) = &this.workspace {
+                    super::navigation::travel(workspace.session.root(), true, window, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &super::NavigateForward, window, cx| {
+                if let Some(workspace) = &this.workspace {
+                    super::navigation::travel(workspace.session.root(), false, window, cx);
+                }
+            }))
             .on_action(cx.listener(Self::reset_layout))
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::save_all))
@@ -1364,6 +1470,8 @@ impl Render for WorkbenchWindow {
                     .child(self.render_activity_rail(cx))
                     .child(main),
             )
+            .children(dialogs)
+            .children(notifications)
     }
 }
 

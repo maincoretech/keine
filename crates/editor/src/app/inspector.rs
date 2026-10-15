@@ -386,6 +386,9 @@ impl WorkbenchPanel {
         let Some(field) = key.fields.get(position) else {
             return false;
         };
+        if !source_field_enabled(key, field) {
+            return false;
+        }
         if value == field.value {
             return true;
         }

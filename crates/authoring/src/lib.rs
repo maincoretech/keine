@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_VERSION: u32 = 11;
 pub const MAX_MESSAGE_BYTES: usize = 256 * 1024;
 pub const MAX_DOCUMENT_BYTES: usize = 1024 * 1024;
 pub const SNAPSHOT_CHUNK_BYTES: usize = 128 * 1024;
@@ -130,6 +130,8 @@ pub enum ServerResponse {
     },
     SnapshotApplied {
         document_revision: u64,
+        /// Only commit/patch replies while Preview is running carry a result.
+        reload: Option<PreviewReload>,
     },
     SourceLocation {
         document_revision: u64,
@@ -150,6 +152,17 @@ pub enum ServerResponse {
     Error {
         code: ErrorCode,
         message: String,
+    },
+}
+
+/// Result of one source update, carried by its existing acknowledgement.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PreviewReload {
+    Preserved,
+    Restarted,
+    Rejected {
+        message: String,
+        diagnostic: Option<Diagnostic>,
     },
 }
 
@@ -282,6 +295,32 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(message, decoded);
+        for reload in [
+            None,
+            Some(PreviewReload::Preserved),
+            Some(PreviewReload::Restarted),
+            Some(PreviewReload::Rejected {
+                message: "syntax error".into(),
+                diagnostic: Some(Diagnostic {
+                    level: DiagnosticLevel::Error,
+                    path: "scripts/main.shou".into(),
+                    line: 2,
+                    column: 4,
+                    message: "expected expression".into(),
+                }),
+            }),
+        ] {
+            let response = ServerResponse::SnapshotApplied {
+                document_revision: 42,
+                reload,
+            };
+            let mut bytes = Vec::new();
+            write_message(&mut bytes, &response).unwrap();
+            assert_eq!(
+                read_message::<ServerResponse>(&mut BufReader::new(bytes.as_slice())).unwrap(),
+                Some(response)
+            );
+        }
     }
 
     #[test]

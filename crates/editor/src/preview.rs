@@ -33,6 +33,7 @@ pub enum PreviewLifecycle {
 pub struct PreviewSnapshot {
     pub lifecycle: PreviewLifecycle,
     pub revision: u64,
+    pub reload: Option<keine_authoring::PreviewReload>,
     pub runtime_position: Option<(PathBuf, usize, usize)>,
     pub runtime: Option<keine_authoring::RuntimeSnapshot>,
     pub diagnostics: Vec<keine_authoring::Diagnostic>,
@@ -46,6 +47,7 @@ impl Default for PreviewSnapshot {
         Self {
             lifecycle: PreviewLifecycle::Off,
             revision: 0,
+            reload: None,
             runtime_position: None,
             runtime: None,
             diagnostics: Vec::new(),
@@ -53,6 +55,37 @@ impl Default for PreviewSnapshot {
             audition_paused: false,
             audition_error: None,
         }
+    }
+}
+
+impl PreviewSnapshot {
+    pub fn source_status(&self) -> Option<&'static str> {
+        use keine_authoring::PreviewReload;
+        if self.lifecycle != PreviewLifecycle::Running {
+            return None;
+        }
+        Some(match &self.reload {
+            Some(PreviewReload::Rejected { .. }) => "Source error · showing last valid preview",
+            Some(PreviewReload::Restarted) => "Reloaded from project entry",
+            Some(PreviewReload::Preserved) => "Source synced · playback preserved",
+            None => "Preview running",
+        })
+    }
+
+    fn apply_reload(&mut self, revision: u64, reload: Option<keine_authoring::PreviewReload>) {
+        self.revision = revision;
+        // Old source locations must not navigate the newly edited document.
+        self.runtime_position = None;
+        self.runtime = None;
+        self.diagnostics.clear();
+        if let Some(keine_authoring::PreviewReload::Rejected {
+            diagnostic: Some(diagnostic),
+            ..
+        }) = &reload
+        {
+            self.diagnostics.push(diagnostic.clone());
+        }
+        self.reload = reload;
     }
 }
 
@@ -511,6 +544,7 @@ impl Worker {
         let revision = self.revision;
         self.mutate(|snapshot| {
             snapshot.lifecycle = PreviewLifecycle::Running;
+            snapshot.reload = None;
             snapshot.revision = revision;
             snapshot.runtime_position = None;
             snapshot.runtime = None;
@@ -534,6 +568,7 @@ impl Worker {
         self.last_position_poll = None;
         self.mutate(|snapshot| {
             snapshot.lifecycle = PreviewLifecycle::Off;
+            snapshot.reload = None;
             snapshot.runtime_position = None;
             snapshot.runtime = None;
         });
@@ -549,24 +584,20 @@ impl Worker {
         };
         let base_revision = self.revision;
         self.revision = self.revision.wrapping_add(1).max(1);
-        if let Some(previous) = previous
+        let reload = if let Some(previous) = previous
             && let Some(patch) = source_patch(&previous, &contents)
             && patch.replacement.len() <= SNAPSHOT_CHUNK_BYTES
         {
             let SourcePatch { range, replacement } = patch;
-            engine.apply_patch(&path, base_revision, self.revision, range, &replacement)?;
+            engine.apply_patch(&path, base_revision, self.revision, range, &replacement)?
         } else {
-            engine.apply_snapshot(&path, self.revision, &contents)?;
-        }
+            engine.apply_snapshot(&path, self.revision, &contents)?
+        };
         let revision = self.revision;
-        self.mutate(|snapshot| {
-            snapshot.revision = revision;
-            snapshot.runtime_position = None;
-            snapshot.runtime = None;
-        });
+        self.mutate(|snapshot| snapshot.apply_reload(revision, reload));
         self.applied_cursor = None;
         self.last_position_poll = None;
-        self.sync_cursor()?;
+
         Ok(())
     }
 
@@ -729,6 +760,43 @@ pub(crate) fn source_patch(previous: &[u8], current: &[u8]) -> Option<SourcePatc
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reload_feedback_keeps_running_but_never_exposes_stale_source_locations() {
+        use keine_authoring::{Diagnostic, DiagnosticLevel, PreviewReload};
+        let mut snapshot = super::PreviewSnapshot {
+            lifecycle: super::PreviewLifecycle::Running,
+            ..Default::default()
+        };
+        for result in [
+            PreviewReload::Rejected {
+                message: "error".into(),
+                diagnostic: Some(Diagnostic {
+                    level: DiagnosticLevel::Error,
+                    path: "scripts/main.shou".into(),
+                    line: 2,
+                    column: 1,
+                    message: "error".into(),
+                }),
+            },
+            PreviewReload::Preserved,
+            PreviewReload::Restarted,
+        ] {
+            snapshot.runtime_position = Some(("scripts/main.shou".into(), 8, 1));
+            snapshot.runtime = Some(Default::default());
+            snapshot.apply_reload(7, Some(result.clone()));
+            assert_eq!(snapshot.lifecycle, super::PreviewLifecycle::Running);
+            assert!(snapshot.runtime_position.is_none() && snapshot.runtime.is_none());
+            assert_eq!(
+                snapshot.diagnostics.len(),
+                usize::from(matches!(result, PreviewReload::Rejected { .. }))
+            );
+            assert_eq!(snapshot.reload, Some(result));
+            assert!(snapshot.source_status().is_some());
+        }
+        snapshot.lifecycle = super::PreviewLifecycle::Off;
+        assert!(snapshot.source_status().is_none());
+    }
+
     use super::*;
 
     #[test]

@@ -1144,6 +1144,9 @@ impl WorkbenchPanel {
             self.close_block_picker(&CloseBlockPicker, window, cx);
             return;
         }
+        if !self.picker.block_picker_open || self.picker.block_picker_closing {
+            self.picker.return_focus = window.focused(cx);
+        }
         // Reopening invalidates any pending fade-out completion.
         self.picker.block_picker_epoch = self.picker.block_picker_epoch.wrapping_add(1);
         self.picker.block_picker_open = true;
@@ -1256,11 +1259,15 @@ impl WorkbenchPanel {
         self.cancel_picker_drag(window, cx);
         self.picker.picker_drag = None;
         self.close_block_context_menu(window, cx);
-        self.focus.focus(window, cx);
-        cx.notify();
         if !self.picker.block_picker_open || self.picker.block_picker_closing {
             return;
         }
+        self.picker
+            .return_focus
+            .as_ref()
+            .unwrap_or(&self.focus)
+            .focus(window, cx);
+        cx.notify();
         if cx.reduce_motion() {
             self.picker.block_picker_open = false;
             cx.notify();

@@ -759,6 +759,36 @@ pub(crate) fn source_field_enabled(key: &SourceContext, field: &SourceField) -> 
     })
 }
 
+/// Keep authored values visible; only unwritten secondary options fold away.
+pub(crate) fn source_field_is_primary(key: &SourceContext, field: &SourceField) -> bool {
+    field.insertion.is_none()
+        || source_asset_kind(key, field).is_some()
+        || matches!(
+            field.key.as_str(),
+            "0" | "id"
+                | "position"
+                | "x"
+                | "y"
+                | "scale"
+                | "alpha"
+                | "duration"
+                | "easing"
+                | "volume"
+                | "loop"
+                | "fade"
+                | "fade_in"
+                | "fade_out"
+        )
+        || field.key.starts_with("position.")
+}
+
+pub(crate) fn source_field_disabled_reason(
+    key: &SourceContext,
+    field: &SourceField,
+) -> Option<&'static str> {
+    (!source_field_enabled(key, field)).then_some("Enable this effect to edit its options.")
+}
+
 pub(crate) fn source_property_group(field: &SourceField) -> &'static str {
     let name = field.key.as_str();
     if name == "position" || name.starts_with("position.") || name.starts_with("1.") {
@@ -1012,6 +1042,26 @@ mod tests {
             ["camera", "character(\"灵梦\")"]
         );
         assert!(options.iter().all(|option| option.asset.is_none()));
+    }
+
+    #[test]
+    fn inspector_keeps_authored_options_visible_and_respects_effect_activation() {
+        let key = source_key("scene a { camera.move(scene, scale_x: 1.5, duration: 1s) }");
+        let field = |name: &str| key.fields.iter().find(|field| field.key == name).unwrap();
+        assert!(source_field_is_primary(&key, field("scale_x")));
+        assert!(source_field_is_primary(&key, field("x")));
+        assert!(!source_field_is_primary(&key, field("scale_y")));
+        assert!(!source_field_is_primary(&key, field("blocking")));
+        assert!(source_field_disabled_reason(&key, field("vignette_intensity")).is_some());
+        assert!(source_field_disabled_reason(&key, field("x")).is_none());
+        let active = source_key("scene a { camera.move(scene, vignette_intensity: 0.5) }");
+        let size = active
+            .fields
+            .iter()
+            .find(|field| field.key == "vignette_size")
+            .unwrap();
+        assert!(source_field_disabled_reason(&active, size).is_none());
+        assert!(source_number(&key, field("duration")).is_some_and(|number| number.unit == "ms"));
     }
 
     #[test]

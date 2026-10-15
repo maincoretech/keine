@@ -77,12 +77,18 @@ pub(super) fn runtime_inspection(
         .preview(root)
         .ok()?
         .snapshot();
-    let runtime = preview.runtime?;
     let mut content = div()
         .flex()
         .flex_col()
         .gap_1()
-        .child(section_label("PREVIEW"))
+        .child(section_label("PREVIEW"));
+    if let Some(status) = preview.source_status() {
+        content = content.child(div().text_xs().text_color(rgb(PRIMARY)).child(status));
+    }
+    let Some(runtime) = preview.runtime else {
+        return preview.source_status().map(|_| content.into_any_element());
+    };
+    content = content
         .child(property_row(
             "Action",
             format!("{} · {}", runtime.scene, runtime.cursor.saturating_sub(1)),

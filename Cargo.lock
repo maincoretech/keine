@@ -5405,7 +5405,7 @@ dependencies = [
 
 [[package]]
 name = "keine"
-version = "0.16.1"
+version = "0.16.2"
 dependencies = [
  "anyhow",
  "bevy",
@@ -5452,7 +5452,7 @@ dependencies = [
 
 [[package]]
 name = "keine-authoring"
-version = "0.16.1"
+version = "0.16.2"
 dependencies = [
  "postcard",
  "serde",
@@ -5460,7 +5460,7 @@ dependencies = [
 
 [[package]]
 name = "keine-core"
-version = "0.16.1"
+version = "0.16.2"
 dependencies = [
  "criterion",
  "log",
@@ -5472,7 +5472,7 @@ dependencies = [
 
 [[package]]
 name = "keine-editor"
-version = "0.16.1"
+version = "0.16.2"
 dependencies = [
  "anyhow",
  "bevy",
@@ -5496,7 +5496,7 @@ dependencies = [
 
 [[package]]
 name = "keine-loader"
-version = "0.16.1"
+version = "0.16.2"
 dependencies = [
  "anyhow",
  "crc32fast",
@@ -5515,7 +5515,7 @@ dependencies = [
 
 [[package]]
 name = "keine-media"
-version = "0.16.1"
+version = "0.16.2"
 dependencies = [
  "image",
  "libwebp-sys",
@@ -8425,9 +8425,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.45"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "once_cell",
  "ring",

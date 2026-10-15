@@ -189,7 +189,7 @@ impl EngineProcess {
         path: &Path,
         revision: u64,
         contents: &[u8],
-    ) -> io::Result<()> {
+    ) -> io::Result<Option<keine_authoring::PreviewReload>> {
         if contents.len() > MAX_DOCUMENT_BYTES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -201,8 +201,9 @@ impl EngineProcess {
             revision,
             total_bytes: contents.len() as u32,
         })? {
-            ServerResponse::SnapshotApplied { document_revision }
-                if document_revision == revision => {}
+            ServerResponse::SnapshotApplied {
+                document_revision, ..
+            } if document_revision == revision => {}
             other => return Err(unexpected("snapshot begin", &other)),
         }
         for (index, bytes) in contents.chunks(SNAPSHOT_CHUNK_BYTES).enumerate() {
@@ -211,17 +212,17 @@ impl EngineProcess {
                 offset: (index * SNAPSHOT_CHUNK_BYTES) as u32,
                 bytes: bytes.to_vec(),
             })? {
-                ServerResponse::SnapshotApplied { document_revision }
-                    if document_revision == revision => {}
+                ServerResponse::SnapshotApplied {
+                    document_revision, ..
+                } if document_revision == revision => {}
                 other => return Err(unexpected("snapshot chunk", &other)),
             }
         }
         match self.request(ClientCommand::CommitDocumentSnapshot { revision })? {
-            ServerResponse::SnapshotApplied { document_revision }
-                if document_revision == revision =>
-            {
-                Ok(())
-            }
+            ServerResponse::SnapshotApplied {
+                document_revision,
+                reload,
+            } if document_revision == revision => Ok(reload),
             other => Err(unexpected("snapshot commit", &other)),
         }
     }
@@ -262,7 +263,7 @@ impl EngineProcess {
         revision: u64,
         range: std::ops::Range<usize>,
         replacement: &[u8],
-    ) -> io::Result<()> {
+    ) -> io::Result<Option<keine_authoring::PreviewReload>> {
         let start = u32::try_from(range.start).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -280,11 +281,10 @@ impl EngineProcess {
             end,
             replacement: replacement.to_vec(),
         })? {
-            ServerResponse::SnapshotApplied { document_revision }
-                if document_revision == revision =>
-            {
-                Ok(())
-            }
+            ServerResponse::SnapshotApplied {
+                document_revision,
+                reload,
+            } if document_revision == revision => Ok(reload),
             other => Err(unexpected("document patch", &other)),
         }
     }

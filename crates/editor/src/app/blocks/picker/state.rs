@@ -5,6 +5,7 @@ pub(in crate::app) struct PickerState {
     pub(in crate::app) picker_drag: Option<crate::app::blocks::PickerDragSession>,
     pub(in crate::app) picker_row_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     pub(in crate::app) picker_scroll: ScrollHandle,
+    pub(in crate::app) return_focus: Option<gpui_kit::FocusHandle>,
     pub(in crate::app) block_picker_open: bool,
     pub(in crate::app) block_picker_closing: bool,
     pub(in crate::app) block_picker_epoch: usize,

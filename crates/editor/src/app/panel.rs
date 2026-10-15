@@ -339,12 +339,22 @@ impl PanelContent {
     fn title(&self) -> SharedString {
         match self {
             Self::Explorer { .. } => "Explorer".into(),
-            Self::Document { relative, .. } => relative
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("Document")
-                .to_owned()
-                .into(),
+            Self::Document {
+                relative, document, ..
+            } => {
+                let name = relative
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("Document");
+                if document
+                    .as_ref()
+                    .is_some_and(|document| document.borrow().is_dirty())
+                {
+                    format!("{name} •").into()
+                } else {
+                    name.to_owned().into()
+                }
+            }
             Self::Inspector { .. } => "Inspector".into(),
             Self::Output { .. } => "Output".into(),
             Self::Search { .. } => "Search".into(),

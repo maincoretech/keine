@@ -289,8 +289,76 @@ impl EditorTabGroupSkin {
                 panel.reload_document(&ReloadDocument, window, cx)
             });
         });
+        let back_root = self.root.clone();
+        let forward_root = self.root.clone();
+        let quick_root = self.root.clone();
+        let (back, forward) = super::navigation::can_travel(&self.root, cx);
+        let navigation = div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(
+                file_action_icon(
+                    "navigate-back",
+                    AssetIconName::ArrowLeft,
+                    if !back {
+                        "No previous source location"
+                    } else if cfg!(target_os = "macos") {
+                        "Back (⌘[)"
+                    } else {
+                        "Back (Alt+←)"
+                    },
+                )
+                .when(!back, |this| {
+                    this.opacity(0.35).cursor_default().tab_stop(false)
+                })
+                .on_click(move |_, window, cx| {
+                    super::navigation::travel(&back_root, true, window, cx)
+                }),
+            )
+            .child(
+                file_action_icon(
+                    "navigate-forward",
+                    AssetIconName::ArrowRight,
+                    if !forward {
+                        "No next source location"
+                    } else if cfg!(target_os = "macos") {
+                        "Forward (⌘])"
+                    } else {
+                        "Forward (Alt+→)"
+                    },
+                )
+                .when(!forward, |this| {
+                    this.opacity(0.35).cursor_default().tab_stop(false)
+                })
+                .on_click(move |_, window, cx| {
+                    super::navigation::travel(&forward_root, false, window, cx)
+                }),
+            )
+            .child(
+                file_action_icon(
+                    "quick-open",
+                    AssetIconName::Search,
+                    if cfg!(target_os = "macos") {
+                        "Go to file or scene (⌘P)"
+                    } else {
+                        "Go to file or scene (Ctrl+P)"
+                    },
+                )
+                .on_click(move |_, window, cx| {
+                    super::navigation::open_quick(&quick_root, window, cx)
+                }),
+            );
         if !shou {
-            return Some(div().pr_2().child(reload));
+            return Some(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .pr_2()
+                    .child(navigation)
+                    .child(reload),
+            );
         }
         let scene_panel = panel.clone();
         let text_panel = panel.clone();
@@ -301,6 +369,7 @@ impl EditorTabGroupSkin {
                 .items_center()
                 .gap_1()
                 .pr_2()
+                .child(navigation)
                 .child(reload)
                 .when(mode == DocumentMode::Block, |controls| {
                     controls.child(

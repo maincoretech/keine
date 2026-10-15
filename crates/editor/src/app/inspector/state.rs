@@ -2,6 +2,7 @@
 use crate::app::*;
 
 pub(in crate::app) struct InspectorState {
+    pub(in crate::app) advanced_open: bool,
     pub(in crate::app) inspector_key: Option<InspectorEditKey>,
     pub(in crate::app) inspector_inputs: Vec<Entity<InputState>>,
     pub(in crate::app) text_lifetime_inputs: Vec<Entity<InputState>>,

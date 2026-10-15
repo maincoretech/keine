@@ -3,6 +3,35 @@ use super::controls::{render_wait_control, replay_button, retraction_property};
 use super::*;
 use crate::authoring::fields::character_track;
 
+fn advanced_toggle(
+    progress: f32,
+    label: String,
+    cx: &mut Context<WorkbenchPanel>,
+) -> impl IntoElement {
+    div()
+        .id("inspector-advanced-toggle")
+        .w_full()
+        .h(px(28.))
+        .flex()
+        .items_center()
+        .gap_2()
+        .rounded(px(5.))
+        .px_1()
+        .text_xs()
+        .text_color(rgb(MUTED))
+        .cursor_pointer()
+        .focusable()
+        .hover(|style| style.bg(rgb(SURFACE_HOVER)).text_color(rgb(INK)))
+        .active(|style| style.bg(rgb(PRIMARY_DIM)))
+        .focus_visible(|style| style.bg(rgb(PRIMARY_DIM)).text_color(rgb(PRIMARY)))
+        .child(disclosure_chevron(progress))
+        .child(label)
+        .on_click(cx.listener(|panel, _, _, cx| {
+            panel.inspector.advanced_open = !panel.inspector.advanced_open;
+            cx.notify();
+        }))
+}
+
 // Studio's effect workspace uses an effect list and a single detail pane. These
 // groups contain only the effects already exposed by the native action schema.
 pub(in crate::app) struct SourceInspectorView<'a> {
@@ -12,6 +41,7 @@ pub(in crate::app) struct SourceInspectorView<'a> {
     pub texts: &'a [Entity<TextareaState>],
     pub sliders: &'a HashMap<String, Entity<SliderState>>,
     pub selects: &'a HashMap<String, Entity<SelectState<Vec<SourceOption>>>>,
+    pub advanced_progress: f32,
     pub effect: Option<&'static str>,
     pub position_bounds: &'a Rc<RefCell<Bounds<Pixels>>>,
     pub position_draft: Option<(usize, f32, f32)>,
@@ -36,6 +66,21 @@ impl SourceInspectorView<'_> {
             self.selects.get(&field.key),
             cx,
         );
+        if let Some(reason) = source_field_disabled_reason(self.key, field) {
+            return div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(editor)
+                .child(
+                    div()
+                        .text_size(px(10.))
+                        .text_color(rgb(MUTED))
+                        .child(reason),
+                )
+                .into_any_element();
+        }
         if !camera_tween_field(self.key, field) {
             return editor;
         }
@@ -59,6 +104,9 @@ impl SourceInspectorView<'_> {
                     .justify_center()
                     .rounded(px(4.))
                     .cursor_pointer()
+                    .focusable()
+                    .focus_visible(|style| style.bg(rgb(PRIMARY_DIM)).text_color(rgb(PRIMARY)))
+                    .active(|style| style.bg(rgb(PRIMARY_DIM)))
                     .text_size(px(12.))
                     .text_color(rgb(if enabled { PRIMARY } else { MUTED }))
                     .hover(|this| this.bg(rgb(SURFACE)))
@@ -81,7 +129,11 @@ impl SourceInspectorView<'_> {
             .into_any_element()
     }
 
-    pub fn render(&self, cx: &mut Context<WorkbenchPanel>) -> AnyElement {
+    pub fn render(
+        &self,
+        extra_advanced: Option<AnyElement>,
+        cx: &mut Context<WorkbenchPanel>,
+    ) -> AnyElement {
         if matches!(self.key.command.as_str(), "wait" | "wait.advance")
             && let Some(input) = self.inputs.first()
         {
@@ -159,6 +211,7 @@ impl SourceInspectorView<'_> {
                 "Position",
                 "Timing",
                 "Transform",
+                "Shake",
                 "Speaking",
                 "Other characters",
                 "Narration",
@@ -173,6 +226,7 @@ impl SourceInspectorView<'_> {
                 "Other characters",
                 "Narration",
                 "Transform",
+                "Shake",
                 "Layout",
                 "Playback",
                 "Timing",
@@ -187,6 +241,7 @@ impl SourceInspectorView<'_> {
                 .filter(|(_, field)| {
                     field.key != "tween"
                         && source_property_group(field) == group
+                        && source_field_is_primary(self.key, field)
                         && (!effects || source_effect_group(&field.key).is_none())
                 })
                 .map(|(position, _)| position)
@@ -210,6 +265,43 @@ impl SourceInspectorView<'_> {
                             .map(|position| self.property(position, cx)),
                     ),
             );
+        }
+        let secondary = self
+            .key
+            .fields
+            .iter()
+            .enumerate()
+            .filter(|(_, field)| {
+                field.key != "tween"
+                    && !source_field_is_primary(self.key, field)
+                    && (!effects || source_effect_group(&field.key).is_none())
+            })
+            .map(|(position, _)| position)
+            .collect::<Vec<_>>();
+        if !secondary.is_empty() || extra_advanced.is_some() {
+            let count = secondary.len();
+            let label = if extra_advanced.is_some() {
+                "Advanced".into()
+            } else {
+                format!("Advanced · {count}")
+            };
+            content = content
+                .child(advanced_toggle(self.advanced_progress, label, cx))
+                .child(disclosure_content(
+                    "source-inspector-advanced",
+                    self.advanced_progress,
+                    div()
+                        .w_full()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .when_some(extra_advanced, |this, extra| this.child(extra))
+                        .children(
+                            secondary
+                                .into_iter()
+                                .map(|position| self.property(position, cx)),
+                        ),
+                ));
         }
         if effects {
             let groups = EFFECT_GROUPS
@@ -292,6 +384,9 @@ impl SourceInspectorView<'_> {
                                     .text_color(rgb(if selected { PRIMARY } else { INK }))
                                     .when(selected, |this| this.bg(rgb(PRIMARY_DIM)))
                                     .cursor_pointer()
+                                    .focusable()
+                                    .focus_visible(|style| style.bg(rgb(PRIMARY_DIM)))
+                                    .active(|style| style.bg(rgb(SURFACE_HOVER)))
                                     .hover(|style| style.bg(rgb(SURFACE_HOVER)))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.inspector.source_inspector_effect = Some(prefix);
@@ -769,6 +864,32 @@ impl WorkbenchPanel {
         let source_sliders = self.inspector.source_inspector_sliders.clone();
         let source_selects = self.inspector.source_inspector_selects.clone();
         let source_effect = self.inspector.source_inspector_effect;
+        let advanced_progress = disclosure_progress(
+            "inspector-advanced",
+            self.inspector.advanced_open,
+            window,
+            cx,
+        );
+        let has_text_inspector = inputs.len() == 3 && text_selects.len() == 2;
+        let mut text_advanced = has_text_inspector.then(|| {
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(property_input("Stable ID", &inputs[2]))
+                .child(render_text_ending(
+                    root,
+                    self.inspector
+                        .inspector_key
+                        .as_ref()
+                        .expect("Text Inspector key"),
+                    &self.inspector.text_lifetime_inputs,
+                    cx,
+                ))
+                .into_any_element()
+        });
+
         let asset_inputs = self.inspector.asset_inspector_inputs.clone();
         let unmapped_preview =
             cx.global::<EditorDocuments>()
@@ -1099,7 +1220,7 @@ impl WorkbenchPanel {
                             },
                         )
                     })
-                    .when(inputs.len() == 3 && text_selects.len() == 2, |this| {
+                    .when(has_text_inspector, |this| {
                         this.child(section_label("TEXT"))
                             .child(
                                 div()
@@ -1147,36 +1268,40 @@ impl WorkbenchPanel {
                                         cx,
                                     )),
                             )
-                            .child(property_input("Stable ID", &inputs[2]))
-                            .child(render_text_ending(
-                                root,
-                                self.inspector
-                                    .inspector_key
-                                    .as_ref()
-                                    .expect("Text Inspector key"),
-                                &self.inspector.text_lifetime_inputs,
-                                cx,
-                            ))
+                            .when(source_key.is_none(), |this| {
+                                this.child(advanced_toggle(
+                                    advanced_progress,
+                                    "Advanced".into(),
+                                    cx,
+                                ))
+                                .child(disclosure_content(
+                                    "text-inspector-advanced",
+                                    advanced_progress,
+                                    text_advanced.take().expect("Text advanced fields"),
+                                ))
+                            })
                     })
                     .when_some(source_key, |this, key| {
-                        this.child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .child(
-                                    Icon::new(block_card_icon(&key.kind, &key.command))
-                                        .small()
-                                        .text_color(rgb(PRIMARY)),
-                                )
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(rgb(INK))
-                                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                        .child(block_card_label(&key.kind, &key.command)),
-                                ),
-                        )
+                        this.when(!has_text_inspector, |this| {
+                            this.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        Icon::new(block_card_icon(&key.kind, &key.command))
+                                            .small()
+                                            .text_color(rgb(PRIMARY)),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(rgb(INK))
+                                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                            .child(block_card_label(&key.kind, &key.command)),
+                                    ),
+                            )
+                        })
                         .child(
                             SourceInspectorView {
                                 root,
@@ -1185,11 +1310,12 @@ impl WorkbenchPanel {
                                 texts: &source_texts,
                                 sliders: &source_sliders,
                                 selects: &source_selects,
+                                advanced_progress,
                                 effect: source_effect,
                                 position_bounds: &self.inspector.source_position_bounds,
                                 position_draft: self.inspector.source_position_draft,
                             }
-                            .render(cx),
+                            .render(text_advanced.take(), cx),
                         )
                     })
                 },
@@ -1208,9 +1334,6 @@ impl WorkbenchPanel {
                 &self.view_scroll,
                 content,
             ))
-            .when_some(self.render_resource_picker(window, cx), |this, picker| {
-                this.child(picker)
-            })
             .into_any_element()
     }
 }

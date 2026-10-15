@@ -444,7 +444,7 @@ impl DocumentManager {
 }
 
 #[derive(Clone, Debug, Default)]
-struct AuthoringPolicy {
+pub(crate) struct AuthoringPolicy {
     enabled: bool,
     assets: PathBuf,
     characters: PathBuf,
@@ -452,7 +452,7 @@ struct AuthoringPolicy {
 }
 
 impl AuthoringPolicy {
-    fn load(project_root: &Path) -> Self {
+    pub(crate) fn load(project_root: &Path) -> Self {
         let Ok(source) = super::read_project_text(project_root, Path::new("config.yaml")) else {
             return Self::default();
         };
@@ -470,7 +470,7 @@ impl AuthoringPolicy {
         }
     }
 
-    fn is_writable(&self, path: &Path) -> bool {
+    pub(crate) fn is_writable(&self, path: &Path) -> bool {
         self.enabled
             && (path == Path::new("config.yaml")
                 || path == self.assets

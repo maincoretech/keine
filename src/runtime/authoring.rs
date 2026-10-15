@@ -13,8 +13,8 @@ use bevy::prelude::{App, Resource, World};
 use bevy::winit::{EventLoopProxyWrapper, WinitUserEvent};
 use keine_authoring::{
     Capability, ClientCommand, ClientMessage, ErrorCode, LifecycleState, MAX_DOCUMENT_BYTES,
-    PROTOCOL_VERSION, ServerMessage, ServerResponse, preview_overlay_path, read_message,
-    write_message,
+    PROTOCOL_VERSION, PreviewReload, ServerMessage, ServerResponse, preview_overlay_path,
+    read_message, write_message,
 };
 use keine_loader::LoaderRegistry;
 
@@ -701,6 +701,7 @@ fn begin_snapshot(
     });
     Ok(ServerResponse::SnapshotApplied {
         document_revision: revision,
+        reload: None,
     })
 }
 
@@ -731,6 +732,7 @@ fn append_snapshot(
     pending.bytes.extend_from_slice(bytes);
     Ok(ServerResponse::SnapshotApplied {
         document_revision: revision,
+        reload: None,
     })
 }
 
@@ -771,9 +773,10 @@ fn commit_snapshot(
         .documents
         .insert(pending.path.clone(), pending.bytes);
     session.document_revision = revision;
-    reload_live_source(runtime, revision);
+    let reload = reload_live_source(runtime, revision);
     Ok(ServerResponse::SnapshotApplied {
         document_revision: revision,
+        reload,
     })
 }
 
@@ -841,20 +844,46 @@ fn apply_patch(
         .write_script(&path, document)
         .map_err(internal_error)?;
     session.document_revision = revision;
-    reload_live_source(runtime, revision);
+    let reload = reload_live_source(runtime, revision);
     Ok(ServerResponse::SnapshotApplied {
         document_revision: revision,
+        reload,
     })
 }
 
-fn reload_live_source(runtime: Option<&mut World>, revision: u64) {
-    let Some(world) = runtime else {
-        return;
-    };
-    if let Err(error) = super::preview::reload_source(world, revision) {
-        // Invalid in-progress text must leave the last valid Program live.
-        log::warn!("preview kept the last valid source: {error:#}");
-    }
+fn reload_live_source(runtime: Option<&mut World>, revision: u64) -> Option<PreviewReload> {
+    let world = runtime?;
+    Some(match super::preview::reload_source(world, revision) {
+        Ok(true) => PreviewReload::Restarted,
+        Ok(false) => PreviewReload::Preserved,
+        Err(error) => {
+            // One bounded reply per source edit; no frame polling or extra parse.
+            log::warn!("preview kept the last valid source: {error:#}");
+            let diagnostic = error
+                .downcast_ref::<super::tick::reload::ReloadDiagnostic>()
+                .and_then(|error| {
+                    Some(keine_authoring::Diagnostic {
+                        level: keine_authoring::DiagnosticLevel::Error,
+                        path: confined_script_path(&if error.path.starts_with("scripts") {
+                            error.path.clone()
+                        } else {
+                            Path::new("scripts").join(&error.path)
+                        })?,
+                        line: error.diagnostic.span.line,
+                        column: error.diagnostic.span.column,
+                        message: bounded_reload_message(&error.diagnostic.message),
+                    })
+                });
+            PreviewReload::Rejected {
+                message: bounded_reload_message(&format!("{error:#}")),
+                diagnostic,
+            }
+        }
+    })
+}
+
+fn bounded_reload_message(message: &str) -> String {
+    message[..message.floor_char_boundary(4096.min(message.len()))].to_owned()
 }
 
 fn confined_script_path(path: &Path) -> Option<PathBuf> {
@@ -995,7 +1024,10 @@ mod tests {
             .settle_until = None;
         world.clear_trackers();
         fs::write(&path, format!("// comment\n{source}")).unwrap();
-        reload_live_source(Some(world), 2);
+        assert_eq!(
+            reload_live_source(Some(world), 2),
+            Some(PreviewReload::Preserved)
+        );
         assert_eq!(preview::document_revision(world), Some(2));
         assert_eq!(world.resource::<GameState>().0, old);
         assert!(Arc::ptr_eq(
@@ -1049,7 +1081,20 @@ mod tests {
         ] {
             fs::write(&path, invalid).unwrap();
             session.document_revision = 3;
-            reload_live_source(Some(world), 3);
+            let result = reload_live_source(Some(world), 3);
+            let Some(PreviewReload::Rejected {
+                message,
+                diagnostic,
+            }) = result
+            else {
+                panic!("invalid source accepted: {invalid}")
+            };
+            assert!(!message.is_empty());
+            if invalid.contains("let a") {
+                let diagnostic = diagnostic.expect("syntax error has a navigable source location");
+                assert_eq!(diagnostic.path, PathBuf::from("scripts/main.shou"));
+                assert!(diagnostic.line > 0 && diagnostic.column > 0);
+            }
             assert_eq!(preview::document_revision(world), Some(2), "{invalid}");
             assert_eq!(world.resource::<GameState>().0, old, "{invalid}");
             assert_eq!(
@@ -1078,7 +1123,10 @@ mod tests {
             assert!(matches!(result, Err((ErrorCode::InvalidRequest, _))));
         }
         fs::write(&path, source.replace("old", "fixed")).unwrap();
-        reload_live_source(Some(world), 4);
+        assert_eq!(
+            reload_live_source(Some(world), 4),
+            Some(PreviewReload::Restarted)
+        );
         assert_eq!(preview::document_revision(world), Some(4));
         assert_eq!(
             world.resource::<GameState>().vars.get("score"),

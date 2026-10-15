@@ -75,7 +75,7 @@ pub(crate) fn document_revision(world: &World) -> Option<u64> {
 
 /// Swap only the authored Program. The native window, GPU surfaces, and
 /// ordinary runtime input remain alive across source edits.
-pub(crate) fn reload_source(world: &mut World, revision: u64) -> Result<()> {
+pub(crate) fn reload_source(world: &mut World, revision: u64) -> Result<bool> {
     let content = &world.resource::<ContentProjectResource>().0;
     let languages = &world.resource::<ScriptLanguages>().0;
     let build = super::tick::reload::build_hot_reload(
@@ -110,7 +110,7 @@ pub(crate) fn reload_source(world: &mut World, revision: u64) -> Result<()> {
     if restarted {
         keep_loading_frames_alive(world);
     }
-    Ok(())
+    Ok(restarted)
 }
 
 pub(crate) fn seek_source(world: &mut World, path: &Path, line: usize) -> bool {

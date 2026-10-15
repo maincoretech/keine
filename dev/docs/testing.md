@@ -166,6 +166,71 @@ actionlint 通过。45 个 Bevy 库产物在后续测试中复用，仅额外编
 
 这些状态不证明新版游戏的三平台运行、Moto 操作或正式发行包已验收。
 
+### Editor 源码反馈与替换验收
+
+0.16.1 工作区的 Preview 协议 v11 与搜索替换，在 macOS arm64 上执行：
+
+```sh
+cargo fmt --all -- --check
+cargo check --workspace --offline --locked --all-targets --all-features
+cargo clippy --workspace --offline --locked --all-targets --all-features -- -D warnings
+cargo test --workspace --offline --locked --all-features
+cargo test --workspace --offline --locked --no-default-features --features publisher
+cargo build --workspace --offline --locked --all-features --bins
+target/debug/keine validate tests/fixtures/native-smoke
+```
+
+检查覆盖重载的保留/重建/拒绝、诊断位置与旧位置清除，以及 Unicode/CRLF、选择性替换、
+空替换、整文档陈旧检查、打开文件后的再次核对、只读兼容输入、取消与结果/内存上限。
+Trash/IPC 测试在沙箱外执行。原始日志为 `target/reload-review/editor-next-*.log`。
+
+本机配对应用以 `target/editor-next/project` 的 Native Smoke 隔离副本完成原生操作：
+Project/Current file 搜索、逐项排除、跨文件未保存替换、一次撤销/重做；Preview 启停、
+注释保留状态、畸形表达式的错误提示与点击定位、修正后的入口重载，以及草稿通知不覆盖
+Preview 状态。没有修改 tday。未将这些操作视为 Windows/Linux、完整游戏画面或长时内存验收。
+
+随后仅将工作区升版至 0.16.2，重新通过 fmt、all-targets/all-features check 与 clippy、
+all-features 工作区测试，以及主工作区和独立 fuzz 的 locked metadata 检查。
+对应日志为 `target/reload-review/editor-0162-*.log`；下方微基准未因升版重跑。
+
+0.16.2 的文档未保存提示、保存失败通知、替换计数、快速定位/位置历史与最近工程改进，
+已通过 fmt、all-targets/all-features check、Clippy `-D warnings`、all-features 工作区测试
+（1107 passed / 24 ignored），以及 native-smoke validate。新增边界覆盖 Unicode 场景过滤、
+结果/历史上限、历史分支、最近工程标题回退和移除记录不删文件。回收站测试在沙箱外复跑通过；
+命令与结果见 `target/reload-review/editor-ux-*.log`。macOS 原生验收发现并补齐工作台的
+Dialog/Notification 渲染层，随后重跑 Editor Clippy、构建与本机配对打包。
+在同一隔离副本确认：最近工程标题/短路径/失效标记与移除记录、工具栏和 ⌘P 定位、
+`@` 场景过滤/回车/Escape、⌘[/⌘] 恢复文本选区/滚动与 Blocks 选中项、未保存标记、
+保存冲突同时显示通知与 Output、替换计数和撤销。Preview 启动后，定位到另一源场景仍保持
+原运行位置；临时长文档与保存冲突探针均已恢复。Windows/Linux 与输入法组合键尚未实测。
+
+Inspector 层级与控件状态补齐后，同机通过 fmt、workspace all-targets/all-features
+check/Clippy、all-features 工作区测试（1108 passed / 24 ignored）及 native-smoke validate。
+最终文本高级区域合并后，另跑 Editor Clippy、lib 测试（247 passed / 7 ignored）、构建和
+配对应用打包；系统 Trash 测试按上述要求在沙箱外通过。日志为
+`target/reload-review/editor-p34-*.log`。macOS 原生操作确认文本高级项只有一个入口、
+显式参数保持可见、镜头参数单位、效果禁用原因、键盘展开/收起，以及资源选择和 Block
+插入面板取消后的焦点返回；发现并移除了 Inspector 内重复的资源弹层挂载，修复辅助功能
+节点重复导致的退出。操作未写入源码，临时镜头测试脚本已恢复；本机配对应用保持 0.16.2。
+这些结果不包含 Windows/Linux 原生交互、屏幕阅读器完整验收或性能增益结论。
+
+有界测量复用已有微基准；Apple M5 Pro / 24 GiB / macOS 27.0.1，dev opt-level=1：
+
+```sh
+cargo test --workspace --offline --locked --all-features block_preparation -- --ignored --nocapture
+cargo test --workspace --offline --locked --all-features text_rebuild -- --ignored --nocapture
+cargo test --workspace --offline --locked --all-features browser_cache -- --ignored --nocapture
+```
+
+| 路径 | 本次结果 |
+| --- | --- |
+| 5,000 Block 准备 | 未缓存参考 0.331243 ms；现有缓存 0.000193 ms |
+| 5,000 行 Text 概览 | 旧主线程参考 42.916 ms；现有后台生成 22.955 ms；改宽 23.082 ms |
+| 5,000 资源浏览准备 | 现有缓存 0.000016 ms |
+
+表中的参考由既有基准内部执行，不是本次 P1/P2 修改前后的对比；不包含整窗绘制、
+输入到呈现延迟或长期 RSS。此次没有改动这些性能路径，也没有据此宣称新增提速。
+
 ## 性能测量方法
 
 先定位实际瓶颈，再固定输入/版本/工具链/功能/构建配置、分辨率、后端和前后台状态做前后对照。

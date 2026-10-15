@@ -140,6 +140,19 @@ impl AppPersistence {
         Ok(paths)
     }
 
+    /// Remove only the launcher entry, including paths that no longer exist.
+    pub fn remove_recent(&self, path: &Path) -> io::Result<()> {
+        let mut paths = self.recent_projects();
+        paths.retain(|candidate| candidate != path);
+        atomic_json(
+            &self.root.join("recent-projects.json"),
+            &RecentProjectsFile {
+                schema: STATE_SCHEMA,
+                paths,
+            },
+        )
+    }
+
     pub fn load_window_bounds(&self) -> Option<(WindowBounds, Option<String>)> {
         let saved = read_json::<WindowBoundsFile>(&self.root.join("window-bounds.json"))?;
         if saved.schema != WINDOW_BOUNDS_SCHEMA
@@ -400,6 +413,16 @@ mod tests {
         persistence.record_recent(&second).unwrap();
         let recents = persistence.record_recent(&first).unwrap();
         assert_eq!(recents, vec![first.path(), second.path()]);
+        fs::write(first.path().join("keep.txt"), "keep").unwrap();
+        persistence.remove_recent(first.path()).unwrap();
+        assert_eq!(persistence.recent_projects(), vec![second.path()]);
+        assert_eq!(
+            fs::read_to_string(first.path().join("keep.txt")).unwrap(),
+            "keep"
+        );
+        fs::remove_dir_all(second.path()).unwrap();
+        persistence.remove_recent(second.path()).unwrap();
+        assert!(persistence.recent_projects().is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -26,7 +26,7 @@ impl SourceHistory {
         self.redo
             .retain(|edit| !edit.changes.iter().any(|change| change.path == path));
     }
-    const BYTE_BUDGET: usize = 16 * 1024 * 1024;
+    pub(super) const BYTE_BUDGET: usize = 16 * 1024 * 1024;
 
     fn bytes(&self) -> usize {
         self.undo
@@ -141,7 +141,7 @@ pub(super) fn replay_source_history(
         replacements.push((change.path.clone(), replacement.clone()));
     }
     apply_file_changes(root, &mut transaction.files, undo)?;
-    if let Err(error) = apply_prepared_edits_impl(root, &replacements, false, window, cx) {
+    if let Err(error) = apply_prepared_edits_impl(root, &replacements, false, None, window, cx) {
         let rollback = apply_file_changes(root, &mut transaction.files, !undo);
         return Err(format!("{error}; file rollback: {rollback:?}"));
     }
@@ -228,7 +228,7 @@ pub(super) fn apply_asset_transaction(
         }
     }
     apply_file_changes(root, &mut files, false)?;
-    if let Err(error) = apply_prepared_edits_impl(root, edits, false, window, cx) {
+    if let Err(error) = apply_prepared_edits_impl(root, edits, false, None, window, cx) {
         let rollback = apply_file_changes(root, &mut files, true);
         return Err(format!("{error}; file rollback: {rollback:?}"));
     }
@@ -622,7 +622,17 @@ pub(super) fn apply_prepared_edits(
     window: &mut Window,
     cx: &mut App,
 ) -> Result<(), String> {
-    apply_prepared_edits_impl(root, edits, true, window, cx)
+    apply_prepared_edits_impl(root, edits, true, None, window, cx)
+}
+
+pub(super) fn apply_checked_edits(
+    root: &Path,
+    edits: &[(PathBuf, String)],
+    expected: &BTreeMap<PathBuf, String>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Result<(), String> {
+    apply_prepared_edits_impl(root, edits, true, Some(expected), window, cx)
 }
 
 /// Save is the only automatic formatting boundary. Update the shared document
@@ -988,6 +998,21 @@ mod formatting_tests {
             let transaction = workspace.source_history.next(true).unwrap();
             assert_eq!(transaction[0].before, source);
             assert_eq!(transaction[0].after, formatted);
+            // A replacement prepared before formatting cannot overwrite the
+            // current editor, even though the newly read document is valid.
+            let stale = BTreeMap::from([(path.to_owned(), source.to_owned())]);
+            assert!(
+                apply_checked_edits(
+                    root,
+                    &[(path.to_owned(), "scene start {wait(9s)}".into())],
+                    &stale,
+                    window,
+                    cx,
+                )
+                .is_err()
+            );
+            assert_eq!(editor.read(cx).value().as_ref(), formatted);
+            assert_eq!(document.borrow().contents(), formatted);
             fs::write(root.join(path), "external").unwrap();
             document
                 .borrow_mut()
@@ -1004,6 +1029,7 @@ fn apply_prepared_edits_impl(
     root: &Path,
     edits: &[(PathBuf, String)],
     record: bool,
+    expected: Option<&BTreeMap<PathBuf, String>>,
     window: &mut Window,
     cx: &mut App,
 ) -> Result<(), String> {
@@ -1011,10 +1037,13 @@ fn apply_prepared_edits_impl(
         edits
             .iter()
             .map(|(path, after)| {
-                let before = cx
-                    .global::<EditorDocuments>()
-                    .source(root, path)
-                    .ok_or_else(|| format!("{} unavailable", path.display()))?;
+                // A search transaction must retain its original preview baseline,
+                // including if a closed file changes just before it is opened.
+                let before = match expected {
+                    Some(expected) => expected.get(path).cloned(),
+                    None => cx.global::<EditorDocuments>().source(root, path),
+                }
+                .ok_or_else(|| format!("{} unavailable", path.display()))?;
                 Ok(SourceChange {
                     path: path.clone(),
                     before,
@@ -1034,6 +1063,18 @@ fn apply_prepared_edits_impl(
             .and_then(|editor| editor.upgrade())
             .ok_or_else(|| format!("Could not open {}", path.display()))?;
         editors.push(editor);
+    }
+    // Opening a closed document can discover an external edit. Validate all
+    // opened inputs before changing any of them, preserving atomic replacement.
+    if record {
+        for (change, editor) in changes.iter().zip(&editors) {
+            if *editor.read(cx).text() != change.before {
+                return Err(format!(
+                    "{} changed while opening; refresh before editing",
+                    change.path.display()
+                ));
+            }
+        }
     }
     for ((_, source), editor) in edits.iter().zip(editors) {
         editor.update(cx, |editor, cx| {
@@ -1057,27 +1098,46 @@ pub(super) fn navigate_inspection(
     window: &mut Window,
     cx: &mut App,
 ) {
+    super::navigation::jump(root, relative, line, column, window, cx);
+}
+
+pub(super) fn navigate_inspection_untracked(
+    root: &Path,
+    relative: &Path,
+    line: usize,
+    column: usize,
+    window: &mut Window,
+    cx: &mut App,
+) {
     open_workspace_document(root, relative, window, cx);
     follow_preview_position(root, relative, line, column, window, cx);
     if let Some(panel) = cx
         .global::<EditorDocuments>()
         .panel_entity_for(root, relative)
     {
-        let _ = panel.update(cx, |panel, _| {
-            panel.document.last_text_cursor =
-                Some((line.saturating_sub(1), column.saturating_sub(1)));
-        });
-    }
-    if let Some(editor) = cx.global::<EditorDocuments>().editor_for(root, relative) {
-        let _ = editor.update(cx, |editor, cx| {
-            editor.set_cursor_position(
-                Position::new(
+        let _ = panel.update(cx, |panel, cx| {
+            let PanelContent::Document { editor, .. } = &panel.content else {
+                return;
+            };
+            let position = editor.update(cx, |editor, cx| {
+                let position = Position::new(
                     line.saturating_sub(1) as u32,
                     column.saturating_sub(1) as u32,
-                ),
-                window,
-                cx,
+                );
+                editor.unfold_at(position, cx);
+                editor.set_cursor_position(position, window, cx);
+                editor.cursor_position()
+            });
+            // Store the actual clamped position before deferred observers run.
+            panel.document.last_text_cursor =
+                Some((position.line as usize, position.character as usize));
+            cx.global_mut::<EditorDocuments>().set_selection(
+                root,
+                relative.to_owned(),
+                position.line as usize,
+                position.character as usize,
             );
+            cx.notify();
         });
     }
 }
@@ -1090,19 +1150,7 @@ pub(super) fn navigate_source(
     window: &mut Window,
     cx: &mut App,
 ) {
-    open_workspace_document(root, relative, window, cx);
-    if let Some(editor) = cx.global::<EditorDocuments>().editor_for(root, relative) {
-        let _ = editor.update(cx, |editor, cx| {
-            editor.set_cursor_position(
-                Position::new(
-                    line.saturating_sub(1) as u32,
-                    column.saturating_sub(1) as u32,
-                ),
-                window,
-                cx,
-            );
-        });
-    }
+    super::navigation::jump(root, relative, line, column, window, cx);
 }
 
 pub(super) fn projected_block_at(

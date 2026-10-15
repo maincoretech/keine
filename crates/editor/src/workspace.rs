@@ -65,6 +65,50 @@ pub struct TextDocument {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) struct RecentProject {
+    pub path: PathBuf,
+    pub title: String,
+    pub available: bool,
+}
+
+impl RecentProject {
+    pub fn pending(path: PathBuf) -> Self {
+        let title = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("Project")
+            .to_owned();
+        Self {
+            path,
+            title,
+            available: true,
+        }
+    }
+
+    pub fn load(path: PathBuf) -> Self {
+        let mut entry = Self::pending(path);
+        entry.available = entry.path.is_dir();
+        if let Ok(source) = read_project_text(&entry.path, Path::new("config.yaml"))
+            && let Ok(config) = keine_core::config::GameConfig::from_yaml(&source)
+            && !config.title.trim().is_empty()
+        {
+            entry.title = config.title.trim().chars().take(160).collect();
+        }
+        entry
+    }
+
+    pub fn short_path(&self) -> String {
+        let components: Vec<_> = self.path.components().rev().take(2).collect();
+        components
+            .into_iter()
+            .rev()
+            .collect::<PathBuf>()
+            .display()
+            .to_string()
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct WorkspaceSession {
     key: ProjectKey,
     name: String,
@@ -230,6 +274,24 @@ mod tests {
         fs::write(root.join("cover.webp"), "media").unwrap();
         fs::write(root.join("target/ignored.txt"), "ignored").unwrap();
         root
+    }
+
+    #[test]
+    fn recent_projects_use_config_titles_and_keep_missing_paths_removable() {
+        let root = fixture();
+        fs::write(root.join("config.yaml"), "title: 海边的故事\n").unwrap();
+        let recent = RecentProject::load(root.clone());
+        assert_eq!(recent.title, "海边的故事");
+        assert!(recent.available);
+        fs::write(root.join("config.yaml"), "invalid: [").unwrap();
+        assert_eq!(
+            RecentProject::load(root.clone()).title,
+            root.file_name().unwrap().to_string_lossy()
+        );
+        fs::remove_dir_all(&root).unwrap();
+        let missing = RecentProject::load(root.clone());
+        assert!(!missing.available);
+        assert_eq!(missing.path, root);
     }
 
     #[test]

@@ -154,6 +154,7 @@ pub(in crate::app) struct ResourcePicker {
     options: Vec<SourceOption>,
     current: String,
     input: Entity<InputState>,
+    return_focus: Option<gpui_kit::FocusHandle>,
     index: usize,
     trigger: Bounds<Pixels>,
     width: Pixels,
@@ -271,11 +272,16 @@ pub(in crate::app) fn resource_trigger(
             this.hover(|style| style.bg(rgb(SURFACE_HOVER)))
         })
         .when(!enabled, |this| this.cursor_default())
-        .when(enabled, |this| this.focusable())
+        .when(enabled, |this| {
+            this.focusable()
+                .focus_visible(|style| style.bg(rgb(PRIMARY_DIM)).text_color(rgb(PRIMARY)))
+                .active(|style| style.bg(rgb(PRIMARY_DIM)))
+        })
         .on_key_down(
             cx.listener(move |panel, event: &gpui_kit::KeyDownEvent, window, cx| {
                 if enabled && matches!(event.keystroke.key.as_str(), "enter" | "space" | "down") {
                     cx.stop_propagation();
+                    window.prevent_default();
                     if matches!(panel.content, PanelContent::Document { .. })
                         && let ResourceTarget::Source(key, _) = &keyboard_target
                     {
@@ -465,12 +471,14 @@ impl WorkbenchPanel {
             .position(|option| option.value == current)
             .unwrap_or(0);
         let size = window.viewport_size();
+        let return_focus = window.focused(cx);
         self.resource_picker = Some(ResourcePicker {
             root: root.to_owned(),
             target,
             options,
             current,
             input: input.clone(),
+            return_focus,
             index,
             trigger,
             width: trigger.size.width.max(px(220.)),
@@ -505,7 +513,11 @@ impl WorkbenchPanel {
             preview.stop_audition();
         }
         if restore_focus {
-            self.focus.focus(window, cx);
+            picker
+                .return_focus
+                .as_ref()
+                .unwrap_or(&self.focus)
+                .focus(window, cx);
         }
         cx.notify();
         let delay = if cx.reduce_motion() {

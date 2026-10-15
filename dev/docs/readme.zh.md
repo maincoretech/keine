@@ -104,7 +104,7 @@ benchmark 指定的窗口大小不受这些偏好影响。Preview 仍使用隔�
 - [Android 构建与实机验收](android.md)
 - [兼容输入边界](compatibility.md)
 
-当前版本 0.16.1。macOS 是当前验收重点；Windows/Linux 的运行态验收暂缓。
+当前版本 0.16.2。macOS 是当前验收重点；Windows/Linux 的运行态验收暂缓。
 编译和自动测试通过不等于 IME、DPI、音视频和运行态验收通过。
 
 ## 许可证

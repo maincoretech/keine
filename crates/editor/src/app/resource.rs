@@ -11,6 +11,9 @@ pub(super) fn asset_action_button(id: &'static str, label: &'static str) -> Stat
         .text_xs()
         .text_color(rgb(INK))
         .cursor_pointer()
+        .focusable()
+        .focus_visible(|style| style.bg(rgb(PRIMARY_DIM)).text_color(rgb(PRIMARY)))
+        .active(|style| style.bg(rgb(PRIMARY_DIM)))
         .hover(|style| style.bg(rgb(SURFACE_HOVER)))
         .child(label)
 }

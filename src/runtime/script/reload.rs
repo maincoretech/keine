@@ -1,5 +1,25 @@
 //! Background script rebuilds and legacy Editor cursor polling.
 use super::restart_after_program_reload;
+/// Preserve the loader location through anyhow so Preview can navigate errors.
+#[derive(Debug)]
+pub(crate) struct ReloadDiagnostic {
+    pub path: std::path::PathBuf,
+    pub diagnostic: Diagnostic,
+}
+impl std::fmt::Display for ReloadDiagnostic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}:{}:{}: {}",
+            self.path.display(),
+            self.diagnostic.span.line,
+            self.diagnostic.span.column,
+            self.diagnostic.message
+        )
+    }
+}
+impl std::error::Error for ReloadDiagnostic {}
+
 #[cfg(feature = "hot-reload")]
 use super::seek::try_sync_editor_cursor;
 #[cfg(feature = "hot-reload")]
@@ -241,13 +261,11 @@ pub(crate) fn build_hot_reload(
                 .find(|diagnostic| diagnostic.level == DiagnosticLevel::Error)
                 .map(|diagnostic| (scene, diagnostic))
         }) {
-            anyhow::bail!(
-                "{}:{}:{}: {}",
-                scene.path.display(),
-                diagnostic.span.line,
-                diagnostic.span.column,
-                diagnostic.message
-            );
+            return Err(ReloadDiagnostic {
+                path: scene.path.clone(),
+                diagnostic: diagnostic.clone(),
+            }
+            .into());
         }
         anyhow::ensure!(
             scenes
