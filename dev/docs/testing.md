@@ -628,3 +628,29 @@ Kēne 的接入证据在 `target/performance/quality-review/v2-*`；库的原始
 
 Kēne 发布端实测序列下限 42、无变化重打包 42、提高下限后 100；非法/零下限拒绝且
 原序列 100 包仍有效。v1 必须从源素材重建 v2；升级流程与客户端回退策略见[发布指南](release.md#hakutaku-020--v2)。
+
+离线密钥重建的回归入口为 `cargo test --locked -p keine-loader --test runtime_keys`：
+优化/LTO 编译后检查不同拆分还原相同密钥，并验证缺失/短材料拒绝和输入文件重建跟踪。
+无材料的开发版单独检查缺钥错误；带材料分支另用合成密钥运行 Loader all-targets/all-features Clippy。
+
+macOS ARM64 对 tday 副本连续执行两次 `bundle`，使用相同临时发布身份，得到不同 Engine：
+
+```sh
+cargo build --locked --bin keine --no-default-features --features publisher
+target/debug/keine bundle <project-copy> --output target/offline-hardening/bundle-a
+target/debug/keine bundle <project-copy> --output target/offline-hardening/bundle-b
+target/offline-hardening/bundle-a/keine validate target/offline-hardening/bundle-a/game.haku
+target/offline-hardening/bundle-b/keine validate target/offline-hardening/bundle-b/game.haku
+```
+
+旧字符串定位脚本失效，两个新 Engine 均未发现开发版缺钥锚点或连续根密钥字节。
+但按公开算法适配一次的 ARM64 静态仿真提取器无需修改即可提取两包：各 72 文件、
+80,942,538 B、4 段、7 页、1193 块，签名/承诺/AEAD 全部校验，输出逐文件 SHA-256
+与原 CI 包一致，发行输入未变。脚本耗时约 0.42 / 0.43 s，**不含人工分析与适配**；
+实现者已知公开算法，不能称为独立盲测。这只证明一次性适配成本，未证明持续抗提取能力。
+
+同机暖缓存 31 组交替的无窗口进程启动、解密及 tday 校验，中位数旧/新约 8.19 / 8.07 ms，
+不作提速主张，也不代表图形首帧。独立密钥重建微基准每轮 2000 万次、7 轮交替，
+Rust 1.99.0 `-O -C lto -C codegen-units=1 -C strip=symbols`，旧/新中位数约
+2.17 / 7.18 ns/次。原始命令、数据、产物清单和校验结果位于本机
+`target/offline-hardening/evidence/`；其他平台二进制及原生窗口/媒体验收未覆盖。

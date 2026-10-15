@@ -14,17 +14,20 @@ mod open;
 // Engine and publisher must move together across incompatible package formats.
 const _: () = assert!(hakutaku_core::format::FORMAT_MAJOR == 2);
 
+#[cfg(keine_packaged_keys)]
+mod packaged_keys {
+    include!(concat!(env!("OUT_DIR"), "/hakutaku-runtime-keys.rs"));
+}
+
 fn packaged_hakutaku_keys() -> Result<([u8; 32], [u8; 32])> {
-    let share_a = *include_bytes!(concat!(env!("OUT_DIR"), "/hakutaku-key-share-a.bin"));
-    let share_b = *include_bytes!(concat!(env!("OUT_DIR"), "/hakutaku-key-share-b.bin"));
-    let public_key = *include_bytes!(concat!(env!("OUT_DIR"), "/hakutaku-public-key.bin"));
-    if share_a == [0; 32] && share_b == [0; 32] && public_key == [0; 32] {
+    #[cfg(keine_packaged_keys)]
+    {
+        Ok(packaged_keys::load())
+    }
+    #[cfg(not(keine_packaged_keys))]
+    {
         bail!("this development engine does not embed Hakutaku release keys");
     }
-    Ok((
-        std::array::from_fn(|index| share_a[index] ^ share_b[index]),
-        public_key,
-    ))
 }
 
 /// One immutable physical content backend shared by scripts and Bevy assets.
@@ -658,6 +661,12 @@ mod tests {
     use super::*;
     use hakutaku_pack::{Identity, PackOptions, pack_directory};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    #[cfg(not(keine_packaged_keys))]
+    fn development_engine_has_no_packaged_keys() {
+        assert!(packaged_hakutaku_keys().is_err());
+    }
 
     #[test]
     fn rejects_paths_that_escape_a_source() {

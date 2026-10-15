@@ -205,6 +205,8 @@ release/
 Hakutaku 的字节布局以[锁定依赖的格式规范](https://github.com/maincoretech/hakutaku/blob/8d637d5629b84f99251fd445366892bdb3c7cf2b/docs/FORMAT.md)为准；Kēne 不维护第二套 wire spec。
 每个文件直接引用物理块；快照更新复用旧块并原子切换。随机读取不先解密整包到磁盘。
 签名和 AEAD 保证身份与完整性；离线内嵌密钥不承诺抵抗能调试客户端的攻击者。
+Loader 将 publisher 的随机密钥拆分转换成每次 bundle 变化的逐字重建代码，
+只提高静态分析门槛；验签公钥可以公开，签名私钥不进入 Engine 构建。细节见[密钥与更新](release.md#密钥与更新)。
 Kēne 当前以 `OpenPolicy::TrustFirstRelease` 打开包，没有持久化已接受的最高发行序号。
 `KEINE_HAKUTAKU_RELEASE_FLOOR` 只控制发布端新序号，不构成客户端防回退；
 未来若需要防回退，须由安装/更新 owner 持久化并传入 `RequireAtLeast`，不能只改打包变量。

@@ -246,11 +246,122 @@ Core/Pack 固定为 `=0.2.0`，Git revision 为
 
 默认身份文件为 `<project>/.keine/publisher.key`，首次有效打包时生成，后续自动复用；旧 `.hakutaku-key` 名自动迁移并保留相同身份。`KEINE_HAKUTAKU_IDENTITY` 可指定工程外的身份路径。
 
-身份文件包含签名私钥和内容根密钥，须私下备份，不随游戏发行。客户端仅嵌入验签公钥及根密钥的两份随机拆分材料；每次拆分变化不等于密钥轮换。客户端需要解密资源，因此不承诺抵抗逆向提取；拆分材料不含签名私钥。
+身份文件包含签名私钥和内容根密钥，须私下备份，不随游戏发行。打包器向 Engine 构建传入验签公钥及根密钥的两份随机拆分材料，不传签名私钥。Loader 构建脚本将拆分材料转换成逐字重建代码，每次 bundle 的顺序、掩码、旋转及表达式随随机拆分变化；不再把两份完整数组相邻嵌入。开发版不生成密钥，发行版不编入开发版缺钥诊断。
+
+这是低成本静态混淆，不增加 AES 密钥位数，也不改变包格式或稳定内容根密钥。`black_box` 仅尽力阻止常量折叠，[Rust 不为它提供安全保证](https://doc.rust-lang.org/std/hint/fn.black_box.html)；更换编译器/目标后须重查实际二进制。客户端能完全离线解密，攻击者仍可仿真重建代码或截取运行时密钥；每次拆分变化不等于密钥轮换。生成代码及相关构建缓存同样含可恢复的解密材料，不应公开上传。
 
 发行步骤仍为 `cargo bundle <project> --output target/bundle/<game>`，macOS 沿用下方 app 打包脚本。更新继续使用同一身份与稳定 `project.id`；CI 继续将同一身份文件的 base64 放在 `HAKUTAKU_IDENTITY_BASE64` secret，无需用户手动处理每次生成的运行时材料。
 
 显式轮换只在确有需要时进行：备份原身份，指定新身份并使用全新输出目录完整打包，分发配套新 Engine 和资源。当前客户端只信任一组密钥；新旧身份的程序/包不可任意混用。Kēne 当前使用 `OpenPolicy::TrustFirstRelease`，未保存客户端最高发行序号，因此允许同身份的合法包回退；发布端的 `KEINE_HAKUTAKU_RELEASE_FLOOR` 不改变这一点。slot 仍要求剧本 fingerprint 匹配。
+
+## 离线保护的停止标准
+
+比较范围是标准归档与已公开实现，不能将引擎名当作统一的加密等级：
+
+| 对照 | 已核实机制 | 与当前 Kēne 的关系 |
+| --- | --- | --- |
+| Ren’Py 标准 RPA-3.0 | 资源原文写入；索引压缩，偏移/长度 XOR，恢复参数写在包头 | 单凭归档即可恢复；Kēne 还需从 Engine 恢复内容密钥，包另有 AEAD/发行签名保护 |
+| krkr 标准 XP3、简单 XOR 扩展 | 原始/压缩段；额外保护由 extraction filter 提供，protected 标志本身不是加密 | Kēne 的密码与完整性保护高于无加密/简单 XOR 基线；XP3 不能代表所有商业保护 |
+| krkr 定制保护，包括 CXDEC 变体 | 存在按种子生成运算、控制表和游戏专用参数的实现 | 没有匹配商业样本的对照实验，不能声称 Kēne 的逆向成本已超过这些方案 |
+
+依据：Ren’Py [归档说明](https://www.renpy.org/doc/html/build.html#archives)与固定版本
+[打包实现](https://github.com/renpy/renpy/blob/7585fc52d03a63528bf0085093921ea2c5b46da5/launcher/game/archiver.rpy)；
+krkrz [XP3 读取实现](https://github.com/krkrz/krkrz/blob/fd5c4baa6a2ef5978db1bd043634351f48667daf/base/XP3Archive.cpp)；
+GARbro 作者维护的 [简单算法](https://github.com/morkt/GARbro/blob/b09ee4570ccb1daf6ac56710ee8934dc0b8baeb0/ArcFormats/KiriKiri/CryptAlgorithms.cs)
+与 [CXDEC 读取实现](https://github.com/morkt/GARbro/blob/b09ee4570ccb1daf6ac56710ee8934dc0b8baeb0/ArcFormats/KiriKiri/KiriKiriCx.cs)。
+提取工具支持已知算法，不证明所有未知或新商业变体都可直接提取。
+
+本地执行官方 Ren’Py `Archive` 类（仅替换 dict/list 兼容别名），生成自有的 3 文件、
+32,801 字节样本，已仅凭 RPA 完整恢复；不是完整 Ren’Py GUI 或商业成品测试。
+krkr 本次仅核查源码。证据在本地忽略目录 `target/offline-hardening/evidence/engine-comparison/`。
+Kēne 两个本地发行样本仍被同一静态提取器恢复，见 [离线验证](testing.md#hakutaku-v2)。
+不将不同样本的脚本耗时换算成强度倍数，也不把发行签名的防伪造能力算作防提取能力。
+
+离线目标限定为超过标准归档/简单混淆、阻止直接通用解包；当前可在此停止追加混淆。
+开源且完全离线的发行物包含完整解密能力，定向分析仍可恢复资源。
+若目标改为达到特定商业保护的逆向成本，应先指定同平台样本和相同攻击条件再测量。
+
+## 单机商业发行策略
+
+默认采用现有离线资源加密与签名，通过商店销售；商业发行不以自建联网密钥服务为前提。
+当前离线保护达到上节标准归档/简单混淆的目标后停止追加混淆，优先保证安装、更新、
+存档兼容与正版使用体验。资源防提取和购买授权分别处理：整包复制运行不一定需要解包，
+有效持有者也可能提取运行时明文，二者都不承诺绝对阻止。
+
+Steam 版未来可按需要接入常规购买验证、成就和云存档，同时继续本地解密资源；
+接 Steam 不代表必须启用下节的服务端发密钥方案。平台授权/DRM 也不自动提供资源保密，
+其边界见 [Steam DRM 文档](https://partner.steamgames.com/doc/features/drm)。
+面向无 DRM 渠道的发行须保持单机功能离线可用，参见 [GOG 发行要求](https://docs.gog.com/quality-assurance/)。
+
+联网发密钥仅保留为可选的后续方向，待确有账号绑定、直接销售许可证或内容授权需求时，
+再评估服务器维护、断网行为、售后与停服成本。0.16.3 不新增或修改 Rust 公共接口、CLI、
+配置或网络协议，不添加 Steam SDK、授权占位实现或服务端；下节仅为待评估设计，
+不构成已承诺兼容的接口合同，也不改变当前离线发行行为。
+
+## 联网授权模式（保留方案，未实现）
+
+保留现有 `offline` 发行路径；规划增加 `authorized`，区别在于最终发行物不含内容根密钥
+或足以重建它的拆分材料。`authorized` 的身份凭据提供方先限定为 `steam_ticket` 和
+`self_hosted`。两者使用同一内容授权合同，不新增包格式或通用插件框架。
+以下名称是设计约定，尚无对应 CLI 参数、配置字段、SDK 或联网行为。
+
+### 信任边界与接入点
+
+```text
+可信启动配置 → Steam ticket / 自托管账号会话或许可证凭据
+            → 授权服务核验身份与内容权益 → 内存中的内容密钥
+            → HakutakuArchive::open_with_keys → open_hakutaku_archive
+```
+
+网络、凭据获取和等待/重试界面由宿主启动层负责；Core/Loader 不引入 Steam、HTTP 或 Bevy。
+Loader 已有上述两个接入点，可以接收外部密钥并继续校验包、加载 Program。
+`open_with_keys` 当前针对文件系统目录；Android 等平台的只读 source 路径还需对应的显式密钥入口，不能假定已覆盖。
+实现阶段仍需新增宿主授权入口和发行模式分支；现有自动加载入口并不支持联网授权。
+
+Engine 固定信任发行验签公钥。公开启动描述放在加密包外，包含协议版本、发行渠道标识、
+Hakutaku project ID、release ID、内容 key ID、快照摘要、HTTPS 服务地址、提供方及可选 Steam AppID；
+它必须内嵌或经过固定信任公钥验签，不能允许旁置文件任意改写凭据接收地址。
+`config.yaml` 在加密包中，不能作为唯一授权启动配置。授权服务仅需内容密钥，不能持有发行签名私钥。
+
+Steam 客户端取得 `GetAuthTicketForWebApi` 的异步结果，服务端通过
+`ISteamUserAuth/AuthenticateUserTicket` 验证，再检查目标 AppID/内容的拥有权；
+服务端依据验证结果确定 SteamID，不信任客户端填报的身份或本地 ownership 布尔值。
+Publisher Web API key 仅留在服务端。自托管模式由同一服务验证账号会话或许可证凭据，
+明确映射到内容权益；不把长期万能服务密钥放进游戏。
+Steam 也需要开发者部署授权服务，ticket 本身不是内容密钥。
+依据 [Steam 身份与拥有权](https://partner.steamgames.com/doc/features/auth)、
+[票据核验](https://partner.steamgames.com/doc/webapi/ISteamUserAuth#AuthenticateUserTicket)及
+[拥有权接口](https://partner.steamgames.com/doc/webapi/ISteamUser#CheckAppOwnership)。
+[Steam DRM wrapper](https://partner.steamgames.com/doc/features/drm) 不能单独承担资源保密。
+
+### 内容授权接口草案
+
+宿主调用语义为 `authorize(release, proof, nonce) -> ContentGrant | AuthorizationError`；
+候选服务路由为 `POST /v1/content-grants`，仅通过验证证书的 HTTPS 传输，不跟随到任意主机的重定向。
+实现前再固定序列化格式、大小上限与具体 Rust 类型，密钥类型不能实现普通日志输出。
+
+| 合同 | 必需内容与语义 |
+| --- | --- |
+| 请求 | `protocol_version`、`release_id`、客户端随机 `nonce`、带提供方标签的 `proof`；Steam 为 ticket，自托管为会话/许可证证明 |
+| 服务端映射 | 从受控发行记录解析 project/AppID/key/快照及权益要求；不能按客户端任意 key ID 发密钥；验证证明、绑定使用方并执行相应重放/限流策略 |
+| 成功响应 | `grant_id`、`project_id`、`release_id`、`key_id`、`snapshot_digest`、原 `nonce`、`issued_at`、`expires_at`、32 字节内容 `root_key`；全部与可信发行记录一致 |
+| 客户端校验 | 严格核对版本、长度、nonce、发行绑定和有效期，再以固定公钥开包；验证实际快照匹配，密钥不落普通磁盘缓存或日志，尽早清理临时副本 |
+| 失败 | 区分取消、暂时不可用、未登录/凭据无效、无权益、发行不匹配/协议不支持；有界超时与重试，拒绝或失败不能自动退回内嵌密钥 |
+
+建议首版每次启动授权、挂载成功后本次运行可断网，不做长期离线密钥缓存；该策略仍待实现前确认。
+首次激活后永久离线意味着在本地保存可恢复解密材料，保护边界会重新接近离线模式。
+`expires_at` 只限制正常客户端接受授权及服务端后续发放，不能使已提取的根密钥在密码学上过期。
+当前 Hakutaku v2 从根密钥与 project ID 派生内容密钥；服务端按 release 限制发放，不等于根密钥
+只能解密该 release。同根密钥/同 project 的其他可取得内容也受泄露影响。
+
+离线与联网渠道不得共用内容根密钥；若相同资源另有离线发行，攻击者仍能从离线版取得资源。
+不同 key epoch 需要实际轮换并重新加密，不能仅更改 key ID；按章节独立授权还需另评估包与密钥边界。
+有效持有者运行时仍可截取密钥或明文，联网收益是让未获授权者仅凭安装包无法静态恢复全部解密材料。
+服务器不可用时的发行生命周期/停服处理必须在上线前决定，不能以隐蔽离线后门解决。
+
+实现验收需分别覆盖：最终发行物不含完整解密材料；有效/无效凭据与权益；跨项目、错版本、
+过期/重放响应和断网行为；两种提供方的真实服务集成；最终包的内容与原生运行验收。
+本节仅定义方案，尚未完成上述联网验收，也未改变当前离线发行行为。
 
 ## 发行前的用户准备
 
