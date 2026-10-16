@@ -35,32 +35,29 @@ Compatibility JSON is read-only; migration is explicit and preserves its input.
 ## Script performance
 
 Measured on **Apple M5 Pro (15 logical CPUs), 24 GiB RAM, macOS 27.0.1**,
-2026-10-11, using the 0.14.3 working tree and optimized Cargo benches. These are historical measurements, not a rerun on the current release.
-Single-threaded, warm in-memory input, 10 samples:
+2026-10-16, using the 0.16.3 working tree with parser allocation improvements
+included in 0.16.4.
+With the same optimized Criterion benchmark, 100,000 text statements improved
+from **85.26 to 75.09 ms**; the 2,626-action tday corpus improved from **2.27 to 2.13 ms**.
 
-| Workload | Approximate result |
-| --- | ---: |
-| EYS parsing: 100,000 text statements | 115 ms / 870k actions/s |
-| EYS parsing: 100,001 expression/text actions | 132 ms / 760k actions/s |
-| tday parser corpus: 14 scenes, 2,665 actions | 2.85 ms |
-| Core execution: assignment, condition and interpolated dialogue | 225k dialogue turns/s |
-| Core execution: non-blocking Comment actions | 108M actions/s |
+Same-machine CPU microbenchmarks below use equivalent content in each language,
+single-threaded, warm in-memory input. Each result is the median of three process
+medians, each with five warm-ups and ten samples; output destruction is excluded.
 
-Execution excludes Program installation; each mixed turn contains three authored actions
-and immediately advances dialogue. These CPU microbenchmarks exclude disk I/O, media,
-scene/UI updates and rendering; the desktop was not isolated. Reproduction details:
-[testing guide](dev/docs/testing.md).
+| Native script path | Parse 10k text statements | Parse 10k assignments | Execute 10k increments |
+| --- | ---: | ---: | ---: |
+| Kēne / EYS, optimized 0.16.3 | 5.98 ms | 4.40 ms | 0.65 ms |
+| TyranoScript `c8dbfd4`, V8 / Node 24.22 | 2.50 ms | 7.01 ms | 0.77 ms |
+| Suika3 26.07.13, C tag path | 1.06 ms | 1.77 ms | 16.49 ms |
+| Ren'Py 8.5.3, SDK Python 3.12 | 81.65 ms | 63.23 ms | 3.74 ms |
 
-For context, these DSLs use different loading/execution paths:
-
-| Engine / DSL | Script path |
-| --- | --- |
-| Kēne / Eiyashou | Source lowered to typed IR; shipping games load a compiled Program and execute through Rust Core |
-| [Ren'Py](https://www.renpy.org/doc/html/language_basics.html) | `.rpy` compiled to `.rpyc`; script expressions use Python |
-| [WebGAL](https://docs.openwebgal.com/en/tech/) | `.txt` parsed into executable scene objects, with a Pixi stage |
-
-Ren'Py and WebGAL were not measured on the same machine/workload. This is an
-architecture comparison, not a cross-engine speed ranking.
+The parsers produce different structures and perform different semantic checks.
+Execution uses prepared scripts and native command handlers/Core; host persistence,
+frame scheduling, rollback, UI, media and rendering are excluded. Suika3's NoctLang/JIT
+is unmeasured. These are specific-path measurements, not a whole-engine ranking or
+startup comparison: shipping Kēne and Ren'Py can load compiled scripts. The desktop
+was not isolated. Exact contracts, versions, raw results and reproduction commands:
+[testing guide](dev/docs/testing.md#0163-解析优化与四引擎脚本对照).
 
 ## Repository
 
@@ -82,7 +79,7 @@ dev/scripts/  build and fixture scripts
 - [Android build and device acceptance](dev/docs/android.md)
 - [Compatibility limits](dev/docs/compatibility.md)
 
-Current version: 0.16.3. macOS is the current acceptance focus; Windows/Linux runtime acceptance is deferred.
+Current version: 0.16.4. macOS is the current acceptance focus; Windows/Linux runtime acceptance is deferred.
 Build/test success and manual input/display/media acceptance are separate gates.
 
 ## License

@@ -5405,7 +5405,7 @@ dependencies = [
 
 [[package]]
 name = "keine"
-version = "0.16.3"
+version = "0.16.4"
 dependencies = [
  "anyhow",
  "bevy",
@@ -5452,7 +5452,7 @@ dependencies = [
 
 [[package]]
 name = "keine-authoring"
-version = "0.16.3"
+version = "0.16.4"
 dependencies = [
  "postcard",
  "serde",
@@ -5460,7 +5460,7 @@ dependencies = [
 
 [[package]]
 name = "keine-core"
-version = "0.16.3"
+version = "0.16.4"
 dependencies = [
  "criterion",
  "log",
@@ -5472,7 +5472,7 @@ dependencies = [
 
 [[package]]
 name = "keine-editor"
-version = "0.16.3"
+version = "0.16.4"
 dependencies = [
  "anyhow",
  "bevy",
@@ -5496,7 +5496,7 @@ dependencies = [
 
 [[package]]
 name = "keine-loader"
-version = "0.16.3"
+version = "0.16.4"
 dependencies = [
  "anyhow",
  "crc32fast",
@@ -5515,7 +5515,7 @@ dependencies = [
 
 [[package]]
 name = "keine-media"
-version = "0.16.3"
+version = "0.16.4"
 dependencies = [
  "image",
  "libwebp-sys",

@@ -476,10 +476,83 @@ realloc 次数另存原始记录。峰值/保留堆是请求的活跃字节，�
 后续继续先 profile。[Oxc 的性能分析](https://oxc.rs/docs/learn/performance) 支持
 减少分配/复制的方向，但其 arena、AST 生命周期和输入与本项目不同；本轮不引入
 arena 或融合 Parser。现有 token 已借用源码范围，并非逐 token 创建 String；Editor
-还依赖完整 trivia。Tyrano/Oxc/SWC 的外部吞吐缺少同机同输入原始证据，simdjson
+还依赖完整 trivia。当时的 Tyrano/Oxc/SWC 外部吞吐缺少同机同输入原始证据，simdjson
 测量 JSON，均不作为本项目速度排名。80–150 MB/s 缺少同一输出合同下的实测依据，
 撤下这一吞吐目标；保留已验证的小步优化与基准，解析器优化在此收尾。
 仅当实际工程的启动、实时编辑或热加载出现可测量的解析延迟/内存问题时重新 profile。
+
+#### 0.16.3 解析优化与四引擎脚本对照
+
+Apple M5 Pro / 24 GiB / macOS 27.0.1 / 原生 ARM64；基线 `d636898`，
+优化后为该提交加本节修改（收录于 0.16.4）。Rust 1.99.0，release 默认 opt-level=3、LTO、单 codegen
+unit；不改变优化等级。`sample` 再次确认稳定 ID 格式化/分配与 ID 注册是热点之一。
+保留完整检查及 ID 的 Debug 字节算法，只预留语义键容量，并用借用 `&str` 的 HashSet
+代替复制 ID、保存未使用位置的 HashMap。API、语法与 Action 不变。
+
+同一 `program-load`、同一语料，20 样本；下表统一使用 Criterion mean 点估计，
+包含结果释放，五项变化均达到其显著性判定。没有并行跑分或编译；普通桌面应用仍打开。
+
+| 负载 | 优化前 → 后（ms） | 耗时变化 |
+| --- | ---: | ---: |
+| 十万条文本 | 85.264 → 75.093 | −11.93% |
+| 100001 条表达式/文本 | 120.427 → 112.868 | −6.28% |
+| 同一混合解析 + Program | 125.473 → 121.187 | −3.42% |
+| tday：169955 字节 / 13 scene / 2626 action | 2.271 → 2.133 | −6.08% |
+| 同一 tday Editor 文档入口 | 2.154 → 2.044 | −5.09% |
+
+```sh
+KEINE_NATIVE_SOURCE_DIR="$PWD/projects/tday/scripts" cargo bench --locked --offline -p keine-loader --bench program-load -- native_ --sample-size 20 --warm-up-time 0.5 --measurement-time 2 --nresamples 1000 --noplot --save-baseline script-0163-before
+# 仅应用 Parser 修改后，将最后一项换为 --baseline script-0163-before。
+```
+
+另用既有 allocation census 检查文本/混合各 1、10、100 MB 与 tday：七组 Program
+指纹与 action 数一致，释放后计数归零。纯文本 alloc 次数降约 16.7%，峰值请求堆降
+8.0–12.5%；混合 alloc 降约 2.4%，峰值降 2.6–3.6%。tday alloc 28940 → 27961，
+realloc 7661 → 4119，峰值 3.732 → 3.639 MiB。返回结果的保留堆不变。
+这是临时分配改善，不代表运行中常驻内存下降。census 的未改代码 profiling 二进制
+与改后 bench 二进制只用于分配/指纹比较，不拿这两者的单次时间推导提速。
+
+四方使用等价内容、各自合法语法：1 千/1 万条编号中英文文本，以及连续变量加一。
+每项 3 个独立进程，每进程 5 次预热、10 次计时，轮换引擎顺序，取各轮中位数的
+中位数。读取、生成、输出释放及初始化在计时外；GC 引擎在每次计时前收集，计时中
+的自动 GC 不禁用。逐条验证文本、动作数量和执行后 counter，以下为 **1 万条**：
+
+| 原生入口 | 文本解析（ms） | 赋值脚本解析（ms） | 执行一万次加一（ms） |
+| --- | ---: | ---: | ---: |
+| Kēne 0.16.3 + 本节优化 | 5.982 | 4.402 | 0.652 |
+| TyranoScript `c8dbfd4` / Node 24.22.0、V8 13.6 | 2.496 | 7.013 | 0.771 |
+| Suika3 tag `26.07.13` / `4d9d0f3`、Clang 21 `-O3 -flto` | 1.058 | 1.771 | 16.488 |
+| Ren’Py 8.5.3.26051504 / SDK Python 3.12.8 | 81.648 | 63.231 | 3.737 |
+
+Kēne 同一万条文本的解析 + Program 构建为 6.708 ms。此表不含输出释放，不能与
+上方 Criterion 表直接相除。1 千条结果及每轮分布保留在原始数据中。
+
+测量合同与限制：
+
+- Kēne 用 `parse_native_scenes`，包含语义检查、稳定 ID 与 typed Action；执行用
+  已安装 Program 的 Core `step`，保留动作步数预算。赋值源码额外带一条 `let`；
+  声明解析计入，变量初始化放在执行计时外。
+- [TyranoScript](https://github.com/ShikemokuMK/tyranoscript/tree/c8dbfd492afd3d79b0954fcf4477236f5c6c4830)
+  原始 `parseScenario`；执行原始 `eval.start` → `evalScript`，使用预热后的 V8。
+  未单独跟踪 JIT 优化状态或缓存命中率。
+  宿主保存与下一帧回调只计次数，排除存储 I/O、DOM 和调度。
+- [Suika3](https://github.com/awemorris/suika3/tree/4d9d0f3961710734fdc59139d8f159ea6ed0918f)
+  原始 `parse_tag_document` + `parse_tag_callback`；固定 tag 表在计时外建立。
+  原始 `set` handler/变量表执行，VM continue 标志用宿主适配器承接。
+  `clear_tag_data` 提前清零数量，适配器在计时外释放输出以避免影响重复测量。
+  **只测 tag 路径，不代表 NoctLang/JIT**；tag 单文件上限 32768，未用分块伪装十万条。
+- [Ren’Py 官方 SDK](https://www.renpy.org/release/8.5.3) 已核对官方 SHA-256。
+  原始 `parser.parse`，使用独立 Script 收集上下文；执行原始 Python AST 节点
+  `execute` / `py_exec_bytecode`，字节码编译和 Store/Context 初始化在计时外。
+  不含 Context 主循环、rollback、显示/预测；不修改原始解析/执行函数。
+- 文本结果结构、语义检查和执行调度职责不同，因此这是具体路径对照，不能推导完整
+  引擎、启动或帧率排名。Suika3 tag 解析主要复制标签/属性；其 `set` 执行还需逐属性
+  展开变量、清空缓冲及字符串/数字转换。Ren’Py 发布时的 `.rpyc` 和 Kēne 编译
+  Program 加载也不是本次源码解析路径。未测其他平台、复杂控制流或完整游戏播放。
+
+原始样本、语料、适配器、工具链/源码/二进制哈希、命令、独立中位数复核与分配记录
+在 `target/performance/script-0163/`：`summary.json`、`optimization.json`、`metrics.json`、
+`manifest.json`、`commands.txt`、`build-and-bench-commands.txt`。测试资料不进入发行包。
 
 ### GPU 合成与模糊
 

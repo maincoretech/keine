@@ -10,6 +10,7 @@ mod v11;
 pub use format::format_native_source;
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fmt::Write;
 use std::ops::Range;
 
 use keine_core::model::eiyashou::MAX_EXPRESSION_DEPTH;
@@ -372,7 +373,7 @@ pub(crate) fn eiyashou_semantic_diagnostics(
     let mut diagnostics = vec![Vec::new(); scenes.len()];
     let mut declarations = HashMap::<String, (usize, usize, EiyashouExpr)>::new();
     let mut types = HashMap::<String, EiyashouType>::new();
-    let mut source_ids = HashMap::<String, (usize, usize)>::new();
+    let mut source_ids = HashSet::<&str>::new();
 
     for (scene_index, (actions, _)) in scenes.iter().enumerate() {
         for (action_index, action) in actions.iter().enumerate() {
@@ -468,18 +469,15 @@ pub(crate) fn eiyashou_semantic_diagnostics(
     diagnostics
 }
 
-fn register_source_id(
-    source_ids: &mut HashMap<String, (usize, usize)>,
-    source_id: &str,
+fn register_source_id<'a>(
+    source_ids: &mut HashSet<&'a str>,
+    source_id: &'a str,
     scene_index: usize,
     action_index: usize,
     scenes: &[(&[Action], &[SourceSpan])],
     diagnostics: &mut [Vec<Diagnostic>],
 ) {
-    if source_ids
-        .insert(source_id.to_owned(), (scene_index, action_index))
-        .is_some()
-    {
+    if !source_ids.insert(source_id) {
         push_semantic_error(
             scenes,
             diagnostics,
@@ -1676,7 +1674,20 @@ impl<'a> Parser<'a> {
         if let Some(explicit) = explicit {
             return explicit;
         }
-        let semantic = format!("{}\0{}\0{text:?}", self.current_scene, speaker);
+        // Reserve for the literal payload before Debug adds its delimiters and
+        // escapes. Keep the exact Debug bytes: these IDs persist in history.
+        let literal_bytes: usize = text
+            .parts
+            .iter()
+            .map(|part| match part {
+                EiyashouTextPart::Literal(value) => value.len(),
+                EiyashouTextPart::Expression(_) => 0,
+            })
+            .sum();
+        let mut semantic =
+            String::with_capacity(self.current_scene.len() + speaker.len() + literal_bytes + 64);
+        write!(semantic, "{}\0{}\0{text:?}", self.current_scene, speaker)
+            .expect("writing to a String cannot fail");
         let mut hash = 0xcbf29ce484222325u64;
         for byte in semantic.bytes() {
             hash ^= u64::from(byte);
@@ -4948,6 +4959,19 @@ scene done { "${removed}" }
 
     #[test]
     fn rejects_type_errors_duplicate_ids_and_maybe_uninitialized_reads() {
+        // IDs are compared by content across scenes, including every repeat,
+        // even when the duplicate registry borrows separate action strings.
+        let repeated = parse_native_scenes(
+            "scene a { @shared \"one\" }\nscene b { @shared \"two\" }\nscene c { @shared \"three\" }",
+        );
+        assert!(errors(&repeated[0]).is_empty());
+        for scene in &repeated[1..] {
+            assert_eq!(scene.report.diagnostics.len(), 1);
+            let diagnostic = &scene.report.diagnostics[0];
+            assert_eq!(diagnostic.level, DiagnosticLevel::Error);
+            assert_eq!(diagnostic.span, scene.report.spans[0]);
+            assert_eq!(diagnostic.message, "duplicate stable source id `shared`");
+        }
         let scenes = parse_native_scenes(
             r#"
 scene start {

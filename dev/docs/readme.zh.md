@@ -33,28 +33,25 @@ Text、Blocks、Inspector 编辑同一源文档；兼容 JSON 只读，迁移显
 ## 脚本性能
 
 测试环境：**Apple M5 Pro（15 个逻辑 CPU）、24 GiB 内存、macOS 27.0.1**。
-2026-10-11，0.14.3 工作区、Cargo 优化基准；单线程、输入已在内存中、10 个样本。
-这是历史测量，不代表当前版本已重跑。
+2026-10-16，0.16.3 工作区加解析器分配优化（收录于 0.16.4）。同一优化配置的
+Criterion 基准中，十万条文本从 **85.26 降至 75.09 ms**，2626 条 action 的
+真实 tday 语料从 **2.27 降至 2.13 ms**。
 
-| 负载 | 测量结果（约） |
-| --- | ---: |
-| EYS 十万条文本解析 | 115 ms / 87 万 action/s |
-| EYS 100001 条表达式与文本混合解析 | 132 ms / 76 万 action/s |
-| tday 解析语料：14 scene / 2665 action | 2.85 ms |
-| Core：赋值、条件判断、文本插值对白 | 22.5 万轮/s |
-| Core：非阻塞 Comment 执行 | 1.08 亿 action/s |
+以下同机 CPU 微基准使用各语言的等价内容，单线程、输入已在内存中；每项三个独立
+进程，每进程五次预热、十次计时，取各进程中位数的中位数，不包含输出释放。
 
-执行计时排除 Program 安装；混合负载每轮含三条作者 action，立即模拟推进对白。
-这些是 CPU 微基准，不含磁盘、媒体、场景/UI 更新及渲染；桌面负载未隔离。
-复现方法见[测试指南](testing.md)。
+| 原生脚本路径 | 解析一万条文本 | 解析一万条赋值 | 执行一万次加一 |
+| --- | ---: | ---: | ---: |
+| Kēne / EYS，优化后 0.16.3 | 5.98 ms | 4.40 ms | 0.65 ms |
+| TyranoScript `c8dbfd4`，V8 / Node 24.22 | 2.50 ms | 7.01 ms | 0.77 ms |
+| Suika3 26.07.13，C tag 路径 | 1.06 ms | 1.77 ms | 16.49 ms |
+| Ren’Py 8.5.3，SDK Python 3.12 | 81.65 ms | 63.23 ms | 3.74 ms |
 
-| 引擎 / DSL | 脚本路径 |
-| --- | --- |
-| Kēne / Eiyashou | 源码转换为 typed IR；发行包加载编译后的 Program，由 Rust Core 执行 |
-| [Ren'Py](https://www.renpy.org/doc/html/language_basics.html) | `.rpy` 编译为 `.rpyc`，脚本表达式使用 Python |
-| [WebGAL](https://docs.openwebgal.com/en/tech/) | `.txt` 解析为可执行场景对象，舞台使用 Pixi |
-
-Ren'Py / WebGAL 尚未做同机同负载测试；上表比较实现路径，不作为跨引擎速度排名。
+各解析器的输出结构与语义检查不同。执行使用已准备的脚本和原生命令处理器/Core，
+排除宿主持久化、帧调度、回滚、UI、媒体与渲染；未测 Suika3 的 NoctLang/JIT。
+这是具体路径对照，不能作为完整引擎排名或启动速度对照：Kēne 与 Ren’Py 的发行
+运行可加载编译脚本。桌面负载未隔离。测量合同、版本、原始结果与复现命令见
+[测试指南](testing.md#0163-解析优化与四引擎脚本对照)。
 
 ## 引擎快捷键
 
@@ -104,7 +101,7 @@ benchmark 指定的窗口大小不受这些偏好影响。Preview 仍使用隔�
 - [Android 构建与实机验收](android.md)
 - [兼容输入边界](compatibility.md)
 
-当前版本 0.16.3。macOS 是当前验收重点；Windows/Linux 的运行态验收暂缓。
+当前版本 0.16.4。macOS 是当前验收重点；Windows/Linux 的运行态验收暂缓。
 编译和自动测试通过不等于 IME、DPI、音视频和运行态验收通过。
 
 ## 许可证
