@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Reject an executable or bundled ELF requiring a newer Linux host ABI."""
+"""Verify an existing Linux package: host ABI, libraries and project loading."""
 import argparse
 import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 
 BASELINE = (2, 39)
 
@@ -69,11 +70,35 @@ def verify(root):
     print(f'Linux ABI: {inspected} ELF files require at most GLIBC 2.39')
 
 
+def verify_package(package, fixture):
+    package, fixture = package.resolve(strict=True), fixture.resolve(strict=True)
+    # Installed SDKs must not mask missing bundled libraries.
+    os.environ.pop('LD_LIBRARY_PATH', None)
+    os.environ.pop('LD_PRELOAD', None)
+    with tempfile.TemporaryDirectory(prefix='keine-linux-package-') as temporary:
+        work = Path(temporary)
+        if not package.is_dir():
+            archive, package = package, work / 'package'
+            package.mkdir()
+            subprocess.run(['unzip', '-q', str(archive), '-d', str(package)], check=True)
+        verify(package)
+        verify_runtime(package)
+        # An unrelated cwd cannot pick up build-tree assets.
+        subprocess.run([str(package / 'keine'), '--version'], cwd=work, check=True, timeout=30)
+        project = package / 'game.haku' if (package / 'game.haku').is_file() else fixture
+        result = subprocess.run([str(package / 'keine'), 'validate', str(project)],
+                                cwd=work, check=True, timeout=60, capture_output=True, text=True)
+        print(result.stdout, end='')
+        if not any(line.startswith('project valid') for line in result.stdout.splitlines()):
+            raise RuntimeError(f'Project validation failed: {result.stderr}')
+    print('Final Linux package: loader and project validation passed.')
+    # No graphical desktop, GPU, audio or performance verdict.
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('package', type=Path)
-    parser.add_argument('--runtime', action='store_true', help='Check executable permissions and dynamic library closure')
+    parser.add_argument('fixture', type=Path, nargs='?',
+                        default=Path(__file__).resolve().parent / '../../tests/fixtures/native-smoke')
     args = parser.parse_args()
-    verify(args.package)
-    if args.runtime:
-        verify_runtime(args.package)
+    verify_package(args.package, args.fixture)

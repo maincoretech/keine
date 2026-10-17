@@ -66,7 +66,7 @@ crates/       core, loader, authoring protocol, Editor, media
 src/          engine; all embedded resources in src/assets/
 tests/        integration, fixtures, bench, fuzz, video acceptance
 dev/docs/     current documentation
-dev/scripts/  build and fixture scripts
+dev/scripts/  build and release scripts
 ```
 
 ## Documentation
@@ -79,7 +79,7 @@ dev/scripts/  build and fixture scripts
 - [Android build and device acceptance](dev/docs/android.md)
 - [Compatibility limits](dev/docs/compatibility.md)
 
-Current version: 0.16.4. macOS is the current acceptance focus; Windows/Linux runtime acceptance is deferred.
+Current version: 0.16.5. macOS is the current acceptance focus; Windows/Linux runtime acceptance is deferred.
 Build/test success and manual input/display/media acceptance are separate gates.
 
 ## License

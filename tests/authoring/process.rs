@@ -30,9 +30,11 @@ fn editor_and_engine_complete_the_control_handshake() {
     assert_eq!(process.audition_state().unwrap(), None);
     assert_eq!(process.pause_audition(true).unwrap(), None);
     assert_eq!(process.pause_audition(false).unwrap(), None);
-    assert_eq!(process.audition_audio(None).unwrap(), None);
+    assert_eq!(process.audition_audio(None, 0.0).unwrap(), None);
+    assert!(process.audition_audio(None, f32::NAN).is_err());
+    process.ping().unwrap();
     for path in ["/etc/passwd", "../outside.opus"] {
-        assert!(process.audition_audio(Some(path.into())).is_err());
+        assert!(process.audition_audio(Some(path.into()), 0.0).is_err());
         assert_eq!(process.audition_state().unwrap(), None);
         process.ping().unwrap();
     }

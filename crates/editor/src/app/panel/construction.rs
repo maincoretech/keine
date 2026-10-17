@@ -26,6 +26,7 @@ impl WorkbenchPanel {
             PanelContent::Scenes { root } => Some((root.clone(), SCENES_PANEL)),
             PanelContent::Problems { root } => Some((root.clone(), PROBLEMS_PANEL)),
             PanelContent::Performance { root, .. } => Some((root.clone(), PERFORMANCE_PANEL)),
+            PanelContent::Project { root } => Some((root.clone(), PROJECT_PANEL)),
             PanelContent::Build { root } => Some((root.clone(), BUILD_PANEL)),
             PanelContent::Output { root, .. } => Some((root.clone(), OUTPUT_PANEL)),
             _ => None,
@@ -59,6 +60,8 @@ impl WorkbenchPanel {
                 focus: cx.focus_handle(),
                 view_scroll,
                 project_search: None,
+                project_settings: None,
+                calibration: Default::default(),
                 _subscriptions: Vec::new(),
                 resource_picker: None,
                 picker: crate::app::blocks::PickerState {

@@ -25,6 +25,8 @@ cargo run --locked --bin keine --features hot-reload,video-native -- dev tests/f
 
 `projects/tday` 已封存；仅用于只读校验或副本实测，不再追加测试剧情。
 固定回归使用 `tests/fixtures`，临时素材/报告放 `target/`，不提交密钥、存档或测量二进制。
+跑分采集器及其测试放在 `tests/bench/runtime`；素材生成器随对应 fixture/视频测试维护。
+`dev/scripts` 只保留构建、发行和 CI 使用的工具。
 
 ## 质量检查
 
@@ -104,7 +106,7 @@ CI 只关闭调试符号，保留调试断言和溢出检查，不单独覆盖�
 
 ### 视频与 Metal 专项
 
-已有视频 fixtures 可直接使用；只有重建夹具时才运行 `bash dev/scripts/video-fixtures.sh`。
+已有视频 fixtures 可直接使用；只有重建夹具时才运行 `bash tests/video/generate-fixtures.sh`。
 选择目标平台的后端，macOS `video-native`，Windows/Linux `video-ffmpeg`：
 
 ```sh
@@ -134,6 +136,24 @@ Fuzz/ASan 的工具链、时间预算和调用以 Media Safety workflow 为准�
 原生视觉验收直接操作应用；不以截图 hook、构建成功或 headless tests 代替。
 维护者负责可重复的构建/合同与错误定位；作者确认实际画面、交互、听感及触感。
 当前 Windows/Linux 游戏运行态仍需对应设备证据，不用 macOS 结果推定。
+
+### 项目设置与离线音频校准
+
+`2ec8086` 基础工作区，macOS arm64 / dev all-features：工作区 check、Clippy、测试、
+无音频 feature check 与 cargo-deny 通过。项目设置局部 YAML、增益边界、元数据保留、
+挂载路径与发布配置往返、试听 IPC 拒绝非法增益有回归；实际 FFmpeg 正弦/静音分析
+通过显式 `offline_measurement -- --ignored` 验证，原始文件字节不变。
+
+原生 Editor 在 `target/creator-tools/project` 副本验证中央 Project 标签、标题/CG 拖动排序
+应用与撤销、短预览面板滚动、音频分析、校准试听进入播放状态、增益应用/重置及保存。
+Editor/Engine 配对 macOS 包签名与 native-smoke 验证通过；试听协议现为 v12，需配对更新。
+日志位于 `target/creator-tools/`。未做 Windows/Linux 原生交互、Android 新包、主观听感
+或多轨混音峰值验收；这些结果不作为播放性能增益结论。
+
+0.16.5 本机配对更新使用同次 dev/all-features 构建，包含最终增益小数精度修正。
+重新打包及安装后签名/native-smoke/版本检查通过；5 项 authoring-process 与 16 项
+打包合同通过，已安装 Editor 的音频试听进入播放状态。安装摘要与日志在
+`target/closeout-0165/`，旧应用包保留为本地备份。
 
 ### 错误反馈与大字号
 
@@ -270,7 +290,7 @@ cargo validate tests/fixtures/native-benchmark
 # 使用隔离的测试 identity；不要复用正式游戏的签名身份。
 cargo bundle tests/fixtures/native-benchmark --output target/native-bench --benchmark
 # 运行实际生成的 benchmark 目录内的 executable，完整报告写到包旁。
-python3 dev/scripts/profile-runtime.py --report /path/to/keine-benchmark-report.txt --output target/native-bench-report
+python3 tests/bench/runtime/profile-runtime.py --report /path/to/keine-benchmark-report.txt --output target/native-bench-report
 ```
 
 `--benchmark` 输出目录规则以命令报告为准；包中 collector、符号和标记位于 `lib/`。

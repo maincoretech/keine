@@ -38,6 +38,7 @@ pub(in crate::app) fn audition_control(
     } else {
         "Play"
     };
+    let root = root.to_owned();
     let path = path.to_owned();
     div()
         .id(format!("audition-{}", path.display()))
@@ -58,7 +59,8 @@ pub(in crate::app) fn audition_control(
         .on_click(move |_, _, cx| {
             cx.stop_propagation();
             if let Some(controller) = &controller {
-                controller.toggle_audition(path.clone());
+                let gain_db = crate::app::audio_calibration::saved_gain(&root, &path, cx);
+                controller.toggle_audition(path.clone(), gain_db);
             }
         })
         .child(
@@ -78,6 +80,7 @@ pub(in crate::app) fn audition_control(
 
 pub(in crate::app) fn replay_control(root: &Path, path: &Path, cx: &mut App) -> AnyElement {
     let controller = cx.global_mut::<EditorDocuments>().preview(root).ok();
+    let root = root.to_owned();
     let path = path.to_owned();
     div()
         .id("audition-replay")
@@ -94,7 +97,8 @@ pub(in crate::app) fn replay_control(root: &Path, path: &Path, cx: &mut App) -> 
         .on_click(move |_, _, cx| {
             cx.stop_propagation();
             if let Some(controller) = &controller {
-                controller.restart_audition(path.clone());
+                let gain_db = crate::app::audio_calibration::saved_gain(&root, &path, cx);
+                controller.restart_audition(path.clone(), gain_db);
             }
         })
         .child(

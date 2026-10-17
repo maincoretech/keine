@@ -89,7 +89,7 @@ jobs:
       - name: Build standalone authoring tools
         shell: bash
         run: |
-          python3 dev/scripts/build-icons.py target/editor-icons
+          cargo run --locked -p keine-media --features icons --example icons --target-dir target/icon-tool -- src/assets/icons/keine.png target/editor-icons
           python3 dev/scripts/verify-icons.py --icon-dir target/editor-icons
           export KEINE_APP_ICON_DIR="$GITHUB_WORKSPACE/target/editor-icons"
           echo "KEINE_APP_ICON_DIR=$KEINE_APP_ICON_DIR" >> "$GITHUB_ENV"

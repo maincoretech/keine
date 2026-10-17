@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Generated calibration media, owned by this repository. No game/user assets.
 set -euo pipefail
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 output="$repo_root/tests/fixtures/native-benchmark/assets"
 mkdir -p "$output/luts"
 ffmpeg_bin="${FFMPEG_BIN:-ffmpeg}"

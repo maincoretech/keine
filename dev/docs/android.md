@@ -238,7 +238,7 @@ Android/winit 可能不暴露当前刷新率，此时原始预算保留 unknown�
 本地打包（工具链要求同上）：
 
 ```sh
-python3 dev/scripts/prepare-android-benchmark.py target/android-benchmark-fixture
+python3 tests/bench/runtime/prepare-android-benchmark.py target/android-benchmark-fixture
 KEINE_BUILD_TARGET=aarch64-linux-android cargo bundle target/android-benchmark-fixture --output target/android-test --benchmark
 python3 target/android-test-benchmark/benchmark-android.py --apk target/android-test-benchmark/game.apk --output moto-report
 ```

@@ -33,9 +33,9 @@ use super::{
     ACTIVITY_BRAND_SIZE_PX, ACTIVITY_ICON_SIZE_PX, ACTIVITY_ITEM_SIZE_PX, ACTIVITY_RAIL_WIDTH_PX,
     ASSET_PREVIEW_PANEL, ASSETS_PANEL, BUILD_PANEL, CANVAS, CHARACTERS_PANEL, CHROME,
     EXPLORER_PANEL, INK, INSPECTOR_PANEL, MUTED, MigrateEiyashou, OUTPUT_PANEL, OpenFolder,
-    PERFORMANCE_PANEL, PRIMARY, PRIMARY_DIM, PROBLEMS_PANEL, RedoSources, ResetLayout,
-    SEARCH_PANEL, SURFACE_HOVER, Save, SaveAll, ShowAssetPreview, ShowAssets, ShowOutput,
-    ShowProblems, ShowSearch, ToggleEngine, UndoSources, VIEW_INSET_PX, VIEW_RADIUS_PX,
+    PERFORMANCE_PANEL, PRIMARY, PRIMARY_DIM, PROBLEMS_PANEL, PROJECT_PANEL, RedoSources,
+    ResetLayout, SEARCH_PANEL, SURFACE_HOVER, Save, SaveAll, ShowAssetPreview, ShowAssets,
+    ShowOutput, ShowProblems, ShowSearch, ToggleEngine, UndoSources, VIEW_INSET_PX, VIEW_RADIUS_PX,
     activity_divider, activity_tool, dock, icon_hint,
 };
 
@@ -677,7 +677,10 @@ impl WorkbenchWindow {
         let tab_anchor = if is_asset {
             cx.global::<EditorDocuments>()
                 .tool_panel(&root, EXPLORER_PANEL)
-        } else if matches!(kind, ToolKind::Explorer | ToolKind::Output) {
+        } else if matches!(
+            kind,
+            ToolKind::Explorer | ToolKind::Output | ToolKind::Project
+        ) {
             None
         } else {
             cx.global::<EditorDocuments>()
@@ -689,7 +692,7 @@ impl WorkbenchWindow {
         };
         let document_panels = cx.global::<EditorDocuments>().document_panels(&root);
         workspace.dock.update(cx, |dock, cx| {
-            let output_target = matches!(kind, ToolKind::Output)
+            let output_target = matches!(kind, ToolKind::Output | ToolKind::Project)
                 .then(|| dock::document_insert_target(dock, None, &document_panels, None));
             let tab_node = tab_anchor.and_then(|anchor| {
                 [
@@ -703,7 +706,7 @@ impl WorkbenchWindow {
             });
             dock.add_panel_view(
                 panel_handle(panel),
-                if matches!(kind, ToolKind::Output) {
+                if matches!(kind, ToolKind::Output | ToolKind::Project) {
                     DockPlacement::Center
                 } else if matches!(kind, ToolKind::Explorer) {
                     DockPlacement::Left
@@ -1007,6 +1010,7 @@ impl WorkbenchWindow {
             performance_open,
             output_open,
             build_open,
+            project_open,
         ) = self
             .workspace
             .as_ref()
@@ -1023,6 +1027,7 @@ impl WorkbenchWindow {
                     documents.tool_panel(root, PERFORMANCE_PANEL).is_some(),
                     documents.tool_panel(root, OUTPUT_PANEL).is_some(),
                     documents.tool_panel(root, BUILD_PANEL).is_some(),
+                    documents.tool_panel(root, PROJECT_PANEL).is_some(),
                 )
             })
             .unwrap_or_default();
@@ -1133,6 +1138,17 @@ impl WorkbenchWindow {
                     )
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.show_tool(ToolKind::Output, window, cx)
+                    })),
+                )
+                .child(
+                    activity_tool(
+                        "activity-project",
+                        AssetIconName::Settings,
+                        project_open,
+                        "Project settings",
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.show_tool(ToolKind::Project, window, cx)
                     })),
                 )
                 .child(

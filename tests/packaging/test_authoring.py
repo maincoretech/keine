@@ -19,7 +19,7 @@ spec.loader.exec_module(packaging)
 
 class LinuxPackageTests(unittest.TestCase):
     def test_package_gate_validates_snapshot_or_authoring_fixture_and_rejects_errors(self):
-        script = SCRIPT.with_name('verify-linux-package.sh')
+        script = SCRIPT.with_name('verify-linux-package.py')
         # Run the entire gate on a directory/ZIP using bounded tool substitutes.
         # A failed CLI currently logs an error even when its exit status is zero.
         for packaged, invalid, zipped in [(True, False, False), (False, False, False),
@@ -27,6 +27,8 @@ class LinuxPackageTests(unittest.TestCase):
             with self.subTest(packaged=packaged, invalid=invalid, zipped=zipped), \
                     tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary).resolve()
+                checker = root / script.name
+                shutil.copyfile(script, checker)  # CI mounts the checker independently of the checkout.
                 package, fixture = root / 'package', root / 'native-smoke'
                 package.mkdir()
                 fixture.mkdir()
@@ -50,7 +52,6 @@ class LinuxPackageTests(unittest.TestCase):
                 tools = root / 'tools'
                 tools.mkdir()
                 for name, body in {
-                    'timeout': 'shift; exec "$@"',
                     'readelf': 'echo "Version needs section:"; echo "Name: GLIBC_2.39"',
                     'ldd': 'echo "libc.so.6 => /lib/libc.so.6 (0x1234)"',
                 }.items():
@@ -60,7 +61,7 @@ class LinuxPackageTests(unittest.TestCase):
                 package_input = package
                 if zipped:
                     package_input = Path(shutil.make_archive(str(root / 'archive'), 'zip', package))
-                result = subprocess.run(['bash', str(script), str(package_input), str(fixture)],
+                result = subprocess.run([sys.executable, str(checker), str(package_input), str(fixture)],
                     env={**os.environ, 'PATH': str(tools) + os.pathsep + os.environ['PATH'],
                          'VALIDATED_PATH': str(root / 'validated-path'),
                          'INVALID_PROJECT': '1' if invalid else '0'},
@@ -159,7 +160,7 @@ class WindowsPackageTests(unittest.TestCase):
 
 class LinuxAbiTests(unittest.TestCase):
     def test_runtime_closure_rejects_sdk_masking_and_missing_libraries(self):
-        spec = importlib.util.spec_from_file_location('linux_abi', SCRIPT.with_name('verify-linux-abi.py'))
+        spec = importlib.util.spec_from_file_location('linux_abi', SCRIPT.with_name('verify-linux-package.py'))
         abi = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(abi)
         with tempfile.TemporaryDirectory() as temporary:
@@ -181,7 +182,7 @@ class LinuxAbiTests(unittest.TestCase):
                             abi.verify_runtime(root)
 
     def test_required_versions_reject_newer_libc_but_ignore_export_definitions(self):
-        spec = importlib.util.spec_from_file_location('linux_abi', SCRIPT.with_name('verify-linux-abi.py'))
+        spec = importlib.util.spec_from_file_location('linux_abi', SCRIPT.with_name('verify-linux-package.py'))
         abi = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(abi)
         for version, rejected in [('2.2.5', False), ('2.39', False), ('2.42', True),

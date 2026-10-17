@@ -45,7 +45,19 @@ impl Render for WorkbenchPanel {
                 let documents = cx.global::<EditorDocuments>();
                 let selection = documents.asset_preview(root);
                 let count = documents.asset_selection(root).len();
-                render_asset_preview(root, selection, count, cx)
+                {
+                    let root = root.clone();
+                    let calibration = selection
+                        .as_ref()
+                        .filter(|asset| {
+                            matches!(
+                                asset.kind,
+                                AssetKind::Bgm | AssetKind::Voice | AssetKind::Effect
+                            )
+                        })
+                        .map(|asset| audio_calibration::render(&root, asset, self, window, cx));
+                    render_asset_preview(&root, selection, count, calibration, cx)
+                }
             }
             PanelContent::Characters { root } => {
                 let root = root.clone();
@@ -55,6 +67,10 @@ impl Render for WorkbenchPanel {
             PanelContent::Problems { root } => render_problems(root, &self.view_scroll, cx),
             PanelContent::Performance { controller, .. } => {
                 performance::render(controller, &self.view_scroll)
+            }
+            PanelContent::Project { root } => {
+                let root = root.clone();
+                project_settings::render(&root, self, window, cx)
             }
             PanelContent::Build { root } => build::render(root, &self.view_scroll, cx),
             PanelContent::Output { .. } => self.render_output(window, cx),

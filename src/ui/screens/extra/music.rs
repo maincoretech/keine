@@ -72,7 +72,7 @@ pub(crate) fn handle_bgm(mut context: ExtraBgmContext) {
     let volume = context.settings.master_volume * context.settings.bgm_volume;
     let (ended, ready_player) = match context.players.single_mut() {
         Ok((_, mut player, Some(mut sink))) => {
-            sink.set_volume(Volume::Linear(volume));
+            sink.set_volume(Volume::Linear(volume * player.gain));
             if !sink.empty() {
                 player.observed_audio = true;
             }
@@ -105,13 +105,13 @@ pub(crate) fn handle_bgm(mut context: ExtraBgmContext) {
                 return;
             }
             context.ui.selected_bgm.clone().or_else(|| {
-                ordered_bgm(&context.state)
+                ordered_bgm(&context.state, &context.config)
                     .first()
                     .map(|(file, _)| (*file).to_owned())
             })
         }
         Some(ExtraBgmControl::Previous) | Some(ExtraBgmControl::Next) => {
-            let ordered = ordered_bgm(&context.state);
+            let ordered = ordered_bgm(&context.state, &context.config);
             if ordered.is_empty() {
                 return;
             }
@@ -129,7 +129,7 @@ pub(crate) fn handle_bgm(mut context: ExtraBgmContext) {
             Some(ordered[next].0.to_owned())
         }
         _ if ended => {
-            let ordered = ordered_bgm(&context.state);
+            let ordered = ordered_bgm(&context.state, &context.config);
             if ordered.is_empty() {
                 return;
             }
@@ -156,7 +156,12 @@ pub(crate) fn handle_bgm(mut context: ExtraBgmContext) {
     for mut seek in &mut context.seek_bars {
         seek.reset();
     }
+    let path = context.config.bgm_path(&file);
+    let gain = keine_core::config::audio_gain_linear(
+        *context.config.audio.bgm_gain_db.get(&path).unwrap_or(&0.0),
+    );
     let mut entity = context.commands.spawn(ExtraBgmPlayer {
+        gain,
         duration: None,
         observed_audio: false,
         failed: false,
@@ -164,26 +169,23 @@ pub(crate) fn handle_bgm(mut context: ExtraBgmContext) {
     crate::runtime::audio::insert_gallery_player(
         &mut entity,
         &context.assets,
-        context.config.bgm_path(&file),
+        path,
         PlaybackSettings {
             // A one-shot source stays seekable; end detection above advances
             // the gallery playlist and wraps the last track to the first.
             mode: PlaybackMode::Once,
-            volume: Volume::Linear(volume),
+            volume: Volume::Linear(volume * gain),
             ..default()
         },
     );
     context.ui.selected_bgm = Some(file);
 }
 
-pub(super) fn ordered_bgm(state: &GameState) -> Vec<(&str, &str)> {
-    let mut ordered = state
-        .unlocked_bgm
-        .iter()
-        .map(|(file, name)| (file.as_str(), name.as_str()))
-        .collect::<Vec<_>>();
-    ordered.sort_unstable_by(|left, right| left.1.cmp(right.1).then_with(|| left.0.cmp(right.0)));
-    ordered
+pub(super) fn ordered_bgm<'a>(
+    state: &'a GameState,
+    config: &GameConfigResource,
+) -> Vec<(&'a str, &'a str)> {
+    ordered_gallery(&state.unlocked_bgm, &config.extra.bgm_order)
 }
 
 pub(crate) fn sync_bgm_selection(
@@ -315,6 +317,8 @@ pub(crate) fn handle_bgm_seek(
         {
             log::warn!("BGM seek failed: {error}");
         }
+        // Always discard the drag preview, including a failed seek. The chained
+        // progress system reads the sink-reported position again in this frame.
         seek.reset();
     }
 }
@@ -597,7 +601,7 @@ mod tests {
     }
 
     #[test]
-    fn orders_bgm_by_display_name_then_file() {
+    fn gallery_order_preserves_defaults_and_only_reorders_unlocked_entries() {
         let mut state = GameState(keine_core::State::new());
         state.unlocked_bgm.insert("z.opus".into(), "Same".into());
         state.unlocked_bgm.insert("a.opus".into(), "Same".into());
@@ -606,12 +610,35 @@ mod tests {
             .insert("middle.opus".into(), "Before".into());
 
         assert_eq!(
-            ordered_bgm(&state),
+            ordered_bgm(&state, &GameConfigResource(default())),
             vec![
                 ("middle.opus", "Before"),
                 ("a.opus", "Same"),
                 ("z.opus", "Same"),
             ]
+        );
+
+        let mut config = GameConfigResource(default());
+        config.0.extra.bgm_order = ["locked", "z.opus", "a.opus", "z.opus"]
+            .map(str::to_owned)
+            .to_vec();
+        let expected = vec![
+            ("z.opus", "Same"),
+            ("a.opus", "Same"),
+            ("middle.opus", "Before"),
+        ];
+        assert_eq!(ordered_bgm(&state, &config), expected);
+
+        state.unlocked_cg = state.unlocked_bgm.clone();
+        // CG and music orders remain independent.
+        assert_eq!(ordered_cg(&state, &config)[0].0, "middle.opus");
+        config.0.extra.cg_order = config.extra.bgm_order.clone();
+        assert_eq!(
+            ordered_cg(&state, &config),
+            expected
+                .into_iter()
+                .map(|(file, name)| (file.to_owned(), name.to_owned()))
+                .collect::<Vec<_>>()
         );
     }
 }

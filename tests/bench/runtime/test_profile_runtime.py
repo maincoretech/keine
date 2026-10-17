@@ -9,7 +9,7 @@ import sys
 import unittest
 import tempfile
 
-SCRIPT = Path(__file__).resolve().parents[3] / "dev/scripts/profile-runtime.py"
+SCRIPT = Path(__file__).resolve().parents[3] / "tests/bench/runtime/profile-runtime.py"
 spec = importlib.util.spec_from_file_location("profile_runtime", SCRIPT)
 collector = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(collector)

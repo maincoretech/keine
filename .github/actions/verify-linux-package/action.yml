@@ -24,7 +24,7 @@ runs:
         checks="$(realpath "$GITHUB_ACTION_PATH/../../../dev/scripts")"
         fixture="$(realpath "$GITHUB_ACTION_PATH/../../../tests/fixtures/native-smoke")"
         if [[ "$ISOLATED" != 'true' ]]; then
-          bash "$checks/verify-linux-package.sh" "$package" "$fixture"
+          python3 "$checks/verify-linux-package.py" "$package" "$fixture"
           exit 0
         fi
         docker run --rm \
@@ -39,5 +39,5 @@ runs:
               python3 binutils unzip libasound2t64 libudev1 libfontconfig1 \
               libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libwayland-cursor0 \
               libwayland-egl1 libx11-6 libxcb1
-            bash /checks/verify-linux-package.sh /input /native-smoke
+            python3 /checks/verify-linux-package.py /input /native-smoke
           '

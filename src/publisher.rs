@@ -980,7 +980,7 @@ fn assemble(
         fs::write(output.join("BENCHMARK.txt"), BENCHMARK_README)?;
         fs::write(
             auxiliary.join("profile-runtime.py"),
-            include_str!("../dev/scripts/profile-runtime.py"),
+            include_str!("../tests/bench/runtime/profile-runtime.py"),
         )?;
         // Keep all auxiliary libraries/tools/symbols under the single lib/.
         #[cfg(windows)]
@@ -1654,7 +1654,7 @@ mod tests {
         assert!(!output.join(crate::runtime::BENCHMARK_MARKER).exists());
         assert_eq!(
             fs::read_to_string(output.join("lib/profile-runtime.py")).unwrap(),
-            include_str!("../dev/scripts/profile-runtime.py"),
+            include_str!("../tests/bench/runtime/profile-runtime.py"),
         );
         assert_eq!(
             fs::read_to_string(output.join("NOTICE")).unwrap(),

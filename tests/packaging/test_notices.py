@@ -1,5 +1,4 @@
 """Distribution notices retain full terms and reject incomplete cached output."""
-import importlib.util
 import io
 from pathlib import Path
 import sys
@@ -11,9 +10,6 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / 'dev/scripts'))
 import package_notices as notices
 
-spec = importlib.util.spec_from_file_location('android_notices', REPO / 'dev/scripts/android-notices.py')
-android = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(android)
 
 
 class NoticesTests(unittest.TestCase):
@@ -44,7 +40,7 @@ class NoticesTests(unittest.TestCase):
         output.mkdir(parents=True)
         for name in notices.LEGACY_FILES:
             (output / name).write_text('old cached notice')
-        android.stage(self.metadata, self.game)
+        notices.stage_android(self.metadata, self.game)
         self.assertEqual([path.name for path in output.iterdir()], ['NOTICE'])
         text = (output / 'NOTICE').read_bytes().decode()
         for relative in notices.BASE_FILES:
@@ -55,7 +51,7 @@ class NoticesTests(unittest.TestCase):
                 self.assertIn(original, text)
             self.assertIn(f"https://crates.io/api/v1/crates/{package['name']}/1.2.3/download", text)
         self.assertIn(self.game.read_text(), text)
-        android.stage(self.metadata)
+        notices.stage_android(self.metadata)
         self.assertNotIn('===== GAME-LICENSE =====', (output / 'NOTICE').read_text())
 
     def test_missing_terms_do_not_replace_previous_document(self):

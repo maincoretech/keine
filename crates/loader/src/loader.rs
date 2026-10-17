@@ -259,6 +259,7 @@ impl ContentProject {
             ResourceKind::Background,
             assets.backgrounds,
             &mut config.assets.backgrounds,
+            None,
             &mut data,
         )?;
         install_asset_namespace(
@@ -267,6 +268,7 @@ impl ContentProject {
             ResourceKind::Figure,
             assets.figures,
             &mut config.assets.figures,
+            None,
             &mut data,
         )?;
         install_asset_namespace(
@@ -275,6 +277,7 @@ impl ContentProject {
             ResourceKind::Voice,
             assets.voices,
             &mut config.assets.voices,
+            Some(&mut config.audio.voice_gain_db),
             &mut data,
         )?;
         install_asset_namespace(
@@ -283,6 +286,7 @@ impl ContentProject {
             ResourceKind::Bgm,
             assets.bgm,
             &mut config.assets.bgm,
+            Some(&mut config.audio.bgm_gain_db),
             &mut data,
         )?;
         install_asset_namespace(
@@ -291,6 +295,7 @@ impl ContentProject {
             ResourceKind::Effect,
             assets.effects,
             &mut config.assets.effects,
+            Some(&mut config.audio.effect_gain_db),
             &mut data,
         )?;
         install_asset_namespace(
@@ -299,6 +304,7 @@ impl ContentProject {
             ResourceKind::Video,
             assets.videos,
             &mut config.assets.videos,
+            None,
             &mut data,
         )?;
         install_asset_namespace(
@@ -307,6 +313,7 @@ impl ContentProject {
             ResourceKind::Lut,
             assets.luts,
             &mut config.assets.luts,
+            None,
             &mut data,
         )?;
         let mut particle_paths = HashMap::new();
@@ -316,6 +323,7 @@ impl ContentProject {
             ResourceKind::Particle,
             assets.particles,
             &mut particle_paths,
+            None,
             &mut data,
         )?;
         data.particle_paths = particle_paths;
@@ -463,6 +471,7 @@ fn install_asset_namespace(
     kind: ResourceKind,
     values: HashMap<String, EiyashouAssetEntry>,
     target: &mut HashMap<String, String>,
+    mut gains: Option<&mut HashMap<String, f32>>,
     data: &mut EiyashouProjectData,
 ) -> Result<()> {
     let ids = data.assets.entry(kind).or_default();
@@ -472,6 +481,10 @@ fn install_asset_namespace(
     for (id, entry) in values {
         if id.is_empty() {
             bail!("asset identifiers must not be empty");
+        }
+        let gain_db = entry.gain_db();
+        if gain_db != 0.0 && gains.is_none() {
+            bail!("gain_db is only supported for audio assets: {id}");
         }
         let configured = entry.into_path();
         let relative = Path::new(&configured);
@@ -506,6 +519,11 @@ fn install_asset_namespace(
                     "asset `{id}` at {configured} is not reachable through adapter.asset sources"
                 )
             })?;
+        if gain_db != 0.0
+            && let Some(gains) = &mut gains
+        {
+            gains.insert(logical.clone(), gain_db);
+        }
         ids.insert(id.clone());
         target.insert(id, logical);
     }
@@ -710,7 +728,7 @@ mod tests {
         fs::write(root.join("assets/background/snow.webp"), b"particle").unwrap();
         fs::write(
             root.join("assets.yaml"),
-            "backgrounds:\n  day: assets/background/day.webp\nfigures:\n  shared: assets/background/day.webp\nvoices:\n  hello:\n    path: packs/voices/hello.opus\n    tags: [rin, chapter-1]\nparticles:\n  snow: assets/background/snow.webp\n",
+            "backgrounds:\n  day: assets/background/day.webp\nfigures:\n  shared: assets/background/day.webp\nvoices:\n  hello:\n    path: packs/voices/hello.opus\n    tags: [rin, chapter-1]\n    gain_db: -3.0\nparticles:\n  snow: assets/background/snow.webp\n",
         )
         .unwrap();
         fs::write(
@@ -738,6 +756,9 @@ mod tests {
         assert_eq!(config.assets.backgrounds["day"], "background/day.webp");
         assert_eq!(config.assets.figures["shared"], "background/day.webp");
         assert_eq!(config.assets.voices["hello"], "hello.opus");
+        assert_eq!(config.audio.voice_gain_db["hello.opus"], -3.0);
+        let packaged = GameConfig::from_yaml(&serde_json::to_string(&config).unwrap()).unwrap();
+        assert_eq!(packaged.audio.voice_gain_db["hello.opus"], -3.0);
         let prepared = project.eiyashou.as_ref().unwrap();
         assert_eq!(prepared.characters["rin"].name, "Rin");
         assert_eq!(

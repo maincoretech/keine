@@ -3,6 +3,7 @@ mod assets;
 pub use assets::*;
 #[path = "media.rs"]
 mod media;
+pub(crate) use media::ffmpeg_executable;
 
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
@@ -700,6 +701,7 @@ pub fn edit_manifest_asset(
             && !trimmed.is_empty()
             && !trimmed.starts_with("path:")
             && !trimmed.starts_with("tags:")
+            && !trimmed.starts_with("gain_db:")
         {
             return Err(invalid("Asset entry has unsupported fields"));
         } else if let (_, comment) = split_yaml_comment(line)
@@ -708,7 +710,8 @@ pub fn edit_manifest_asset(
             comments.push(format!("  {comment}"));
         }
     }
-    let mut replacement = if tags.is_empty() {
+    let gain = current.gain_db();
+    let mut replacement = if tags.is_empty() && gain == 0.0 {
         format!(
             "  {id}: '{}'\n",
             yaml_single_quote(&slash_path(&asset.path))
@@ -724,6 +727,9 @@ pub fn edit_manifest_asset(
             yaml_single_quote(&slash_path(&asset.path))
         )
     };
+    if gain != 0.0 {
+        replacement.push_str(&format!("    gain_db: {gain}\n"));
+    }
     for comment in &comments {
         replacement.push_str(comment);
         replacement.push('\n');
@@ -755,6 +761,21 @@ pub fn edit_manifest_asset(
             };
             edited = edit_manifest_asset(&edited, &moved, id, kind, tags)?;
         }
+    }
+    if kind != asset.kind && gain != 0.0 {
+        if !matches!(kind, AssetKind::Bgm | AssetKind::Voice | AssetKind::Effect) {
+            return Err(invalid(
+                "Reset audio gain before changing to an image or video",
+            ));
+        }
+        edited = crate::workspace::audio_calibration::edit_gain(
+            &edited,
+            namespace(kind),
+            id,
+            &slash_path(&asset.path),
+            gain,
+        )
+        .map_err(invalid)?;
     }
     validate_manifest(edited)
 }
@@ -1232,6 +1253,31 @@ mod tests {
         assert!(manifest.backgrounds.contains_key("room_new"));
         assert_eq!(manifest.backgrounds["room_new"].tags(), &["interior"]);
         assert!(edit_manifest_asset(source, &asset, "second", AssetKind::Background, &[]).is_err());
+    }
+
+    #[test]
+    fn audio_rename_and_type_edit_retain_calibration() {
+        let source = "bgm:\n  music:\n    path: assets/music.opus\n    gain_db: -4.5\n    tags: [night]\nse: {}\n";
+        let asset = AssetEntry {
+            kind: AssetKind::Bgm,
+            id: "music".into(),
+            path: "assets/music.opus".into(),
+            tags: vec!["night".into()],
+            exists: true,
+            reference_count: 0,
+        };
+        for kind in [AssetKind::Bgm, AssetKind::Effect] {
+            let edited =
+                edit_manifest_asset(source, &asset, "renamed", kind, &["quiet".into()]).unwrap();
+            let manifest = EiyashouAssetManifest::from_yaml(&edited).unwrap();
+            let entry = if kind == AssetKind::Bgm {
+                &manifest.bgm["renamed"]
+            } else {
+                &manifest.effects["renamed"]
+            };
+            assert_eq!(entry.gain_db(), -4.5);
+            assert_eq!(entry.tags(), ["quiet"]);
+        }
     }
 
     #[test]

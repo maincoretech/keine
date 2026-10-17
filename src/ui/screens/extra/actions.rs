@@ -54,7 +54,7 @@ pub(crate) fn handle_page(mut context: ExtraPageContext) {
     if !context.ui.open || context.transition.is_animating() {
         return;
     }
-    let mut images = ordered_cg(&context.state);
+    let images = ordered_cg(&context.state, &context.config);
     let count = images.len().div_ceil(CG_PER_PAGE).max(1);
     let page = (context.ui.page as i64 + i64::from(page)).clamp(1, count as i64) as usize;
     if context.ui.page != page {
@@ -64,9 +64,6 @@ pub(crate) fn handle_page(mut context: ExtraPageContext) {
         for mut label in &mut context.page_labels {
             label.0 = format!("{page} / {count}");
         }
-        images.sort_unstable_by(|left, right| {
-            left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0))
-        });
         for (grid, parent, phase) in &context.grids {
             if phase.outgoing {
                 continue;
@@ -130,7 +127,7 @@ pub(crate) fn handle_cg(mut context: ExtraCgContext) {
     let Ok(camera) = context.camera.single() else {
         return;
     };
-    let images = ordered_cg(&context.state);
+    let images = ordered_cg(&context.state, &context.config);
 
     let current = context.full.single().ok();
     let selected = if let Some(file) = card {

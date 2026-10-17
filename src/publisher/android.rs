@@ -120,7 +120,8 @@ pub(super) fn assemble(
         .env_remove("KEINE_HAKUTAKU_KEY_SHARE_A")
         .env_remove("KEINE_HAKUTAKU_KEY_SHARE_B")
         .env_remove("KEINE_HAKUTAKU_PUBLIC_KEY")
-        .arg("dev/scripts/android-notices.py")
+        .arg("dev/scripts/package_notices.py")
+        .arg("--android")
         .stdin(metadata.stdout.take().context("metadata pipe missing")?);
     let notice_snapshot = tempdir()?;
     if let Some(license) = super::notices::game(project)? {
@@ -143,11 +144,11 @@ pub(super) fn assemble(
         for (name, bytes) in [
             (
                 "benchmark-android.py",
-                include_bytes!("../../dev/scripts/benchmark-android.py").as_slice(),
+                include_bytes!("../../tests/bench/runtime/benchmark-android.py").as_slice(),
             ),
             (
                 "profile-runtime.py",
-                include_bytes!("../../dev/scripts/profile-runtime.py").as_slice(),
+                include_bytes!("../../tests/bench/runtime/profile-runtime.py").as_slice(),
             ),
         ] {
             fs::write(output.join(name), bytes)?;

@@ -74,6 +74,7 @@ use panel::{
 };
 use window::{EditorApp, EditorAppOwner, WorkbenchWindow, listen_for_secondary_launches};
 
+mod audio_calibration;
 mod blocks;
 mod build;
 mod characters;
@@ -90,6 +91,7 @@ mod navigation;
 mod output;
 mod panel;
 mod performance;
+mod project_settings;
 mod render;
 mod reorder;
 mod resource;
@@ -217,6 +219,7 @@ const CHARACTERS_PANEL: &str = "keine.editor.characters";
 const SCENES_PANEL: &str = "keine.editor.scenes";
 const PROBLEMS_PANEL: &str = "keine.editor.problems";
 const PERFORMANCE_PANEL: &str = "keine.editor.performance";
+const PROJECT_PANEL: &str = "keine.editor.project";
 const BUILD_PANEL: &str = "keine.editor.build";
 
 actions!(

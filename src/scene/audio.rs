@@ -235,7 +235,11 @@ pub fn sync_bgm(
         player.current = false;
     }
     let fading = duration > f32::EPSILON;
-    let base_volume = context.state.bgm.volume.clamp(0.0, 1.0);
+    let path = context.config.bgm_path(file);
+    let gain = keine_core::config::audio_gain_linear(
+        *context.config.audio.bgm_gain_db.get(&path).unwrap_or(&0.0),
+    );
+    let base_volume = context.state.bgm.volume.clamp(0.0, 1.0) * gain;
     let mut entity = commands.spawn((
         Name::new(format!("bgm::{file}")),
         BgmPlayer {
@@ -252,7 +256,7 @@ pub fn sync_bgm(
     insert_player(
         &mut entity,
         &context.asset_server,
-        context.config.bgm_path(file),
+        path,
         PlaybackSettings {
             mode: if context.state.bgm.looped {
                 PlaybackMode::Loop
@@ -580,6 +584,11 @@ fn spawn_effect(
     settings: &RuntimeSettings,
     effect: EffectSpawn<'_>,
 ) {
+    let path = config.effect_path(effect.file);
+    let base_volume = effect.volume
+        * keine_core::config::audio_gain_linear(
+            *config.audio.effect_gain_db.get(&path).unwrap_or(&0.0),
+        );
     let mut envelope = PlaybackEnvelope::fade_in(effect.fade_in);
     envelope.waiting_handoff = effect.looping;
     let mut entity = commands.spawn((
@@ -591,7 +600,7 @@ fn spawn_effect(
             id: effect.id,
             looping: effect.looping,
             current: true,
-            base_volume: effect.volume,
+            base_volume,
             applied_volume: None,
         },
         envelope,
@@ -599,7 +608,7 @@ fn spawn_effect(
     insert_effect_player(
         &mut entity,
         asset_server,
-        config.effect_path(effect.file),
+        path,
         PlaybackSettings {
             mode: if effect.looping {
                 PlaybackMode::Loop
@@ -607,7 +616,7 @@ fn spawn_effect(
                 PlaybackMode::Despawn
             },
             volume: Volume::Linear(
-                effect.volume
+                base_volume
                     * settings.master_volume
                     * settings.se_volume
                     * if effect.fade_in > f32::EPSILON {
@@ -774,6 +783,11 @@ pub(crate) fn spawn_vocal(
     vocal: &str,
     fade_in: f32,
 ) {
+    let path = config.voice_path(vocal);
+    let line_volume = line_volume
+        * keine_core::config::audio_gain_linear(
+            *config.audio.voice_gain_db.get(&path).unwrap_or(&0.0),
+        );
     let envelope = PlaybackEnvelope::fade_in(fade_in);
     let mut entity = commands.spawn((
         Name::new(format!("vocal::{vocal}")),
@@ -786,7 +800,7 @@ pub(crate) fn spawn_vocal(
     insert_player(
         &mut entity,
         asset_server,
-        config.voice_path(vocal),
+        path,
         PlaybackSettings {
             mode: PlaybackMode::Despawn,
             volume: Volume::Linear(

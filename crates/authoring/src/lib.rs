@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-pub const PROTOCOL_VERSION: u32 = 11;
+pub const PROTOCOL_VERSION: u32 = 12;
 pub const MAX_MESSAGE_BYTES: usize = 256 * 1024;
 pub const MAX_DOCUMENT_BYTES: usize = 1024 * 1024;
 pub const SNAPSHOT_CHUNK_BYTES: usize = 128 * 1024;
@@ -70,6 +70,7 @@ pub enum ClientCommand {
     /// asset mount. None stops playback; it never executes Program.
     AuditionAudio {
         path: Option<PathBuf>,
+        gain_db: f32,
     },
     AuditionState,
     Stop,

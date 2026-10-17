@@ -39,6 +39,7 @@ pub struct PreviewSnapshot {
     pub diagnostics: Vec<keine_authoring::Diagnostic>,
     pub audition_path: Option<PathBuf>,
     pub audition_paused: bool,
+    pub audition_gain_db: f32,
     pub audition_error: Option<String>,
 }
 
@@ -53,6 +54,7 @@ impl Default for PreviewSnapshot {
             diagnostics: Vec::new(),
             audition_path: None,
             audition_paused: false,
+            audition_gain_db: 0.0,
             audition_error: None,
         }
     }
@@ -93,8 +95,8 @@ enum PreviewCommand {
     Start,
     Stop,
     Show,
-    ToggleAudition(PathBuf),
-    RestartAudition(PathBuf),
+    ToggleAudition(PathBuf, f32),
+    RestartAudition(PathBuf, f32),
     StopAudition,
     Snapshot {
         path: PathBuf,
@@ -171,11 +173,11 @@ impl PendingCommands {
                         (PreviewCommand::Start, PreviewCommand::Start)
                             | (PreviewCommand::Show, PreviewCommand::Show)
                             | (
-                                PreviewCommand::ToggleAudition(_)
-                                    | PreviewCommand::RestartAudition(_)
+                                PreviewCommand::ToggleAudition(..)
+                                    | PreviewCommand::RestartAudition(..)
                                     | PreviewCommand::StopAudition,
-                                PreviewCommand::ToggleAudition(_)
-                                    | PreviewCommand::RestartAudition(_)
+                                PreviewCommand::ToggleAudition(..)
+                                    | PreviewCommand::RestartAudition(..)
                                     | PreviewCommand::StopAudition
                             )
                     )
@@ -303,12 +305,14 @@ impl PreviewController {
         self.commands.send(PreviewCommand::Show);
     }
 
-    pub fn toggle_audition(&self, path: PathBuf) {
-        self.commands.send(PreviewCommand::ToggleAudition(path));
+    pub fn toggle_audition(&self, path: PathBuf, gain_db: f32) {
+        self.commands
+            .send(PreviewCommand::ToggleAudition(path, gain_db));
     }
 
-    pub fn restart_audition(&self, path: PathBuf) {
-        self.commands.send(PreviewCommand::RestartAudition(path));
+    pub fn restart_audition(&self, path: PathBuf, gain_db: f32) {
+        self.commands
+            .send(PreviewCommand::RestartAudition(path, gain_db));
     }
 
     pub fn stop_audition(&self) {
@@ -408,7 +412,7 @@ impl Worker {
     }
 
     fn handle(&mut self, command: PreviewCommand) {
-        let restart = matches!(command, PreviewCommand::RestartAudition(_));
+        let restart = matches!(command, PreviewCommand::RestartAudition(..));
         let result = match command {
             PreviewCommand::Start => self.start(),
             PreviewCommand::Stop => {
@@ -419,8 +423,9 @@ impl Worker {
                 .engine
                 .as_mut()
                 .map_or(Ok(()), |engine| engine.show_preview().map(|_| ())),
-            PreviewCommand::ToggleAudition(path) | PreviewCommand::RestartAudition(path) => {
-                if let Err(error) = self.audition(path, restart) {
+            PreviewCommand::ToggleAudition(path, gain_db)
+            | PreviewCommand::RestartAudition(path, gain_db) => {
+                if let Err(error) = self.audition(path, gain_db, restart) {
                     self.stop_audition();
                     self.mutate(|snapshot| snapshot.audition_error = Some(error.to_string()));
                 }
@@ -445,12 +450,17 @@ impl Worker {
         }
     }
 
-    fn audition(&mut self, path: PathBuf, restart: bool) -> io::Result<()> {
-        let (current, paused) = {
+    fn audition(&mut self, path: PathBuf, gain_db: f32, restart: bool) -> io::Result<()> {
+        let (current, paused, current_gain) = {
             let snapshot = self.shared.lock().expect("preview snapshot lock poisoned");
-            (snapshot.audition_path.clone(), snapshot.audition_paused)
+            (
+                snapshot.audition_path.clone(),
+                snapshot.audition_paused,
+                snapshot.audition_gain_db,
+            )
         };
         if !restart
+            && current_gain == gain_db
             && current.as_ref() == Some(&path)
             && let Some(engine) = &mut self.audition_engine
         {
@@ -474,10 +484,11 @@ impl Worker {
             .audition_engine
             .as_mut()
             .expect("audition host was just opened")
-            .audition_audio(Some(path))?;
+            .audition_audio(Some(path), gain_db)?;
         self.last_audition_poll = None;
         self.mutate(|snapshot| {
             snapshot.audition_path = path;
+            snapshot.audition_gain_db = gain_db;
             snapshot.audition_paused = false;
             snapshot.audition_error = None;
         });
@@ -802,13 +813,13 @@ mod tests {
     #[test]
     fn replay_replaces_pending_audio_intent_and_stop_cancels_it() {
         let mut pending = PendingCommands::default();
-        pending.push(PreviewCommand::ToggleAudition("assets/a.opus".into()));
-        pending.push(PreviewCommand::RestartAudition("assets/b.opus".into()));
+        pending.push(PreviewCommand::ToggleAudition("assets/a.opus".into(), 0.0));
+        pending.push(PreviewCommand::RestartAudition("assets/b.opus".into(), 0.0));
         assert!(
-            matches!(pending.pop(), Some(PreviewCommand::RestartAudition(path)) if path == std::path::Path::new("assets/b.opus"))
+            matches!(pending.pop(), Some(PreviewCommand::RestartAudition(path, _)) if path == std::path::Path::new("assets/b.opus"))
         );
         assert!(pending.pop().is_none());
-        pending.push(PreviewCommand::RestartAudition("assets/a.opus".into()));
+        pending.push(PreviewCommand::RestartAudition("assets/a.opus".into(), 0.0));
         pending.push(PreviewCommand::StopAudition);
         assert!(matches!(pending.pop(), Some(PreviewCommand::StopAudition)));
         assert!(pending.pop().is_none());

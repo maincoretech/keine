@@ -64,24 +64,15 @@ pub(crate) fn sync(mut context: ExtraSyncContext) {
         return;
     }
 
-    let mut cg = context
-        .state
-        .unlocked_cg
-        .iter()
-        .map(|(file, name)| (file.clone(), name.clone()))
-        .collect::<Vec<_>>();
-    cg.sort_unstable_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
+    let cg = ordered_cg(&context.state, &context.config);
     context.ui.page = context
         .ui
         .page
         .clamp(1, cg.len().div_ceil(CG_PER_PAGE).max(1));
-    let mut bgm = context
-        .state
-        .unlocked_bgm
-        .iter()
-        .map(|(file, name)| (file.clone(), name.clone()))
+    let bgm = ordered_bgm(&context.state, &context.config)
+        .into_iter()
+        .map(|(file, name)| (file.to_owned(), name.to_owned()))
         .collect::<Vec<_>>();
-    bgm.sort_unstable_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
 
     context
         .commands

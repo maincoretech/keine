@@ -231,8 +231,12 @@ impl EngineProcess {
         self.lifecycle(ClientCommand::StartPreview { document_revision })
     }
 
-    pub fn audition_audio(&mut self, path: Option<PathBuf>) -> io::Result<Option<PathBuf>> {
-        match self.request(ClientCommand::AuditionAudio { path })? {
+    pub fn audition_audio(
+        &mut self,
+        path: Option<PathBuf>,
+        gain_db: f32,
+    ) -> io::Result<Option<PathBuf>> {
+        match self.request(ClientCommand::AuditionAudio { path, gain_db })? {
             ServerResponse::AudioAudition { path } => Ok(path),
             other => Err(unexpected("audio audition", &other)),
         }

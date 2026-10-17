@@ -38,7 +38,7 @@ Engine 与 Editor 的最终 ZIP、正式 Project 的发布目录，在同一 Ubu
 加载 Engine 和 `game.haku`（Editor 用 native-smoke 工程目录）。FFmpeg 和已有 bundled
 库必须从包内 `lib/` 解析，不能由 runner SDK 掩盖漏包。
 复核已有 ZIP 可在 Ubuntu 24.04 运行
-`bash dev/scripts/verify-linux-package.sh <zip> tests/fixtures/native-smoke`；无需重新编译。
+`python3 dev/scripts/verify-linux-package.py <zip> tests/fixtures/native-smoke`；无需重新编译。
 发布流程已包含最终验包，不再为同一检查保留独立 workflow。
 这些检查覆盖 loader/内容加载，不替代原生窗口、GPU、音频及硬件性能验收。
 glibc 的 loader、libc/libm、libmvec/libresolv 等组件由宿主提供，不随应用复制。
@@ -78,8 +78,7 @@ Linux 包中的 `python3 install-desktop.py --install` 可注册应用菜单与�
 
 维护者只维护 `src/assets/icons/keine.png`。Release Editor / CI 的 Android job 在构建前自动派生，
 项目发行直接调用同一 Rust 生成器；现有 `image` PNG 与 `keine-media` WebP 解码器复用，无额外图片工具。
-手动生成到新目录：`python3 dev/scripts/build-icons.py target/my-icons --source path/to/icon.webp`；
-或 `cargo run --features publisher -- icons path/to/icon.webp target/my-icons`。
+手动生成到新目录：`cargo run --features publisher -- icons path/to/icon.webp target/my-icons`。
 提交默认图标变更时同步生成 `src/assets/icons` 与 Android `icon-res` 回退资源，并运行
 `python3 dev/scripts/verify-icons.py`；CI 另检查派生文件和实际 APK。
 
@@ -382,12 +381,12 @@ Steam 也需要开发者部署授权服务，ticket 本身不是内容密钥。
 ```sh
 cargo build --release --locked -p keine-editor --bin editor
 cargo build --release --locked -p keine --bin keine --no-default-features --features audio-all,ui-sounds,video-native
-bash dev/scripts/package-authoring-macos.sh target/release/editor target/release/keine /path/to/fresh-output
+python3 dev/scripts/package-authoring.py target/release/editor target/release/keine /path/to/fresh-output
 bash dev/scripts/bundle-macos.sh <project> <app-name> <reverse-dns-bundle-id>
 ```
 
 第一条打包脚本使用预构建二进制，产出一个 `Kēne Editor.app`，同版本 Engine 内置于
-`Contents/MacOS/keine`；目标必须是新目录。跨平台 CI 使用 `package-authoring.py` 包装，
+`Contents/MacOS/keine`；目标必须是新目录。各平台与 CI 共用此入口，
 记录 SHA/features，检查实际安装 runtime 并校验 native-smoke；不能混用不同提交的二进制。
 Editor 导入图片无需外部工具；导入非规范音视频需要可执行的 FFmpeg（libopus/libx264），
 可安装到 PATH 或放在 Editor executable 旁/Resources 内。当前打包脚本不附带 FFmpeg；

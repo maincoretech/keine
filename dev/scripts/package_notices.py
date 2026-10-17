@@ -3,6 +3,7 @@ import argparse
 import json
 from pathlib import Path
 import subprocess
+import sys
 
 REPO = Path(__file__).resolve().parents[2]
 HEADER = ('Kēne distribution notices\n'
@@ -93,14 +94,31 @@ def verify_apk(apk, require_game=False, metadata=None):
     assert not any(f'assets/{name}' in names for name in LEGACY_FILES), names
 
 
+def stage_android(metadata, game_license=None):
+    root = Path(metadata['workspace_root'])
+    output = root / 'target/android/notices'
+    write(output / 'NOTICE', metadata, game_license, root)
+    # This directory is reused between Engine and game builds, including CI caches.
+    for name in LEGACY_FILES:
+        (output / name).unlink(missing_ok=True)
+    return next(package['version'] for package in metadata['packages'] if package['name'] == 'keine')
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('output', type=Path)
+    parser.add_argument('output', type=Path, nargs='?')
+    parser.add_argument('--android', action='store_true', help='Stage Android notices using Cargo metadata from stdin')
     parser.add_argument('--native', action='store_true')
     parser.add_argument('--append-native', action='store_true')
     parser.add_argument('--game-license', type=Path)
     args = parser.parse_args()
-    if args.append_native:
+    if args.android:
+        if args.output or args.native or args.append_native:
+            parser.error('--android cannot be combined with output/native options')
+        print(stage_android(json.load(sys.stdin), args.game_license))
+    elif args.output is None:
+        parser.error('output is required unless --android is used')
+    elif args.append_native:
         contents = read_text(args.output) + native_document(cargo_metadata())
         args.output.write_bytes(contents.encode('utf-8'))
     else:

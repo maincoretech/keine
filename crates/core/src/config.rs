@@ -74,6 +74,14 @@ pub struct GameConfig {
     #[serde(default)]
     pub features: FeatureConfig,
 
+    /// Optional author-defined order for unlocked gallery entries.
+    #[serde(default)]
+    pub extra: ExtraConfig,
+
+    /// Fixed audio calibration, keyed by logical asset path after manifest resolution.
+    #[serde(default)]
+    pub audio: AudioConfig,
+
     /// Independently selected parser/codec categories.
     #[serde(default)]
     pub adapter: AdapterConfig,
@@ -169,6 +177,51 @@ pub struct FeatureConfig {
     pub extra: bool,
 }
 
+/// Gallery order uses the same resource IDs as `extra.unlock`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtraConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cg_order: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bgm_order: Vec<String>,
+}
+
+/// Playback gains prepared from audio manifest metadata; no realtime analysis.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AudioConfig {
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub bgm_gain_db: HashMap<String, f32>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub voice_gain_db: HashMap<String, f32>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub effect_gain_db: HashMap<String, f32>,
+}
+
+/// A bounded fixed gain shared by authoring audition and shipping playback.
+pub fn audio_gain_linear(db: f32) -> f32 {
+    if valid_audio_gain(db) {
+        10.0_f32.powf(db / 20.0)
+    } else {
+        1.0
+    }
+}
+pub fn valid_audio_gain(db: f32) -> bool {
+    db.is_finite() && (-60.0..=12.0).contains(&db)
+}
+fn deserialize_audio_gain<'de, D: serde::Deserializer<'de>>(de: D) -> Result<f32, D::Error> {
+    let gain = f32::deserialize(de)?;
+    if valid_audio_gain(gain) {
+        Ok(gain)
+    } else {
+        Err(serde::de::Error::custom(
+            "gain_db must be finite and between -60 and 12 dB",
+        ))
+    }
+}
+fn zero_gain(gain: &f32) -> bool {
+    *gain == 0.0
+}
+
 /// One resource source consumed through an asset adapter.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssetSourceConfig {
@@ -253,7 +306,7 @@ impl EiyashouObjectManifest {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct EiyashouAssetManifest {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub luts: HashMap<String, EiyashouAssetEntry>,
@@ -275,7 +328,7 @@ pub struct EiyashouAssetManifest {
     unknown: HashMap<String, noyalib::Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum EiyashouAssetEntry {
     Path(String),
@@ -294,6 +347,13 @@ impl EiyashouAssetEntry {
         match self {
             Self::Path(_) => &[],
             Self::Metadata(metadata) => &metadata.tags,
+        }
+    }
+
+    pub fn gain_db(&self) -> f32 {
+        match self {
+            Self::Path(_) => 0.0,
+            Self::Metadata(metadata) => metadata.gain_db,
         }
     }
 
@@ -317,10 +377,16 @@ impl From<&str> for EiyashouAssetEntry {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EiyashouAssetMetadata {
     pub path: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_audio_gain",
+        skip_serializing_if = "zero_gain"
+    )]
+    pub gain_db: f32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
 }
@@ -708,6 +774,8 @@ impl Default for GameConfig {
             title_background: default_title_background(),
             project: ProjectMetadata::default(),
             features: FeatureConfig::default(),
+            extra: ExtraConfig::default(),
+            audio: AudioConfig::default(),
             adapter: AdapterConfig::default(),
             script: ScriptConfig::default(),
             assets: AssetMap::default(),
@@ -752,6 +820,19 @@ impl GameConfig {
     /// render, decode and timing consumers cannot disagree about malformed
     /// values.
     pub fn validate(&self) -> Result<(), ConfigValidationError> {
+        if self
+            .audio
+            .bgm_gain_db
+            .values()
+            .chain(self.audio.voice_gain_db.values())
+            .chain(self.audio.effect_gain_db.values())
+            .any(|db| !valid_audio_gain(*db))
+        {
+            return Err(ConfigValidationError::new(
+                "audio",
+                "gain must be finite and between -60 and 12 dB",
+            ));
+        }
         if self.adapter.script.eq_ignore_ascii_case("keine") {
             if self.script.version != default_native_script_version() {
                 return Err(ConfigValidationError::new(
@@ -1018,6 +1099,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn fixed_audio_gain_is_bounded_and_optional() {
+        assert_eq!(
+            EiyashouAssetManifest::from_yaml("bgm: {track: a.opus}")
+                .unwrap()
+                .bgm["track"]
+                .gain_db(),
+            0.0
+        );
+        for db in [".nan", ".inf", "13", "-61"] {
+            assert!(
+                EiyashouAssetManifest::from_yaml(&format!(
+                    "bgm: {{track: {{path: a.opus, gain_db: {db}}}}}"
+                ))
+                .is_err()
+            );
+            assert!(
+                GameConfig::from_yaml(&format!("audio: {{bgm_gain_db: {{a.opus: {db}}}}}"))
+                    .is_err()
+            );
+        }
+        assert_eq!(audio_gain_linear(0.0), 1.0);
+        assert!((audio_gain_linear(-6.0) - 0.5011872).abs() < 0.00001);
+    }
+
+    #[test]
     fn defaults_and_minimal_yaml_preserve_unspecified_fields() {
         for (name, cfg, title, speed) in [
             ("default", GameConfig::default(), "Kēne", 45.0),
@@ -1155,6 +1261,16 @@ features:
         .unwrap();
 
         assert!(cfg.features.extra);
+        assert_eq!(cfg.extra, ExtraConfig::default());
+        let cfg = GameConfig::from_yaml(
+            "extra:\n  cg_order: [ending, opening]\n  bgm_order: [theme, night]\n",
+        )
+        .unwrap();
+        assert!(!cfg.features.extra);
+        assert_eq!(cfg.extra.cg_order, ["ending", "opening"]);
+        assert_eq!(cfg.extra.bgm_order, ["theme", "night"]);
+        let restored = GameConfig::from_yaml(&noyalib::to_string(&cfg).unwrap()).unwrap();
+        assert_eq!(restored.extra, cfg.extra);
     }
 
     #[test]

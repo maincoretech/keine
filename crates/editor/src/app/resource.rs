@@ -196,6 +196,7 @@ pub(super) fn render_asset_preview(
     root: &Path,
     selection: Option<AssetPreviewSelection>,
     selected_count: usize,
+    calibration: Option<AnyElement>,
     cx: &mut App,
 ) -> AnyElement {
     let Some(asset) = selection else {
@@ -253,24 +254,29 @@ pub(super) fn render_asset_preview(
         AssetKind::Voice | AssetKind::Bgm | AssetKind::Effect
     ) {
         div()
+            .id("audio-preview-scroll")
             .size_full()
+            .overflow_y_scroll()
             .flex()
             .flex_col()
             .items_center()
-            .justify_center()
+            .justify_start()
             .gap_3()
             .child(
                 Icon::new(AssetIconName::Music)
                     .size(px(32.))
+                    .flex_shrink_0()
                     .text_color(rgb(MUTED)),
             )
             .child(
                 div()
+                    .flex_shrink_0()
                     .flex()
                     .gap_2()
                     .child(audition_control(root, &asset.path, false, cx))
                     .child(replay_control(root, &asset.path, cx)),
             )
+            .children(calibration)
             .into_any_element()
     } else {
         preview_placeholder(match asset.kind {

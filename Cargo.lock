@@ -5405,7 +5405,7 @@ dependencies = [
 
 [[package]]
 name = "keine"
-version = "0.16.4"
+version = "0.16.5"
 dependencies = [
  "anyhow",
  "bevy",
@@ -5452,7 +5452,7 @@ dependencies = [
 
 [[package]]
 name = "keine-authoring"
-version = "0.16.4"
+version = "0.16.5"
 dependencies = [
  "postcard",
  "serde",
@@ -5460,7 +5460,7 @@ dependencies = [
 
 [[package]]
 name = "keine-core"
-version = "0.16.4"
+version = "0.16.5"
 dependencies = [
  "criterion",
  "log",
@@ -5472,7 +5472,7 @@ dependencies = [
 
 [[package]]
 name = "keine-editor"
-version = "0.16.4"
+version = "0.16.5"
 dependencies = [
  "anyhow",
  "bevy",
@@ -5484,6 +5484,7 @@ dependencies = [
  "keine-media",
  "libc",
  "lsp-types",
+ "noyalib",
  "objc2-foundation 0.3.2",
  "postcard",
  "serde",
@@ -5496,7 +5497,7 @@ dependencies = [
 
 [[package]]
 name = "keine-loader"
-version = "0.16.4"
+version = "0.16.5"
 dependencies = [
  "anyhow",
  "crc32fast",
@@ -5515,7 +5516,7 @@ dependencies = [
 
 [[package]]
 name = "keine-media"
-version = "0.16.4"
+version = "0.16.5"
 dependencies = [
  "image",
  "libwebp-sys",

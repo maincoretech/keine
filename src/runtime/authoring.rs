@@ -149,7 +149,14 @@ impl Session {
     fn audition_audio(
         &mut self,
         path: Option<&Path>,
+        gain_db: f32,
     ) -> Result<ServerResponse, (ErrorCode, String)> {
+        if !keine_core::config::valid_audio_gain(gain_db) {
+            return Err((
+                ErrorCode::InvalidRequest,
+                "gain_db must be between -60 and 12 dB".into(),
+            ));
+        }
         self.stop_audition();
         let Some(path) = path else {
             return Ok(ServerResponse::AudioAudition { path: None });
@@ -196,6 +203,7 @@ impl Session {
                 .audio_output
                 .get_or_init(bevy::audio::AudioOutput::default);
             let player = rodio::Player::connect_new(output.mixer());
+            player.set_volume(keine_core::config::audio_gain_linear(gain_db));
             player.append(source);
             self.audition = Some(AudioAudition {
                 path: path.to_owned(),
@@ -625,7 +633,9 @@ fn handle(
                 state: session.lifecycle,
             })
         }
-        ClientCommand::AuditionAudio { path } => session.audition_audio(path.as_deref()),
+        ClientCommand::AuditionAudio { path, gain_db } => {
+            session.audition_audio(path.as_deref(), *gain_db)
+        }
         ClientCommand::PauseAudition { paused } => session.pause_audition(*paused),
         ClientCommand::AuditionState => Ok(ServerResponse::AudioAudition {
             path: session.audition_path(),

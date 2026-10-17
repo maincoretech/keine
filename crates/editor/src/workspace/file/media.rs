@@ -240,7 +240,7 @@ fn transcode(source: &Path, output: &Path, kind: AssetKind) -> io::Result<()> {
     Ok(())
 }
 
-pub(super) fn ffmpeg_executable() -> io::Result<PathBuf> {
+pub(crate) fn ffmpeg_executable() -> io::Result<PathBuf> {
     let name = if cfg!(windows) {
         "ffmpeg.exe"
     } else {

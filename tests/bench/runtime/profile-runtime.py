@@ -14,7 +14,7 @@ import time
 SCRIPT_ROOT = Path(__file__).resolve().parent
 PACKAGED = (SCRIPT_ROOT / "keine-benchmark.conf").is_file()
 BUNDLE_ROOT = SCRIPT_ROOT.parent if PACKAGED and SCRIPT_ROOT.name == 'lib' else SCRIPT_ROOT
-ROOT = BUNDLE_ROOT if PACKAGED else Path(__file__).resolve().parents[2]
+ROOT = SCRIPT_ROOT.parents[2] if SCRIPT_ROOT.parts[-3:] == ('tests', 'bench', 'runtime') else BUNDLE_ROOT
 TRACE_FIELDS = ("elapsed_seconds", "frame", "interval_ms", "update_to_render_ms",
                 "budget_ms", "scene", "next_cursor", "source", "activity", "line",
                 "focused", "width", "height", "exclusion")

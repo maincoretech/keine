@@ -111,6 +111,7 @@ pub(crate) struct ExtraBgm(pub(super) String);
 
 #[derive(Component)]
 pub(crate) struct ExtraBgmPlayer {
+    pub gain: f32,
     pub(super) duration: Option<Duration>,
     pub(super) observed_audio: bool,
     pub(super) failed: bool,
@@ -178,12 +179,31 @@ impl ExtraMotion {
     }
 }
 
-pub(super) fn ordered_cg(state: &GameState) -> Vec<(String, String)> {
-    let mut ordered = state
-        .unlocked_cg
+pub(super) fn ordered_cg(state: &GameState, config: &GameConfigResource) -> Vec<(String, String)> {
+    ordered_gallery(&state.unlocked_cg, &config.extra.cg_order)
+        .into_iter()
+        .map(|(file, name)| (file.to_owned(), name.to_owned()))
+        .collect()
+}
+
+pub(super) fn ordered_gallery<'a>(
+    entries: &'a HashMap<String, String>,
+    order: &[String],
+) -> Vec<(&'a str, &'a str)> {
+    let mut ordered = entries
         .iter()
-        .map(|(file, name)| (file.clone(), name.clone()))
+        .map(|(file, name)| (file.as_str(), name.as_str()))
         .collect::<Vec<_>>();
-    ordered.sort_unstable_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
+    // Build ranks only when a list is opened or navigation changes the selection.
+    // Repeated IDs use their first position; locked entries are never added.
+    let ranks: HashMap<&str, usize> = order
+        .iter()
+        .enumerate()
+        .rev()
+        .map(|(index, file)| (file.as_str(), index))
+        .collect();
+    ordered.sort_unstable_by_key(|&(file, name)| {
+        (ranks.get(file).copied().unwrap_or(usize::MAX), name, file)
+    });
     ordered
 }

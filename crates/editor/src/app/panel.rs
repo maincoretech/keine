@@ -41,8 +41,8 @@ use super::resource::ResourcePicker;
 use super::{
     ASSET_PREVIEW_PANEL, ASSETS_PANEL, BUILD_PANEL, CHARACTERS_PANEL, DOCUMENT_PANEL,
     EXPLORER_PANEL, INK, INSPECTOR_PANEL, OUTPUT_PANEL, PERFORMANCE_PANEL, PREVIEW_SOURCE_DEBOUNCE,
-    PRIMARY, PROBLEMS_PANEL, SCENES_PANEL, SEARCH_PANEL, SURFACE, SURFACE_HOVER, completion,
-    minimap, search, text_minimap,
+    PRIMARY, PROBLEMS_PANEL, PROJECT_PANEL, SCENES_PANEL, SEARCH_PANEL, SURFACE, SURFACE_HOVER,
+    completion, minimap, search, text_minimap,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -89,6 +89,9 @@ pub(super) enum PanelPayload {
     Build {
         root: PathBuf,
     },
+    Project {
+        root: PathBuf,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -109,6 +112,7 @@ pub(super) enum ToolKind {
     Performance,
     Output,
     Build,
+    Project,
 }
 
 impl ToolKind {
@@ -123,6 +127,7 @@ impl ToolKind {
             Self::Performance => PERFORMANCE_PANEL,
             Self::Output => OUTPUT_PANEL,
             Self::Build => BUILD_PANEL,
+            Self::Project => PROJECT_PANEL,
         }
     }
 
@@ -140,6 +145,7 @@ impl ToolKind {
             Self::Performance => PanelPayload::Performance { root },
             Self::Output => PanelPayload::Output { root },
             Self::Build => PanelPayload::Build { root },
+            Self::Project => PanelPayload::Project { root },
         }
     }
 }
@@ -188,6 +194,9 @@ pub(super) enum PanelContent {
         controller: Arc<PreviewController>,
     },
     Build {
+        root: PathBuf,
+    },
+    Project {
         root: PathBuf,
     },
 }
@@ -284,6 +293,7 @@ impl PanelContent {
             PanelPayload::Scenes { root } => Ok(Self::Scenes { root }),
             PanelPayload::Problems { root } => Ok(Self::Problems { root }),
             PanelPayload::Build { root } => Ok(Self::Build { root }),
+            PanelPayload::Project { root } => Ok(Self::Project { root }),
             PanelPayload::Performance { root } => {
                 let controller = cx.global_mut::<EditorDocuments>().preview(&root)?;
                 Ok(Self::Performance { root, controller })
@@ -316,6 +326,7 @@ impl PanelContent {
             Self::Problems { root } => PanelPayload::Problems { root: root.clone() },
             Self::Performance { root, .. } => PanelPayload::Performance { root: root.clone() },
             Self::Build { root } => PanelPayload::Build { root: root.clone() },
+            Self::Project { root } => PanelPayload::Project { root: root.clone() },
         }
     }
 
@@ -333,6 +344,7 @@ impl PanelContent {
             Self::Problems { .. } => PROBLEMS_PANEL,
             Self::Performance { .. } => PERFORMANCE_PANEL,
             Self::Build { .. } => BUILD_PANEL,
+            Self::Project { .. } => PROJECT_PANEL,
         }
     }
 
@@ -365,6 +377,7 @@ impl PanelContent {
             Self::Problems { .. } => "Problems".into(),
             Self::Performance { .. } => "Performance".into(),
             Self::Build { .. } => "Build".into(),
+            Self::Project { .. } => "Project".into(),
         }
     }
 }
@@ -373,6 +386,8 @@ pub(super) struct WorkbenchPanel {
     pub(super) content: PanelContent,
     pub(super) focus: FocusHandle,
     pub(super) view_scroll: ScrollHandle,
+    pub(super) project_settings: Option<super::project_settings::Settings>,
+    pub(super) calibration: super::audio_calibration::Calibration,
     pub(super) project_search: Option<search::ProjectSearch>,
     pub(super) _subscriptions: Vec<Subscription>,
     pub(super) resource_picker: Option<ResourcePicker>,
@@ -743,6 +758,10 @@ impl BasePanel for WorkbenchPanel {
                 documents.unregister_panel(root, relative, panel);
                 documents.clear_document_node(root);
             }
+            PanelContent::Project { root } => {
+                cx.global_mut::<EditorDocuments>()
+                    .set_tool_panel(root, PROJECT_PANEL, None)
+            }
             PanelContent::Inspector { root, .. } => cx
                 .global_mut::<EditorDocuments>()
                 .set_tool_panel(root, INSPECTOR_PANEL, None),
@@ -827,6 +846,7 @@ pub(super) fn register_workbench_panels(cx: &mut App) {
         PROBLEMS_PANEL,
         PERFORMANCE_PANEL,
         BUILD_PANEL,
+        PROJECT_PANEL,
     ] {
         register_panel(cx, name, |context, window, cx| {
             let panel = workbench_panel(context, window, cx).unwrap_or_else(|error| {

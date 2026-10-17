@@ -34,6 +34,17 @@ script:
 ```
 
 清单条目可写 `room: assets/room.webp`，或 `{ path: assets/room.webp, tags: [interior] }`。
+音频条目（`bgm` / `voices` / `se`）还可填写 `gain_db`，例如：
+
+```yaml
+bgm:
+  night: {path: assets/night.opus, tags: [night], gain_db: -3.5}
+```
+
+`gain_db` 默认 0，接受 −60…+12 的有限数值，作为固定素材增益，与剧本音量、玩家音量及
+淡入淡出相乘；不重写音频、不压缩动态。Editor 可离线分析并建议值，支持原声/调整后试听与撤销。
+发行器将增益解析到 `config.yaml` 的 `audio.*_gain_db` 逻辑路径映射，运行时不再读取素材清单。
+
 角色可包含 Editor 显示预置；只影响之后显式插入的命令，不改变已有剧本的运行行为：
 
 ```yaml
@@ -244,6 +255,21 @@ scene name { ... }
 资源必须是对应类型的已声明 ID；`name` 必须提供，作为鉴赏页显示名称。
 解锁按资源去重，后续调用可更新显示名；解锁持久化独立于存档回滚。
 新补全和插入使用 `extra.unlock`；已有 `gallery.unlock` 使用同一规则继续读取。
+
+可在 `config.yaml` 中指定鉴赏顺序（可省略）：
+
+```yaml
+features:
+  extra: true
+extra:
+  cg_order: [ending_cg, opening_cg]
+  bgm_order: [main_theme, night_theme]
+```
+
+列表填写与 `extra.unlock` 相同的资源 ID，不填显示名称。已列出的已解锁内容按列表
+顺序显示，其余已解锁内容仍按名称、资源 ID 排在后面。重复 ID 取第一次；未解锁或
+不存在的 ID 不显示。CG 翻页/切图、音乐列表/上一曲/下一曲/自动续播使用同一顺序。
+修改配置后重新打开工程生效，不改变解锁记录或存档。
 
 ### 导入角色位置
 

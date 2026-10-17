@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import plistlib
 import shutil
 import subprocess
 import tempfile
@@ -86,6 +87,29 @@ def windows_libraries(output):
         append_file(output / 'NOTICE', f'Native SDK / {notice.parent.name}', notice)
 
 
+def macos_app(editor, engine, output):
+    app = output / 'Kēne Editor.app'
+    binaries, resources = app / 'Contents/MacOS', app / 'Contents/Resources'
+    binaries.mkdir(parents=True)
+    resources.mkdir()
+    for name, source in [('editor', editor), ('keine', engine)]:
+        target = binaries / name
+        shutil.copy2(source, target)
+        target.chmod(target.stat().st_mode | 0o111)
+    icons = Path(os.environ.get('KEINE_APP_ICON_DIR', REPO / 'src/assets/icons'))
+    shutil.copy2(icons / 'keine.icns', resources / 'keine.icns')
+    metadata = cargo_metadata()
+    write(resources / 'NOTICE', metadata)
+    version = next(package['version'] for package in metadata['packages'] if package['name'] == 'keine')
+    with (app / 'Contents/Info.plist').open('wb') as target:
+        plistlib.dump({
+            'CFBundleExecutable': 'editor', 'CFBundleIdentifier': 'moe.maincore.keine-editor',
+            'CFBundleName': 'Kēne Editor', 'CFBundlePackageType': 'APPL',
+            'CFBundleIconFile': 'keine.icns', 'CFBundleShortVersionString': version,
+        }, target)
+    subprocess.run(['bash', str(REPO / 'dev/scripts/sign-macos.sh'), str(app)], check=True)
+
+
 def package(editor, engine, output):
     system = platform.system()
     editor, engine, output = editor.resolve(strict=True), engine.resolve(strict=True), output.absolute()
@@ -97,8 +121,7 @@ def package(editor, engine, output):
     with tempfile.TemporaryDirectory(prefix='.keine-editor-', dir=output.parent) as temporary:
         staging = Path(temporary) / 'package'
         if system == 'Darwin':
-            subprocess.run(['bash', str(REPO / 'dev/scripts/package-authoring-macos.sh'),
-                            str(editor), str(engine), str(staging)], check=True)
+            macos_app(editor, engine, staging)
         else:
             staging.mkdir()
             suffix = '.exe' if system == 'Windows' else ''
