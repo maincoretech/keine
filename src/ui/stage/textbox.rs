@@ -397,7 +397,7 @@ fn spawn_text_box(root: &mut ChildSpawnerCommands, config: &GameConfig, assets: 
                 left: Val::Px(42.0),
                 right: Val::Px(42.0),
                 top: Val::Px(54.0),
-                bottom: Val::Px(30.0),
+                bottom: Val::Px(48.0),
             },
             ..default()
         },
@@ -417,6 +417,7 @@ fn spawn_text_box(root: &mut ChildSpawnerCommands, config: &GameConfig, assets: 
                 width: Val::Percent(100.0),
                 flex_direction: FlexDirection::Row,
                 flex_wrap: FlexWrap::Wrap,
+                flex_shrink: 0.0,
                 align_items: AlignItems::FlexEnd,
                 align_content: AlignContent::FlexStart,
                 // Ruby is overlaid inside each base glyph's line box. This gap
@@ -427,6 +428,51 @@ fn spawn_text_box(root: &mut ChildSpawnerCommands, config: &GameConfig, assets: 
             },
         ));
     });
+}
+
+/// Grow upward for the laid-out paragraph, including hidden typewriter glyphs.
+/// The complete line determines height, so revealing characters does not move the box.
+pub(crate) fn fit_textbox_content(
+    config: Res<GameConfigResource>,
+    state: Res<GameState>,
+    dialogue: Query<&ComputedNode, With<DialogueText>>,
+    mut boxes: Query<&mut Node, (With<TextBoxRoot>, Without<NameBarRoot>)>,
+    mut names: Query<&mut Node, (With<NameBarRoot>, Without<TextBoxRoot>)>,
+) {
+    let Ok(content) = dialogue.single() else {
+        return;
+    };
+    if content.size().x <= 0.0 {
+        return;
+    }
+    let layout = &config.layout;
+    let base = DESIGN_HEIGHT * layout.textbox_height / 100.0;
+    let height = textbox_content_height(
+        base,
+        content.content_size().y * content.inverse_scale_factor(),
+    );
+    for mut node in &mut boxes {
+        if node.height != Val::Px(height) {
+            node.height = Val::Px(height);
+        }
+    }
+    let film_offset = if state.film_mode {
+        FILM_MODE_TEXTBOX_OFFSET
+    } else {
+        0.0
+    };
+    let bottom =
+        Val::Percent(layout.namebar_bottom + film_offset + (height - base) / DESIGN_HEIGHT * 100.0);
+    for mut node in &mut names {
+        if node.bottom != bottom {
+            node.bottom = bottom;
+        }
+    }
+}
+
+fn textbox_content_height(base: f32, content: f32) -> f32 {
+    // Top controls plus a separate bottom control row and breathing room.
+    base.max(content.ceil() + 54.0 + 48.0)
 }
 
 fn spawn_top_controls(text_box: &mut ChildSpawnerCommands, config: &GameConfig, assets: &UiFonts) {
@@ -1544,6 +1590,18 @@ pub fn apply_hide_toggle(
 #[cfg(test)]
 mod rich_text_tests {
     use super::*;
+
+    #[test]
+    fn paragraph_height_reserves_controls_at_large_text_size() {
+        let base = 1080.0 * 0.22;
+        assert_eq!(textbox_content_height(base, 40.0), base);
+        let three_lines = 43.0 * 1.16 * 1.1 * 3.0 + 2.5 * 2.0;
+        assert!(textbox_content_height(base, three_lines) >= three_lines + 102.0);
+        assert!(
+            textbox_content_height(base, three_lines * 2.0)
+                > textbox_content_height(base, three_lines)
+        );
+    }
 
     #[test]
     fn textbox_visibility_tracks_core_state_without_dialogue_changes() {

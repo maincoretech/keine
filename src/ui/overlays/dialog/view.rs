@@ -60,7 +60,8 @@ pub fn spawn_dialog(
             p.spawn((
                 Node {
                     width: Val::Percent(100.0),
-                    height: Val::Percent(20.0),
+                    min_height: Val::Percent(20.0),
+                    max_height: Val::Percent(85.0),
                     border: UiRect::top(Val::Px(11.25)),
                     ..default()
                 },
@@ -70,8 +71,8 @@ pub fn spawn_dialog(
             .with_child((
                 Node {
                     width: Val::Percent(100.0),
-                    height: Val::Percent(100.0),
                     flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(24.0),
                     justify_content: JustifyContent::SpaceBetween,
                     align_items: AlignItems::Center,
                     padding: UiRect::axes(Val::Px(60.0), Val::Px(24.0)),

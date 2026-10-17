@@ -60,7 +60,12 @@ pub(crate) fn load(project_root: &Path) -> HashMap<String, Value> {
         .unwrap_or_default()
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "ECS persistence inputs and failure reporting stay explicit"
+)]
 pub(crate) fn persist(
+    mut commands: Commands,
     time: Res<Time<Real>>,
     state: Res<GameState>,
     project_root: Res<PersistenceRoot>,
@@ -88,10 +93,20 @@ pub(crate) fn persist(
     if *elapsed < WRITE_DELAY_SECONDS {
         return;
     }
-    persist_now(&state.global_vars, &project_root, &mut writer);
+    persist_now(
+        &state.global_vars,
+        &project_root,
+        &mut writer,
+        &mut commands,
+    );
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "ECS persistence inputs and failure reporting stay explicit"
+)]
 pub(crate) fn flush_on_exit(
+    mut commands: Commands,
     mut exits: MessageReader<AppExit>,
     state: Res<GameState>,
     project_root: Res<PersistenceRoot>,
@@ -108,17 +123,28 @@ pub(crate) fn flush_on_exit(
         return;
     }
     if exits.read().next().is_some() && writer.saved != state.global_vars {
-        persist_now(&state.global_vars, &project_root, &mut writer);
+        persist_now(
+            &state.global_vars,
+            &project_root,
+            &mut writer,
+            &mut commands,
+        );
     }
 }
 
-fn persist_now(values: &HashMap<String, Value>, project_root: &Path, writer: &mut ProfileWriter) {
+fn persist_now(
+    values: &HashMap<String, Value>,
+    project_root: &Path,
+    writer: &mut ProfileWriter,
+    commands: &mut Commands,
+) {
     match save(values, project_root) {
         Ok(()) => {
             writer.saved.clone_from(values);
             writer.dirty_seconds = None;
         }
         Err(error) => {
+            crate::ui::dialog::report_background_save_failure(commands);
             writer.dirty_seconds = Some(0.0);
             log::warn!("failed to persist profile: {error:#}");
         }

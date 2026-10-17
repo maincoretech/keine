@@ -94,15 +94,19 @@ pub fn handle_dialog_click(
                     }
                     Err(error) => {
                         log::error!("quick save failed: {error:#}");
-                        if !context.state.persistence_safety().is_exact() {
-                            commands.insert_resource(DialogRequest::confirmation(
-                                tr(
-                                    context.settings.locale,
-                                    UiText::SaveUnavailableDuringPresentation,
-                                ),
-                                DialogAction::Noop,
-                            ));
-                        }
+                        crate::ui::dialog::report_notice(
+                            &mut commands,
+                            if context
+                                .checkpoint
+                                .state_for_continuation(&context.state)
+                                .is_none()
+                            {
+                                crate::ui::support::i18n::UiText::SaveUnavailableDuringPresentation
+                            } else {
+                                crate::ui::support::i18n::UiText::SaveFailed
+                            },
+                            false,
+                        );
                     }
                 }
             }
@@ -122,7 +126,10 @@ pub fn handle_dialog_click(
                             ));
                         }
                     },
-                    Err(error) => log::error!("quick load failed: {error:#}"),
+                    Err(error) => {
+                        log::error!("quick load failed: {error:#}");
+                        report_notice(&mut commands, UiText::LoadFailed, false);
+                    }
                 }
             }
             DialogAction::BackToTitle => {
@@ -151,7 +158,8 @@ pub fn handle_dialog_click(
                     Err(error) => {
                         log::error!(
                             "failed to save continuation before returning to title: {error:#}"
-                        )
+                        );
+                        report_notice(&mut commands, UiText::SaveFailed, false)
                     }
                 }
                 commands.insert_resource(crate::ui::title::ReturnToTitleTransition::default());
@@ -188,15 +196,19 @@ pub fn handle_dialog_click(
                     }
                     Err(error) => {
                         log::error!("save slot {slot} failed: {error:#}");
-                        if !context.state.persistence_safety().is_exact() {
-                            commands.insert_resource(DialogRequest::confirmation(
-                                tr(
-                                    context.settings.locale,
-                                    UiText::SaveUnavailableDuringPresentation,
-                                ),
-                                DialogAction::Noop,
-                            ));
-                        }
+                        crate::ui::dialog::report_notice(
+                            &mut commands,
+                            if context
+                                .checkpoint
+                                .state_for_continuation(&context.state)
+                                .is_none()
+                            {
+                                crate::ui::support::i18n::UiText::SaveUnavailableDuringPresentation
+                            } else {
+                                crate::ui::support::i18n::UiText::SaveFailed
+                            },
+                            false,
+                        );
                     }
                 }
             }
@@ -219,7 +231,10 @@ pub fn handle_dialog_click(
                             ));
                         }
                     },
-                    Err(error) => log::error!("load slot {slot} failed: {error:#}"),
+                    Err(error) => {
+                        log::error!("load slot {slot} failed: {error:#}");
+                        report_notice(&mut commands, UiText::LoadFailed, false);
+                    }
                 }
             }
             DialogAction::DeleteSlot(slot) => {
@@ -231,7 +246,10 @@ pub fn handle_dialog_click(
                     &context.project_root,
                 ) {
                     Ok(()) => context.save_load.set_changed(),
-                    Err(error) => log::error!("delete slot {slot} failed: {error:#}"),
+                    Err(error) => {
+                        log::error!("delete slot {slot} failed: {error:#}");
+                        report_notice(&mut commands, UiText::DataOperationFailed, false);
+                    }
                 }
             }
             DialogAction::ClearSaves => {
@@ -241,6 +259,7 @@ pub fn handle_dialog_click(
                     &context.project_root,
                 ) {
                     log::error!("failed to clear save slots: {error:#}");
+                    report_notice(&mut commands, UiText::DataOperationFailed, false);
                 } else {
                     context.preview.state = None;
                     context.preview.image = None;
@@ -250,6 +269,7 @@ pub fn handle_dialog_click(
             }
             DialogAction::ResetSettings => {
                 crate::ui::settings_panel::reset_runtime_settings(
+                    &mut commands,
                     &mut context.settings,
                     &mut context.toggles,
                     &mut context.pending_window,

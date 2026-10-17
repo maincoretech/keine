@@ -4,6 +4,7 @@ mod persistence;
 pub(crate) mod profile;
 #[path = "storage/read/history.rs"]
 pub(crate) mod read_history;
+mod recovery;
 pub(crate) mod save;
 pub(crate) mod settings;
 
@@ -128,7 +129,10 @@ impl Plugin for StoragePlugin {
         app.init_resource::<PersistenceWake>();
         app.init_resource::<save::ContinuationCheckpoint>();
         app.init_resource::<save::SavePreviewCoordinator>();
-        app.add_systems(Startup, settings::load_settings);
+        app.add_systems(
+            Startup,
+            (settings::load_settings, recovery::report_load_failures),
+        );
         app.add_systems(
             Update,
             (

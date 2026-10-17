@@ -114,6 +114,7 @@ pub fn handle_setting_action(context: SettingActionContext) {
         Some(Ok(None)) => return,
         Some(Err(error)) => {
             log::error!("failed to choose backup: {error:#}");
+            crate::ui::dialog::report_notice(&mut commands, UiText::DataOperationFailed, false);
             return;
         }
         None => (action, None),
@@ -179,12 +180,18 @@ pub fn handle_setting_action(context: SettingActionContext) {
                 None => {
                     if let Err(error) = crate::runtime::platform::request_backup(true) {
                         log::error!("failed to open backup export: {error:#}");
+                        crate::ui::dialog::report_notice(
+                            &mut commands,
+                            UiText::DataOperationFailed,
+                            false,
+                        );
                     }
                     return;
                 }
             };
             if let Err(error) = result {
                 log::error!("failed to export save data: {error:#}");
+                crate::ui::dialog::report_notice(&mut commands, UiText::DataOperationFailed, false);
             } else {
                 log::info!("backup export completed");
             }
@@ -206,12 +213,18 @@ pub fn handle_setting_action(context: SettingActionContext) {
                 None => {
                     if let Err(error) = crate::runtime::platform::request_backup(false) {
                         log::error!("failed to open backup import: {error:#}");
+                        crate::ui::dialog::report_notice(
+                            &mut commands,
+                            UiText::DataOperationFailed,
+                            false,
+                        );
                     }
                     return;
                 }
             };
             if let Err(error) = result {
                 log::error!("failed to import save data: {error:#}");
+                crate::ui::dialog::report_notice(&mut commands, UiText::DataOperationFailed, false);
                 return;
             }
             preview_coordinator.invalidate_all();
@@ -255,10 +268,12 @@ pub fn handle_setting_action(context: SettingActionContext) {
     }
     if let Err(error) = crate::storage::settings::persist(&settings, &project_root) {
         log::error!("failed to persist settings: {error:#}");
+        crate::ui::dialog::report_notice(&mut commands, UiText::SettingsSaveFailed, true);
     }
 }
 
 pub(crate) fn reset_runtime_settings(
+    commands: &mut Commands,
     settings: &mut RuntimeSettings,
     toggles: &mut ToggleStates,
     pending_window: &mut PendingWindowMode,
@@ -271,6 +286,7 @@ pub(crate) fn reset_runtime_settings(
     pending_window.delay_frames = 1;
     if let Err(error) = crate::storage::settings::persist(settings, project_root) {
         log::error!("failed to restore default settings: {error:#}");
+        crate::ui::dialog::report_notice(commands, UiText::SettingsSaveFailed, false);
     }
 }
 
@@ -321,6 +337,7 @@ pub(crate) struct SettingSliderInput<'w, 's> {
 }
 
 pub fn handle_setting_sliders(
+    mut commands: Commands,
     sliders: Query<(
         Entity,
         &Interaction,
@@ -424,6 +441,7 @@ pub fn handle_setting_sliders(
         if drag.dirty {
             if let Err(error) = crate::storage::settings::persist(&settings, &project_root) {
                 log::error!("failed to persist settings: {error:#}");
+                crate::ui::dialog::report_notice(&mut commands, UiText::SettingsSaveFailed, true);
             }
             drag.dirty = false;
         }

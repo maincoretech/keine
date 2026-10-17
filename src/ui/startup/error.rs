@@ -16,9 +16,9 @@ const WINDOW_HEIGHT: u32 = 540;
 const CARD_WIDTH: f32 = 600.0;
 const TITLE: &str = "游戏资源不可用";
 #[cfg(not(target_os = "android"))]
-const INSTRUCTION: &str = "请重新下载 game.haku 和 data 文件夹，并放到游戏可执行文件同目录";
+const INSTRUCTION: &str = "请重新下载并完整解压游戏包。";
 #[cfg(target_os = "android")]
-const INSTRUCTION: &str = "当前为安卓引擎测试包，请先部署游戏资源再重新启动";
+const INSTRUCTION: &str = "请重新下载并安装完整的游戏包。";
 
 #[derive(Component)]
 struct CloseButton;

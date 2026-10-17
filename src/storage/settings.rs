@@ -99,13 +99,26 @@ pub fn persist(settings: &RuntimeSettings, project_root: &Path) -> Result<()> {
         settings: settings.clone(),
     };
     let bytes = super::encode_postcard_limited(&file, MAX_SETTINGS_BYTES, "settings")?;
-    super::write_atomically(&path, &bytes)
+    super::recovery::write_preserving(&path, &bytes, MAX_SETTINGS_BYTES, decode)
 }
 
 pub(crate) fn load(project_root: &Path) -> Option<RuntimeSettings> {
-    let bytes = super::read_limited(&path(project_root), MAX_SETTINGS_BYTES).ok()?;
-    let file: SettingsFile = super::decode_postcard_exact(&bytes).ok()?;
-    (file.version == SETTINGS_VERSION).then_some(file.settings)
+    super::recovery::read_optional(&path(project_root), MAX_SETTINGS_BYTES, decode)
+        .ok()
+        .flatten()
+}
+
+fn decode(bytes: &[u8]) -> Result<RuntimeSettings> {
+    let file: SettingsFile = super::decode_postcard_exact(bytes)?;
+    anyhow::ensure!(
+        file.version == SETTINGS_VERSION,
+        "unsupported settings version"
+    );
+    Ok(file.settings)
+}
+
+pub(super) fn check(root: &Path) -> Result<()> {
+    super::recovery::read_optional(&path(root), MAX_SETTINGS_BYTES, decode).map(|_| ())
 }
 
 pub(crate) fn sanitize(settings: &mut RuntimeSettings) {
@@ -220,6 +233,13 @@ mod tests {
         .unwrap();
 
         assert!(load(&root).is_none());
+        let original = fs::read(path(&root)).unwrap();
+        persist(&RuntimeSettings::default(), &root).unwrap();
+        assert_eq!(
+            fs::read(root.join("saves/settings.bin.recovery-1")).unwrap(),
+            original
+        );
+        assert!(load(&root).is_some());
         let _ = fs::remove_dir_all(root);
     }
 }

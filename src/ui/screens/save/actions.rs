@@ -123,17 +123,19 @@ pub fn handle_save_load_slot(
             }
             Err(error) => {
                 log::error!("save slot {slot} failed: {error:#}");
-                if !context.state.persistence_safety().is_exact() {
-                    context
-                        .commands
-                        .insert_resource(DialogRequest::confirmation(
-                            crate::ui::support::i18n::tr(
-                                context.settings.locale,
-                                crate::ui::support::i18n::UiText::SaveUnavailableDuringPresentation,
-                            ),
-                            DialogAction::Noop,
-                        ));
-                }
+                crate::ui::dialog::report_notice(
+                    &mut context.commands,
+                    if context
+                        .checkpoint
+                        .state_for_continuation(&context.state)
+                        .is_none()
+                    {
+                        crate::ui::support::i18n::UiText::SaveUnavailableDuringPresentation
+                    } else {
+                        crate::ui::support::i18n::UiText::SaveFailed
+                    },
+                    false,
+                );
             }
         }
         return;

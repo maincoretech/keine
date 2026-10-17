@@ -59,7 +59,12 @@ pub(crate) fn load(state: &mut keine_core::State, project_root: &Path) {
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "ECS persistence inputs and failure reporting stay explicit"
+)]
 pub(crate) fn persist(
+    mut commands: Commands,
     time: Res<Time<Real>>,
     state: Res<GameState>,
     project_root: Res<PersistenceRoot>,
@@ -87,10 +92,15 @@ pub(crate) fn persist(
         previous.retry_seconds = None;
         return;
     }
-    persist_now(&state, &project_root, &mut previous);
+    persist_now(&state, &project_root, &mut previous, &mut commands);
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "ECS persistence inputs and failure reporting stay explicit"
+)]
 pub(crate) fn flush_on_exit(
+    mut commands: Commands,
     mut exits: MessageReader<AppExit>,
     state: Res<GameState>,
     project_root: Res<PersistenceRoot>,
@@ -106,19 +116,26 @@ pub(crate) fn flush_on_exit(
     ) && exits.read().next().is_some()
         && (previous.cg != state.unlocked_cg || previous.bgm != state.unlocked_bgm)
     {
-        persist_now(&state, &project_root, &mut previous);
+        persist_now(&state, &project_root, &mut previous, &mut commands);
     }
 }
 
-fn persist_now(state: &GameState, project_root: &Path, previous: &mut GallerySnapshot) {
+fn persist_now(
+    state: &GameState,
+    project_root: &Path,
+    previous: &mut GallerySnapshot,
+    commands: &mut Commands,
+) {
     let file = GalleryFile {
         version: VERSION,
         cg: &state.unlocked_cg,
         bgm: &state.unlocked_bgm,
     };
     let target = path(project_root);
-    let result = super::encode_postcard_limited(&file, MAX_GALLERY_BYTES, "gallery")
-        .and_then(|bytes| super::write_atomically(&target, &bytes));
+    let result =
+        super::encode_postcard_limited(&file, MAX_GALLERY_BYTES, "gallery").and_then(|bytes| {
+            super::recovery::write_preserving(&target, &bytes, MAX_GALLERY_BYTES, decode)
+        });
     match result {
         Ok(()) => {
             previous.cg.clone_from(&state.unlocked_cg);
@@ -126,6 +143,7 @@ fn persist_now(state: &GameState, project_root: &Path, previous: &mut GallerySna
             previous.retry_seconds = None;
         }
         Err(error) => {
+            crate::ui::dialog::report_background_save_failure(commands);
             previous.retry_seconds = Some(0.0);
             log::error!("failed to persist gallery: {error:#}");
         }
@@ -134,10 +152,15 @@ fn persist_now(state: &GameState, project_root: &Path, previous: &mut GallerySna
 
 fn decode(bytes: &[u8]) -> anyhow::Result<GalleryFileWire> {
     let file: GalleryFileWire = super::decode_postcard_exact(bytes)?;
+    anyhow::ensure!(file.version == VERSION, "unsupported gallery version");
     if file.cg.len().saturating_add(file.bgm.len()) > MAX_GALLERY_ENTRIES {
         anyhow::bail!("gallery contains too many entries");
     }
     Ok(file)
+}
+
+pub(super) fn check(root: &Path) -> anyhow::Result<()> {
+    super::recovery::read_optional(&path(root), MAX_GALLERY_BYTES, decode).map(|_| ())
 }
 
 fn path(project_root: &Path) -> std::path::PathBuf {

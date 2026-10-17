@@ -63,6 +63,7 @@ impl Plugin for GameUiPlugin {
         app.add_systems(
             PostUpdate,
             (
+                textbox::fit_textbox_content,
                 control_bar::position_quick_previews,
                 blur::update_blur_regions,
             )
@@ -71,7 +72,12 @@ impl Plugin for GameUiPlugin {
         );
         app.add_systems(
             PostUpdate,
-            (dialog::sync_system_message, dialog::spawn_dialog).chain(),
+            (
+                dialog::sync_system_message,
+                dialog::show_notice,
+                dialog::spawn_dialog,
+            )
+                .chain(),
         );
         app.add_systems(
             Last,

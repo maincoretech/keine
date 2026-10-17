@@ -135,6 +135,21 @@ Fuzz/ASan 的工具链、时间预算和调用以 Media Safety workflow 为准�
 维护者负责可重复的构建/合同与错误定位；作者确认实际画面、交互、听感及触感。
 当前 Windows/Linux 游戏运行态仍需对应设备证据，不用 macOS 结果推定。
 
+### 错误反馈与大字号
+
+在 `fc71d02` 基础工作区上，macOS / Metal / dev `video-native` 原生窗口验证：
+最大字号的三行对白与五行中英混排段落完整显示，文本框向上扩展，末行与底部操作区分离；
+长错误提示自动换行且确认按钮可见。临时工程目录取消写权限后，保存失败弹出提示，
+恢复权限后同一槽位重试成功。测试只改 `target/ui-readability-acceptance/` 中的副本。
+
+手机交互已由用户明确人工验收通过，不重复设备操作；本批新改动未重新构建 Android 包，
+也未补做 Windows/Linux 实机、极长段落分页或全语言原生布局验收。
+新增提示覆盖简中/繁中/日文/英文。设置与鉴赏的损坏/超限原件保留、无法保留时拒绝写入，
+以及提示排队不覆盖确认框均有回归测试；格式版本不变。
+fmt、工作区 all-targets/all-features check/Clippy、all-features 测试与
+no-default-features + publisher 测试通过；首次沙箱内测试仅废纸篓权限失败，沙箱外全量复验通过。
+本机命令和日志保留在 `target/ui-readability-acceptance/validation/`。
+
 ### 0.16.0 已有证据
 
 在 `83b00c2` 源码上整理文档时，macOS arm64 / Rust 1.99.0 复跑通过 fmt、

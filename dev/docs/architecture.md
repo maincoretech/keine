@@ -174,6 +174,11 @@ Runtime 在创建瞬态演出前捕获边界，读档后重新进入该演出，
 profile、read history、gallery、settings、window bounds 不随 slot rollback 回滚。
 profile/已读延迟写入和鉴赏失败重试使用 Real clock；Storage 提供下一次写入期限，
 runtime 复用休眠调度到期唤醒，Virtual clock 可以继续暂停。退出时补写三个独立域。
+设置/鉴赏读取失败时使用默认值并提示；下一次写入前，先将不可读原件保留为同目录
+`.recovery-N`，无法保留则拒绝覆盖。保护只在加载/实际写入时执行，不增加逐帧文件扫描；
+保留使用硬链接，不支持硬链接的文件系统会保留原件并报告写入失败。
+保存、读取、删除、导入/导出失败使用已有确认框；后台写入失败每会话提示一次，
+不覆盖正在等待选择的确认框，原有重试策略保持不变。
 窗口布局由 runtime/window.rs 管理，独立版本化 `saves/window.bin` 保存正常窗口
 物理尺寸、位置、DPI 和最大化状态，不改变设置 v4 或 Save v11。启动时按当前 monitor
 限制尺寸和位置，再显示窗口；benchmark 保留显式尺寸及隐藏窗口策略。

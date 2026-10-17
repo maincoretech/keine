@@ -59,7 +59,12 @@ pub(crate) fn load(project_root: &Path) -> HashSet<DialogueKey> {
         .unwrap_or_default()
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "ECS persistence inputs and failure reporting stay explicit"
+)]
 pub(crate) fn persist_read_history(
+    mut commands: Commands,
     time: Res<Time<Real>>,
     state: Res<GameState>,
     project_root: Res<PersistenceRoot>,
@@ -87,10 +92,20 @@ pub(crate) fn persist_read_history(
     if *elapsed < WRITE_DELAY_SECONDS {
         return;
     }
-    persist_now(&state.read_dialogues, &project_root, &mut writer);
+    persist_now(
+        &state.read_dialogues,
+        &project_root,
+        &mut writer,
+        &mut commands,
+    );
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "ECS persistence inputs and failure reporting stay explicit"
+)]
 pub(crate) fn flush_on_exit(
+    mut commands: Commands,
     mut exits: MessageReader<AppExit>,
     state: Res<GameState>,
     project_root: Res<PersistenceRoot>,
@@ -106,7 +121,12 @@ pub(crate) fn flush_on_exit(
     ) && exits.read().next().is_some()
         && writer.saved_len != state.read_dialogues.len()
     {
-        persist_now(&state.read_dialogues, &project_root, &mut writer);
+        persist_now(
+            &state.read_dialogues,
+            &project_root,
+            &mut writer,
+            &mut commands,
+        );
     }
 }
 
@@ -114,6 +134,7 @@ fn persist_now(
     history: &HashSet<DialogueKey>,
     project_root: &Path,
     writer: &mut ReadHistoryWriter,
+    commands: &mut Commands,
 ) {
     match save(history, project_root) {
         Ok(()) => {
@@ -121,6 +142,7 @@ fn persist_now(
             writer.dirty_seconds = None;
         }
         Err(error) => {
+            crate::ui::dialog::report_background_save_failure(commands);
             writer.dirty_seconds = Some(0.0);
             log::warn!("failed to persist read history: {error:#}");
         }

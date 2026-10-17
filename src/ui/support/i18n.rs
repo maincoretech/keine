@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::storage::settings::{RuntimeSettings, UiLocale};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum UiText {
     Save,
     Load,
@@ -55,6 +55,12 @@ pub(crate) enum UiText {
     ConfirmQuickSave,
     ConfirmQuickLoad,
     ConfirmReturnTitle,
+    SaveFailed,
+    LoadFailed,
+    DataOperationFailed,
+    SettingsSaveFailed,
+    BackgroundSaveFailed,
+    DataReadFailed,
     SaveUnavailableDuringPresentation,
     ForeignSave,
     NoSaveData,
@@ -93,6 +99,47 @@ pub(crate) const fn tr(locale: UiLocale, key: UiText) -> &'static str {
     use UiLocale::{En, Ja, ZhCn, ZhTw};
     use UiText::*;
     match (locale, key) {
+        (ZhCn, SaveFailed) => "保存失败，请检查存储空间或权限后重试。",
+        (ZhTw, SaveFailed) => "儲存失敗，請檢查儲存空間或權限後重試。",
+        (Ja, SaveFailed) => {
+            "保存できませんでした。空き容量やアクセス権を確認して再試行してください。"
+        }
+        (En, SaveFailed) => "Could not save. Check storage space and permissions, then retry.",
+        (ZhCn, LoadFailed) => "读档失败，当前进度未改变。",
+        (ZhTw, LoadFailed) => "讀檔失敗，目前進度未改變。",
+        (Ja, LoadFailed) => "ロードできませんでした。現在の進行状況は変わりません。",
+        (En, LoadFailed) => "Could not load the save. Your current progress is unchanged.",
+        (ZhCn, DataOperationFailed) => "操作失败，请检查存储空间或权限后重试。",
+        (ZhTw, DataOperationFailed) => "操作失敗，請檢查儲存空間或權限後重試。",
+        (Ja, DataOperationFailed) => {
+            "操作に失敗しました。空き容量やアクセス権を確認して再試行してください。"
+        }
+        (En, DataOperationFailed) => {
+            "Could not complete this action. Check storage space and permissions, then retry."
+        }
+        (ZhCn, SettingsSaveFailed) => "设置尚未保存，重启后可能恢复原值。",
+        (ZhTw, SettingsSaveFailed) => "設定尚未儲存，重新啟動後可能恢復原值。",
+        (Ja, SettingsSaveFailed) => {
+            "設定を保存できませんでした。再起動後に元の設定に戻る場合があります。"
+        }
+        (En, SettingsSaveFailed) => "Settings could not be saved and may revert after restarting.",
+        (ZhCn, BackgroundSaveFailed) => "部分进度未能保存，请检查存储空间或权限。",
+        (ZhTw, BackgroundSaveFailed) => "部分進度未能儲存，請檢查儲存空間或權限。",
+        (Ja, BackgroundSaveFailed) => {
+            "一部の進行データを保存できませんでした。空き容量やアクセス権を確認してください。"
+        }
+        (En, BackgroundSaveFailed) => {
+            "Some progress could not be saved. Please check storage space and permissions."
+        }
+        (ZhCn, DataReadFailed) => "部分设置或鉴赏记录未能加载，暂时使用默认值。",
+        (ZhTw, DataReadFailed) => "部分設定或鑑賞紀錄未能載入，暫時使用預設值。",
+        (Ja, DataReadFailed) => {
+            "一部の設定や鑑賞記録を読み込めませんでした。一時的に初期値を使用します。"
+        }
+        (En, DataReadFailed) => {
+            "Some settings or gallery records could not be loaded. Using defaults for now."
+        }
+
         (ZhCn, GalleryCg) => "CG",
         (ZhCn, GalleryMusic) => "音乐",
         (ZhCn, NoGalleryCg) => "尚未解锁 CG",
@@ -201,8 +248,8 @@ pub(crate) const fn tr(locale: UiLocale, key: UiText) -> &'static str {
         (ZhCn, ConfirmQuickSave) => "快速存档？",
         (ZhCn, ConfirmQuickLoad) => "快速读档？",
         (ZhCn, ConfirmReturnTitle) => "返回标题画面？",
-        (ZhCn, SaveUnavailableDuringPresentation) => "当前还没有可恢复的存档位置。",
-        (ZhCn, ForeignSave) => "存档属于不同的脚本版本",
+        (ZhCn, SaveUnavailableDuringPresentation) => "暂时无法存档。",
+        (ZhCn, ForeignSave) => "此存档与当前游戏不兼容。",
         (ZhCn, NoSaveData) => "暂无存档",
         (ZhCn, ConfirmExit) => "退出游戏？",
 
@@ -257,8 +304,8 @@ pub(crate) const fn tr(locale: UiLocale, key: UiText) -> &'static str {
         (ZhTw, ConfirmQuickSave) => "快速存檔？",
         (ZhTw, ConfirmQuickLoad) => "快速讀檔？",
         (ZhTw, ConfirmReturnTitle) => "返回標題畫面？",
-        (ZhTw, SaveUnavailableDuringPresentation) => "目前還沒有可恢復的存檔位置。",
-        (ZhTw, ForeignSave) => "存檔屬於不同的腳本版本",
+        (ZhTw, SaveUnavailableDuringPresentation) => "暫時無法存檔。",
+        (ZhTw, ForeignSave) => "此存檔與目前遊戲不相容。",
         (ZhTw, NoSaveData) => "暫無存檔",
         (ZhTw, ConfirmExit) => "退出遊戲？",
 
@@ -313,8 +360,8 @@ pub(crate) const fn tr(locale: UiLocale, key: UiText) -> &'static str {
         (Ja, ConfirmQuickSave) => "クイックセーブしますか？",
         (Ja, ConfirmQuickLoad) => "クイックロードしますか？",
         (Ja, ConfirmReturnTitle) => "タイトル画面に戻りますか？",
-        (Ja, SaveUnavailableDuringPresentation) => "復元できるセーブ位置がまだありません。",
-        (Ja, ForeignSave) => "セーブデータのスクリプトバージョンが異なります",
+        (Ja, SaveUnavailableDuringPresentation) => "今はセーブできません。",
+        (Ja, ForeignSave) => "このセーブデータは現在のゲームで使用できません。",
         (Ja, NoSaveData) => "セーブデータがありません",
         (Ja, ConfirmExit) => "ゲームを終了しますか？",
 
@@ -369,8 +416,8 @@ pub(crate) const fn tr(locale: UiLocale, key: UiText) -> &'static str {
         (En, ConfirmQuickSave) => "Quick save?",
         (En, ConfirmQuickLoad) => "Quick load?",
         (En, ConfirmReturnTitle) => "Return to title?",
-        (En, SaveUnavailableDuringPresentation) => "No resumable save position is available yet.",
-        (En, ForeignSave) => "Save data belongs to a different script build",
+        (En, SaveUnavailableDuringPresentation) => "Cannot save right now.",
+        (En, ForeignSave) => "This save is not compatible with the current game.",
         (En, NoSaveData) => "No save data",
         (En, ConfirmExit) => "Exit game?",
     }

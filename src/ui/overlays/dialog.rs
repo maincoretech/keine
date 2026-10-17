@@ -31,3 +31,8 @@ mod motion;
 pub use motion::*;
 mod sync;
 pub use sync::*;
+
+mod notices;
+pub(crate) use notices::{
+    report_background_save_failure, report_data_read_failure, report_notice, show_notice,
+};
