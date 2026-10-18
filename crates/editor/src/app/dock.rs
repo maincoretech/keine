@@ -1,6 +1,31 @@
 use super::*;
 use gpui_kit::base::ElementExt as _;
 
+/// Read only layout identities: a caller may already be updating a tool panel.
+pub(super) fn selected_panels(dock: &DockArea) -> Vec<PanelId> {
+    use gpui_kit::component::dock::PaneRef;
+    let mut selected = Vec::new();
+    for placement in [
+        DockPlacement::Center,
+        DockPlacement::Left,
+        DockPlacement::Right,
+        DockPlacement::Bottom,
+    ] {
+        if (placement == DockPlacement::Center || dock.is_dock_open(placement))
+            && let Some(tree) = dock.layout(placement)
+        {
+            tree.root().walk(&mut |node| {
+                if let PaneRef::Tabs { panels, active_ix } = node.kind()
+                    && let Some(panel) = panels.get(active_ix)
+                {
+                    selected.push(*panel);
+                }
+            });
+        }
+    }
+    selected
+}
+
 pub(super) fn document_insert_target(
     dock: &DockArea,
     remembered: Option<NodeId>,

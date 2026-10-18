@@ -96,6 +96,7 @@ mod render;
 mod reorder;
 mod resource;
 mod search;
+mod settings;
 #[path = "app/text/minimap.rs"]
 mod text_minimap;
 mod window;
@@ -241,6 +242,7 @@ actions!(
         ShowProblems,
         ShowOutput,
         ShowSearch,
+        ShowSettings,
         ShowAssetPreview,
         MigrateEiyashou,
         CopyBlocks,
@@ -355,7 +357,7 @@ impl Render for IconHint {
             .bg(rgb(SURFACE))
             .text_xs()
             .text_color(rgb(INK))
-            .child(self.0.clone())
+            .child(crate::i18n::text(&self.0))
     }
 }
 
@@ -375,6 +377,10 @@ fn activity_tool(
     div()
         .id(id)
         .size(px(ACTIVITY_ITEM_SIZE_PX))
+        .relative()
+        .focusable()
+        .aria_label(crate::i18n::tr(hint))
+        .focus_visible(|style| style.bg(rgb(PRIMARY_DIM)))
         .flex()
         .items_center()
         .justify_center()
@@ -441,7 +447,7 @@ fn file_context_menu_item(
         .cursor_pointer()
         .hover(|style| style.bg(rgb(SURFACE_HOVER)))
         .child(Icon::new(icon).xsmall().text_color(rgb(color)))
-        .child(label)
+        .child(crate::i18n::text(label))
 }
 
 fn short_error(error: &io::Error) -> String {
@@ -454,14 +460,35 @@ fn short_error(error: &io::Error) -> String {
 }
 
 fn open_workspace_document(root: &Path, relative: &Path, window: &mut Window, cx: &mut App) {
+    ensure_workspace_document(root, relative, true, window, cx);
+}
+
+/// Form transactions load the same source editor without navigating away.
+fn ensure_workspace_document(
+    root: &Path,
+    relative: &Path,
+    activate: bool,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let existing = cx.global::<EditorDocuments>().panel_for(root, relative);
     let Some((dock, document_node)) = cx.global::<EditorDocuments>().document_dock(root) else {
         return;
     };
     if let Some(panel) = existing {
-        let _ = dock.update(cx, |dock, cx| dock.select_panel(panel, window, cx));
+        if activate {
+            let _ = dock.update(cx, |dock, cx| dock.select_panel(panel, window, cx));
+        }
         return;
     }
+    let focus = window.focused(cx);
+    let selected = if activate {
+        Vec::new()
+    } else {
+        dock.upgrade()
+            .map(|dock| dock::selected_panels(dock.read(cx)))
+            .unwrap_or_default()
+    };
     let panel = match WorkbenchPanel::from_payload(
         PanelPayload::Document {
             root: root.to_owned(),
@@ -475,7 +502,13 @@ fn open_workspace_document(root: &Path, relative: &Path, window: &mut Window, cx
         Err(error) => {
             cx.global_mut::<EditorDocuments>().set_notice(
                 root,
-                format!("Could not open {}: {error}", relative.display()),
+                crate::i18n::format(
+                    "Could not open {0}: {error}",
+                    &[
+                        ("0", (relative.display()).to_string()),
+                        ("error", crate::i18n::tr(&(error).to_string()).to_owned()),
+                    ],
+                ),
             );
             cx.refresh_windows();
             return;
@@ -489,8 +522,17 @@ fn open_workspace_document(root: &Path, relative: &Path, window: &mut Window, cx
         let target = dock::document_insert_target(dock, document_node, &document_panels, output);
         dock.add_panel_view(panel_handle(panel), DockPlacement::Center, None, window, cx);
         dock.move_panel(panel_id, target, window, cx);
-        dock.select_panel(panel_id, window, cx);
+        if activate {
+            dock.select_panel(panel_id, window, cx);
+        } else {
+            for panel in selected {
+                dock.select_panel(panel, window, cx);
+            }
+        }
     });
+    if !activate && let Some(focus) = focus {
+        focus.focus(window, cx);
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -571,11 +613,15 @@ pub fn run() -> ExitCode {
             crate::syntax::install_editing_languages(cx);
             configure_dark_theme(cx);
             let persistence = AppPersistence::new(app_data.clone());
-            cx.set_global(EditorDocuments::new(persistence.clone()));
+            let documents = EditorDocuments::new(persistence.clone());
+            crate::i18n::set_language(documents.editor_preferences.language);
+            cx.set_global(documents);
             register_workbench_panels(cx);
             cx.bind_keys([
                 KeyBinding::new("ctrl-space", ShowSourceCompletions, Some("Input")),
                 KeyBinding::new("alt-/", ShowSourceCompletions, Some("Input")),
+                KeyBinding::new("cmd-,", ShowSettings, Some("KeineWorkbench")),
+                KeyBinding::new("ctrl-,", ShowSettings, Some("KeineWorkbench")),
                 KeyBinding::new("cmd-o", OpenFolder, Some("KeineWorkbench")),
                 KeyBinding::new("cmd-p", ShowQuickOpen, Some("KeineWorkbench")),
                 KeyBinding::new("ctrl-p", ShowQuickOpen, Some("KeineWorkbench")),

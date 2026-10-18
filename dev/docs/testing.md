@@ -155,6 +155,46 @@ Editor/Engine 配对 macOS 包签名与 native-smoke 验证通过；试听协议
 打包合同通过，已安装 Editor 的音频试听进入播放状态。安装摘要与日志在
 `target/closeout-0165/`，旧应用包保留为本地备份。
 
+Editor 表单与试听 UI 细化在 `89eb662` 基础工作区完成：fmt、工作区全功能 check/Clippy
+及测试通过（1121 passed、25 ignored；系统 Trash 权限失败后在沙箱外复验），最终焦点修正
+另跑 Editor `app::` 回归（94 passed、4 ignored）。同次构建的 macOS Editor/Engine 包通过
+签名与 native-smoke。原生窗口验证背景选择/预览、工程内图标选择、字段错误、排序落点、
+固定操作区、Apply 后留在表单并用 ⌘S 保存，以及音频 A/B 状态、建议增益应用/保存、
+重复应用禁用和窄面板换行。记录与截图在 `target/editor-ux-refinement/`；测试窗口已关闭。
+本次未安装替换系统应用，也未验证 Windows/Linux 原生界面或主观听感。
+后续将常用操作改为图标按钮并保留悬停提示，背景/图标选择器移至输入框旁；
+fmt、全功能 Clippy、Editor `app::` 回归和配对打包/native-smoke 通过。
+该版最初原生点击受 Computer Use `noWindowsAvailable` 阻塞；后续同一工作区原生窗口已可操作。
+
+左栏分组、表单上下文与列表交互细化：全功能工作区 check/Clippy、全量测试通过
+（1123 passed、25 ignored；系统 Trash 用例沙箱外复验），最后的 UI 修正另跑 Editor
+`app::`（96 passed、4 ignored）。新增回归覆盖首次/重复表单事务保留页签和焦点、
+Unicode 选区映射；现有滚动回归补验表单修改后 Text 选区和滚动不变。
+原生 macOS 验证底部菜单、左栏焦点高亮、项目 Apply/⌘S 留在表单、资源右键 Preview、
+CG 拖动及应用后立即再次拖动。拖动测试发现事件回调误调用绘制阶段动画 API，修正后复验通过。
+最终配对包位于 `target/editor-ux-refinement/framework-verified-package/`，签名/native-smoke 通过；
+日志与截图 `framework-*` 保留在同目录上级，测试窗口已关闭。未替换系统应用；
+长列表边缘滚动、拖动中 Esc、Windows/Linux 原生交互仍需单独人工验收。
+
+Settings 收敛为 Project / Extra / Editor：fmt、工作区全功能 check/Clippy 及测试通过
+（1125 passed、25 ignored）；最终 Editor 回归 256 passed、8 ignored。
+新增偏好持久化/边界与写入失败回归，既有概览换行用例覆盖 10/13/18/24 px；bench 调用同步签名，未额外跑分。
+原生 macOS 验证欢迎页齿轮与启动后 ⌘,、输入框/源码内 ⌘,、跨标签保留草稿、
+重启恢复偏好、源码字号即时更新、概览隐藏/恢复、Restore layout；测试偏好恢复默认，窗口关闭。
+测试包 `target/editor-ux-refinement/settings-final-package/` 签名/native-smoke 通过；
+日志和实拍 `settings-*` 位于同目录上级。未替换本机安装、未测 Windows/Linux 原生交互。
+
+Editor 三语界面：fmt、工作区全功能 check/Clippy 及测试通过（1127 passed、25 ignored）。
+回归覆盖三语词表完整性、占位符一致性、插入内容原样保留，以及语言偏好往返和旧配置兼容。
+原生 macOS 验证三语即时切换、设置/工作台/右键菜单布局、中文区块搜索、重新载入提示及重启记住语言；
+原有源码和项目名称保留。测试草稿已丢弃，语言恢复原来的英文，窗口关闭。
+`target/editor-i18n/package/` 配对测试包签名/native-smoke 通过；日志为 `target/editor-i18n-*.log`，
+实拍为 `target/editor-i18n/settings-zh-CN.png`。未替换本机安装；Windows/Linux 原生布局未验收。
+
+0.16.6 收尾：同次 dev/all-features 构建的 Editor/Engine 已配对更新到原本机应用位置，
+签名、版本与 native-smoke 校验及 5 项 authoring-process 测试通过，安装后设置页原生启动正常。
+安装摘要、旧包备份和日志位于 `target/closeout-0166/`；此本机验证不代表跨平台发行包验收。
+
 ### 错误反馈与大字号
 
 在 `fc71d02` 基础工作区上，macOS / Metal / dev `video-native` 原生窗口验证：

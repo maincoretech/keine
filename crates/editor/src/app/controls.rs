@@ -125,7 +125,7 @@ pub(super) fn section_label(label: &'static str) -> impl IntoElement {
         .text_xs()
         .font_weight(gpui_kit::FontWeight::SEMIBOLD)
         .text_color(rgb(PRIMARY))
-        .child(label)
+        .child(crate::i18n::text(label))
 }
 
 pub(super) fn property_row(label: &'static str, value: String) -> impl IntoElement {
@@ -136,7 +136,12 @@ pub(super) fn property_row(label: &'static str, value: String) -> impl IntoEleme
         .pb_1()
         .border_b_1()
         .border_color(rgb(BORDER))
-        .child(div().text_xs().text_color(rgb(MUTED)).child(label))
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child(crate::i18n::text(label)),
+        )
         .child(div().text_xs().text_color(rgb(INK)).child(value))
 }
 
@@ -144,16 +149,28 @@ pub(super) fn property_input(
     label: impl Into<SharedString>,
     state: &Entity<InputState>,
 ) -> impl IntoElement {
+    let label = label.into();
     div()
+        .w_full()
+        .min_w_0()
         .flex()
-        .flex_col()
-        .gap(px(2.))
+        .flex_wrap()
+        .items_center()
+        .gap_x_2()
+        .gap_y_1()
         .pb_1()
         .border_b_1()
         .border_color(rgb(BORDER))
-        .child(div().text_xs().text_color(rgb(MUTED)).child(label.into()))
         .child(
-            div().h(px(28.)).child(
+            div()
+                .w(px(90.))
+                .flex_shrink_0()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child(crate::i18n::text(&label)),
+        )
+        .child(
+            div().flex_1().min_w(px(120.)).h(px(28.)).child(
                 Input::new(state)
                     .appearance(false)
                     .bordered(false)
@@ -173,9 +190,15 @@ pub(super) fn output_line(label: &'static str, color: u32, value: String) -> imp
                 .w(px(44.))
                 .flex_none()
                 .text_color(rgb(color))
-                .child(label),
+                .child(crate::i18n::text(label)),
         )
-        .child(div().min_w_0().flex_1().whitespace_normal().child(value))
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .whitespace_normal()
+                .child(crate::i18n::text(&value)),
+        )
 }
 
 pub(super) fn document_mode_button(label: &'static str, selected: bool) -> Stateful<Div> {
@@ -201,12 +224,13 @@ pub(super) fn document_mode_button(label: &'static str, selected: bool) -> State
         .active(|style| style.bg(rgb(PRIMARY_DIM)))
         .cursor_pointer()
         .hover(|style| style.bg(rgb(SURFACE_HOVER)).text_color(rgb(INK)))
-        .child(label)
+        .child(crate::i18n::text(label))
 }
 
 pub(super) fn tool_input(state: &Entity<InputState>) -> impl IntoElement {
     div()
-        .h(px(30.))
+        .min_w_0()
+        .h(px(28.))
         .rounded(px(7.))
         .bg(rgb(SURFACE))
         .px_2()
@@ -221,23 +245,64 @@ pub(super) fn tool_input(state: &Entity<InputState>) -> impl IntoElement {
 }
 
 pub(super) fn tool_action(label: &'static str) -> Stateful<Div> {
+    tool_action_state(label, true, false)
+}
+
+/// Shared compact action styling; callers only attach actions when enabled.
+pub(super) fn tool_action_state(
+    label: &'static str,
+    enabled: bool,
+    selected: bool,
+) -> Stateful<Div> {
+    tool_action_base(label, enabled, selected).child(crate::i18n::text(label))
+}
+
+pub(super) fn tool_icon_action(
+    label: &'static str,
+    icon: AssetIconName,
+    enabled: bool,
+) -> Stateful<Div> {
+    tool_action_base(label, enabled, false)
+        .w(px(28.))
+        .px_0()
+        .aria_label(crate::i18n::text(label))
+        .tooltip(icon_hint(label))
+        .child(Icon::new(icon).small())
+}
+
+fn tool_action_base(label: &'static str, enabled: bool, selected: bool) -> Stateful<Div> {
     div()
         .id(label)
         .h(px(28.))
+        .min_w_0()
+        .flex_shrink_0()
         .px_3()
         .flex()
         .items_center()
         .justify_center()
         .rounded(px(7.))
-        .bg(rgb(PRIMARY_DIM))
         .text_xs()
-        .text_color(rgb(PRIMARY))
-        .focusable()
-        .focus_visible(|style| style.bg(rgb(PRIMARY_DIM)).text_color(rgb(PRIMARY)))
-        .active(|style| style.bg(rgb(PRIMARY_DIM)))
-        .cursor_pointer()
-        .hover(|style| style.bg(rgb(SURFACE_HOVER)).text_color(rgb(INK)))
-        .child(label)
+        .whitespace_nowrap()
+        .bg(rgb(if selected && enabled {
+            PRIMARY_DIM
+        } else {
+            SURFACE
+        }))
+        .text_color(rgb(if !enabled {
+            MUTED
+        } else if selected {
+            PRIMARY
+        } else {
+            INK
+        }))
+        .when(enabled, |this| {
+            this.focusable()
+                .focus_visible(|style| style.bg(rgb(PRIMARY_DIM)).text_color(rgb(PRIMARY)))
+                .active(|style| style.bg(rgb(PRIMARY_DIM)).text_color(rgb(PRIMARY)))
+                .cursor_pointer()
+                .hover(|style| style.bg(rgb(SURFACE_HOVER)).text_color(rgb(INK)))
+        })
+        .when(!enabled, |this| this.opacity(0.55).cursor_default())
 }
 
 pub(super) fn bottom_overflow_fade(visible: impl Fn(&App) -> bool + 'static) -> impl IntoElement {
@@ -426,11 +491,9 @@ mod disclosure_tests {
                         .flex()
                         .flex_col()
                         .child(div().h(px(40.)).flex_none())
-                        .child(
-                            div().text_sm().whitespace_normal().child(
-                                "Ready 70 Pending 0 Unused 0 Missing 0 Undefined 0 Unmapped 0",
-                            ),
-                        ),
+                        .child(div().text_sm().whitespace_normal().child(crate::i18n::tr(
+                            "Ready 70 Pending 0 Unused 0 Missing 0 Undefined 0 Unmapped 0",
+                        ))),
                 ))
                 .child(
                     div()

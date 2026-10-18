@@ -6,14 +6,22 @@
 │   ├── Explorer：工程文件，记住展开状态；首次默认折叠
 │   ├── Assets：映射资源 / Unmapped、搜索、类型/目录/标签过滤、List/Grid
 │   ├── Characters
-│   ├── Search：全文搜索与可撤销替换，⌘/Ctrl+Shift+F；位于角色下方、分隔线上方
-│   └── 分隔线 → Inspector / Problems / Output / Project / Build / Performance
+│   ├── Search：全文搜索与可撤销替换，⌘/Ctrl+Shift+F；其下为 Inspector
+│   ├── 分隔线 → Settings / Build
+│   └── 底部：Problems / Output / Performance；菜单提供打开工程、迁移；布局恢复归入 Settings
 ├── 中央文档
 │   ├── Text：补全、语法着色、诊断、智能缩进/配对、右侧概览
 │   └── Blocks：同一份源码的结构投影、拖动、行内编辑、右侧概览
 ├── 右栏：可关闭的 Asset Preview + Inspector
 └── Output：操作、解析、Preview 状态、只读变量和可点击错误
 ```
+
+左栏只高亮焦点所在工具，已打开但未聚焦的工具显示细标记。文件、资源和角色行
+提供一致的悬停、选中与键盘焦点反馈，Enter/Space 使用同一点击动作；资源/角色右键先选中
+目标，再提供 Preview / Edit YAML。现有行内操作继续可见，不依赖悬停才能发现。
+Inspector 属性标签与控件对齐，窄面板换行；长资源路径截断并提供完整提示。
+表单事务保留当前页签、焦点以及源码选区/滚动；只有明确跳转动作切换源码。
+Settings → Extra 的 CG/音乐排序在放下时生效，复用 Block 边缘滚动速度，Esc 或窗口失焦取消。
 
 ## 单一源码
 
@@ -275,11 +283,25 @@ Text 光标在多行指令内部也可定位。使用已保存角色值；无 `d
 
 时间轴和 Preview 拖拽构图仍不在当前功能范围；后续须由作者参与设计。
 
-## 项目设置
+## 设置
 
-左栏 Project 齿轮打开设置页：标题、标题背景（资源 ID / 路径）、应用图标、Extra 开关、
-CG / 音乐拖动排序。图标使用工程内的正方形 PNG / WebP；平台图标仍由原有打包流程生成。
-排序不解锁内容。Apply 写入当前 `config.yaml` 文档，沿用 Undo/Redo 和保存流程；
+左栏齿轮统一打开 Settings，同一页面分为 Project / Extra / Editor 三个标签。
+Project 编辑标题、标题背景（资源 ID / 路径）和应用图标；Extra 编辑鉴赏开关及 CG / 音乐排序。
+两个项目标签共用表单草稿和 Apply / Reset，不因切换标签丢失未应用修改；字段错误会返回 Project。
+Editor 提供界面语言（简体中文 / 繁體中文 / English）、源码字号（10–24 px，默认 13）和 Text / Blocks 概览开关（默认开启），
+以及当前工作区的 Restore layout。偏好自动保存到 Editor 用户目录，不写入项目；字号与概览换行映射同步更新。
+`⌘/Ctrl+,` 直接进入 Editor 标签；未打开项目时，欢迎页齿轮/同一快捷键打开相同控件。
+资源、角色及 Inspector 仍按编辑对象分开；Build 独立处理导出，Problems / Output / Performance 保持可并排调试。
+
+语言切换立即生效并保存在 `editor.json`；旧偏好缺少语言字段时继续使用英文。
+工作台、设置、区块菜单、资源/角色操作和常用提示使用同一静态三语词表；区块搜索兼容本地化名称及原有英文名称。
+脚本语法、资源 ID、角色名、文件名和引擎原始诊断保持原文。语言仅属于 Editor 偏好，不改变游戏语言或项目配置。
+
+项目设置中的图标使用工程内的正方形 PNG / WebP；平台图标仍由原有打包流程生成。
+Project / Extra 标签沿用现有控件；背景可从资源选择器选择，图标通过文件选择器选择，
+两者显示小预览；输入框旁用文件夹图标打开选择器。排序行用顶部插入线指示落点，列表末尾可放到最后。
+操作区固定在底部，以勾选、回退、文件图标对应 Apply / Reset form / Edit YAML，并提供悬停提示；无修改时 Apply / Reset form 禁用，状态区分未应用、已应用未保存、已保存；
+标题和图标错误显示在对应字段旁。排序不解锁内容。Apply 写入当前 `config.yaml` 文档，保留设置页和键盘焦点，沿用 Undo/Redo 和保存流程；
 局部 YAML 编辑保留未修改字段和注释。Reset form 放弃表单草稿，Edit YAML 打开源码。
 配置在其他位置改动时，未修改的表单自动刷新；已有草稿不覆盖外部改动。
 保存后重启 Preview 生效。
@@ -293,7 +315,9 @@ Assets 选择已登记音频 → Asset Preview → Analyze loudness。复用导�
 
 - 建议目标为 −18 LUFS，真峰值上限 −1 dBTP，固定增益限制 −60…+12 dB，建议值向下取到 0.1 dB；这是起始建议，
   不是发行标准或自动混音。静音报无可测音频；无整段响度读数时不自动提升，仅必要时降低峰值。
-- Original / Adjusted 从头试听原声 / 建议值，复用 Engine 解码；Apply gain 写入音频条目的
+- 音频预览使用播放/暂停、重播图标；分析、重新分析、应用和重置也使用图标与悬停提示，A/B 保留 Original / Adjusted 标签。建议值突出显示，目标和峰值说明收在提示中。
+- Original / Adjusted 从头试听原声 / 建议值，高亮与 Engine 的试听路径、增益和暂停状态同步；
+  已应用相同建议值时禁用 Apply gain。Apply gain 写入音频条目的
   `gain_db`，Reset gain 恢复 0 dB。正常试听读取当前文档中的增益，保存后重启 Preview 使用。
 - 增益与现有素材/总线/淡入淡出音量相乘，剧情 BGM、语音、音效和 Extra 音乐一致；
   加载/创建播放器时处理映射与 dB 换算，不增加逐帧分析。打包保存解析后的逻辑路径增益。

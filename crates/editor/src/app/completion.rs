@@ -430,7 +430,7 @@ fn completion_items(
                 .or_else(|| character.map(|character| character.name.clone()))
                 .unwrap_or_else(|| {
                     if value.ends_with(": ") {
-                        "Parameter".into()
+                        crate::i18n::tr("Parameter").into()
                     } else {
                         "EYS".into()
                     }

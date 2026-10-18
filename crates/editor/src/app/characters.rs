@@ -1,6 +1,7 @@
 //! Character manifest transactions and explicit source insertion. No second scene model.
 use super::*;
 use crate::authoring::CharacterEntry;
+use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui_kit::component::select::Select;
 use keine_core::config::CharacterDisplayPreset;
 
@@ -36,6 +37,10 @@ pub(super) fn render(
         });
     for character in &index.characters {
         let id = character.id.clone();
+        let menu_id = id.clone();
+        let menu_root = root.to_owned();
+        let manifest = index.characters_manifest.clone();
+        let owner = cx.entity().downgrade();
         let references = index
             .dialogues
             .iter()
@@ -44,10 +49,13 @@ pub(super) fn render(
         content = content.child(
             div()
                 .id(format!("character-{id}"))
+                .tooltip(icon_hint(format!("{} · {}", character.name, character.id)))
+                .focusable()
+                .focus_visible(|style| style.bg(rgb(PRIMARY_DIM)))
                 .p_2()
                 .rounded(px(7.))
                 .bg(rgb(if selected.as_ref() == Some(&id) {
-                    PRIMARY_DIM
+                    SURFACE
                 } else {
                     PANEL
                 }))
@@ -60,14 +68,36 @@ pub(super) fn render(
                     div()
                         .text_sm()
                         .text_color(rgb(INK))
+                        .truncate()
                         .child(character.name.clone()),
                 )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(MUTED))
-                        .child(format!("{} · {references} refs", character.id)),
-                ),
+                .child(div().text_xs().text_color(rgb(MUTED)).truncate().child(
+                    crate::i18n::format(
+                        "{0} · {references} refs",
+                        &[
+                            ("0", (character.id).to_string()),
+                            ("references", (references).to_string()),
+                        ],
+                    ),
+                ))
+                .context_menu(move |menu, window, cx| {
+                    let _ = owner.update(cx, |panel, cx| {
+                        if panel.characters.character_id.as_ref() != Some(&menu_id) {
+                            panel.select_character(Some(menu_id.clone()), window, cx);
+                        }
+                    });
+                    let root = menu_root.clone();
+                    let manifest = manifest.clone();
+                    menu.item(
+                        PopupMenuItem::new(crate::i18n::tr("Edit YAML"))
+                            .disabled(manifest.is_none())
+                            .on_click(move |_, window, cx| {
+                                if let Some(path) = &manifest {
+                                    navigate_source(&root, path, 1, 1, window, cx);
+                                }
+                            }),
+                    )
+                }),
         );
     }
     if inputs.len() == 10 {
@@ -85,7 +115,12 @@ pub(super) fn render(
             .zip(&panel.characters.display_selects)
         {
             content = content
-                .child(div().text_xs().text_color(rgb(MUTED)).child(label))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child(crate::i18n::text(label)),
+                )
                 .child(Select::new(select).small());
         }
         for (label, input) in [
@@ -95,7 +130,12 @@ pub(super) fn render(
             ("Transition duration (ms)", &inputs[9]),
         ] {
             content = content
-                .child(div().text_xs().text_color(rgb(MUTED)).child(label))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child(crate::i18n::text(label)),
+                )
                 .child(tool_input(input));
         }
         content = content
@@ -131,11 +171,18 @@ pub(super) fn render(
             .when_some(
                 panel.characters.character_script.as_ref(),
                 |this, (path, line)| {
-                    this.child(div().text_xs().text_color(rgb(MUTED)).child(format!(
-                        "Insert after {}:{}",
-                        path.display(),
-                        line + 1
-                    )))
+                    this.child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(MUTED))
+                            .child(crate::i18n::format(
+                                "Insert after {0}:{1}",
+                                &[
+                                    ("0", (path.display()).to_string()),
+                                    ("1", (line + 1).to_string()),
+                                ],
+                            )),
+                    )
                 },
             )
             .child(tool_action("Delete character").on_click(
@@ -185,7 +232,9 @@ pub(super) fn render(
                                 .to_string_lossy()
                                 .into_owned()
                         })
-                        .unwrap_or_else(|| format!("Missing: {id}"))
+                        .unwrap_or_else(|| {
+                            crate::i18n::format("Missing: {id}", &[("id", (id).to_string())])
+                        })
                 })
                 .collect::<Vec<_>>()
                 .join(" → ");
@@ -278,6 +327,7 @@ impl WorkbenchPanel {
             let options = options
                 .into_iter()
                 .map(|(value, title)| SourceOption {
+                    localize: true,
                     value: value.into(),
                     title: title.into(),
                     asset: None,
@@ -411,6 +461,7 @@ impl WorkbenchPanel {
             .iter()
             .filter(|asset| asset.kind == AssetKind::Figure && asset.exists)
             .map(|asset| SourceOption {
+                localize: false,
                 value: asset.id.clone(),
                 title: asset
                     .path
@@ -482,7 +533,7 @@ impl WorkbenchPanel {
         match result {
             Ok(source) => apply_prepared_edits(&root, &[(path, source)], window, cx).is_ok(),
             Err(error) => {
-                window.push_notification(Notification::error(error), cx);
+                window.push_notification(Notification::error(crate::i18n::text(&error)), cx);
                 false
             }
         }
@@ -500,9 +551,9 @@ impl WorkbenchPanel {
         let mut character = self.selected_character(cx).unwrap_or_default();
         if self.characters.character_id.is_some() && character.id != values[0] {
             window.push_notification(
-                Notification::error(
+                Notification::error(crate::i18n::tr(
                     "Character ID is stable; edit references in Text view before renaming",
-                ),
+                )),
                 cx,
             );
             return;
@@ -514,7 +565,7 @@ impl WorkbenchPanel {
         let display = match self.character_display(cx) {
             Ok(display) => display,
             Err(error) => {
-                window.push_notification(Notification::error(error), cx);
+                window.push_notification(Notification::error(crate::i18n::text(&error)), cx);
                 return;
             }
         };
@@ -529,7 +580,9 @@ impl WorkbenchPanel {
                 .any(|asset| &asset.id == id && asset.kind == AssetKind::Figure && asset.exists)
         }) {
             window.push_notification(
-                Notification::error("Avatar must reference a registered figure image"),
+                Notification::error(crate::i18n::tr(
+                    "Avatar must reference a registered figure image",
+                )),
                 cx,
             );
             return;
@@ -580,7 +633,7 @@ impl WorkbenchPanel {
             .to_owned();
         if !valid_identifier(&name) {
             window.push_notification(
-                Notification::error("Expression name must be an identifier"),
+                Notification::error(crate::i18n::tr("Expression name must be an identifier")),
                 cx,
             );
             return;
@@ -612,7 +665,9 @@ impl WorkbenchPanel {
                 })
             {
                 window.push_notification(
-                    Notification::error("Frames must reference registered figure images"),
+                    Notification::error(crate::i18n::tr(
+                        "Frames must reference registered figure images",
+                    )),
                     cx,
                 );
                 return;
@@ -624,8 +679,10 @@ impl WorkbenchPanel {
                 .is_some_and(|selected| selected != &name)
                 && character.expressions.contains_key(&name)
             {
-                window
-                    .push_notification(Notification::error("Expression name is already used"), cx);
+                window.push_notification(
+                    Notification::error(crate::i18n::tr("Expression name is already used")),
+                    cx,
+                );
                 return;
             }
             if let Some(selected) = &self.characters.character_expression {
@@ -653,7 +710,7 @@ impl WorkbenchPanel {
             .collect::<Vec<_>>();
         if images.is_empty() {
             window.push_notification(
-                Notification::error("Select figure images in Assets first"),
+                Notification::error(crate::i18n::tr("Select figure images in Assets first")),
                 cx,
             );
             return;
@@ -715,13 +772,14 @@ impl WorkbenchPanel {
             .and_then(|path| cx.global::<EditorDocuments>().source(&root, path));
         let receiver = window.prompt(
             PromptLevel::Warning,
-            "Delete character?",
-            Some(&format!(
-                "{count} dialogue references will become unresolved. Undo remains available."
+            crate::i18n::tr("Delete character?"),
+            Some(&crate::i18n::format(
+                "{count} dialogue references will become unresolved. Undo remains available.",
+                &[("count", (count).to_string())],
             )),
             &[
-                PromptButton::Other("Delete".into()),
-                PromptButton::Cancel("Cancel".into()),
+                PromptButton::Other(crate::i18n::tr("Delete").into()),
+                PromptButton::Cancel(crate::i18n::tr("Cancel").into()),
             ],
             cx,
         );
@@ -740,7 +798,9 @@ impl WorkbenchPanel {
                     || current_source != expected_source
                 {
                     window.push_notification(
-                        Notification::error("Character manifest changed; retry deletion"),
+                        Notification::error(crate::i18n::tr(
+                            "Character manifest changed; retry deletion",
+                        )),
                         cx,
                     );
                     return;
@@ -772,14 +832,18 @@ impl WorkbenchPanel {
         };
         let Some((path, line)) = self.characters.character_script.clone() else {
             window.push_notification(
-                Notification::error("Select a script block or Text position first"),
+                Notification::error(crate::i18n::tr(
+                    "Select a script block or Text position first",
+                )),
                 cx,
             );
             return;
         };
         if path.extension().is_none_or(|ext| ext != "shou") {
             window.push_notification(
-                Notification::error("Select a script block or Text position first"),
+                Notification::error(crate::i18n::tr(
+                    "Select a script block or Text position first",
+                )),
                 cx,
             );
             return;
@@ -821,7 +885,9 @@ impl WorkbenchPanel {
                     "Inserted character command; save the script to keep it",
                 );
             }
-            Err(error) => window.push_notification(Notification::error(error), cx),
+            Err(error) => {
+                window.push_notification(Notification::error(crate::i18n::text(&error)), cx)
+            }
         }
         cx.refresh_windows();
     }
@@ -849,7 +915,9 @@ impl WorkbenchPanel {
             .and_then(|manifest| manifest.characters.get(&character.id))
         else {
             window.push_notification(
-                Notification::error("Character manifest changed or is invalid; refresh Characters"),
+                Notification::error(crate::i18n::tr(
+                    "Character manifest changed or is invalid; refresh Characters",
+                )),
                 cx,
             );
             return;
@@ -871,7 +939,7 @@ impl WorkbenchPanel {
             selected.filter(|(path, _)| path.extension().is_some_and(|ext| ext == "shou"))
         else {
             window.push_notification(
-                Notification::error("Select one native sprite block first"),
+                Notification::error(crate::i18n::tr("Select one native sprite block first")),
                 cx,
             );
             return;
@@ -899,7 +967,9 @@ impl WorkbenchPanel {
                 // Reuse the normal Inspector Preview path and current overlays.
                 cx.defer(move |cx| super::inspector::run_source_block(&root, &path, start, cx));
             }
-            Err(error) => window.push_notification(Notification::error(error), cx),
+            Err(error) => {
+                window.push_notification(Notification::error(crate::i18n::text(&error)), cx)
+            }
         }
         cx.refresh_windows();
     }
@@ -914,7 +984,7 @@ fn apply_character_display(
     let display = character.display.clone().unwrap_or_default();
     display.validate().map_err(str::to_owned)?;
     if !valid_identifier(&character.id) {
-        return Err("Character ID is invalid".into());
+        return Err(crate::i18n::tr("Character ID is invalid").into());
     }
     let projection = EiyashouProjection::parse(source);
     let scene = projection
@@ -1071,7 +1141,7 @@ fn character_statement(
     index: &AuthoringIndex,
 ) -> Result<String, String> {
     if !valid_identifier(&character.id) {
-        return Err("Character ID is invalid".into());
+        return Err(crate::i18n::tr("Character ID is invalid").into());
     }
     if let Some(display) = &character.display {
         display.validate().map_err(str::to_owned)?;
@@ -1098,7 +1168,7 @@ fn character_statement(
                 .any(|asset| &asset.id == id && asset.kind == AssetKind::Figure && asset.exists)
         })
     {
-        return Err("Expression references a missing figure image".into());
+        return Err(crate::i18n::tr("Expression references a missing figure image").into());
     }
     if mode == "avatar" {
         return Ok(format!("avatar.show({})", frames[0]));

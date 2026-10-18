@@ -133,9 +133,9 @@ pub(super) fn replay_source_history(
             .as_deref()
             != Some(expected.as_str())
         {
-            return Err(format!(
-                "{} changed; refresh before undoing",
-                change.path.display()
+            return Err(crate::i18n::format(
+                "{0} changed; refresh before undoing",
+                &[("0", (change.path.display()).to_string())],
             ));
         }
         replacements.push((change.path.clone(), replacement.clone()));
@@ -207,7 +207,9 @@ pub(super) fn apply_asset_transaction(
             let before = cx
                 .global::<EditorDocuments>()
                 .source(root, path)
-                .ok_or_else(|| format!("{} unavailable", path.display()))?;
+                .ok_or_else(|| {
+                    crate::i18n::format("{0} unavailable", &[("0", (path.display()).to_string())])
+                })?;
             Ok(SourceChange {
                 path: path.clone(),
                 before,
@@ -217,14 +219,17 @@ pub(super) fn apply_asset_transaction(
         .collect::<Result<Vec<_>, String>>()?;
     // Prepare every editor before touching files, so a failed open leaves the project intact.
     for (path, _) in edits {
-        open_workspace_document(root, path, window, cx);
+        ensure_workspace_document(root, path, false, window, cx);
         if cx
             .global::<EditorDocuments>()
             .editor_for(root, path)
             .and_then(|editor| editor.upgrade())
             .is_none()
         {
-            return Err(format!("Could not open {}", path.display()));
+            return Err(crate::i18n::format(
+                "Could not open {0}",
+                &[("0", (path.display()).to_string())],
+            ));
         }
     }
     apply_file_changes(root, &mut files, false)?;
@@ -291,7 +296,7 @@ pub(super) fn asset_drop_edit_at(
     insertion: Option<bool>,
 ) -> Result<String, String> {
     if keys.is_empty() {
-        return Err("No asset selected".into());
+        return Err(crate::i18n::tr("No asset selected").into());
     }
     let projection = EiyashouProjection::parse(source);
     let target = projection
@@ -301,7 +306,7 @@ pub(super) fn asset_drop_edit_at(
         .find(|block| block.source_range.start == target_start)
         .ok_or("Target changed")?;
     if target.read_only {
-        return Err("Target is read-only".into());
+        return Err(crate::i18n::tr("Target is read-only").into());
     }
     let mut assets = keys
         .iter()
@@ -310,17 +315,19 @@ pub(super) fn asset_drop_edit_at(
                 .assets
                 .iter()
                 .find(|entry| entry.kind == key.kind && entry.id == key.id && entry.exists)
-                .ok_or_else(|| format!("{} is unavailable", key.id))
+                .ok_or_else(|| {
+                    crate::i18n::format("{0} is unavailable", &[("0", (key.id).to_string())])
+                })
         })
         .collect::<Result<Vec<_>, _>>()?;
     let mut seen = HashSet::new();
     assets.retain(|asset| seen.insert(asset.key()));
     if assets.iter().any(|asset| !valid_identifier(&asset.id)) {
-        return Err("Asset ID is not a script identifier".into());
+        return Err(crate::i18n::tr("Asset ID is not a script identifier").into());
     }
     if assets.iter().any(|asset| asset.kind == AssetKind::Voice) {
         if assets.len() != 1 {
-            return Err("Voice must be dropped alone".into());
+            return Err(crate::i18n::tr("Voice must be dropped alone").into());
         }
         let mut metadata = projection
             .text_block_metadata(source, target_start)
@@ -372,7 +379,7 @@ pub(super) fn asset_drop_edit_at(
                 crate::authoring::fields::source_asset_accepts(&context, field, asset.kind)
             }) {
                 if field.insertion.is_some() {
-                    return Err("Asset field has no exact source range".into());
+                    return Err(crate::i18n::tr("Asset field has no exact source range").into());
                 }
                 let value = if field.quoted {
                     escape_eiyashou_string(&asset.id)
@@ -382,7 +389,10 @@ pub(super) fn asset_drop_edit_at(
                 edited.replace_range(field.range.clone(), &value);
                 return Ok(edited);
             }
-            return Err("Resource type is incompatible; drop between Blocks to insert".into());
+            return Err(crate::i18n::tr(
+                "Resource type is incompatible; drop between Blocks to insert",
+            )
+            .into());
         }
         let projection = EiyashouProjection::parse(&edited);
         let (next, inserted) = if position == 0 && insertion == Some(false) {
@@ -531,9 +541,9 @@ pub(super) fn prepare_asset_edits(
     let renamed = new_id != asset.id;
     let retyped = new_kind != asset.kind;
     if (renamed || retyped) && !index.unindexed_sources.is_empty() {
-        return Err(format!(
-            "{} script sources could not be indexed",
-            index.unindexed_sources.len()
+        return Err(crate::i18n::format(
+            "{0} script sources could not be indexed",
+            &[("0", (index.unindexed_sources.len()).to_string())],
         ));
     }
     if retyped {
@@ -585,14 +595,18 @@ pub(super) fn prepare_asset_edits(
                 .push(reference.range.clone().expect("checked above"));
         }
         for (path, mut ranges) in ranges_by_path {
-            let mut source =
-                source_for(&path).ok_or_else(|| format!("{} unavailable", path.display()))?;
+            let mut source = source_for(&path).ok_or_else(|| {
+                crate::i18n::format("{0} unavailable", &[("0", (path.display()).to_string())])
+            })?;
             ranges.sort_by_key(|range| range.start);
             if ranges
                 .windows(2)
                 .any(|pair| pair[0].end > pair[1].start || pair[0] == pair[1])
             {
-                return Err(format!("Ambiguous reference in {}", path.display()));
+                return Err(crate::i18n::format(
+                    "Ambiguous reference in {0}",
+                    &[("0", (path.display()).to_string())],
+                ));
             }
             for range in ranges.into_iter().rev() {
                 let raw = source
@@ -603,7 +617,7 @@ pub(super) fn prepare_asset_edits(
                 } else if raw == format!("\"{}\"", asset.id) {
                     format!("\"{new_id}\"")
                 } else {
-                    return Err("Script changed; refresh Inspector".into());
+                    return Err(crate::i18n::tr("Script changed; refresh Inspector").into());
                 };
                 source.replace_range(range, &replacement);
             }
@@ -857,6 +871,107 @@ mod formatting_tests {
     }
 
     #[gpui_kit::test]
+    fn form_edits_preserve_active_tabs_focus_and_selection(cx: &mut gpui_kit::TestAppContext) {
+        let temporary =
+            std::env::temp_dir().join(format!("keine-form-context-{}", std::process::id()));
+        let root = temporary.join("project");
+        fs::create_dir_all(root.join("scripts")).unwrap();
+        fs::write(
+            root.join("config.yaml"),
+            include_str!("../../../../tests/fixtures/native-smoke/config.yaml"),
+        )
+        .unwrap();
+        let source = "scene start {\n  \"中文\",\n  wait(1s)\n}\n";
+        let path = Path::new("scripts/main.shou");
+        fs::write(root.join(path), source).unwrap();
+        let cx = cx.add_empty_window();
+        let (root, dock, selected, focus, after) = cx.update(|window, cx| {
+            gpui_kit::init(cx);
+            let session = crate::workspace::WorkspaceSession::open(&root).unwrap();
+            let root = session.root();
+            let mut documents = EditorDocuments::new(crate::persistence::AppPersistence::new(
+                temporary.join("app-data"),
+            ));
+            documents
+                .ensure_workspace_with_files(root, session.files())
+                .unwrap();
+            cx.set_global(documents);
+            let dock = cx.new(|cx| DockArea::new("form-context", None, window, cx));
+            cx.global_mut::<EditorDocuments>()
+                .set_dock(root, dock.downgrade());
+            let project = WorkbenchPanel::from_payload(
+                PanelPayload::Project {
+                    root: root.to_owned(),
+                },
+                window,
+                cx,
+            )
+            .unwrap();
+            let output = WorkbenchPanel::from_payload(
+                PanelPayload::Output {
+                    root: root.to_owned(),
+                },
+                window,
+                cx,
+            )
+            .unwrap();
+            let layout = DockLayout::tabs()
+                .panel_view(panel_handle(project.clone()), cx)
+                .panel_view(panel_handle(output), cx);
+            dock.update(cx, |dock, cx| dock.set_center(layout, window, cx));
+            project.read(cx).focus.clone().focus(window, cx);
+            let selected = dock::selected_panels(dock.read(cx));
+            let focus = window.focused(cx);
+            let after = source.replace("1s", "2s");
+            project.update(cx, |_, cx| {
+                apply_prepared_edits(root, &[(path.to_owned(), after.clone())], window, cx)
+                    .unwrap();
+            });
+            assert_eq!(dock::selected_panels(dock.read(cx)), selected);
+            assert_eq!(window.focused(cx), focus);
+            (root.to_owned(), dock, selected, focus, after)
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let root = root.as_path();
+            let editor = cx
+                .global::<EditorDocuments>()
+                .editor_for(root, path)
+                .unwrap()
+                .upgrade()
+                .unwrap();
+            let start = after.find("中文").unwrap();
+            editor.update(cx, |editor, cx| {
+                editor.set_selected_range(start..start + "中文".len(), cx);
+            });
+            apply_prepared_edits(
+                root,
+                &[(path.to_owned(), after.replace("2s", "30s"))],
+                window,
+                cx,
+            )
+            .unwrap();
+            assert_eq!(editor.read(cx).selected_value().as_ref(), "中文");
+            assert_eq!(dock::selected_panels(dock.read(cx)), selected);
+            assert_eq!(window.focused(cx), focus);
+        });
+        fs::remove_dir_all(temporary).unwrap();
+    }
+
+    #[test]
+    fn edit_position_mapping_handles_insert_delete_and_utf8() {
+        for (before, after, offset, expected) in [
+            ("ab尾", "a123b尾", 2, 5),
+            ("a123b尾", "ab尾", 5, 2),
+            ("前中文后", "前x后", 6, 4),
+            ("abc", "", 2, 0),
+            ("abc", "abc", 2, 2),
+        ] {
+            assert_eq!(replacement_offsets(before, after)(offset), expected);
+        }
+    }
+
+    #[gpui_kit::test]
     fn save_preserves_selection_and_its_screen_position(cx: &mut gpui_kit::TestAppContext) {
         let temporary = std::env::temp_dir().join(format!(
             "keine-save-view-{}-{}",
@@ -944,6 +1059,17 @@ mod formatting_tests {
             .unwrap();
         cx.run_until_parked();
         editor.read_with(cx, |editor, _| assert_eq!(editor.scroll_offset(), after));
+        window
+            .update(cx, |_, window, cx| {
+                let edited = editor.read(cx).value().replace("1s", "2s");
+                apply_prepared_edits(&root, &[(path.to_owned(), edited)], window, cx).unwrap();
+            })
+            .unwrap();
+        cx.run_until_parked();
+        editor.read_with(cx, |editor, _| {
+            assert_eq!(editor.selected_value().as_ref(), "对白30中文");
+            assert_eq!(editor.scroll_offset(), after);
+        });
         fs::remove_dir_all(temporary).unwrap();
     }
 
@@ -1025,6 +1151,33 @@ mod formatting_tests {
     }
 }
 
+// Preserve positions outside the changed span without parsing or allocating an AST.
+fn replacement_offsets<'a>(before: &'a str, after: &'a str) -> impl Fn(usize) -> usize + 'a {
+    let prefix = before
+        .chars()
+        .zip(after.chars())
+        .take_while(|(a, b)| a == b)
+        .map(|(c, _)| c.len_utf8())
+        .sum::<usize>();
+    let suffix = before[prefix..]
+        .chars()
+        .rev()
+        .zip(after[prefix..].chars().rev())
+        .take_while(|(a, b)| a == b)
+        .map(|(c, _)| c.len_utf8())
+        .sum::<usize>();
+    move |offset| {
+        let mapped = if offset <= prefix {
+            offset
+        } else if offset >= before.len() - suffix {
+            after.len() - suffix + offset.saturating_sub(before.len() - suffix)
+        } else {
+            prefix + (offset - prefix).min(after.len() - suffix - prefix)
+        };
+        after.floor_char_boundary(mapped.min(after.len()))
+    }
+}
+
 fn apply_prepared_edits_impl(
     root: &Path,
     edits: &[(PathBuf, String)],
@@ -1043,7 +1196,9 @@ fn apply_prepared_edits_impl(
                     Some(expected) => expected.get(path).cloned(),
                     None => cx.global::<EditorDocuments>().source(root, path),
                 }
-                .ok_or_else(|| format!("{} unavailable", path.display()))?;
+                .ok_or_else(|| {
+                    crate::i18n::format("{0} unavailable", &[("0", (path.display()).to_string())])
+                })?;
                 Ok(SourceChange {
                     path: path.clone(),
                     before,
@@ -1056,12 +1211,14 @@ fn apply_prepared_edits_impl(
     };
     let mut editors = Vec::with_capacity(edits.len());
     for (path, _) in edits {
-        open_workspace_document(root, path, window, cx);
+        ensure_workspace_document(root, path, false, window, cx);
         let editor = cx
             .global::<EditorDocuments>()
             .editor_for(root, path)
             .and_then(|editor| editor.upgrade())
-            .ok_or_else(|| format!("Could not open {}", path.display()))?;
+            .ok_or_else(|| {
+                crate::i18n::format("Could not open {0}", &[("0", (path.display()).to_string())])
+            })?;
         editors.push(editor);
     }
     // Opening a closed document can discover an external edit. Validate all
@@ -1069,16 +1226,23 @@ fn apply_prepared_edits_impl(
     if record {
         for (change, editor) in changes.iter().zip(&editors) {
             if *editor.read(cx).text() != change.before {
-                return Err(format!(
-                    "{} changed while opening; refresh before editing",
-                    change.path.display()
+                return Err(crate::i18n::format(
+                    "{0} changed while opening; refresh before editing",
+                    &[("0", (change.path.display()).to_string())],
                 ));
             }
         }
     }
     for ((_, source), editor) in edits.iter().zip(editors) {
         editor.update(cx, |editor, cx| {
-            editor.replace_all(source.clone(), window, cx)
+            let selection = editor.selected_range();
+            let scroll = editor.scroll_offset();
+            let before = editor.text().to_string();
+            let map = replacement_offsets(&before, source);
+            let selection = map(selection.start)..map(selection.end);
+            editor.replace_all(source.clone(), window, cx);
+            editor.set_selected_range(selection, cx);
+            editor.set_scroll_offset(scroll, cx);
         });
     }
     if record {
@@ -1228,7 +1392,7 @@ pub(super) fn common_value(values: impl IntoIterator<Item = String>) -> String {
     if values.all(|value| value == first) {
         first
     } else {
-        "Mixed".to_owned()
+        crate::i18n::tr("Mixed").to_owned()
     }
 }
 

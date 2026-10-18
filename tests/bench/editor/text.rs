@@ -87,7 +87,7 @@ fn text_rebuild(cx: &mut gpui_kit::TestAppContext) {
                 rows(
                     text.clone(),
                     px(300.),
-                    font.clone(),
+                    (font.clone(), px(13.)),
                     "shou",
                     cx.text_system().clone(),
                     None,
@@ -104,7 +104,7 @@ fn text_rebuild(cx: &mut gpui_kit::TestAppContext) {
                     rows(
                         text.clone(),
                         px(300.),
-                        font.clone(),
+                        (font.clone(), px(13.)),
                         "shou",
                         cx.text_system().clone(),
                         None,
@@ -118,7 +118,7 @@ fn text_rebuild(cx: &mut gpui_kit::TestAppContext) {
                     rows(
                         text.clone(),
                         px(320.),
-                        font.clone(),
+                        (font.clone(), px(13.)),
                         "shou",
                         cx.text_system().clone(),
                         Some(previous.clone()),

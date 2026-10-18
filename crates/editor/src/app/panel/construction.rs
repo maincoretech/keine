@@ -32,11 +32,15 @@ impl WorkbenchPanel {
             _ => None,
         };
         let panel = cx.new(|cx| {
-            let block_picker_input =
-                cx.new(|cx| InputState::new(window, cx).placeholder("Search blocks"));
-            let file_name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Name"));
-            let scene_name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Scene"));
-            let asset_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
+            let block_picker_input = cx.new(|cx| {
+                InputState::new(window, cx).placeholder(crate::i18n::tr("Search blocks"))
+            });
+            let file_name_input =
+                cx.new(|cx| InputState::new(window, cx).placeholder(crate::i18n::tr("Name")));
+            let scene_name_input =
+                cx.new(|cx| InputState::new(window, cx).placeholder(crate::i18n::tr("Scene")));
+            let asset_search =
+                cx.new(|cx| InputState::new(window, cx).placeholder(crate::i18n::tr("Search")));
             let view_scroll = ScrollHandle::new();
             let block_scroll_anchor = ScrollAnchor::for_handle(view_scroll.clone());
             let syntax_marks = match &content {
@@ -61,6 +65,8 @@ impl WorkbenchPanel {
                 view_scroll,
                 project_search: None,
                 project_settings: None,
+                language: crate::i18n::language(),
+                settings_tab: Default::default(),
                 calibration: Default::default(),
                 _subscriptions: Vec::new(),
                 resource_picker: None,
@@ -97,10 +103,12 @@ impl WorkbenchPanel {
                     asset_inspector_inputs: Vec::new(),
                     asset_rename_file: true,
                     batch_block_field: None,
-                    batch_block_input: cx
-                        .new(|cx| InputState::new(window, cx).placeholder("Value")),
+                    batch_block_input: cx.new(|cx| {
+                        InputState::new(window, cx).placeholder(crate::i18n::tr("Value"))
+                    }),
                     asset_batch_tags: cx.new(|cx| {
-                        InputState::new(window, cx).placeholder("Tags, separated by commas")
+                        InputState::new(window, cx)
+                            .placeholder(crate::i18n::tr("Tags, separated by commas"))
                     }),
                     asset_inspector_subscriptions: Vec::new(),
                 },
@@ -375,7 +383,7 @@ impl WorkbenchPanel {
                                                 editor.replace_all(previous, window, cx)
                                             });
                                             window.push_notification(
-                                                Notification::warning(message),
+                                                Notification::warning(crate::i18n::text(&message)),
                                                 cx,
                                             );
                                         });
@@ -511,13 +519,26 @@ impl WorkbenchPanel {
                                                         .global::<EditorDocuments>()
                                                         .has_dirty_documents(&write_root);
                                                     let notice = match recovery {
-                                                        Ok(()) if !any_dirty => "Ready".to_owned(),
-                                                        Ok(()) if clean => {
-                                                            "Unsaved changes".to_owned()
+                                                        Ok(()) if !any_dirty => {
+                                                            crate::i18n::tr("Ready").to_owned()
                                                         }
-                                                        Ok(()) => "Recovery draft saved".to_owned(),
-                                                        Err(error) => format!(
-                                                            "Recovery draft failed: {error}"
+                                                        Ok(()) if clean => {
+                                                            crate::i18n::tr("Unsaved changes")
+                                                                .to_owned()
+                                                        }
+                                                        Ok(()) => {
+                                                            crate::i18n::tr("Recovery draft saved")
+                                                                .to_owned()
+                                                        }
+                                                        Err(error) => crate::i18n::format(
+                                                            "Recovery draft failed: {error}",
+                                                            &[(
+                                                                "error",
+                                                                crate::i18n::tr(
+                                                                    &(error).to_string(),
+                                                                )
+                                                                .to_owned(),
+                                                            )],
                                                         ),
                                                     };
                                                     cx.global_mut::<EditorDocuments>()
@@ -555,10 +576,9 @@ impl WorkbenchPanel {
                     "Height (% of viewport; blank = natural)",
                     "Transition duration (ms)",
                 ] {
-                    panel
-                        .characters
-                        .tool_inputs
-                        .push(cx.new(|cx| InputState::new(window, cx).placeholder(placeholder)));
+                    panel.characters.tool_inputs.push(cx.new(|cx| {
+                        InputState::new(window, cx).placeholder(crate::i18n::tr(placeholder))
+                    }));
                 }
                 panel.init_character_display(window, cx);
             }

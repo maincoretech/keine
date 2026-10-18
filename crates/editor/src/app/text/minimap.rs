@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub(super) struct TextMinimap {
     cache: Option<Arc<Rows>>,
     dirty: bool,
-    requested: Option<(Pixels, gpui_kit::Font)>,
+    requested: Option<(Pixels, gpui_kit::Font, Pixels)>,
     epoch: u64,
     cancelled: Arc<AtomicBool>,
     task: Option<gpui_kit::Task<()>>,
@@ -30,7 +30,7 @@ struct Stroke {
 fn rows(
     text: Rope,
     wrap_width: Pixels,
-    font: gpui_kit::Font,
+    font: (gpui_kit::Font, Pixels),
     language: &str,
     text_system: Arc<gpui_kit::TextSystem>,
     previous: Option<Arc<Rows>>,
@@ -48,7 +48,7 @@ fn rows(
             || Arc::new(crate::syntax::overview_styles(&source, language)),
             |previous| previous.styles.clone(),
         );
-    let mut wrapper = text_system.line_wrapper(font.clone(), px(13.));
+    let mut wrapper = text_system.line_wrapper(font.0, font.1);
     let mut offsets = Vec::new();
     for row in 0..text.lines_len() {
         if cancelled.load(Ordering::Relaxed) {
@@ -202,13 +202,20 @@ pub(super) fn render(
         .text_bounds()
         .map_or(px(600.), |bounds| bounds.size.width);
     let font = gpui_kit::font(Theme::global(cx).mono_font_family.clone());
-    if !composing && (state.dirty || state.requested.as_ref() != Some(&(width, font.clone()))) {
+    let font_size = px(f32::from(
+        cx.global::<EditorDocuments>()
+            .editor_preferences
+            .source_font_size,
+    ));
+    if !composing
+        && (state.dirty || state.requested.as_ref() != Some(&(width, font.clone(), font_size)))
+    {
         state.cancelled.store(true, Ordering::Relaxed);
         state.task.take();
         state.cancelled = Arc::new(AtomicBool::new(false));
         state.epoch = state.epoch.wrapping_add(1);
         let epoch = state.epoch;
-        state.requested = Some((width, font.clone()));
+        state.requested = Some((width, font.clone(), font_size));
         state.dirty = false;
         let text = editor.read(cx).text().clone();
         let digits = text.lines_len().max(1).ilog10() as usize + 2;
@@ -216,7 +223,7 @@ pub(super) fn render(
             .text_system()
             .shape_line(
                 "+".repeat(digits).into(),
-                px(13.),
+                font_size,
                 &[gpui_kit::TextRun {
                     len: digits,
                     font: font.clone(),
@@ -243,7 +250,7 @@ pub(super) fn render(
             rows(
                 text,
                 wrap_width,
-                font,
+                (font, font_size),
                 &language,
                 text_system,
                 previous,
@@ -429,19 +436,19 @@ mod tests {
                 "\t  你好🙂 a long indented line to wrap\n\nend",
                 "scene demo {\n  hero: \"正文[wait=1000]继续\",\n}",
             ] {
-                for width in [1., 30., 80., 600.] {
+                for (width, font_size) in [(1., 10.), (30., 13.), (80., 24.), (600., 18.)] {
                     let text = Rope::from(source);
                     let actual = rows(
                         text.clone(),
                         px(width),
-                        font.clone(),
+                        (font.clone(), px(font_size)),
                         "shou",
                         cx.text_system().clone(),
                         None,
                         &cancelled,
                     )
                     .unwrap();
-                    let mut map = DisplayMap::new(font.clone(), px(13.), Some(px(width)));
+                    let mut map = DisplayMap::new(font.clone(), px(font_size), Some(px(width)));
                     map.set_text(&text, cx);
                     let expected = (0..map.display_row_count())
                         .map(|row| {
@@ -462,7 +469,7 @@ mod tests {
                     let resized = rows(
                         text,
                         px(width + 10.),
-                        font.clone(),
+                        (font.clone(), px(font_size)),
                         "shou",
                         cx.text_system().clone(),
                         Some(actual.clone()),
@@ -476,7 +483,7 @@ mod tests {
                 rows(
                     Rope::from("latest"),
                     px(80.),
-                    font.clone(),
+                    (font.clone(), px(13.)),
                     "shou",
                     cx.text_system().clone(),
                     None,
@@ -496,7 +503,7 @@ mod tests {
                 rows(
                     Rope::from("cancelled"),
                     px(80.),
-                    font,
+                    (font, px(13.)),
                     "shou",
                     cx.text_system().clone(),
                     None,

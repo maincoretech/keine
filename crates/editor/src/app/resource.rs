@@ -4,9 +4,12 @@ use super::*;
 pub(super) fn asset_action_button(id: &'static str, label: &'static str) -> Stateful<Div> {
     div()
         .id(id)
+        .h(px(28.))
         .px_2()
-        .py_1()
-        .rounded(px(6.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(7.))
         .bg(rgb(SURFACE))
         .text_xs()
         .text_color(rgb(INK))
@@ -15,7 +18,7 @@ pub(super) fn asset_action_button(id: &'static str, label: &'static str) -> Stat
         .focus_visible(|style| style.bg(rgb(PRIMARY_DIM)).text_color(rgb(PRIMARY)))
         .active(|style| style.bg(rgb(PRIMARY_DIM)))
         .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-        .child(label)
+        .child(crate::i18n::text(label))
 }
 
 impl WorkbenchPanel {
@@ -75,7 +78,9 @@ impl WorkbenchPanel {
                     .asset_batch_tags
                     .update(cx, |input, cx| input.set_value("", window, cx));
             }
-            Err(error) => window.push_notification(Notification::error(error), cx),
+            Err(error) => {
+                window.push_notification(Notification::error(crate::i18n::text(&error)), cx)
+            }
         }
         cx.refresh_windows();
     }
@@ -99,18 +104,18 @@ impl WorkbenchPanel {
         }
         let buttons = if unmapped.is_some() {
             vec![
-                PromptButton::Other("Trash".into()),
-                PromptButton::Cancel("Cancel".into()),
+                PromptButton::Other(crate::i18n::tr("Trash").into()),
+                PromptButton::Cancel(crate::i18n::tr("Cancel").into()),
             ]
         } else {
             vec![
-                PromptButton::Other("Keep files".into()),
-                PromptButton::Other("Trash".into()),
-                PromptButton::Cancel("Cancel".into()),
+                PromptButton::Other(crate::i18n::tr("Keep files").into()),
+                PromptButton::Other(crate::i18n::tr("Trash").into()),
+                PromptButton::Cancel(crate::i18n::tr("Cancel").into()),
             ]
         };
-        let receiver = window.prompt(PromptLevel::Warning, &format!("Delete {count} asset(s)?"),
-            Some("Keep files removes the mapping and marks files .unmapped. Trash uses the system Trash. Existing script references are left for diagnostics; Undo restores the change."), &buttons, cx);
+        let receiver = window.prompt(PromptLevel::Warning, &crate::i18n::format("Delete {count} asset(s)?", &[("count", (count).to_string())]),
+            Some(crate::i18n::tr("Keep files removes the mapping and marks files .unmapped. Trash uses the system Trash. Existing script references are left for diagnostics; Undo restores the change.")), &buttons, cx);
         cx.spawn_in(window, async move |this, cx| {
             let answer = prompt_answer(receiver.await.ok(), buttons.len());
             let delete_file = if unmapped.is_some() { answer == Some(0) } else { answer == Some(1) };
@@ -128,7 +133,7 @@ impl WorkbenchPanel {
                         for key in &selection {
                             let asset = index.assets.iter().find(|asset| asset.key() == *key).ok_or("Selection changed")?;
                             if asset.exists && index.assets.iter().any(|other| other.path == asset.path && other.key() != asset.key() && !selection.contains(&other.key())) {
-                                return Err("File has another mapping; select all mappings before deleting it".into());
+                                return Err(crate::i18n::tr("File has another mapping; select all mappings before deleting it").into());
                             }
                             source = file_ops::remove_manifest_asset(&source, asset).map_err(|error| error.to_string())?;
                             if asset.exists && !files.iter().any(|change: &file_ops::AssetFileChange| change.from == asset.path) { files.push(if delete_file { file_ops::AssetFileChange::delete(asset.path.clone()) }
@@ -140,7 +145,7 @@ impl WorkbenchPanel {
                     cx.global_mut::<EditorDocuments>().clear_asset_selection(&root);
                     Ok(())
                 })();
-                if let Err(error) = result { window.push_notification(Notification::error(error), cx); }
+                if let Err(error) = result { window.push_notification(Notification::error(crate::i18n::text(&error)), cx); }
                 else { this.focus.focus(window, cx); }
                 cx.refresh_windows();
             });
@@ -180,7 +185,7 @@ impl WorkbenchPanel {
             )
         })();
         if let Err(error) = result {
-            window.push_notification(Notification::error(error), cx);
+            window.push_notification(Notification::error(crate::i18n::text(&error)), cx);
         }
         cx.refresh_windows();
     }
@@ -209,9 +214,12 @@ pub(super) fn render_asset_preview(
             .text_sm()
             .text_color(rgb(MUTED))
             .child(if selected_count > 1 {
-                format!("{selected_count} assets selected")
+                crate::i18n::format(
+                    "{selected_count} assets selected",
+                    &[("selected_count", (selected_count).to_string())],
+                )
             } else {
-                "Select an asset to preview".to_owned()
+                crate::i18n::tr("Select an asset to preview").to_owned()
             })
             .into_any_element();
     };
@@ -240,7 +248,7 @@ pub(super) fn render_asset_preview(
                         .justify_center()
                         .text_sm()
                         .text_color(rgb(MUTED))
-                        .child("Could not decode image")
+                        .child(crate::i18n::tr("Could not decode image"))
                         .into_any_element()
                 })
                 .into_any_element()
@@ -261,18 +269,21 @@ pub(super) fn render_asset_preview(
             .flex_col()
             .items_center()
             .justify_start()
-            .gap_3()
-            .child(
-                Icon::new(AssetIconName::Music)
-                    .size(px(32.))
-                    .flex_shrink_0()
-                    .text_color(rgb(MUTED)),
-            )
+            .gap_2()
+            .p_2()
             .child(
                 div()
                     .flex_shrink_0()
+                    .w_full()
                     .flex()
+                    .flex_wrap()
+                    .items_center()
                     .gap_2()
+                    .child(
+                        Icon::new(AssetIconName::Music)
+                            .xsmall()
+                            .text_color(rgb(MUTED)),
+                    )
                     .child(audition_control(root, &asset.path, false, cx))
                     .child(replay_control(root, &asset.path, cx)),
             )
@@ -321,7 +332,11 @@ pub(super) fn render_asset_preview(
                 .overflow_hidden()
                 .text_ellipsis()
                 .whitespace_nowrap()
-                .child(format!("{} · {}", asset.kind.label(), asset.path.display())),
+                .child(format!(
+                    "{} · {}",
+                    crate::i18n::tr(asset.kind.label()),
+                    asset.path.display()
+                )),
         )
         .into_any_element()
 }
@@ -334,7 +349,7 @@ fn preview_placeholder(message: &'static str) -> AnyElement {
         .justify_center()
         .text_sm()
         .text_color(rgb(MUTED))
-        .child(message)
+        .child(crate::i18n::tr(message))
         .into_any_element()
 }
 
@@ -458,9 +473,12 @@ pub(super) fn render_asset_filter_menu(
         (
             AssetFilterGroup::Modified,
             "Modified",
-            panel.assets.asset_modified.map_or("Any".into(), |age| {
-                format!("{} days", age.as_secs() / 86400)
-            }),
+            panel
+                .assets
+                .asset_modified
+                .map_or(crate::i18n::tr("Any").into(), |age| {
+                    crate::i18n::format("{0} days", &[("0", (age.as_secs() / 86400).to_string())])
+                }),
             [
                 (None, "Any"),
                 (Some(Duration::from_secs(86400)), "Last day"),
@@ -514,22 +532,22 @@ pub(super) fn render_asset_filter_menu(
                     panel.assets.asset_sort == AssetSort::Name,
                 ),
                 (
-                    "Path".to_owned(),
+                    crate::i18n::tr("Path").to_owned(),
                     AssetFilterChoice::Sort(AssetSort::Path),
                     panel.assets.asset_sort == AssetSort::Path,
                 ),
                 (
-                    "References".to_owned(),
+                    crate::i18n::tr("References").to_owned(),
                     AssetFilterChoice::Sort(AssetSort::References),
                     panel.assets.asset_sort == AssetSort::References,
                 ),
                 (
-                    "Modified".into(),
+                    crate::i18n::tr("Modified").into(),
                     AssetFilterChoice::Sort(AssetSort::Modified),
                     panel.assets.asset_sort == AssetSort::Modified,
                 ),
                 (
-                    "Size".into(),
+                    crate::i18n::tr("Size").into(),
                     AssetFilterChoice::Sort(AssetSort::Size),
                     panel.assets.asset_sort == AssetSort::Size,
                 ),
@@ -546,17 +564,17 @@ pub(super) fn render_asset_filter_menu(
             .to_owned(),
             vec![
                 (
-                    "Auto".to_owned(),
+                    crate::i18n::tr("Auto").to_owned(),
                     AssetFilterChoice::View(None),
                     panel.assets.asset_grid.is_none(),
                 ),
                 (
-                    "List".to_owned(),
+                    crate::i18n::tr("List").to_owned(),
                     AssetFilterChoice::View(Some(false)),
                     panel.assets.asset_grid == Some(false),
                 ),
                 (
-                    "Grid".to_owned(),
+                    crate::i18n::tr("Grid").to_owned(),
                     AssetFilterChoice::View(Some(true)),
                     panel.assets.asset_grid == Some(true),
                 ),
@@ -573,12 +591,12 @@ pub(super) fn render_asset_filter_menu(
             .to_owned(),
             vec![
                 (
-                    "Compact".to_owned(),
+                    crate::i18n::tr("Compact").to_owned(),
                     AssetFilterChoice::Size(false),
                     !panel.assets.asset_large,
                 ),
                 (
-                    "Large".to_owned(),
+                    crate::i18n::tr("Large").to_owned(),
                     AssetFilterChoice::Size(true),
                     panel.assets.asset_large,
                 ),
@@ -595,12 +613,12 @@ pub(super) fn render_asset_filter_menu(
             .to_owned(),
             vec![
                 (
-                    "Mapped".to_owned(),
+                    crate::i18n::tr("Mapped").to_owned(),
                     AssetFilterChoice::Show(false),
                     !panel.assets.asset_unmapped,
                 ),
                 (
-                    "Unmapped".to_owned(),
+                    crate::i18n::tr("Unmapped").to_owned(),
                     AssetFilterChoice::Show(true),
                     panel.assets.asset_unmapped,
                 ),
@@ -672,7 +690,7 @@ pub(super) fn render_asset_filter_menu(
                                             cx.notify();
                                         }
                                     }))
-                                    .child(div().flex_1().min_w_0().child(title))
+                                    .child(div().flex_1().min_w_0().child(crate::i18n::tr(title)))
                                     .child(
                                         div()
                                             .max_w(px(110.))
@@ -680,7 +698,17 @@ pub(super) fn render_asset_filter_menu(
                                             .whitespace_nowrap()
                                             .text_ellipsis()
                                             .text_color(rgb(MUTED))
-                                            .child(value),
+                                            .child(
+                                                if matches!(
+                                                    group,
+                                                    AssetFilterGroup::Tags
+                                                        | AssetFilterGroup::Folder
+                                                ) {
+                                                    value.into()
+                                                } else {
+                                                    crate::i18n::text(&value)
+                                                },
+                                            ),
                                     )
                                     .child(disclosure_chevron(reveal)),
                             )
@@ -754,7 +782,17 @@ pub(super) fn render_asset_filter_menu(
                                                     .overflow_hidden()
                                                     .whitespace_nowrap()
                                                     .text_ellipsis()
-                                                    .child(label),
+                                                    .child(
+                                                        if matches!(
+                                                            group,
+                                                            AssetFilterGroup::Tags
+                                                                | AssetFilterGroup::Folder
+                                                        ) {
+                                                            label.into()
+                                                        } else {
+                                                            crate::i18n::text(&label)
+                                                        },
+                                                    ),
                                             )
                                             .when(selected, |this| {
                                                 this.child(

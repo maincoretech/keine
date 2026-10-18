@@ -1,6 +1,7 @@
 //! Responsive resource browsing; only visible rows mount image elements.
 use super::*;
 use crate::authoring::{AssetEntry, UnmappedAsset};
+use gpui_kit::component::menu::ContextMenuExt as _;
 
 pub(in crate::app) fn render_assets(
     root: &Path,
@@ -120,6 +121,13 @@ pub(in crate::app) fn render_assets(
                     let media = index.media.get(&asset.path);
                     let key = asset.key();
                     let row_key = key.clone();
+                    let menu_key = key.clone();
+                    let menu_root = root.clone();
+                    let menu_focus = panel.focus.clone();
+                    let menu_unmapped = UnmappedAsset {
+                        kind: asset.kind,
+                        path: asset.path.clone(),
+                    };
                     let row_root = root.clone();
                     let row_order = ordered.clone();
                     let selected = !unmapped_mode && selection.contains(&key);
@@ -128,7 +136,13 @@ pub(in crate::app) fn render_assets(
                         path: asset.path.clone(),
                     };
                     div()
-                        .id(("asset-row", row))
+                        .id(format!(
+                            "asset-row-{:?}-{}",
+                            asset.kind,
+                            asset.path.display()
+                        ))
+                        .focusable()
+                        .focus_visible(|style| style.bg(rgb(PRIMARY_DIM)))
                         .when(layout.grid, |this| {
                             this.w(px(cell_width)).flex_none().flex_col()
                         })
@@ -222,6 +236,17 @@ pub(in crate::app) fn render_assets(
                             &panel.assets.asset_thumbnails,
                             cx,
                         ))
+                        .context_menu(move |menu, _, cx| {
+                            let docs = cx.global_mut::<EditorDocuments>();
+                            if unmapped_mode {
+                                docs.set_unmapped_asset_preview(&menu_root, &menu_unmapped);
+                            } else if !docs.asset_selection(&menu_root).contains(&menu_key) {
+                                docs.set_asset_selection(&menu_root, vec![menu_key.clone()]);
+                            }
+                            cx.refresh_windows();
+                            menu.action_context(menu_focus.clone())
+                                .menu("Preview", Box::new(ShowAssetPreview))
+                        })
                 }))
         }))
         .child(div().h(px(after)).flex_none())
@@ -380,11 +405,17 @@ fn asset_content(
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| asset.id.clone());
     let detail = if asset.id.is_empty() {
-        "Unmapped".to_owned()
+        crate::i18n::tr("Unmapped").to_owned()
     } else if !asset.exists {
-        "Missing".to_owned()
+        crate::i18n::tr("Missing").to_owned()
     } else {
-        format!("{} · {} refs", asset.id, asset.reference_count)
+        crate::i18n::format(
+            "{0} · {1} refs",
+            &[
+                ("0", (asset.id).to_string()),
+                ("1", (asset.reference_count).to_string()),
+            ],
+        )
     };
     let mut metadata = String::new();
     if let Some(extension) = asset.path.extension().and_then(|value| value.to_str()) {
@@ -747,7 +778,7 @@ fn statistic_filter(
             cx.notify();
         }))
         .child(Icon::new(icon).xsmall())
-        .child(format!("{label} {count}"))
+        .child(format!("{} {count}", crate::i18n::tr(label)))
         .into_any_element()
 }
 
@@ -772,7 +803,7 @@ fn statistics_card(
                 }))
                 .child(disclosure_chevron(reveal))
                 .child(Icon::new(AssetIconName::Files).xsmall().text_color(rgb(MUTED)))
-                .child(div().text_sm().text_color(rgb(INK)).child(format!("{} files", statistics.files))))
+                .child(div().text_sm().text_color(rgb(INK)).child(crate::i18n::format("{0} files", &[("0", (statistics.files).to_string())]))))
             .child(div().text_xs().text_color(rgb(MUTED)).child(asset_bytes(statistics.bytes))))
         .child(disclosure_content("asset-statistics-body", reveal, div().px_2().pb_2().flex().flex_col().gap_2().text_xs().text_color(rgb(MUTED))
             .child(div().flex().flex_wrap().gap_2()
@@ -784,22 +815,22 @@ fn statistics_card(
                 .child(div().id("asset-undefined-references").flex().items_center().gap_1().cursor_pointer().tooltip(icon_hint("Show undefined references in Problems"))
                     .hover(|style| style.text_color(rgb(PRIMARY)))
                     .on_click(|_, window, cx| window.dispatch_action(Box::new(ShowProblems), cx))
-                    .child(Icon::new(AssetIconName::TriangleAlert).xsmall()).child(format!("Undefined {}", statistics.missing_references)))
+                    .child(Icon::new(AssetIconName::TriangleAlert).xsmall()).child(crate::i18n::format("Undefined {0}", &[("0", (statistics.missing_references).to_string())])))
                 .child(div().id("asset-unmapped-files").flex().items_center().gap_1().cursor_pointer().tooltip(icon_hint("Show files not registered in the resource manifest"))
                     .hover(|style| style.text_color(rgb(PRIMARY)))
                     .on_click(cx.listener(|panel, _, window, cx| { let active = panel.assets.asset_unmapped; panel.clear_asset_filters(window, cx); panel.assets.asset_unmapped = !active; cx.notify(); }))
-                    .child(Icon::new(AssetIconName::Link).xsmall()).child(format!("Unmapped {}", statistics.unmapped))))
+                    .child(Icon::new(AssetIconName::Link).xsmall()).child(crate::i18n::format("Unmapped {0}", &[("0", (statistics.unmapped).to_string())]))))
             .child(div().id("asset-package-estimate").flex().items_center().gap_1()
                 .tooltip(icon_hint("Registered assets, counted once per file, including unused. Pending files use current size; conversion updates the estimate. Excludes runtime, scripts and package overhead."))
                 .child(Icon::new(AssetIconName::Package).xsmall())
-                .child(format!("Package ≈ {}{}", asset_bytes(statistics.bytes), if statistics.missing + statistics.unmeasured > 0 { " · incomplete" } else { "" })))
+                .child(crate::i18n::format("Package ≈ {0}{1}", &[("0", (asset_bytes(statistics.bytes)).to_string()), ("1", (if statistics.missing + statistics.unmeasured > 0 { " · incomplete" } else { "" }).to_string())])))
             .child(div().id("convert-all-assets").flex().items_center().gap_1().px_2().py_1().rounded(px(5.))
                 .text_color(rgb(if can_convert { PRIMARY } else { MUTED }))
                 .when(can_convert, |button| button.cursor_pointer().hover(|style| style.bg(rgb(SURFACE_HOVER))))
                 .tooltip(icon_hint("Convert pending assets to WebP / Opus / H.264 MP4 beside originals. Keep IDs, tags and scripts. Original files stay unchanged."))
                 .on_click(cx.listener(move |panel, _, window, cx| { if can_convert { panel.start_asset_conversion(&root, window, cx); } }))
                 .child(Icon::new(AssetIconName::RefreshCw).xsmall())
-                .child(progress.map_or_else(|| "Convert all".to_owned(), |progress| format!("Working {}/{}", progress.completed, progress.total))))))
+                .child(progress.map_or_else(|| crate::i18n::tr("Convert all").to_owned(), |progress| crate::i18n::format("Working {0}/{1}", &[("0", (progress.completed).to_string()), ("1", (progress.total).to_string())]))))))
         .when_some(progress, |card, progress| card.child(
             div().px_2().pb_2()
                 .child(div().w_full().h(px(4.)).rounded_full().overflow_hidden().bg(rgb(SURFACE_HOVER))

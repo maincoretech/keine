@@ -350,7 +350,7 @@ impl PanelContent {
 
     fn title(&self) -> SharedString {
         match self {
-            Self::Explorer { .. } => "Explorer".into(),
+            Self::Explorer { .. } => crate::i18n::tr("Explorer").into(),
             Self::Document {
                 relative, document, ..
             } => {
@@ -367,17 +367,17 @@ impl PanelContent {
                     name.to_owned().into()
                 }
             }
-            Self::Inspector { .. } => "Inspector".into(),
-            Self::Output { .. } => "Output".into(),
-            Self::Search { .. } => "Search".into(),
-            Self::Assets { .. } => "Assets".into(),
-            Self::AssetPreview { .. } => "Asset Preview".into(),
-            Self::Characters { .. } => "Characters".into(),
-            Self::Scenes { .. } => "Scenes".into(),
-            Self::Problems { .. } => "Problems".into(),
-            Self::Performance { .. } => "Performance".into(),
-            Self::Build { .. } => "Build".into(),
-            Self::Project { .. } => "Project".into(),
+            Self::Inspector { .. } => crate::i18n::tr("Inspector").into(),
+            Self::Output { .. } => crate::i18n::tr("Output").into(),
+            Self::Search { .. } => crate::i18n::tr("Search").into(),
+            Self::Assets { .. } => crate::i18n::tr("Assets").into(),
+            Self::AssetPreview { .. } => crate::i18n::tr("Asset Preview").into(),
+            Self::Characters { .. } => crate::i18n::tr("Characters").into(),
+            Self::Scenes { .. } => crate::i18n::tr("Scenes").into(),
+            Self::Problems { .. } => crate::i18n::tr("Problems").into(),
+            Self::Performance { .. } => crate::i18n::tr("Performance").into(),
+            Self::Build { .. } => crate::i18n::tr("Build").into(),
+            Self::Project { .. } => crate::i18n::tr("Settings").into(),
         }
     }
 }
@@ -386,6 +386,8 @@ pub(super) struct WorkbenchPanel {
     pub(super) content: PanelContent,
     pub(super) focus: FocusHandle,
     pub(super) view_scroll: ScrollHandle,
+    pub(super) language: crate::i18n::Language,
+    pub(super) settings_tab: super::settings::SettingsTab,
     pub(super) project_settings: Option<super::project_settings::Settings>,
     pub(super) calibration: super::audio_calibration::Calibration,
     pub(super) project_search: Option<search::ProjectSearch>,
@@ -617,7 +619,7 @@ impl Render for BlockDragPreview {
                     .child(if self.count == 1 {
                         self.summary.clone()
                     } else {
-                        format!("{} blocks", self.count)
+                        crate::i18n::format("{0} blocks", &[("0", (self.count).to_string())])
                     }),
             )
     }
@@ -670,7 +672,7 @@ impl Render for AssetDrag {
                     .child(if self.keys.len() == 1 {
                         self.keys[0].id.clone()
                     } else {
-                        format!("{} assets", self.keys.len())
+                        crate::i18n::format("{0} assets", &[("0", (self.keys.len()).to_string())])
                     }),
             )
     }

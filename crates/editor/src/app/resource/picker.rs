@@ -3,11 +3,13 @@ use gpui_kit::{DispatchPhase, ScrollWheelEvent, canvas, point};
 
 pub(in crate::app) fn speaker_options(index: &AuthoringIndex) -> Vec<SourceOption> {
     std::iter::once(SourceOption {
+        localize: true,
         value: "Narrator".into(),
         title: "Narrator".into(),
         asset: None,
     })
     .chain(index.characters.iter().map(|character| SourceOption {
+        localize: false,
         value: character.id.clone(),
         title: character.name.clone().into(),
         asset: None,
@@ -42,7 +44,7 @@ pub(in crate::app) fn audition_control(
     let path = path.to_owned();
     div()
         .id(format!("audition-{}", path.display()))
-        .h(px(if compact { 24. } else { 32. }))
+        .h(px(if compact { 24. } else { 28. }))
         .min_w(px(24.))
         .px_2()
         .flex_shrink_0()
@@ -50,10 +52,14 @@ pub(in crate::app) fn audition_control(
         .items_center()
         .justify_center()
         .gap_2()
-        .rounded(px(4.))
+        .rounded(px(7.))
+        .focusable()
+        .focus_visible(|style| style.bg(rgb(PRIMARY_DIM)))
+        .active(|style| style.bg(rgb(PRIMARY_DIM)))
         .cursor_pointer()
         .hover(|style| style.bg(rgb(SURFACE_HOVER)))
         .when(!compact, |this| this.bg(rgb(SURFACE)))
+        .aria_label(crate::i18n::tr(label))
         .tooltip(icon_hint(label))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(move |_, _, cx| {
@@ -72,9 +78,6 @@ pub(in crate::app) fn audition_control(
             .xsmall()
             .text_color(rgb(PRIMARY)),
         )
-        .when(!compact, |this| {
-            this.child(div().text_size(px(12.)).text_color(rgb(INK)).child(label))
-        })
         .into_any_element()
 }
 
@@ -84,15 +87,19 @@ pub(in crate::app) fn replay_control(root: &Path, path: &Path, cx: &mut App) -> 
     let path = path.to_owned();
     div()
         .id("audition-replay")
-        .h(px(32.))
+        .h(px(28.))
         .px_2()
         .flex()
         .items_center()
         .gap_2()
-        .rounded(px(4.))
+        .rounded(px(7.))
         .bg(rgb(SURFACE))
+        .focusable()
+        .focus_visible(|style| style.bg(rgb(PRIMARY_DIM)))
+        .active(|style| style.bg(rgb(PRIMARY_DIM)))
         .cursor_pointer()
         .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+        .aria_label(crate::i18n::tr("Replay from beginning"))
         .tooltip(icon_hint("Replay from beginning"))
         .on_click(move |_, _, cx| {
             cx.stop_propagation();
@@ -106,12 +113,6 @@ pub(in crate::app) fn replay_control(root: &Path, path: &Path, cx: &mut App) -> 
                 .xsmall()
                 .text_color(rgb(PRIMARY)),
         )
-        .child(
-            div()
-                .text_size(px(12.))
-                .text_color(rgb(INK))
-                .child("Replay"),
-        )
         .into_any_element()
 }
 
@@ -120,6 +121,7 @@ pub(in crate::app) fn voice_resource_options(
     index: &AuthoringIndex,
 ) -> Vec<SourceOption> {
     let mut options = vec![SourceOption {
+        localize: true,
         value: String::new(),
         title: "No voice".into(),
         asset: None,
@@ -130,6 +132,7 @@ pub(in crate::app) fn voice_resource_options(
             .iter()
             .filter(|asset| asset.kind == AssetKind::Voice)
             .map(|asset| SourceOption {
+                localize: false,
                 value: asset.id.clone(),
                 title: asset
                     .path
@@ -147,6 +150,7 @@ pub(in crate::app) fn voice_resource_options(
 #[derive(Clone)]
 pub(in crate::app) enum ResourceTarget {
     Reference,
+    ProjectBackground,
     Source(SourceInspectorKey, usize),
     Voice(InspectorEditKey),
     Speaker(InspectorEditKey),
@@ -177,7 +181,7 @@ impl ResourcePicker {
         }
         let documents = cx.global::<EditorDocuments>();
         let (path, start) = match &self.target {
-            ResourceTarget::Reference => return true,
+            ResourceTarget::Reference | ResourceTarget::ProjectBackground => return true,
             ResourceTarget::Source(key, _) => (&key.path, key.block_start),
             ResourceTarget::Voice(key) | ResourceTarget::Speaker(key) => {
                 (&key.path, key.block_start)
@@ -196,7 +200,7 @@ impl ResourcePicker {
         };
         let projection = documents.projection(&self.root, path, &source);
         match &self.target {
-            ResourceTarget::Reference => true,
+            ResourceTarget::Reference | ResourceTarget::ProjectBackground => true,
             ResourceTarget::Source(key, _) => projection
                 .scenes
                 .iter()
@@ -238,10 +242,12 @@ pub(in crate::app) fn resource_trigger(
     let label = options
         .iter()
         .find(|option| option.value == current)
-        .map(|option| option.title.to_string())
+        .map(|option| option.title().to_string())
         .unwrap_or_else(|| current.clone());
+    let icon_only = matches!(target, ResourceTarget::ProjectBackground);
     let id = match &target {
         ResourceTarget::Reference => "asset-reference-picker".into(),
+        ResourceTarget::ProjectBackground => "project-background-picker".into(),
         ResourceTarget::Source(key, position) => format!("resource-{}-{position}", key.block_start),
         ResourceTarget::Voice(key) => format!("voice-resource-{}", key.block_start),
         ResourceTarget::Speaker(key) => format!("speaker-resource-{}", key.block_start),
@@ -262,10 +268,18 @@ pub(in crate::app) fn resource_trigger(
         .id(id)
         .relative()
         .when(inline, |this| this.w_auto().max_w(px(320.)).flex_none())
-        .when(!inline, |this| this.w_full())
+        .when(!inline && !icon_only, |this| this.w_full())
+        .when(icon_only, |this| {
+            this.w(px(28.))
+                .flex_shrink_0()
+                .aria_label(crate::i18n::tr("Choose background…"))
+                .justify_center()
+                .tooltip(icon_hint("Choose background…"))
+        })
         .min_w_0()
         .h(px(28.))
         .px_2()
+        .when(icon_only, |this| this.px_0())
         .flex()
         .items_center()
         .gap_2()
@@ -313,32 +327,34 @@ pub(in crate::app) fn resource_trigger(
             .absolute()
             .size_full(),
         )
-        .when(resource, |this| {
+        .when(resource || icon_only, |this| {
             this.child(
                 Icon::new(AssetIconName::Folder)
                     .xsmall()
                     .text_color(rgb(MUTED)),
             )
         })
-        .child(
-            div()
-                .when(!inline, |this| this.flex_1())
-                .min_w_0()
-                .text_size(px(12.))
-                .overflow_hidden()
-                .text_ellipsis()
-                .whitespace_nowrap()
-                .child(if label.is_empty() {
-                    "Select…".to_owned()
-                } else {
-                    label
-                }),
-        )
-        .child(
-            Icon::new(AssetIconName::ChevronDown)
-                .xsmall()
-                .text_color(rgb(MUTED)),
-        )
+        .when(!icon_only, |this| {
+            this.child(
+                div()
+                    .when(!inline, |this| this.flex_1())
+                    .min_w_0()
+                    .text_size(px(12.))
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .child(if label.is_empty() {
+                        crate::i18n::tr("Select…").to_owned()
+                    } else {
+                        label
+                    }),
+            )
+            .child(
+                Icon::new(AssetIconName::ChevronDown)
+                    .xsmall()
+                    .text_color(rgb(MUTED)),
+            )
+        })
         .on_click(cx.listener(move |panel, _, window, cx| {
             cx.stop_propagation();
             if !enabled {
@@ -449,7 +465,7 @@ impl WorkbenchPanel {
         if let Ok(preview) = cx.global_mut::<EditorDocuments>().preview(root) {
             preview.stop_audition();
         }
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(crate::i18n::tr("Search")));
         let subscription = cx.subscribe(&input, |panel, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 if let Some(picker) = panel.resource_picker.as_mut() {
@@ -561,6 +577,10 @@ impl WorkbenchPanel {
         let target = picker.target.clone();
         self.close_resource_picker(true, window, cx);
         match target {
+            ResourceTarget::ProjectBackground => {
+                project_settings::select_background(self, option.value, window, cx);
+                return;
+            }
             ResourceTarget::Reference => {
                 if let Ok((path, line, column)) =
                     serde_json::from_str::<(PathBuf, usize, usize)>(&option.value)
@@ -730,7 +750,7 @@ impl WorkbenchPanel {
                                 .p_3()
                                 .text_size(px(12.))
                                 .text_color(rgb(MUTED))
-                                .child("No matching resources"),
+                                .child(crate::i18n::tr("No matching resources")),
                         )
                     })
                     .child(div().h(px(first as f32 * row_height)).flex_none())
@@ -751,7 +771,7 @@ impl WorkbenchPanel {
                                         .overflow_hidden()
                                         .text_ellipsis()
                                         .whitespace_nowrap()
-                                        .child(option.title.clone())
+                                        .child(option.title())
                                         .into_any_element()
                                 };
                                 let current = picker.current == option.value;
@@ -821,7 +841,7 @@ impl WorkbenchPanel {
                                 .set_notice(&root, "Resource manager");
                         }))
                         .child(Icon::new(AssetIconName::Folder).xsmall())
-                        .child("Manage resources"),
+                        .child(crate::i18n::tr("Manage resources")),
                 )
             })
             .with_animation(

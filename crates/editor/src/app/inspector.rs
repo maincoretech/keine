@@ -39,7 +39,9 @@ impl WorkbenchPanel {
                 cx.global_mut::<EditorDocuments>()
                     .set_block_selection(root, path, starts);
             }
-            Err(error) => window.push_notification(Notification::error(error), cx),
+            Err(error) => {
+                window.push_notification(Notification::error(crate::i18n::text(&error)), cx)
+            }
         }
         cx.refresh_windows();
     }
@@ -1017,11 +1019,11 @@ impl WorkbenchPanel {
                 cx.new(|cx| {
                     InputState::new(window, cx)
                         .default_value((*value).clone())
-                        .placeholder(if position == 0 {
+                        .placeholder(crate::i18n::tr(if position == 0 {
                             "Sprite ID / prefix*"
                         } else {
                             "fade(200ms)"
-                        })
+                        }))
                 })
             })
             .collect();
@@ -1067,7 +1069,7 @@ impl WorkbenchPanel {
                 cx.new(|cx| {
                     InputState::new(window, cx)
                         .default_value(value.clone())
-                        .placeholder(placeholder)
+                        .placeholder(crate::i18n::tr(placeholder))
                 })
             })
             .collect();
@@ -1094,6 +1096,7 @@ impl WorkbenchPanel {
         let index = cx.global::<EditorDocuments>().authoring(root);
         let speakers = speaker_options(&index);
         let mut voices = vec![SourceOption {
+            localize: true,
             value: String::new(),
             title: "No voice".into(),
             asset: None,
@@ -1104,6 +1107,7 @@ impl WorkbenchPanel {
                 .iter()
                 .filter(|asset| asset.kind == AssetKind::Voice)
                 .map(|asset| SourceOption {
+                    localize: false,
                     value: asset.id.clone(),
                     title: asset
                         .path
@@ -1119,6 +1123,7 @@ impl WorkbenchPanel {
             let value = &values[position];
             if !options.iter().any(|option| option.value == *value) {
                 options.push(SourceOption {
+                    localize: false,
                     value: value.clone(),
                     title: value.clone().into(),
                     asset: None,
@@ -1236,8 +1241,13 @@ impl WorkbenchPanel {
                         input.set_value(original.clone(), window, cx)
                     });
                 }
-                cx.global_mut::<EditorDocuments>()
-                    .set_notice(root, format!("Text ending edit blocked: {error}"));
+                cx.global_mut::<EditorDocuments>().set_notice(
+                    root,
+                    crate::i18n::format(
+                        "Text ending edit blocked: {error}",
+                        &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                    ),
+                );
             }
         }
         cx.refresh_windows();
@@ -1297,9 +1307,13 @@ impl WorkbenchPanel {
                     cx.global_mut::<EditorDocuments>()
                         .set_notice(root, "Text properties updated");
                 }
-                Err(error) => cx
-                    .global_mut::<EditorDocuments>()
-                    .set_notice(root, format!("Text properties blocked: {error}")),
+                Err(error) => cx.global_mut::<EditorDocuments>().set_notice(
+                    root,
+                    crate::i18n::format(
+                        "Text properties blocked: {error}",
+                        &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                    ),
+                ),
             }
         }
         cx.refresh_windows();
@@ -1338,7 +1352,7 @@ impl WorkbenchPanel {
             self.inspector.asset_inspector_inputs.push(cx.new(|cx| {
                 InputState::new(window, cx)
                     .default_value(value)
-                    .placeholder(placeholder)
+                    .placeholder(crate::i18n::tr(placeholder))
             }));
         }
         let inputs = self.inspector.asset_inspector_inputs.clone();
@@ -1385,7 +1399,7 @@ impl WorkbenchPanel {
                         return;
                     };
                     let result = if !cx.global::<EditorDocuments>().authoring_is_current(&root) {
-                        Err("Script index is updating; try again shortly".to_owned())
+                        Err(crate::i18n::tr("Script index is updating; try again shortly").to_owned())
                     } else {
                         prepare_asset_edits(
                             &root,
@@ -1418,7 +1432,7 @@ impl WorkbenchPanel {
                             let files = if path == asset.path || !asset.exists { Vec::new() } else { vec![file_ops::AssetFileChange::relocate(asset.path.clone(), path.clone())] };
                             let message = format!("{} → {}\n{} → {}\n{} reference(s) in {} source file(s).{}", asset.id, id, asset.path.display(), path.display(), asset.reference_count, edits.len().saturating_sub(1), if asset.kind != kind { "\nReferences incompatible with the new type will be reported in Problems." } else { "" });
                             let receiver = if id != asset.id || kind != asset.kind {
-                                match cx.update_window(window_handle, |_, window, cx| window.prompt(PromptLevel::Warning, "Update asset?", Some(&message), &[PromptButton::Other("Apply".into()), PromptButton::Cancel("Cancel".into())], cx)) {
+                                match cx.update_window(window_handle, |_, window, cx| window.prompt(PromptLevel::Warning, crate::i18n::tr("Update asset?"), Some(&message), &[PromptButton::Other(crate::i18n::tr("Apply").into()), PromptButton::Cancel(crate::i18n::tr("Cancel").into())], cx)) {
                                     Ok(receiver) => Some(receiver),
                                     Err(error) => { panel.inspector.asset_inspector_key = None; cx.global_mut::<EditorDocuments>().set_notice(&root, error.to_string()); return; }
                                 }
@@ -1433,7 +1447,7 @@ impl WorkbenchPanel {
                                 let _ = this.update(cx, |panel, cx| {
                                     let applied = cx.update_window(window_handle, |_, window, cx| {
                                         if baselines.len() != edits.len() || baselines.iter().any(|(path, before)| cx.global::<EditorDocuments>().source(&root, path).as_ref() != Some(before)) {
-                                            return Err("Source changed while confirming; refresh Inspector".into());
+                                            return Err(crate::i18n::tr("Source changed while confirming; refresh Inspector").into());
                                         }
                                         let result = apply_asset_transaction(&root, &edits, files, window, cx);
                                         if result.is_ok() { panel.focus.focus(window, cx); }
@@ -1444,7 +1458,7 @@ impl WorkbenchPanel {
                                             cx.global_mut::<EditorDocuments>().set_asset_selection(&root, vec![AssetKey { kind, id }]);
                                             cx.global_mut::<EditorDocuments>().set_notice(&root, "Asset updated");
                                         }
-                                        Ok(Err(error)) => { panel.inspector.asset_inspector_key = None; cx.global_mut::<EditorDocuments>().set_notice(&root, format!("Asset: {error}")); }
+                                        Ok(Err(error)) => { panel.inspector.asset_inspector_key = None; cx.global_mut::<EditorDocuments>().set_notice(&root, crate::i18n::format("Asset: {error}", &[("error", crate::i18n::tr(&(error).to_string()).to_owned())])); }
                                         Err(error) => { cx.global_mut::<EditorDocuments>().set_notice(&root, error.to_string()); }
                                     }
                                     cx.refresh_windows();
@@ -1454,7 +1468,7 @@ impl WorkbenchPanel {
                         Err(error) => {
                             panel.inspector.asset_inspector_key = None;
                             cx.global_mut::<EditorDocuments>()
-                                .set_notice(&root, format!("Asset: {error}"));
+                                .set_notice(&root, crate::i18n::format("Asset: {error}", &[("error", crate::i18n::tr(&(error).to_string()).to_owned())]));
                         }
                     }
                     cx.refresh_windows();

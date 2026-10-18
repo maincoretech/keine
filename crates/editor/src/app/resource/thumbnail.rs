@@ -161,7 +161,7 @@ impl Thumbnails {
         (self.recent.len() > CAPACITY).then(|| self.recent.pop_front().unwrap())
     }
 
-    pub(super) fn image(
+    pub(in crate::app) fn image(
         cache: &Entity<Self>,
         root: &Path,
         path: &Path,

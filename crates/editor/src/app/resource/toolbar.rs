@@ -56,11 +56,14 @@ impl state::AssetsState {
         if let Some(age) = self.asset_modified {
             filters.push((
                 Filter::Modified,
-                format!("Last {} days", age.as_secs() / 86400),
+                crate::i18n::format(
+                    "Last {0} days",
+                    &[("0", (age.as_secs() / 86400).to_string())],
+                ),
             ));
         }
         if self.asset_unmapped {
-            filters.push((Filter::Unmapped, "Unmapped".into()));
+            filters.push((Filter::Unmapped, crate::i18n::tr("Unmapped").into()));
         }
         filters
     }
@@ -127,7 +130,7 @@ impl WorkbenchPanel {
             files: true,
             directories: false,
             multiple: true,
-            prompt: Some("Import assets".into()),
+            prompt: Some(crate::i18n::tr("Import assets").into()),
         });
         cx.spawn_in(window, async move |panel, cx| {
             let Ok(Ok(Some(paths))) = paths.await else {
@@ -336,9 +339,15 @@ pub(super) fn render(
                         .text_xs()
                         .text_color(rgb(MUTED))
                         .child(if count == total {
-                            format!("{count} assets")
+                            crate::i18n::format("{count} assets", &[("count", (count).to_string())])
                         } else {
-                            format!("{count} / {total} assets")
+                            crate::i18n::format(
+                                "{count} / {total} assets",
+                                &[
+                                    ("count", (count).to_string()),
+                                    ("total", (total).to_string()),
+                                ],
+                            )
                         }),
                 )
                 .when(selected > 0, |row| {
@@ -346,7 +355,10 @@ pub(super) fn render(
                         div()
                             .text_xs()
                             .text_color(rgb(PRIMARY))
-                            .child(format!("{selected} selected")),
+                            .child(crate::i18n::format(
+                                "{selected} selected",
+                                &[("selected", (selected).to_string())],
+                            )),
                     )
                 })
                 .child(actions),
@@ -376,7 +388,10 @@ pub(super) fn render(
                                 .bg(rgb(SURFACE))
                                 .text_xs()
                                 .text_color(rgb(PRIMARY))
-                                .tooltip(icon_hint(format!("Remove filter: {label}")))
+                                .tooltip(icon_hint(crate::i18n::format(
+                                    "Remove filter: {label}",
+                                    &[("label", (label).to_string())],
+                                )))
                                 .cursor_pointer()
                                 .hover(|style| style.bg(rgb(SURFACE_HOVER)))
                                 .on_click(cx.listener(move |panel, _, _, cx| {
@@ -419,11 +434,11 @@ pub(super) fn empty_state(
         .text_sm()
         .text_color(rgb(MUTED))
         .child(Icon::new(AssetIconName::FolderOpen).small())
-        .child(if empty_project {
+        .child(crate::i18n::tr(if empty_project {
             "No assets yet"
         } else {
             "No matching assets"
-        })
+        }))
         .when(filtered, |this| {
             this.child(tool_action("Clear filters").on_click(
                 cx.listener(|panel, _, window, cx| panel.clear_asset_filters(window, cx)),

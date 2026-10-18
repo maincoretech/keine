@@ -209,7 +209,10 @@ pub(super) fn travel(root: &Path, back: bool, window: &mut Window, cx: &mut App)
         // Validate before changing either history stack, including when tabs were closed.
         if let Err(error) = cx.global_mut::<EditorDocuments>().open(&root, &target.path) {
             window.push_notification(
-                Notification::warning(format!("Could not return to location: {error}")),
+                Notification::warning(crate::i18n::format(
+                    "Could not return to location: {error}",
+                    &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                )),
                 cx,
             );
             return;
@@ -366,8 +369,10 @@ pub(super) fn open_quick(root: &Path, window: &mut Window, cx: &mut App) {
     }
     let root = root.to_owned();
     let picker = cx.new(|cx| {
-        let input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Files and scenes · @ for scenes"));
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(crate::i18n::tr("Files and scenes · @ for scenes"))
+        });
         let subscription = cx.subscribe(&input, |this: &mut QuickPicker, _, event, cx| {
             if matches!(event, InputEvent::Change) {
                 this.search(cx);
@@ -397,7 +402,7 @@ pub(super) fn open_quick(root: &Path, window: &mut Window, cx: &mut App) {
     let input = picker.read(cx).input.clone();
     window.open_dialog(cx, move |dialog, _, _| {
         dialog
-            .title("Go to file or scene")
+            .title(crate::i18n::tr("Go to file or scene"))
             .width(px(560.))
             .child(picker.clone())
     });
@@ -474,7 +479,9 @@ impl QuickPicker {
             .source(&self.root, &candidate.path);
         let Some(source) = source else {
             window.push_notification(
-                Notification::warning("File unavailable; reopen the picker to refresh"),
+                Notification::warning(crate::i18n::tr(
+                    "File unavailable; reopen the picker to refresh",
+                )),
                 cx,
             );
             return;
@@ -485,7 +492,9 @@ impl QuickPicker {
                     .projection(&self.root, &candidate.path, &source);
             let Some(scene) = projection.scenes.iter().find(|scene| scene.name == *name) else {
                 window.push_notification(
-                    Notification::warning("Scene changed; reopen the picker to refresh"),
+                    Notification::warning(crate::i18n::tr(
+                        "Scene changed; reopen the picker to refresh",
+                    )),
                     cx,
                 );
                 return;
@@ -520,18 +529,21 @@ impl Render for QuickPicker {
                     .text_xs()
                     .text_color(rgb(MUTED))
                     .child(if self.loading {
-                        "Searching…".to_owned()
+                        crate::i18n::tr("Searching…").to_owned()
                     } else if self.count == 0 {
-                        "No matching files or scenes".to_owned()
+                        crate::i18n::tr("No matching files or scenes").to_owned()
                     } else if self.count > RESULT_LIMIT {
-                        format!(
-                            "First {RESULT_LIMIT} of {} results · type to narrow",
-                            self.count
+                        crate::i18n::format(
+                            "First {RESULT_LIMIT} of {0} results · type to narrow",
+                            &[
+                                ("RESULT_LIMIT", (RESULT_LIMIT).to_string()),
+                                ("0", (self.count).to_string()),
+                            ],
                         )
                     } else {
-                        format!(
-                            "{} results · ↑↓ select · Enter open · Esc close",
-                            self.count
+                        crate::i18n::format(
+                            "{0} results · ↑↓ select · Enter open · Esc close",
+                            &[("0", (self.count).to_string())],
                         )
                     }),
             )

@@ -28,8 +28,8 @@ pub(super) fn render(
     let export_root = root.to_owned();
     let mut content = div().flex().flex_col().p_3().gap_3()
         .child(section_label("PLAYTEST"))
-        .child(div().text_sm().text_color(rgb(INK)).child("Export a playable copy for this computer’s operating system."))
-        .child(div().text_xs().text_color(rgb(MUTED)).child("Saves current edits. Includes readable scripts and registered resources. Formal releases use Hakutaku bundle."))
+        .child(div().text_sm().text_color(rgb(INK)).child(crate::i18n::tr("Export a playable copy for this computer’s operating system.")))
+        .child(div().text_xs().text_color(rgb(MUTED)).child(crate::i18n::tr("Saves current edits. Includes readable scripts and registered resources. Formal releases use Hakutaku bundle.")))
         .child(button("build-export", AssetIconName::Package, "Export game…", !running && native)
             .on_click(move |_, window, cx| {
                 if !running && native { choose_export(export_root.clone(), window, cx); }
@@ -49,12 +49,12 @@ pub(super) fn render(
             .into_any_element()
         };
         content = content.child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(activity)
-                .child(div().text_xs().text_color(rgb(MUTED)).child("Exporting…")),
+            div().flex().items_center().gap_2().child(activity).child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child(crate::i18n::tr("Exporting…")),
+            ),
         );
     }
     if !native {
@@ -62,7 +62,7 @@ pub(super) fn render(
             div()
                 .text_sm()
                 .text_color(rgb(MUTED))
-                .child("Migrate to Eiyashou before exporting."),
+                .child(crate::i18n::tr("Migrate to Eiyashou before exporting.")),
         );
     }
     if let Some(error) = error {
@@ -71,7 +71,7 @@ pub(super) fn render(
                 .text_sm()
                 .whitespace_normal()
                 .text_color(rgb(0xf09090))
-                .child(error),
+                .child(crate::i18n::text(&error)),
         );
     }
     if let Some(game) = output {
@@ -84,7 +84,7 @@ pub(super) fn render(
                 div()
                     .text_sm()
                     .text_color(rgb(SUCCESS))
-                    .child("Export ready"),
+                    .child(crate::i18n::tr("Export ready")),
             )
             .child(
                 div()
@@ -152,7 +152,7 @@ fn button(
                 .hover(|style| style.bg(rgb(SURFACE_HOVER)))
         })
         .child(Icon::new(icon).xsmall())
-        .child(label)
+        .child(crate::i18n::text(label))
 }
 
 fn choose_export(root: PathBuf, window: &mut Window, cx: &mut App) {
@@ -161,7 +161,7 @@ fn choose_export(root: PathBuf, window: &mut Window, cx: &mut App) {
         files: false,
         directories: true,
         multiple: false,
-        prompt: Some("Export game here".into()),
+        prompt: Some(crate::i18n::tr("Export game here").into()),
     });
     cx.spawn(async move |cx| {
         if let Ok(Ok(Some(paths))) = receiver.await

@@ -675,7 +675,13 @@ impl WorkbenchPanel {
             Ok(_) => self.cancel_block_drag(window, cx),
             Err(error) => {
                 self.cancel_block_drag(window, cx);
-                self.set_block_notice(format!("Move blocked: {error}"), cx);
+                self.set_block_notice(
+                    crate::i18n::format(
+                        "Move blocked: {error}",
+                        &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                    ),
+                    cx,
+                );
             }
         }
     }
@@ -757,7 +763,13 @@ impl WorkbenchPanel {
             Ok(_) => self.cancel_block_drag(window, cx),
             Err(error) => {
                 self.cancel_block_drag(window, cx);
-                self.set_block_notice(format!("Asset drop blocked: {error}"), cx);
+                self.set_block_notice(
+                    crate::i18n::format(
+                        "Asset drop blocked: {error}",
+                        &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                    ),
+                    cx,
+                );
             }
         }
     }

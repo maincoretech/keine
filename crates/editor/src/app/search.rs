@@ -56,15 +56,24 @@ enum SearchRow {
 }
 
 impl WorkbenchPanel {
+    pub(super) fn refresh_search_language(&self, window: &mut Window, cx: &mut App) {
+        if let Some(search) = &self.project_search {
+            crate::i18n::refresh_input(&search.input, window, cx);
+            crate::i18n::refresh_input(&search.replacement, window, cx);
+        }
+    }
+
     pub(super) fn install_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search project"));
+        let input =
+            cx.new(|cx| InputState::new(window, cx).placeholder(crate::i18n::tr("Search project")));
         self._subscriptions
             .push(cx.subscribe(&input, |panel, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
                     panel.schedule_search(cx);
                 }
             }));
-        let replacement = cx.new(|cx| InputState::new(window, cx).placeholder("Replace with"));
+        let replacement =
+            cx.new(|cx| InputState::new(window, cx).placeholder(crate::i18n::tr("Replace with")));
         self._subscriptions
             .push(cx.subscribe(&replacement, |_, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -278,7 +287,10 @@ impl WorkbenchPanel {
         let result = edits.and_then(|edits| {
             let policy = crate::document::AuthoringPolicy::load(&root);
             if let Some((path, _)) = edits.iter().find(|(path, _)| !policy.is_writable(path)) {
-                return Err(format!("{} is read-only", path.display()));
+                return Err(crate::i18n::format(
+                    "{0} is read-only",
+                    &[("0", (path.display()).to_string())],
+                ));
             }
             let count = edits.len();
             let occurrences = search
@@ -298,9 +310,9 @@ impl WorkbenchPanel {
                 self.schedule_search(cx);
                 self.search_message(
                     if count == 0 {
-                        "No changes to replace".to_owned()
+                        crate::i18n::tr("No changes to replace").to_owned()
                     } else {
-                        format!("Replaced {occurrences} matches in {count} files · unsaved · Undo available")
+                        crate::i18n::format("Replaced {occurrences} matches in {count} files · unsaved · Undo available", &[("occurrences", (occurrences).to_string()), ("count", (count).to_string())])
                     },
                     cx,
                 );
@@ -393,22 +405,28 @@ impl WorkbenchPanel {
             .scope
             .as_ref()
             .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "All project text files".into());
+            .unwrap_or_else(|| crate::i18n::tr("All project text files").into());
         let status = if search.loading {
-            "Searching…".to_owned()
+            crate::i18n::tr("Searching…").to_owned()
         } else if input.read(cx).value().is_empty() {
-            "Search dialogue, commands and project files".to_owned()
+            crate::i18n::tr("Search dialogue, commands and project files").to_owned()
         } else if search.results.hits.is_empty() {
-            "No results".to_owned()
+            crate::i18n::tr("No results").to_owned()
         } else {
-            format!(
-                "{} results{}",
-                search.results.hits.len(),
-                if search.results.truncated {
-                    " · partial; narrow search for more"
-                } else {
-                    ""
-                }
+            crate::i18n::format(
+                "{0} results{1}",
+                &[
+                    ("0", (search.results.hits.len()).to_string()),
+                    (
+                        "1",
+                        (if search.results.truncated {
+                            " · partial; narrow search for more"
+                        } else {
+                            ""
+                        })
+                        .to_string(),
+                    ),
+                ],
             )
         };
         let mut rows = Vec::new();
@@ -648,10 +666,10 @@ impl WorkbenchPanel {
                     .on_click(cx.listener(|panel, _, _, cx| { if let Some(search) = panel.project_search.as_mut() { search.case_sensitive = !search.case_sensitive; } panel.schedule_search(cx); }))))
             .child(div().px_2().pb_2().flex_none().flex().gap_1()
                 .child(div().id("search-project-scope").px_2().py_1().rounded(px(4.)).text_xs().cursor_pointer()
-                    .bg(rgb(if !current_scope { PRIMARY_DIM } else { SURFACE })).child("Project")
+                    .bg(rgb(if !current_scope { PRIMARY_DIM } else { SURFACE })).child(crate::i18n::tr("Project"))
                     .on_click(cx.listener(|panel, _, _, cx| panel.set_search_scope(false, cx))))
                 .child(div().id("search-file-scope").px_2().py_1().rounded(px(4.)).text_xs().cursor_pointer()
-                    .bg(rgb(if current_scope { PRIMARY_DIM } else { SURFACE })).tooltip(icon_hint(scope_hint)).child("Current file")
+                    .bg(rgb(if current_scope { PRIMARY_DIM } else { SURFACE })).tooltip(icon_hint(scope_hint)).child(crate::i18n::tr("Current file"))
                     .on_click(cx.listener(|panel, _, _, cx| panel.set_search_scope(true, cx)))))
             .when(replacing, |this| this
                 .child(div().px_2().pb_2().flex_none()
@@ -659,9 +677,9 @@ impl WorkbenchPanel {
                 .child(div().px_2().pb_2().flex_none().flex().flex_wrap().items_center().gap_1()
                     .child(div().id("search-replace-apply").px_2().py_1().rounded(px(4.)).text_xs()
                         .bg(rgb(SURFACE)).text_color(rgb(if included > 0 && !search.loading { PRIMARY } else { MUTED })).cursor_pointer()
-                        .child(format!("Replace selected ({included})"))
+                        .child(crate::i18n::format("Replace selected ({included})", &[("included", (included).to_string())]))
                         .on_click(cx.listener(|panel, _, window, cx| panel.replace_search_hits(window, cx))))
-                    .child(div().id("search-select-all").px_2().py_1().text_xs().cursor_pointer().child(if included == 0 { "Select all" } else { "Deselect all" })
+                    .child(div().id("search-select-all").px_2().py_1().text_xs().cursor_pointer().child(crate::i18n::tr(if included == 0 { "Select all" } else { "Deselect all" }))
                         .on_click(cx.listener(|panel, _, _, cx| {
                             if let Some(search) = panel.project_search.as_mut() {
                                 if search.excluded.len() == search.results.hits.len() { search.excluded.clear(); }
@@ -675,8 +693,8 @@ impl WorkbenchPanel {
                         .on_click(cx.listener(|panel, _, window, cx| panel.undo_search(false, window, cx))))))
             .child(div().px_3().pb_2().flex_none().text_size(px(10.)).text_color(rgb(MUTED)).child(status))
             .when_some(search.message.clone(), |this, message| this.child(div().px_3().pb_2().text_xs().text_color(rgb(PRIMARY)).child(message)))
-            .when(search.results.readonly > 0, |this| this.child(div().px_3().text_size(px(10.)).text_color(rgb(MUTED)).child(format!("{} read-only files excluded from replacement", search.results.readonly))))
-            .when(search.results.skipped > 0, |this| this.child(div().px_3().text_size(px(10.)).text_color(rgb(MUTED)).child(format!("{} unreadable or oversized files skipped", search.results.skipped))))
+            .when(search.results.readonly > 0, |this| this.child(div().px_3().text_size(px(10.)).text_color(rgb(MUTED)).child(crate::i18n::format("{0} read-only files excluded from replacement", &[("0", (search.results.readonly).to_string())]))))
+            .when(search.results.skipped > 0, |this| this.child(div().px_3().text_size(px(10.)).text_color(rgb(MUTED)).child(crate::i18n::format("{0} unreadable or oversized files skipped", &[("0", (search.results.skipped).to_string())]))))
             .child(vertical_overflow_view("project-search-results", &self.view_scroll, contents))
             .into_any_element()
     }
@@ -840,7 +858,7 @@ fn prepare_replacements(
         files.entry(&hit.path).or_default().push(hit);
     }
     if files.len() > 128 {
-        return Err("Select at most 128 files per replacement".into());
+        return Err(crate::i18n::tr("Select at most 128 files per replacement").into());
     }
     let mut edits = Vec::with_capacity(files.len());
     let mut bytes = 0usize;
@@ -850,9 +868,9 @@ fn prepare_replacements(
             .get(path)
             .ok_or("Refresh the replacement preview")?;
         if current(path).as_deref() != Some(before.as_str()) {
-            return Err(format!(
-                "{} changed; refresh the search before replacing",
-                path.display()
+            return Err(crate::i18n::format(
+                "{0} changed; refresh the search before replacing",
+                &[("0", (path.display()).to_string())],
             ));
         }
         let mut size = before.len();
@@ -860,7 +878,9 @@ fn prepare_replacements(
         for hit in &hits {
             if hit.range.start < end || before.get(hit.range.clone()) != Some(hit.matched.as_str())
             {
-                return Err("Search ranges changed; refresh before replacing".into());
+                return Err(
+                    crate::i18n::tr("Search ranges changed; refresh before replacing").into(),
+                );
             }
             end = hit.range.end;
             size = size
@@ -869,14 +889,16 @@ fn prepare_replacements(
                 .ok_or("Replacement is too large")?;
         }
         if size > crate::workspace::MAX_DOCUMENT_BYTES as usize {
-            return Err(format!(
-                "{} would exceed the document size limit",
-                path.display()
+            return Err(crate::i18n::format(
+                "{0} would exceed the document size limit",
+                &[("0", (path.display()).to_string())],
             ));
         }
         bytes = bytes.saturating_add(before.len()).saturating_add(size);
         if bytes > super::edits::SourceHistory::BYTE_BUDGET {
-            return Err("Replacement exceeds the undo budget; select fewer files".into());
+            return Err(
+                crate::i18n::tr("Replacement exceeds the undo budget; select fewer files").into(),
+            );
         }
         let mut after = before.clone();
         for hit in hits.into_iter().rev() {

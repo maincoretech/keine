@@ -30,13 +30,11 @@ use super::edits::{follow_preview_position, format_and_save, replay_source_histo
 use super::panel::{ToolKind, WorkbenchPanel};
 use super::prompt_answer;
 use super::{
-    ACTIVITY_BRAND_SIZE_PX, ACTIVITY_ICON_SIZE_PX, ACTIVITY_ITEM_SIZE_PX, ACTIVITY_RAIL_WIDTH_PX,
-    ASSET_PREVIEW_PANEL, ASSETS_PANEL, BUILD_PANEL, CANVAS, CHARACTERS_PANEL, CHROME,
-    EXPLORER_PANEL, INK, INSPECTOR_PANEL, MUTED, MigrateEiyashou, OUTPUT_PANEL, OpenFolder,
-    PERFORMANCE_PANEL, PRIMARY, PRIMARY_DIM, PROBLEMS_PANEL, PROJECT_PANEL, RedoSources,
-    ResetLayout, SEARCH_PANEL, SURFACE_HOVER, Save, SaveAll, ShowAssetPreview, ShowAssets,
-    ShowOutput, ShowProblems, ShowSearch, ToggleEngine, UndoSources, VIEW_INSET_PX, VIEW_RADIUS_PX,
-    activity_divider, activity_tool, dock, icon_hint,
+    ACTIVITY_BRAND_SIZE_PX, ACTIVITY_ITEM_SIZE_PX, ACTIVITY_RAIL_WIDTH_PX, ASSET_PREVIEW_PANEL,
+    CANVAS, CHROME, EXPLORER_PANEL, INK, INSPECTOR_PANEL, MUTED, MigrateEiyashou, OpenFolder,
+    PRIMARY, PRIMARY_DIM, PROBLEMS_PANEL, RedoSources, ResetLayout, SURFACE_HOVER, Save, SaveAll,
+    ShowAssetPreview, ShowAssets, ShowOutput, ShowProblems, ShowSearch, ToggleEngine, UndoSources,
+    VIEW_INSET_PX, VIEW_RADIUS_PX, activity_divider, activity_tool, dock, icon_hint,
 };
 
 struct WindowRegistry<W> {
@@ -211,7 +209,7 @@ pub(super) struct WorkbenchWindow {
     preview_reload: Option<keine_authoring::PreviewReload>,
     preview_position: Option<(PathBuf, usize, usize)>,
     preview_runtime: Option<keine_authoring::RuntimeSnapshot>,
-    audition_status: (Option<PathBuf>, Option<String>, bool),
+    audition_status: (Option<PathBuf>, Option<String>, bool, u32),
     focus: FocusHandle,
 }
 
@@ -221,7 +219,7 @@ fn install_close_guard(window: &mut Window, workbench: WeakEntity<WorkbenchWindo
             .update(cx, |workbench, cx| {
                 if workbench.file_operation_active(cx) {
                     window.push_notification(
-                        Notification::warning("A file operation is still running"),
+                        Notification::warning(crate::i18n::tr("A file operation is still running")),
                         cx,
                     );
                     return false;
@@ -294,7 +292,7 @@ impl WorkbenchWindow {
         if self.file_operation_active(cx) {
             self.close_prompt_open = false;
             window.push_notification(
-                Notification::warning("A file operation is still running"),
+                Notification::warning(crate::i18n::tr("A file operation is still running")),
                 cx,
             );
             return;
@@ -336,8 +334,13 @@ impl WorkbenchWindow {
                     }
                     if this.preview_lifecycle != snapshot.lifecycle {
                         if let PreviewLifecycle::Failed(error) = &snapshot.lifecycle {
-                            cx.global_mut::<EditorDocuments>()
-                                .set_notice(&root, format!("Preview failed: {error}"));
+                            cx.global_mut::<EditorDocuments>().set_notice(
+                                &root,
+                                crate::i18n::format(
+                                    "Preview failed: {error}",
+                                    &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                                ),
+                            );
                             cx.refresh_windows();
                         }
                         this.preview_lifecycle = snapshot.lifecycle;
@@ -347,11 +350,17 @@ impl WorkbenchWindow {
                         snapshot.audition_path,
                         snapshot.audition_error,
                         snapshot.audition_paused,
+                        snapshot.audition_gain_db.to_bits(),
                     );
                     if this.audition_status != audition_status {
                         if let Some(error) = &audition_status.1 {
-                            cx.global_mut::<EditorDocuments>()
-                                .set_notice(&root, format!("Audition failed: {error}"));
+                            cx.global_mut::<EditorDocuments>().set_notice(
+                                &root,
+                                crate::i18n::format(
+                                    "Audition failed: {error}",
+                                    &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                                ),
+                            );
                         }
                         this.audition_status = audition_status;
                         cx.refresh_windows();
@@ -405,7 +414,9 @@ impl WorkbenchWindow {
         match replay_source_history(root, undo, window, cx) {
             Ok(true) => cx.refresh_windows(),
             Ok(false) => {}
-            Err(error) => window.push_notification(Notification::warning(error), cx),
+            Err(error) => {
+                window.push_notification(Notification::warning(crate::i18n::text(&error)), cx)
+            }
         }
     }
 
@@ -445,6 +456,8 @@ impl WorkbenchWindow {
             });
         })
         .detach();
+        let focus = cx.focus_handle();
+        focus.focus(window, cx);
         Self {
             editor,
             persistence,
@@ -459,8 +472,8 @@ impl WorkbenchWindow {
             preview_reload: None,
             preview_position: None,
             preview_runtime: None,
-            audition_status: (None, None, false),
-            focus: cx.focus_handle(),
+            audition_status: (None, None, false, 0),
+            focus,
         }
     }
 
@@ -491,7 +504,7 @@ impl WorkbenchWindow {
             preview_reload: None,
             preview_position: None,
             preview_runtime: None,
-            audition_status: (None, None, false),
+            audition_status: (None, None, false, 0),
             focus: cx.focus_handle(),
         }
     }
@@ -602,11 +615,16 @@ impl WorkbenchWindow {
         };
         let result = format_and_save(&root, window, cx);
         let notice = match result {
-            Ok(0) => "No changes to save".to_owned(),
-            Ok(1) => "Saved 1 document".to_owned(),
-            Ok(count) => format!("Saved {count} documents"),
+            Ok(0) => crate::i18n::tr("No changes to save").to_owned(),
+            Ok(1) => crate::i18n::tr("Saved 1 document").to_owned(),
+            Ok(count) => {
+                crate::i18n::format("Saved {count} documents", &[("count", (count).to_string())])
+            }
             Err(error) => {
-                let message = format!("Save blocked: {error}");
+                let message = crate::i18n::format(
+                    "Save blocked: {error}",
+                    &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                );
                 window.push_notification(Notification::error(message.clone()), cx);
                 message
             }
@@ -624,8 +642,13 @@ impl WorkbenchWindow {
         let controller = match cx.global_mut::<EditorDocuments>().preview(&root) {
             Ok(controller) => controller,
             Err(error) => {
-                cx.global_mut::<EditorDocuments>()
-                    .set_notice(&root, format!("Could not start Preview: {error}"));
+                cx.global_mut::<EditorDocuments>().set_notice(
+                    &root,
+                    crate::i18n::format(
+                        "Could not start Preview: {error}",
+                        &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                    ),
+                );
                 cx.refresh_windows();
                 return;
             }
@@ -655,9 +678,7 @@ impl WorkbenchWindow {
             workspace
                 .dock
                 .update(cx, |dock, cx| dock.select_panel(panel, window, cx));
-            if matches!(kind, ToolKind::Search)
-                && let Some(panel) = workspace.dock.read(cx).panel(panel)
-            {
+            if let Some(panel) = workspace.dock.read(cx).panel(panel) {
                 panel.focus_handle(cx).focus(window, cx);
             }
             return;
@@ -665,14 +686,19 @@ impl WorkbenchWindow {
         let panel = match WorkbenchPanel::from_payload(kind.payload(root.clone()), window, cx) {
             Ok(panel) => panel,
             Err(error) => {
-                cx.global_mut::<EditorDocuments>()
-                    .set_notice(&root, format!("Could not show tool: {error}"));
+                cx.global_mut::<EditorDocuments>().set_notice(
+                    &root,
+                    crate::i18n::format(
+                        "Could not show tool: {error}",
+                        &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                    ),
+                );
                 cx.refresh_windows();
                 return;
             }
         };
         let panel_id = PanelId::from(panel.entity_id());
-        let search_focus = matches!(kind, ToolKind::Search).then(|| panel.read(cx).focus.clone());
+        let focus = panel.read(cx).focus.clone();
         let is_asset = matches!(kind, ToolKind::Assets | ToolKind::Search);
         let tab_anchor = if is_asset {
             cx.global::<EditorDocuments>()
@@ -743,9 +769,7 @@ impl WorkbenchWindow {
             }
             dock.select_panel(panel_id, window, cx);
         });
-        if let Some(focus) = search_focus {
-            focus.focus(window, cx);
-        }
+        focus.focus(window, cx);
         cx.refresh_windows();
     }
 
@@ -791,8 +815,13 @@ impl WorkbenchWindow {
         let plan = match MigrationPlan::preview(&root) {
             Ok(plan) => plan,
             Err(error) => {
-                cx.global_mut::<EditorDocuments>()
-                    .set_notice(&root, format!("Migration preview failed: {error}"));
+                cx.global_mut::<EditorDocuments>().set_notice(
+                    &root,
+                    crate::i18n::format(
+                        "Migration preview failed: {error}",
+                        &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                    ),
+                );
                 cx.refresh_windows();
                 return;
             }
@@ -806,11 +835,11 @@ impl WorkbenchWindow {
         let detail = plan.diff_preview();
         let receiver = window.prompt(
             PromptLevel::Warning,
-            "Apply Eiyashou source migration?",
+            crate::i18n::tr("Apply Eiyashou source migration?"),
             Some(&detail),
             &[
-                PromptButton::Other("Apply Renames".into()),
-                PromptButton::Cancel("Cancel".into()),
+                PromptButton::Other(crate::i18n::tr("Apply Renames").into()),
+                PromptButton::Cancel(crate::i18n::tr("Cancel").into()),
             ],
             cx,
         );
@@ -828,23 +857,34 @@ impl WorkbenchWindow {
                         Ok(session) => match this.open_session(session, window, cx) {
                             Ok(()) => cx.global_mut::<EditorDocuments>().set_notice(
                                 &root,
-                                format!("Migrated {count} source file(s) to .shou"),
+                                crate::i18n::format(
+                                    "Migrated {count} source file(s) to .shou",
+                                    &[("count", (count).to_string())],
+                                ),
                             ),
                             Err(error) => window.push_notification(
-                                Notification::error(format!(
-                                    "Migration applied, but workspace refresh failed: {error}"
+                                Notification::error(crate::i18n::format(
+                                    "Migration applied, but workspace refresh failed: {error}",
+                                    &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
                                 )),
                                 cx,
                             ),
                         },
                         Err(error) => cx.global_mut::<EditorDocuments>().set_notice(
                             &root,
-                            format!("Migration applied, but workspace refresh failed: {error}"),
+                            crate::i18n::format(
+                                "Migration applied, but workspace refresh failed: {error}",
+                                &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                            ),
                         ),
                     },
-                    Err(error) => cx
-                        .global_mut::<EditorDocuments>()
-                        .set_notice(&root, format!("Migration failed: {error}")),
+                    Err(error) => cx.global_mut::<EditorDocuments>().set_notice(
+                        &root,
+                        crate::i18n::format(
+                            "Migration failed: {error}",
+                            &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                        ),
+                    ),
                 }
                 cx.notify();
                 cx.refresh_windows();
@@ -867,12 +907,14 @@ impl WorkbenchWindow {
         self.close_prompt_open = true;
         let receiver = window.prompt(
             PromptLevel::Warning,
-            "Save changes before closing?",
-            Some("Unsaved source changes have a recovery draft, but are not in the project yet."),
+            crate::i18n::tr("Save changes before closing?"),
+            Some(crate::i18n::tr(
+                "Unsaved source changes have a recovery draft, but are not in the project yet.",
+            )),
             &[
-                PromptButton::Other("Save and Close".into()),
-                PromptButton::Other("Close Without Saving".into()),
-                PromptButton::Cancel("Cancel".into()),
+                PromptButton::Other(crate::i18n::tr("Save and Close").into()),
+                PromptButton::Other(crate::i18n::tr("Close Without Saving").into()),
+                PromptButton::Cancel(crate::i18n::tr("Cancel").into()),
             ],
             cx,
         );
@@ -980,11 +1022,19 @@ impl WorkbenchWindow {
                         }
                         Err(error) => {
                             window.push_notification(
-                                Notification::error(format!("Save blocked: {error}")),
+                                Notification::error(crate::i18n::format(
+                                    "Save blocked: {error}",
+                                    &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                                )),
                                 cx,
                             );
-                            cx.global_mut::<EditorDocuments>()
-                                .set_notice(&root, format!("Save blocked: {error}"));
+                            cx.global_mut::<EditorDocuments>().set_notice(
+                                &root,
+                                crate::i18n::format(
+                                    "Save blocked: {error}",
+                                    &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                                ),
+                            );
                             cx.refresh_windows();
                         }
                     }
@@ -994,44 +1044,14 @@ impl WorkbenchWindow {
         .detach();
     }
 
-    fn render_activity_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let editor = self.editor.clone();
-        let has_unsaved_changes = self.workspace.as_ref().is_some_and(|workspace| {
+    fn render_activity_rail(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use gpui_kit::component::button::{Button, ButtonVariants as _};
+        use gpui_kit::component::menu::DropdownMenu as _;
+        let dirty = self.workspace.as_ref().is_some_and(|workspace| {
             cx.global::<EditorDocuments>()
                 .has_dirty_documents(workspace.session.root())
         });
-        let (
-            explorer_open,
-            search_open,
-            assets_open,
-            characters_open,
-            inspector_open,
-            problems_open,
-            performance_open,
-            output_open,
-            build_open,
-            project_open,
-        ) = self
-            .workspace
-            .as_ref()
-            .map(|workspace| {
-                let root = workspace.session.root();
-                let documents = cx.global::<EditorDocuments>();
-                (
-                    documents.tool_panel(root, EXPLORER_PANEL).is_some(),
-                    documents.tool_panel(root, SEARCH_PANEL).is_some(),
-                    documents.tool_panel(root, ASSETS_PANEL).is_some(),
-                    documents.tool_panel(root, CHARACTERS_PANEL).is_some(),
-                    documents.tool_panel(root, INSPECTOR_PANEL).is_some(),
-                    documents.tool_panel(root, PROBLEMS_PANEL).is_some(),
-                    documents.tool_panel(root, PERFORMANCE_PANEL).is_some(),
-                    documents.tool_panel(root, OUTPUT_PANEL).is_some(),
-                    documents.tool_panel(root, BUILD_PANEL).is_some(),
-                    documents.tool_panel(root, PROJECT_PANEL).is_some(),
-                )
-            })
-            .unwrap_or_default();
-        let rail = div()
+        let mut rail = div()
             .id("activity-rail-content")
             .size_full()
             .flex()
@@ -1049,196 +1069,95 @@ impl WorkbenchWindow {
                     .items_center()
                     .justify_center()
                     .rounded(px(7.))
-                    .bg(if has_unsaved_changes {
-                        rgb(0xdb7780)
-                    } else {
-                        rgb(PRIMARY)
-                    })
+                    .bg(if dirty { rgb(0xdb7780) } else { rgb(PRIMARY) })
                     .text_size(px(17.))
                     .font_weight(gpui_kit::FontWeight::BOLD)
                     .text_color(rgb(CANVAS))
                     .child("K"),
-            )
-            .when(self.workspace.is_some(), |this| {
-                this.child(
-                    activity_tool(
-                        "activity-explorer",
-                        IconName::FileText,
-                        explorer_open,
-                        "Explorer",
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.show_tool(ToolKind::Explorer, window, cx)
-                    })),
-                )
-            })
-            .when(self.workspace.is_some(), |this| {
-                this.child(
-                    activity_tool(
-                        "activity-assets",
-                        AssetIconName::Images,
-                        assets_open,
-                        "Assets",
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.show_tool(ToolKind::Assets, window, cx)
-                    })),
-                )
-                .child(
-                    activity_tool(
-                        "activity-characters",
-                        IconName::User,
-                        characters_open,
-                        "Characters",
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.show_tool(ToolKind::Characters, window, cx)
-                    })),
-                )
-                .child(
-                    activity_tool(
-                        "activity-search",
-                        AssetIconName::Search,
-                        search_open,
-                        "Search",
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.show_tool(ToolKind::Search, window, cx)
-                    })),
-                )
-                .child(activity_divider())
-                .child(
-                    activity_tool(
-                        "activity-inspector",
+            );
+        if let Some(workspace) = &self.workspace {
+            // Stable groups: authoring, project, then diagnostics at the bottom.
+            let groups = [
+                &[
+                    (ToolKind::Explorer, AssetIconName::FileText, "Explorer"),
+                    (ToolKind::Assets, AssetIconName::Images, "Assets"),
+                    (ToolKind::Characters, AssetIconName::User, "Characters"),
+                    (ToolKind::Search, AssetIconName::Search, "Search"),
+                    (
+                        ToolKind::Inspector,
                         AssetIconName::SlidersHorizontal,
-                        inspector_open,
                         "Inspector",
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.show_tool(ToolKind::Inspector, window, cx)
-                    })),
+                    ),
+                ][..],
+                &[
+                    (ToolKind::Project, AssetIconName::Settings, "Settings"),
+                    (ToolKind::Build, AssetIconName::Package, "Build"),
+                ][..],
+                &[
+                    (ToolKind::Problems, AssetIconName::TriangleAlert, "Problems"),
+                    (ToolKind::Output, AssetIconName::Terminal, "Output"),
+                    (ToolKind::Performance, AssetIconName::Cpu, "Performance"),
+                ][..],
+            ];
+            for (group, tools) in groups.into_iter().enumerate() {
+                if group == 2 {
+                    rail = rail.child(div().flex_1());
+                }
+                if group > 0 {
+                    rail = rail.child(activity_divider());
+                }
+                for &(kind, icon, hint) in tools {
+                    let panel = cx
+                        .global::<EditorDocuments>()
+                        .tool_panel(workspace.session.root(), kind.panel_name());
+                    let active = panel
+                        .and_then(|id| workspace.dock.read(cx).panel(id))
+                        .is_some_and(|panel| panel.focus_handle(cx).contains_focused(window, cx));
+                    rail = rail.child(
+                        activity_tool(kind.panel_name(), icon, active, hint)
+                            .when(panel.is_some() && !active, |this| {
+                                this.child(
+                                    div()
+                                        .absolute()
+                                        .left(px(1.))
+                                        .w(px(2.))
+                                        .h(px(10.))
+                                        .rounded(px(1.))
+                                        .bg(rgb(MUTED)),
+                                )
+                            })
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.show_tool(kind, window, cx)
+                            })),
+                    );
+                }
+            }
+            let focus = self.focus.clone();
+            rail = rail.child(activity_divider()).child(
+                Button::new("activity-more")
+                    .ghost()
+                    .icon(AssetIconName::Ellipsis)
+                    .size(px(ACTIVITY_ITEM_SIZE_PX))
+                    .tooltip(crate::i18n::tr("Workspace actions"))
+                    .dropdown_menu(move |menu, _, _| {
+                        menu.action_context(focus.clone())
+                            .menu("Open folder", Box::new(OpenFolder))
+                            .separator()
+                            .menu("Migrate project", Box::new(MigrateEiyashou))
+                    }),
+            );
+        }
+        if self.workspace.is_none() {
+            rail = rail.child(div().flex_1()).child(
+                activity_tool(
+                    "editor-settings",
+                    AssetIconName::Settings,
+                    false,
+                    "Editor settings",
                 )
-                .child(
-                    activity_tool(
-                        "activity-problems",
-                        IconName::TriangleAlert,
-                        problems_open,
-                        "Problems",
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.show_tool(ToolKind::Problems, window, cx)
-                    })),
-                )
-                .child(
-                    activity_tool(
-                        "activity-output",
-                        AssetIconName::Terminal,
-                        output_open,
-                        "Output",
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.show_tool(ToolKind::Output, window, cx)
-                    })),
-                )
-                .child(
-                    activity_tool(
-                        "activity-project",
-                        AssetIconName::Settings,
-                        project_open,
-                        "Project settings",
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.show_tool(ToolKind::Project, window, cx)
-                    })),
-                )
-                .child(
-                    activity_tool(
-                        "activity-build",
-                        AssetIconName::Package,
-                        build_open,
-                        "Build",
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.show_tool(ToolKind::Build, window, cx)
-                    })),
-                )
-                .child(
-                    activity_tool(
-                        "activity-performance",
-                        IconName::Cpu,
-                        performance_open,
-                        "Performance",
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.show_tool(ToolKind::Performance, window, cx)
-                    })),
-                )
-            })
-            .child(div().flex_1())
-            .when(self.workspace.is_some(), |this| {
-                this.child(
-                    div()
-                        .id("activity-open-folder")
-                        .size(px(ACTIVITY_ITEM_SIZE_PX))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(7.))
-                        .cursor_pointer()
-                        .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-                        .tooltip(icon_hint("Open folder"))
-                        .on_click(move |_, _, cx| prompt_open_folder(editor.clone(), cx))
-                        .child(
-                            Icon::new(IconName::FolderOpen)
-                                .with_size(px(ACTIVITY_ICON_SIZE_PX))
-                                .text_color(rgb(MUTED)),
-                        ),
-                )
-            })
-            .when(self.workspace.is_some(), |this| {
-                this.child(activity_divider())
-                    .child(
-                        div()
-                            .id("activity-migrate-eiyashou")
-                            .size(px(ACTIVITY_ITEM_SIZE_PX))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(7.))
-                            .cursor_pointer()
-                            .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-                            .tooltip(icon_hint("Migrate project"))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.migrate_eiyashou(&MigrateEiyashou, window, cx)
-                            }))
-                            .child(
-                                Icon::new(IconName::Replace)
-                                    .with_size(px(ACTIVITY_ICON_SIZE_PX))
-                                    .text_color(rgb(MUTED)),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .id("activity-reset-layout")
-                            .size(px(ACTIVITY_ITEM_SIZE_PX))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(7.))
-                            .cursor_pointer()
-                            .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-                            .tooltip(icon_hint("Reset layout"))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.reset_layout(&ResetLayout, window, cx)
-                            }))
-                            .child(
-                                Icon::new(IconName::RotateCw)
-                                    .with_size(px(ACTIVITY_ICON_SIZE_PX))
-                                    .text_color(rgb(MUTED)),
-                            ),
-                    )
-            });
-
+                .on_click(|_, window, cx| super::settings::open_without_project(window, cx)),
+            );
+        }
         div()
             .id("activity-rail")
             .w(px(ACTIVITY_RAIL_WIDTH_PX))
@@ -1280,7 +1199,7 @@ impl WorkbenchWindow {
                                 div()
                                     .text_sm()
                                     .text_color(rgb(MUTED))
-                                    .child("Native visual-novel workspace"),
+                                    .child(crate::i18n::tr("Native visual-novel workspace")),
                             ),
                     )
                     .child(
@@ -1304,7 +1223,7 @@ impl WorkbenchWindow {
                                     .small()
                                     .text_color(rgb(PRIMARY)),
                             )
-                            .child("Open Folder"),
+                            .child(crate::i18n::tr("Open Folder")),
                     )
                     .when(!recents.is_empty(), |this| {
                         this.child(
@@ -1317,7 +1236,7 @@ impl WorkbenchWindow {
                                         .text_xs()
                                         .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                         .text_color(rgb(MUTED))
-                                        .child("RECENT"),
+                                        .child(crate::i18n::tr("RECENT")),
                                 )
                                 .children(recents.into_iter().take(6).enumerate().map(
                                     |(index, entry)| {
@@ -1375,7 +1294,8 @@ impl WorkbenchWindow {
                                                     .child(if entry.available {
                                                         entry.short_path()
                                                     } else {
-                                                        "Folder unavailable".to_owned()
+                                                        crate::i18n::tr("Folder unavailable")
+                                                            .to_owned()
                                                     }),
                                             )
                                             .child(
@@ -1436,6 +1356,25 @@ impl Render for WorkbenchWindow {
             .key_context("KeineWorkbench")
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::open_folder))
+            .on_action(cx.listener(|this, _: &super::ShowSettings, window, cx| {
+                if this.workspace.is_some() {
+                    this.show_tool(ToolKind::Project, window, cx);
+                    if let Some(workspace) = &this.workspace
+                        && let Some(id) = cx
+                            .global::<EditorDocuments>()
+                            .tool_panel(workspace.session.root(), super::PROJECT_PANEL)
+                        && let Some(panel) = workspace.dock.read(cx).panel(id)
+                        && let Ok(panel) = panel.view().downcast::<WorkbenchPanel>()
+                    {
+                        panel.update(cx, |panel, cx| {
+                            panel.settings_tab = super::settings::SettingsTab::Editor;
+                            cx.notify();
+                        });
+                    }
+                } else {
+                    super::settings::open_without_project(window, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &super::ShowQuickOpen, window, cx| {
                 if let Some(workspace) = &this.workspace {
                     super::navigation::open_quick(workspace.session.root(), window, cx);
@@ -1483,7 +1422,7 @@ impl Render for WorkbenchWindow {
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .child(self.render_activity_rail(cx))
+                    .child(self.render_activity_rail(window, cx))
                     .child(main),
             )
             .children(dialogs)
@@ -1496,7 +1435,7 @@ fn prompt_open_folder(editor: WeakEntity<EditorApp>, cx: &mut App) {
         files: false,
         directories: true,
         multiple: true,
-        prompt: Some("Open Folder".into()),
+        prompt: Some(crate::i18n::tr("Open Folder").into()),
     });
     cx.spawn(async move |cx| {
         if let Ok(Ok(Some(paths))) = receiver.await {

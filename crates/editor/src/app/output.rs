@@ -28,7 +28,10 @@ impl WorkbenchPanel {
             .child(output_line(
                 "INDEX",
                 PRIMARY,
-                format!("{file_count} text files discovered"),
+                crate::i18n::format(
+                    "{file_count} text files discovered",
+                    &[("file_count", (file_count).to_string())],
+                ),
             ))
             .when_some(
                 cx.global::<EditorDocuments>()
@@ -83,7 +86,12 @@ pub(super) fn runtime_inspection(
         .gap_1()
         .child(section_label("PREVIEW"));
     if let Some(status) = preview.source_status() {
-        content = content.child(div().text_xs().text_color(rgb(PRIMARY)).child(status));
+        content = content.child(
+            div()
+                .text_xs()
+                .text_color(rgb(PRIMARY))
+                .child(crate::i18n::tr(status)),
+        );
     }
     let Some(runtime) = preview.runtime else {
         return preview.source_status().map(|_| content.into_any_element());
@@ -96,7 +104,7 @@ pub(super) fn runtime_inspection(
         .child(property_row(
             "Waiting",
             if runtime.waiting.is_empty() {
-                "None".into()
+                crate::i18n::tr("None").into()
             } else {
                 runtime.waiting.join(" · ")
             },
@@ -135,7 +143,10 @@ pub(super) fn runtime_inspection(
                     }),
             )
         } else if id == "preview-save-source" {
-            content.child(property_row("Save", "No reachable checkpoint".into()))
+            content.child(property_row(
+                "Save",
+                crate::i18n::tr("No reachable checkpoint").into(),
+            ))
         } else {
             content
         };
@@ -143,7 +154,12 @@ pub(super) fn runtime_inspection(
     if variables {
         content = content.child(section_label("VARIABLES · READ ONLY"));
         if runtime.variables.is_empty() {
-            content = content.child(div().text_xs().text_color(rgb(MUTED)).child("No variables"));
+            content = content.child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child(crate::i18n::tr("No variables")),
+            );
         }
         content = content.children(runtime.variables.into_iter().map(|(name, value)| {
             div()
@@ -156,7 +172,7 @@ pub(super) fn runtime_inspection(
         }));
         if runtime.omitted_variables > 0 {
             content = content.child(div().text_xs().text_color(rgb(MUTED))
-                .child(format!("{} more variables; first 128 shown. Strings limited to 512 bytes; arrays show item count.", runtime.omitted_variables)));
+                .child(crate::i18n::format("{0} more variables; first 128 shown. Strings limited to 512 bytes; arrays show item count.", &[("0", (runtime.omitted_variables).to_string())])));
         }
     }
     Some(content.into_any_element())

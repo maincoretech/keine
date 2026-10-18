@@ -130,7 +130,8 @@ pub(in crate::app) fn picker_kinds(
         .filter(|kind| {
             let matches_query = query.is_empty()
                 || kind.search_terms().contains(query)
-                || kind.label().to_lowercase().contains(query);
+                || kind.label().to_lowercase().contains(query)
+                || crate::i18n::tr(kind.label()).to_lowercase().contains(query);
             if !matches_query {
                 return false;
             }
@@ -259,7 +260,7 @@ pub(in crate::app) fn render_block_picker(
                     .text_xs()
                     .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                     .text_color(rgb(MUTED))
-                    .child(category.to_uppercase())
+                    .child(crate::i18n::tr(category).to_uppercase())
                     .into_any_element(),
             );
             previous_category = Some(category);
@@ -336,7 +337,7 @@ pub(in crate::app) fn render_block_picker(
                         .text_ellipsis()
                         .text_sm()
                         .text_color(rgb(if hidden { MUTED } else { INK }))
-                        .child(kind.label()),
+                        .child(crate::i18n::tr(kind.label())),
                 );
         if customize {
             row = row
@@ -573,7 +574,7 @@ pub(in crate::app) fn render_block_picker(
                                                 this.picker.block_picker_index = 0;
                                                 cx.notify();
                                             }))
-                                            .child(div().flex_1().child(label));
+                                            .child(div().flex_1().child(crate::i18n::tr(label)));
                                         if let Some(category) = category.filter(|category| {
                                             customize && *category != "Favorites"
                                         }) {
@@ -851,7 +852,7 @@ pub(in crate::app) fn render_block_context_menu(
                                     this.block_menu_action(row, &source, action, window, cx);
                                 }))
                                 .child(Icon::new(icon).xsmall())
-                                .child(label)
+                                .child(crate::i18n::tr(label))
                         },
                     ))
                     .with_animation(

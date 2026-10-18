@@ -840,6 +840,7 @@ pub(crate) fn source_property_group(field: &SourceField) -> &'static str {
 }
 
 pub(crate) struct FieldOption {
+    pub localize: bool,
     pub value: String,
     pub title: String,
     pub asset: Option<(PathBuf, AssetKind, PathBuf)>,
@@ -858,6 +859,7 @@ pub(crate) fn field_options(
     let mut options = if key.command == "track" && field.key == "1" {
         keine_loader::native_stage_property_names()
             .map(|name| FieldOption {
+                localize: true,
                 value: name.into(),
                 title: title_case(&name.replace('_', " ")),
                 asset: None,
@@ -893,6 +895,7 @@ pub(crate) fn field_options(
         targets
             .into_iter()
             .map(|(value, title)| FieldOption {
+                localize: value == "camera",
                 value,
                 title,
                 asset: None,
@@ -904,6 +907,7 @@ pub(crate) fn field_options(
             .flat_map(|index| &index.assets)
             .filter(|asset| source_asset_accepts(key, field, asset.kind))
             .map(|asset| FieldOption {
+                localize: false,
                 value: asset.id.clone(),
                 title: asset
                     .path
@@ -919,6 +923,7 @@ pub(crate) fn field_options(
             .iter()
             .filter(|value| !matches!(**value, "true" | "false"))
             .map(|value| FieldOption {
+                localize: true,
                 value: (*value).to_owned(),
                 title: title_case(&value.replace('_', " ")),
                 asset: None,
@@ -942,6 +947,7 @@ pub(crate) fn field_options(
         options.insert(
             0,
             FieldOption {
+                localize: true,
                 value: String::new(),
                 title: title_case(default),
                 asset: None,
@@ -955,6 +961,7 @@ pub(crate) fn field_options(
         options.insert(
             0,
             FieldOption {
+                localize: false,
                 value: field.value.clone(),
                 title: field.value.clone(),
                 asset: None,

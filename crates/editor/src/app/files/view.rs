@@ -201,9 +201,12 @@ impl WorkbenchPanel {
                         .xsmall()
                         .text_color(rgb(PRIMARY)),
                 )
-                .child(format!(
-                    "Importing {} / {}",
-                    progress.completed, progress.total
+                .child(crate::i18n::format(
+                    "Importing {0} / {1}",
+                    &[
+                        ("0", (progress.completed).to_string()),
+                        ("1", (progress.total).to_string()),
+                    ],
                 ))
         });
         let context_menu = self.explorer.file_context_menu.clone().map(|menu| {
@@ -527,7 +530,9 @@ impl WorkbenchPanel {
                                                 px(0.)
                                             };
                                             let row = div()
-                                                .id(("explorer-file", index))
+                                                .id(format!("explorer-file-{}", relative.display()))
+                .focusable()
+                .focus_visible(|style| style.bg(rgb(PRIMARY_DIM)))
                                                 .h(px(EXPLORER_ROW_HEIGHT))
                                                 .w_full()
                                                 .flex_none()
@@ -545,7 +550,7 @@ impl WorkbenchPanel {
                                                     MUTED
                                                 }))
                                                 .when(row_selected, |style| {
-                                                    style.bg(rgb(SURFACE_HOVER))
+                                                    style.bg(rgb(SURFACE))
                                                 })
                                                 .when(folder_hovered, |style| {
                                                     style

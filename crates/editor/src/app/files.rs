@@ -321,7 +321,10 @@ impl WorkbenchPanel {
             .and_then(|path| open_in_file_manager(&path));
         if let Err(error) = result {
             window.push_notification(
-                Notification::error(format!("Could not show in folder: {}", short_error(&error))),
+                Notification::error(crate::i18n::format(
+                    "Could not show in folder: {0}",
+                    &[("0", (short_error(&error)).to_string())],
+                )),
                 cx,
             );
         }
@@ -491,7 +494,7 @@ impl WorkbenchPanel {
             .is_some_and(|workspace| workspace.file_operation_active)
         {
             window.push_notification(
-                Notification::warning("A file operation is still running"),
+                Notification::warning(crate::i18n::tr("A file operation is still running")),
                 cx,
             );
             return false;
@@ -502,7 +505,10 @@ impl WorkbenchPanel {
         {
             true
         } else {
-            window.push_notification(Notification::warning("Save assets.yaml first"), cx);
+            window.push_notification(
+                Notification::warning(crate::i18n::tr("Save assets.yaml first")),
+                cx,
+            );
             false
         }
     }
@@ -519,7 +525,10 @@ impl WorkbenchPanel {
             .iter()
             .any(|path| documents.has_open_documents_under(root, path))
         {
-            window.push_notification(Notification::warning("Save and close affected files"), cx);
+            window.push_notification(
+                Notification::warning(crate::i18n::tr("Save and close affected files")),
+                cx,
+            );
             false
         } else {
             true
@@ -586,9 +595,13 @@ impl WorkbenchPanel {
                         this.persist_explorer_state(cx);
                         schedule_authoring_refresh(&root, None, cx);
                     }
-                    Err(error) => cx
-                        .global_mut::<EditorDocuments>()
-                        .set_notice(&root, format!("File refresh failed: {error}")),
+                    Err(error) => cx.global_mut::<EditorDocuments>().set_notice(
+                        &root,
+                        crate::i18n::format(
+                            "File refresh failed: {error}",
+                            &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                        ),
+                    ),
                 }
                 cx.refresh_windows();
             });
@@ -672,7 +685,10 @@ impl WorkbenchPanel {
                         }
                         this.refresh_explorer(&root, cx);
                         this.focus.focus(window, cx);
-                        window.push_notification(Notification::success("Copied"), cx);
+                        window.push_notification(
+                            Notification::success(crate::i18n::tr("Copied")),
+                            cx,
+                        );
                     }
                     Err(error) => {
                         window.push_notification(Notification::error(short_error(&error)), cx)
@@ -727,11 +743,11 @@ impl WorkbenchPanel {
         };
         let receiver = window.prompt(
             PromptLevel::Warning,
-            "Delete selected item?",
+            crate::i18n::tr("Delete selected item?"),
             Some(&path.display().to_string()),
             &[
-                PromptButton::Other("Delete".into()),
-                PromptButton::Cancel("Cancel".into()),
+                PromptButton::Other(crate::i18n::tr("Delete").into()),
+                PromptButton::Cancel(crate::i18n::tr("Cancel").into()),
             ],
             cx,
         );
@@ -752,7 +768,10 @@ impl WorkbenchPanel {
                         this.explorer.file_selection = None;
                         this.refresh_explorer(&root, cx);
                         this.focus.focus(window, cx);
-                        window.push_notification(Notification::success("Deleted"), cx);
+                        window.push_notification(
+                            Notification::success(crate::i18n::tr("Deleted")),
+                            cx,
+                        );
                     }
                     Err(error) => {
                         window.push_notification(Notification::error(short_error(&error)), cx)
@@ -934,7 +953,13 @@ impl WorkbenchPanel {
                 }
                 if failed == 0 {
                     window.push_notification(
-                        Notification::success(format!("{verb} {succeeded} resource(s)")),
+                        Notification::success(crate::i18n::format(
+                            "{verb} {succeeded} resource(s)",
+                            &[
+                                ("verb", crate::i18n::tr(verb).to_owned()),
+                                ("succeeded", (succeeded).to_string()),
+                            ],
+                        )),
                         cx,
                     );
                 } else {
@@ -942,8 +967,14 @@ impl WorkbenchPanel {
                     cx.global_mut::<EditorDocuments>()
                         .set_notice(&root, format!("{verb}: {detail}"));
                     window.push_notification(
-                        Notification::warning(format!(
-                            "{verb} {succeeded} · {failed} failed · {detail}"
+                        Notification::warning(crate::i18n::format(
+                            "{verb} {succeeded} · {failed} failed · {detail}",
+                            &[
+                                ("verb", crate::i18n::tr(verb).to_owned()),
+                                ("succeeded", (succeeded).to_string()),
+                                ("failed", (failed).to_string()),
+                                ("detail", (detail).to_string()),
+                            ],
                         )),
                         cx,
                     );

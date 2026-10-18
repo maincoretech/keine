@@ -5,6 +5,7 @@ use bevy as _;
 
 mod app;
 pub mod authoring;
+pub mod i18n;
 pub mod preview;
 pub mod workspace;
 

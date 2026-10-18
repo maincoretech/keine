@@ -22,6 +22,7 @@ pub(super) struct Calibration {
     running: Option<PathBuf>,
     result: Option<(PathBuf, Stamp, Measurement)>,
     error: Option<(PathBuf, String)>,
+    adjusted: bool,
 }
 fn manifest(
     root: &Path,
@@ -82,40 +83,80 @@ pub(super) fn render(
 ) -> AnyElement {
     let path = asset.path.clone();
     let gain = saved_gain(root, &path, cx);
+    let snapshot = cx
+        .global_mut::<EditorDocuments>()
+        .preview(root)
+        .ok()
+        .map(|p| p.snapshot());
+    let playing = snapshot
+        .as_ref()
+        .filter(|s| s.audition_path.as_deref() == Some(&path));
+    let clean = cx
+        .global_mut::<EditorDocuments>()
+        .asset_manifest_is_clean(root);
+    let has_result = panel
+        .calibration
+        .result
+        .as_ref()
+        .is_some_and(|(p, _, _)| p == &path);
     let mut content = div()
         .w_full()
         .flex_shrink_0()
-        .max_w(px(440.))
         .flex()
         .flex_col()
         .gap_2()
-        .p_3()
+        .p_1()
         .child(section_label("LOUDNESS"))
-        .child(
-            div()
-                .text_sm()
-                .child(format!("Applied gain: {gain:+.1} dB")),
-        );
+        .child(div().text_sm().child(crate::i18n::format(
+            "Gain {gain} dB · {0}",
+            &[
+                ("gain", format!("{:+.1}", gain)),
+                ("0", (if clean { "Saved" } else { "Not saved" }).to_string()),
+            ],
+        )));
     if manifest(root, &path, cx).is_err() {
         return content
             .child(
                 div()
                     .text_xs()
                     .text_color(rgb(MUTED))
-                    .child("Add this file to the asset manifest to calibrate it."),
+                    .child(crate::i18n::tr(
+                        "Add this file to the asset manifest to calibrate it.",
+                    )),
             )
             .into_any_element();
     }
     if let Some(running) = &panel.calibration.running {
-        content = content.child(div().text_sm().text_color(rgb(MUTED)).child(format!(
-            "Analyzing {}…",
-            running.file_name().unwrap_or_default().to_string_lossy()
-        )));
+        content = content.child(
+            div()
+                .text_sm()
+                .text_color(rgb(MUTED))
+                .child(crate::i18n::format(
+                    "Analyzing {0}…",
+                    &[(
+                        "0",
+                        (running.file_name().unwrap_or_default().to_string_lossy()).to_string(),
+                    )],
+                )),
+        );
     } else {
         let root = root.to_owned();
         let path = path.clone();
-        content = content.child(tool_action("Analyze loudness").on_click(cx.listener(
-            move |panel, _, window, cx| {
+        content = content.child(
+            tool_icon_action(
+                if has_result {
+                    "Reanalyze"
+                } else {
+                    "Analyze loudness"
+                },
+                if has_result {
+                    AssetIconName::RefreshCw
+                } else {
+                    AssetIconName::SlidersHorizontal
+                },
+                true,
+            )
+            .on_click(cx.listener(move |panel, _, window, cx| {
                 if panel.calibration.running.is_some() {
                     return;
                 }
@@ -130,7 +171,9 @@ pub(super) fn render(
                         let before = stamp(&root, &path)?;
                         let result = audio::measure(&root, &path)?;
                         if stamp(&root, &path)? != before {
-                            return Err("Audio changed; analyze it again".to_owned());
+                            return Err(
+                                crate::i18n::tr("Audio changed; analyze it again").to_owned()
+                            );
                         }
                         Ok((path, before, result))
                     }
@@ -151,8 +194,8 @@ pub(super) fn render(
                 })
                 .detach();
                 cx.notify();
-            },
-        )));
+            })),
+        );
     }
     if let Some((_, measured_stamp, measurement)) = panel
         .calibration
@@ -162,89 +205,111 @@ pub(super) fn render(
     {
         let suggested = measurement.suggested();
         let loudness = measurement.integrated.map_or_else(
-            || "No integrated reading".to_owned(),
+            || crate::i18n::tr("No integrated reading").to_owned(),
             |i| format!("{i:.1} LUFS"),
         );
         content = content
             .child(
                 div()
-                    .text_sm()
+                    .text_xs().text_color(rgb(MUTED))
                     .child(format!("{loudness} · {:.1} dBTP", measurement.true_peak)),
             )
             .child(
-                div()
-                    .text_sm()
-                    .child(format!("Suggested gain: {suggested:+.1} dB")),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(MUTED))
-                    .child("Target −18 LUFS; peak ceiling −1 dBTP. Adjust the final mix by ear."),
+                div().id("suggested-audio-gain")
+                    .text_sm().text_color(rgb(PRIMARY))
+                    .tooltip(icon_hint("Target −18 LUFS; peak ceiling −1 dBTP. Adjust the final mix by ear. Original audio is unchanged."))
+                    .child(crate::i18n::format("Suggested {suggested} dB", &[("suggested", format!("{:+.1}", suggested))])),
             );
         let mut buttons = div().flex().flex_wrap().gap_2();
         for (label, db) in [("Original", 0.0), ("Adjusted", suggested)] {
+            let adjusted = label == "Adjusted";
+            let selected = playing.is_some_and(|s| {
+                (s.audition_gain_db - db).abs() < 0.01
+                    && (suggested != 0.0 || panel.calibration.adjusted == adjusted)
+            });
             let root = root.to_owned();
             let path = path.clone();
             let baseline = measured_stamp.clone();
-            buttons = buttons.child(tool_action(label).on_click(cx.listener(
-                move |panel, _, _, cx| {
+            buttons = buttons.child(tool_action_state(label, true, selected).on_click(
+                cx.listener(move |panel, _, _, cx| {
                     if stamp(&root, &path).ok().as_ref() != Some(&baseline) {
-                        panel.calibration.error =
-                            Some((path.clone(), "Audio changed; analyze it again".into()));
+                        panel.calibration.error = Some((
+                            path.clone(),
+                            crate::i18n::tr("Audio changed; analyze it again").into(),
+                        ));
                         cx.notify();
                         return;
                     }
                     if let Ok(preview) = cx.global_mut::<EditorDocuments>().preview(&root) {
+                        panel.calibration.adjusted = adjusted;
                         preview.restart_audition(path.clone(), db);
+                        cx.notify();
                     }
-                },
-            )));
+                }),
+            ));
         }
         let root = root.to_owned();
         let path = path.clone();
         let baseline = measured_stamp.clone();
-        buttons = buttons.child(tool_action("Apply gain").on_click(cx.listener(
-            move |panel, _, window, cx| {
-                let result = if stamp(&root, &path).ok().as_ref() == Some(&baseline) {
-                    apply(&root, &path, suggested, window, cx)
-                } else {
-                    Err("Audio changed; analyze it again".into())
-                };
-                panel.calibration.error = result.err().map(|e| (path.clone(), e));
-                cx.refresh_windows();
-            },
-        )));
+        let changed = (gain - suggested).abs() >= 0.01;
+        buttons = buttons.child(
+            tool_icon_action("Apply gain", AssetIconName::Check, changed).when(changed, |button| {
+                button.on_click(cx.listener(move |panel, _, window, cx| {
+                    let result = if stamp(&root, &path).ok().as_ref() == Some(&baseline) {
+                        apply(&root, &path, suggested, window, cx)
+                    } else {
+                        Err(crate::i18n::tr("Audio changed; analyze it again").into())
+                    };
+                    panel.calibration.error = result.err().map(|e| (path.clone(), e));
+                    panel.focus.focus(window, cx);
+                    cx.refresh_windows();
+                }))
+            }),
+        );
         content = content.child(buttons);
+        if let Some(playing) = playing {
+            let mode = if (playing.audition_gain_db - suggested).abs() < 0.01
+                && (suggested != 0.0 || panel.calibration.adjusted)
+            {
+                "Adjusted"
+            } else if playing.audition_gain_db.abs() < 0.01 {
+                "Original"
+            } else {
+                "Applied gain"
+            };
+            content = content.child(div().text_xs().text_color(rgb(MUTED)).child(format!(
+                "{mode} · {}",
+                if playing.audition_paused {
+                    "Paused"
+                } else {
+                    "Playing"
+                }
+            )));
+        }
     }
     if gain != 0.0 {
         let root = root.to_owned();
         let path = path.clone();
-        content = content.child(tool_action("Reset gain").on_click(cx.listener(
-            move |panel, _, window, cx| {
-                panel.calibration.error = apply(&root, &path, 0.0, window, cx)
-                    .err()
-                    .map(|e| (path.clone(), e));
-                cx.refresh_windows();
-            },
-        )));
+        content = content.child(
+            tool_icon_action("Reset gain", AssetIconName::RotateCcw, true).on_click(cx.listener(
+                move |panel, _, window, cx| {
+                    panel.calibration.error = apply(&root, &path, 0.0, window, cx)
+                        .err()
+                        .map(|e| (path.clone(), e));
+                    cx.refresh_windows();
+                },
+            )),
+        );
     }
     if let Some((_, message)) = panel.calibration.error.as_ref().filter(|(p, _)| p == &path) {
         content = content.child(
             div()
                 .text_sm()
                 .text_color(rgb(0xdb7780))
-                .child(message.clone()),
+                .child(crate::i18n::text(message)),
         );
     }
-    content
-        .child(
-            div()
-                .text_xs()
-                .text_color(rgb(MUTED))
-                .child("Apply, then save. Original audio is unchanged."),
-        )
-        .into_any_element()
+    content.into_any_element()
 }
 fn apply(
     root: &Path,

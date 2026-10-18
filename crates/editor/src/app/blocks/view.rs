@@ -66,7 +66,7 @@ pub(in crate::app) fn block_card_icon(kind: &BlockKind, source: &str) -> AssetIc
 pub(in crate::app) fn block_card_summary(kind: &BlockKind, source: &str, line: usize) -> String {
     match kind {
         BlockKind::Narration | BlockKind::Dialogue { .. } => {
-            format!("Dynamic text · L{}", line + 1)
+            crate::i18n::format("Dynamic text · L{0}", &[("0", (line + 1).to_string())])
         }
         BlockKind::Choice
         | BlockKind::Conditional
@@ -86,7 +86,10 @@ pub(in crate::app) fn block_card_summary(kind: &BlockKind, source: &str, line: u
             .unwrap_or_default()
             .to_owned(),
         BlockKind::Command => String::new(),
-        BlockKind::Unsupported => format!("Unsupported syntax · L{}", line + 1),
+        BlockKind::Unsupported => crate::i18n::format(
+            "Unsupported syntax · L{0}",
+            &[("0", (line + 1).to_string())],
+        ),
     }
 }
 
@@ -110,7 +113,7 @@ fn block_card_headline(
         // Summaries are truncated and commas can belong to nested calls or text.
         // Source fields already retain complete, token-bounded argument values.
         "sprite" | "move" => value("1").unwrap_or_default().to_owned(),
-        "sprite.focus.configure" => "Sprite focus styles".to_owned(),
+        "sprite.focus.configure" => crate::i18n::tr("Sprite focus styles").to_owned(),
         "screen.curtain.show" | "screen.curtain.hide" => {
             value("color").unwrap_or_default().to_owned()
         }
@@ -275,7 +278,7 @@ pub(in crate::app) fn draft_text_row(draft: &DraftTextBlock, indent: f32, id: us
                         .flex_none()
                         .text_xs()
                         .text_color(rgb(PRIMARY))
-                        .child("Text"),
+                        .child(crate::i18n::tr("Text")),
                 )
                 .child(
                     div().min_h(px(30.)).flex_1().min_w_0().child(
@@ -336,7 +339,9 @@ fn inline_wait_preview(source: &str, editing: Option<(usize, &str)>) -> WaitPrev
             text.push_str(" ms]");
         } else {
             text.push_str(&match wait.duration {
-                Some(seconds) => format!("[Wait {seconds}s]"),
+                Some(seconds) => {
+                    crate::i18n::format("[Wait {seconds}s]", &[("seconds", (seconds).to_string())])
+                }
                 None => "[Wait for input]".to_owned(),
             });
         }
@@ -1657,22 +1662,30 @@ pub(in crate::app) fn render_block_projection(
                     content,
                 )),
         )
-        .child(minimap::render(
-            geometry.as_ref().map_or_else(
-                || Rc::new(overview),
-                |geometry| {
-                    layout.marks(
-                        &snapshot,
-                        geometry,
-                        selected_blocks,
-                        selected_line.map(|line| (line, selected_start.unwrap_or(usize::MAX))),
-                    )
-                },
-            ),
-            scroll_handle,
-            minimap,
-            cx,
-        ))
+        .when(
+            cx.global::<EditorDocuments>()
+                .editor_preferences
+                .show_minimap,
+            |view| {
+                view.child(minimap::render(
+                    geometry.as_ref().map_or_else(
+                        || Rc::new(overview),
+                        |geometry| {
+                            layout.marks(
+                                &snapshot,
+                                geometry,
+                                selected_blocks,
+                                selected_line
+                                    .map(|line| (line, selected_start.unwrap_or(usize::MAX))),
+                            )
+                        },
+                    ),
+                    scroll_handle,
+                    minimap,
+                    cx,
+                ))
+            },
+        )
         .into_any_element()
 }
 

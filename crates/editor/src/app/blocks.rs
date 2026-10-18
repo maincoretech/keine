@@ -136,9 +136,13 @@ impl WorkbenchPanel {
                     vec![start],
                 );
             }
-            Err(error) => cx
-                .global_mut::<EditorDocuments>()
-                .set_notice(root, format!("Text ending edit blocked: {error}")),
+            Err(error) => cx.global_mut::<EditorDocuments>().set_notice(
+                root,
+                crate::i18n::format(
+                    "Text ending edit blocked: {error}",
+                    &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                ),
+            ),
         }
         cx.refresh_windows();
     }
@@ -163,11 +167,13 @@ impl WorkbenchPanel {
         if document.borrow().is_dirty() {
             let receiver = window.prompt(
                 PromptLevel::Warning,
-                "Reload from disk?",
-                Some("Unsaved changes in this document will be discarded."),
+                crate::i18n::tr("Reload from disk?"),
+                Some(crate::i18n::tr(
+                    "Unsaved changes in this document will be discarded.",
+                )),
                 &[
-                    PromptButton::Other("Reload".into()),
-                    PromptButton::Cancel("Cancel".into()),
+                    PromptButton::Other(crate::i18n::tr("Reload").into()),
+                    PromptButton::Cancel(crate::i18n::tr("Cancel").into()),
                 ],
                 cx,
             );
@@ -559,7 +565,10 @@ impl WorkbenchPanel {
             _ => return,
         };
         if current != source {
-            self.set_block_notice("Source changed; reopen the Block menu".into(), cx);
+            self.set_block_notice(
+                crate::i18n::tr("Source changed; reopen the Block menu").into(),
+                cx,
+            );
             cx.notify();
             return;
         }
@@ -588,7 +597,13 @@ impl WorkbenchPanel {
                         );
                         self.select_edited_block(&edited, start, cx);
                     }
-                    Err(error) => self.set_block_notice(format!("Toggle blocked: {error}"), cx),
+                    Err(error) => self.set_block_notice(
+                        crate::i18n::format(
+                            "Toggle blocked: {error}",
+                            &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                        ),
+                        cx,
+                    ),
                 }
             }
             BlockMenuAction::Copy => self.copy_selected_blocks(&CopyBlocks, window, cx),
@@ -601,7 +616,13 @@ impl WorkbenchPanel {
                         self.apply_block_source(edited.clone(), "Blocks duplicated", window, cx);
                         self.select_edited_block(&edited, inserted.start, cx);
                     }
-                    Err(error) => self.set_block_notice(format!("Duplicate blocked: {error}"), cx),
+                    Err(error) => self.set_block_notice(
+                        crate::i18n::format(
+                            "Duplicate blocked: {error}",
+                            &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                        ),
+                        cx,
+                    ),
                 }
             }
             BlockMenuAction::Cut => {
@@ -933,7 +954,7 @@ impl WorkbenchPanel {
             let state = cx.new(|cx| {
                 TextareaState::new(window, cx)
                     .default_value(dialogue.text.clone())
-                    .placeholder("Text")
+                    .placeholder(crate::i18n::tr("Text"))
                     .auto_grow(1, 6)
                     .submit_on_enter(true)
             });
@@ -1018,14 +1039,21 @@ impl WorkbenchPanel {
                             panel.shift_text_offsets(changed_end, delta);
                         }
                         let notice = match result {
-                            Ok(()) => "Text updated from Blocks".to_owned(),
-                            Err(error) => format!("Block text edit failed: {error}"),
+                            Ok(()) => crate::i18n::tr("Text updated from Blocks").to_owned(),
+                            Err(error) => crate::i18n::format(
+                                "Block text edit failed: {error}",
+                                &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                            ),
                         };
                         cx.global_mut::<EditorDocuments>().set_notice(&root, notice);
                     }
-                    Err(error) => cx
-                        .global_mut::<EditorDocuments>()
-                        .set_notice(&root, format!("Block text edit blocked: {error}")),
+                    Err(error) => cx.global_mut::<EditorDocuments>().set_notice(
+                        &root,
+                        crate::i18n::format(
+                            "Block text edit blocked: {error}",
+                            &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                        ),
+                    ),
                 }
                 cx.notify();
             });
@@ -1319,8 +1347,13 @@ impl WorkbenchPanel {
         if let Err(error) = result
             && let PanelContent::Document { root, .. } = &self.content
         {
-            cx.global_mut::<EditorDocuments>()
-                .set_notice(root, format!("Picker preferences not saved: {error}"));
+            cx.global_mut::<EditorDocuments>().set_notice(
+                root,
+                crate::i18n::format(
+                    "Picker preferences not saved: {error}",
+                    &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                ),
+            );
         }
         cx.refresh_windows();
     }
@@ -1476,7 +1509,7 @@ impl WorkbenchPanel {
         }
         let state = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .placeholder("Text")
+                .placeholder(crate::i18n::tr("Text"))
                 .auto_grow(1, 6)
                 .submit_on_enter(true)
         });
@@ -1577,14 +1610,21 @@ impl WorkbenchPanel {
                         });
                     });
                     let notice = match result {
-                        Ok(()) => "Text updated".to_owned(),
-                        Err(error) => format!("Text edit failed: {error}"),
+                        Ok(()) => crate::i18n::tr("Text updated").to_owned(),
+                        Err(error) => crate::i18n::format(
+                            "Text edit failed: {error}",
+                            &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                        ),
                     };
                     cx.global_mut::<EditorDocuments>().set_notice(&root, notice);
                 }
-                Err(error) => cx
-                    .global_mut::<EditorDocuments>()
-                    .set_notice(&root, format!("Text edit blocked: {error}")),
+                Err(error) => cx.global_mut::<EditorDocuments>().set_notice(
+                    &root,
+                    crate::i18n::format(
+                        "Text edit blocked: {error}",
+                        &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                    ),
+                ),
             }
             cx.notify();
         });
@@ -1650,7 +1690,13 @@ impl WorkbenchPanel {
                 range.start
             }
             Some(Err(error)) => {
-                self.set_block_notice(format!("Text edit blocked: {error}"), cx);
+                self.set_block_notice(
+                    crate::i18n::format(
+                        "Text edit blocked: {error}",
+                        &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                    ),
+                    cx,
+                );
                 return;
             }
             None => {
@@ -1717,9 +1763,13 @@ impl WorkbenchPanel {
                 cx.global_mut::<EditorDocuments>()
                     .set_notice(root, "Blocks copied");
             }
-            Err(error) => cx
-                .global_mut::<EditorDocuments>()
-                .set_notice(root, format!("Copy blocked: {error}")),
+            Err(error) => cx.global_mut::<EditorDocuments>().set_notice(
+                root,
+                crate::i18n::format(
+                    "Copy blocked: {error}",
+                    &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                ),
+            ),
         }
         cx.refresh_windows();
     }
@@ -1734,12 +1784,18 @@ impl WorkbenchPanel {
             return;
         }
         let Some(fragment) = cx.read_from_clipboard().and_then(|item| item.text()) else {
-            self.set_block_notice("Paste blocked: clipboard has no text".into(), cx);
+            self.set_block_notice(
+                crate::i18n::tr("Paste blocked: clipboard has no text").into(),
+                cx,
+            );
             return;
         };
         let fragment = fragment.trim();
         if fragment.is_empty() {
-            self.set_block_notice("Paste blocked: clipboard is empty".into(), cx);
+            self.set_block_notice(
+                crate::i18n::tr("Paste blocked: clipboard is empty").into(),
+                cx,
+            );
             return;
         }
         let wrapper = format!("scene __paste {{ {fragment} }}");
@@ -1753,7 +1809,10 @@ impl WorkbenchPanel {
             || !fragment_projection.read_only.is_empty()
             || fragment_blocks.iter().any(|block| block.read_only)
         {
-            self.set_block_notice("Paste blocked: not valid block source".into(), cx);
+            self.set_block_notice(
+                crate::i18n::tr("Paste blocked: not valid block source").into(),
+                cx,
+            );
             return;
         }
         let mut pasted_ids = HashSet::new();
@@ -1762,7 +1821,10 @@ impl WorkbenchPanel {
             .filter_map(|block| block.stable_id.as_deref())
             .any(|id| !pasted_ids.insert(id.to_owned()))
         {
-            self.set_block_notice("Paste blocked: duplicate stable ID".into(), cx);
+            self.set_block_notice(
+                crate::i18n::tr("Paste blocked: duplicate stable ID").into(),
+                cx,
+            );
             return;
         }
         let PanelContent::Document {
@@ -1775,7 +1837,10 @@ impl WorkbenchPanel {
         };
         let project_ids = cx.global::<EditorDocuments>().explicit_source_ids(root);
         if pasted_ids.iter().any(|id| project_ids.contains(id)) {
-            self.set_block_notice("Paste blocked: stable ID already exists".into(), cx);
+            self.set_block_notice(
+                crate::i18n::tr("Paste blocked: stable ID already exists").into(),
+                cx,
+            );
             return;
         }
         let Some(before_start) = self
@@ -1784,7 +1849,10 @@ impl WorkbenchPanel {
             .filter(|start| self.document.selected_blocks.contains(start))
             .or_else(|| self.document.selected_blocks.iter().copied().min())
         else {
-            self.set_block_notice("Paste blocked: select an insertion block".into(), cx);
+            self.set_block_notice(
+                crate::i18n::tr("Paste blocked: select an insertion block").into(),
+                cx,
+            );
             return;
         };
         let source = document.borrow().contents().to_owned();
@@ -1797,7 +1865,13 @@ impl WorkbenchPanel {
                 self.apply_block_source(edited.clone(), "Blocks pasted", window, cx);
                 self.select_edited_block(&edited, inserted.start, cx);
             }
-            Err(error) => self.set_block_notice(format!("Paste blocked: {error}"), cx),
+            Err(error) => self.set_block_notice(
+                crate::i18n::format(
+                    "Paste blocked: {error}",
+                    &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                ),
+                cx,
+            ),
         }
     }
 
@@ -1824,7 +1898,13 @@ impl WorkbenchPanel {
             .delete_blocks(&source, &self.document.selected_blocks)
         {
             Ok(edited) => self.apply_block_source(edited, "Blocks deleted", window, cx),
-            Err(error) => self.set_block_notice(format!("Delete blocked: {error}"), cx),
+            Err(error) => self.set_block_notice(
+                crate::i18n::format(
+                    "Delete blocked: {error}",
+                    &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                ),
+                cx,
+            ),
         }
     }
 
@@ -1868,7 +1948,13 @@ impl WorkbenchPanel {
             direction,
         ) {
             Ok(edited) => self.apply_block_source(edited, "Blocks moved", window, cx),
-            Err(error) => self.set_block_notice(format!("Move blocked: {error}"), cx),
+            Err(error) => self.set_block_notice(
+                crate::i18n::format(
+                    "Move blocked: {error}",
+                    &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                ),
+                cx,
+            ),
         }
     }
 
@@ -1901,7 +1987,13 @@ impl WorkbenchPanel {
         let index = cx.global::<EditorDocuments>().authoring(root);
         match asset_drop_edit(&source, target_start, &drag.keys, &index, insertion) {
             Ok(edited) => self.apply_block_source(edited, "Assets inserted", window, cx),
-            Err(error) => self.set_block_notice(format!("Asset drop blocked: {error}"), cx),
+            Err(error) => self.set_block_notice(
+                crate::i18n::format(
+                    "Asset drop blocked: {error}",
+                    &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                ),
+                cx,
+            ),
         }
     }
 
@@ -2031,7 +2123,10 @@ impl WorkbenchPanel {
             .trim()
             .to_owned();
         if !valid_identifier(&name) {
-            self.set_block_notice("Scene name must be an identifier".into(), cx);
+            self.set_block_notice(
+                crate::i18n::tr("Scene name must be an identifier").into(),
+                cx,
+            );
             return;
         }
         if matches!(&mode, SceneEditMode::Rename { old_name, .. } if old_name == &name) {
@@ -2040,7 +2135,10 @@ impl WorkbenchPanel {
             return;
         }
         if !cx.global::<EditorDocuments>().authoring_is_current(&root) {
-            self.set_block_notice("Script index is updating; try again shortly".into(), cx);
+            self.set_block_notice(
+                crate::i18n::tr("Script index is updating; try again shortly").into(),
+                cx,
+            );
             return;
         }
         let index = cx.global::<EditorDocuments>().authoring(&root);
@@ -2053,7 +2151,7 @@ impl WorkbenchPanel {
             .iter()
             .any(|scene| scene.name == name && !same_scene(scene))
         {
-            self.set_block_notice("Scene name already exists".into(), cx);
+            self.set_block_notice(crate::i18n::tr("Scene name already exists").into(), cx);
             return;
         }
         let result = match &mode {
@@ -2062,7 +2160,7 @@ impl WorkbenchPanel {
                 .map_err(|error| error.to_string()),
             SceneEditMode::Rename { start, old_name } => {
                 if !index.unindexed_sources.is_empty() {
-                    Err("Some scripts could not be indexed".to_owned())
+                    Err(crate::i18n::tr("Some scripts could not be indexed").to_owned())
                 } else if index.scenes.iter().any(|scene| {
                     scene.path == relative
                         && scene.source_range.start == *start
@@ -2085,7 +2183,10 @@ impl WorkbenchPanel {
                                     cx.global::<EditorDocuments>().source(&root, &path)
                                 else {
                                     self.set_block_notice(
-                                        format!("Could not read {}", path.display()),
+                                        crate::i18n::format(
+                                            "Could not read {0}",
+                                            &[("0", (path.display()).to_string())],
+                                        ),
                                         cx,
                                     );
                                     return;
@@ -2101,7 +2202,7 @@ impl WorkbenchPanel {
                         Err(error) => Err(error.to_string()),
                     }
                 } else {
-                    Err("Scene changed; refresh Blocks".to_owned())
+                    Err(crate::i18n::tr("Scene changed; refresh Blocks").to_owned())
                 }
             }
         };
@@ -2114,9 +2215,18 @@ impl WorkbenchPanel {
                 }
                 self.document.scene_edit = None;
                 self.schedule_visual_editors_rebuild(window, cx);
-                self.set_block_notice(format!("Scene {name} updated"), cx);
+                self.set_block_notice(
+                    crate::i18n::format("Scene {name} updated", &[("name", (name).to_string())]),
+                    cx,
+                );
             }
-            Err(error) => self.set_block_notice(format!("Scene edit blocked: {error}"), cx),
+            Err(error) => self.set_block_notice(
+                crate::i18n::format(
+                    "Scene edit blocked: {error}",
+                    &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                ),
+                cx,
+            ),
         }
     }
 
@@ -2137,7 +2247,13 @@ impl WorkbenchPanel {
         let source = document.borrow().contents().to_owned();
         match move_scene(&source, start, direction) {
             Ok(edited) => self.apply_block_source(edited, "Scene moved", window, cx),
-            Err(error) => self.set_block_notice(format!("Move blocked: {error}"), cx),
+            Err(error) => self.set_block_notice(
+                crate::i18n::format(
+                    "Move blocked: {error}",
+                    &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                ),
+                cx,
+            ),
         }
     }
 
@@ -2162,19 +2278,21 @@ impl WorkbenchPanel {
             .map(|source| scene_references(&source, &name).len())
             .sum::<usize>();
         let detail = if references == 0 {
-            "This removes the scene and its blocks. Undo remains available.".to_owned()
+            crate::i18n::tr("This removes the scene and its blocks. Undo remains available.")
+                .to_owned()
         } else {
-            format!(
-                "This removes the scene and its blocks. {references} references will be unresolved. Undo remains available."
+            crate::i18n::format(
+                "This removes the scene and its blocks. {references} references will be unresolved. Undo remains available.",
+                &[("references", (references).to_string())],
             )
         };
         let receiver = window.prompt(
             PromptLevel::Warning,
-            "Delete scene?",
+            crate::i18n::tr("Delete scene?"),
             Some(&detail),
             &[
-                PromptButton::Other("Delete".into()),
-                PromptButton::Cancel("Cancel".into()),
+                PromptButton::Other(crate::i18n::tr("Delete").into()),
+                PromptButton::Cancel(crate::i18n::tr("Cancel").into()),
             ],
             cx,
         );
@@ -2196,7 +2314,10 @@ impl WorkbenchPanel {
                     .iter()
                     .any(|scene| scene.source_range.start == start && scene.name == name);
                 if !still_same {
-                    this.set_block_notice("Scene changed; refresh Blocks".into(), cx);
+                    this.set_block_notice(
+                        crate::i18n::tr("Scene changed; refresh Blocks").into(),
+                        cx,
+                    );
                     return;
                 }
                 match delete_scene(&source, start) {
@@ -2204,7 +2325,13 @@ impl WorkbenchPanel {
                         this.document.collapsed_scenes.remove(&name);
                         this.apply_block_source(edited, "Scene deleted", window, cx)
                     }
-                    Err(error) => this.set_block_notice(format!("Delete blocked: {error}"), cx),
+                    Err(error) => this.set_block_notice(
+                        crate::i18n::format(
+                            "Delete blocked: {error}",
+                            &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                        ),
+                        cx,
+                    ),
                 }
             });
         })
@@ -2319,15 +2446,24 @@ impl WorkbenchPanel {
                 editor.update(cx, |editor, cx| {
                     editor.replace_all(edited.clone(), window, cx)
                 });
-                cx.global_mut::<EditorDocuments>()
-                    .set_notice(root, format!("Inserted {}", kind.label()));
+                cx.global_mut::<EditorDocuments>().set_notice(
+                    root,
+                    crate::i18n::format(
+                        "Inserted {0}",
+                        &[("0", (crate::i18n::tr(kind.label())).to_string())],
+                    ),
+                );
                 if !inserted.is_empty() {
                     self.select_edited_block(&edited, inserted.start, cx);
                 }
             }
-            Err(error) => cx
-                .global_mut::<EditorDocuments>()
-                .set_notice(root, format!("Insert blocked: {error}")),
+            Err(error) => cx.global_mut::<EditorDocuments>().set_notice(
+                root,
+                crate::i18n::format(
+                    "Insert blocked: {error}",
+                    &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                ),
+            ),
         }
         cx.refresh_windows();
     }

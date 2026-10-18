@@ -79,7 +79,7 @@ dev/scripts/  build and release scripts
 - [Android build and device acceptance](dev/docs/android.md)
 - [Compatibility limits](dev/docs/compatibility.md)
 
-Current version: 0.16.5. macOS is the current acceptance focus; Windows/Linux runtime acceptance is deferred.
+Current version: 0.16.6. macOS is the current acceptance focus; Windows/Linux runtime acceptance is deferred.
 Build/test success and manual input/display/media acceptance are separate gates.
 
 ## License

@@ -25,7 +25,7 @@ fn advanced_toggle(
         .active(|style| style.bg(rgb(PRIMARY_DIM)))
         .focus_visible(|style| style.bg(rgb(PRIMARY_DIM)).text_color(rgb(PRIMARY)))
         .child(disclosure_chevron(progress))
-        .child(label)
+        .child(crate::i18n::text(&label))
         .on_click(cx.listener(|panel, _, _, cx| {
             panel.inspector.advanced_open = !panel.inspector.advanced_open;
             cx.notify();
@@ -115,7 +115,7 @@ impl SourceInspectorView<'_> {
                     } else {
                         "Apply immediately"
                     }))
-                    .child(if enabled { "◆" } else { "◇" })
+                    .child(crate::i18n::tr(if enabled { "◆" } else { "◇" }))
                     .on_click(cx.listener(move |panel, _, window, cx| {
                         panel.commit_source_fields(
                             &root,
@@ -165,7 +165,9 @@ impl SourceInspectorView<'_> {
                     div()
                         .text_size(px(11.))
                         .text_color(rgb(MUTED))
-                        .child("Deletes the tail, then waits for a new advance input."),
+                        .child(crate::i18n::tr(
+                            "Deletes the tail, then waits for a new advance input.",
+                        )),
                 )
                 .into_any_element();
         }
@@ -281,9 +283,9 @@ impl SourceInspectorView<'_> {
         if !secondary.is_empty() || extra_advanced.is_some() {
             let count = secondary.len();
             let label = if extra_advanced.is_some() {
-                "Advanced".into()
+                crate::i18n::tr("Advanced").into()
             } else {
-                format!("Advanced · {count}")
+                crate::i18n::format("Advanced · {count}", &[("count", (count).to_string())])
             };
             content = content
                 .child(advanced_toggle(self.advanced_progress, label, cx))
@@ -429,7 +431,7 @@ impl SourceInspectorView<'_> {
                                                 );
                                             })),
                                     )
-                                    .child(title)
+                                    .child(crate::i18n::text(title))
                             })),
                     )
                     .child(
@@ -505,20 +507,22 @@ pub(in crate::app) fn multi_block_summary(source: &str, starts: &[usize]) -> Opt
         ));
         properties.push((
             "Voice",
-            common_value(
+            common_value(metadata.iter().map(|metadata| {
                 metadata
-                    .iter()
-                    .map(|metadata| metadata.voice.clone().unwrap_or_else(|| "None".into())),
-            ),
+                    .voice
+                    .clone()
+                    .unwrap_or_else(|| crate::i18n::tr("None").into())
+            })),
         ));
     }
     properties.push((
         "Stable ID",
-        common_value(
-            selected
-                .iter()
-                .map(|(_, block)| block.stable_id.clone().unwrap_or_else(|| "None".to_owned())),
-        ),
+        common_value(selected.iter().map(|(_, block)| {
+            block
+                .stable_id
+                .clone()
+                .unwrap_or_else(|| crate::i18n::tr("None").to_owned())
+        })),
     ));
     Some(
         div()
@@ -601,11 +605,18 @@ pub(in crate::app) fn selection_summary(
                             .text_color(rgb(MUTED))
                             .child(path.display().to_string()),
                     )
-                    .child(div().text_xs().text_color(rgb(MUTED)).child(format!(
-                        "Line {}, column {}",
-                        line + 1,
-                        column + 1
-                    )))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(MUTED))
+                            .child(crate::i18n::format(
+                                "Line {0}, column {1}",
+                                &[
+                                    ("0", (line + 1).to_string()),
+                                    ("1", (column + 1).to_string()),
+                                ],
+                            )),
+                    )
                     .children(
                         properties
                             .into_iter()
@@ -615,8 +626,10 @@ pub(in crate::app) fn selection_summary(
                     .into_any_element();
             }
             let authoring = match index.selection(path, *line) {
-                AuthoringSelection::Source => "Source selection".to_owned(),
-                AuthoringSelection::Scene(scene) => format!("Scene · {}", scene.name),
+                AuthoringSelection::Source => crate::i18n::tr("Source selection").to_owned(),
+                AuthoringSelection::Scene(scene) => {
+                    crate::i18n::format("Scene · {0}", &[("0", (scene.name).to_string())])
+                }
                 AuthoringSelection::Dialogue(dialogue) => format!(
                     "{} · {}",
                     if dialogue.speaker.is_empty() {
@@ -634,7 +647,13 @@ pub(in crate::app) fn selection_summary(
                 .text_xs()
                 .text_color(rgb(0xb8c4cf))
                 .child(path.display().to_string())
-                .child(format!("Line {}, column {}", line + 1, column + 1))
+                .child(crate::i18n::format(
+                    "Line {0}, column {1}",
+                    &[
+                        ("0", (line + 1).to_string()),
+                        ("1", (column + 1).to_string()),
+                    ],
+                ))
                 .child(div().text_color(rgb(PRIMARY)).child(authoring))
                 .children(diagnostics)
                 .into_any_element()
@@ -642,7 +661,7 @@ pub(in crate::app) fn selection_summary(
         None => div()
             .text_xs()
             .text_color(rgb(MUTED))
-            .child("No source selection")
+            .child(crate::i18n::tr("No source selection"))
             .into_any_element(),
     }
 }
@@ -761,7 +780,7 @@ pub(in crate::app) fn batch_block_edit(
         .iter()
         .any(|(field, _)| field == name)
     {
-        return Err("Field is not editable for this selection".into());
+        return Err(crate::i18n::tr("Field is not editable for this selection").into());
     }
     let original = EiyashouProjection::parse(source);
     let selected_indexes = original
@@ -819,7 +838,7 @@ pub(in crate::app) fn batch_block_edit(
                 .flat_map(|scene| &scene.blocks)
                 .count()
     {
-        return Err("Invalid batch value; nothing changed".into());
+        return Err(crate::i18n::tr("Invalid batch value; nothing changed").into());
     }
     let starts = parsed
         .scenes
@@ -971,7 +990,7 @@ impl WorkbenchPanel {
                                     .on_click(move |_, window, cx| {
                                         navigate_source(&root, &path, line, column, window, cx)
                                     })
-                                    .child(label)
+                                    .child(crate::i18n::text(&label))
                             })
                             .collect::<Vec<_>>();
                         this.when(asset_inputs.len() == 3, |this| {
@@ -998,7 +1017,7 @@ impl WorkbenchPanel {
                                             div()
                                                 .text_xs()
                                                 .text_color(rgb(MUTED))
-                                                .child("Rename file to match"),
+                                                .child(crate::i18n::tr("Rename file to match")),
                                         ),
                                 )
                         })
@@ -1012,6 +1031,7 @@ impl WorkbenchPanel {
                                 .iter()
                                 .filter(|reference| reference.key == asset.key())
                                 .map(|reference| SourceOption {
+                                    localize: false,
                                     value: serde_json::to_string(&(
                                         reference.path.clone(),
                                         reference.line,
@@ -1027,7 +1047,7 @@ impl WorkbenchPanel {
                                     asset: None,
                                 })
                                 .collect(),
-                            "Browse references".into(),
+                            crate::i18n::tr("Browse references").into(),
                             false,
                             cx,
                         ))
@@ -1048,7 +1068,10 @@ impl WorkbenchPanel {
 ",
                                             ),
                                     ))
-                                    .child(format!("+{more} files")),
+                                    .child(crate::i18n::format(
+                                        "+{more} files",
+                                        &[("more", (more).to_string())],
+                                    )),
                             )
                         })
                     })
@@ -1271,7 +1294,7 @@ impl WorkbenchPanel {
                             .when(source_key.is_none(), |this| {
                                 this.child(advanced_toggle(
                                     advanced_progress,
-                                    "Advanced".into(),
+                                    crate::i18n::tr("Advanced").into(),
                                     cx,
                                 ))
                                 .child(disclosure_content(

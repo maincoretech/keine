@@ -45,7 +45,7 @@ pub(super) fn render(controller: &PreviewController, scroll: &ScrollHandle) -> A
                     div()
                         .text_sm()
                         .text_color(rgb(lifecycle_color(&snapshot.lifecycle)))
-                        .child(lifecycle_name(&snapshot.lifecycle)),
+                        .child(crate::i18n::tr(lifecycle_name(&snapshot.lifecycle))),
                 )
                 .child(
                     div().text_xs().text_color(rgb(MUTED)).child(
@@ -70,7 +70,7 @@ pub(super) fn render(controller: &PreviewController, scroll: &ScrollHandle) -> A
             div()
                 .text_xs()
                 .text_color(rgb(MUTED))
-                .child("100% = 1 logical core"),
+                .child(crate::i18n::tr("100% = 1 logical core")),
         )
         .child(controls::property_row("Memory · RSS", memory))
         .child(sparkline(
@@ -84,13 +84,15 @@ pub(super) fn render(controller: &PreviewController, scroll: &ScrollHandle) -> A
             div()
                 .text_xs()
                 .text_color(rgb(MUTED))
-                .child("Last 30s · sampled every 500ms"),
+                .child(crate::i18n::tr("Last 30s · sampled every 500ms")),
         )
         .child(
             div()
                 .text_xs()
                 .text_color(rgb(MUTED))
-                .child("Peak is the highest sampled RSS in this Engine process."),
+                .child(crate::i18n::tr(
+                    "Peak is the highest sampled RSS in this Engine process.",
+                )),
         );
     controls::vertical_overflow_view("performance-scroll", scroll, content)
 }

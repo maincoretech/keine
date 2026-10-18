@@ -268,10 +268,12 @@ impl SourceInspectorView<'_> {
                     div()
                         .text_size(px(10.))
                         .text_color(rgb(MUTED))
-                        .child(format!(
-                            "X {} · Y {} px · Shift to snap",
-                            number_text(x),
-                            number_text(y)
+                        .child(crate::i18n::format(
+                            "X {0} · Y {1} px · Shift to snap",
+                            &[
+                                ("0", (number_text(x)).to_string()),
+                                ("1", (number_text(y)).to_string()),
+                            ],
                         )),
                 )
                 .into_any_element(),
@@ -371,7 +373,12 @@ impl SourceInspectorView<'_> {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(div().text_size(px(11.)).text_color(rgb(MUTED)).child(title))
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(rgb(MUTED))
+                                .child(crate::i18n::text(&title)),
+                        )
                         .child(
                             div()
                                 .relative()

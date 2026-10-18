@@ -30,14 +30,14 @@ pub(in crate::app) fn render_text_ending(
                     div()
                         .text_size(px(11.))
                         .text_color(rgb(MUTED))
-                        .child("Keep dialogue"),
+                        .child(crate::i18n::tr("Keep dialogue")),
                 )
                 .child(
                     Switch::new("text-keep-dialogue")
                         .small()
                         .color(rgb(PRIMARY))
                         .checked(key.lifetime.text_box.is_none())
-                        .accessibility_label("Keep dialogue")
+                        .accessibility_label(crate::i18n::tr("Keep dialogue"))
                         .on_change(cx.listener(move |panel, keep: &bool, window, cx| {
                             panel.commit_text_lifetime(
                                 &dialogue_root,
@@ -59,14 +59,14 @@ pub(in crate::app) fn render_text_ending(
                     div()
                         .text_size(px(11.))
                         .text_color(rgb(MUTED))
-                        .child("Keep characters"),
+                        .child(crate::i18n::tr("Keep characters")),
                 )
                 .child(
                     Switch::new("text-keep-characters")
                         .small()
                         .color(rgb(PRIMARY))
                         .checked(key.lifetime.hide.is_none())
-                        .accessibility_label("Keep characters")
+                        .accessibility_label(crate::i18n::tr("Keep characters"))
                         .on_change(cx.listener(move |panel, keep: &bool, window, cx| {
                             if !keep && target.read(cx).value().trim().is_empty() {
                                 target.update(cx, |target, cx| target.focus(window, cx));
@@ -128,12 +128,12 @@ fn source_property_label(key: &SourceInspectorKey, field: &SourceField) -> impl 
         .when(camera_tween_field(key, field), |this| this.pr(px(24.)))
         .text_size(px(11.))
         .text_color(rgb(MUTED))
-        .child(source_field_label(key, field))
+        .child(crate::i18n::text(&source_field_label(key, field)))
         .child(
             div()
                 .id(format!("field-origin-{}-{}", key.block_start, field.key))
                 .text_size(px(10.))
-                .child(if written { "Set" } else { "Default" })
+                .child(crate::i18n::tr(if written { "Set" } else { "Default" }))
                 .tooltip(icon_hint(if written {
                     "Written explicitly in source."
                 } else {
@@ -167,64 +167,71 @@ pub(in crate::app) fn segmented_source_property(
             .flex_col()
             .gap_1()
             .child(source_property_label(key, field))
-            .child(div().flex().gap_1().children(choices.iter().map(|choice| {
-                let root = root.to_owned();
-                let key = key.clone();
-                let choice = *choice;
-                let active = if field.value.is_empty() {
-                    choice == default
-                } else {
-                    choice == field.value
-                };
+            .child(
                 div()
-                    .id(format!(
-                        "source-segment-{}-{}-{choice}",
-                        key.block_start, field.key
-                    ))
-                    .flex_1()
-                    .h(px(26.))
                     .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(4.))
-                    .border_1()
-                    .border_color(rgb(if active { PRIMARY } else { BORDER }))
-                    .bg(rgb(if active { PRIMARY_DIM } else { CANVAS }))
-                    .text_size(px(11.))
-                    .text_color(rgb(if active { PRIMARY } else { MUTED }))
-                    .when(enabled, |this| {
-                        this.cursor_pointer()
-                            .focusable()
-                            .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-                            .active(|style| style.bg(rgb(PRIMARY_DIM)))
-                            .focus_visible(|style| style.border_color(rgb(PRIMARY)))
-                    })
-                    .when(!enabled, |this| this.opacity(0.4).cursor_default())
-                    .on_click(cx.listener(move |panel, _, window, cx| {
-                        if !enabled {
-                            return;
-                        }
-                        panel.commit_source_field(
-                            &root,
-                            &key,
-                            position,
-                            choice.to_owned(),
-                            window,
-                            cx,
-                        );
-                    }))
-                    .child(if choice == "both" {
-                        "XY".to_owned()
-                    } else {
-                        title_case(choice)
-                    })
-            })))
+                    .flex_wrap()
+                    .gap_1()
+                    .children(choices.iter().map(|choice| {
+                        let root = root.to_owned();
+                        let key = key.clone();
+                        let choice = *choice;
+                        let active = if field.value.is_empty() {
+                            choice == default
+                        } else {
+                            choice == field.value
+                        };
+                        div()
+                            .id(format!(
+                                "source-segment-{}-{}-{choice}",
+                                key.block_start, field.key
+                            ))
+                            .flex_1()
+                            .h(px(26.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(4.))
+                            .border_1()
+                            .border_color(rgb(if active { PRIMARY } else { BORDER }))
+                            .bg(rgb(if active { PRIMARY_DIM } else { CANVAS }))
+                            .text_size(px(11.))
+                            .text_color(rgb(if active { PRIMARY } else { MUTED }))
+                            .when(enabled, |this| {
+                                this.cursor_pointer()
+                                    .focusable()
+                                    .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                                    .active(|style| style.bg(rgb(PRIMARY_DIM)))
+                                    .focus_visible(|style| style.border_color(rgb(PRIMARY)))
+                            })
+                            .when(!enabled, |this| this.opacity(0.4).cursor_default())
+                            .on_click(cx.listener(move |panel, _, window, cx| {
+                                if !enabled {
+                                    return;
+                                }
+                                panel.commit_source_field(
+                                    &root,
+                                    &key,
+                                    position,
+                                    choice.to_owned(),
+                                    window,
+                                    cx,
+                                );
+                            }))
+                            .child(if choice == "both" {
+                                "XY".to_owned()
+                            } else {
+                                crate::i18n::tr(&title_case(choice)).to_owned()
+                            })
+                    })),
+            )
             .into_any_element(),
     )
 }
 
 #[derive(Clone, PartialEq, Eq)]
 pub(in crate::app) struct SourceOption {
+    pub localize: bool,
     pub value: String,
     pub title: SharedString,
     pub asset: Option<(PathBuf, AssetKind, PathBuf)>,
@@ -234,7 +241,11 @@ impl SelectItem for SourceOption {
     type Value = String;
 
     fn title(&self) -> SharedString {
-        self.title.clone()
+        if self.localize {
+            crate::i18n::text(&self.title)
+        } else {
+            self.title.clone()
+        }
     }
 
     fn value(&self) -> &String {
@@ -243,7 +254,8 @@ impl SelectItem for SourceOption {
 
     fn matches(&self, query: &str) -> bool {
         let query = query.to_lowercase();
-        self.title.to_lowercase().contains(&query)
+        self.title().to_lowercase().contains(&query)
+            || self.title.to_lowercase().contains(&query)
             || self.value.to_lowercase().contains(&query)
             || self
                 .asset
@@ -253,7 +265,7 @@ impl SelectItem for SourceOption {
 
     fn render(&self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let Some((root, kind, path)) = &self.asset else {
-            return self.title.clone().into_any_element();
+            return self.title().into_any_element();
         };
         let image = matches!(
             kind,
@@ -318,7 +330,9 @@ impl SelectItem for SourceOption {
                     )
                     .child(
                         div()
-                            .text_size(px(9.))
+                            .id(format!("inspector-resource-path-{}", self.value))
+                            .tooltip(icon_hint(path.display().to_string()))
+                            .text_size(px(10.))
                             .text_color(rgb(MUTED))
                             .whitespace_nowrap()
                             .text_ellipsis()
@@ -355,6 +369,7 @@ pub(in crate::app) fn source_options(
     )
     .into_iter()
     .map(|option| SourceOption {
+        localize: option.localize,
         value: option.value,
         title: option.title.into(),
         asset: option.asset,
@@ -383,7 +398,7 @@ pub(super) fn retraction_property(
             div()
                 .text_size(px(11.))
                 .text_color(rgb(MUTED))
-                .child(label.clone()),
+                .child(crate::i18n::text(&label)),
         )
         .child(
             div()
@@ -397,7 +412,7 @@ pub(super) fn retraction_property(
                 .bg(rgb(CANVAS))
                 .child(
                     Textarea::new(input)
-                        .aria_label(label)
+                        .aria_label(crate::i18n::text(&label))
                         .appearance(false)
                         .bordered(false)
                         .w_full()
@@ -407,7 +422,12 @@ pub(super) fn retraction_property(
                         .text_color(rgb(INK)),
                 ),
         )
-        .child(div().text_size(px(10.)).text_color(rgb(MUTED)).child(hint))
+        .child(
+            div()
+                .text_size(px(10.))
+                .text_color(rgb(MUTED))
+                .child(crate::i18n::text(hint)),
+        )
         .into_any_element()
 }
 
@@ -531,7 +551,7 @@ pub(super) fn replay_button(root: &Path, key: &SourceInspectorKey) -> impl IntoE
         .on_click(move |_, _, cx| run_source_block(&root, &path, start, cx))
         .child(Icon::new(AssetIconName::Play).xsmall())
         .tooltip(icon_hint("Rebuild from project entry to this block; unreachable blocks use their scene entry. Player choices are not restored."))
-        .child("Replay")
+        .child(crate::i18n::tr("Replay"))
 }
 
 pub(super) fn render_wait_control(
@@ -578,9 +598,10 @@ pub(super) fn render_wait_control(
                     let duration = duration.map(|time| time.to_string());
                     this.commit_wait_mode(&root, &key, duration.as_deref(), window, cx);
                 }))
-                .child(
-                    duration.map_or_else(|| "Wait for input".to_owned(), |time| time.to_string()),
-                ),
+                .child(duration.map_or_else(
+                    || crate::i18n::tr("Wait for input").to_owned(),
+                    |time| time.to_string(),
+                )),
         );
     }
     let numeric = div()
@@ -645,7 +666,7 @@ pub(super) fn render_wait_control(
                     div()
                         .text_size(px(12.))
                         .text_color(rgb(MUTED))
-                        .child("Waits here until the player advances."),
+                        .child(crate::i18n::tr("Waits here until the player advances.")),
                 )
             })
     };

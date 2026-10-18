@@ -17,6 +17,7 @@ impl WorkbenchPanel {
             return Empty.into_any_element();
         };
         let mono = Theme::global(cx).mono_font_family.clone();
+        let preferences = cx.global::<EditorDocuments>().editor_preferences;
 
         let eiyashou = document.is_some()
             && relative.extension().and_then(|value| value.to_str()) == Some("shou");
@@ -74,7 +75,7 @@ impl WorkbenchPanel {
                         .w_full()
                         .p_1()
                         .font_family(mono)
-                        .text_size(px(13.))
+                        .text_size(px(f32::from(preferences.source_font_size)))
                         .text_color(rgb(0xc8cbd0)),
                 )
                 .child(bottom_overflow_fade(move |cx| {
@@ -100,14 +101,16 @@ impl WorkbenchPanel {
                         .overflow_hidden()
                         .child(code),
                 )
-                .child(text_minimap::render(
-                    editor,
-                    relative,
-                    &mut self.document.text_minimap,
-                    &self.document.minimap_navigation,
-                    window,
-                    cx,
-                ))
+                .when(preferences.show_minimap, |view| {
+                    view.child(text_minimap::render(
+                        editor,
+                        relative,
+                        &mut self.document.text_minimap,
+                        &self.document.minimap_navigation,
+                        window,
+                        cx,
+                    ))
+                })
                 .into_any_element()
         };
         let picker = (eiyashou && mode == DocumentMode::Block && self.picker.block_picker_open)

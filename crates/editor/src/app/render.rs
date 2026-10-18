@@ -2,9 +2,31 @@ use super::*;
 
 impl Render for WorkbenchPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.language != crate::i18n::language() {
+            self.language = crate::i18n::language();
+            for input in [
+                &self.picker.block_picker_input,
+                &self.explorer.file_name_input,
+                &self.document.scene_name_input,
+                &self.assets.asset_search,
+                &self.inspector.batch_block_input,
+                &self.inspector.asset_batch_tags,
+            ]
+            .into_iter()
+            .chain(&self.characters.tool_inputs)
+            .chain(&self.inspector.inspector_inputs)
+            .chain(&self.inspector.text_lifetime_inputs)
+            .chain(&self.inspector.source_inspector_inputs)
+            .chain(&self.inspector.asset_inspector_inputs)
+            {
+                crate::i18n::refresh_input(input, window, cx);
+            }
+            self.refresh_search_language(window, cx);
+        }
         self.prepare_document_view(window, cx);
         self.refresh_block_drag(window, cx);
         self.refresh_picker_drag(window, cx);
+        project_settings::refresh_drag(self, window, cx);
         if !cx.has_active_drag() {
             self.explorer.file_drop_target = None;
         }
@@ -70,7 +92,7 @@ impl Render for WorkbenchPanel {
             }
             PanelContent::Project { root } => {
                 let root = root.clone();
-                project_settings::render(&root, self, window, cx)
+                settings::render(&root, self, window, cx)
             }
             PanelContent::Build { root } => build::render(root, &self.view_scroll, cx),
             PanelContent::Output { .. } => self.render_output(window, cx),
@@ -80,6 +102,12 @@ impl Render for WorkbenchPanel {
             .track_focus(&self.focus)
             .capture_key_down(
                 cx.listener(|this, event: &gpui_kit::KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "escape"
+                        && project_settings::cancel_drag(this, window, cx)
+                    {
+                        cx.notify();
+                        cx.stop_propagation();
+                    }
                     if event.keystroke.key == "escape"
                         && matches!(
                             this.document.block_drag,
@@ -143,6 +171,7 @@ pub(super) fn render_problems(
 ) -> AnyElement {
     let index = cx.global::<EditorDocuments>().authoring(root);
     let runtime = cx.global::<EditorDocuments>().runtime_diagnostics(root);
+    let empty = index.problems.is_empty() && runtime.is_empty();
     let root = root.to_owned();
     let authoring_rows = index.problems.iter().cloned().enumerate().map({
         let root = root.clone();
@@ -191,7 +220,15 @@ pub(super) fn render_problems(
         .flex_col()
         .p_2()
         .gap_1()
-        .child(section_label("PARSE · VALIDATION · RUNTIME"))
+        .when(empty, |this| {
+            this.child(
+                div()
+                    .p_2()
+                    .text_sm()
+                    .text_color(rgb(MUTED))
+                    .child(crate::i18n::tr("No problems")),
+            )
+        })
         .child(
             div()
                 .flex()

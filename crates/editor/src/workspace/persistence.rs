@@ -58,6 +58,38 @@ struct WindowBoundsFile {
     height: f32,
 }
 
+/// User preferences, independent of project configuration and dock layout.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct EditorPreferences {
+    pub language: crate::i18n::Language,
+    pub source_font_size: u8,
+    pub show_minimap: bool,
+}
+
+impl Default for EditorPreferences {
+    fn default() -> Self {
+        Self {
+            language: crate::i18n::Language::default(),
+            source_font_size: 13,
+            show_minimap: true,
+        }
+    }
+}
+
+impl EditorPreferences {
+    pub fn normalized(mut self) -> Self {
+        self.source_font_size = self.source_font_size.clamp(10, 24);
+        self
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct EditorPreferencesFile {
+    schema: u32,
+    preferences: EditorPreferences,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BlockPickerPreferences {
     pub favorites: Vec<String>,
@@ -107,6 +139,23 @@ struct BlockPickerPreferencesFile {
 impl AppPersistence {
     pub fn new(root: PathBuf) -> Self {
         Self { root }
+    }
+
+    pub fn load_editor_preferences(&self) -> EditorPreferences {
+        read_json::<EditorPreferencesFile>(&self.root.join("editor.json"))
+            .filter(|state| state.schema == STATE_SCHEMA)
+            .map(|state| state.preferences.normalized())
+            .unwrap_or_default()
+    }
+
+    pub fn save_editor_preferences(&self, preferences: EditorPreferences) -> io::Result<()> {
+        atomic_json(
+            &self.root.join("editor.json"),
+            &EditorPreferencesFile {
+                schema: STATE_SCHEMA,
+                preferences: preferences.normalized(),
+            },
+        )
     }
 
     pub fn root(&self) -> &Path {
@@ -351,6 +400,64 @@ mod tests {
         fs::create_dir_all(&project).unwrap();
         let key = ProjectKey::from_path(&project).unwrap();
         (root, project, AppPersistence::new(app_data), key)
+    }
+
+    #[test]
+    fn editor_preferences_round_trip_defaults_and_bounds() {
+        let (root, _, persistence, _) = fixture();
+        assert_eq!(
+            persistence.load_editor_preferences(),
+            EditorPreferences::default()
+        );
+        let preferences = EditorPreferences {
+            language: crate::i18n::Language::TraditionalChinese,
+            source_font_size: 18,
+            show_minimap: false,
+        };
+        persistence.save_editor_preferences(preferences).unwrap();
+        let reopened = AppPersistence::new(persistence.root().to_owned());
+        assert_eq!(reopened.load_editor_preferences(), preferences);
+        for language in crate::i18n::Language::ALL {
+            let localized = EditorPreferences {
+                language,
+                ..preferences
+            };
+            persistence.save_editor_preferences(localized).unwrap();
+            assert_eq!(reopened.load_editor_preferences(), localized);
+        }
+        for (size, expected) in [(0, 10), (255, 24)] {
+            persistence
+                .save_editor_preferences(EditorPreferences {
+                    source_font_size: size,
+                    ..preferences
+                })
+                .unwrap();
+            assert_eq!(
+                reopened.load_editor_preferences().source_font_size,
+                expected
+            );
+        }
+        let path = persistence.root().join("editor.json");
+        fs::write(
+            &path,
+            r#"{"schema":1,"preferences":{"show_minimap":false}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            reopened.load_editor_preferences(),
+            EditorPreferences {
+                show_minimap: false,
+                ..Default::default()
+            }
+        );
+        for invalid in ["{", r#"{"schema":999,"preferences":{}}"#] {
+            fs::write(&path, invalid).unwrap();
+            assert_eq!(
+                reopened.load_editor_preferences(),
+                EditorPreferences::default()
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn layout() -> DockAreaState {

@@ -209,6 +209,7 @@ fn refresh_asset_preview(root: &Path, workspace: &mut WorkspaceDocuments) {
 pub(super) struct EditorDocuments {
     persistence: AppPersistence,
     block_picker_preferences: BlockPickerPreferences,
+    pub(super) editor_preferences: crate::persistence::EditorPreferences,
     pub(super) workspaces: HashMap<PathBuf, WorkspaceDocuments>,
     pub(super) resource_picker_epoch: u64,
 }
@@ -219,6 +220,7 @@ impl EditorDocuments {
     pub(super) fn new(persistence: AppPersistence) -> Self {
         let block_picker_preferences = persistence.load_block_picker_preferences();
         Self {
+            editor_preferences: persistence.load_editor_preferences(),
             persistence,
             block_picker_preferences,
             workspaces: HashMap::new(),
@@ -423,6 +425,17 @@ impl EditorDocuments {
     pub(super) fn block_selection(&self, root: &Path) -> Option<&(PathBuf, Vec<usize>)> {
         let key = ProjectKey::from_path(root).ok()?;
         self.workspaces.get(key.path())?.block_selection.as_ref()
+    }
+
+    pub(super) fn set_editor_preferences(
+        &mut self,
+        preferences: crate::persistence::EditorPreferences,
+    ) -> io::Result<()> {
+        let preferences = preferences.normalized();
+        self.persistence.save_editor_preferences(preferences)?;
+        crate::i18n::set_language(preferences.language);
+        self.editor_preferences = preferences;
+        Ok(())
     }
 
     pub(super) fn block_picker_preferences(&self) -> &BlockPickerPreferences {
