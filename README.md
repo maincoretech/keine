@@ -1,12 +1,10 @@
-# Kēne
+![Kēne — Native Visual Novel Engine](src/assets/branding/keine-banner.png)
 
 Native visual-novel engine and source-backed Editor. Rust 2024 (MSRV 1.99.0), Bevy 0.19.1, GPUI.
 Native authoring uses Eiyashou `.shou`; LetsGal Studio and frozen WebGAL compatibility inputs are supported.
 Shipping projects use Hakutaku v2, WebP images and Ogg Opus audio.
 
 [简体中文](dev/docs/readme.zh.md)
-
-<img src="src/assets/branding/keine-portrait.png" width="180" alt="Kēne character artwork">
 
 ## Downloads
 

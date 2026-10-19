@@ -1,4 +1,4 @@
-# Kēne
+![Kēne — 原生视觉小说引擎](../../src/assets/branding/keine-banner.png)
 
 原生视觉小说引擎与编辑器，Rust 2024（MSRV 1.99.0）/ Bevy 0.19.1 / GPUI。
 原生项目使用 Eiyashou `.shou`；支持 LetsGal Studio 工程与冻结的 WebGAL 兼容输入。
