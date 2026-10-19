@@ -211,11 +211,21 @@ mod tests {
             Some(("scripts/main.shou".into(), 5, 3))
         );
         let mut state = world.resource_mut::<GameState>();
-        state.script_diagnostic = Some(keine_core::state::ScriptDiagnostic {
-            scene: "main".into(),
-            cursor: 1,
-            message: "Script runtime error".into(),
-        });
+        state.install_program(keine_core::Program::from_scenes([(
+            "main".into(),
+            vec![keine_core::Action::Flow {
+                action: Box::new(keine_core::Action::Comment),
+                when: Some("missing_flag".into()),
+                next: false,
+            }],
+        )]));
+        state.cursor = 0;
+        assert_eq!(
+            keine_core::step::step_preserving_presentation(&mut state),
+            keine_core::StepResult::RuntimeError(
+                keine_core::step::ScriptRuntimeError::InvalidFlowCondition
+            )
+        );
         keine_core::step::end_game(&mut state);
         let snapshot = runtime_snapshot(&world);
         assert!(snapshot.checkpoint.is_none());

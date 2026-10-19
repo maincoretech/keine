@@ -98,7 +98,72 @@ fn introduces_transient_presentation(action: &keine_core::Action) -> bool {
         | Action::ConfigureTimedSpriteSequence { .. }
         | Action::MoveSprite { .. }
         | Action::UpdateSprite { .. } => true,
-        _ => false,
+        // These actions only create persisted state, consume it, or do not affect presentation.
+        // Keep this match exhaustive: a new Action must choose a save-boundary policy.
+        Action::ShowBg { .. }
+        | Action::HideBg { .. }
+        | Action::ShowSprite { .. }
+        | Action::HideSprite { .. }
+        | Action::Say { .. }
+        | Action::Menu { .. }
+        | Action::Jump(..)
+        | Action::Label(..)
+        | Action::ChangeScene(..)
+        | Action::CallScene(..)
+        | Action::End
+        | Action::Bgm { .. }
+        | Action::Effect { .. }
+        | Action::MiniAvatar { .. }
+        | Action::HideMiniAvatar
+        | Action::Set { .. }
+        | Action::SetTransform { .. }
+        | Action::Animate { .. }
+        | Action::SetTransition { .. }
+        | Action::SetFilter { .. }
+        | Action::Wait { .. }
+        | Action::Intro { .. }
+        | Action::FilmMode { .. }
+        | Action::ShowParticles { .. }
+        | Action::HideParticles { .. }
+        | Action::SetTextbox { .. }
+        | Action::UserInput { .. }
+        | Action::Comment
+        | Action::Unlock { .. }
+        | Action::Curtain { .. }
+        | Action::FloatingText { .. }
+        | Action::ConfigurePortraits { .. }
+        | Action::FocusPortrait { .. }
+        | Action::SetDialogueStyle { .. }
+        | Action::HideSprites { .. }
+        | Action::SetAutoplay { .. }
+        | Action::SetSystemUi { .. }
+        | Action::StopVideo { .. }
+        | Action::SetCameraBinding { .. }
+        | Action::HostCommand { .. }
+        | Action::Vocal { .. }
+        | Action::RequestInput { .. }
+        | Action::RetractDialogue { .. }
+        | Action::WaitForAdvance
+        | Action::SelectSpriteImage { .. }
+        | Action::HideFloatingText { .. }
+        | Action::SetParagraphStyle { .. }
+        | Action::SystemMessage { .. }
+        | Action::ConfigureSpriteSequence { .. }
+        | Action::SelectTextPresentation { .. }
+        | Action::ConfigureFloatingText { .. }
+        | Action::ConfigureLoading { .. }
+        | Action::HideParticleLayers
+        | Action::SelectSpriteImageByCondition { .. }
+        | Action::ReturnScene
+        | Action::EiyashouSay(..)
+        | Action::EiyashouMenu { .. }
+        | Action::EiyashouSet { .. }
+        | Action::EiyashouList { .. }
+        | Action::EiyashouJumpIf { .. }
+        | Action::EiyashouBgm { .. }
+        | Action::EiyashouSelectSpriteImageByCondition { .. }
+        | Action::SoundEffect { .. }
+        | Action::ConditionalCall { .. } => false,
     }
 }
 
@@ -315,6 +380,296 @@ mod tests {
                 .map(|dialogue| dialogue.text.as_str()),
             Some("Continued")
         );
+    }
+
+    #[test]
+    fn transient_action_families_round_trip_the_pre_action_save_boundary() {
+        use keine_core::*;
+        use keine_loader::{KeineStore, StoreAdapter};
+        let mut transform = TransformPatch::default();
+        transform.set_offset_x(100.0);
+        let frames = vec![TransformKeyframe {
+            transform,
+            duration: 1.0,
+            easing: Easing::Linear,
+        }];
+        let shake = CameraShakeSpec {
+            amplitude: 8.0,
+            frequency: 12.0,
+            duration: 1.0,
+            axis: Default::default(),
+            falloff: Default::default(),
+        };
+        let cases = vec![
+            (
+                "background keyframes",
+                Action::AnimateKeyframes {
+                    target: "background".into(),
+                    frames: frames.clone(),
+                    repeat: 0,
+                    blocking: true,
+                },
+            ),
+            (
+                "sprite keyframes",
+                Action::AnimateKeyframes {
+                    target: "hero".into(),
+                    frames,
+                    repeat: 0,
+                    blocking: false,
+                },
+            ),
+            (
+                "video",
+                Action::PlayVideo {
+                    video: VideoSpec {
+                        id: "opening".into(),
+                        file: "opening.mp4".into(),
+                        looped: false,
+                        muted: true,
+                        alpha: 1.0,
+                        skippable: true,
+                        wait_for_finished: true,
+                        mode: VideoMode::Fullscreen,
+                    },
+                },
+            ),
+            (
+                "post process",
+                Action::SetPostProcess {
+                    targets: CameraTargets::SCENE,
+                    effect: Box::default(),
+                    duration: 1.0,
+                    easing: Easing::Linear,
+                    blocking: false,
+                },
+            ),
+            (
+                "post process v2",
+                Action::SetPostProcessV2 {
+                    targets: CameraTargets::SCENE,
+                    effect: Box::new(PostProcessV2 {
+                        mirror_shatter_intensity: 0.5,
+                        ..Default::default()
+                    }),
+                    duration: 0.0,
+                    easing: Easing::Linear,
+                    blocking: false,
+                },
+            ),
+            (
+                "camera transform",
+                Action::SetCameraTransform {
+                    targets: CameraTargets::SCENE,
+                    transform,
+                    duration: 1.0,
+                    easing: Easing::Linear,
+                    blocking: true,
+                },
+            ),
+            (
+                "camera shake",
+                Action::ShakeCamera {
+                    targets: CameraTargets::SCENE,
+                    shake,
+                    blocking: false,
+                },
+            ),
+            (
+                "randomized shake",
+                Action::ShakeCameraRandomized {
+                    targets: CameraTargets::SCENE,
+                    shake,
+                    randomness: Default::default(),
+                    blocking: true,
+                },
+            ),
+            (
+                "camera tween",
+                Action::SetCameraTween {
+                    spec: Box::new(CameraTweenSpec {
+                        targets: CameraTargets::SCENE,
+                        transform: Some(transform),
+                        effect: None,
+                        v2: None,
+                        shake: None,
+                        fields: vec![CameraTweenField::X],
+                        duration: 1.0,
+                        easing: Easing::Linear,
+                        blocking: false,
+                    }),
+                },
+            ),
+            (
+                "particles",
+                Action::ShowParticlesWithOptions {
+                    id: "rain".into(),
+                    effect: ParticleEffect::preset("rain"),
+                    options: ParticleOptions {
+                        speed: Some(2.0),
+                        ..Default::default()
+                    },
+                },
+            ),
+            (
+                "dynamic sequence",
+                Action::ConfigureDynamicSpriteSequence {
+                    id: "hero".into(),
+                    frames: vec!["a.webp".into(), "b.webp".into()],
+                    fps: 12.0,
+                    frame_durations: vec![],
+                    playback: SequencePlayback::Blink { interval: 2.0 },
+                },
+            ),
+            (
+                "timed sequence",
+                Action::ConfigureTimedSpriteSequence {
+                    id: "hero".into(),
+                    frames: vec!["a.webp".into(), "b.webp".into()],
+                    frame_durations: vec![0.1, 0.2],
+                    looped: true,
+                },
+            ),
+            (
+                "sprite patch",
+                Action::PatchSprite {
+                    id: "hero".into(),
+                    image: "b.webp".into(),
+                    position: Some(Position::left(0.0)),
+                    layout: None,
+                    scale: None,
+                    duration: 1.0,
+                    easing: Easing::Linear,
+                    blocking: true,
+                },
+            ),
+            (
+                "sprite update",
+                Action::UpdateSprite {
+                    id: "hero".into(),
+                    image: "b.webp".into(),
+                    position: Position::left(0.0),
+                    layout: Default::default(),
+                    scale: 1.0,
+                    duration: 1.0,
+                    easing: Easing::Linear,
+                    blocking: false,
+                },
+            ),
+            (
+                "sprite move",
+                Action::MoveSprite {
+                    id: "hero".into(),
+                    position: Position::left(0.0),
+                    duration: 1.0,
+                    easing: Easing::Linear,
+                    blocking: true,
+                },
+            ),
+            (
+                "stage timeline",
+                Action::StageAnimation {
+                    animation: StageAnimation {
+                        id: "stage".into(),
+                        duration: 1.0,
+                        tracks: vec![],
+                        events: vec![],
+                        repeat: 0,
+                        infinite: false,
+                        playback_rate: 1.0,
+                        blocking: false,
+                    },
+                },
+            ),
+            (
+                "stage mask",
+                Action::StageMask {
+                    id: "mask".into(),
+                    mask: Some(Box::default()),
+                    duration: 1.0,
+                    blocking: true,
+                },
+            ),
+            (
+                "parallax",
+                Action::ConfigureSceneMouseParallax {
+                    parallax: Some(Default::default()),
+                },
+            ),
+        ];
+        for (name, action) in cases {
+            // Both the direct action and legal wrapper shape must retain the same boundary.
+            for wrapped in [false, true] {
+                let action = if wrapped {
+                    Action::Flow {
+                        action: Box::new(Action::SpriteVisual {
+                            action: Box::new(action.clone()),
+                            filter: Default::default(),
+                        }),
+                        when: Some("true".into()),
+                        next: true,
+                    }
+                } else {
+                    action.clone()
+                };
+                let mut state = state_with(vec![
+                    Action::ShowSprite {
+                        id: "hero".into(),
+                        image: "a.webp".into(),
+                        position: Position::center(0.0),
+                        layout: Default::default(),
+                        transform: Default::default(),
+                        z_index: 0,
+                        blend: Default::default(),
+                        transition: Transition::Instant,
+                    },
+                    Action::Set {
+                        name: "progress".into(),
+                        expression: "7".into(),
+                        global: false,
+                    },
+                    action,
+                    Action::Say {
+                        speaker: String::new(),
+                        text: "after".into(),
+                        options: Default::default(),
+                    },
+                ]);
+                let mut checkpoint = ContinuationCheckpoint::default();
+                assert_eq!(
+                    resume(&mut state, &mut checkpoint),
+                    ScriptOutcome::Yielded,
+                    "{name}, wrapped={wrapped}"
+                );
+                let hazard = state.persistence_safety();
+                assert!(!hazard.is_exact(), "{name}, wrapped={wrapped}");
+                let saved = checkpoint.state_for_continuation(&state).unwrap();
+                assert_eq!(saved.cursor, 2, "{name}, wrapped={wrapped}");
+                assert_eq!(saved.vars["progress"], Value::Int(7));
+                assert!(saved.persistence_safety().is_exact());
+                let encoded = KeineStore.encode(saved).unwrap();
+                let mut restored = State::new();
+                restored.install_program((*state.program).clone());
+                KeineStore
+                    .decode(&encoded)
+                    .unwrap()
+                    .restore_into(&mut restored)
+                    .unwrap();
+                assert_eq!(
+                    resume(&mut restored, &mut ContinuationCheckpoint::default()),
+                    ScriptOutcome::Yielded,
+                    "{name}"
+                );
+                assert_eq!(restored.cursor, state.cursor, "{name}");
+                assert_eq!(restored.persistence_safety(), hazard, "{name}");
+                assert_eq!(
+                    restored.presentation_blocked(),
+                    state.presentation_blocked(),
+                    "{name}"
+                );
+                assert_eq!(restored.vars, state.vars, "{name}");
+            }
+        }
     }
 
     #[test]

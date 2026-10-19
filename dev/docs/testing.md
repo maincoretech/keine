@@ -122,6 +122,30 @@ Fuzz/ASan 的工具链、时间预算和调用以 Media Safety workflow 为准�
 
 ## 运行与发行验收
 
+### 脚本推进与恢复行为矩阵
+
+以下使用现有 Core/Runtime 回归，不启动 GPU 或扩展性能套件：
+
+| 行为 | 回归入口 |
+| --- | --- |
+| Flow 条件真/假、语法错误、缺失变量、除零 | Core `flow_conditions_distinguish_false_from_evaluation_failure` |
+| 运行时错误定位在返回标题后保留 | Preview `checkpoint_and_failure_positions_survive_transient_presentation_and_title_cleanup`，由真实 Flow 错误生成诊断 |
+| 18 类瞬态动作及 Flow/SpriteVisual 包装，前置检查点与 Save v11 往返重放 | Driver `transient_action_families_round_trip_the_pre_action_save_boundary` |
+| 点击与自动到期同帧，只跨过一个等待点 | Tick `playback_manual_and_automatic_advance_cannot_cross_two_yields_in_one_frame` |
+| 加载/菜单期间取消跳过并消费自动按键释放，解除遮挡不误推进 | Tick `playback_loading_and_menu_gates_do_not_swallow_auto_release` |
+| 对白、选择、输入恢复与执行上限 | Driver `normal_yield_and_end_share_one_host_policy`、`every_resume_source_*` |
+| 阻塞演出自然结束，后端完成发生在加载/菜单期间 | Tick `settled_presentation_clocks_resume_without_player_input`、`playback_backend_completion_resumes_after_the_loading_or_menu_gate` |
+| 可跳过/不可跳过/循环视频 | Tick `playback_skip_video_respects_skippable_and_looping_flags` |
+| 热重载成功、失败、过期候选、恢复时钟和检查点 | Reload `hot_reload_discards_invalid_and_superseded_candidates_without_touching_live_state`、`playback_hot_reload_resets_same_cursor_clocks_and_checkpoint` |
+| 已接收文档 revision 与实际应用 revision 不同 | Authoring `live_reload_rejects_errors_tracks_applied_revision_and_keeps_noop_state` |
+
+这些验证覆盖逻辑推进、持久化和诊断位置，不代替实际视频后端、跨平台输入或画面验收。
+本轮在 `ddc9669` 基础工作区、macOS arm64 上完成 fmt、全功能工作区 check/Clippy/tests
+（1131 passed、25 ignored），以及 `--no-default-features --features publisher` 的 Engine/tests check；
+日志为 `target/architecture-audit-*.log`。本轮未重打应用包或进行设备画面验收。
+
+### 原生与发行证据
+
 静态检查、构建、单元/集成测试、包验证和真实交互是独立证据。每次验收记录：
 源码 SHA、features/profile、产物摘要、平台/设备/后端、实际覆盖项和未测项。
 

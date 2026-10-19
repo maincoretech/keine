@@ -41,6 +41,10 @@ Runtime 只消费 typed `Program` / `State`，
 不解析 Editor JSON、工程兼容字段或包格式细节。外部编辑器逻辑留在 editor adapter。
 已有 Rust 模块/API 名保持兼容，文件按目录职责组织；不新增通用 backend、主题或插件框架。
 
+`Flow.when` 保留兼容表达式的 truthy 判定；仅假条件跳过动作。求值失败返回
+`RuntimeError(InvalidFlowCondition)`，沿用 `ScriptDiagnostic` 的 scene / cursor 和 Preview
+源码映射，不继续执行后续动作。原始求值原因保留在日志；不将失败解释为 false。
+
 ```text
 作者工程 → Loader adapters / 校验 → Program
 Program + 输入/宿主 → Runtime 调度 / Core 执行 → State → Scene / UI → Render
@@ -170,6 +174,11 @@ Extra 的 `music.rs` 单独拥有曲目播放、拖动进度、列表滚动和�
 Save v11 只恢复到 fingerprint 相同的 Program；不支持的二进制布局直接拒绝。
 普通/快速存档在当前状态不可完整序列化时，立即保存最近的可恢复 action 边界；
 Runtime 在创建瞬态演出前捕获边界，读档后重新进入该演出，不推进现场剧本或等待演出结束。
+`script/driver.rs` 的动作分类使用穷尽匹配，新增 Action 必须明确是否需要前置检查点；
+`State::persistence_safety()` 则判断当前实例能否精确保存，两者不互相替代。
+新增状态字段时须同步审查序列化、恢复/Backlog、演出阻塞与 Editor 检视；
+产生瞬态状态的动作应在现有表驱动回归中验证前置边界、Save v11 编解码和恢复重放。
+普通可序列化动作不增加前置 State 克隆。State 保持唯一真源，tick 的帧内调度顺序保持不变。
 回退存档不捕获较晚的现场画面；卡片显示检查点文本，无匹配截图时使用默认背景。
 profile、read history、gallery、settings、window bounds 不随 slot rollback 回滚。
 profile/已读延迟写入和鉴赏失败重试使用 Real clock；Storage 提供下一次写入期限，

@@ -49,6 +49,8 @@ Kēne 独立定义原生语法与交互；参考上游的常用创作能力，�
 已知边界：不执行任意 JavaScript/对象表达式；不完整支持 `-continue`、CSS/React 模板、
 自定义 WebGAL animation table、所有 easing/filter、Steam 桥接和上游输入验证参数。
 `showVars`、`applyStyle`、`callSteam` 不伪造成功。
+`-when` 的有效表达式继续使用原有 truthy 语义；无效表达式、缺失变量或除零等求值失败
+会停止脚本并给出可定位的运行时诊断，不再仅记录日志后跳过动作。此为 Kēne 错误处理合同。
 资源图像与格式通过 Kēne 的现有媒体路径；解析成功不等于视觉或听觉完全等价。
 
 保留已知差异：重复参数本地以后项覆盖；标签取最后定义；gallery 不保存完整 series 元数据。

@@ -48,6 +48,8 @@ pub enum ScriptRuntimeError {
     ReturnWithoutCall,
     NoVisibleChoice,
     MissingLabel,
+    /// A compatibility Flow condition could not be evaluated.
+    InvalidFlowCondition,
     Eiyashou(EiyashouRuntimeError),
 }
 
@@ -163,7 +165,9 @@ fn execute_step(
                         Ok(_) => continue,
                         Err(error) => {
                             log::error!("invalid -when expression {condition:?}: {error}");
-                            continue;
+                            return StepResult::RuntimeError(
+                                ScriptRuntimeError::InvalidFlowCondition,
+                            );
                         }
                     }
                 }
@@ -3492,6 +3496,57 @@ mod tests {
         assert_eq!(step(&mut state), StepResult::EndOfScene);
         assert!(!state.videos["preview"].spec.wait_for_finished);
         assert!(!state.presentation_blocked());
+    }
+
+    #[test]
+    fn flow_conditions_distinguish_false_from_evaluation_failure() {
+        for (condition, expected_text, cursor) in [
+            ("true", Some("guarded"), 2),
+            ("false", Some("tail"), 3),
+            (") == 1", None, 2),
+            ("1 +", None, 2),
+            ("missing_flag", None, 2),
+            ("1 / 0", None, 2),
+        ] {
+            let say = |text: &str| Action::Say {
+                speaker: String::new(),
+                text: text.into(),
+                options: Default::default(),
+            };
+            let mut state = state_with(vec![
+                Action::Comment,
+                Action::Flow {
+                    action: Box::new(say("guarded")),
+                    when: Some(condition.into()),
+                    next: false,
+                },
+                say("tail"),
+            ]);
+            let result = step(&mut state);
+            assert_eq!(state.cursor, cursor, "{condition}");
+            assert_eq!(
+                state.dialogue.as_ref().map(|d| d.text.as_str()),
+                expected_text,
+                "{condition}"
+            );
+            if expected_text.is_some() {
+                assert_eq!(result, StepResult::AwaitClick);
+                assert!(state.script_diagnostic.is_none());
+            } else {
+                assert_eq!(
+                    result,
+                    StepResult::RuntimeError(ScriptRuntimeError::InvalidFlowCondition)
+                );
+                let diagnostic = state.script_diagnostic.as_ref().unwrap();
+                assert_eq!(diagnostic.scene, state.current_scene);
+                assert_eq!(diagnostic.cursor, 2);
+                assert!(diagnostic.message.contains("InvalidFlowCondition"));
+                assert!(
+                    state.backlog.is_empty(),
+                    "failed condition must not reach the next dialogue"
+                );
+            }
+        }
     }
 
     #[test]

@@ -2476,6 +2476,103 @@ mod tests {
     }
 
     #[test]
+    fn playback_loading_and_menu_gates_do_not_swallow_auto_release() {
+        for loading in [false, true] {
+            let mut state = State::new();
+            state.current_scene = "main".into();
+            state.install_program(Program::from_scenes([(
+                "main".into(),
+                vec![
+                    Action::Say {
+                        speaker: String::new(),
+                        text: "first".into(),
+                        options: Default::default(),
+                    },
+                    Action::Say {
+                        speaker: String::new(),
+                        text: "second".into(),
+                        options: Default::default(),
+                    },
+                ],
+            )]));
+            crate::runtime::script_driver::resume(&mut state, &mut Default::default());
+            state.dialogue.as_mut().unwrap().visible_chars = 5;
+            let mut app = playback_test_app(state, true);
+            app.world_mut().resource_mut::<ToggleStates>().skip = true;
+            app.world_mut().resource_mut::<InputActions>().auto_released = true;
+            app.world_mut().resource_mut::<RuntimeSettings>().auto_delay = 0.0;
+            app.world_mut().resource_mut::<AssetLoadingGate>().blocked = loading;
+            *app.world_mut().resource_mut::<UiInputScope>() = if loading {
+                UiInputScope::Loading
+            } else {
+                UiInputScope::Menu
+            };
+            app.update();
+            let toggles = app.world().resource::<ToggleStates>();
+            assert!(!toggles.auto && !toggles.skip, "loading={loading}");
+            assert_eq!(app.world().resource::<GameState>().cursor, 1);
+            *app.world_mut().resource_mut::<InputActions>() = Default::default();
+            *app.world_mut().resource_mut::<UiInputScope>() = UiInputScope::Stage;
+            app.world_mut().resource_mut::<AssetLoadingGate>().blocked = false;
+            app.update();
+            assert_eq!(
+                app.world().resource::<GameState>().cursor,
+                1,
+                "released auto must not resume after gate, loading={loading}"
+            );
+        }
+    }
+
+    #[test]
+    fn playback_skip_video_respects_skippable_and_looping_flags() {
+        for skippable in [false, true] {
+            for looped in [false, true] {
+                let mut state = State::new();
+                state.current_scene = "main".into();
+                state.install_program(Program::from_scenes([(
+                    "main".into(),
+                    vec![
+                        Action::PlayVideo {
+                            video: VideoSpec {
+                                id: "video".into(),
+                                file: "video.mp4".into(),
+                                wait_for_finished: true,
+                                looped,
+                                muted: true,
+                                alpha: 1.0,
+                                skippable,
+                                mode: VideoMode::Fullscreen,
+                            },
+                        },
+                        Action::Say {
+                            speaker: String::new(),
+                            text: "after".into(),
+                            options: Default::default(),
+                        },
+                        Action::Say {
+                            speaker: String::new(),
+                            text: "tail".into(),
+                            options: Default::default(),
+                        },
+                    ],
+                )]));
+                crate::runtime::script_driver::resume(&mut state, &mut Default::default());
+                let mut app = playback_test_app(state, false);
+                app.world_mut().resource_mut::<InputActions>().skip_video = true;
+                app.update();
+                let state = app.world().resource::<GameState>();
+                assert_eq!(
+                    state.videos.contains_key("video"),
+                    !skippable || looped,
+                    "skippable={skippable}, looped={looped}"
+                );
+                assert_eq!(state.cursor, if skippable || looped { 2 } else { 1 });
+                assert_eq!(state.presentation_blocked(), !skippable && !looped);
+            }
+        }
+    }
+
+    #[test]
     fn playback_manual_and_automatic_advance_cannot_cross_two_yields_in_one_frame() {
         for notend in [false, true] {
             let mut state = State::new();
