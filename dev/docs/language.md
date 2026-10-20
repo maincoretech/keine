@@ -1,12 +1,72 @@
 # Eiyashou v2.0
 
-本指南维护作者语法与默认值；工程适配边界见[兼容性](compatibility.md)，
-编译/存档/IPC 的独立版本及输入上限见[架构合同](architecture.md#版本合同)。
+Eiyashou 是 Kēne 的剧本语言，脚本使用 UTF-8 编码，扩展名为 `.shou`。
+先从下面的小剧本开始；命令、参数和默认值在后面的参考章节中查阅。
 
-当前原生脚本为 UTF-8 `.shou`，命令按对象职责分组。
-sprite.update、transform 与 camera 稀疏修改中省略的字段保留当前值；创建使用默认值。
-每条作者命令 lower 为 typed Engine Action，Editor 只编辑同一份源码。
-EYS v2.0 对应 `script.version: 2`；省略时默认 2，显式旧版本会被拒绝。已合并的旧命令不提供别名；`se.loop` 已移除，循环音效统一写为 `se(asset, id: ..., loop: true)`。
+## 第一个剧本
+
+新建一个目录，放入以下四个文本文件，再准备一张 WebP 图片，保存为 `assets/room.webp`。
+
+`config.yaml`：
+
+```yaml
+title: My first story
+project:
+  id: my-first-story
+adapter:
+  script: keine
+script:
+  version: 2
+  entry: start
+  assets: assets.yaml
+```
+
+`assets.yaml`：
+
+```yaml
+backgrounds:
+  room: assets/room.webp
+```
+
+`characters.yaml`：这个例子只有旁白，角色清单先留空。
+
+```yaml
+characters: {}
+```
+
+`scripts/main.shou`：
+
+```shou
+scene start {
+  background(room),
+  "早上好。",
+  choice("接下来做什么？") {
+    "看看窗外": { "天已经亮了。" },
+    "再坐一会儿": { "今天不用着急。" }
+  },
+  story.end()
+}
+```
+
+在编辑器中打开这个目录并点击预览，或在 Kēne 源码仓库运行：
+
+```sh
+cargo validate /path/to/my-first-story
+cargo dev /path/to/my-first-story
+```
+
+命令所需的环境见[开发指南](testing.md#开发环境)。剧本从 `start` 开始，先显示背景，
+然后显示旁白、等待玩家选择，最后结束。`room` 是素材清单里的名称，不是图片路径。
+每条指令用逗号分隔；换行只是为了方便阅读。
+
+## 语法版本与更新规则
+
+本文对应 `script.version: 2`，省略版本时也使用 2；显式填写旧版本会报错。
+旧命令不保留别名，例如循环音效应写为 `se(asset, id: ..., loop: true)`，不再使用 `se.loop`。
+
+`sprite.update`、transform 和 camera 的局部修改会保留未填写字段的当前值；
+创建对象时才使用默认值。脚本会转换为引擎指令，编辑器始终修改原始脚本。
+其他工程的支持范围见[兼容说明](compatibility.md)，编译文件、存档和通信协议的版本见[架构文档](architecture.md#版本合同)。
 
 ## 工程
 
@@ -62,12 +122,12 @@ characters:
       duration_ms: 300        # 0–60000；默认 500
 ```
 
-资源/角色/对象使用裸 ID；普通工程不需要对象映射。保留 `none`、`*` 等命令上下文哨兵。
+资源、角色和对象使用不加引号的 ID；普通工程不需要对象映射。`none`、`*` 等特殊写法的含义由具体命令决定。
 脚本 ID 中的下划线合法；仓库文件布局规则不限制作者 ID。
 
 ### 多文件与章节连接
 
-Loader 递归读取 `scripts/` 下所有 `.shou`；scene ID 全项目唯一，不需要 import，
+引擎会读取 `scripts/` 及其子目录中的所有 `.shou`；scene ID 在整个工程中不能重复，不需要 import，
 不按文件名/目录顺序执行。`script.entry` 指定入口 scene，文件不必叫 `main.shou`。
 
 ```shou
@@ -156,7 +216,7 @@ scene start {
 ## 作者命令
 
 时间用 `ms` / `s`，坐标用 1920×1080 设计空间，音量 0–1。
-未出现的稀疏更新字段保持当前值；不支持的参数报诊断。
+修改已有对象时，未填写的字段保持当前值；不支持的参数会报错。
 
 ```text
 常用命令选择

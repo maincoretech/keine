@@ -1,19 +1,24 @@
 ![Kēne — 原生视觉小说引擎](../../src/assets/branding/keine-banner.png)
 
-原生视觉小说引擎与编辑器，Rust 2024（MSRV 1.99.0）/ Bevy 0.19.1 / GPUI。
-原生项目使用 Eiyashou `.shou`；支持 LetsGal Studio 工程与冻结的 WebGAL 兼容输入。
-正式发行只使用 Hakutaku v2、WebP 图片与 Ogg Opus 音频。
+Kēne 是一款视觉小说引擎，附带原生桌面编辑器。使用 Eiyashou（`.shou`）编写剧本，
+可以直接改文本，也可以用积木视图和属性面板编辑，再通过 Engine 预览游戏。
+这几种编辑方式共用同一份剧本。
+
+引擎和编辑器使用 Rust、Bevy 与 GPUI。游戏以 Hakutaku v2 打包，图片使用 WebP，
+音频使用 Ogg Opus。支持导入 LetsGal Studio 工程；WebGAL 仅支持[兼容文档](compatibility.md)中列出的功能。
 
 [English](../../README.md)
 
 ## 下载
 
-- [`editor-latest`](https://github.com/maincoretech/keine/releases/tag/editor-latest)：独立 Editor，内含同版本 Preview Engine；main 的 CI 桌面检查通过后自动更新。
-- [`tday-latest`](https://github.com/maincoretech/keine/releases/tag/tday-latest)：tday 试玩，仅手动运行 **Build tday** 构建。
+- [Editor](https://github.com/maincoretech/keine/releases/tag/editor-latest)：附带配套的预览 Engine，`main` 的桌面 CI 通过后更新。
+- [tday 试玩](https://github.com/maincoretech/keine/releases/tag/tday-latest)：可直接运行的示例游戏，通过 **Build tday** 手动发布新构建。
 
-包目录、签名与正式项目发行见[发布指南](release.md)。
+打包自己的游戏，请参阅[发布指南](release.md)。
 
-## 开始
+## 构建与运行
+
+先安装[开发环境](testing.md#开发环境)中列出的原生依赖。仓库固定使用 Rust 1.99.0，引擎使用 Bevy 0.19.1。
 
 ```sh
 cargo build --locked -p keine --bin keine --features video-native,video-ffmpeg
@@ -22,40 +27,38 @@ cargo validate tests/fixtures/native-smoke
 cargo dev tests/fixtures/native-smoke
 ```
 
-使用仓库固定工具链，并安装[开发环境](testing.md#开发环境)列出的原生 SDK。
-上述开发入口启用 FFmpeg；macOS 优先使用原生视频后端。Editor 只启动预构建 Engine，
-不会自动运行 Cargo，所以先构建 Engine 再启动 Preview。迁移与正式打包见[发布命令](release.md#cli)。
+使用 Editor 预览前，需要先编译 Engine。编辑器会在独立窗口中启动它，不会自动替你编译。
+上述命令启用了 FFmpeg；macOS 优先使用系统原生视频后端。
 
-`projects/tday` 是已封存的可运行示例，剧本和 WebP/Opus 成品已入库；实验请使用副本。
-PNG/WAV 原稿及其他本地工程忽略。自动回归使用 `tests/fixtures`。
-Text、Blocks、Inspector 编辑同一源文档；兼容 JSON 只读，迁移显式执行并保留源工程。
+`projects/tday/` 是已完成的示例项目，想尝试修改时请先复制一份。
+`tests/fixtures/` 中放的是小型测试项目。转换已有工程的方式见[迁移命令](release.md#cli)；
+编辑器中的兼容 JSON 为只读，转换会保留原工程。
 
 ## 脚本性能
 
-测试环境：**Apple M5 Pro（15 个逻辑 CPU）、24 GiB 内存、macOS 27.0.1**。
-2026-10-16，0.16.3 工作区加解析器分配优化（收录于 0.16.4）。同一优化配置的
-Criterion 基准中，十万条文本从 **85.26 降至 75.09 ms**，2626 条 action 的
-真实 tday 语料从 **2.27 降至 2.13 ms**。
+测试于 2026 年 10 月 16 日，环境为 **Apple M5 Pro（15 个逻辑 CPU）、24 GiB 内存、macOS 27.0.1**。
+使用的是加入解析器优化的 0.16.3，相关改动已在 0.16.4 发布；这些数据尚未在 0.16.7 上重测。
 
-以下同机 CPU 微基准使用各语言的等价内容，单线程、输入已在内存中；每项三个独立
-进程，每进程五次预热、十次计时，取各进程中位数的中位数，不包含输出释放。
+在 Criterion 测试中，优化后解析十万条文本的耗时从 **85.26 降至 75.09 ms**，
+解析 tday 剧本中 2626 条指令的耗时从 **2.27 降至 2.13 ms**。
 
-| 原生脚本路径 | 解析一万条文本 | 解析一万条赋值 | 执行一万次加一 |
+下表在同一台机器上运行各语言的等价脚本，均为单线程，输入已放入内存，每项取三轮测试的中位数。
+
+| 引擎 / 脚本实现 | 解析一万条文本 | 解析一万条赋值 | 执行一万次加一 |
 | --- | ---: | ---: | ---: |
 | Kēne / EYS，优化后 0.16.3 | 5.98 ms | 4.40 ms | 0.65 ms |
 | TyranoScript `c8dbfd4`，V8 / Node 24.22 | 2.50 ms | 7.01 ms | 0.77 ms |
 | Suika3 26.07.13，C tag 路径 | 1.06 ms | 1.77 ms | 16.49 ms |
 | Ren’Py 8.5.3，SDK Python 3.12 | 81.65 ms | 63.23 ms | 3.74 ms |
 
-各解析器的输出结构与语义检查不同。执行使用已准备的脚本和原生命令处理器/Core，
-排除宿主持久化、帧调度、回滚、UI、媒体与渲染；未测 Suika3 的 NoctLang/JIT。
-这是具体路径对照，不能作为完整引擎排名或启动速度对照：Kēne 与 Ren’Py 的发行
-运行可加载编译脚本。桌面负载未隔离。测量合同、版本、原始结果与复现命令见
-[测试指南](testing.md#0163-解析优化与四引擎脚本对照)。
+这里只计脚本解析与执行的耗时，不包含文件加载、画面、音频等游戏功能。
+各解析器做的检查也不同，因此不能据此判断哪个引擎启动更快、游戏更流畅。
+Suika3 的 NoctLang/JIT 未参与测试。完整条件、限制、原始数据和复现命令见
+[测试记录](testing.md#0163-解析优化与四引擎脚本对照)。
 
 ## 引擎快捷键
 
-Engine 和 Editor 的独立 Preview 使用相同键位；键盘焦点须在 Engine 窗口。
+游戏和编辑器的预览窗口使用同一套快捷键。使用时请先选中 Engine 窗口。
 
 | 键位 | 操作 |
 |---|---|
@@ -75,39 +78,37 @@ Engine 和 Editor 的独立 Preview 使用相同键位；键盘焦点须在 Engi
 | Delete | 存读档页删除鼠标指向的存档（确认后执行） |
 | ↑ / ↓、1–9、Enter | 选择分支；数字直接选择对应项 |
 
-快进遵守设置里的“已读/全部”，默认只快进已读对白；不会代替选择分支或提交输入。
-输入框、确认框和加载期间不触发剧情快捷键；失焦停止 Ctrl 自动播放。
-Ctrl 参与组合键后，须松开 Ctrl 再按下才会自动播放；Alt/Cmd/Shift 组合不触发上表剧情键。
-取消 A/Ctrl+A 快捷键；画面上的自动播放按钮仍可开关自动播放。右键开关仅在剧情舞台生效。
-F11 只改变当前窗口，设置页的全屏选项仍可保存为偏好。
+快进默认只跳过已读对白，可在设置中改为全部对白；分支选择和文字输入仍需手动完成。
+输入框、确认框和加载期间不会响应剧情快捷键。切到其他窗口会停止按住 Ctrl 的自动播放；
+使用 Ctrl 组合键后，须松开再按下 Ctrl 才会开始自动播放。
+Alt、Cmd、Shift 组合不会触发这些剧情快捷键，自动播放也可通过画面上的按钮切换。
 
-设置页“数据管理”提供“还原设置”和“清除存档”，均需确认。前者恢复默认设置，
-后者清除全部手动/快速存档及其预览；这两项不清除已读记录、鉴赏解锁或全局变量。
-界面与确认文案同步维护简体中文、繁体中文、日语和英语。
+设置中的“还原设置”和“清除存档”都需要确认。清除存档会删除手动存档、快速存档及其预览图，
+但会保留已读记录、鉴赏解锁和全局变量；还原设置同样不会清除这些进度。
+游戏界面支持简体中文、繁体中文、日语和英语。
 
-正常退出后记住窗口大小、位置和最大化状态，保存在项目持久化目录的
-`saves/window.bin`，不随读档回滚。首次启动会按当前屏幕缩小并居中，
-为标题栏和桌面面板留出空间；换屏或 DPI 改变时重新适配，屏幕移除时回到主屏。
-全屏和最小化不覆盖正常窗口尺寸；Wayland 的窗口位置由合成器决定。
-benchmark 指定的窗口大小不受这些偏好影响。Preview 仍使用隔离的临时数据目录。
+正常退出后会记住窗口大小、位置和最大化状态；读档不会改变它们。
+F11 只切换当前窗口的全屏状态，要保存全屏偏好请使用设置页。
+Preview 使用独立的临时数据目录。
 
 ## 文档
 
-- [架构与数据合同](architecture.md)
+- [架构](architecture.md)
 - [Eiyashou v2.0](language.md)
 - [Editor](editor.md)
-- [开发、测试与验收](testing.md)
+- [开发与测试](testing.md)
 - [发布](release.md)
-- [Android 构建与实机验收](android.md)
-- [兼容输入边界](compatibility.md)
+- [Android](android.md)
+- [工程兼容](compatibility.md)
 
-当前版本 0.16.7。macOS 是当前验收重点；Windows/Linux 的运行态验收暂缓。
-编译和自动测试通过不等于 IME、DPI、音视频和运行态验收通过。
+当前版本 **0.16.7**。近期主要在 macOS 上进行人工测试，Windows 和 Linux 尚待新一轮运行测试。
+CI 通过后，仍需在设备上检查输入、显示和音视频播放。
 
 ## 许可证
 
-Kēne 原创代码和文档采用 [Defold License 1.0](../../LICENSE)。允许制作和销售商业游戏，
-禁止将引擎或 Editor 本身作为游戏引擎产品商业化；项目属于源码公开软件。
-第三方依赖、字体、图标、音效、美术和游戏内容保留各自许可，见 [NOTICE](../../NOTICE)。
-tday 剧本和素材由 shiftz 原创并保留独立版权，见[示例许可](../../projects/tday/LICENSE)。
-除另有书面约定，提交给项目的贡献采用同一许可证；不要求转让版权。
+Kēne 的原创代码和文档采用 [Defold License 1.0](../../LICENSE)。
+可以用它制作和销售游戏，但许可证限制将引擎或 Editor 本身作为游戏引擎产品商业化。
+
+第三方库和素材各有自己的许可证，见 [NOTICE](../../NOTICE)。
+tday 的剧本和素材归 shiftz 所有，见[示例许可](../../projects/tday/LICENSE)。
+除另有约定，贡献采用与 Kēne 相同的许可证，不要求转让版权。

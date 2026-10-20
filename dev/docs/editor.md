@@ -1,5 +1,41 @@
 # Editor
 
+Editor 用来管理工程、编辑剧本和预览游戏。Text、Blocks 和 Inspector 修改的是同一份 `.shou` 文件，切换视图不需要转换格式。
+
+## 打开工程
+
+在欢迎页点击 **Open folder**，选择包含 `config.yaml` 的工程目录；也可以从最近项目中打开。
+从源码运行时使用 `cargo editor <工程目录>`，开发环境见[构建说明](testing.md#开发环境)。
+LetsGal 等兼容工程的 JSON 在编辑器中只读，需要修改剧本时先[迁移为原生工程](release.md#cli)。
+
+## 编辑剧本
+
+1. 在左侧 **Explorer** 打开 `scripts/` 下的剧本。
+2. 用 **Text** 直接编写代码，或切换 **Blocks** 插入、编辑和拖动指令。
+3. 选中指令后，在右侧 **Inspector** 调整资源、位置、时长等参数。
+4. 保存文件。标签上的 `•` 表示还有未保存的修改。
+
+`⌘/Ctrl+P` 查找文件和场景，输入 `@` 只查场景；`⌘/Ctrl+Shift+F` 搜索整个工程。
+角色和素材分别在 **Characters**、**Assets** 中管理。语言、字号和布局在[设置](#设置)中调整。
+
+## 预览游戏
+
+点击右上角播放按钮，Engine 会打开独立预览窗口。下载的 Editor 已附带配套 Engine；
+从源码运行时需要先[构建 Engine](testing.md#开发环境)。预览也会使用尚未保存的剧本修改。
+
+启动失败时，点击错误图标打开 **Output** 查看原因；左栏也有 Output 入口。
+剧本改错时预览会保留上一次有效画面，修正后继续同步。更多行为见 [Engine](#engine)。
+
+## 导出试玩
+
+在左栏打开 **Build**，点击 **Export game…** 并选择输出位置。
+完成后可用 **Play** 启动副本，或用 **Open folder** 查看文件。
+
+试玩导出不需要 Rust 工具链或发布密钥，但只面向当前操作系统，并包含可读的剧本源码。
+正式打包见[发布指南](release.md)，导出细节见 [Build](#build)。
+
+## 工作台
+
 ```text
 工作台
 ├── 左栏
@@ -11,7 +47,7 @@
 │   └── 底部：Problems / Output / Performance；菜单提供打开工程、迁移；布局恢复归入 Settings
 ├── 中央文档
 │   ├── Text：补全、语法着色、诊断、智能缩进/配对、右侧概览
-│   └── Blocks：同一份源码的结构投影、拖动、行内编辑、右侧概览
+│   └── Blocks：以指令块显示剧本，支持拖动、行内编辑和概览
 ├── 右栏：可关闭的 Asset Preview + Inspector
 └── Output：操作、解析、Preview 状态、只读变量和可点击错误
 ```
@@ -20,17 +56,17 @@
 提供一致的悬停、选中与键盘焦点反馈，Enter/Space 使用同一点击动作；资源/角色右键先选中
 目标，再提供 Preview / Edit YAML。现有行内操作继续可见，不依赖悬停才能发现。
 Inspector 属性标签与控件对齐，窄面板换行；长资源路径截断并提供完整提示。
-表单事务保留当前页签、焦点以及源码选区/滚动；只有明确跳转动作切换源码。
+修改表单时保留当前页签、焦点和编辑位置；点击跳转操作才切换到对应源码。
 Settings → Extra 的 CG/音乐排序在放下时生效，复用 Block 边缘滚动速度，Esc 或窗口失焦取消。
 
 ## 单一源码
 
 Explorer 同目录的剧本默认按场景排列：入口场景所在文件优先，其余按 `scene` 名称自然排序（2 在 10 前）；多场景文件取最早场景。目录和其他文件的位置保持原样，显示顺序不改变剧情跳转。
 
-Text、Blocks、Inspector 共用源文档。Block 编辑只替换准确 source range，
-保留周围空白、注释和未知语法；不通过重新序列化整个工程写回。
-无法理解的语法仍可见且只读。兼容 JSON 保持只读；转换必须显式 `migrate`。
-未保存文档覆盖磁盘内容参与索引、搜索和 Preview。关闭/保存冲突走现有保护与恢复流程。
+Text、Blocks、Inspector 共用一份剧本。编辑 Block 只修改对应的源码片段，
+保留周围的空白、注释和无法识别的语法；无法识别的部分仍会显示，但不能通过 Block 修改。
+兼容 JSON 为只读，需要通过 `migrate` 转换。索引、搜索和预览优先使用未保存的修改；
+保存时若发现文件已被外部修改，会提示处理冲突。
 关闭确认中的 Save and Close 保存成功后退出，Cancel 保留窗口和修改；Close Without Saving
 不写项目源文件并关闭，恢复草稿仍尝试保留，草稿写入失败记录错误但不取消关闭。
 定位 Block 重建持久舞台、BGM 和循环音效；历史单次音效/语音不重播，只播放选中 Block 的音频。相同 BGM 保持播放，显式选择 BGM Block 才重新播放。
@@ -47,70 +83,6 @@ Text、Blocks 及关闭窗口时的保存共用此流程，格式化可撤销；
 `⌘/Ctrl+P` 打开文件/场景快速定位，`@` 只筛选场景；复用当前工程文件与场景索引，在后台筛选，最多显示 80 项。↑↓ 选择、Enter 打开、Esc 关闭；中文组词确认不触发跳转。文档页签栏提供同一入口及前进/后退按钮。返回快捷键在 macOS 为 `⌘[` / `⌘]`，其他桌面为 `Alt+←` / `Alt+→`。显式源码跳转记录最多 64 个位置，恢复 Text/Blocks 模式、选区和滚动；源码改变后只恢复有效光标位置，不使用旧块范围。定位不重新播放 Preview；Text 缩进使用 `Tab` / `Shift+Tab`。
 
 欢迎页的最近项目在后台读取工程标题，显示短路径并以悬浮提示提供完整路径；失效路径标记为不可用。移除按钮只删除最近记录，不删除工程或恢复草稿。
-
-```text
-crates/editor/src/
-├── app.rs                  启动、主题、共享控件
-├── app/
-│   ├── documents.rs        共享文档状态、派生索引、选择与面板登记
-│   ├── panel.rs            面板标识、载荷与 Dock 生命周期
-│   ├── panel/construction.rs 构造与输入事件订阅
-│   ├── render.rs           面板分派、焦点与共享弹层
-│   ├── document/           文档视图状态、Text/Blocks/Scenes 组合
-│   ├── files/              Explorer 状态与文件树视图
-│   ├── window.rs           工程窗口、保存/关闭保护、Engine 生命周期
-│   ├── edits.rs            源码事务与撤销/重做
-│   ├── navigation.rs       文件/场景快速定位与有界位置历史
-│   ├── controls.rs         共享控件与滚动容器
-│   ├── blocks.rs           Block 交互与源码范围编辑
-│   ├── blocks/             drag：剧本拖放；motion：重排映射；view：布局；picker：插入及偏好拖放
-│   ├── reorder.rs          Block/列表共用的位移插值与边缘滚动
-│   ├── inspector.rs        字段编辑与源码同步
-│   ├── inspector/          state：面板状态；controls：字段控件；view：组合；spatial：位置与时间轴
-│   ├── resource.rs         资源清单事务、筛选弹层与预览
-│   ├── resource/state.rs   搜索、筛选、选择锚点与缩略图缓存
-│   ├── resource/toolbar.rs 查询、筛选标签、多选操作与原生导入
-│   ├── resource/browse.rs  响应式网格/列表、可见资源窗口
-│   ├── resource/picker.rs  资源选择弹层
-│   ├── minimap.rs          共用视口/拖动/平移计算与 Block 概览
-│   └── text/minimap.rs     Text 换行映射、语法缩略图与滚动适配
-├── authoring.rs            公共入口与标识符规则
-└── authoring/
-    ├── commands.rs        命令目录、分类、插入与补全模板
-    ├── fields.rs          Loader 参数清单的消费、标签、候选值、数值与资源规则
-    ├── index.rs           工程资源、引用、场景与对白索引
-    ├── edit.rs            场景、角色、对白等纯源码修改
-    ├── projection.rs      结构模型、字段范围与只读查询
-    └── projection/
-        ├── parse.rs       基于 Loader token 的结构识别
-        └── edit.rs        Block 的有界源码修改
-```
-
-面板持有交互状态，源文档仍由 `EditorDocuments` 统一管理；投影与索引均可从源码重建。
-补全、Block、Inspector 共用 `commands` / `fields`，字段规则不依赖 GPUI 控件。
-原生命令及舞台事件的合法字段由 Loader 的各命令族 signature/字段表定义，
-通过 `native_command_argument_names` 供 Inspector 与补全使用；新增参数只改对应命令族。
-音效统一使用 `se(asset, id: ..., loop: true, volume: ..., fade: ...)`；Inspector/补全提供 Loop、Fade 和 Fade out 字段；旧 `se.loop` 不再解析，现有剧本须改为统一写法。
-显示顺序保留，标签、候选值、分组提示与特殊控件仍归 Editor。
-`style` 及对白尾部选项也复用 Loader 的字段表。`frame` 等子行通过
-`native_child_command_argument_names(parent, child)` 按父命令查询；Inspector 与补全
-共用序列 fps/逐帧时长的提示过滤，不混用序列帧和关键帧字段。
-文本的 speaker/voice/stable ID 查询共用投影元数据；语音和尾部选项范围共用基于 Loader token
-的查询，由元数据、字段编辑及写回共同消费。多选摘要读取完整源码范围，
-Voice 修改保留尾部注释和选项；return/break 仍按 Loader 规则作为控制语句。
-插入模板覆盖全部 70 个入口的解析与可编辑 Block 回归；sprite.update 模板只换图，不隐式重设位置或缩放。
-立绘、移动、隐藏及聚焦规则模板优先共用已有角色 ID，使聚焦能够自动跟随对白。
-源码层只返回修改结果；应用修改、冲突保护与撤销仍由 `app/edits.rs` 负责。
-中文等 Unicode 标识符沿用 Loader 的字母/数字规则，编辑器不另设 ASCII 限制。
-Text/Blocks 共用概览导航状态和边界计算；各自仅提供原生行布局与滚动位置。
-概览缓存、选中态、配色与源码更新路径保持独立，拖动概览不修改源码或选中 Block。
-Blocks 的源码、行索引、顺序和静态几何按版本缓存；普通滚动二分查找可见行，源码、折叠或实测行高改变时重建。拖放/折叠动画仍使用原有冻结几何路径。
-Text 概览的配色、换行与笔画在后台生成；改宽复用配色，新任务取消旧任务，发布前复核版本，无固定输入延迟。换行调用与原生 DisplayMap 相同的 GPUI LineWrapper。
-
-面板专属状态由 `document/files/inspector/resource/characters/blocks/picker` 各模块拥有；
-共享文档、源码事务、文件事务及派生索引仍使用原有 owner，渲染只准备视图与控件。
-文件/场景名称的 Enter 在输入订阅里延迟提交，不在 render 中执行文件或源码修改。
-共享运动、测量展开、边缘滚动与弹层关闭规则仍归 `controls/reorder`，不建立跨 GPUI/Bevy 的 UI 框架。
 
 ## 交互
 
@@ -238,8 +210,8 @@ Asset Preview 的 X 关闭面板并记住布局，下一次实际选择资源可
 
 ## Engine
 
-每个物理工程一个工作台与一个 Engine child。右上角图标控制独立原生窗口，
-不传输内嵌画面。源码 revision、cursor 与退出由有界协议协调；不匹配的协议/能力明确报错。
+每个工程对应一个工作台和一个独立的 Engine 进程，游戏画面显示在 Engine 窗口中。
+两端通过通信协议同步源码版本、执行位置和退出状态；版本或功能不匹配时会提示错误。
 Engine 发现支持 sibling app、同目录、Resources、PATH 与 `KEINE_ENGINE`。
 Editor 只启动预构建 Engine，不在作者交互中运行 Cargo。开发时须同时构建 `keine` 和 `keine-editor`，保持 `target/debug/keine` 与 `editor` 同目录。Preview 错误图标可直接打开 Output；左侧 Output 入口可恢复已关闭的日志面板。
 
@@ -362,3 +334,71 @@ Windows 使用 Shell 回收站 namespace 项恢复。撤销不覆盖同名新文
 IME、多显示器、1× DPI、主观音频和实际 Preview FPS 见 [验收](testing.md)。
 
 资源阻塞加载时，Engine 右下角显示 24 px 圆环，每三秒旋转一周；加载完成隐藏，不再显示 Loading 文案。
+
+## 实现说明
+
+以下内容供维护编辑器代码时查阅。使用方法见前面的操作说明。
+
+```text
+crates/editor/src/
+├── app.rs                  启动、主题、共享控件
+├── app/
+│   ├── documents.rs        共享文档状态、派生索引、选择与面板登记
+│   ├── panel.rs            面板标识、载荷与 Dock 生命周期
+│   ├── panel/construction.rs 构造与输入事件订阅
+│   ├── render.rs           面板分派、焦点与共享弹层
+│   ├── document/           文档视图状态、Text/Blocks/Scenes 组合
+│   ├── files/              Explorer 状态与文件树视图
+│   ├── window.rs           工程窗口、保存/关闭保护、Engine 生命周期
+│   ├── edits.rs            源码事务与撤销/重做
+│   ├── navigation.rs       文件/场景快速定位与有界位置历史
+│   ├── controls.rs         共享控件与滚动容器
+│   ├── blocks.rs           Block 交互与源码范围编辑
+│   ├── blocks/             drag：剧本拖放；motion：重排映射；view：布局；picker：插入及偏好拖放
+│   ├── reorder.rs          Block/列表共用的位移插值与边缘滚动
+│   ├── inspector.rs        字段编辑与源码同步
+│   ├── inspector/          state：面板状态；controls：字段控件；view：组合；spatial：位置与时间轴
+│   ├── resource.rs         资源清单事务、筛选弹层与预览
+│   ├── resource/state.rs   搜索、筛选、选择锚点与缩略图缓存
+│   ├── resource/toolbar.rs 查询、筛选标签、多选操作与原生导入
+│   ├── resource/browse.rs  响应式网格/列表、可见资源窗口
+│   ├── resource/picker.rs  资源选择弹层
+│   ├── minimap.rs          共用视口/拖动/平移计算与 Block 概览
+│   └── text/minimap.rs     Text 换行映射、语法缩略图与滚动适配
+├── authoring.rs            公共入口与标识符规则
+└── authoring/
+    ├── commands.rs        命令目录、分类、插入与补全模板
+    ├── fields.rs          Loader 参数清单的消费、标签、候选值、数值与资源规则
+    ├── index.rs           工程资源、引用、场景与对白索引
+    ├── edit.rs            场景、角色、对白等纯源码修改
+    ├── projection.rs      结构模型、字段范围与只读查询
+    └── projection/
+        ├── parse.rs       基于 Loader token 的结构识别
+        └── edit.rs        Block 的有界源码修改
+```
+
+面板持有交互状态，源文档仍由 `EditorDocuments` 统一管理；投影与索引均可从源码重建。
+补全、Block、Inspector 共用 `commands` / `fields`，字段规则不依赖 GPUI 控件。
+原生命令及舞台事件的合法字段由 Loader 的各命令族 signature/字段表定义，
+通过 `native_command_argument_names` 供 Inspector 与补全使用；新增参数只改对应命令族。
+音效统一使用 `se(asset, id: ..., loop: true, volume: ..., fade: ...)`；Inspector/补全提供 Loop、Fade 和 Fade out 字段；旧 `se.loop` 不再解析，现有剧本须改为统一写法。
+显示顺序保留，标签、候选值、分组提示与特殊控件仍归 Editor。
+`style` 及对白尾部选项也复用 Loader 的字段表。`frame` 等子行通过
+`native_child_command_argument_names(parent, child)` 按父命令查询；Inspector 与补全
+共用序列 fps/逐帧时长的提示过滤，不混用序列帧和关键帧字段。
+文本的 speaker/voice/stable ID 查询共用投影元数据；语音和尾部选项范围共用基于 Loader token
+的查询，由元数据、字段编辑及写回共同消费。多选摘要读取完整源码范围，
+Voice 修改保留尾部注释和选项；return/break 仍按 Loader 规则作为控制语句。
+插入模板覆盖全部 70 个入口的解析与可编辑 Block 回归；sprite.update 模板只换图，不隐式重设位置或缩放。
+立绘、移动、隐藏及聚焦规则模板优先共用已有角色 ID，使聚焦能够自动跟随对白。
+源码层只返回修改结果；应用修改、冲突保护与撤销仍由 `app/edits.rs` 负责。
+中文等 Unicode 标识符沿用 Loader 的字母/数字规则，编辑器不另设 ASCII 限制。
+Text/Blocks 共用概览导航状态和边界计算；各自仅提供原生行布局与滚动位置。
+概览缓存、选中态、配色与源码更新路径保持独立，拖动概览不修改源码或选中 Block。
+Blocks 的源码、行索引、顺序和静态几何按版本缓存；普通滚动二分查找可见行，源码、折叠或实测行高改变时重建。拖放/折叠动画仍使用原有冻结几何路径。
+Text 概览的配色、换行与笔画在后台生成；改宽复用配色，新任务取消旧任务，发布前复核版本，无固定输入延迟。换行调用与原生 DisplayMap 相同的 GPUI LineWrapper。
+
+面板专属状态由 `document/files/inspector/resource/characters/blocks/picker` 各模块拥有；
+共享文档、源码事务、文件事务及派生索引仍使用原有 owner，渲染只准备视图与控件。
+文件/场景名称的 Enter 在输入订阅里延迟提交，不在 render 中执行文件或源码修改。
+共享运动、测量展开、边缘滚动与弹层关闭规则仍归 `controls/reorder`，不建立跨 GPUI/Bevy 的 UI 框架。
