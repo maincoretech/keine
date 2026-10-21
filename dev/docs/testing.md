@@ -134,6 +134,8 @@ Fuzz/ASan 的工具链、时间预算和调用以 Media Safety workflow 为准�
 | 运行时错误定位在返回标题后保留 | Preview `checkpoint_and_failure_positions_survive_transient_presentation_and_title_cleanup`，由真实 Flow 错误生成诊断 |
 | 18 类瞬态动作及 Flow/SpriteVisual 包装，前置检查点与 Save v11 往返重放 | Driver `transient_action_families_round_trip_the_pre_action_save_boundary` |
 | 点击与自动到期同帧，只跨过一个等待点 | Tick `playback_manual_and_automatic_advance_cannot_cross_two_yields_in_one_frame` |
+| 自动播放等待语音同步、加载、实际队列 EOF 后的阅读延时；暂停/静音和菜单不提前推进，同文件下一句重新等待 | Tick `playback_auto_waits_for_voice_eof_and_then_reading_delay`、`playback_auto_waits_for_pending_voice_and_releases_after_failed_player_cleanup`；使用无设备 Rodio 队列，恢复同一光标及真实失败清理 |
+| 无语音阅读延时；手动/快进/作者显式续行仍可打断语音 | Tick `playback_auto_without_voice_keeps_the_configured_reading_delay`、`playback_manual_skip_and_authored_notend_can_interrupt_voice` |
 | 加载/菜单期间取消跳过并消费自动按键释放，解除遮挡不误推进 | Tick `playback_loading_and_menu_gates_do_not_swallow_auto_release` |
 | 对白、选择、输入恢复与执行上限 | Driver `normal_yield_and_end_share_one_host_policy`、`every_resume_source_*` |
 | 阻塞演出自然结束，后端完成发生在加载/菜单期间 | Tick `settled_presentation_clocks_resume_without_player_input`、`playback_backend_completion_resumes_after_the_loading_or_menu_gate` |

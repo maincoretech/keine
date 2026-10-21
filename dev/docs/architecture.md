@@ -149,6 +149,11 @@ Android 当前无视频，启动先尝试 Vulkan、初始化错误时回退 Open
 
 ## 音频输出
 
+自动播放在文字显示完且当前语音实际结束后，才开始设置中的阅读延时。
+待加载、暂停或静音的语音不视为结束；加载失败经音频清理后解除等待。
+Runtime 在音频同步前也检查新对白/恢复语音请求，避免零延时跳过尚未创建的播放器。
+手动推进、快进及作者显式 `auto_advance` 保留各自的推进语义。
+
 `bevy_audio` 同版局部补丁保留一个 48kHz/stereo 逻辑 mixer；播放器、解码器、暂停、
 音量与采样位置独立于物理 stream。恢复 worker 只重建设备输出，Windows 每秒检查
 默认 endpoint ID；CoreAudio 健康 DefaultOutput 沿用系统路由，Android AAudio 断流及

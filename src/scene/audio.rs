@@ -103,6 +103,31 @@ pub struct VocalPlayback {
     key: Option<(String, usize, String)>,
 }
 
+impl VocalPlayback {
+    /// Tick runs before audio sync. A restored/new cue must reach sync before
+    /// the absence of a player can be interpreted as completed playback.
+    pub(crate) fn awaiting_sync(&self, state: &keine_core::State) -> bool {
+        if state
+            .vocal_event
+            .as_ref()
+            .is_some_and(|cue| cue.file.is_some())
+        {
+            return true;
+        }
+        let requested = state.dialogue.as_ref().and_then(|dialogue| {
+            dialogue
+                .vocal
+                .as_deref()
+                .map(|vocal| (state.current_scene.as_str(), state.cursor, vocal))
+        });
+        let applied = self
+            .key
+            .as_ref()
+            .map(|(scene, cursor, vocal)| (scene.as_str(), *cursor, vocal.as_str()));
+        requested != applied
+    }
+}
+
 #[derive(Resource, Default)]
 pub struct BgmPlayback {
     applied: Option<BgmState>,

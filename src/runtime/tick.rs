@@ -1,3 +1,4 @@
+use bevy::audio::AudioSinkPlayback;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use keine_core::State;
@@ -97,6 +98,8 @@ pub struct TickContext<'w, 's> {
     windows: Query<'w, 's, &'static Window>,
     input_scope: Res<'w, UiInputScope>,
     loading: Res<'w, AssetLoadingGate>,
+    vocal_playback: Option<Res<'w, crate::scene::audio::VocalPlayback>>,
+    vocals: Query<'w, 's, Option<&'static AudioSink>, With<crate::scene::audio::VocalPlayer>>,
     editor_sync: Option<Res<'w, EditorSyncSession>>,
     authoring_preview: Option<Res<'w, super::preview::AuthoringPreviewSession>>,
     returning_to_title: Option<Res<'w, crate::ui::title::ReturnToTitleTransition>>,
@@ -263,6 +266,19 @@ pub fn tick(mut context: TickContext) {
         if notend.changed || notend.return_to_title {
             *context.auto_timer = 0.0;
             notend
+        } else if context
+            .vocal_playback
+            .as_ref()
+            .is_some_and(|playback| playback.awaiting_sync(&context.state))
+            || context
+                .vocals
+                .iter()
+                .any(|sink| sink.is_none_or(|sink| !sink.empty()))
+        {
+            // Pending loads and paused voices are unfinished too. Begin the
+            // normal reading delay only after playback has actually ended.
+            *context.auto_timer = 0.0;
+            TickProgress::default()
         } else {
             update_auto_mode(
                 context.state.bypass_change_detection(),
@@ -2472,6 +2488,210 @@ mod tests {
                 );
                 assert_eq!(state.cursor, 3);
             }
+        }
+    }
+
+    #[test]
+    fn playback_auto_waits_for_pending_voice_and_releases_after_failed_player_cleanup() {
+        let mut app = voiced_auto_test_app();
+        app.world_mut().resource_mut::<RuntimeSettings>().auto_delay = 0.0;
+        // The first tick precedes sync: even a zero-delay, fully revealed line
+        // must not disappear before its voice player can be created.
+        app.update();
+        assert_eq!(app.world().resource::<GameState>().cursor, 1);
+        let entity = app
+            .world_mut()
+            .query_filtered::<Entity, With<crate::scene::audio::VocalPlayer>>()
+            .single(app.world())
+            .unwrap();
+        for _ in 0..120 {
+            app.update();
+        }
+        assert_eq!(app.world().resource::<GameState>().cursor, 1);
+        // Restoring the same cursor queues a new cue even though the dialogue
+        // key matches. An old finished/absent player cannot satisfy that cue.
+        app.world_mut().despawn(entity);
+        assert!(
+            app.world_mut()
+                .resource_mut::<GameState>()
+                .restore_backlog(0)
+        );
+        app.update();
+        assert_eq!(app.world().resource::<GameState>().cursor, 1);
+        let entity = app
+            .world_mut()
+            .query_filtered::<Entity, With<crate::scene::audio::VocalPlayer>>()
+            .single(app.world())
+            .unwrap();
+        // Failed-source cleanup removes the pending player; the synchronized
+        // dialogue key must not cause a permanent wait or replay the source.
+        #[cfg(feature = "audio-seekable")]
+        app.add_systems(
+            PreUpdate,
+            crate::scene::audio::retire_failed_players::<crate::runtime::audio::SeekableAudio>,
+        );
+        #[cfg(not(feature = "audio-seekable"))]
+        app.add_systems(
+            PreUpdate,
+            crate::scene::audio::retire_failed_players::<AudioSource>,
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while app.world().resource::<GameState>().cursor == 1 {
+            app.update();
+            assert!(
+                std::time::Instant::now() < deadline,
+                "failed voice was not retired"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(app.world().get_entity(entity).is_err());
+        assert_eq!(app.world().resource::<GameState>().cursor, 2);
+    }
+
+    fn voiced_auto_test_app() -> App {
+        use crate::scene::audio::{VocalPlayback, sync_vocal};
+        use bevy::asset::AssetApp;
+        let mut state = State::new();
+        state.current_scene = "main".into();
+        state.install_program(Program::from_scenes([(
+            "main".into(),
+            ["first", "second", "third"]
+                .map(|text| Action::Say {
+                    speaker: String::new(),
+                    text: text.into(),
+                    options: keine_core::SayOptions {
+                        vocal: Some("voice.wav".into()),
+                        ..Default::default()
+                    },
+                })
+                .to_vec(),
+        )]));
+        crate::runtime::script_driver::resume(&mut state, &mut Default::default());
+        state.dialogue.as_mut().unwrap().visible_chars = 5;
+        let mut app = playback_test_app(state, true);
+        // No device or decoder: sync creates real pending players; tests attach
+        // an offline Rodio sink when they need to consume playback samples.
+        app.add_plugins((
+            bevy::app::TaskPoolPlugin::default(),
+            bevy::asset::AssetPlugin::default(),
+        ))
+        .init_asset::<AudioSource>()
+        .init_resource::<VocalPlayback>()
+        .insert_resource(crate::runtime::resources::GameConfigResource(
+            Default::default(),
+        ))
+        .add_systems(Update, sync_vocal.after(tick));
+        #[cfg(feature = "audio-seekable")]
+        app.init_asset::<crate::runtime::audio::SeekableAudio>();
+        app
+    }
+
+    #[cfg(any(
+        feature = "audio-opus",
+        feature = "audio-seekable",
+        feature = "video-ffmpeg"
+    ))]
+    #[test]
+    fn playback_auto_waits_for_voice_eof_and_then_reading_delay() {
+        let mut app = voiced_auto_test_app();
+        app.world_mut().resource_mut::<RuntimeSettings>().auto_delay = 0.1;
+        app.update();
+        let entity = app
+            .world_mut()
+            .query_filtered::<Entity, With<crate::scene::audio::VocalPlayer>>()
+            .single(app.world())
+            .unwrap();
+        let (player, mut output) = rodio::Player::new();
+        player.append(rodio::buffer::SamplesBuffer::new(
+            rodio::ChannelCount::new(1).unwrap(),
+            rodio::SampleRate::new(48_000).unwrap(),
+            vec![0.0; 48_000],
+        ));
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(AudioSink::new(player));
+        // Paused or muted does not mean finished. Neither simulated time nor
+        // volume may bypass the actual sample queue.
+        for paused in [false, true] {
+            let mut sink = app.world_mut().get_mut::<AudioSink>(entity).unwrap();
+            sink.mute();
+            if paused {
+                sink.pause();
+            }
+            for _ in 0..120 {
+                app.update();
+            }
+            assert_eq!(app.world().resource::<GameState>().cursor, 1);
+        }
+        app.world().get::<AudioSink>(entity).unwrap().play();
+        for _ in 0..50_000 {
+            output.next();
+        }
+        assert!(app.world().get::<AudioSink>(entity).unwrap().empty());
+        *app.world_mut().resource_mut::<UiInputScope>() = UiInputScope::Menu;
+        for _ in 0..120 {
+            app.update();
+        }
+        assert_eq!(app.world().resource::<GameState>().cursor, 1);
+        *app.world_mut().resource_mut::<UiInputScope>() = UiInputScope::Stage;
+        for _ in 0..5 {
+            app.update();
+        }
+        assert_eq!(app.world().resource::<GameState>().cursor, 1);
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(app.world().resource::<GameState>().cursor, 2);
+        // The same file on the next line still gets a fresh pending player.
+        for _ in 0..120 {
+            app.update();
+        }
+        assert_eq!(app.world().resource::<GameState>().cursor, 2);
+    }
+
+    #[test]
+    fn playback_auto_without_voice_keeps_the_configured_reading_delay() {
+        let mut app = voiced_auto_test_app();
+        app.world_mut()
+            .resource_mut::<GameState>()
+            .dialogue
+            .as_mut()
+            .unwrap()
+            .vocal = None;
+        app.world_mut().resource_mut::<RuntimeSettings>().auto_delay = 0.1;
+        for _ in 0..5 {
+            app.update();
+        }
+        assert_eq!(app.world().resource::<GameState>().cursor, 1);
+        for _ in 0..4 {
+            app.update();
+        }
+        assert_eq!(app.world().resource::<GameState>().cursor, 2);
+    }
+
+    #[test]
+    fn playback_manual_skip_and_authored_notend_can_interrupt_voice() {
+        for mode in ["manual", "skip", "notend"] {
+            let mut app = voiced_auto_test_app();
+            app.update();
+            match mode {
+                "manual" => app.world_mut().resource_mut::<InputActions>().advance = true,
+                "skip" => {
+                    let mut toggles = app.world_mut().resource_mut::<ToggleStates>();
+                    toggles.skip = true;
+                    toggles.skip_mode = SkipMode::All;
+                }
+                _ => {
+                    app.world_mut()
+                        .resource_mut::<GameState>()
+                        .dialogue
+                        .as_mut()
+                        .unwrap()
+                        .auto_advance = true
+                }
+            }
+            app.update();
+            assert_eq!(app.world().resource::<GameState>().cursor, 2, "{mode}");
         }
     }
 
