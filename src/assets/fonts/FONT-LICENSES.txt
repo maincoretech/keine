@@ -14,7 +14,22 @@ https://glyphwiki.org/wiki/GlyphWiki:License
 
 The merged font is distributed under SIL OFL 1.1. Its primary family, full
 and PostScript names were changed to Kene Text / KeneText-Regular to avoid
-Maven Pro's Reserved Font Name. Glyphs and metrics were not changed.
+Maven Pro's Reserved Font Name. Existing glyphs and metrics are preserved.
+
+The common-symbol extension adds 252 previously missing characters from
+HanaMinA 8.030 (2007-2018 GlyphWiki. All Rights Reserved.):
+https://github.com/cjkvi/HanaMinAFDKO/releases/tag/8.030
+Source file: HanaMinA.otf
+SHA-256: f068fbe4f7e091828d23dc833f9438aebe0446ce341b69497fbb514affaee190
+Upstream declares the same GlyphWiki data license reproduced below.
+Only missing Unicode mappings are appended; existing glyph IDs, outlines,
+advances, kerning and substitution tables are retained. Donor metrics use
+the same 1000-unit em. Donor CFF outlines were converted with fontTools
+4.60.2 Cu2QuPen (max_err=0.5 font units, reverse_direction=True) and
+TTGlyphPen, retaining donor horizontal metrics and adding no hinting.
+KeneText-symbols.txt records the common-symbol coverage checked by the
+engine's text shaping/rasterization regression. It includes characters
+already present as well as the new symbols; it is not the font's full cmap.
 
 Copyright 2011 The Maven Pro Project Authors (https://github.com/m4rc1e/mavenproFont), with Reserved Font Name "Maven Pro".
 

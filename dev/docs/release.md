@@ -201,7 +201,9 @@ cargo deny --locked --all-features check advisories licenses bans sources
 `cargo-deny` 检查声明，不证明所有二进制与素材的发行义务已满足。
 
 合成字体来源与完整 OFL/MIT 文本见 `src/assets/fonts/FONT-LICENSES.txt`。
-Maven Pro 合成版内部名称已改为 Kene Text，字形与排版数据未变；CJK 来源由项目所有者确认
+Maven Pro 合成版内部名称已改为 Kene Text，原有字形与排版数据保留；另从 HanaMinA 8.030
+增补 252 个常用符号，确切来源、哈希与轮廓转换参数见该声明，回归覆盖字符见同目录
+`KeneText-symbols.txt`。原有 CJK 来源由项目所有者确认
 为 HanaMinAFDKO，作者仓库声明遵循 GlyphWiki 数据许可。已附 Mozilla 分发的 GlyphWiki 历史许可原文；
 此前来源核查时上游页面返回 403，未验证其最新版本。原始合成/图标转换配方和确切源版本未保存，
 不声称已重建来源链。

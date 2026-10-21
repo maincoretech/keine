@@ -220,6 +220,30 @@ mod tests {
     }
 
     #[test]
+    fn embedded_font_renders_titles_and_common_symbols_without_fallback() {
+        let mut text = Rasterizer::new();
+        let samples = concat!(
+            "■エピローグ　：　－　７　Ｆ　－\n■终章：　－　７Ｆ　－\n",
+            "■プロローグ　―　姫　子　―\n■─　尼洛和阿洛伊斯　─\n",
+            include_str!("../../../assets/fonts/KeneText-symbols.txt"),
+        );
+        let embedded = include_bytes!("../../../assets/fonts/MavenPro-CJK.ttf");
+        for sample in samples.lines() {
+            text.rasterize(1.0, sample);
+            for line in text.computed.buffer().lines() {
+                for run in line.runs() {
+                    assert!(run.font().data.as_ref() == embedded, "fallback: {sample}");
+                    for cluster in run.clusters() {
+                        for glyph in cluster.glyphs() {
+                            assert_ne!(glyph.id, 0, "missing glyph: {sample}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn repeated_scales_reclaim_idle_rasters_and_keep_current_glyphs() {
         let mut text = Rasterizer::new();
         let mut unbounded = Rasterizer::new();

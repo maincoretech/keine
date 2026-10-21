@@ -715,6 +715,22 @@ Suika3 26.07.13 的该 fixture GPU 三轮均值为 0.5262 / 0.5393 / 0.5352 ms�
 这支持额外模糊/合成是差距的重要来源，不能量化语言或抽象层各自贡献，也不是等画质排名。
 Suika 每帧同步等待不应照搬。横向图的包体积包含不同素材/SDK范围，同样不能作为最小发行包排名。
 
+### 内嵌字体
+
+内嵌 Kene Text 的标题/符号回归通过真实 `TextPipeline` 排版和栅格化，检查水仙章节标题及
+`src/assets/fonts/KeneText-symbols.txt` 的常见符号均使用内嵌字体、glyph ID 非零，
+避免系统字体 fallback 掩盖缺字：
+
+```sh
+cargo test --locked -p keine --all-features --lib embedded_font_renders_titles_and_common_symbols_without_fallback
+```
+
+252 个新增映射取自 HanaMinA 8.030；原有 21,740 个 glyph 的轮廓、水平度量和
+21,703 个字符映射均已逐项核对，原有基线/行高、GSUB/GPOS 与名称表保留。
+水仙剧本剩余一处未映射字符为源包自带的私用区 U+E5A2，含义未确认，未擅自替字。
+本机禁用持久化的工程副本定位 `chapter_19:140`，Computer Use 已确认原生窗口中
+日文/中文终章标题的 `■` 均显示为实心方块。
+
 ### 内存、空闲与连续播放
 
 窗口缩放的字体缓存回归使用 Bevy 0.19.1 的真实 `TextPipeline` 和内嵌 CJK 字体，
