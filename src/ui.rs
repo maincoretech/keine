@@ -81,7 +81,12 @@ impl Plugin for GameUiPlugin {
         );
         app.add_systems(
             Last,
-            (activity::update, activity::settle_image_removals)
+            (
+                activity::update,
+                support::font_cache::trim_font_atlases,
+                activity::settle_image_removals,
+                crate::runtime::platform::settle_render_targets,
+            )
                 .chain()
                 .before(crate::runtime::platform::update_lifecycle),
         );
@@ -90,6 +95,7 @@ impl Plugin for GameUiPlugin {
 
 fn init_resources(app: &mut App) {
     app.init_resource::<activity::UiAnimationActivity>()
+        .init_resource::<crate::runtime::platform::RenderTargetRetirement>()
         .init_resource::<foundation::UiFonts>()
         .init_resource::<control_bar::ToggleStates>()
         .init_resource::<control_bar::AutoHideTiming>()

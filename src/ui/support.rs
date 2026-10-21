@@ -1,4 +1,6 @@
 pub(crate) mod activity;
+#[path = "support/text/cache.rs"]
+pub(crate) mod font_cache;
 pub(crate) mod foundation;
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod haptics;

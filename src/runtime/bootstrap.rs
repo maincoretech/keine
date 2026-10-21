@@ -596,10 +596,11 @@ fn build_opened_app(
         // Render diagnostics are benchmark-only. Vulkan and DX12 expose both
         // CPU/GPU pass time and pipeline statistics; other backends still
         // provide CPU pass time without affecting normal game execution.
-        app.add_plugins((
-            EntityCountDiagnosticsPlugin::default(),
-            RenderDiagnosticsPlugin,
-        ));
+        app.add_plugins(EntityCountDiagnosticsPlugin::default());
+        // RenderPlugin already installs this when tracing-tracy is enabled.
+        if !app.is_plugin_added::<RenderDiagnosticsPlugin>() {
+            app.add_plugins(RenderDiagnosticsPlugin);
+        }
         app.init_resource::<PersistenceDisabled>();
         crate::ui::performance::install_runtime_capture(
             &mut app,

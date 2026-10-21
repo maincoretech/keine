@@ -365,6 +365,48 @@ pub(crate) enum RuntimeActivity {
     Background,
 }
 
+#[derive(Resource, Default)]
+pub(crate) struct RenderTargetRetirement(pub(crate) bool);
+
+#[derive(Default)]
+pub(crate) struct RenderTargetSnapshot {
+    size: Option<UVec2>,
+    cameras: Vec<(Entity, bool)>,
+    remaining: u8,
+}
+
+/// TextureCache retires unused targets after three rendered frames. Finish
+/// those frames plus submission cleanup even if a resize immediately idles or
+/// backgrounds the game. This wakes rendering without advancing story time.
+pub(crate) fn settle_render_targets(
+    windows: Query<&Window>,
+    cameras: Query<(Entity, &Camera), DesignCameraFilter>,
+    mut snapshot: Local<RenderTargetSnapshot>,
+    mut retirement: ResMut<RenderTargetRetirement>,
+) {
+    let size = windows
+        .single()
+        .ok()
+        .map(|window| UVec2::new(window.physical_width(), window.physical_height()));
+    if snapshot.size != size
+        || snapshot.cameras.len() != cameras.iter().len()
+        || cameras
+            .iter()
+            .any(|(entity, camera)| !snapshot.cameras.contains(&(entity, camera.is_active)))
+    {
+        snapshot.size = size;
+        snapshot.cameras.clear();
+        snapshot.cameras.extend(
+            cameras
+                .iter()
+                .map(|(entity, camera)| (entity, camera.is_active)),
+        );
+        snapshot.remaining = 4;
+    }
+    retirement.0 = snapshot.remaining != 0;
+    snapshot.remaining = snapshot.remaining.saturating_sub(1);
+}
+
 type DialogTargetRoots<'w, 's> = Query<
     'w,
     's,
@@ -439,6 +481,7 @@ pub(crate) struct LifecycleContext<'w, 's> {
     state: Res<'w, GameState>,
     loading: Res<'w, AssetLoadingGate>,
     ui: Res<'w, UiAnimationActivity>,
+    target_retirement: Option<Res<'w, RenderTargetRetirement>>,
     audio: Res<'w, AudioAnimationActivity>,
     toggles: Res<'w, ToggleStates>,
     input_scope: Res<'w, crate::ui::input_scope::UiInputScope>,
@@ -541,7 +584,12 @@ pub(crate) fn update_lifecycle(
         .and_then(|monitor| context.monitors.get(monitor.0).ok())
         .and_then(|monitor| monitor.refresh_rate_millihertz);
     let active_mode = active_update_mode(refresh_rate);
+    let retiring_targets = context
+        .target_retirement
+        .as_ref()
+        .is_some_and(|pending| pending.0);
     let focused_mode = match next {
+        _ if retiring_targets => active_mode,
         RuntimeActivity::Active | RuntimeActivity::Loading => active_mode,
         RuntimeActivity::Idle | RuntimeActivity::Background => {
             UpdateMode::reactive_low_power(reactive_wait)
@@ -550,13 +598,14 @@ pub(crate) fn update_lifecycle(
     if winit.focused_mode != focused_mode {
         winit.focused_mode = focused_mode;
     }
-    let unfocused_mode = if benchmark_active || studio_sync && !companion_preview {
-        active_mode
-    } else if companion_preview {
-        focused_mode
-    } else {
-        UpdateMode::reactive_low_power(reactive_wait)
-    };
+    let unfocused_mode =
+        if retiring_targets || benchmark_active || studio_sync && !companion_preview {
+            active_mode
+        } else if companion_preview {
+            focused_mode
+        } else {
+            UpdateMode::reactive_low_power(reactive_wait)
+        };
     if winit.unfocused_mode != unfocused_mode {
         winit.unfocused_mode = unfocused_mode;
     }
@@ -973,8 +1022,192 @@ mod tests {
     use bevy::input::{ButtonState, InputPlugin, InputSystems, mouse::MouseButtonInput};
     use bevy::window::WindowResolution;
 
+    #[cfg(all(target_os = "macos", feature = "video-native"))]
+    #[test]
+    #[ignore = "requires a real Metal device"]
+    fn inactive_camera_releases_render_targets_on_gpu() {
+        use bevy::camera::RenderTarget;
+        use bevy::render::RenderPlugin;
+        use bevy::render::render_resource::{Extent3d, TextureFormat};
+        use bevy::render::settings::{Backends, RenderCreation, WgpuSettings};
+        use bevy::render::sync_world::RenderEntity;
+        use bevy::render::view::{ViewDepthTexture, ViewTarget};
+        use bevy::window::{ExitCondition, WindowPlugin};
+
+        let mut app = App::new();
+        app.add_plugins(
+            DefaultPlugins
+                .build()
+                .disable::<bevy::winit::WinitPlugin>()
+                .disable::<bevy::log::LogPlugin>()
+                .set(WindowPlugin {
+                    primary_window: None,
+                    exit_condition: ExitCondition::DontExit,
+                    ..default()
+                })
+                .set(RenderPlugin {
+                    render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
+                        backends: Some(Backends::METAL),
+                        ..default()
+                    })),
+                    ..default()
+                }),
+        );
+        let image = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(Image::new_target_texture(
+                256,
+                256,
+                TextureFormat::Rgba8UnormSrgb,
+                None,
+            ));
+        let target = RenderTarget::Image(image.clone().into());
+        app.world_mut().spawn((Camera2d, Msaa::Off, target.clone()));
+        let dialog = app
+            .world_mut()
+            .spawn((
+                Camera2d,
+                Msaa::Off,
+                Camera {
+                    order: 1,
+                    clear_color: ClearColorConfig::None,
+                    ..default()
+                },
+                target,
+            ))
+            .id();
+        app.finish();
+        app.cleanup();
+        app.insert_resource(bevy::render::error_handler::RenderErrorHandler(
+            |error, _, _| panic!("GPU regression render error: {error:?}"),
+        ));
+        for _ in 0..4 {
+            app.update();
+        }
+        let rendered = app.world().get::<RenderEntity>(dialog).unwrap().id();
+        let render = app.sub_app(RenderApp).world();
+        assert!(render.get::<ViewTarget>(rendered).is_some());
+        assert!(render.get::<ViewDepthTexture>(rendered).is_some());
+        app.world_mut().get_mut::<Camera>(dialog).unwrap().is_active = false;
+        app.world_mut()
+            .resource_mut::<Assets<Image>>()
+            .get_mut(&image)
+            .unwrap()
+            .resize(Extent3d {
+                width: 64,
+                height: 64,
+                depth_or_array_layers: 1,
+            });
+        for _ in 0..4 {
+            app.update();
+        }
+        let render = app.sub_app(RenderApp).world();
+        assert!(
+            render
+                .get::<bevy::render::camera::ExtractedCamera>(rendered)
+                .is_none()
+        );
+        println!(
+            "sleeping camera retained attachments: color {}, depth {}",
+            render.get::<ViewTarget>(rendered).is_some(),
+            render.get::<ViewDepthTexture>(rendered).is_some()
+        );
+        assert!(
+            render.get::<ViewTarget>(rendered).is_none(),
+            "sleeping camera pins old color/output views"
+        );
+        assert!(
+            render.get::<ViewDepthTexture>(rendered).is_none(),
+            "sleeping camera pins old depth texture"
+        );
+        app.world_mut().get_mut::<Camera>(dialog).unwrap().is_active = true;
+        for _ in 0..4 {
+            app.update();
+        }
+        let render = app.sub_app(RenderApp).world();
+        assert_eq!(
+            render
+                .get::<ViewTarget>(rendered)
+                .unwrap()
+                .main_texture()
+                .width(),
+            64
+        );
+        assert_eq!(
+            render
+                .get::<ViewDepthTexture>(rendered)
+                .unwrap()
+                .texture
+                .width(),
+            64
+        );
+    }
+
     fn is_animating(state: &GameState) -> bool {
         core_is_animating(state, &mut DialogueLengthCache::default())
+    }
+
+    #[test]
+    fn target_retirement_finishes_in_background_without_advancing_story() {
+        let mut app = App::new();
+        app.insert_resource(GameState(keine_core::State::new()))
+            .init_resource::<AssetLoadingGate>()
+            .init_resource::<UiAnimationActivity>()
+            .init_resource::<AudioAnimationActivity>()
+            .init_resource::<ToggleStates>()
+            .init_resource::<crate::ui::input_scope::UiInputScope>()
+            .init_resource::<AutoHideTiming>()
+            .init_resource::<UserInputCaretBlink>()
+            .init_resource::<Time<Real>>()
+            .init_resource::<Time<Virtual>>()
+            .init_resource::<RuntimeActivity>()
+            .init_resource::<RenderTargetRetirement>()
+            .insert_resource(WinitSettings::desktop_app())
+            .add_systems(Last, (settle_render_targets, update_lifecycle).chain());
+        let window = app
+            .world_mut()
+            .spawn(Window {
+                focused: false,
+                ..default()
+            })
+            .id();
+        let camera = app
+            .world_mut()
+            .spawn((Camera::default(), SceneBlurCamera))
+            .id();
+        for change in 0..3 {
+            match change {
+                1 => app
+                    .world_mut()
+                    .get_mut::<Window>(window)
+                    .unwrap()
+                    .resolution
+                    .set_physical_resolution(640, 360),
+                2 => app.world_mut().get_mut::<Camera>(camera).unwrap().is_active = false,
+                _ => {}
+            }
+            for _ in 0..4 {
+                app.update();
+                assert!(app.world().resource::<RenderTargetRetirement>().0);
+                assert_eq!(
+                    app.world().resource::<WinitSettings>().unfocused_mode,
+                    active_update_mode(None)
+                );
+                assert_eq!(
+                    *app.world().resource::<RuntimeActivity>(),
+                    RuntimeActivity::Background
+                );
+                assert!(app.world().resource::<Time<Virtual>>().is_paused());
+            }
+            app.update();
+            assert!(!app.world().resource::<RenderTargetRetirement>().0);
+            let mode = app.world().resource::<WinitSettings>().unfocused_mode;
+            assert_ne!(mode, active_update_mode(None));
+            assert!(
+                matches!(mode, UpdateMode::Reactive { wait, .. } if wait > std::time::Duration::ZERO && wait <= IDLE_WAIT)
+            );
+        }
     }
 
     #[test]

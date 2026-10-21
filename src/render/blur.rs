@@ -13,7 +13,7 @@ use bevy::{
     asset::{embedded_asset, load_embedded_asset},
     core_pipeline::{Core2d, Core2dSystems, FullscreenShader},
     render::{
-        RenderApp, RenderStartup,
+        Render, RenderApp, RenderStartup, RenderSystems,
         extract_component::{
             ComponentUniforms, DynamicUniformIndex, ExtractComponent, ExtractComponentPlugin,
             UniformComponentPlugin,
@@ -24,6 +24,7 @@ use bevy::{
     },
 };
 use std::borrow::Cow;
+use std::collections::HashMap;
 
 // Keep CPU scissor padding aligned with the shader clamp. Larger values used
 // to enlarge the processed area without producing a stronger visual result.
@@ -112,6 +113,10 @@ impl Plugin for BlurPlugin {
                 .before(bevy::core_pipeline::upscaling::upscaling),
         );
         render_app.add_systems(RenderStartup, setup_blur_pipeline.ambiguous_with_all());
+        render_app.add_systems(
+            Render,
+            retire_unused_blur_intermediate.in_set(RenderSystems::PrepareBindGroups),
+        );
     }
 }
 
@@ -135,7 +140,58 @@ struct BlurIntermediate {
 }
 
 #[derive(Resource, Default)]
-struct BlurIntermediatePool(Option<BlurIntermediate>);
+struct BlurIntermediatePool {
+    texture: Option<BlurIntermediate>,
+    bind_groups: BlurBindGroups,
+}
+
+#[derive(Default)]
+struct BlurBindGroups {
+    entries: HashMap<(TextureViewId, BufferId), BindGroup>,
+    #[cfg(test)]
+    bind_group_creations: usize,
+}
+
+#[expect(
+    clippy::type_complexity,
+    reason = "only cameras running regional passes may retain bindings"
+)]
+fn retire_unused_blur_intermediate(
+    mut pool: ResMut<BlurIntermediatePool>,
+    uniforms: Res<ComponentUniforms<BlurCamera>>,
+    views: Query<
+        (&ViewTarget, &BlurCamera),
+        (
+            With<bevy::render::camera::ExtractedCamera>,
+            Or<(With<SceneBlurCamera>, With<UiBlurCamera>)>,
+        ),
+    >,
+) {
+    if pool.texture.as_ref().is_some_and(|texture| {
+        !views.iter().any(|(target, blur)| {
+            let scissor = blur_scissor(blur, target.main_texture().size(), false);
+            scissor.width != 0
+                && scissor.height != 0
+                && target.main_texture().size() == texture.size
+                && target.main_texture_format() == texture.format
+        })
+    }) {
+        pool.texture = None;
+    }
+    let intermediate = pool.texture.as_ref().map(|texture| texture.view.id());
+    let buffer = uniforms.uniforms().buffer().map(Buffer::id);
+    pool.bind_groups.entries.retain(|(source, uniform), _| {
+        Some(*uniform) == buffer
+            && (Some(*source) == intermediate
+                || views.iter().any(|(target, blur)| {
+                    let scissor = blur_scissor(blur, target.main_texture().size(), false);
+                    scissor.width != 0
+                        && scissor.height != 0
+                        && (*source == target.main_texture_view().id()
+                            || *source == target.main_texture_other_view().id())
+                }))
+    });
+}
 
 struct BlurRunResources<'a> {
     pipeline_cache: &'a PipelineCache,
@@ -271,7 +327,7 @@ fn do_scene_blur(
             pipelines: &mut resources.pipelines,
             uniforms: &resources.uniforms,
         },
-        &mut resources.intermediate.0,
+        &mut resources.intermediate,
         &mut ctx,
     );
 }
@@ -301,7 +357,7 @@ fn do_ui_blur(
             pipelines: &mut resources.pipelines,
             uniforms: &resources.uniforms,
         },
-        &mut resources.intermediate.0,
+        &mut resources.intermediate,
         &mut ctx,
     );
 }
@@ -311,7 +367,7 @@ fn run_blur(
     bc: &BlurCamera,
     uniform_index: &DynamicUniformIndex<BlurCamera>,
     resources: BlurRunResources,
-    intermediate: &mut Option<BlurIntermediate>,
+    pool: &mut BlurIntermediatePool,
     ctx: &mut RenderContext,
 ) {
     // Avoid allocating/encoding either regional pass when no blur is requested.
@@ -365,7 +421,8 @@ fn run_blur(
     if vertical_scissor.width == 0 || vertical_scissor.height == 0 {
         return;
     }
-    let recreate_intermediate = intermediate
+    let recreate_intermediate = pool
+        .texture
         .as_ref()
         .is_none_or(|texture| texture.size != size || texture.format != format);
     if recreate_intermediate {
@@ -380,14 +437,14 @@ fn run_blur(
             view_formats: &[],
         });
         let view = texture.create_view(&TextureViewDescriptor::default());
-        *intermediate = Some(BlurIntermediate {
+        pool.texture = Some(BlurIntermediate {
             _texture: texture,
             view,
             size,
             format,
         });
     }
-    let intermediate_view = &intermediate.as_ref().expect("created above").view;
+    let intermediate_view = &pool.texture.as_ref().expect("created above").view;
     let original = vt.main_texture_view().clone();
     run_blur_pass(
         BlurPassTargets {
@@ -398,6 +455,7 @@ fn run_blur(
         horizontal,
         uniform_index,
         &uniform_binding,
+        &mut pool.bind_groups,
         &resources,
         ctx,
     );
@@ -410,6 +468,7 @@ fn run_blur(
         vertical,
         uniform_index,
         &uniform_binding,
+        &mut pool.bind_groups,
         &resources,
         ctx,
     );
@@ -420,21 +479,34 @@ fn run_blur_pass(
     pipeline: &RenderPipeline,
     uniform_index: &DynamicUniformIndex<BlurCamera>,
     uniform_binding: &BindingResource<'_>,
+    bind_groups: &mut BlurBindGroups,
     resources: &BlurRunResources,
     ctx: &mut RenderContext,
 ) {
-    // ViewTarget textures can change after resize or render recovery. Creating
-    // these two small bind groups per active blur avoids caching against wgpu
-    // implementation details and follows Bevy's post-process pattern.
-    let bind_group = ctx.render_device().create_bind_group(
-        "blur_bg",
-        &resources.pipeline.layout,
-        &BindGroupEntries::sequential((
-            targets.source,
-            &resources.pipeline.sampler,
-            uniform_binding.clone(),
-        )),
-    );
+    let uniform_id = resources
+        .uniforms
+        .uniforms()
+        .buffer()
+        .expect("binding exists")
+        .id();
+    let bind_group = bind_groups
+        .entries
+        .entry((targets.source.id(), uniform_id))
+        .or_insert_with(|| {
+            #[cfg(test)]
+            {
+                bind_groups.bind_group_creations += 1;
+            }
+            ctx.render_device().create_bind_group(
+                "blur_bg",
+                &resources.pipeline.layout,
+                &BindGroupEntries::sequential((
+                    targets.source,
+                    &resources.pipeline.sampler,
+                    uniform_binding.clone(),
+                )),
+            )
+        });
     let mut pass = ctx.begin_tracked_render_pass(RenderPassDescriptor {
         label: Some("blur"),
         color_attachments: &[Some(RenderPassColorAttachment {
@@ -455,7 +527,7 @@ fn run_blur_pass(
         multiview_mask: None,
     });
     pass.set_render_pipeline(pipeline);
-    pass.set_bind_group(0, &bind_group, &[uniform_index.index()]);
+    pass.set_bind_group(0, &*bind_group, &[uniform_index.index()]);
     pass.set_scissor_rect(
         targets.scissor.x,
         targets.scissor.y,
@@ -855,6 +927,205 @@ impl BlurRect {
 mod tests {
     use super::*;
     use bevy::math::Affine2;
+
+    #[cfg(all(target_os = "macos", feature = "video-native"))]
+    #[test]
+    #[ignore = "requires a real Metal device"]
+    fn regional_bind_groups_reuse_and_retire_on_gpu() {
+        use crate::render::test_support;
+        use bevy::camera::RenderTarget;
+        let mut app = test_support::metal_app();
+        app.add_plugins(BlurPlugin);
+        let image = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(Image::new_target_texture(
+                128,
+                128,
+                TextureFormat::Rgba8UnormSrgb,
+                None,
+            ));
+        let mut blur = BlurCamera {
+            count: 1,
+            ..default()
+        };
+        blur.rects[0] = BlurRect {
+            min_x: 8.,
+            max_x: 96.,
+            min_y: 8.,
+            max_y: 96.,
+            coc: 4.,
+            ..default()
+        };
+        let camera = app
+            .world_mut()
+            .spawn((
+                Camera2d,
+                Msaa::Off,
+                RenderTarget::Image(image.clone().into()),
+                SceneBlurCamera,
+                blur.clone(),
+            ))
+            .id();
+        let visible_blur = blur.clone();
+        test_support::start(&mut app);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            app.update();
+            if app
+                .sub_app(RenderApp)
+                .world()
+                .resource::<BlurIntermediatePool>()
+                .bind_groups
+                .entries
+                .len()
+                == 2
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "blur pipeline did not render"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let creations = |app: &App| {
+            app.sub_app(RenderApp)
+                .world()
+                .resource::<BlurIntermediatePool>()
+                .bind_groups
+                .bind_group_creations
+        };
+        // Reference allocation policy: discard bindings each frame, as the old
+        // implementation did. Both modes execute the same two real GPU passes.
+        let before = creations(&app);
+        for _ in 0..60 {
+            app.sub_app_mut(RenderApp)
+                .world_mut()
+                .resource_mut::<BlurIntermediatePool>()
+                .bind_groups
+                .entries
+                .clear();
+            app.update();
+        }
+        let reference = creations(&app) - before;
+        let before = creations(&app);
+        for _ in 0..60 {
+            app.update();
+        }
+        let reused = creations(&app) - before;
+        println!(
+            "regional blur / 60 warm frames: per-frame rebuild {reference}, reuse {reused} bind-group allocations"
+        );
+        assert_eq!((reference, reused), (120, 0));
+
+        let old_uniform = app
+            .sub_app(RenderApp)
+            .world()
+            .resource::<ComponentUniforms<BlurCamera>>()
+            .uniforms()
+            .buffer()
+            .unwrap()
+            .id();
+        for _ in 0..64 {
+            app.world_mut().spawn(BlurCamera::default());
+        }
+        for _ in 0..3 {
+            app.update();
+        }
+        let render = app.sub_app(RenderApp).world();
+        let uniform = render
+            .resource::<ComponentUniforms<BlurCamera>>()
+            .uniforms()
+            .buffer()
+            .unwrap()
+            .id();
+        assert_ne!(old_uniform, uniform);
+        assert!(
+            render
+                .resource::<BlurIntermediatePool>()
+                .bind_groups
+                .entries
+                .keys()
+                .all(|(_, id)| *id == uniform)
+        );
+
+        for (width, height) in [(2560, 1440), (64, 64)] {
+            let previous: Vec<_> = app
+                .sub_app(RenderApp)
+                .world()
+                .resource::<BlurIntermediatePool>()
+                .bind_groups
+                .entries
+                .keys()
+                .copied()
+                .collect();
+            app.world_mut()
+                .resource_mut::<Assets<Image>>()
+                .get_mut(&image)
+                .unwrap()
+                .resize(Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                });
+            for _ in 0..4 {
+                app.update();
+            }
+            let pool = app
+                .sub_app(RenderApp)
+                .world()
+                .resource::<BlurIntermediatePool>();
+            assert_eq!(pool.texture.as_ref().unwrap().size.width, width);
+            assert!(!pool.bind_groups.entries.is_empty());
+            assert!(
+                previous
+                    .iter()
+                    .all(|key| !pool.bind_groups.entries.contains_key(key))
+            );
+        }
+        // A nonempty authored rectangle fully outside the target needs no GPU
+        // intermediate; count alone is not a valid liveness test.
+        blur.rects[0].min_x = 100_000.;
+        blur.rects[0].max_x = 100_100.;
+        *app.world_mut().get_mut::<BlurCamera>(camera).unwrap() = blur;
+        app.update();
+        let pool = app
+            .sub_app(RenderApp)
+            .world()
+            .resource::<BlurIntermediatePool>();
+        assert!(pool.texture.is_none() && pool.bind_groups.entries.is_empty());
+        *app.world_mut().get_mut::<BlurCamera>(camera).unwrap() = visible_blur.clone();
+        app.update();
+        assert!(
+            app.sub_app(RenderApp)
+                .world()
+                .resource::<BlurIntermediatePool>()
+                .texture
+                .is_some()
+        );
+        // A camera carrying the uniform but not either pass marker is not a
+        // consumer and must not keep another camera's intermediate alive.
+        app.world_mut().spawn((
+            Camera2d,
+            Msaa::Off,
+            Camera {
+                order: 1,
+                ..default()
+            },
+            RenderTarget::Image(image.into()),
+            visible_blur,
+        ));
+        app.world_mut().get_mut::<Camera>(camera).unwrap().is_active = false;
+        for _ in 0..4 {
+            app.update();
+        }
+        let pool = app
+            .sub_app(RenderApp)
+            .world()
+            .resource::<BlurIntermediatePool>();
+        assert!(pool.texture.is_none() && pool.bind_groups.entries.is_empty());
+    }
 
     #[cfg(all(target_os = "macos", feature = "video-native"))]
     #[test]

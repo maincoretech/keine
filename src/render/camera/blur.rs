@@ -13,7 +13,7 @@ use bevy::render::extract_component::{
 use bevy::render::render_resource::{binding_types::*, *};
 use bevy::render::renderer::{RenderAdapter, RenderContext, RenderDevice, ViewQuery};
 use bevy::render::view::ViewTarget;
-use bevy::render::{RenderApp, RenderStartup};
+use bevy::render::{Render, RenderApp, RenderStartup, RenderSystems};
 use keine_core::{CameraTargets, PostProcessEffect};
 
 use crate::render::blur::SceneBlurCamera;
@@ -117,6 +117,10 @@ impl Plugin for CameraEffectsPlugin {
             RenderStartup,
             setup_camera_effects_pipeline.ambiguous_with_all(),
         );
+        render_app.add_systems(
+            Render,
+            retire_camera_effects_bind_groups.in_set(RenderSystems::PrepareBindGroups),
+        );
     }
 }
 
@@ -210,10 +214,37 @@ fn setup_camera_effects_pipeline(
         vertex: fullscreen_shader.to_vertex_state(),
     });
     commands.insert_resource(SpecializedRenderPipelines::<CameraEffectsPipeline>::default());
+    commands.insert_resource(CameraEffectsBindGroups::default());
 }
 
-#[derive(Default)]
-struct CameraEffectsBindGroups(Vec<(TextureViewId, BindGroup)>);
+#[derive(Resource, Default)]
+struct CameraEffectsBindGroups(Vec<(TextureViewId, BufferId, BindGroup)>);
+
+#[expect(
+    clippy::type_complexity,
+    reason = "only active stage views may retain bindings"
+)]
+fn retire_camera_effects_bind_groups(
+    mut cache: ResMut<CameraEffectsBindGroups>,
+    uniforms: Res<ComponentUniforms<CompositedCameraEffects>>,
+    views: Query<
+        (&ViewTarget, &CompositedCameraEffects),
+        (
+            With<SceneBlurCamera>,
+            With<bevy::render::camera::ExtractedCamera>,
+        ),
+    >,
+) {
+    let buffer = uniforms.uniforms().buffer().map(Buffer::id);
+    cache.0.retain(|(source, uniform, _)| {
+        Some(*uniform) == buffer
+            && views.iter().any(|(target, effects)| {
+                effects.is_active()
+                    && (*source == target.main_texture_view().id()
+                        || *source == target.main_texture_other_view().id())
+            })
+    });
+}
 
 #[derive(SystemParam)]
 struct CameraEffectsRenderResources<'w> {
@@ -232,7 +263,7 @@ fn run_camera_effects(
         Option<&SceneBlurCamera>,
     )>,
     mut resources: CameraEffectsRenderResources,
-    mut bind_groups: Local<CameraEffectsBindGroups>,
+    mut bind_groups: ResMut<CameraEffectsBindGroups>,
     mut context: RenderContext,
 ) {
     let (view_target, blur, uniform_index, marker) = view.into_inner();
@@ -267,20 +298,22 @@ fn run_camera_effects(
     let Some(uniform_binding) = resources.uniforms.uniforms().binding() else {
         return;
     };
+    let uniform_id = resources
+        .uniforms
+        .uniforms()
+        .buffer()
+        .expect("binding exists")
+        .id();
 
     // ViewTarget flips between two main textures. Retaining those two bind
     // groups removes a per-frame allocation; a resize introduces new view IDs,
     // at which point the stale pair is discarded so it cannot retain textures.
     let post_process = view_target.post_process_write();
     let source_id = post_process.source.id();
-    let existing = bind_groups
-        .0
-        .iter()
-        .position(|(texture_id, _)| *texture_id == source_id);
+    let existing = bind_groups.0.iter().position(|(texture_id, buffer_id, _)| {
+        *texture_id == source_id && *buffer_id == uniform_id
+    });
     let index = existing.unwrap_or_else(|| {
-        if bind_groups.0.len() >= 2 {
-            bind_groups.0.clear();
-        }
         let bind_group = context.render_device().create_bind_group(
             "camera_effects_bind_group",
             &resources.pipeline.layout,
@@ -290,7 +323,7 @@ fn run_camera_effects(
                 uniform_binding.clone(),
             )),
         );
-        bind_groups.0.push((source_id, bind_group));
+        bind_groups.0.push((source_id, uniform_id, bind_group));
         bind_groups.0.len() - 1
     });
 
@@ -308,13 +341,148 @@ fn run_camera_effects(
         multiview_mask: None,
     });
     pass.set_render_pipeline(render_pipeline);
-    pass.set_bind_group(0, &bind_groups.0[index].1, &[uniform_index.index()]);
+    pass.set_bind_group(0, &bind_groups.0[index].2, &[uniform_index.index()]);
     pass.draw(0..3, 0..1);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(target_os = "macos", feature = "video-native"))]
+    #[test]
+    #[ignore = "requires a real Metal device"]
+    fn camera_effects_release_bind_groups_without_running_camera_on_gpu() {
+        use crate::render::test_support;
+        use bevy::camera::RenderTarget;
+        let mut app = test_support::metal_app();
+        app.add_plugins((crate::render::blur::BlurPlugin, CameraEffectsPlugin));
+        let effect = PostProcessEffect {
+            sharpen_strength: 0.5,
+            ..default()
+        };
+        app.world_mut().resource_mut::<GameState>().camera_effect = effect.clone();
+        app.world_mut()
+            .resource_mut::<GameState>()
+            .camera_effect_targets = CameraTargets::ALL;
+        let image = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(Image::new_target_texture(
+                128,
+                128,
+                TextureFormat::Rgba8UnormSrgb,
+                None,
+            ));
+        let camera = app
+            .world_mut()
+            .spawn((
+                Camera2d,
+                Msaa::Off,
+                RenderTarget::Image(image.clone().into()),
+                SceneBlurCamera,
+                CompositedCameraEffects::from_effect(&effect, CameraTargets::ALL),
+            ))
+            .id();
+        test_support::start(&mut app);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            app.update();
+            if !app
+                .sub_app(RenderApp)
+                .world()
+                .resource::<CameraEffectsBindGroups>()
+                .0
+                .is_empty()
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "camera effects pipeline did not render"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let old_uniform = app
+            .sub_app(RenderApp)
+            .world()
+            .resource::<ComponentUniforms<CompositedCameraEffects>>()
+            .uniforms()
+            .buffer()
+            .unwrap()
+            .id();
+        for _ in 0..64 {
+            app.world_mut().spawn(CompositedCameraEffects::default());
+        }
+        for _ in 0..3 {
+            app.update();
+        }
+        let render = app.sub_app(RenderApp).world();
+        let uniform = render
+            .resource::<ComponentUniforms<CompositedCameraEffects>>()
+            .uniforms()
+            .buffer()
+            .unwrap()
+            .id();
+        assert_ne!(old_uniform, uniform);
+        let cache = render.resource::<CameraEffectsBindGroups>();
+        assert!(!cache.0.is_empty());
+        assert!(cache.0.iter().all(|(_, id, _)| *id == uniform));
+
+        let old_views: Vec<_> = cache.0.iter().map(|(id, _, _)| *id).collect();
+        app.world_mut()
+            .resource_mut::<Assets<Image>>()
+            .get_mut(&image)
+            .unwrap()
+            .resize(Extent3d {
+                width: 64,
+                height: 64,
+                depth_or_array_layers: 1,
+            });
+        for _ in 0..4 {
+            app.update();
+        }
+        let cache = app
+            .sub_app(RenderApp)
+            .world()
+            .resource::<CameraEffectsBindGroups>();
+        assert!(!cache.0.is_empty());
+        assert!(cache.0.iter().all(|(id, _, _)| !old_views.contains(id)));
+
+        app.world_mut().get_mut::<Camera>(camera).unwrap().is_active = false;
+        for _ in 0..4 {
+            app.update();
+        }
+        assert!(
+            app.sub_app(RenderApp)
+                .world()
+                .resource::<CameraEffectsBindGroups>()
+                .0
+                .is_empty()
+        );
+        app.world_mut().get_mut::<Camera>(camera).unwrap().is_active = true;
+        for _ in 0..4 {
+            app.update();
+        }
+        assert!(
+            !app.sub_app(RenderApp)
+                .world()
+                .resource::<CameraEffectsBindGroups>()
+                .0
+                .is_empty()
+        );
+        app.world_mut().despawn(camera);
+        for _ in 0..4 {
+            app.update();
+        }
+        assert!(
+            app.sub_app(RenderApp)
+                .world()
+                .resource::<CameraEffectsBindGroups>()
+                .0
+                .is_empty()
+        );
+    }
 
     fn blur_effect() -> PostProcessEffect {
         PostProcessEffect {

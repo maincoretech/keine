@@ -715,7 +715,99 @@ Suika 每帧同步等待不应照搬。横向图的包体积包含不同素材/S
 
 ### 内存、空闲与连续播放
 
-均为 M5 Pro / 24 GiB / macOS 27.0.1 / Metal、dev opt-level=1 的历史记录；
+窗口缩放的字体缓存回归使用 Bevy 0.19.1 的真实 `TextPipeline` 和内嵌 CJK 字体，
+同时跑未回收对照与生产回收策略。128 个不同缩放比例、相同文字，对照为
+134,217,728 CPU 像素字节 / 128 个字号 key；回收后为 33,554,432 字节 / 32 个 key，
+退役的 `Image` 资产也已移除。这是字体图集 payload 的 128 → 32 MiB，不是进程 RSS。
+原因是上游按精确浮点字号缓存图集，未自动淘汰旧字号；每张最小 RGBA 图集为 1 MiB，
+且同时保留 CPU 数据和 GPU 纹理。Runtime 在排版后按最近使用顺序回收闲置字号，
+CPU 图集预算 32 MiB；所有现存布局（含隐藏文字）引用的整组图集受保护，
+活跃工作集可超过预算。回收后保留三帧资产退役时间，再恢复空闲休眠。
+
+```sh
+cargo test --locked -p keine --all-features --lib ui::support::font_cache:: -- --nocapture
+cargo build --locked --bin keine --all-features
+# 本机真实工程副本；分别将保存的 keine-before / keine-after 复制到
+# Narcissu Probe.app/Contents/MacOS/memory-probe 后运行，不修改工程素材或存档。
+python3 target/performance/narcissu-memory/run.py before
+python3 target/performance/narcissu-memory/run.py after
+```
+
+回归另覆盖隐藏布局保护、活跃工作集超预算、布局删除后回收与资源退役后停止唤醒。
+本机 Narcissu 工程副本定位 `chapter_00:35`，原生三轮最大化/还原后文字正常；
+还原 1920×1080 时 RSS 196,288 KiB，footprint 266,159,400 B。这次原生短测只有
+两种最终尺寸，未触发 32 MiB 回收，不能据此主张进程 RSS 改善；高基数回收由上述排版回归覆盖。
+原始日志、命令和 2,382 个工程媒体文件的前后 SHA-256 核对保存在
+`target/performance/narcissu-memory/`；媒体无变化。该回归不代表 Windows/Linux
+原生窗口、长时阅读或整进程 200–300 MiB 的验收。
+
+图形缓冲回收补充覆盖“大尺寸菜单关闭、弹窗相机休眠、还原窗口”的路径。
+休眠/失效相机现在同时移除 `ViewTarget` 和 `ViewDepthTexture`，释放其颜色、深度及
+旧交换链视图引用；区域模糊中间纹理在没有匹配的活动使用者时退役，光学特效关闭后
+释放绑定组持有的源视图。窗口像素尺寸或活动相机集合变化后额外渲染四帧，让
+TextureCache 的三帧淘汰和提交收尾完成；后台剧情时钟仍暂停，收尾后恢复休眠。
+输出分辨率、纹理格式、采样、shader 和工程媒体均未修改。
+
+本机 M5 Pro / Metal、同一 Narcissu 工程副本从 `chapter_00:35` 启动，使用原生窗口
+最大化（窗口外框 5120×2700）、关闭设置菜单，再还原到 1920×1080。下列为一次配对
+采样的 physical footprint；RSS 同时留档，但受压缩/编译负载影响，不用于此组改善主张。
+
+| 还原后的分类 | 修复前 | 修复后 |
+| --- | ---: | ---: |
+| 进程 footprint | 509,248,832 B / 485.7 MiB | 321,602,904 B / 306.7 MiB |
+| unmapped graphics | 215,564,288 B / 205.6 MiB | 103,366,656 B / 98.6 MiB |
+| IOSurface | 80,576,512 B / 76.8 MiB | 25,460,736 B / 24.3 MiB |
+
+修复前再空闲约三分钟仍为 509,265,192 B；大尺寸关闭菜单后的 footprint 则为
+620,463,424 → 598,066,520 B。后者仍包含大尺寸输出所需资源，不能宣称全屏等于
+1080p 窗口的占用。修复版另一个同进程的两轮菜单缩放后，graphics / IOSurface 分别
+保持 103,366,656 / 25,460,736 B；总 footprint 344.7 → 352.8 MiB 的变化主要落在
+Malloc Small，不能据此宣称整进程完全不增长。
+
+```sh
+# 使用保存的 keine-graphics-before / keine-graphics-after；窗口操作通过 Computer Use 完成。
+python3 target/performance/narcissu-memory/launch-graphics.py before
+python3 target/performance/narcissu-memory/launch-graphics.py after
+probe_pid=$(cat target/performance/narcissu-memory/graphics-after-native.pid)
+ps -p "$probe_pid" -o pid,rss,etime,command
+footprint -p "$probe_pid" -f bytes
+cargo test --locked -p keine --all-features --lib inactive_camera_releases_render_targets_on_gpu -- --ignored --nocapture
+cargo test --locked -p keine --all-features --lib target_retirement_finishes_in_background -- --nocapture
+cargo test --locked -p keine --all-features --lib on_gpu -- --ignored --nocapture
+```
+
+`graphics-gpu-before.log` 使用同一合法渲染目标回归，在未修相机提取逻辑上确认颜色/深度
+附件仍存在；修复后释放并能按新尺寸唤醒。窗口大小、打开/关闭菜单及对白已在本机原生
+检查，Gaussian 边界和 source-over Metal 回归通过。原始命令、二进制和分类采样位于
+`target/performance/narcissu-memory/graphics-*`。未验证 Windows/Linux 原生缩放、
+长时剧情或 device-loss；这次没有新的打包/发行验收。
+
+区域模糊的绑定组现在按源纹理视图与 uniform buffer 的实际 ID 复用，保留范围仅为
+仍运行该 pass 的活动相机和当前中间纹理。无可见处理区域、目标尺寸/缓冲更换及
+相机休眠后清理旧绑定；光学特效的绑定缓存也在 render prepare 阶段回收，
+不依赖相机继续执行才能释放。输出尺寸、格式、采样和 shader 均保持原样。
+
+真实 Metal 回归中，60 个稳定帧的每帧丢弃绑定组对照（等价于原来两次创建）为
+120 次分配，复用后新增 0 次。两种策略执行相同的两次模糊 pass；这只是分配计数，
+不是整游戏 RSS、CPU 或 FPS 改善。另覆盖 uniform 扩容、2560×1440 / 64×64
+切换、屏幕外区域、无 pass 标记的相机，以及光学相机停用、恢复和销毁。
+素材预取仍按既有字节预算管理，字体预算保护活动布局，存档预览保留当前页，
+视频继续使用有界队列；本轮没有调整素材解码规格或增加 1080p 缓存上限。
+
+```sh
+cargo test --locked -p keine --all-features --lib on_gpu -- --ignored --nocapture
+cargo check --workspace --locked --all-targets --all-features
+cargo clippy --workspace --locked --all-targets --all-features -- -D warnings
+```
+
+命令、分配计数和检查日志保存在 `target/performance/postprocess-cache/`。
+本机 Narcissu 测试副本已检查正常窗口、最大化及还原后的背景/对白画面；
+菜单点击被 Computer Use 的 `noWindowsAvailable` 阻断，未计为菜单人工验收通过。
+工作区全功能 / publisher-only 测试及五项 Metal 回归通过，native-smoke 校验通过，
+2,382 个工程媒体文件 SHA-256 均未变化；未做新的发行打包验收。
+Windows/Linux 原生运行、长时压力与真实 device-loss 仍未验收。
+
+下列为 M5 Pro / 24 GiB / macOS 27.0.1 / Metal、dev opt-level=1 的历史记录；
 窗口 1920×1080 @1×。physical footprint 与 RSS 分别采集，不能混称 RAM。
 
 | 观察 / 改动 | 结果 | 原始目录（`target/performance/` 下） |
@@ -730,7 +822,7 @@ Suika 每帧同步等待不应照搬。横向图的包体积包含不同素材/S
 CG 输出 RGBA 245.2 → 69.8 MiB 是像素 payload，不是进程内存；顺序解码
 211.7 → 225.1 ms（+6.4%，每图约 +0.43 ms），不能宣称 codec 更快。
 页面仍并行加载，首开全屏原图改为按需加载；低端设备、冷包和 2× 设备延迟尚未验收。
-三帧收尾使资源退役得以完成，不清空字体/模糊/allocator 缓存；缓存保留与泄漏不能凭单点占用区分。
+当时的三帧收尾使资源退役得以完成，不清空字体/模糊/allocator 缓存；缓存保留与泄漏不能凭单点占用区分。
 
 ```sh
 # 使用各实验保存的输入、副本、before/after binary 和本地测试 app。

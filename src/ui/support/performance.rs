@@ -160,6 +160,7 @@ type CaptureCameraQuery<'w, 's> = Query<
 
 #[derive(SystemParam)]
 struct RuntimeCaptureDiagnostics<'w, 's> {
+    font_atlases: Res<'w, bevy::text::FontAtlasSet>,
     diagnostics: Res<'w, DiagnosticsStore>,
     render_device: Res<'w, RenderDevice>,
     images: Res<'w, Assets<Image>>,
@@ -822,6 +823,10 @@ fn capture_runtime_performance(
     if let Some(adapter) = adapter {
         log::info!(target: "keine::performance", "GPUINFO  | {adapter}");
     }
+    log::info!(target: "keine::performance", "FONT_CACHE | {} font/size keys · {} atlases · {} CPU pixel bytes",
+        capture.font_atlases.len(),
+        capture.font_atlases.values().map(Vec::len).sum::<usize>(),
+        capture.font_atlases.total_bytes(&capture.images));
     if let Ok((entity, window)) = capture.windows.single() {
         let refresh_hz = WINIT_WINDOWS.with_borrow(|windows| {
             windows

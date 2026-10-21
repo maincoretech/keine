@@ -12,7 +12,8 @@ use crate::{
     view::{
         ColorGrading, ExtractedView, ExtractedWindows, Msaa, NoIndirectDrawing,
         RenderExtractedVisibleEntities, RenderVisibleEntities, RenderVisibleEntitiesClass,
-        RetainedViewEntity, ViewUniformOffset, VisibilityExtractionSystemParam,
+        RetainedViewEntity, ViewDepthTexture, ViewTarget, ViewUniformOffset,
+        VisibilityExtractionSystemParam,
     },
     Extract, ExtractSchedule, Render, RenderApp, RenderSystems,
 };
@@ -519,6 +520,10 @@ pub fn extract_cameras(
         Projection,
         NoIndirectDrawing,
         ViewUniformOffset,
+        // Inactive/invalid cameras must release their attachments too. In
+        // particular an output view can otherwise pin a retired swapchain.
+        ViewTarget,
+        ViewDepthTexture,
     );
 
     for (
