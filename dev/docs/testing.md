@@ -11,6 +11,8 @@
 - Linux 需要 ALSA、Fontconfig、udev、Wayland、XKB 开发库；FFmpeg feature 另需
   avcodec/avformat/avutil/swscale/swresample。Windows 使用匹配架构的 FFmpeg vcpkg SDK。
   可复用的安装清单以 [`setup-video`](../../.github/actions/setup-video/action.yml) 为准。
+- FFmpeg 绑定的构建脚本在 16 MiB 栈的工作线程上运行，避免 Windows 主线程栈溢出；
+  本地与显式 `--target` 构建共用此修复，见 [FFmpeg patch](../vendor/ffmpeg-sys-next/KEINE-PATCH.md)。
 - Android 的 SDK/NDK/JDK 与构建步骤由 [Android guide](android.md) 维护；不启用视频 feature。
 - Editor Preview 启动已构建的 Engine，不自动执行 Cargo。开发时 `target/debug/editor`
   和 `target/debug/keine` 应来自同一源码；覆盖路径及发现规则见 [Editor](editor.md#engine)。
