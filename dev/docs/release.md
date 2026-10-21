@@ -339,6 +339,22 @@ features 查询，不能用锁文件包数推断运行时体积。
 GPUI 的 macOS 依赖链仍含 `block 0.1.6` 的 `uninhabited_static` 未来兼容性警告；
 当前 Rust 1.99 可构建，应随上游 Cocoa/Metal 绑定迁移处理，不新增本地 FFI 替代层。
 
+证书撤销事件还需检查构建工具和系统信任库，更新 Rust 锁文件不能替代它们。
+2026-10 的 eMudhra 事件对应 [RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382.html)：
+`rustls-webpki` 至少使用 0.103.16。当前该依赖来自 GPUI 的 wasm 可选资源下载路径，
+桌面和 Android 发行未启用该路径；锁文件仍保留修复版。
+Linux SDK 安装同时更新 `ca-certificates`；其他平台还需核对 runner 镜像和下载工具各自使用的信任库。
+固定 SHA 和 Cargo 校验和继续保留，不以关闭 TLS 校验解决下载失败。
+macOS 自带 `curl` 可能仍使用旧 PEM 信任库，不能只看系统更新状态。
+使用 Homebrew 的维护者可先更新 `ca-certificates`，再在当前终端为下载工具指定它：
+
+```sh
+brew upgrade ca-certificates
+export CURL_CA_BUNDLE="$(brew --prefix)/etc/ca-certificates/cert.pem"
+export CARGO_HTTP_CAINFO="$CURL_CA_BUNDLE"
+export GIT_SSL_CAINFO="$CURL_CA_BUNDLE"
+```
+
 - `CI` 每日 UTC 02:17（北京时间 10:17）仅审计依赖；每周一 UTC 03:17 另跑媒体安全。
   定时任务不编译桌面/Android 或发布 Editor，手动审计选择 `checks: dependencies`。
   GitHub 的定时任务可能延迟；长期无活动的公开仓库也可能停用 schedule，维护者须留意

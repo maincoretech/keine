@@ -155,7 +155,7 @@ ffmpeg-next = { version = "9.0", default-features = false, features = ["codec", 
 tempfile = "3"
 winit = { version = "0.30.13", default-features = false }
 wgpu = { version = "29.0.4", default-features = false, features = ["metal"] }
-gpui-kit = { version = "=0.6.4" }
+gpui-kit = { version = "=0.6.6" }
 image = { version = "0.25.10", default-features = false }
 
 # Bevy 0.19.1 requests synthetic macOS redraws from `about_to_wait`. The local

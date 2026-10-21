@@ -18,7 +18,7 @@ allow = [
 # These are the Rust wrappers; the linked FFmpeg libraries have separate terms.
 exceptions = [
     { crate = "ffmpeg-next@9.0.0", allow = ["WTFPL"] },
-    { crate = "ffmpeg-sys-next@9.0.0", allow = ["WTFPL"] },
+    { crate = "ffmpeg-sys-next@9.0.1", allow = ["WTFPL"] },
     { crate = "keine", allow = ["LicenseRef-Defold-1.0"] },
     { crate = "keine-core", allow = ["LicenseRef-Defold-1.0"] },
     { crate = "keine-loader", allow = ["LicenseRef-Defold-1.0"] },

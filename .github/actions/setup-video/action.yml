@@ -20,6 +20,7 @@ runs:
       run: |
         # GPUI's Linux backend links Fontconfig and XKB through pkg-config.
         packages=(
+          ca-certificates
           libasound2-dev
           libfontconfig-dev
           libudev-dev
