@@ -141,6 +141,9 @@ benchmark 相机组合更新，场景与 UI 的渲染和区域模糊仍按原顺
 Editor 通过显式开始/停止控制独立原生 Engine；Block 与执行位置双向同步。
 失去窗口焦点不会代替停止指令。
 
+菜单、Backlog、鉴赏和弹窗暂停 Tick 时，未完成的打字、演出和眨眼等待不持续请求重绘。
+UI 动画、输入、媒体/粒子及实时 shader 保留各自的唤醒条件；返回舞台后恢复原演出计时。
+
 实验性 Android Engine 使用系统 NativeActivity 与现有 runtime，平台入口集中在
 `runtime/android.rs`；游戏 APK 的加密内容通过有界 AssetManager 文件描述符只读挂载，
 不复制整份资源。引擎测试包仍读取私有 files/game，存档按 `project.id` 隔离。

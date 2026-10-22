@@ -657,6 +657,39 @@ Kēne 同一万条文本的解析 + Program 构建为 6.708 ms。此表不含输
 在 `target/performance/script-0163/`：`summary.json`、`optimization.json`、`metrics.json`、
 `manifest.json`、`commands.txt`、`build-and-bench-commands.txt`。测试资料不进入发行包。
 
+### 静态菜单的重复重绘
+
+`8319be9` 与本轮调度修复工作区；Apple M5 Pro / 24 GiB / macOS 27.0.1 / Metal，
+dev opt-level=1，1280×720 @1×。临时项目复用 native-benchmark 的 day.webp，
+在非阻塞镜头移动中执行 `ui.show(settings)`，得到暂停演出、背景静止的真实菜单。
+正常打字与页签切换时仍执行场景合成和区域模糊；本轮未引入画面像素缓存。
+
+| 原生窗口、60 秒采样中的稳定 10 秒区间（elapsed 50–60s） | 重绘提交数 | 最后观察到的状态 |
+| --- | ---: | --- |
+| 原版 | 1,135 | 前台 Active |
+| 调度修复 | 0 | 前台 Idle；仅事件/采样期限唤醒 |
+
+期间显示环境从 144 Hz 切换为 60 Hz，因此这组数据只证明静止菜单从持续提交变为休眠，
+不比较单帧 GPU 耗时、输入延迟、CPU 百分比或显示 FPS。没有新帧不能写成 GPU 每帧耗时 0。
+原版把已经被菜单暂停的打字、演出和眨眼计时仍算作动画；修复使生命周期与 Tick 的输入域一致。
+UI 动画以及媒体、粒子和时变 shader 继续请求绘制，返回舞台后恢复原有播放。
+
+```sh
+cargo build --locked --bin keine --features hot-reload,video-native,video-ffmpeg
+python3 target/performance/static-ui/measure.py before paused acceptance 60 runtime
+python3 target/performance/static-ui/measure.py after paused acceptance 60 runtime
+```
+
+两个二进制采用相同 feature；命令、哈希、临时项目、Metal 数据及逐帧 trace 保存在
+`target/performance/static-ui/`，汇总为 `final-results.json`。着色器编译失败、失焦和不同
+尺寸的探索样本未混入上述区间；完整高斯核与少量系数预计算候选均撤回，未宣称稳定收益。
+
+扩展现有生命周期回归，覆盖四种菜单输入域中的暂停对白/计时/眨眼、UI 与 shader 唤醒和返回舞台。
+工作区 all-features check、Clippy、测试（1,140 passed / 28 ignored）、无默认 feature 的 publisher
+check、native-smoke 校验及另行执行的五项真实 Metal 回归通过。macOS 原生窗口检查了打字、菜单
+模糊、页签与返回舞台；滑块自动化未产生有效数值变化，未计为拖动验收。其他平台、长时压力和
+新的发行包本轮未验收。
+
 ### GPU 合成与模糊
 
 0.15.4–0.15.5 工作区；Apple M5 Pro / 24 GiB / macOS 27.0.1 / Metal，

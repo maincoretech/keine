@@ -529,7 +529,12 @@ pub(crate) fn update_lifecycle(
     let auto_hide = context
         .auto_hide
         .lifecycle(context.real_time.elapsed_secs(), &context.toggles);
-    let blink_wait = blink_idle_wait(&context.state, virtual_time.max_delta());
+    let playback_enabled = *context.input_scope == crate::ui::input_scope::UiInputScope::Stage;
+    let blink_wait = if playback_enabled {
+        blink_idle_wait(&context.state, virtual_time.max_delta())
+    } else {
+        IDLE_WAIT
+    };
     let mut reactive_wait = auto_hide.1.min(IDLE_WAIT).min(blink_wait).min(
         context
             .input_caret
@@ -550,7 +555,7 @@ pub(crate) fn update_lifecycle(
     } else if context.loading.blocked {
         RuntimeActivity::Loading
     } else if preview_settling
-        || core_is_animating(&context.state, &mut dialogue_length)
+        || core_is_animating(&context.state, &mut dialogue_length, playback_enabled)
         || context.ui.0
         || context.audio.0
         || (*context.input_scope == crate::ui::input_scope::UiInputScope::Stage
@@ -710,7 +715,23 @@ fn blink_idle_wait(state: &GameState, max_delta: std::time::Duration) -> std::ti
         .unwrap_or(IDLE_WAIT)
 }
 
-fn core_is_animating(state: &GameState, dialogue_length: &mut DialogueLengthCache) -> bool {
+fn core_is_animating(
+    state: &GameState,
+    dialogue_length: &mut DialogueLengthCache,
+    playback_enabled: bool,
+) -> bool {
+    if !playback_enabled {
+        // Tick suspends script-owned presentation outside Stage. Only visuals
+        // with a media, particle or shader clock still need scene redraws.
+        return !state.videos.is_empty()
+            || !state.particle_effects.is_empty()
+            || state.bg_films.is_time_varying()
+            || state.camera_effect.is_time_varying()
+            || state
+                .sprites
+                .values()
+                .any(|sprite| sprite.films.is_time_varying());
+    }
     state
         .dialogue
         .as_ref()
@@ -1145,7 +1166,7 @@ mod tests {
     }
 
     fn is_animating(state: &GameState) -> bool {
-        core_is_animating(state, &mut DialogueLengthCache::default())
+        core_is_animating(state, &mut DialogueLengthCache::default(), true)
     }
 
     #[test]
@@ -1584,18 +1605,18 @@ mod tests {
             },
         );
         let mut length = DialogueLengthCache::default();
-        assert!(!core_is_animating(&state, &mut length));
+        assert!(!core_is_animating(&state, &mut length, true));
         assert_eq!(
             blink_idle_wait(&state, std::time::Duration::from_millis(250)),
             std::time::Duration::from_millis(250)
         );
         state.sprite_sequences.get_mut("eyes").unwrap().elapsed = 3.0;
-        assert!(core_is_animating(&state, &mut length));
+        assert!(core_is_animating(&state, &mut length, true));
         state.sprite_sequences.get_mut("eyes").unwrap().playback =
             Some(keine_core::SequencePlayback::Talk {
                 speaker: "Hero".into(),
             });
-        assert!(!core_is_animating(&state, &mut length));
+        assert!(!core_is_animating(&state, &mut length, true));
         assert_eq!(
             blink_idle_wait(&state, std::time::Duration::from_millis(250)),
             IDLE_WAIT
@@ -1764,6 +1785,35 @@ mod tests {
             RuntimeActivity::Active
         );
         assert!(!app.world().resource::<Time<Virtual>>().is_paused());
+        // Opening a menu mid-line freezes tick's clocks. Pending text, a
+        // timed wait and a resting blink must not keep redrawing its backdrop.
+        {
+            let mut state = app.world_mut().resource_mut::<GameState>();
+            state.dialogue = Some(keine_core::state::Dialogue {
+                speaker: String::new(),
+                speaker_color: None,
+                text: "unfinished dialogue".into(),
+                markup: "unfinished dialogue".into(),
+                visible_chars: 1,
+                pauses: Vec::new(),
+                vocal: None,
+                volume: 1.0,
+                auto_advance: false,
+            });
+            state.wait_remaining = 0.5;
+            state.sprite_sequences.insert(
+                "eyes".into(),
+                keine_core::SpriteSequenceState {
+                    frames: vec!["open".into(), "closed".into()],
+                    fps: 10.0,
+                    looped: true,
+                    elapsed: 0.0,
+                    frame: 0,
+                    frame_durations: Vec::new(),
+                    playback: Some(keine_core::SequencePlayback::Blink { interval: 3.0 }),
+                },
+            );
+        }
         for scope in [
             crate::ui::input_scope::UiInputScope::Menu,
             crate::ui::input_scope::UiInputScope::Backlog,
@@ -1778,6 +1828,7 @@ mod tests {
                 RuntimeActivity::Idle
             );
             assert!(app.world().resource::<ToggleStates>().auto);
+            assert!(app.world().resource::<Time<Virtual>>().is_paused());
             app.world_mut().resource_mut::<UiAnimationActivity>().0 = true;
             app.world_mut().run_system_once(update_lifecycle).unwrap();
             assert_eq!(
@@ -1785,11 +1836,38 @@ mod tests {
                 RuntimeActivity::Active
             );
             app.world_mut().resource_mut::<UiAnimationActivity>().0 = false;
+            // Shader-clock effects still animate behind the same menu.
+            app.world_mut()
+                .resource_mut::<GameState>()
+                .camera_effect
+                .film_grain_intensity = 0.5;
+            app.world_mut().run_system_once(update_lifecycle).unwrap();
+            assert_eq!(
+                *app.world().resource::<RuntimeActivity>(),
+                RuntimeActivity::Active
+            );
+            app.world_mut()
+                .resource_mut::<GameState>()
+                .camera_effect
+                .film_grain_intensity = 0.0;
         }
         *app.world_mut()
             .resource_mut::<crate::ui::input_scope::UiInputScope>() =
             crate::ui::input_scope::UiInputScope::Stage;
         app.world_mut().resource_mut::<ToggleStates>().auto = false;
+        app.world_mut().run_system_once(update_lifecycle).unwrap();
+        assert_eq!(
+            *app.world().resource::<RuntimeActivity>(),
+            RuntimeActivity::Active,
+            "returning to Stage resumes the unfinished line"
+        );
+        assert!(!app.world().resource::<Time<Virtual>>().is_paused());
+        {
+            let mut state = app.world_mut().resource_mut::<GameState>();
+            state.dialogue = None;
+            state.wait_remaining = 0.0;
+            state.sprite_sequences.clear();
+        }
         for (infinite, elapsed, expected) in [
             (true, 0.0, RuntimeActivity::Active),
             (true, 0.5, RuntimeActivity::Idle),
