@@ -108,15 +108,21 @@ pub(crate) fn animate(
     let amount = exp_lerp(time.delta_secs(), UI_MOTION_RATE);
     let mut progress = None;
     for (entity, mut motion, mut transform) in &mut context.roots {
-        motion.current += (motion.target - motion.current) * amount;
-        if motion.target == 0.0 && motion.current <= 0.05
-            || (motion.target - motion.current).abs() < 0.001
-        {
-            motion.current = motion.target;
+        let mut current = motion.current + (motion.target - motion.current) * amount;
+        if motion.target == 0.0 && current <= 0.05 || (motion.target - current).abs() < 0.001 {
+            current = motion.target;
         }
-        let eased = smoothstep(motion.current);
-        transform.translation = Val2::px(31.5 * (1.0 - eased), 0.0);
-        transform.scale = Vec2::ONE;
+        if motion.current != current {
+            motion.current = current;
+        }
+        let eased = smoothstep(current);
+        let translation = Val2::px(31.5 * (1.0 - eased), 0.0);
+        if transform.translation != translation {
+            transform.translation = translation;
+        }
+        if transform.scale != Vec2::ONE {
+            transform.scale = Vec2::ONE;
+        }
         progress = Some((entity, eased));
         if motion.current == 0.0 && motion.target == 0.0 {
             commands.entity(entity).despawn();
@@ -132,8 +138,11 @@ pub(crate) fn animate(
             watermark.set_progress(progress);
         }
         for (entity, mut strength, mut background) in &mut context.proxies {
-            strength.0 = crate::ui::FULLSCREEN_BLUR_STRENGTH * progress;
-            background.0 = Color::srgba(0.0, 0.0, 0.0, 0.6 * progress);
+            let blur = crate::ui::FULLSCREEN_BLUR_STRENGTH * progress;
+            if strength.0 != blur {
+                strength.0 = blur;
+            }
+            background.set_if_neq(BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6 * progress)));
             // Zero progress also occurs on the first opening frame. Only
             // tear down the backdrop when the screen has finished closing.
             if !ui.open && progress == 0.0 {
@@ -233,22 +242,29 @@ pub(crate) fn update_sections(
     mut grids: Query<(Entity, &ExtraCgGrid, &mut UiTransform), Without<ExtraPanel>>,
     mut commands: Commands,
 ) {
-    if !ui.open {
+    if !ui.open && (transition.is_animating() || transition.elapsed != 0.0) {
         *transition = ExtraPageTransition::default();
     }
     if transition.is_animating() {
         transition.elapsed = (transition.elapsed + time.delta_secs()).min(PAGE_SLIDE_SECONDS);
     }
     let progress = transition.elapsed / PAGE_SLIDE_SECONDS;
+    if progress >= 1.0 && transition.is_animating() {
+        transition.from = None;
+        transition.cg_direction = 0.0;
+    }
     for (panel, mut node, mut transform) in &mut panels {
         let outgoing = transition.from == Some(panel.0);
         let incoming = ui.section == panel.0;
-        node.display = if incoming || outgoing {
+        let display = if incoming || outgoing {
             Display::Flex
         } else {
             Display::None
         };
-        transform.translation = if transition.from.is_some() {
+        if node.display != display {
+            node.display = display;
+        }
+        let translation = if transition.from.is_some() {
             horizontal_page_offset(
                 outgoing,
                 if ui.section == ExtraSection::Music {
@@ -261,27 +277,21 @@ pub(crate) fn update_sections(
         } else {
             Val2::ZERO
         };
-    }
-    for (entity, grid, mut transform) in &mut grids {
-        if transition.cg_direction != 0.0 && progress < 1.0 {
-            transform.translation =
-                horizontal_page_offset(grid.outgoing, transition.cg_direction, progress);
-        } else if grid.outgoing {
-            commands.entity(entity).despawn();
-        } else {
-            transform.translation = Val2::ZERO;
+        if transform.translation != translation {
+            transform.translation = translation;
         }
     }
-    if progress >= 1.0 {
-        transition.from = None;
-        transition.cg_direction = 0.0;
-        for (panel, mut node, mut transform) in &mut panels {
-            node.display = if ui.section == panel.0 {
-                Display::Flex
-            } else {
-                Display::None
-            };
-            transform.translation = Val2::ZERO;
+    for (entity, grid, mut transform) in &mut grids {
+        let translation = if transition.cg_direction != 0.0 && progress < 1.0 {
+            horizontal_page_offset(grid.outgoing, transition.cg_direction, progress)
+        } else if grid.outgoing {
+            commands.entity(entity).despawn();
+            continue;
+        } else {
+            Val2::ZERO
+        };
+        if transform.translation != translation {
+            transform.translation = translation;
         }
     }
 }
@@ -310,16 +320,25 @@ pub(crate) fn animate_full_cg(
     mut commands: Commands,
 ) {
     for (entity, mut motion, mut transform, mut background) in &mut full {
-        motion.current +=
-            (motion.target - motion.current) * exp_lerp(time.delta_secs(), UI_MOTION_RATE);
-        if (motion.current - motion.target).abs() < 0.001
-            || motion.target == 0.0 && motion.current < 0.05
-        {
-            motion.current = motion.target;
+        let mut current = motion.current
+            + (motion.target - motion.current) * exp_lerp(time.delta_secs(), UI_MOTION_RATE);
+        if (current - motion.target).abs() < 0.001 || motion.target == 0.0 && current < 0.05 {
+            current = motion.target;
         }
-        let progress = smoothstep(motion.current);
-        transform.scale = Vec2::splat(0.99 + progress * 0.01);
-        background.0 = Color::srgba(0.0, 0.0, 0.0, 0.72 * progress);
+        if motion.current != current {
+            motion.current = current;
+        }
+        let progress = smoothstep(current);
+        let scale = Vec2::splat(0.99 + progress * 0.01);
+        if transform.scale != scale {
+            transform.scale = scale;
+        }
+        background.set_if_neq(BackgroundColor(Color::srgba(
+            0.0,
+            0.0,
+            0.0,
+            0.72 * progress,
+        )));
         fade_extra_content(entity, progress, &mut fade, &mut cache);
         if progress == 0.0 && motion.target == 0.0 {
             commands.entity(entity).despawn();

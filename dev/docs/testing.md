@@ -690,6 +690,133 @@ check、native-smoke 校验及另行执行的五项真实 Metal 回归通过。m
 模糊、页签与返回舞台；滑块自动化未产生有效数值变化，未计为拖动验收。其他平台、长时压力和
 新的发行包本轮未验收。
 
+### 对白与音乐进度的重复 UI 写入
+
+`b098232` 与本轮工作区；Apple M5 Pro / 24 GiB / macOS 27.0.1，test opt-level=1、
+all-features。只测无窗口 Bevy `App.update` 中的动画/透明度或进度系统及变化计数器，
+不含布局、渲染、音频和 GPU。预热 100 次，文本测 20,000 次，音乐测 100,000 次；
+以下为三组交替前后测试的中位数，桌面未隔离。
+
+| 场景 | 修改前 → 后（µs/update） | 每次更新的组件写入 |
+| --- | ---: | --- |
+| 80 字，仅一字淡入 | 1.935 → 1.956 | TextColor 80 → 1 |
+| 320 字，仅一字淡入 | 3.313 → 3.291 | TextColor 320 → 1 |
+| 1,000 字，仅一字淡入 | 7.110 → 6.966 | TextColor 1,000 → 1 |
+| 音乐进度固定 | 1.576 → 1.532 | Text/Node/BackgroundColor (1,2,1) → (0,0,0) |
+
+合成测试用很长的淡入时间保持一个活动字形，不代表正常播放速度。已稳定的对白在修改前后
+都不写颜色。保留的改动减少无效变更通知；普通对白耗时没有稳定改善，未据此宣称 GPU 或
+整帧性能提升。额外的活动字形标记方案已撤回，收益不足以抵消生命周期维护成本。
+
+```sh
+cargo test --locked --lib --all-features perf_ui_ --no-run
+# 保存带相同临时测量模块的前后测试二进制后，各交替运行三次：
+target/performance/ui-updates/probe-before perf_ui_ --ignored --nocapture --test-threads=1
+target/performance/ui-updates/probe-final perf_ui_ --ignored --nocapture --test-threads=1
+```
+
+临时测量模块、原版源文件、命令、原始日志、二进制哈希与 `results.json` 保存在
+`target/performance/ui-updates/`，不进入发行包。正式回归覆盖单字与全局淡入、
+新文本的透明度、亚秒进度移动、拖动/悬停状态及同一秒内重建时间标签。
+工作区 all-features check、Clippy、测试（1,142 passed / 28 ignored）、无默认 feature 的
+publisher check 与原生构建通过。macOS 窗口确认了打字淡入、隐藏/恢复对白、菜单模糊、
+音乐播放/暂停、点击跳转进度与恢复播放；拖动工具未产生有效位移，不计为拖动验收。
+CG 空提示居中、单页隐藏分页及两页翻页已检查。其他平台未实测。
+
+### 鉴赏动画结束后的重复写入
+
+沿用上述机器和 test opt-level=1 / all-features 配置。前版包含上面的对白与进度改动；
+同一无窗口系统测量方法，预热 100 次、测量 100,000 次，三组交替前后测试取中位数。
+稳定状态下只在值变化时写入；动画曲线、模糊强度公式、轮询频率和输入处理不变。
+
+| 单独测量的系统 | 修改前 → 后（µs/update） | 稳定帧的相关组件变更数 |
+| --- | ---: | ---: |
+| CG/音乐页切换（两面板、一网格） | 1.574 → 1.570 | 5 → 0 |
+| 鉴赏页淡入（根节点、模糊层） | 1.605 → 1.590 | 4 → 0 |
+| 全屏 CG 淡入 | 1.713 → 1.563 | 3 → 0 |
+| 音乐不可用状态（无音源） | 2.987 → 2.975 | 3 → 0 |
+
+计数范围为 Node、UiTransform、BlurStrength、BackgroundColor、LocalizedText、
+ExtraBgmPlayer、ExtraMotion，未表示整个鉴赏页不再更新。耗时很小且存在波动；
+保留这些简单比较以减少无效组件变更，不据此推导 GPU、帧率或交互延迟改善。
+状态样本包含 AssetPlugin，但不播放音频；所有样本均不含布局与渲染。
+
+```sh
+cargo test --locked --lib --all-features perf_extra_ --no-run
+# 用相同临时模块构建并保存前后测试二进制，各交替运行三次：
+target/performance/extra-settled/probe-before perf_extra_ --ignored --nocapture --test-threads=1
+target/performance/extra-settled/probe-after perf_extra_ --ignored --nocapture --test-threads=1
+```
+
+原版源文件、临时测量模块、命令、原始日志及二进制哈希位于
+`target/performance/extra-settled/`，汇总为 `results.json`。正式回归覆盖双向页签切换、
+动画结束后的新节点、模糊层关闭清理、全屏 CG 关闭，以及音乐失败/加载/停止状态与重建标签。
+工作区 all-features check、Clippy、测试（1,144 passed / 28 ignored）和无默认 feature 的
+publisher check 通过。macOS 原生窗口确认模糊、CG 翻页/打开/关闭、双向页签切换、
+音乐播放/暂停/停止及点击跳转进度；之后翻页文字改为内嵌左右图标，再构建并验证两个方向的点击。
+没有新增 GPU 耗时或跨平台实测结论。
+
+### 标题、菜单与设置的稳定帧
+
+继续审查标题、菜单、存读档、Backlog、输入路由及场景/音频同步。删除标题根节点每帧
+重复的固定布局赋值；动画稳定后停止重复写入；按钮字重只在选择状态改变时写入，设置数值只在
+设置变化或新标签加入时格式化。沿用现有状态与 Bevy 变化检测，没有增加缓存或调度层。
+背景、立绘、音频与 Editor 文档索引已有更新门控，本轮未改动这些模块。
+
+沿用上述环境与无窗口测量方式，100 次预热、100,000 次更新，三组交替测量取中位数。
+前版为本轮标题/菜单调整前的工作区，已包含上述对白及鉴赏优化。
+
+| 系统样本 | 前 → 后（µs/update） | 稳定帧相关变更数 |
+| --- | ---: | ---: |
+| 关闭的标题继续预览 | 1.555 → 1.515 | 3 → 0 |
+| 菜单面板与模糊层 | 1.550 → 1.551 | 3 → 0 |
+| 存读档单网格 | 1.487 → 1.487 | 1 → 0 |
+| Backlog 静止滚动容器 | 1.545 → 1.540 | 2 → 0 |
+| 16 个稳定设置按钮 | 1.710 → 1.743 | 16 → 0 |
+| 7 个设置数值标签 | 1.880 → 1.538 | 0 → 0 |
+
+计数针对各样本的 Node、TextColor、UiTransform、BackgroundColor，以及按钮的
+SettingChoiceVisual 或滚动容器的 ScrollPosition。最后一项减少字符串格式化，原本就没有
+无效 Text 写入。耗时接近系统调度开销，部分结果有回退或波动；收益主要是减少无效更新，
+没有证据表明整帧或 GPU 耗时改善。
+
+```sh
+cargo test --locked --lib --all-features perf_audit_ --no-run
+# 相同临时探针分别构建前后版本，再交替运行三次：
+target/performance/ui-audit/probe-before-v2 perf_audit_ --ignored --nocapture --test-threads=1
+target/performance/ui-audit/probe-after-v2 perf_audit_ --ignored --nocapture --test-threads=1
+```
+
+前后源码、临时探针、命令脚本、日志、二进制哈希与 `results.json` 保存在
+`target/performance/ui-audit/`。v2 修正了初版 Backlog 样本默认阻塞输入的问题，并补充了
+按钮状态计数；上表使用 v2。临时探针不保留在生产源码中。
+正式回归覆盖按钮字重、重建设置标签、菜单关闭/重开及模糊恢复、继续预览悬停、翻页清理和
+Backlog 动画计时停止。工作区 fmt/check/Clippy、测试（1,148 passed / 28 ignored）、
+无默认 feature 的 publisher check 与原生构建通过。macOS 1920×1080 原生窗口确认设置选项、
+滑块点击及数值、设置/读档双向切换、翻页、返回标题和 Backlog 开关/短列表滚动；模糊保留。
+继续预览的完整生命周期由回归测试覆盖，本轮未做其原生悬停验收；其他平台未实测。测试窗口已关闭。
+
+
+### 遮罩同步的重复写入
+
+全模块复查包含 Core/Loader、运行时、场景/音视频、渲染、存储、Editor/Authoring、
+Media、迁移/发布、开发脚本、CI 与本地依赖补丁的相关更新路径。新增修复仅在
+`src/scene/masks.rs`：遮罩透明度变化时，相同 Transform 和 RenderLayers 不再重复写入。
+材质仍随渐变更新，窗口尺寸和遮罩平面变化仍更新布局。没有增加缓存、状态或依赖。
+其余路径保留现有变化检测、异步交接、校验和失败重试，没有为减少代码量合并不同生命周期。
+
+```sh
+cargo test --locked --lib -p keine --all-features overlay_fade_only_changes_material_and_keeps_layout_responsive
+```
+
+同一个回归在修改前捕获 `[1, 1]` 次位置/层级变更，修改后为 `[0, 0]`；同时验证渐变材质、
+窗口缩放、切换渲染层和无关 stage revision。原始日志与修改前源码位于
+`target/performance/global-audit/`，工作区检查命令及结果同目录保存。
+fmt、全 feature check/Clippy、工作区测试（同职责用例合并后 1,144 passed / 28 ignored）通过；
+此前 16 项打包脚本测试通过。测试合并的独立 diff、命令与日志在 `target/test-consolidation/`。
+首次测试的系统废纸篓操作被 macOS 沙箱拒绝，沙箱外重跑完整工作区通过。
+这是 ECS 变更计数验证，没有测量 GPU 帧耗时，也未新增跨平台或原生窗口视觉验收。
+
 ### GPU 合成与模糊
 
 0.15.4–0.15.5 工作区；Apple M5 Pro / 24 GiB / macOS 27.0.1 / Metal，

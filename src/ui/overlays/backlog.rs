@@ -531,6 +531,9 @@ pub fn animate_backlog(
     let Ok((entity, mut root, mut background)) = roots.single_mut() else {
         return;
     };
+    if context.ui.open && root.was_open && root.elapsed >= BACKLOG_SETTLE_SECONDS {
+        return;
+    }
     if root.was_open != context.ui.open {
         root.was_open = context.ui.open;
         root.elapsed = 0.0;
@@ -694,11 +697,17 @@ pub fn scroll_backlog(mut context: BacklogScrollContext) {
     context
         .motion
         .advance(delta, max, context.time.delta_secs());
-    position.y = context.motion.current.clamp(0.0, max);
+    position
+        .reborrow()
+        .map_unchanged(|position| &mut position.y)
+        .set_if_neq(context.motion.current.clamp(0.0, max));
     if let Ok(mut transform) = context.list.single_mut() {
         // Bevy clamps ScrollPosition, so apply edge movement to the list while
         // keeping its viewport and clipping bounds fixed.
-        *transform = UiTransform::from_xy(Val::Px(0.0), Val::Px(context.motion.overscroll));
+        transform.set_if_neq(UiTransform::from_xy(
+            Val::Px(0.0),
+            Val::Px(context.motion.overscroll),
+        ));
     }
 }
 
@@ -809,6 +818,17 @@ mod tests {
                 .all(|root| { !root.is_animating(true) })
         );
 
+        let root = world
+            .query_filtered::<Entity, With<BacklogRoot>>()
+            .single(world)
+            .unwrap();
+        let elapsed = world.get::<BacklogRoot>(root).unwrap().elapsed;
+        app.update();
+        assert_eq!(
+            app.world().get::<BacklogRoot>(root).unwrap().elapsed,
+            elapsed
+        );
+        let world = app.world_mut();
         world.resource_mut::<BacklogUiState>().open = false;
         app.update();
         app.world_mut()

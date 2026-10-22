@@ -1554,7 +1554,11 @@ pub fn apply_hide_toggle(
     initial_fade: Res<InitialTextboxFade>,
     state: Res<GameState>,
     mut text_queries: ParamSet<(
-        Query<(&mut TextColor, &HideContentText, Option<&mut TextShadow>)>,
+        Query<(
+            &mut TextColor,
+            Ref<HideContentText>,
+            Option<&mut TextShadow>,
+        )>,
         Query<(), Changed<HideContentText>>,
     )>,
     mut background_query: Query<(&mut BackgroundColor, &HideContentBg)>,
@@ -1564,32 +1568,148 @@ pub fn apply_hide_toggle(
     let alpha = timing.hide_alpha * overlay.alpha * initial_fade.alpha;
     let current = (alpha, state.mini_avatar_progress);
     let text_changed = !text_queries.p1().is_empty();
-    if !text_changed
-        && last.is_some_and(|last| {
-            (last.0 - current.0).abs() < 0.001 && (last.1 - current.1).abs() < 0.001
-        })
-    {
+    let fade_changed = !last.is_some_and(|last| {
+        (last.0 - current.0).abs() < 0.001 && (last.1 - current.1).abs() < 0.001
+    });
+    if !text_changed && !fade_changed {
         return;
     }
     *last = Some(current);
     for (mut color, hidden, shadow) in &mut text_queries.p0() {
+        if !fade_changed && !hidden.is_changed() {
+            continue;
+        }
         let text_alpha = hidden.base_alpha * alpha;
-        color.0 = color.0.with_alpha(text_alpha);
+        let next = color.0.with_alpha(text_alpha);
+        if color.0 != next {
+            color.0 = next;
+        }
         if let Some(mut shadow) = shadow {
-            shadow.color = shadow.color.with_alpha(0.9 * text_alpha);
+            let next = shadow.color.with_alpha(0.9 * text_alpha);
+            if shadow.color != next {
+                shadow.color = next;
+            }
         }
     }
     for (mut color, hidden) in &mut background_query {
-        color.0 = color.0.with_alpha(hidden.base_alpha * alpha);
+        let next = color.0.with_alpha(hidden.base_alpha * alpha);
+        if color.0 != next {
+            color.0 = next;
+        }
     }
     for mut avatar in &mut avatars {
-        avatar.color = avatar.color.with_alpha(state.mini_avatar_progress * alpha);
+        let next = avatar.color.with_alpha(state.mini_avatar_progress * alpha);
+        if avatar.color != next {
+            avatar.color = next;
+        }
     }
 }
 
 #[cfg(test)]
 mod rich_text_tests {
     use super::*;
+
+    #[derive(Resource, Default)]
+    struct ColorWrites(Vec<Entity>);
+
+    fn record_color_writes(
+        changed: Query<Entity, Changed<TextColor>>,
+        mut writes: ResMut<ColorWrites>,
+    ) {
+        writes.0 = changed.iter().collect();
+    }
+
+    #[test]
+    fn glyph_alpha_updates_only_changed_text_and_preserves_global_fades() {
+        let mut app = App::new();
+        let mut state = keine_core::State::new();
+        state.mini_avatar_progress = 1.0;
+        app.init_resource::<AutoHideTiming>()
+            .init_resource::<TextboxOverlayFade>()
+            .insert_resource(InitialTextboxFade {
+                alpha: 1.0,
+                ..default()
+            })
+            .insert_resource(GameState(state))
+            .init_resource::<ColorWrites>()
+            .add_systems(Update, (apply_hide_toggle, record_color_writes).chain());
+        let first = app
+            .world_mut()
+            .spawn((
+                TextColor(Color::WHITE),
+                HideContentText::new(1.0),
+                TextShadow::default(),
+            ))
+            .id();
+        let second = app
+            .world_mut()
+            .spawn((TextColor(Color::WHITE), HideContentText::new(1.0)))
+            .id();
+        let background = app
+            .world_mut()
+            .spawn((BackgroundColor(Color::BLACK), HideContentBg::new(0.6)))
+            .id();
+        let avatar = app
+            .world_mut()
+            .spawn((MiniAvatarNode, ImageNode::default()))
+            .id();
+        app.update();
+        app.update();
+        assert!(app.world().resource::<ColorWrites>().0.is_empty());
+
+        app.world_mut()
+            .get_mut::<HideContentText>(first)
+            .unwrap()
+            .base_alpha = 0.5;
+        app.update();
+        assert_eq!(app.world().resource::<ColorWrites>().0, [first]);
+        assert_eq!(app.world().get::<TextColor>(first).unwrap().0.alpha(), 0.5);
+        assert_eq!(
+            app.world().get::<TextShadow>(first).unwrap().color.alpha(),
+            0.45
+        );
+        assert_eq!(app.world().get::<TextColor>(second).unwrap().0.alpha(), 1.0);
+
+        for alpha in [0.5, 0.0, 1.0] {
+            app.world_mut().resource_mut::<AutoHideTiming>().hide_alpha = alpha;
+            app.update();
+            assert_eq!(app.world().resource::<ColorWrites>().0.len(), 2);
+            assert_eq!(
+                app.world().get::<TextColor>(first).unwrap().0.alpha(),
+                0.5 * alpha
+            );
+            assert_eq!(
+                app.world().get::<TextShadow>(first).unwrap().color.alpha(),
+                0.45 * alpha
+            );
+            assert_eq!(
+                app.world().get::<TextColor>(second).unwrap().0.alpha(),
+                alpha
+            );
+            assert_eq!(
+                app.world()
+                    .get::<BackgroundColor>(background)
+                    .unwrap()
+                    .0
+                    .alpha(),
+                0.6 * alpha
+            );
+            assert_eq!(
+                app.world().get::<ImageNode>(avatar).unwrap().color.alpha(),
+                alpha
+            );
+        }
+        // A rebuilt line/ruby node must receive the current fade immediately.
+        app.world_mut().resource_mut::<AutoHideTiming>().hide_alpha = 0.5;
+        app.update();
+        let added = app
+            .world_mut()
+            .spawn((TextColor(Color::WHITE), HideContentText::new(0.8)))
+            .id();
+        app.update();
+        assert_eq!(app.world().resource::<ColorWrites>().0, [added]);
+        assert_eq!(app.world().get::<TextColor>(added).unwrap().0.alpha(), 0.4);
+    }
 
     #[test]
     fn paragraph_height_reserves_controls_at_large_text_size() {
@@ -1629,23 +1749,18 @@ mod rich_text_tests {
     }
 
     #[test]
-    fn textbox_layout_stretches_smoothly_and_keeps_its_right_edge_fixed() {
+    fn textbox_layout_motion_reverses_smoothly_and_is_frame_rate_independent() {
         let mut motion = TextboxLayoutMotion::default();
         assert_eq!(motion.advance(0.0, 0.0), 0.0);
 
         let entering = motion.advance(10.0, 1.0 / 60.0);
         assert!(entering > 0.0 && entering < 10.0);
-        assert!((entering + (100.0 - entering) - 100.0).abs() < f32::EPSILON);
         assert!(motion.is_animating());
 
         let before_reverse = motion.current_left;
         assert_eq!(motion.advance(0.0, 0.0), before_reverse);
         let leaving = motion.advance(0.0, 1.0 / 60.0);
         assert!(leaving > 0.0 && leaving < before_reverse);
-    }
-
-    #[test]
-    fn textbox_layout_motion_is_frame_rate_independent() {
         fn sample(frames: usize, delta_seconds: f32) -> f32 {
             let mut motion = TextboxLayoutMotion::default();
             motion.advance(0.0, 0.0);

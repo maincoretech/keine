@@ -251,7 +251,7 @@ type TitleButtonVisualQuery<'w, 's> = Query<
 #[derive(SystemParam)]
 pub struct TitleSyncContext<'w, 's> {
     config: Res<'w, GameConfigResource>,
-    roots: Query<'w, 's, (Entity, &'static mut Node), With<TitleRoot>>,
+    roots: Query<'w, 's, Entity, With<TitleRoot>>,
     backgrounds:
         Query<'w, 's, (Entity, &'static mut Sprite, &'static mut Transform), With<TitleBackground>>,
     camera: Query<'w, 's, Entity, With<UiBlurCamera>>,
@@ -288,9 +288,6 @@ pub fn sync_title(state: Res<GameState>, mut context: TitleSyncContext) {
         return;
     };
     let viewport = DesignViewport::from_window(window);
-    for (_, mut node) in &mut context.roots {
-        layout_title_root(&mut node, viewport);
-    }
     for (_, mut sprite, mut transform) in &mut context.backgrounds {
         layout_title_background(&mut sprite, &mut transform, viewport);
     }
@@ -300,7 +297,7 @@ pub fn sync_title(state: Res<GameState>, mut context: TitleSyncContext) {
     if state.ended == title_present && !title_config_changed && !continue_state_changed {
         return;
     }
-    for (entity, _) in &context.roots {
+    for entity in &context.roots {
         context.commands.entity(entity).despawn();
     }
     for (entity, _, _) in &context.backgrounds {
@@ -415,20 +412,21 @@ fn spawn_extra_button(menu: &mut ChildSpawnerCommands, font: &Handle<Font>, extr
     }
 }
 
-fn layout_title_root(node: &mut Node, _viewport: DesignViewport) {
-    node.left = Val::ZERO;
-    node.top = Val::ZERO;
-    node.width = Val::Px(DESIGN_WIDTH);
-    node.height = Val::Px(DESIGN_HEIGHT);
-}
-
 fn layout_title_background(
-    sprite: &mut Sprite,
-    transform: &mut Transform,
+    sprite: &mut Mut<Sprite>,
+    transform: &mut Mut<Transform>,
     viewport: DesignViewport,
 ) {
-    sprite.custom_size = Some(Vec2::new(DESIGN_WIDTH, DESIGN_HEIGHT) * viewport.scale);
-    transform.translation = viewport.content_center().extend(0.0);
+    let size = Some(Vec2::new(DESIGN_WIDTH, DESIGN_HEIGHT) * viewport.scale);
+    sprite
+        .reborrow()
+        .map_unchanged(|sprite| &mut sprite.custom_size)
+        .set_if_neq(size);
+    let center = viewport.content_center().extend(0.0);
+    transform
+        .reborrow()
+        .map_unchanged(|transform| &mut transform.translation)
+        .set_if_neq(center);
 }
 
 fn spawn_title_button(
@@ -794,8 +792,10 @@ pub fn animate_title_buttons(
             continue_visible = matches!(interaction, Interaction::Hovered | Interaction::Pressed);
         }
         if *interaction == Interaction::Pressed {
-            motion.press = 1.0;
-        } else {
+            if motion.press != 1.0 {
+                motion.press = 1.0;
+            }
+        } else if motion.press != 0.0 {
             motion.press *= (-delta * 16.0).exp();
             if motion.press < 0.001 {
                 motion.press = 0.0;
@@ -844,7 +844,11 @@ pub fn animate_title_buttons(
     let Ok((mut preview, mut node, mut background, mut blur)) = previews.single_mut() else {
         return;
     };
-    preview.target = f32::from(continue_visible);
+    let target = f32::from(continue_visible);
+    if !preview.is_added() && preview.progress == target && preview.target == target {
+        return;
+    }
+    preview.target = target;
     if preview.target > 0.0 {
         node.display = Display::Flex;
     }
@@ -876,12 +880,101 @@ pub fn animate_title_buttons(
 
 #[cfg(test)]
 mod continue_preview_tests {
-    use super::smoothstep;
+    use super::*;
 
     #[test]
-    fn preview_curve_is_not_linear() {
-        assert!(smoothstep(0.25) < 0.25);
-        assert!(smoothstep(0.75) > 0.75);
+    fn continue_preview_settles_and_resumes_on_hover() {
+        #[derive(Resource, Default)]
+        struct Writes([usize; 2]);
+        fn count(
+            previews: Query<(), (With<TitleContinuePreview>, Changed<Node>)>,
+            texts: Query<(), (With<TitleContinuePreviewAlpha>, Changed<TextColor>)>,
+            mut writes: ResMut<Writes>,
+        ) {
+            writes.0 = [previews.iter().count(), texts.iter().count()];
+        }
+        let mut app = App::new();
+        app.init_resource::<Writes>();
+        app.init_resource::<Time>()
+            .add_systems(Update, (animate_title_buttons, count).chain());
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs_f32(1.0 / 60.0));
+        let visual = app
+            .world_mut()
+            .spawn((
+                TitleButtonVisual,
+                Node::default(),
+                UiTransform::default(),
+                BackgroundColor(Color::NONE),
+            ))
+            .id();
+        let button = app
+            .world_mut()
+            .spawn((
+                TitleAction::Continue,
+                Interaction::None,
+                TitleButtonMotion {
+                    width: 100.0,
+                    padding: 22.5,
+                    press: 0.0,
+                    hover: 0.0,
+                },
+            ))
+            .add_child(visual)
+            .id();
+        let preview = app
+            .world_mut()
+            .spawn((
+                TitleContinuePreview::default(),
+                Node::default(),
+                BackgroundColor(Color::NONE),
+                BlurStrength(0.0),
+            ))
+            .id();
+        let label = app
+            .world_mut()
+            .spawn((TitleContinuePreviewAlpha(0.8), TextColor::WHITE))
+            .id();
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(preview).unwrap().display,
+            Display::None
+        );
+        assert_eq!(app.world().get::<TextColor>(label).unwrap().0.alpha(), 0.0);
+        for interaction in [
+            Interaction::Hovered,
+            Interaction::None,
+            Interaction::Hovered,
+        ] {
+            *app.world_mut().get_mut::<Interaction>(button).unwrap() = interaction;
+            app.update();
+            let progress = app
+                .world()
+                .get::<TitleContinuePreview>(preview)
+                .unwrap()
+                .progress;
+            assert!(progress > 0.0 && progress < 1.0);
+            for _ in 0..60 {
+                app.update();
+            }
+            let visible = interaction == Interaction::Hovered;
+            assert_eq!(
+                app.world().get::<Node>(preview).unwrap().display,
+                if visible {
+                    Display::Flex
+                } else {
+                    Display::None
+                }
+            );
+            assert_eq!(
+                app.world().get::<BlurStrength>(preview).unwrap().0,
+                if visible { TITLE_GLASS_BLUR } else { 0.0 }
+            );
+            app.update();
+            assert_eq!(app.world().resource::<Writes>().0[0], 0);
+            assert_eq!(app.world().resource::<Writes>().0[1], 0);
+        }
     }
 }
 

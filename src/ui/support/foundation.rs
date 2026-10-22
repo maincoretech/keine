@@ -402,6 +402,8 @@ mod tests {
     fn animation_helpers_are_bounded() {
         assert_eq!(smoothstep(0.0), 0.0);
         assert_eq!(smoothstep(1.0), 1.0);
+        assert!(smoothstep(0.25) < 0.25);
+        assert!(smoothstep(0.75) > 0.75);
         assert_eq!(ease_in_out_cubic(0.0), 0.0);
         assert_eq!(ease_in_out_cubic(1.0), 1.0);
         assert!((0.0..=1.0).contains(&exp_lerp(1.0 / 60.0, 12.0)));

@@ -327,48 +327,72 @@ pub(super) fn spawn_cg_panel(
         },
     ))
     .with_children(|panel| {
-        panel
-            .spawn((Node {
-                width: Val::Percent(100.0),
-                height: Val::Px(63.0),
-                flex_shrink: 0.0,
-                padding: UiRect::horizontal(Val::Px(12.0)),
-                justify_content: JustifyContent::FlexEnd,
-                align_items: AlignItems::Center,
-                ..default()
-            },))
-            .with_children(|pages| {
-                pages
-                    .spawn((Node {
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },))
-                    .with_children(|buttons| {
-                        for (step, label) in [(-1, UiText::Previous), (1, UiText::Next)] {
-                            buttons.spawn((
-                                Button,
-                                ExtraPage(step),
-                                extra_button(),
-                                Node {
-                                    min_width: Val::Px(126.0),
-                                    height: Val::Px(63.0),
-                                    padding: UiRect::horizontal(Val::Px(12.0)),
-                                    justify_content: JustifyContent::Center,
-                                    align_items: AlignItems::Center,
-                                    ..default()
-                                },
-                                BackgroundColor(Color::NONE),
-                                children![(LocalizedText(label), text("", &fonts.text, 22.5, 0.8))],
-                            ));
-                            if step == -1 {
+        if images.is_empty() {
+            panel
+                .spawn(Node {
+                    width: Val::Percent(100.0),
+                    flex_grow: 1.0,
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                })
+                .with_children(|empty| {
+                    empty.spawn((
+                        LocalizedText(UiText::NoGalleryCg),
+                        text("", &fonts.text, 22.5, 0.58),
+                    ));
+                });
+            return;
+        }
+        if page_count > 1 {
+            panel
+                .spawn((Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Px(63.0),
+                    flex_shrink: 0.0,
+                    padding: UiRect::horizontal(Val::Px(12.0)),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },))
+                .with_children(|pages| {
+                    pages
+                        .spawn((Node {
+                            align_items: AlignItems::Center,
+                            ..default()
+                        },))
+                        .with_children(|buttons| {
+                            for (step, icon) in [(-1, "\u{f284}"), (1, "\u{f285}")] {
                                 buttons.spawn((
-                                    ExtraPageLabel,
-                                    text(format!("{page} / {page_count}"), &fonts.text, 22.5, 0.58),
+                                    Button,
+                                    ExtraPage(step),
+                                    extra_button(),
+                                    Node {
+                                        min_width: Val::Px(126.0),
+                                        height: Val::Px(63.0),
+                                        padding: UiRect::horizontal(Val::Px(12.0)),
+                                        justify_content: JustifyContent::Center,
+                                        align_items: AlignItems::Center,
+                                        ..default()
+                                    },
+                                    BackgroundColor(Color::NONE),
+                                    children![text(icon, &fonts.icons, 24.0, 0.8)],
                                 ));
+                                if step == -1 {
+                                    buttons.spawn((
+                                        ExtraPageLabel,
+                                        text(
+                                            format!("{page} / {page_count}"),
+                                            &fonts.text,
+                                            22.5,
+                                            0.58,
+                                        ),
+                                    ));
+                                }
                             }
-                        }
-                    });
-            });
+                        });
+                });
+        }
         panel
             .spawn(Node {
                 width: Val::Percent(100.0),

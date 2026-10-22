@@ -616,6 +616,9 @@ pub(crate) fn animate(
         {
             continue;
         }
+        if !fade.is_changed() && fade.current == fade.target {
+            continue;
+        }
         fade.current += (fade.target - fade.current) * amount;
         if fade.target == 0.0 && fade.current <= EXIT_VISUAL_EPSILON
             || (fade.target - fade.current).abs() < 0.001
@@ -643,6 +646,9 @@ pub(crate) fn animate(
             && fade.current == 0.0
             && fade.target == 0.0
         {
+            continue;
+        }
+        if !fade.is_changed() && fade.current == fade.target {
             continue;
         }
         fade.current += (fade.target - fade.current) * amount;
@@ -805,6 +811,93 @@ pub(crate) fn animate_route_transition(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settled_menu_stops_writing_and_reopens_with_blur() {
+        #[derive(Resource, Default)]
+        struct Writes([usize; 2]);
+        fn count(
+            surfaces: Query<(), (With<MenuSurface>, Changed<UiTransform>)>,
+            blurs: Query<(), (With<MenuBlur>, Changed<BlurStrength>)>,
+            mut writes: ResMut<Writes>,
+        ) {
+            writes.0 = [surfaces.iter().count(), blurs.iter().count()];
+        }
+        let mut app = App::new();
+        app.init_resource::<Writes>();
+        app.init_resource::<Time>()
+            .add_systems(Update, (animate, count).chain());
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs_f32(1.0 / 60.0));
+        let surface = app
+            .world_mut()
+            .spawn((
+                MenuSurfaceState::new(MenuSurface::standard(), false),
+                BackgroundColor(Color::NONE),
+                PersistentMenu,
+            ))
+            .id();
+        let blur = app
+            .world_mut()
+            .spawn((
+                MenuFade::entering(),
+                MenuBlur,
+                BlurStrength(0.0),
+                BackgroundColor(Color::NONE),
+                Visibility::Inherited,
+                PersistentMenu,
+            ))
+            .id();
+        for target in [1.0, 0.0, 1.0] {
+            for entity in [surface, blur] {
+                app.world_mut().get_mut::<MenuFade>(entity).unwrap().target = target;
+                if target == 1.0 {
+                    *app.world_mut().get_mut::<Visibility>(entity).unwrap() = Visibility::Inherited;
+                }
+            }
+            app.update();
+            assert!(app.world().get::<MenuFade>(surface).unwrap().current > 0.0);
+            for _ in 0..60 {
+                app.update();
+            }
+            assert_eq!(
+                app.world().get::<MenuFade>(surface).unwrap().current,
+                target
+            );
+            assert_eq!(
+                app.world().get::<BlurStrength>(blur).unwrap().0,
+                FULLSCREEN_BLUR_STRENGTH * target
+            );
+            assert_eq!(
+                *app.world().get::<Visibility>(blur).unwrap(),
+                if target == 0.0 {
+                    Visibility::Hidden
+                } else {
+                    Visibility::Inherited
+                }
+            );
+            app.update();
+            assert_eq!(app.world().resource::<Writes>().0[0], 0);
+            assert_eq!(app.world().resource::<Writes>().0[1], 0);
+        }
+        // A new already-visible layer still receives its initial blur strength.
+        let new_blur = app
+            .world_mut()
+            .spawn((
+                MenuFade::visible(),
+                MenuBlur,
+                BlurStrength(0.0),
+                BackgroundColor(Color::NONE),
+                Visibility::Inherited,
+            ))
+            .id();
+        app.update();
+        assert_eq!(
+            app.world().get::<BlurStrength>(new_blur).unwrap().0,
+            FULLSCREEN_BLUR_STRENGTH
+        );
+    }
 
     #[test]
     fn fade_only_surface_never_translates_or_scales() {

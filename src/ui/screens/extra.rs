@@ -53,6 +53,24 @@ pub(crate) use sync::*;
 mod tests {
     use super::*;
 
+    #[derive(Resource, Default)]
+    struct VisualWrites(usize);
+
+    type VisualChanges = Or<(
+        Changed<Node>,
+        Changed<UiTransform>,
+        Changed<BlurStrength>,
+        Changed<BackgroundColor>,
+        Changed<ExtraMotion>,
+    )>;
+
+    fn count_visual_writes(
+        changed: Query<Entity, VisualChanges>,
+        mut writes: ResMut<VisualWrites>,
+    ) {
+        writes.0 = changed.iter().count();
+    }
+
     #[test]
     fn backdrop_survives_zero_delta_opening_and_is_removed_after_closing() {
         let mut app = App::new();
@@ -61,7 +79,8 @@ mod tests {
                 open: true,
                 ..default()
             })
-            .add_systems(Update, animate);
+            .init_resource::<VisualWrites>()
+            .add_systems(Update, (animate, count_visual_writes).chain());
         let root = app
             .world_mut()
             .spawn((
@@ -95,11 +114,36 @@ mod tests {
             app.world().get::<BackgroundColor>(proxy).unwrap().0.alpha(),
             0.6
         );
+        app.update();
+        assert_eq!(app.world().resource::<VisualWrites>().0, 0);
+        // A newly created backdrop still gets the settled fade in its first update.
+        let replacement = app
+            .world_mut()
+            .spawn((
+                ExtraBlurProxy,
+                BlurStrength(0.0),
+                BackgroundColor(Color::NONE),
+            ))
+            .id();
+        app.update();
+        assert_eq!(
+            app.world().get::<BlurStrength>(replacement).unwrap().0,
+            crate::ui::FULLSCREEN_BLUR_STRENGTH
+        );
+        assert_eq!(
+            app.world()
+                .get::<BackgroundColor>(replacement)
+                .unwrap()
+                .0
+                .alpha(),
+            0.6
+        );
         app.world_mut().resource_mut::<ExtraUi>().open = false;
         app.world_mut().get_mut::<ExtraMotion>(root).unwrap().target = 0.0;
         app.update();
         assert!(app.world().get_entity(root).is_err());
         assert!(app.world().get_entity(proxy).is_err());
+        assert!(app.world().get_entity(replacement).is_err());
     }
 
     #[test]
@@ -145,19 +189,20 @@ mod tests {
     }
 
     #[test]
-    fn right_click_returns_from_full_cg_before_leaving_extra() {
+    fn full_cg_settles_and_back_closes_it_before_leaving_extra() {
         let mut app = App::new();
         app.init_resource::<ButtonInput<KeyCode>>()
-            .insert_resource(crate::runtime::platform::InputActions {
-                back: true,
-                ..default()
-            })
+            .init_resource::<crate::runtime::platform::InputActions>()
             .insert_resource(ExtraUi {
                 open: true,
                 ..default()
             })
             .init_resource::<Time>()
-            .add_systems(Update, (handle_navigation, animate_full_cg).chain());
+            .init_resource::<VisualWrites>()
+            .add_systems(
+                Update,
+                (handle_navigation, animate_full_cg, count_visual_writes).chain(),
+            );
         let cg = app
             .world_mut()
             .spawn((
@@ -167,9 +212,19 @@ mod tests {
                     target: 1.0,
                 },
                 UiTransform::default(),
-                BackgroundColor(Color::BLACK),
+                BackgroundColor(Color::NONE),
             ))
             .id();
+        app.update();
+        assert_eq!(
+            app.world().get::<BackgroundColor>(cg).unwrap().0.alpha(),
+            0.72
+        );
+        app.update();
+        assert_eq!(app.world().resource::<VisualWrites>().0, 0, "settled CG");
+        app.world_mut()
+            .resource_mut::<crate::runtime::platform::InputActions>()
+            .back = true;
         app.world_mut()
             .resource_mut::<Time>()
             .advance_by(Duration::from_millis(16));
@@ -177,6 +232,8 @@ mod tests {
         assert!(app.world().get_entity(cg).is_ok());
         assert!(app.world().resource::<ExtraUi>().open);
         assert_eq!(app.world().get::<ExtraMotion>(cg).unwrap().target, 0.0);
+        assert!(app.world().get::<ExtraMotion>(cg).unwrap().current < 1.0);
+        assert!(app.world().get::<BackgroundColor>(cg).unwrap().0.alpha() < 0.72);
         // Repeated Back during the exit fade cannot also dismiss Extra.
         app.update();
         assert!(app.world().resource::<ExtraUi>().open);
@@ -201,7 +258,8 @@ mod tests {
                 selected_bgm: Some("chosen.opus".into()),
                 ..default()
             })
-            .add_systems(Update, update_sections);
+            .init_resource::<VisualWrites>()
+            .add_systems(Update, (update_sections, count_visual_writes).chain());
         app.world_mut().resource_mut::<ExtraPageTransition>().from = Some(ExtraSection::Cg);
         let old = app
             .world_mut()
@@ -249,5 +307,39 @@ mod tests {
             app.world().resource::<ExtraUi>().selected_bgm.as_deref(),
             Some("chosen.opus")
         );
+        app.update();
+        assert_eq!(app.world().resource::<VisualWrites>().0, 0);
+        let grid = app
+            .world_mut()
+            .spawn((
+                ExtraCgGrid { outgoing: false },
+                UiTransform {
+                    translation: Val2::percent(100.0, 0.0),
+                    ..default()
+                },
+            ))
+            .id();
+        app.update();
+        assert_eq!(
+            app.world().get::<UiTransform>(grid).unwrap().translation,
+            Val2::ZERO
+        );
+        app.world_mut().resource_mut::<ExtraUi>().section = ExtraSection::Cg;
+        *app.world_mut().resource_mut::<ExtraPageTransition>() = ExtraPageTransition {
+            from: Some(ExtraSection::Music),
+            ..default()
+        };
+        app.update();
+        assert_eq!(
+            app.world().get::<UiTransform>(new).unwrap().translation,
+            Val2::percent(50.0, 0.0)
+        );
+        assert_eq!(
+            app.world().get::<UiTransform>(old).unwrap().translation,
+            Val2::percent(-50.0, 0.0)
+        );
+        app.update();
+        assert_eq!(app.world().get::<Node>(new).unwrap().display, Display::None);
+        assert_eq!(app.world().get::<Node>(old).unwrap().display, Display::Flex);
     }
 }

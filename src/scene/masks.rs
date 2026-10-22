@@ -149,8 +149,8 @@ fn sync(
             && let Ok((_, node, mut transform, mut render_layers, handle)) = masks.get_mut(entity)
         {
             debug_assert_eq!(&node.0, id);
-            *transform = overlay_transform(viewport, z);
-            *render_layers = RenderLayers::layer(layer);
+            transform.set_if_neq(overlay_transform(viewport, z));
+            render_layers.set_if_neq(RenderLayers::layer(layer));
             if materials
                 .get(&handle.0)
                 .is_some_and(|current| current != &material)
@@ -374,6 +374,92 @@ const fn blend_code(blend: StageMaskTextureBlend) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlay_fade_only_changes_material_and_keeps_layout_responsive() {
+        #[derive(Resource, Default)]
+        struct Writes([usize; 2]);
+        fn count(
+            transforms: Query<(), (With<StageMaskNode>, Changed<Transform>)>,
+            layers: Query<(), (With<StageMaskNode>, Changed<RenderLayers>)>,
+            mut writes: ResMut<Writes>,
+        ) {
+            writes.0 = [transforms.iter().count(), layers.iter().count()];
+        }
+        let mut state = keine_core::State::new();
+        let mut mask = test_mask();
+        mask.mode = StageMaskMode::Overlay;
+        state.stage_masks.insert(
+            "fade".into(),
+            StageMaskState {
+                mask,
+                current: 0.5,
+                from: 0.0,
+                target: 1.0,
+                elapsed: 0.5,
+                duration: 1.0,
+                blocking: false,
+                order: 0,
+            },
+        );
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()))
+            .init_asset::<Image>()
+            .init_asset::<StageMaskMaterial>()
+            .init_resource::<ImageRoleRegistry>()
+            .init_resource::<Writes>()
+            .insert_resource(StageQuad(Handle::default()))
+            .insert_resource(GameState(state))
+            .add_systems(Update, (sync, count).chain());
+        let window = app.world_mut().spawn(Window::default()).id();
+        app.update();
+        let (entity, handle) = app
+            .world_mut()
+            .query::<(Entity, &MeshMaterial2d<StageMaskMaterial>)>()
+            .single(app.world())
+            .map(|(entity, material)| (entity, material.0.clone()))
+            .unwrap();
+        let original = *app.world().get::<Transform>(entity).unwrap();
+        {
+            let mut state = app.world_mut().resource_mut::<GameState>();
+            state.stage_masks.get_mut("fade").unwrap().current = 0.75;
+            state.stage_revision += 1;
+        }
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<Assets<StageMaskMaterial>>()
+                .get(&handle)
+                .unwrap()
+                .shape_a
+                .w,
+            0.75
+        );
+        assert_eq!(app.world().resource::<Writes>().0, [0, 0]);
+
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .unwrap()
+            .resolution
+            .set(640.0, 360.0);
+        app.update();
+        assert_eq!(app.world().resource::<Writes>().0, [1, 0]);
+        assert_ne!(*app.world().get::<Transform>(entity).unwrap(), original);
+        {
+            let mut state = app.world_mut().resource_mut::<GameState>();
+            state.stage_masks.get_mut("fade").unwrap().mask.plane = StageMaskPlane::Topmost;
+            state.stage_revision += 1;
+        }
+        app.update();
+        assert_eq!(app.world().resource::<Writes>().0, [1, 1]);
+        assert_eq!(
+            *app.world().get::<RenderLayers>(entity).unwrap(),
+            RenderLayers::layer(2)
+        );
+        app.world_mut().resource_mut::<GameState>().stage_revision += 1;
+        app.update();
+        assert_eq!(app.world().resource::<Writes>().0, [0, 0]);
+    }
 
     #[test]
     fn selected_scope_matches_stable_scene_layer_ids() {

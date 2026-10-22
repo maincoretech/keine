@@ -352,7 +352,7 @@ pub(crate) struct ExtraBgmProgressUi<'w, 's> {
     labels: Query<'w, 's, &'static mut Text>,
 }
 
-type BgmTimeDisplayKey = (Option<Entity>, u64, Option<u64>);
+type BgmTimeDisplayKey = (Option<Entity>, Option<Entity>, u64, Option<u64>);
 
 pub(crate) fn update_bgm_progress(
     mut players: Query<(
@@ -406,33 +406,50 @@ fn set_bgm_progress(
     for (mut visual, interaction, mut thumb, mut background) in &mut ui.thumbs {
         let hovered = *interaction != Interaction::None;
         let target = if hovered || dragging { 12.0 } else { 10.0 };
-        visual.0 += (target - visual.0) * exp_lerp(ui.time.delta_secs(), 18.0);
+        let next = visual.0 + (target - visual.0) * exp_lerp(ui.time.delta_secs(), 18.0);
+        if visual.0 != next {
+            visual.0 = next;
+        }
         let thumb_width = (visual.0 * 3.75).min(width);
-        thumb.width = Val::Px(thumb_width);
-        thumb.left = Val::Px(ratio * (width - thumb_width));
-        background.0 = Color::srgba(1.0, 1.0, 1.0, if hovered { 0.67 } else { 0.5 });
+        let next_width = Val::Px(thumb_width);
+        let left = Val::Px(ratio * (width - thumb_width));
+        if thumb.width != next_width {
+            thumb.width = next_width;
+        }
+        if thumb.left != left {
+            thumb.left = left;
+        }
+        let color = Color::srgba(1.0, 1.0, 1.0, if hovered { 0.67 } else { 0.5 });
+        if background.0 != color {
+            background.0 = color;
+        }
     }
     let thumb_hovered = ui
         .thumbs
         .iter()
         .any(|(_, interaction, _, _)| *interaction != Interaction::None);
     for mut bubble in &mut ui.bubbles {
-        bubble.display = if thumb_hovered || dragging {
+        let display = if thumb_hovered || dragging {
             Display::Flex
         } else {
             Display::None
         };
         let bubble_width = 67.5_f32.min(width);
-        bubble.width = Val::Px(bubble_width);
-        bubble.left = Val::Px(ratio * (width - bubble_width));
-    }
-    for entity in &ui.values {
-        if let Ok(mut value) = ui.labels.get_mut(entity) {
-            value.0 = format_bgm_time(elapsed);
+        let next_width = Val::Px(bubble_width);
+        let left = Val::Px(ratio * (width - bubble_width));
+        if bubble.display != display {
+            bubble.display = display;
+        }
+        if bubble.width != next_width {
+            bubble.width = next_width;
+        }
+        if bubble.left != left {
+            bubble.left = left;
         }
     }
     let time_key = (
         ui.times.iter().next().map(|(entity, _)| entity),
+        ui.values.iter().next(),
         elapsed.as_secs(),
         duration.map(|duration| duration.as_secs()),
     );
@@ -440,6 +457,11 @@ fn set_bgm_progress(
         return;
     }
     *displayed_time = Some(time_key);
+    for entity in &ui.values {
+        if let Ok(mut value) = ui.labels.get_mut(entity) {
+            value.0 = format_bgm_time(elapsed);
+        }
+    }
     let value = format!(
         "{} / {}",
         format_bgm_time(elapsed),
@@ -565,9 +587,13 @@ pub(crate) fn update_bgm_status(
             }
             _ => true,
         };
-        player.failed = failed;
+        if player.failed != failed {
+            player.failed = failed;
+        }
         if failed {
-            resume_stage_bgm(&mut ui, &stage);
+            if !ui.paused_stage_bgm.is_empty() {
+                resume_stage_bgm(&mut ui, &stage);
+            }
             UiText::GalleryUnavailable
         } else if let Some(sink) = sink {
             if sink.is_paused() {
@@ -582,12 +608,17 @@ pub(crate) fn update_bgm_status(
         UiText::PlaybackStopped
     };
     for (mut label, mut node) in &mut labels {
-        label.0 = status;
-        node.display = if matches!(status, UiText::GalleryLoading | UiText::GalleryUnavailable) {
+        if label.0 != status {
+            label.0 = status;
+        }
+        let display = if matches!(status, UiText::GalleryLoading | UiText::GalleryUnavailable) {
             Display::Flex
         } else {
             Display::None
         };
+        if node.display != display {
+            node.display = display;
+        }
     }
 }
 
@@ -595,9 +626,229 @@ pub(crate) fn update_bgm_status(
 mod tests {
     use super::*;
 
+    #[derive(Resource, Default)]
+    struct StatusWrites(usize);
+
+    type StatusChanges = Or<(
+        Changed<LocalizedText>,
+        Changed<Node>,
+        Changed<ExtraBgmPlayer>,
+    )>;
+
+    fn count_status_writes(
+        changed: Query<Entity, StatusChanges>,
+        mut writes: ResMut<StatusWrites>,
+    ) {
+        writes.0 = changed.iter().count();
+    }
+
     #[test]
-    fn formats_bgm_time_without_fractional_jitter() {
+    fn music_status_updates_on_failure_recovery_and_new_labels() {
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::app::TaskPoolPlugin::default(),
+            bevy::asset::AssetPlugin::default(),
+        ))
+        .init_resource::<ExtraUi>()
+        .init_resource::<StatusWrites>()
+        .add_systems(Update, (update_bgm_status, count_status_writes).chain());
+        let label = app
+            .world_mut()
+            .spawn((
+                ExtraBgmStatus,
+                LocalizedText(UiText::PlaybackStopped),
+                Node::default(),
+            ))
+            .id();
+        let player = app
+            .world_mut()
+            .spawn(ExtraBgmPlayer {
+                gain: 1.0,
+                duration: None,
+                observed_audio: false,
+                failed: false,
+            })
+            .id();
+        app.update();
+        assert_eq!(
+            app.world().get::<LocalizedText>(label).unwrap().0,
+            UiText::GalleryUnavailable
+        );
+        assert_eq!(
+            app.world().get::<Node>(label).unwrap().display,
+            Display::Flex
+        );
+        app.update();
+        assert_eq!(app.world().resource::<StatusWrites>().0, 0);
+        #[cfg(feature = "audio-opus")]
+        {
+            app.world_mut()
+                .entity_mut(player)
+                .insert(GalleryAudio::Opus(Handle::default()));
+            app.update();
+            assert_eq!(
+                app.world().get::<LocalizedText>(label).unwrap().0,
+                UiText::GalleryLoading
+            );
+            assert!(!app.world().get::<ExtraBgmPlayer>(player).unwrap().failed);
+        }
+        app.world_mut().despawn(player);
+        app.update();
+        assert_eq!(
+            app.world().get::<LocalizedText>(label).unwrap().0,
+            UiText::PlaybackStopped
+        );
+        assert_eq!(
+            app.world().get::<Node>(label).unwrap().display,
+            Display::None
+        );
+        let replacement = app
+            .world_mut()
+            .spawn((
+                ExtraBgmStatus,
+                LocalizedText(UiText::GalleryLoading),
+                Node::default(),
+            ))
+            .id();
+        app.update();
+        assert_eq!(
+            app.world().get::<LocalizedText>(replacement).unwrap().0,
+            UiText::PlaybackStopped
+        );
+        assert_eq!(
+            app.world().get::<Node>(replacement).unwrap().display,
+            Display::None
+        );
+        app.update();
+        assert_eq!(app.world().resource::<StatusWrites>().0, 0);
+    }
+
+    #[derive(Resource)]
+    struct ProgressSample(Duration, Option<Duration>);
+
+    #[derive(Resource, Default)]
+    struct ProgressWrites(usize, usize, usize);
+
+    fn sample_progress(
+        sample: Res<ProgressSample>,
+        mut ui: ExtraBgmProgressUi,
+        mut displayed: Local<Option<BgmTimeDisplayKey>>,
+    ) {
+        set_bgm_progress(&mut ui, sample.0, sample.1, &mut displayed);
+    }
+
+    fn record_progress_writes(
+        texts: Query<(), Changed<Text>>,
+        nodes: Query<(), Changed<Node>>,
+        colors: Query<(), Changed<BackgroundColor>>,
+        mut writes: ResMut<ProgressWrites>,
+    ) {
+        *writes = ProgressWrites(
+            texts.iter().count(),
+            nodes.iter().count(),
+            colors.iter().count(),
+        );
+    }
+
+    #[test]
+    fn progress_keeps_subsecond_motion_and_refreshes_rebuilt_labels() {
         assert_eq!(format_bgm_time(Duration::from_millis(62_999)), "01:02");
+        let mut app = App::new();
+        let mut time = Time::<()>::default();
+        time.advance_by(Duration::from_secs_f64(1.0 / 60.0));
+        app.insert_resource(time)
+            .insert_resource(ProgressSample(
+                Duration::from_millis(62345),
+                Some(Duration::from_secs(180)),
+            ))
+            .init_resource::<ProgressWrites>()
+            .add_systems(Update, (sample_progress, record_progress_writes).chain());
+        let bar = app
+            .world_mut()
+            .spawn((
+                ExtraBgmSeekBar::default(),
+                Interaction::None,
+                ComputedNode::default(),
+            ))
+            .id();
+        let thumb = app
+            .world_mut()
+            .spawn((
+                ExtraBgmProgressThumb(10.0),
+                Interaction::None,
+                Node::default(),
+                BackgroundColor::default(),
+            ))
+            .id();
+        let bubble = app
+            .world_mut()
+            .spawn((ExtraBgmBubble, Node::default()))
+            .id();
+        let label = app
+            .world_mut()
+            .spawn((ExtraBgmBubbleText, Text::default()))
+            .id();
+        let total = app.world_mut().spawn(Text::default()).id();
+        app.world_mut().spawn(ExtraBgmTime).add_child(total);
+        app.update();
+        assert_eq!(app.world().get::<Text>(label).unwrap().0, "01:02");
+        assert_eq!(app.world().get::<Text>(total).unwrap().0, "01:02 / 03:00");
+        app.update();
+        let writes = app.world().resource::<ProgressWrites>();
+        assert_eq!((writes.0, writes.1, writes.2), (0, 0, 0));
+        let previous = app.world().get::<Node>(thumb).unwrap().left;
+        app.world_mut().resource_mut::<ProgressSample>().0 = Duration::from_millis(62999);
+        app.update();
+        assert_ne!(app.world().get::<Node>(thumb).unwrap().left, previous);
+        assert_eq!(app.world().resource::<ProgressWrites>().0, 0);
+
+        app.world_mut()
+            .get_mut::<Interaction>(thumb)
+            .unwrap()
+            .clone_from(&Interaction::Hovered);
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(bubble).unwrap().display,
+            Display::Flex
+        );
+        assert!(app.world().get::<ExtraBgmProgressThumb>(thumb).unwrap().0 > 10.0);
+        *app.world_mut().get_mut::<Interaction>(thumb).unwrap() = Interaction::None;
+        app.world_mut()
+            .get_mut::<ExtraBgmSeekBar>(bar)
+            .unwrap()
+            .dragging = true;
+        app.world_mut().resource_mut::<ProgressSample>().0 = Duration::from_secs(120);
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(bubble).unwrap().display,
+            Display::Flex
+        );
+        assert_eq!(app.world().get::<Text>(label).unwrap().0, "02:00");
+        app.world_mut()
+            .get_mut::<ExtraBgmSeekBar>(bar)
+            .unwrap()
+            .dragging = false;
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(bubble).unwrap().display,
+            Display::None
+        );
+
+        // Recreating the bubble in the same second must not reuse a stale key.
+        app.world_mut().despawn(label);
+        let rebuilt = app
+            .world_mut()
+            .spawn((ExtraBgmBubbleText, Text::default()))
+            .id();
+        app.update();
+        assert_eq!(app.world().get::<Text>(rebuilt).unwrap().0, "02:00");
+        app.world_mut().resource_mut::<ProgressSample>().1 = None;
+        app.update();
+        assert_eq!(app.world().get::<Text>(total).unwrap().0, "02:00 / --:--");
+        app.world_mut().resource_mut::<ProgressSample>().1 = Some(Duration::from_secs(60));
+        app.update();
+        assert_eq!(app.world().get::<Text>(rebuilt).unwrap().0, "01:00");
+        assert_eq!(app.world().get::<Text>(total).unwrap().0, "01:00 / 01:00");
     }
 
     #[test]

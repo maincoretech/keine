@@ -14,18 +14,12 @@ pub fn animate_page_transition(
     ui: Res<SaveLoadUi>,
     mut transition: ResMut<SaveLoadPageTransition>,
 ) {
-    if ui.mode.is_none() {
-        transition.active = false;
-        transition.elapsed = 0.0;
-        transition.direction = 0.0;
+    if !transition.active {
+        return;
     }
-    if transition.active {
-        transition.elapsed += time.delta_secs();
-        if transition.elapsed >= SaveLoadPageTransition::SECONDS {
-            transition.active = false;
-            transition.elapsed = 0.0;
-            transition.direction = 0.0;
-        }
+    transition.elapsed += time.delta_secs();
+    if ui.mode.is_none() || transition.elapsed >= SaveLoadPageTransition::SECONDS {
+        *transition = SaveLoadPageTransition::default();
     }
 }
 
@@ -33,14 +27,14 @@ pub fn animate_save_load_content(
     mut context: SaveLoadFadeContext,
     mut cache: Local<SaveLoadContentFadeCache>,
 ) {
-    let Some(_content) = context.contents.iter().next() else {
+    if context.contents.is_empty() {
         cache.active = false;
         cache.text.clear();
         cache.background.clear();
         cache.border.clear();
         cache.image.clear();
         return;
-    };
+    }
     let Ok((root, root_fade, visibility)) = context.roots.single() else {
         return;
     };
@@ -160,8 +154,13 @@ pub fn animate_save_load_grid_track(
             if grid.phase == SaveLoadGridPhase::Outgoing {
                 commands.entity(entity).despawn();
             } else {
-                grid.phase = SaveLoadGridPhase::Settled;
-                transform.translation = Val2::ZERO;
+                if grid.phase != SaveLoadGridPhase::Settled {
+                    grid.phase = SaveLoadGridPhase::Settled;
+                }
+                transform
+                    .reborrow()
+                    .map_unchanged(|transform| &mut transform.translation)
+                    .set_if_neq(Val2::ZERO);
             }
         }
         return;
@@ -295,12 +294,101 @@ pub fn animate_save_load_pages(
         for child in children.iter() {
             if let Ok((mut color, mut font)) = labels.get_mut(child) {
                 color.0 = Color::srgba(1.0, 1.0, 1.0, visual.text);
-                font.weight = if visual.selected || hovered {
+                let weight = if visual.selected || hovered {
                     FontWeight::BOLD
                 } else {
                     FontWeight::NORMAL
                 };
+                font.reborrow()
+                    .map_unchanged(|font| &mut font.weight)
+                    .set_if_neq(weight);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grid_settles_once_and_removes_outgoing_page() {
+        #[derive(Resource, Default)]
+        struct Writes([usize; 2]);
+        fn count(
+            transforms: Query<(), (With<SaveLoadSlotGrid>, Changed<UiTransform>)>,
+            grids: Query<(), Changed<SaveLoadSlotGrid>>,
+            mut writes: ResMut<Writes>,
+        ) {
+            writes.0 = [transforms.iter().count(), grids.iter().count()];
+        }
+        let mut app = App::new();
+        app.init_resource::<Writes>();
+        app.init_resource::<Time>()
+            .init_resource::<SaveLoadUi>()
+            .init_resource::<SaveLoadPageTransition>()
+            .add_systems(
+                Update,
+                (animate_page_transition, animate_save_load_grid_track, count).chain(),
+            );
+        let incoming = app
+            .world_mut()
+            .spawn((
+                SaveLoadSlotGrid {
+                    phase: SaveLoadGridPhase::Incoming,
+                },
+                UiTransform::from_xy(Val::Px(100.0), Val::ZERO),
+                ComputedNode::default(),
+            ))
+            .id();
+        let outgoing = app
+            .world_mut()
+            .spawn((
+                SaveLoadSlotGrid {
+                    phase: SaveLoadGridPhase::Outgoing,
+                },
+                UiTransform::default(),
+                ComputedNode::default(),
+            ))
+            .id();
+        app.world_mut().resource_mut::<SaveLoadUi>().mode = Some(SaveLoadMode::Load);
+        app.world_mut()
+            .resource_mut::<SaveLoadPageTransition>()
+            .begin(1.0);
+        app.update();
+        assert_ne!(
+            app.world()
+                .get::<UiTransform>(incoming)
+                .unwrap()
+                .translation,
+            Val2::ZERO
+        );
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs_f32(
+                SaveLoadPageTransition::SECONDS,
+            ));
+        app.update();
+        assert!(app.world().get_entity(outgoing).is_err());
+        assert_eq!(
+            app.world()
+                .get::<UiTransform>(incoming)
+                .unwrap()
+                .translation,
+            Val2::ZERO
+        );
+        app.update();
+        assert_eq!(app.world().resource::<Writes>().0[0], 0);
+        assert_eq!(app.world().resource::<Writes>().0[1], 0);
+        app.world_mut()
+            .resource_mut::<SaveLoadPageTransition>()
+            .begin(-1.0);
+        app.world_mut().resource_mut::<SaveLoadUi>().mode = None;
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<SaveLoadPageTransition>()
+                .is_animating()
+        );
     }
 }

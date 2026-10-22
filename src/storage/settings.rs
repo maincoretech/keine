@@ -180,7 +180,7 @@ mod tests {
     }
 
     #[test]
-    fn persists_runtime_settings() {
+    fn settings_round_trip_and_legacy_recovery_preserve_values() {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -202,30 +202,9 @@ mod tests {
         };
 
         persist(&expected, &root).unwrap();
-        let actual = load(&root).unwrap();
-        assert_eq!(actual.master_volume, expected.master_volume);
-        assert_eq!(actual.locale, expected.locale);
-        assert_eq!(actual.vocal_volume, expected.vocal_volume);
-        assert_eq!(actual.bgm_volume, expected.bgm_volume);
-        assert_eq!(actual.se_volume, expected.se_volume);
-        assert_eq!(actual.ui_se_volume, expected.ui_se_volume);
-        assert_eq!(actual.typewriter_speed, expected.typewriter_speed);
-        assert_eq!(actual.auto_delay, expected.auto_delay);
-        assert_eq!(actual.text_size, expected.text_size);
-        assert_eq!(actual.textbox_opacity, expected.textbox_opacity);
-        assert_eq!(actual.fullscreen, expected.fullscreen);
-        assert_eq!(actual.skip_all, expected.skip_all);
-        let _ = fs::remove_dir_all(root);
-    }
+        assert_eq!(load(&root).unwrap(), expected);
 
-    #[test]
-    fn rejects_unversioned_settings() {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("keine-legacy-settings-{nonce}"));
-        fs::create_dir_all(root.join("saves")).unwrap();
+        // Replace the saved file with the old unversioned format, then recover it.
         fs::write(
             path(&root),
             postcard::to_stdvec(&RuntimeSettings::default()).unwrap(),
@@ -239,7 +218,7 @@ mod tests {
             fs::read(root.join("saves/settings.bin.recovery-1")).unwrap(),
             original
         );
-        assert!(load(&root).is_some());
+        assert_eq!(load(&root).unwrap(), RuntimeSettings::default());
         let _ = fs::remove_dir_all(root);
     }
 }

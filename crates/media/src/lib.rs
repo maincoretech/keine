@@ -279,38 +279,18 @@ mod tests {
 
     #[test]
     fn enforces_source_and_output_pixel_budgets() {
-        assert!(
-            check_pixel_budget(
-                "source",
-                ImageSize::new(8_192, 8_192),
-                MAX_WEBP_SOURCE_PIXELS,
-            )
-            .is_ok()
-        );
-        assert!(
-            check_pixel_budget(
-                "source",
-                ImageSize::new(8_193, 8_192),
-                MAX_WEBP_SOURCE_PIXELS,
-            )
-            .is_err()
-        );
-        assert!(
-            check_pixel_budget(
-                "output",
-                ImageSize::new(4_096, 4_096),
-                MAX_WEBP_OUTPUT_PIXELS,
-            )
-            .is_ok()
-        );
-        assert!(
-            check_pixel_budget(
-                "output",
-                ImageSize::new(4_097, 4_096),
-                MAX_WEBP_OUTPUT_PIXELS,
-            )
-            .is_err()
-        );
+        for (kind, edge, limit) in [
+            ("source", 8_192, MAX_WEBP_SOURCE_PIXELS),
+            ("output", 4_096, MAX_WEBP_OUTPUT_PIXELS),
+        ] {
+            for (width, valid) in [(edge, true), (edge + 1, false)] {
+                assert_eq!(
+                    check_pixel_budget(kind, ImageSize::new(width, edge), limit).is_ok(),
+                    valid,
+                    "{kind}: {width} x {edge} pixels"
+                );
+            }
+        }
     }
 
     #[test]

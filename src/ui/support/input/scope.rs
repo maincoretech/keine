@@ -49,7 +49,7 @@ pub(crate) struct InputScopeContext<'w> {
 }
 
 pub(crate) fn sync(mut context: InputScopeContext) {
-    *context.scope = if context.loading.blocked || context.return_to_title.is_some() {
+    let scope = if context.loading.blocked || context.return_to_title.is_some() {
         UiInputScope::Loading
     } else if context.dialog.is_some() {
         UiInputScope::Dialog
@@ -66,6 +66,7 @@ pub(crate) fn sync(mut context: InputScopeContext) {
     } else {
         UiInputScope::Stage
     };
+    context.scope.set_if_neq(scope);
 }
 
 pub(crate) fn backlog_allowed(scope: Res<UiInputScope>) -> bool {

@@ -270,7 +270,7 @@ pub fn update_setting_visuals(
 pub(crate) fn animate_choice_visual(
     interaction: Interaction,
     selected: bool,
-    visual: &mut SettingChoiceVisual,
+    visual: &mut Mut<SettingChoiceVisual>,
     children: &Children,
     fills: &mut SettingChoiceFillQuery,
     choice_text: &mut Query<(&mut TextColor, &mut TextFont)>,
@@ -293,15 +293,18 @@ pub(crate) fn animate_choice_visual(
     for child in children.iter() {
         if let Ok((mut node, mut background)) = fills.get_mut(child) {
             node.width = Val::Percent(visual.fill);
-            background.0 = button_surface(OPTION_FILL_ALPHA);
+            background.set_if_neq(BackgroundColor(button_surface(OPTION_FILL_ALPHA)));
         }
         if let Ok((mut color, mut font)) = choice_text.get_mut(child) {
             color.0 = Color::srgba(1.0, 1.0, 1.0, visual.text_alpha);
-            font.weight = if selected {
+            let weight = if selected {
                 FontWeight::BOLD
             } else {
                 FontWeight::NORMAL
             };
+            font.reborrow()
+                .map_unchanged(|font| &mut font.weight)
+                .set_if_neq(weight);
         }
     }
 }
@@ -314,9 +317,11 @@ pub fn update_setting_bubbles(
     mut bubbles: Query<(&SettingValueBubble, &mut Node), Without<SettingSliderThumb>>,
 ) {
     for (kind, mut text) in &mut values {
-        let value = kind.0.value_text(kind.0.ratio(&settings));
-        if text.0 != value {
-            text.0 = value;
+        if settings.is_changed() || text.is_added() {
+            let value = kind.0.value_text(kind.0.ratio(&settings));
+            if text.0 != value {
+                text.0 = value;
+            }
         }
     }
     for (kind, mut node) in &mut bubbles {
@@ -479,6 +484,66 @@ mod touch_performance_tests {
     use super::*;
 
     #[test]
+    fn choice_animation_only_changes_font_when_selection_changes() {
+        #[derive(Resource, Default)]
+        struct Writes([usize; 3]);
+        fn count(
+            visuals: Query<(), Changed<SettingChoiceVisual>>,
+            fonts: Query<(), Changed<TextFont>>,
+            colors: Query<(), Changed<TextColor>>,
+            mut writes: ResMut<Writes>,
+        ) {
+            writes.0 = [
+                visuals.iter().count(),
+                fonts.iter().count(),
+                colors.iter().count(),
+            ];
+        }
+        let mut app = App::new();
+        app.init_resource::<Writes>();
+        app.init_resource::<Time>()
+            .init_resource::<RuntimeSettings>()
+            .init_resource::<ActiveSettingSlider>()
+            .add_systems(Update, (update_setting_visuals, count).chain());
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs_f32(1.0 / 60.0));
+        let label = app
+            .world_mut()
+            .spawn((Text::default(), TextFont::default(), TextColor::WHITE))
+            .id();
+        let button = app
+            .world_mut()
+            .spawn((
+                Interaction::None,
+                SettingChoice(SettingAction::SetSkip(true)),
+                SettingChoiceVisual::new(false),
+            ))
+            .add_child(label)
+            .id();
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<Writes>().0[0], 0);
+        *app.world_mut().get_mut::<Interaction>(button).unwrap() = Interaction::Hovered;
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<Writes>().0[2], 1);
+        assert_eq!(app.world().resource::<Writes>().0[1], 0);
+        app.world_mut().resource_mut::<RuntimeSettings>().skip_all = true;
+        app.update();
+        assert_eq!(
+            app.world().get::<TextFont>(label).unwrap().weight,
+            FontWeight::BOLD
+        );
+        app.world_mut().resource_mut::<RuntimeSettings>().skip_all = false;
+        app.update();
+        assert_eq!(
+            app.world().get::<TextFont>(label).unwrap().weight,
+            FontWeight::NORMAL
+        );
+    }
+
+    #[test]
     fn captured_slider_shows_only_its_live_value_until_release() {
         let mut app = App::new();
         app.init_resource::<RuntimeSettings>()
@@ -524,6 +589,13 @@ mod touch_performance_tests {
             app.world().get::<Node>(bubbles[0].0).unwrap().display,
             Display::None
         );
+        // Reopening the screen must initialize new labels with unchanged settings.
+        let rebuilt = app
+            .world_mut()
+            .spawn((SettingValueText(SettingKind::MasterVolume), Text::default()))
+            .id();
+        app.update();
+        assert_eq!(app.world().get::<Text>(rebuilt).unwrap().0, "25");
         // Desktop mouse hovering retains its existing hint.
         let mut sliders = app
             .world_mut()
