@@ -6,13 +6,14 @@ use std::sync::OnceLock;
 
 mod metrics;
 
-use criterion::{BatchSize, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 use keine_core::config::AssetSourceConfig;
 use keine_core::{Program, State, step};
 use keine_loader::{
     CompiledSceneV1, DiagnosticLevel, EncodeInput, IR_SCHEMA_VERSION, ProgramMetadataV1, decode,
     encode, load_project, load_scenes, parse_native_document, parse_native_scenes,
 };
+use std::hint::black_box;
 
 const ACTION_COUNT: usize = 100_000;
 

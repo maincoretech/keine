@@ -1,5 +1,6 @@
 //! Confirmation dialog view.
 use super::*;
+use crate::ui::foundation::Button;
 
 /// Spawn the dialog overlay + centred box when DialogRequest is present.
 pub fn spawn_dialog(

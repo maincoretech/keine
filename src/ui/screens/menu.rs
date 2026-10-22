@@ -1,5 +1,6 @@
 //! Shared chrome for the fixed SAVE / LOAD / CONFIG shell.
 
+use crate::ui::foundation::{Button, Interaction};
 use std::collections::HashMap;
 
 use bevy::camera::visibility::RenderLayers;

@@ -80,16 +80,18 @@ fn text_rebuild(cx: &mut gpui_kit::TestAppContext) {
                 "  hero: \"对白[wait=1000]继续\",\n".repeat(lines)
             );
             let text = Rope::from(source.as_str());
+            let mut map = DisplayMap::new(font.clone(), px(13.), Some(px(300.)));
+            map.set_text(&text, cx);
+            let mut resized_map = DisplayMap::new(font.clone(), px(13.), Some(px(320.)));
+            resized_map.set_text(&text, cx);
             let mut old = Vec::new();
             let mut new = Vec::new();
             let mut resize = Vec::new();
             let previous = Arc::new(
                 rows(
                     text.clone(),
-                    px(300.),
-                    (font.clone(), px(13.)),
+                    display_offsets(&map),
                     "shou",
-                    cx.text_system().clone(),
                     None,
                     &cancelled,
                 )
@@ -103,10 +105,8 @@ fn text_rebuild(cx: &mut gpui_kit::TestAppContext) {
                 std::hint::black_box(
                     rows(
                         text.clone(),
-                        px(300.),
-                        (font.clone(), px(13.)),
+                        display_offsets(&map),
                         "shou",
-                        cx.text_system().clone(),
                         None,
                         &cancelled,
                     )
@@ -117,10 +117,8 @@ fn text_rebuild(cx: &mut gpui_kit::TestAppContext) {
                 std::hint::black_box(
                     rows(
                         text.clone(),
-                        px(320.),
-                        (font.clone(), px(13.)),
+                        display_offsets(&resized_map),
                         "shou",
-                        cx.text_system().clone(),
                         Some(previous.clone()),
                         &cancelled,
                     )

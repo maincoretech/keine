@@ -379,8 +379,10 @@ fn import_frame(
                         height: frame.height,
                         depth: 1,
                     },
+                    None,
                 ),
                 &descriptor,
+                wgpu::TextureUses::COPY_SRC,
             )
     };
     Ok(ImportedFrame {

@@ -1014,7 +1014,7 @@ fn log_window_system(handles: Query<&bevy::window::RawHandleWrapper, With<Primar
 }
 
 fn log_renderer(adapter: Res<RenderAdapterInfo>, preprocessing: Res<GpuPreprocessingSupport>) {
-    let transient_memory = if adapter.transient_saves_memory {
+    let transient_memory = if adapter.transient_saves_memory == Some(true) {
         " · transient memory ✓"
     } else {
         ""
@@ -1052,7 +1052,7 @@ mod tests {
         use bevy::render::render_resource::{Extent3d, TextureFormat};
         use bevy::render::settings::{Backends, RenderCreation, WgpuSettings};
         use bevy::render::sync_world::RenderEntity;
-        use bevy::render::view::{ViewDepthTexture, ViewTarget};
+        use bevy::render::view::{ViewDepthStencilTexture, ViewTarget};
         use bevy::window::{ExitCondition, WindowPlugin};
 
         let mut app = App::new();
@@ -1109,7 +1109,7 @@ mod tests {
         let rendered = app.world().get::<RenderEntity>(dialog).unwrap().id();
         let render = app.sub_app(RenderApp).world();
         assert!(render.get::<ViewTarget>(rendered).is_some());
-        assert!(render.get::<ViewDepthTexture>(rendered).is_some());
+        assert!(render.get::<ViewDepthStencilTexture>(rendered).is_some());
         app.world_mut().get_mut::<Camera>(dialog).unwrap().is_active = false;
         app.world_mut()
             .resource_mut::<Assets<Image>>()
@@ -1132,14 +1132,14 @@ mod tests {
         println!(
             "sleeping camera retained attachments: color {}, depth {}",
             render.get::<ViewTarget>(rendered).is_some(),
-            render.get::<ViewDepthTexture>(rendered).is_some()
+            render.get::<ViewDepthStencilTexture>(rendered).is_some()
         );
         assert!(
             render.get::<ViewTarget>(rendered).is_none(),
             "sleeping camera pins old color/output views"
         );
         assert!(
-            render.get::<ViewDepthTexture>(rendered).is_none(),
+            render.get::<ViewDepthStencilTexture>(rendered).is_none(),
             "sleeping camera pins old depth texture"
         );
         app.world_mut().get_mut::<Camera>(dialog).unwrap().is_active = true;
@@ -1157,9 +1157,9 @@ mod tests {
         );
         assert_eq!(
             render
-                .get::<ViewDepthTexture>(rendered)
+                .get::<ViewDepthStencilTexture>(rendered)
                 .unwrap()
-                .texture
+                .texture()
                 .width(),
             64
         );

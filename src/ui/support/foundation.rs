@@ -9,6 +9,14 @@ use bevy::text::FontWeight;
 use bevy::ui::FocusPolicy;
 use keine_core::{DESIGN_HEIGHT, DESIGN_WIDTH};
 
+// Keep the existing focus/touch capture contract while Bevy transitions its
+// stock widgets to picking. No second input dispatcher is installed.
+pub(crate) use bevy::ui::DeprecatedInteraction as Interaction;
+
+#[derive(Component)]
+#[require(Node, Interaction, FocusPolicy::Block)]
+pub(crate) struct Button;
+
 pub(crate) const TEXT_FONT_PATH: &str = "embedded://keine/assets/fonts/MavenPro-CJK.ttf";
 pub(crate) const ICON_FONT_PATH: &str = "embedded://keine/assets/fonts/bootstrap-icons.ttf";
 

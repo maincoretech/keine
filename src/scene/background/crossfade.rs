@@ -4,7 +4,9 @@ use bevy::asset::{AssetPath, embedded_asset, embedded_path};
 use bevy::camera::visibility::RenderLayers;
 use bevy::core_pipeline::core_2d::Transparent2d;
 use bevy::prelude::*;
+use bevy::render::erased_render_asset::ErasedRenderAssets;
 use bevy::render::extract_component::{ExtractComponent, ExtractComponentPlugin};
+use bevy::render::material_bind_groups::MaterialBindGroupAllocators;
 use bevy::render::render_asset::RenderAssets;
 use bevy::render::render_phase::{
     AddRenderCommand, DrawFunctionId, DrawFunctions, RenderCommand, RenderCommandResult,
@@ -25,7 +27,7 @@ use bevy::sprite_render::{
 pub(crate) struct BackgroundCrossfadePlugin;
 impl Plugin for BackgroundCrossfadePlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "../../assets/shaders/stage/crossfade.wgsl");
+        embedded_asset!(app, "../../assets/shaders/stage/crossfade.wesl");
         app.add_plugins((
             Material2dPlugin::<BackgroundCrossfade>::default(),
             ExtractComponentPlugin::<CrossfadeSources>::default(),
@@ -66,7 +68,7 @@ impl BackgroundCrossfade {
 impl Material2d for BackgroundCrossfade {
     fn fragment_shader() -> ShaderRef {
         ShaderRef::Path(
-            AssetPath::from_path_buf(embedded_path!("../../assets/shaders/stage/crossfade.wgsl"))
+            AssetPath::from_path_buf(embedded_path!("../../assets/shaders/stage/crossfade.wesl"))
                 .with_source("embedded"),
         )
     }
@@ -74,6 +76,7 @@ impl Material2d for BackgroundCrossfade {
         AlphaMode2d::Blend
     }
     fn specialize(
+        _pipeline: &bevy::sprite_render::Material2dPipeline,
         descriptor: &mut RenderPipelineDescriptor,
         _layout: &bevy::mesh::MeshVertexBufferLayoutRef,
         _key: Material2dKey<Self>,
@@ -114,6 +117,7 @@ pub(super) fn eligible_progress(state: &GameState) -> Option<f32> {
 }
 
 #[derive(Component, Clone, PartialEq, ExtractComponent)]
+#[extract_app(bevy::render::RenderApp)]
 struct CrossfadeSources {
     material: AssetId<BackgroundCrossfade>,
     images: [AssetId<Image>; 2],
@@ -222,19 +226,33 @@ fn sources_match(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn select_crossfade(
     mut phases: ResMut<ViewSortedRenderPhases<Transparent2d>>,
     sources: Query<(&MainEntity, &CrossfadeSources)>,
-    materials: Res<RenderAssets<PreparedMaterial2d<BackgroundCrossfade>>>,
+    materials: Res<ErasedRenderAssets<PreparedMaterial2d>>,
+    allocators: Res<MaterialBindGroupAllocators>,
     images: Res<RenderAssets<GpuImage>>,
     pipelines: Res<PipelineCache>,
     functions: Res<DrawFunctions<Transparent2d>>,
+    mut previous_fallbacks: Local<Option<([Entity; 2], DrawFunctionId)>>,
 ) {
+    let functions = functions.read();
+    let skip = functions.id::<SkipCrossfade>();
+    // A completed/canceled fade may no longer have a CrossfadeSources entity.
+    // Restore last frame's suppressed sprites before inspecting the new fade.
+    if let Some((previous, draw_sprite)) = previous_fallbacks.take() {
+        for phase in phases.values_mut() {
+            for item in phase.items.values_mut() {
+                if previous.contains(&item.entity.1.id()) && item.draw_function == skip {
+                    item.draw_function = draw_sprite;
+                }
+            }
+        }
+    }
     let Ok((entity, sources)) = sources.single() else {
         return;
     };
-    let functions = functions.read();
-    let skip = functions.id::<SkipCrossfade>();
     for phase in phases.values_mut() {
         let Some(item) = phase
             .items
@@ -243,12 +261,39 @@ fn select_crossfade(
         else {
             continue;
         };
-        let material = materials.get(sources.material);
+        let material = materials.get(sources.material.untyped());
         let ready = pipelines.get_render_pipeline(item.pipeline).is_some()
             && material
-                .is_some_and(|material| sources_match(&material.bindings, sources.images, &images));
-        let draw = material.map_or(skip, |material| material.properties.draw_function_id);
-        choose_phase(phase, *entity, sources.fallbacks, draw, skip, ready);
+                .and_then(|material| {
+                    allocators
+                        .get(&std::any::TypeId::of::<BackgroundCrossfade>())?
+                        .get(material.binding.group)?
+                        .non_bindless_bindings()
+                })
+                .is_some_and(|bindings| sources_match(bindings, sources.images, &images));
+        let draw = material.map_or(skip, |material| {
+            material
+                .properties
+                .get_draw_function(bevy::sprite_render::Pass2dTransparentDrawFunction)
+                .unwrap_or(skip)
+        });
+        let fallback_draw = phase
+            .items
+            .values()
+            .find(|item| sources.fallbacks.contains(&item.entity.1.id()))
+            .map_or(draw, |item| item.draw_function);
+        if ready {
+            *previous_fallbacks = Some((sources.fallbacks, fallback_draw));
+        }
+        choose_phase(
+            phase,
+            *entity,
+            sources.fallbacks,
+            draw,
+            fallback_draw,
+            skip,
+            ready,
+        );
     }
 }
 
@@ -257,6 +302,7 @@ fn choose_phase(
     entity: MainEntity,
     fallbacks: [Entity; 2],
     draw: DrawFunctionId,
+    fallback_draw: DrawFunctionId,
     skip: DrawFunctionId,
     ready: bool,
 ) {
@@ -268,13 +314,12 @@ fn choose_phase(
         return;
     };
     item.draw_function = if ready { draw } else { skip };
-    if ready {
-        // Sprite phase items are transient and requeued every frame. The
-        // combined mesh item is retained: keep it queued even while its
-        // pipeline/material is pending, so retry can activate next frame.
-        phase
-            .items
-            .retain(|_, item| !fallbacks.contains(&item.entity.1.id()));
+    // Sprites now share the retained Mesh2d phase. Keep both fallback entries
+    // so a lost/replaced texture can restore them without waiting for requeue.
+    for item in phase.items.values_mut() {
+        if fallbacks.contains(&item.entity.1.id()) {
+            item.draw_function = if ready { skip } else { fallback_draw };
+        }
     }
 }
 
@@ -319,23 +364,34 @@ mod tests {
             .get_mut(&view)
             .unwrap()
             .add_retained(item(ids[2], Entity::PLACEHOLDER));
+        for id in [ids[0], ids[1], ids[3]] {
+            phases.get_mut(&view).unwrap().add_retained(item(id, id));
+        }
         for ready in [false, true, false, true] {
             phases.prepare_for_new_frame(view);
             let phase = phases.get_mut(&view).unwrap();
-            for id in [ids[0], ids[1], ids[3]] {
-                phase.add_transient(item(id, id));
-            }
-            choose_phase(phase, ids[2].into(), [ids[0], ids[1]], draw, skip, ready);
+            choose_phase(
+                phase,
+                ids[2].into(),
+                [ids[0], ids[1]],
+                draw,
+                draw,
+                skip,
+                ready,
+            );
             let combined = phase
                 .items
                 .get(&(Entity::PLACEHOLDER, ids[2].into()))
                 .unwrap();
             assert_eq!(combined.draw_function, if ready { draw } else { skip });
             for id in [ids[0], ids[1]] {
-                assert_eq!(phase.items.contains_key(&(id, id.into())), !ready);
+                assert_eq!(
+                    phase.items.get(&(id, id.into())).unwrap().draw_function,
+                    if ready { skip } else { draw }
+                );
             }
             assert!(phase.items.contains_key(&(ids[3], ids[3].into())));
-            assert_eq!(phase.items.len(), if ready { 2 } else { 4 });
+            assert_eq!(phase.items.len(), 4);
         }
     }
 
@@ -514,12 +570,12 @@ mod gpu_tests {
 
         // Execute the production fragment against two ordinary source-over
         // reference draws. sRGB attachments retain the existing rounding step.
-        let production = include_str!("../../assets/shaders/stage/crossfade.wgsl")
+        let production = include_str!("../../assets/shaders/stage/crossfade.wesl")
             .lines()
-            .filter(|line| !line.starts_with("#import"))
+            .filter(|line| !line.starts_with("import "))
             .collect::<Vec<_>>()
             .join("\n")
-            .replace("#{MATERIAL_BIND_GROUP}", "0");
+            .replace("constants::MATERIAL_BIND_GROUP", "0");
         let source = format!(
             r#"
 struct VertexOutput {{ @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> }}
@@ -702,7 +758,10 @@ struct VertexOutput {{ @builtin(position) position: vec4<f32>, @location(0) uv: 
                     .recv_timeout(std::time::Duration::from_secs(10))
                     .unwrap()
                     .unwrap();
-                let bytes = readback.slice(..).get_mapped_range();
+                let bytes = readback
+                    .slice(..)
+                    .get_mapped_range()
+                    .expect("mapped readback buffer");
                 let difference = bytes[..2048]
                     .iter()
                     .zip(&bytes[2048..])

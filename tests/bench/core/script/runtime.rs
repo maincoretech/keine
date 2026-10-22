@@ -6,10 +6,9 @@
 
 use std::sync::OnceLock;
 
-use criterion::{
-    BatchSize, BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main,
-};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use keine_core::{Action, Program, SayOptions, State, StepResult, Value, step};
+use std::hint::black_box;
 
 const ACTION_COUNT: usize = 100_000;
 const DIALOGUE_TURNS: usize = 1_000;

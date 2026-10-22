@@ -3,9 +3,10 @@
 
 use std::path::{Path, PathBuf};
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use keine_core::Program;
 use keine_loader::{AdaptedProject, LoaderRegistry, load_scenes};
+use std::hint::black_box;
 
 const EXPECTED_ACTIONS: u64 = 896;
 

@@ -1,5 +1,5 @@
-#import bevy_sprite::mesh2d_vertex_output::VertexOutput
-#import bevy_sprite::mesh2d_view_bindings::globals
+import bevy_sprite_render::mesh2d::vertex_output::VertexOutput;
+import bevy_sprite_render::mesh2d::view_bindings::globals;
 
 struct StageMaterialUniform {
     tint: vec4<f32>,
@@ -34,13 +34,13 @@ struct StageMaterialUniform {
     clip_c: vec4<f32>,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> material: StageMaterialUniform;
-@group(#{MATERIAL_BIND_GROUP}) @binding(1) var lut_texture: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(2) var lut_sampler: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(3) var color_texture: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(4) var color_sampler: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(5) var clip_texture: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(6) var clip_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> material: StageMaterialUniform;
+@group(constants::MATERIAL_BIND_GROUP) @binding(1) var lut_texture: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(2) var lut_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(3) var color_texture: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(4) var color_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(5) var clip_texture: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(6) var clip_sampler: sampler;
 
 fn noise(point: vec2<f32>) -> f32 {
     return fract(sin(dot(point, vec2<f32>(12.9898, 78.233))) * 43758.5453);
@@ -59,13 +59,14 @@ fn smooth_noise(point: vec2<f32>) -> f32 {
     return mix(lower, upper, blend.y);
 }
 
-#ifdef STAGE_CLIP
+@if(STAGE_CLIP)
 fn rotate_2d(point: vec2<f32>, angle: f32) -> vec2<f32> {
     let sine = sin(angle);
     let cosine = cos(angle);
     return vec2<f32>(point.x * cosine - point.y * sine, point.x * sine + point.y * cosine);
 }
 
+@if(STAGE_CLIP)
 fn fitted_mask_uv(source: vec2<f32>, fit: u32) -> vec2<f32> {
     if fit == 0u {
         return source;
@@ -89,6 +90,7 @@ fn fitted_mask_uv(source: vec2<f32>, fit: u32) -> vec2<f32> {
     return uv;
 }
 
+@if(STAGE_CLIP)
 fn stage_clip_coverage(world_position: vec2<f32>) -> f32 {
     if material.clip_a.x <= 0.001 {
         return 1.0;
@@ -124,7 +126,7 @@ fn stage_clip_coverage(world_position: vec2<f32>) -> f32 {
     }
     return mix(1.0, coverage, clamp(material.clip_a.x, 0.0, 1.0));
 }
-#endif
+
 
 fn distort_uv(uv: vec2<f32>) -> vec2<f32> {
     let dimensions = vec2<f32>(textureDimensions(color_texture));
@@ -197,7 +199,7 @@ fn animate_uv(source: vec2<f32>) -> vec2<f32> {
     return uv;
 }
 
-#ifdef STAGE_BLUR
+@if(STAGE_BLUR)
 fn sample_blurred(uv: vec2<f32>) -> vec4<f32> {
     let blur = max(0.0, material.filter_data.x + material.post_a.w);
     var color = textureSample(color_texture, color_sampler, uv);
@@ -224,9 +226,9 @@ fn sample_blurred(uv: vec2<f32>) -> vec4<f32> {
     }
     return color;
 }
-#endif
 
-#ifdef STAGE_OPTICAL
+
+@if(STAGE_OPTICAL)
 fn sample_camera_effects(uv: vec2<f32>, edge_uv: vec2<f32>) -> vec4<f32> {
     let dimensions = vec2<f32>(textureDimensions(color_texture));
     let texel = vec2<f32>(1.0) / dimensions;
@@ -282,7 +284,7 @@ fn sample_camera_effects(uv: vec2<f32>, edge_uv: vec2<f32>) -> vec4<f32> {
     }
     return color;
 }
-#endif
+
 
 fn apply_basic_filter(color: vec4<f32>) -> vec4<f32> {
     let luminance = dot(color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
@@ -501,7 +503,7 @@ fn apply_post(color: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {
         let quantized = floor(clamp(result.rgb + threshold, vec3<f32>(0.0), vec3<f32>(1.0)) * levels) / levels;
         result = vec4<f32>(mix(result.rgb, quantized, material.post_p.w), result.a);
     }
-#ifdef STAGE_OUTLINE
+@if(STAGE_OUTLINE) {
     if material.post_q.y > 0.001 {
         let texel = vec2<f32>(material.post_q.z) / vec2<f32>(textureDimensions(color_texture));
         let left = textureSample(color_texture, color_sampler, clamp(uv - vec2<f32>(texel.x, 0.0), vec2<f32>(0.0), vec2<f32>(1.0))).rgb;
@@ -511,7 +513,7 @@ fn apply_post(color: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {
         let edge = clamp(length(left - right) + length(up - down), 0.0, 1.0);
         result = vec4<f32>(mix(result.rgb, vec3<f32>(edge), material.post_q.y), result.a);
     }
-#endif
+}
     if material.post_q.w < 0.999 {
         let centered = uv - vec2<f32>(material.post_r.w, material.post_s.x);
         let horizontal = abs(centered.x) / max(material.post_r.x, 0.001);
@@ -524,7 +526,7 @@ fn apply_post(color: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {
 
 @fragment
 fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
-#ifdef STAGE_COMPLEX
+@if(STAGE_COMPLEX) {
     let kind = u32(material.transition_data.x + 0.5);
     let progress = clamp(material.transition_data.y, 0.0, 1.0);
     if kind == 1u && mesh.uv.x > progress {
@@ -569,8 +571,8 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     let dimensions = vec2<f32>(textureDimensions(color_texture));
     let half_texel = vec2<f32>(0.5) / dimensions;
     uv = clamp(uv, half_texel, vec2<f32>(1.0) - half_texel);
-#ifdef STAGE_BLUR
     var color = vec4<f32>(0.0);
+@if(STAGE_BLUR) {
     if material.post_b.w > 0.001 {
         // Shock replaces the complete source color. Build it directly instead
         // of paying for a blurred/optical sample that would be discarded.
@@ -606,15 +608,15 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
             zoom.a,
         );
     } else {
-#ifdef STAGE_OPTICAL
+@if(STAGE_OPTICAL) {
         color = apply_basic_filter(sample_camera_effects(uv, edge_uv)) * material.tint;
-#else
+} @else {
         color = apply_basic_filter(sample_blurred(uv)) * material.tint;
-#endif
+}
     }
-#else
-    var color = apply_basic_filter(textureSample(color_texture, color_sampler, uv)) * material.tint;
-#endif
+} @else {
+    color = apply_basic_filter(textureSample(color_texture, color_sampler, uv)) * material.tint;
+}
     let ray = godray(uv);
     color = vec4<f32>(color.rgb + vec3<f32>(ray), color.a);
     if material.post_a.y > 0.001 {
@@ -679,14 +681,14 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
             color.a,
         );
     }
-#ifdef STAGE_BLUR
+@if(STAGE_BLUR) {
     if (effects & 16u) != 0u {
         let offset = vec2<f32>(0.007 + 0.002 * sin(globals.time * 18.0), 0.0);
         let red = sample_blurred(clamp(uv + offset, vec2<f32>(0.0), vec2<f32>(1.0))).r;
         let blue = sample_blurred(clamp(uv - offset, vec2<f32>(0.0), vec2<f32>(1.0))).b;
         color = vec4<f32>(red, color.g, blue, color.a);
     }
-#endif
+}
     if (effects & 32u) != 0u {
         let source = -0.10 + fract(globals.time * 0.018) * 1.20;
         let ray = pow(max(0.0, 1.0 - abs(uv.x - source) * 2.2), 3.0)
@@ -698,33 +700,33 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
         );
     }
     color = vec4<f32>(color.rgb, color.a * edge_coverage);
-#ifdef STAGE_CLIP
+@if(STAGE_CLIP) {
     color = vec4<f32>(color.rgb, color.a * stage_clip_coverage(mesh.world_position.xy));
-#endif
-#ifdef BLEND_MULTIPLY
+}
+@if(BLEND_MULTIPLY) {
     // Pixi/WebGAL's multiply is perceived in display space. Bevy samples the
     // sRGB texture into linear space, so feeding raw linear RGB to the fixed
     // blend factors makes the result visibly too dark. Restore perceptual RGB
     // before premultiplying while keeping the standard source-over coverage.
     let perceptual = pow(max(color.rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
     color = vec4<f32>(perceptual * color.a, color.a);
-#endif
-#ifdef BLEND_SCREEN
+}
+@if(BLEND_SCREEN) {
     color = vec4<f32>(color.rgb * color.a, color.a);
-#endif
+}
     return color;
-#else
+} @else {
     var color = textureSample(color_texture, color_sampler, mesh.uv) * material.tint;
-#ifdef STAGE_CLIP
+@if(STAGE_CLIP) {
     color = vec4<f32>(color.rgb, color.a * stage_clip_coverage(mesh.world_position.xy));
-#endif
-#ifdef BLEND_MULTIPLY
+}
+@if(BLEND_MULTIPLY) {
     let perceptual = pow(max(color.rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
     color = vec4<f32>(perceptual * color.a, color.a);
-#endif
-#ifdef BLEND_SCREEN
+}
+@if(BLEND_SCREEN) {
     color = vec4<f32>(color.rgb * color.a, color.a);
-#endif
+}
     return color;
-#endif
+}
 }

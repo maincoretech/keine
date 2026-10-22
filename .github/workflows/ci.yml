@@ -115,12 +115,13 @@ jobs:
       - name: Set up video dependencies
         if: matrix.platform != 'macOS arm64'
         uses: ./.github/actions/setup-video
+      # Inspect the Engine dependency tree directly: Editor may use another wgpu.
       - name: Guard Linux window and renderer features
         if: runner.os == 'Linux'
         shell: bash
         run: |
           cargo tree --locked -p keine --no-default-features --features ui-sounds -e normal,build,features -i winit > "$RUNNER_TEMP/winit-features.txt"
-          cargo tree --locked -p keine --no-default-features --features ui-sounds -e normal,build,features -i wgpu > "$RUNNER_TEMP/wgpu-features.txt"
+          cargo tree --locked -p keine --no-default-features --features ui-sounds -e normal,build,features --prefix none > "$RUNNER_TEMP/wgpu-features.txt"
           for feature in x11 wayland; do
             grep -E "(^|[[:space:]])winit feature \"$feature\"" "$RUNNER_TEMP/winit-features.txt"
           done
@@ -131,7 +132,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          cargo tree --locked -p keine --no-default-features --features ui-sounds -e normal,build,features -i wgpu > "$RUNNER_TEMP/wgpu-features.txt"
+          cargo tree --locked -p keine --no-default-features --features ui-sounds -e normal,build,features --prefix none > "$RUNNER_TEMP/wgpu-features.txt"
           for feature in dx12 vulkan gles; do
             grep -E "(^|[[:space:]])wgpu feature \"$feature\"" "$RUNNER_TEMP/wgpu-features.txt"
           done
@@ -235,7 +236,7 @@ jobs:
             exit 1
           fi
           cargo tree --locked -p keine --target aarch64-linux-android \
-            --no-default-features --features ui-sounds -e features -i wgpu \
+            --no-default-features --features ui-sounds -e normal,build,features --prefix none \
             > "$RUNNER_TEMP/android-render-features.txt"
           for backend in vulkan gles; do
             grep -F "wgpu feature \"$backend\"" "$RUNNER_TEMP/android-render-features.txt"

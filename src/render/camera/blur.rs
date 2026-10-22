@@ -26,6 +26,7 @@ const ACTIVE: f32 = 0.001;
 /// Three `Vec4`s keep the extracted uniform compact and naturally aligned on
 /// all supported graphics backends.
 #[derive(Component, Clone, Copy, Debug, Default, ExtractComponent, ShaderType)]
+#[extract_app(bevy::render::RenderApp)]
 pub(crate) struct CompositedCameraEffects {
     params_a: Vec4,
     params_b: Vec4,

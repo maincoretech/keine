@@ -1,9 +1,9 @@
 use bevy::camera::visibility::InheritedVisibility;
-use bevy::math::{Affine2, Rect};
+use bevy::math::Affine2;
 use bevy::prelude::*;
-use bevy::render::{Extract, ExtractSchedule, RenderApp, sync_world::TemporaryRenderEntity};
+use bevy::render::{Extract, ExtractSchedule, RenderApp, sync_world::MainEntity};
+use bevy::text::EditableText;
 use bevy::text::TextLayoutInfo;
-use bevy::ui::widget::TextScroll;
 use bevy::ui::{CalculatedClip, ComputedStackIndex, ComputedUiTargetCamera};
 use bevy::ui_render::{
     ExtractedGlyph, ExtractedUiItem, ExtractedUiNode, ExtractedUiNodes, RenderUiSystems,
@@ -39,7 +39,7 @@ type SoftShadowNodeQuery<'w, 's> = Query<
         &'static TextLayoutInfo,
         &'static TextColor,
         &'static SoftTextShadow,
-        Option<&'static TextScroll>,
+        Option<&'static EditableText>,
     ),
 >;
 
@@ -88,6 +88,9 @@ fn extract_soft_text_shadows(
         text_scroll,
     ) in &nodes
     {
+        if !extracted.changed.contains(&MainEntity::from(entity)) {
+            continue;
+        }
         if !inherited_visibility.get() || node.is_empty() || text_color.0.alpha() <= 0.0 {
             continue;
         }
@@ -111,7 +114,7 @@ fn extract_soft_text_shadows(
             let transform = Affine2::from(*global_transform)
                 * Affine2::from_translation(
                     node.content_box().min + offset
-                        - text_scroll.map_or(Vec2::ZERO, |scroll| scroll.0),
+                        - text_scroll.map_or(Vec2::ZERO, |scroll| scroll.viewport.offset),
                 );
             extract_glyph_run(
                 &mut commands,
@@ -119,7 +122,7 @@ fn extract_soft_text_shadows(
                 layout,
                 color,
                 transform,
-                clip,
+                clip.clone(),
                 camera,
                 entity,
                 stack_index.0 as f32 + stack_z_offsets::TEXT,
@@ -132,20 +135,27 @@ fn text_clip(
     node: &ComputedNode,
     transform: &UiGlobalTransform,
     maybe_clip: Option<&CalculatedClip>,
-    scroll: Option<&TextScroll>,
+    scroll: Option<&EditableText>,
     shadow_radius: f32,
-) -> Option<Rect> {
+) -> Option<CalculatedClip> {
     if scroll.is_some() {
-        let content = node.content_box();
-        let text_clip = Rect::from_center_size(
-            transform.affine().translation + content.center(),
-            content.size(),
-        );
-        Some(maybe_clip.map_or(text_clip, |clip| clip.clip.intersect(text_clip)))
+        Some(
+            maybe_clip
+                .cloned()
+                .unwrap_or_default()
+                .with_rect(node.content_box(), transform),
+        )
     } else {
-        maybe_clip.map(|clip| Rect {
-            min: clip.clip.min - Vec2::splat(shadow_radius),
-            max: clip.clip.max + Vec2::splat(shadow_radius),
+        maybe_clip.cloned().map(|mut clip| {
+            if let CalculatedClip::Rects(rects) = &mut clip {
+                for region in rects {
+                    let matrix = region.world_to_clip_local.matrix2;
+                    let padding = (matrix.x_axis.abs() + matrix.y_axis.abs()) * shadow_radius;
+                    region.rect.min -= padding;
+                    region.rect.max += padding;
+                }
+            }
+            clip
         })
     }
 }
@@ -157,15 +167,14 @@ fn extract_glyph_run(
     layout: &TextLayoutInfo,
     color: Color,
     transform: Affine2,
-    clip: Option<Rect>,
+    clip: Option<CalculatedClip>,
     camera: Entity,
     entity: Entity,
     z_order: f32,
 ) {
-    let mut start = extracted.glyphs.len();
+    let mut glyphs = Vec::new();
     for (index, glyph) in layout.glyphs.iter().enumerate() {
-        let end = extracted.glyphs.len() + 1;
-        extracted.glyphs.push(ExtractedGlyph {
+        glyphs.push(ExtractedGlyph {
             color: color.into(),
             translation: glyph.position,
             rect: glyph.atlas_info.rect,
@@ -174,17 +183,23 @@ fn extract_glyph_run(
             next.section_index != glyph.section_index
                 || next.atlas_info.texture != glyph.atlas_info.texture
         }) {
-            extracted.uinodes.push(ExtractedUiNode {
-                transform,
-                z_order,
-                render_entity: commands.spawn(TemporaryRenderEntity).id(),
-                image: glyph.atlas_info.texture,
-                clip,
-                extracted_camera_entity: camera,
-                item: ExtractedUiItem::Glyphs { range: start..end },
-                main_entity: entity.into(),
-            });
-            start = end;
+            extracted
+                .uinodes
+                .entry(entity.into())
+                .or_insert_with(|| (camera, default()))
+                .1
+                .insert(
+                    commands.spawn_empty().id(),
+                    ExtractedUiNode {
+                        transform,
+                        z_order,
+                        image: glyph.atlas_info.texture,
+                        clip: clip.clone(),
+                        item: ExtractedUiItem::Glyphs {
+                            glyphs: std::mem::take(&mut glyphs),
+                        },
+                    },
+                );
         }
     }
 }

@@ -162,11 +162,13 @@ mod tests {
                     std::iter::once((
                         Entity::PLACEHOLDER,
                         0,
-                        text,
-                        &self.font,
-                        Color::WHITE,
-                        LineHeight::default(),
-                        bevy::text::LetterSpacing::default(),
+                        bevy::text::TextElement::Text {
+                            text,
+                            font: &self.font,
+                            color: Color::WHITE,
+                            line_height: LineHeight::default(),
+                            letter_spacing: bevy::text::LetterSpacing::default(),
+                        },
                     )),
                     LineBreak::AnyCharacter,
                     Justify::Left,
@@ -176,7 +178,7 @@ mod tests {
                     &mut self.font_cx,
                     &mut self.layout_cx,
                     Vec2::new(1920.0, 1080.0),
-                    16.0,
+                    bevy::text::RemSize(16.0),
                 )
                 .unwrap();
             self.pipeline

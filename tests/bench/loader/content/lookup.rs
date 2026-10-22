@@ -1,9 +1,10 @@
 use std::path::Path;
 use std::sync::OnceLock;
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use hakutaku_pack::{Identity, PackOptions, pack_directory};
 use keine_loader::{ContentBackend, ContentMount, HakutakuArchive, OpenPolicy};
+use std::hint::black_box;
 
 const DIRECTORY_COUNT: usize = 64;
 const FILES_PER_DIRECTORY: usize = 128;

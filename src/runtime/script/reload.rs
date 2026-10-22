@@ -25,6 +25,7 @@ use super::seek::try_sync_editor_cursor;
 #[cfg(feature = "hot-reload")]
 use super::{TickContext, TypewriterClock};
 use crate::runtime::resources::{LocalAssetManifest, LocalSceneAssets};
+use anyhow::Context as ContextExt;
 use bevy::prelude::*;
 use keine_core::{Program, State, config::GameConfig};
 use keine_loader::{Diagnostic, DiagnosticLevel};
@@ -179,8 +180,6 @@ fn start_pending_reload(
     languages: &keine_loader::ScriptLanguageRegistry,
     config: &GameConfig,
 ) -> anyhow::Result<()> {
-    use anyhow::Context as _;
-
     if pipeline.running.is_some() || pipeline.pending_change_count == 0 {
         return Ok(());
     }
@@ -238,8 +237,6 @@ pub(crate) fn build_hot_reload(
     languages: &keine_loader::ScriptLanguageRegistry,
     active_config: &GameConfig,
 ) -> anyhow::Result<HotReloadBuild> {
-    use anyhow::Context as _;
-
     let config = content
         .reload_config()
         .context("failed to reload project config")?;

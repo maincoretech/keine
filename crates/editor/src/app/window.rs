@@ -1337,8 +1337,6 @@ impl WorkbenchWindow {
 
 impl Render for WorkbenchWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let dialogs = Root::render_dialog_layer(window, cx);
-        let notifications = Root::render_notification_layer(window, cx);
         let main = if let Some(workspace) = &self.workspace {
             div()
                 .id("dock-host")
@@ -1425,8 +1423,6 @@ impl Render for WorkbenchWindow {
                     .child(self.render_activity_rail(window, cx))
                     .child(main),
             )
-            .children(dialogs)
-            .children(notifications)
     }
 }
 

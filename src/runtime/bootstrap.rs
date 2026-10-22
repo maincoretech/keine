@@ -1,3 +1,4 @@
+use anyhow::Context as ContextExt;
 use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -6,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Instant;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use bevy::asset::io::AssetSourceId;
 use bevy::asset::{AssetApp, AssetPlugin, RenderAssetUsages};
 use bevy::camera::visibility::RenderLayers;

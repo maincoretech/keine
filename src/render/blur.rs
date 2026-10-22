@@ -42,6 +42,7 @@ pub(super) enum BlurRenderSet {
 
 // ── BlurCamera ──
 #[derive(Component, Clone, ExtractComponent, ShaderType)]
+#[extract_app(bevy::render::RenderApp)]
 pub struct BlurCamera {
     pub count: u32,
     pub _pad: UVec3,
@@ -59,10 +60,12 @@ pub(crate) struct BlurRect {
 
 /// The layer-0 camera applies regional blur behind the regular UI.
 #[derive(Component, Clone, ExtractComponent)]
+#[extract_app(bevy::render::RenderApp)]
 pub struct SceneBlurCamera;
 
 /// The layer-1 camera applies full-screen blur behind a modal dialog.
 #[derive(Component, Clone, ExtractComponent)]
+#[extract_app(bevy::render::RenderApp)]
 pub struct UiBlurCamera;
 
 /// The layer-2 camera renders modal UI after all backdrop processing.
@@ -245,6 +248,7 @@ impl SpecializedRenderPipeline for BlurPipeline {
             immediate_size: 0,
             vertex: self.vertex.clone(),
             fragment: Some(FragmentState {
+                constants: default(),
                 shader: self.shader.clone(),
                 shader_defs: vec![],
                 entry_point: Some(Cow::Borrowed(if key.vertical {
@@ -1249,7 +1253,10 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(10))
             .unwrap()
             .unwrap();
-        let bytes = readback.slice(..).get_mapped_range();
+        let bytes = readback
+            .slice(..)
+            .get_mapped_range()
+            .expect("mapped readback buffer");
         for pixel in bytes.as_chunks::<16>().0 {
             for (actual, expected) in pixel.as_chunks::<4>().0.iter().zip([64., 128., 192., 255.]) {
                 let actual = f32::from_ne_bytes(*actual);

@@ -1,5 +1,6 @@
 //! Confirmation dialog actions.
 use super::*;
+use crate::ui::foundation::Interaction;
 
 #[derive(SystemParam)]
 pub(crate) struct QuickSaveContext<'w, 's> {

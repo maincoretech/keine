@@ -2,10 +2,11 @@
 
 use std::io::Cursor;
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use keine_core::{State, Value};
 use keine_loader::{KeineStore, StoreAdapter};
 use libwebp_sys::{WebPEncodeLosslessRGB, WebPEncodeRGBA, WebPFree};
+use std::hint::black_box;
 
 const WIDTH: usize = 480;
 const HEIGHT: usize = 270;

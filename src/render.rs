@@ -3,10 +3,10 @@ pub mod blur;
 pub(crate) mod camera_blur;
 
 #[cfg(all(test, target_os = "macos", feature = "video-native"))]
-mod test_support {
+pub(crate) mod test_support {
     use bevy::prelude::*;
 
-    pub(super) fn metal_app() -> App {
+    pub(crate) fn metal_app() -> App {
         use bevy::render::RenderPlugin;
         use bevy::render::settings::{Backends, RenderCreation, WgpuSettings};
         use bevy::window::{ExitCondition, WindowPlugin};
@@ -35,7 +35,7 @@ mod test_support {
         app
     }
 
-    pub(super) fn start(app: &mut App) {
+    pub(crate) fn start(app: &mut App) {
         app.finish();
         app.cleanup();
         app.insert_resource(bevy::render::error_handler::RenderErrorHandler(

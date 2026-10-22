@@ -13,7 +13,7 @@ pub(crate) struct StageMaterialPlugin;
 
 impl Plugin for StageMaterialPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "../../assets/shaders/stage/material.wgsl");
+        embedded_asset!(app, "../../assets/shaders/stage/material.wesl");
         app.add_plugins(crate::scene::background::crossfade::BackgroundCrossfadePlugin);
         app.add_plugins(Material2dPlugin::<StageMaterial>::default())
             .add_systems(Startup, setup_quad);
@@ -489,7 +489,7 @@ impl StageMaterial {
 impl Material2d for StageMaterial {
     fn fragment_shader() -> ShaderRef {
         ShaderRef::Path(
-            AssetPath::from_path_buf(embedded_path!("../../assets/shaders/stage/material.wgsl"))
+            AssetPath::from_path_buf(embedded_path!("../../assets/shaders/stage/material.wesl"))
                 .with_source("embedded"),
         )
     }
@@ -499,6 +499,7 @@ impl Material2d for StageMaterial {
     }
 
     fn specialize(
+        _pipeline: &bevy::sprite_render::Material2dPipeline,
         descriptor: &mut RenderPipelineDescriptor,
         _layout: &MeshVertexBufferLayoutRef,
         key: Material2dKey<Self>,
@@ -571,9 +572,116 @@ impl Material2d for StageMaterial {
 mod tests {
     use super::*;
 
+    #[cfg(all(target_os = "macos", feature = "video-native"))]
+    #[test]
+    #[ignore = "requires a real Metal device"]
+    fn migrated_material_variants_compile_on_gpu() {
+        use crate::render::test_support;
+        use bevy::render::renderer::RenderDevice;
+        use bevy::shader::{ShaderCache, ShaderCacheSource, ShaderDefVal};
+
+        let mut app = test_support::metal_app();
+        test_support::start(&mut app);
+        // Built-in shader dependencies are loaded by the same plugins as the game.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            app.update();
+            // Mesh bindings are requested in RenderStartup, after the first extraction.
+            if app
+                .world()
+                .resource::<Assets<Shader>>()
+                .iter()
+                .any(|(_, shader)| shader.path.ends_with("mesh2d/bindings.wesl"))
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "mesh bindings did not load"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let device = app
+            .sub_app(bevy::render::RenderApp)
+            .world()
+            .resource::<RenderDevice>()
+            .clone();
+        let mut cache = ShaderCache::new(device, |device, source, _| {
+            let ShaderCacheSource::Wgsl(source) = source else {
+                panic!("WGSL expected");
+            };
+            Ok(device
+                .wgpu_device()
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("material migration regression"),
+                    source: wgpu::ShaderSource::Wgsl(source.into()),
+                }))
+        });
+        let shaders = app.world().resource::<Assets<Shader>>();
+        for (id, shader) in shaders.iter() {
+            cache.set_shader(id, shader.clone());
+        }
+        let stages = [
+            (
+                "stage/material.wesl",
+                include_str!("../../assets/shaders/stage/material.wesl"),
+            ),
+            (
+                "stage/mask.wesl",
+                include_str!("../../assets/shaders/stage/mask.wesl"),
+            ),
+            (
+                "stage/crossfade.wesl",
+                include_str!("../../assets/shaders/stage/crossfade.wesl"),
+            ),
+            (
+                "particle/material.wesl",
+                include_str!("../../assets/shaders/particle/material.wesl"),
+            ),
+        ];
+        for (name, source) in stages {
+            let shader =
+                Shader::from_wesl(source, format!("embedded://keine/assets/shaders/{name}"));
+            let handle = app
+                .world_mut()
+                .resource_mut::<Assets<Shader>>()
+                .add(shader.clone());
+            cache.set_shader(handle.id(), shader);
+            for class in [
+                vec![],
+                vec!["STAGE_COMPLEX"],
+                vec!["STAGE_COMPLEX", "STAGE_BLUR"],
+                vec!["STAGE_COMPLEX", "STAGE_OUTLINE"],
+                vec![
+                    "STAGE_COMPLEX",
+                    "STAGE_BLUR",
+                    "STAGE_OUTLINE",
+                    "STAGE_OPTICAL",
+                ],
+            ] {
+                for blend in [None, Some("BLEND_MULTIPLY"), Some("BLEND_SCREEN")] {
+                    for clip in [false, true] {
+                        let mut defs = vec![ShaderDefVal::UInt("MATERIAL_BIND_GROUP".into(), 2)];
+                        defs.extend(class.iter().copied().chain(blend).map(ShaderDefVal::from));
+                        if clip {
+                            defs.push("STAGE_CLIP".into());
+                        }
+                        cache
+                            .get(0, handle.id(), &defs)
+                            .unwrap_or_else(|error| panic!("{name} {defs:?}: {error:?}"));
+                    }
+                }
+                // Other materials have no stage-class variants.
+                if name != "stage/material.wesl" {
+                    break;
+                }
+            }
+        }
+    }
+
     #[test]
     fn stage_material_keeps_a_compact_bind_group() {
-        let shader = include_str!("../../assets/shaders/stage/material.wgsl");
+        let shader = include_str!("../../assets/shaders/stage/material.wesl");
 
         assert_eq!(shader.matches("var<uniform>").count(), 1);
         // LUT, source image, and the optional authored clip image each need one

@@ -1,5 +1,6 @@
 //! Gallery music transport, seek controls and list scrolling.
 use super::*;
+use crate::ui::foundation::{Button, Interaction};
 
 #[derive(SystemParam)]
 pub(crate) struct ExtraBgmContext<'w, 's> {

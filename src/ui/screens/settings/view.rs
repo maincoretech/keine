@@ -1,5 +1,6 @@
 //! Settings view; registered through the parent facade.
 use super::*;
+use crate::ui::foundation::{Button, Interaction};
 
 pub(crate) fn menu_watermark(label: &str, font: &Handle<Font>) -> impl Bundle {
     (

@@ -1,5 +1,6 @@
 //! Gallery header, panels, thumbnails and full-CG layout.
 use super::*;
+use crate::ui::foundation::{Button, Interaction};
 
 pub(super) fn extra_button() -> impl Bundle {
     (ExtraButtonVisual, SettingChoiceVisual::new(false))

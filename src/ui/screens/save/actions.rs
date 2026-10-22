@@ -1,5 +1,6 @@
 //! Save_Load actions; registered through the parent facade.
 use super::*;
+use crate::ui::foundation::Interaction;
 
 pub(crate) fn save_load_open(ui: Res<SaveLoadUi>) -> bool {
     ui.mode.is_some()

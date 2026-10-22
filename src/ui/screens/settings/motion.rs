@@ -1,5 +1,6 @@
 //! Settings motion; registered through the parent facade.
 use super::*;
+use crate::ui::foundation::Interaction;
 
 pub fn animate_watermark(
     time: Res<Time>,

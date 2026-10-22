@@ -26,7 +26,7 @@ pub(crate) struct ParticleMaterialPlugin;
 
 impl Plugin for ParticleMaterialPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "../../assets/shaders/particle/material.wgsl");
+        embedded_asset!(app, "../../assets/shaders/particle/material.wesl");
         app.add_plugins(Material2dPlugin::<ParticleMaterial>::default());
     }
 }
@@ -54,6 +54,7 @@ impl Material2d for ParticleMaterial {
     }
 
     fn specialize(
+        _pipeline: &bevy::sprite_render::Material2dPipeline,
         descriptor: &mut RenderPipelineDescriptor,
         layout: &MeshVertexBufferLayoutRef,
         _key: Material2dKey<Self>,
@@ -69,7 +70,7 @@ impl Material2d for ParticleMaterial {
 fn particle_shader() -> ShaderRef {
     ShaderRef::Path(
         AssetPath::from_path_buf(embedded_path!(
-            "../../assets/shaders/particle/material.wgsl"
+            "../../assets/shaders/particle/material.wesl"
         ))
         .with_source("embedded"),
     )
@@ -342,7 +343,11 @@ pub(crate) fn sync(
             .iter()
             .map(|particle| ParticleGpu::new(particle, style.kind, linear, opacity, frame))
             .collect::<Vec<_>>();
-        let buffer = assets.buffers.add(ShaderBuffer::from(&gpu_particles));
+        let buffer = assets.buffers.add({
+            let mut buffer = ShaderBuffer::default();
+            buffer.extend(gpu_particles.iter().map(ParticleGpu::packed));
+            buffer
+        });
         let mesh = assets.meshes.add(particle_mesh(count));
         let material = assets.materials.add(ParticleMaterial {
             texture,
@@ -477,7 +482,8 @@ pub(crate) fn animate(
             *gpu = ParticleGpu::new(particle, kind, linear, opacity, frame);
         }
         if let Some(mut buffer) = buffers.get_mut(&*buffer) {
-            buffer.set_data(&*gpu_particles);
+            buffer.clear();
+            buffer.extend(gpu_particles.iter().map(ParticleGpu::packed));
         }
     }
 }
@@ -570,6 +576,15 @@ fn particle_mesh(count: usize) -> Mesh {
 }
 
 impl ParticleGpu {
+    fn packed(&self) -> [[f32; 4]; 4] {
+        [
+            self.previous.to_array(),
+            self.current.to_array(),
+            self.size_depth.to_array(),
+            self.color.to_array(),
+        ]
+    }
+
     fn new(
         particle: &Particle,
         kind: ParticleKind,
@@ -1076,8 +1091,15 @@ mod tests {
         ] {
             for opacity in [0.0, 0.3, 1.0] {
                 let gpu = ParticleGpu::new(&particle, kind, [0.7, 0.8, 1.0, 0.5], opacity, frame);
-                let buffer = ShaderBuffer::from(vec![gpu]);
-                assert_eq!(buffer.data.as_ref().unwrap().len(), 64);
+                let buffer = ShaderBuffer::from(vec![gpu.packed()]);
+                assert_eq!(
+                    match &buffer.data {
+                        bevy::render::storage::ShaderBufferData::Initialized { data, .. } =>
+                            data.len(),
+                        _ => panic!("initialized particle buffer"),
+                    },
+                    64
+                );
                 assert!((gpu.size_depth.z - particle.depth * 0.001).abs() < f32::EPSILON);
                 let pulse = if kind == ParticleKind::Firefly {
                     0.7 + 0.3 * (frame.current_elapsed * 2.1 + particle.phase).sin().abs()
@@ -1227,14 +1249,24 @@ mod tests {
             .unwrap()
             .data
             .clone();
+        let bevy::render::storage::ShaderBufferData::Initialized { data: previous, .. } = previous
+        else {
+            panic!("initialized particle buffer");
+        };
         app.update();
         assert_ne!(
-            app.world()
+            match &app
+                .world()
                 .resource::<Assets<ShaderBuffer>>()
                 .get(buffer)
                 .unwrap()
-                .data,
-            previous
+                .data
+            {
+                bevy::render::storage::ShaderBufferData::Initialized { data, .. } =>
+                    data.as_slice(),
+                _ => panic!("initialized particle buffer"),
+            },
+            previous.as_slice()
         );
         assert_eq!(
             app.world_mut()

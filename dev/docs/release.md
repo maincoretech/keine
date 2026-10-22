@@ -335,6 +335,12 @@ identity 与内嵌 key 不记录、不提交、不缓存，也不传给无需它
 [质量检查与相关 feature 门禁](testing.md#质量检查)。
 
 Bevy 的三个本地补丁、GPUI 原生平台行为和 Hakutaku 格式边界须随对应依赖单独复核。
+当前使用 Bevy 0.20、wgpu 30、GPUI Kit 0.8。Rodio 保持 Bevy Audio 支持的 0.22.2，
+避免重复音频栈和不兼容的 Source/Player；Windows SDK 与 windows-core 成对使用 0.62.2，
+不单独升级到不同 ABI 版本的 windows-core 0.100。Tokio 1.54.0 已因
+[RUSTSEC-2026-0384](https://github.com/rustsec/advisory-db/blob/main/crates/tokio/RUSTSEC-2026-0384.md)
+撤回，锁文件至少使用 1.54.1。
+
 Editor 的 `image` 仅请求 BMP/GIF/JPEG/PNG/TIFF/WebP，Media 图标仅请求 PNG；
 不要为了方便恢复默认编码器集合。锁文件仍可包含上游可选依赖，实际依赖树须按目标与
 features 查询，不能用锁文件包数推断运行时体积。

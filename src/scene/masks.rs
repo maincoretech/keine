@@ -23,7 +23,7 @@ pub(crate) struct StageMaskPlugin;
 
 impl Plugin for StageMaskPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "../assets/shaders/stage/mask.wgsl");
+        embedded_asset!(app, "../assets/shaders/stage/mask.wesl");
         app.add_plugins(Material2dPlugin::<StageMaskMaterial>::default())
             .add_systems(Update, sync.in_set(crate::runtime::GameSystemSet::Sync));
     }
@@ -62,7 +62,7 @@ struct StageMaskMaterial {
 impl Material2d for StageMaskMaterial {
     fn fragment_shader() -> ShaderRef {
         ShaderRef::Path(
-            AssetPath::from_path_buf(embedded_path!("../assets/shaders/stage/mask.wgsl"))
+            AssetPath::from_path_buf(embedded_path!("../assets/shaders/stage/mask.wesl"))
                 .with_source("embedded"),
         )
     }
@@ -72,6 +72,7 @@ impl Material2d for StageMaskMaterial {
     }
 
     fn specialize(
+        _pipeline: &bevy::sprite_render::Material2dPipeline,
         _descriptor: &mut RenderPipelineDescriptor,
         _layout: &MeshVertexBufferLayoutRef,
         _key: Material2dKey<Self>,

@@ -4,6 +4,7 @@
 //! the failure path independent means a broken project, script, or archive
 //! can never prevent the recovery instructions themselves from rendering.
 
+use crate::ui::foundation::{Button, Interaction};
 use bevy::app::AppExit;
 use bevy::asset::{embedded_asset, load_embedded_asset};
 use bevy::prelude::*;

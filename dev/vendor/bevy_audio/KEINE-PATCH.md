@@ -1,6 +1,6 @@
 # Bevy audio output recovery patch
 
-Source: official [bevy_audio 0.19.1](https://crates.io/crates/bevy_audio/0.19.1).
+Source: official [bevy_audio 0.20.0](https://crates.io/crates/bevy_audio/0.20.0).
 Upstream MIT/Apache licenses and decoder/sink APIs are retained. Kēne additions
 in `recovery.rs` use the repository's Defold License 1.0.
 

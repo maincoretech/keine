@@ -1,5 +1,5 @@
-#import bevy_sprite::mesh2d_vertex_output::VertexOutput
-#import bevy_sprite::mesh2d_view_bindings::globals
+import bevy_sprite_render::mesh2d::vertex_output::VertexOutput;
+import bevy_sprite_render::mesh2d::view_bindings::globals;
 
 struct StageMaskUniform {
     shape_a: vec4<f32>,
@@ -14,11 +14,11 @@ struct StageMaskUniform {
     effect_b: vec4<f32>,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> material: StageMaskUniform;
-@group(#{MATERIAL_BIND_GROUP}) @binding(1) var mask_texture: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(2) var mask_sampler: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(3) var fill_texture: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(4) var fill_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> material: StageMaskUniform;
+@group(constants::MATERIAL_BIND_GROUP) @binding(1) var mask_texture: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(2) var mask_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(3) var fill_texture: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(4) var fill_sampler: sampler;
 
 fn noise(point: vec2<f32>) -> f32 {
     return fract(sin(dot(point, vec2<f32>(12.9898, 78.233))) * 43758.5453);

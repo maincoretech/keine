@@ -1,5 +1,6 @@
 //! Gallery button feedback, fades and horizontal page transitions.
 use super::*;
+use crate::ui::foundation::Interaction;
 
 #[derive(Default)]
 pub(crate) struct ExtraFadeCache {

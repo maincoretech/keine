@@ -1,3 +1,4 @@
+use anyhow::Context as ContextExt;
 pub(crate) mod backup;
 pub(crate) mod gallery;
 mod persistence;
@@ -12,7 +13,7 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 

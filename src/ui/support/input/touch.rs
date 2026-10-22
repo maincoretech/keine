@@ -1,4 +1,7 @@
 //! One owner per touch: controls and scroll areas cannot become navigation.
+#[cfg(test)]
+use crate::ui::foundation::Button;
+use crate::ui::foundation::Interaction;
 use std::collections::HashSet;
 use std::time::Instant;
 
@@ -6,8 +9,8 @@ use bevy::ecs::system::SystemParam;
 use bevy::input::touch::{TouchInput, TouchPhase};
 use bevy::prelude::*;
 use bevy::ui::{
-    ComputedStackIndex, ComputedUiTargetCamera, FocusPolicy, OverflowAxis, OverrideClip,
-    clip_check_recursive,
+    CalculatedClip, ComputedStackIndex, ComputedUiTargetCamera, FocusPolicy, OverflowAxis,
+    OverrideClip,
 };
 use bevy::window::PrimaryWindow;
 
@@ -139,15 +142,7 @@ pub(crate) struct TouchContext<'w, 's> {
     windows: Query<'w, 's, (Entity, &'static Window), With<PrimaryWindow>>,
     cameras: Query<'w, 's, &'static Camera>,
     nodes: HitNodes<'w, 's>,
-    clipping: Query<
-        'w,
-        's,
-        (
-            &'static ComputedNode,
-            &'static UiGlobalTransform,
-            &'static Node,
-        ),
-    >,
+    clipping: Query<'w, 's, &'static CalculatedClip>,
     parents: Query<'w, 's, &'static ChildOf, Without<OverrideClip>>,
     interactions: Query<'w, 's, (Entity, &'static mut Interaction)>,
     scope: Res<'w, UiInputScope>,
@@ -227,12 +222,10 @@ pub(crate) fn collect(mut context: TouchContext) {
                     if !visible.get()
                         || node.size().min_element() <= 0.0
                         || !node.contains_point(*transform, camera_point)
-                        || !clip_check_recursive(
-                            camera_point,
-                            entity,
-                            &context.clipping,
-                            &context.parents,
-                        )
+                        || context
+                            .clipping
+                            .get(entity)
+                            .is_ok_and(|clip| !clip.contains_point(camera_point))
                     {
                         return None;
                     }
@@ -537,6 +530,7 @@ mod tests {
                 ComputedStackIndex(2),
             ))
             .id();
+        app.add_systems(PostUpdate, bevy::ui::update::update_clipping_system);
         // The shared menu header is a full-page transparent surface above
         // settings, with Pass. Its empty area must not steal child-page taps.
         app.world_mut().spawn((

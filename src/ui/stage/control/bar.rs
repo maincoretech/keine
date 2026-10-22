@@ -1,3 +1,4 @@
+use crate::ui::foundation::{Button, Interaction};
 // WebGAL-style control bar icon definitions and interaction.
 // Both top and bottom bars spawn as children of TextBoxRoot in textbox.rs.
 use bevy::{

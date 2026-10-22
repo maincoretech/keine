@@ -14,6 +14,7 @@ use crate::runtime::resources::{GameState, LocalAssetManifest, ProjectRoot};
 pub(crate) const TRACE_FIELDS: &str = "elapsed_seconds\tframe\tinterval_ms\tupdate_to_render_ms\tbudget_ms\tscene\tnext_cursor\tsource\tactivity\tline\tfocused\twidth\theight\texclusion";
 
 #[derive(Resource, Clone, ExtractResource)]
+#[extract_app(bevy::render::RenderApp)]
 pub(super) struct FrameContext {
     pub frame: u32,
     pub scene: Arc<str>,

@@ -1,5 +1,6 @@
 //! Gallery navigation, tabs and CG selection.
 use super::*;
+use crate::ui::foundation::Interaction;
 
 pub(crate) fn handle_navigation(
     keys: Res<ButtonInput<KeyCode>>,

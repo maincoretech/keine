@@ -3,12 +3,13 @@
 
 use std::sync::OnceLock;
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use keine_core::model::state::{Dialogue, Sprite};
 use keine_core::{
     Action, BlendMode, FilmEffects, Position, Program, SpriteLayout, SpriteTransform, State,
     Transition, Value, VisualFilter,
 };
+use std::hint::black_box;
 
 const SPRITES: usize = 100;
 const VARS: usize = 1_000;

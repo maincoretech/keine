@@ -73,6 +73,25 @@ macOS 的 IPC/系统 Trash 测试可能被本地沙箱拒绝（`Operation not pe
 显式 `ignored` 的 GPU/性能测试也不能计作工作区测试已覆盖。
 不以测试数量作为目标：同规则参数边界用表驱动；独立故障保留独立回归，失败信息包含案例名。
 
+### 当前依赖迁移验收
+
+Bevy 0.20 / wgpu 30 / GPUI Kit 0.8 已在 macOS arm64 完成上述 fmt、check、clippy、
+两组工作区测试、native/FFmpeg feature 检查、native-smoke、打包合同和全 feature cargo-deny。
+根工作区与独立 fuzz 工作区的 locked metadata 均通过。原始日志保留在本机
+`target/ci-repair/`：`test-major.log`、`test-publisher-major.log`、`deny-major.log` 等。
+
+显式执行的 GPU 回归为 6 项渲染测试和 1 项 Metal 设备替换测试：
+
+```sh
+cargo test --workspace --locked --all-features on_gpu -- --ignored --test-threads=1
+cargo test --workspace --locked --all-features metal_cache_follows_replacement_device -- --ignored
+```
+
+临时配对 macOS 包已完成签名验证和原生界面检查：Engine 的逐字显现、文字阴影、设置页模糊、
+按钮与窗口缩放；Editor 的中文源码、折叠、缩略图、文件选择弹层和未保存关闭提示。
+这些检查不代表所有图形变体或视频场景均已人工验收；Windows、Linux、Android 的构建和设备验收仍待完成。
+本轮未重跑性能基准，不据此宣称帧耗时或内存改善。
+
 ## 测试入口与 CI
 
 | Owner | 入口 |

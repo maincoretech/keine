@@ -20,7 +20,7 @@ To package your own game, see the [publishing guide](dev/docs/release.md).
 ## Build and run
 
 Install the native libraries listed in the [development guide](dev/docs/testing.md#开发环境).
-The repository pins Rust 1.99.0; the engine uses Bevy 0.19.1.
+The repository pins Rust 1.99.0; the engine uses Bevy 0.20.0.
 
 ```sh
 cargo build --locked -p keine --bin keine --features video-native,video-ffmpeg
@@ -42,7 +42,7 @@ in the Editor, and conversion preserves the original project.
 
 Tested on **Apple M5 Pro (15 logical CPUs), 24 GiB RAM, macOS 27.0.1** on
 October 16, 2026. These results use 0.16.3 with the parser improvements later
-released in 0.16.4; they have not been rerun for 0.16.7.
+released in 0.16.4; they have not been rerun for 0.17.0.
 
 In the Criterion benchmark, those changes reduced parsing time from
 **85.26 to 75.09 ms** for 100,000 text statements, and from **2.27 to 2.13 ms**
@@ -84,7 +84,7 @@ dev/scripts/  build and release scripts
 - [Android](dev/docs/android.md)
 - [Project compatibility](dev/docs/compatibility.md)
 
-Current version: **0.16.7**. Recent manual testing has focused on macOS;
+Current version: **0.17.0**. Recent manual testing has focused on macOS;
 Windows and Linux still need a fresh runtime check. CI results alone do not confirm
 that input, display and media playback work correctly on a device.
 

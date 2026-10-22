@@ -1,5 +1,6 @@
 //! Save_Load state; registered through the parent facade.
 use super::*;
+use crate::ui::foundation::Interaction;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SaveLoadMode {

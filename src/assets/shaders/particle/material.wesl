@@ -1,21 +1,18 @@
-#import bevy_sprite::{
-    mesh2d_functions as mesh_functions,
-    mesh2d_view_bindings::view,
-}
-#import bevy_sprite::mesh2d_view_bindings::globals
+import bevy_sprite_render::mesh2d::{
+    functions as mesh_functions,
+    view_bindings::view,
+};
+import bevy_sprite_render::mesh2d::view_bindings::globals;
 
-#ifdef TONEMAP_IN_SHADER
-#import bevy_core_pipeline::tonemapping
-#endif
-#ifdef SRGB_OUTPUT
-#import bevy_render::color_operations::linear_to_srgb
-#endif
-#ifdef OKLAB_OUTPUT
-#import bevy_render::color_operations::linear_rgb_to_oklab
-#endif
+@if(TONEMAP_IN_SHADER)
+import bevy_core_pipeline::tonemapping;
+@if(SRGB_OUTPUT)
+import bevy_render::color_operations::linear_to_srgb;
+@if(OKLAB_OUTPUT)
+import bevy_render::color_operations::linear_rgb_to_oklab;
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0) var particle_texture: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(1) var particle_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(0) var particle_texture: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(1) var particle_sampler: sampler;
 
 struct Particle {
     previous: vec4<f32>,
@@ -24,7 +21,7 @@ struct Particle {
     color: vec4<f32>,
 };
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(2) var<storage, read> particles: array<Particle>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(2) var<storage, read> particles: array<Particle>;
 
 fn particle_point(center_rotation: vec4<f32>, corner: vec2<f32>) -> vec2<f32> {
     return center_rotation.xy + vec2<f32>(
@@ -72,14 +69,14 @@ fn vertex(vertex: Vertex) -> VertexOutput {
 @fragment
 fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     var output_color = mesh.color * textureSample(particle_texture, particle_sampler, mesh.uv);
-#ifdef TONEMAP_IN_SHADER
+@if(TONEMAP_IN_SHADER) {
     output_color = tonemapping::tone_mapping(output_color, view.color_grading);
-#endif
-#ifdef SRGB_OUTPUT
+}
+@if(SRGB_OUTPUT) {
     output_color = vec4(linear_to_srgb(output_color.rgb), output_color.a);
-#endif
-#ifdef OKLAB_OUTPUT
+}
+@if(OKLAB_OUTPUT) {
     output_color = vec4(linear_rgb_to_oklab(output_color.rgb), output_color.a);
-#endif
+}
     return output_color;
 }

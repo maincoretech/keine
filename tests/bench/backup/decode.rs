@@ -1,8 +1,9 @@
 //! Backup-envelope decode cost for the owned V2 representation and the
 //! in-place borrowed representation used by import.
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use serde::{Deserialize, Serialize};
+use std::hint::black_box;
 
 const PAYLOAD_BYTES: usize = 32 * 1024 * 1024;
 

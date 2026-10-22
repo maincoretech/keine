@@ -1,5 +1,6 @@
 //! Settings state; registered through the parent facade.
 use super::*;
+use crate::ui::foundation::Interaction;
 
 #[derive(Clone, Copy)]
 pub(super) struct SettingsProjectContext<'a> {

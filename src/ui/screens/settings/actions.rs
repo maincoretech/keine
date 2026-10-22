@@ -1,5 +1,6 @@
 //! Settings actions; registered through the parent facade.
 use super::*;
+use crate::ui::foundation::Interaction;
 
 pub fn toggle_settings(
     keys: Res<ButtonInput<KeyCode>>,

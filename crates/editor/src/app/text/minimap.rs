@@ -1,6 +1,6 @@
-//! Source overview, built off-thread with the Editor's GPUI soft-wrap rules.
+//! Source overview: reuse native display rows; build syntax and strokes off-thread.
 use super::*;
-use gpui_kit::base::input::Rope;
+use gpui_kit::base::input::{DisplayMap, DisplayPoint, FoldRange, Rope};
 use minimap::{Geometry, INSET, WIDTH};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -8,10 +8,35 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub(super) struct TextMinimap {
     cache: Option<Arc<Rows>>,
     dirty: bool,
-    requested: Option<(Pixels, gpui_kit::Font, Pixels)>,
+    requested: Option<Layout>,
     epoch: u64,
     cancelled: Arc<AtomicBool>,
     task: Option<gpui_kit::Task<()>>,
+}
+
+#[derive(PartialEq)]
+struct Layout {
+    width: Pixels,
+    line_height: Option<Pixels>,
+    rows: usize,
+    folds: Vec<FoldRange>,
+}
+
+fn display_offsets(map: &DisplayMap) -> Vec<Range<usize>> {
+    let text = map.text();
+    let start = |row| {
+        let point = map.display_pos_to_buffer_pos(DisplayPoint::new(row, 0));
+        text.line_start_offset(point.line) + point.col
+    };
+    (0..map.display_row_count())
+        .map(|row| {
+            start(row)..if row + 1 < map.display_row_count() {
+                start(row + 1)
+            } else {
+                text.len()
+            }
+        })
+        .collect()
 }
 
 struct Rows {
@@ -29,10 +54,8 @@ struct Stroke {
 
 fn rows(
     text: Rope,
-    wrap_width: Pixels,
-    font: (gpui_kit::Font, Pixels),
+    offsets: Vec<Range<usize>>,
     language: &str,
-    text_system: Arc<gpui_kit::TextSystem>,
     previous: Option<Arc<Rows>>,
     cancelled: &AtomicBool,
 ) -> Option<Rows> {
@@ -48,29 +71,6 @@ fn rows(
             || Arc::new(crate::syntax::overview_styles(&source, language)),
             |previous| previous.styles.clone(),
         );
-    let mut wrapper = text_system.line_wrapper(font.0, font.1);
-    let mut offsets = Vec::new();
-    for row in 0..text.lines_len() {
-        if cancelled.load(Ordering::Relaxed) {
-            return None;
-        }
-        let line = text.slice_line(row).to_string();
-        let start = text.line_start_offset(row);
-        // Use the same GPUI LineWrapper and WrappingIndent::Same as DisplayMap.
-        let mut previous = start;
-        for boundary in wrapper.wrap_line(&[gpui_kit::LineFragment::text(&line)], wrap_width) {
-            let end = start + boundary.ix;
-            offsets.push(previous..end);
-            previous = end;
-        }
-        // Preserve the original navigation/selection ranges, including the newline.
-        let end = if row + 1 < text.lines_len() {
-            text.line_start_offset(row + 1)
-        } else {
-            source.len()
-        };
-        offsets.push(previous..end);
-    }
     let mut strokes = Vec::new();
     for range in offsets.iter().cloned() {
         if cancelled.load(Ordering::Relaxed) {
@@ -197,66 +197,40 @@ pub(super) fn render(
     let composing = editor.update(cx, |editor, cx| {
         editor.marked_text_range(window, cx).is_some()
     });
-    let width = editor
-        .read(cx)
-        .text_bounds()
-        .map_or(px(600.), |bounds| bounds.size.width);
-    let font = gpui_kit::font(Theme::global(cx).mono_font_family.clone());
-    let font_size = px(f32::from(
-        cx.global::<EditorDocuments>()
-            .editor_preferences
-            .source_font_size,
-    ));
-    if !composing
-        && (state.dirty || state.requested.as_ref() != Some(&(width, font.clone(), font_size)))
-    {
+    let native = editor.read(cx);
+    let map = native.display_map();
+    let width = native.input_bounds().size.width;
+    let line_height = native.line_height();
+    let layout_changed = state.requested.as_ref().is_none_or(|layout| {
+        layout.width != width
+            || layout.line_height != line_height
+            || layout.rows != map.display_row_count()
+            || layout.folds != map.folded_ranges()
+    });
+    // GPUI updates its map during layout and notifies for the subsequent render.
+    // Do not shape text again or guess the editor's gutter and wrapping rules.
+    if !composing && map.display_row_count() > 0 && (state.dirty || layout_changed) {
         state.cancelled.store(true, Ordering::Relaxed);
         state.task.take();
         state.cancelled = Arc::new(AtomicBool::new(false));
         state.epoch = state.epoch.wrapping_add(1);
         let epoch = state.epoch;
-        state.requested = Some((width, font.clone(), font_size));
+        state.requested = Some(Layout {
+            width,
+            line_height,
+            rows: map.display_row_count(),
+            folds: map.folded_ranges().to_vec(),
+        });
         state.dirty = false;
-        let text = editor.read(cx).text().clone();
-        let digits = text.lines_len().max(1).ilog10() as usize + 2;
-        let gutter = window
-            .text_system()
-            .shape_line(
-                "+".repeat(digits).into(),
-                font_size,
-                &[gpui_kit::TextRun {
-                    len: digits,
-                    font: font.clone(),
-                    color: rgb(INK).into(),
-                    background_color: None,
-                    underline: None,
-                    strikethrough: None,
-                }],
-                None,
-            )
-            .width;
-        // Native Editor reserves 18 px beside line numbers for folding controls.
-        let fold_gutter = if language_for_path(relative) == "eiyashou" {
-            px(18.)
-        } else {
-            px(0.)
-        };
-        let wrap_width = (width - gutter - px(20.) - fold_gutter).max(px(1.));
-        let text_system = cx.text_system().clone();
+        let map = editor.read(cx).display_map();
+        let text = map.text().clone();
+        let offsets = display_offsets(map);
         let previous = state.cache.clone();
         let cancelled = state.cancelled.clone();
         let language = language_for_path(relative).to_owned();
-        let worker = cx.background_executor().spawn(async move {
-            rows(
-                text,
-                wrap_width,
-                (font, font_size),
-                &language,
-                text_system,
-                previous,
-                &cancelled,
-            )
-        });
+        let worker = cx
+            .background_executor()
+            .spawn(async move { rows(text, offsets, &language, previous, &cancelled) });
         state.task = Some(cx.spawn(async move |panel, cx| {
             if let Some(rows) = worker.await {
                 let _ = panel.update(cx, |panel, cx| {
@@ -422,7 +396,6 @@ pub(super) fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui_kit::base::input::{DisplayMap, DisplayPoint};
 
     #[gpui_kit::test]
     fn worker_mapping_matches_native_wrapping(cx: &mut gpui_kit::TestAppContext) {
@@ -438,18 +411,16 @@ mod tests {
             ] {
                 for (width, font_size) in [(1., 10.), (30., 13.), (80., 24.), (600., 18.)] {
                     let text = Rope::from(source);
+                    let mut map = DisplayMap::new(font.clone(), px(font_size), Some(px(width)));
+                    map.set_text(&text, cx);
                     let actual = rows(
                         text.clone(),
-                        px(width),
-                        (font.clone(), px(font_size)),
+                        display_offsets(&map),
                         "shou",
-                        cx.text_system().clone(),
                         None,
                         &cancelled,
                     )
                     .unwrap();
-                    let mut map = DisplayMap::new(font.clone(), px(font_size), Some(px(width)));
-                    map.set_text(&text, cx);
                     let expected = (0..map.display_row_count())
                         .map(|row| {
                             let point = map.display_pos_to_buffer_pos(DisplayPoint::new(row, 0));
@@ -466,12 +437,11 @@ mod tests {
                         .collect::<Vec<_>>();
                     assert_eq!(actual.offsets, expected, "source={source:?} width={width}");
                     let actual = Arc::new(actual);
+                    map.on_layout_changed(Some(px(width + 10.)), cx);
                     let resized = rows(
                         text,
-                        px(width + 10.),
-                        (font.clone(), px(font_size)),
+                        display_offsets(&map),
                         "shou",
-                        cx.text_system().clone(),
                         Some(actual.clone()),
                         &cancelled,
                     )
@@ -482,10 +452,8 @@ mod tests {
             let build = || {
                 rows(
                     Rope::from("latest"),
-                    px(80.),
-                    (font.clone(), px(13.)),
+                    std::iter::once(0..6).collect(),
                     "shou",
-                    cx.text_system().clone(),
                     None,
                     &cancelled,
                 )
@@ -502,10 +470,8 @@ mod tests {
             assert!(
                 rows(
                     Rope::from("cancelled"),
-                    px(80.),
-                    (font, px(13.)),
+                    std::iter::once(0..9).collect(),
                     "shou",
-                    cx.text_system().clone(),
                     None,
                     &cancelled
                 )
