@@ -87,7 +87,7 @@ video-native = [
 
 [workspace.package]
 license-file = "LICENSE"
-version = "0.17.0"
+version = "0.17.1"
 edition = "2024"
 rust-version = "1.99.0"
 
@@ -104,6 +104,11 @@ debug = 1
 
 [profile.dev.package.icu_provider]
 debug-assertions = false
+
+# Full-resolution WebP decoding is dominated by the native codec. Keep it at
+# shipping optimization in dev/test without optimizing the whole workspace.
+[profile.dev.package.libwebp-sys]
+opt-level = 3
 
 # Shipping profile: smaller and faster at the cost of slower release builds.
 # LTO removes cross-crate duplication, strip drops the symbol table, and

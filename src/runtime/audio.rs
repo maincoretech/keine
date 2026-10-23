@@ -1,6 +1,10 @@
 #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
 mod tail;
 
+#[cfg(all(test, feature = "audio-opus", feature = "publisher"))]
+#[path = "../../tests/bench/runtime/audio.rs"]
+mod benchmark;
+
 #[cfg(any(feature = "audio-opus", feature = "audio-seekable"))]
 use std::io::{self, Cursor};
 #[cfg(feature = "audio-opus")]

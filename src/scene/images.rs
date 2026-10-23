@@ -11,6 +11,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::runtime::resources::{GameConfigResource, LocalAssetCache, LocalAssetManifest};
 
+#[cfg(all(test, feature = "publisher"))]
+#[path = "../../tests/bench/runtime/images.rs"]
+mod benchmark;
+
 const BACKGROUND_LIMIT: UVec2 = UVec2::new(
     keine_core::DESIGN_WIDTH as u32,
     keine_core::DESIGN_HEIGHT as u32,

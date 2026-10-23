@@ -1068,6 +1068,147 @@ cargo test --locked -p keine-editor --release --lib index::benchmark:: -- --igno
 
 ### Hakutaku v2
 
+#### 开发态真实图片读取与解码
+
+2026-10-23，在 `4c04778`、Rust 1.99.0、macOS 27.0.1 arm64 / M5 Pro / 24 GiB 上，
+测量 tday 全部 35 张 WebP（31 背景、4 立绘，8,664,922 B），以及本机 Narcissu
+196 张背景中按压缩文件大小分层选出的 40 张（8,600,150 B）。源素材只读复制到临时
+目录并打包，身份仅在内存中生成；不使用作者私钥或相邻 Hakutaku worktree 的修改。
+
+实际路径是 `OverlayAssetReader → ContentMount → ContentFile → AssetCursor`（包）
+或散文件，之后使用生产 `read_webp_input`、`target_size`、native WebP decoder 和
+Bevy `Image::new`。当前读取已有几何扩容与持久 cursor，RGBA 所有权直接移动，没有
+整图 clone；背景上限 1920×1080，立绘本次使用实际工程的 sprite height 1080。
+计时拆分为打开/读完压缩输入、解码/构造 Image、场景取色，完整 RGBA 校验不计时。
+
+保留的修改仅为 `[profile.dev.package.libwebp-sys] opt-level = 3`：原来原生 C codec
+也继承 dev/test 的 opt-level=1，其 build.rs 通过 `cc` 使用 Cargo 的 `OPT_LEVEL`。
+发行版本来就是 opt-level=3，**这不是 shipping 性能提升**。没有改变 codec 算法、
+线程设置、输出格式、尺寸/像素限制、缓存或认证链，也没有新依赖。
+
+六对独立进程，前三对 before/after，后三对 after/before；每进程每后端五遍，先取
+进程内中位数，再取六轮中位数。每遍新开 package，宿主文件缓存为热；打包、打开
+package 和构造挂载不计时，桌面负载未隔离。表中是整组解码耗时，不是单张或 P95。
+
+| 后端 / 图片组 | 原实现 | codec opt-level=3 | 变化 |
+| --- | ---: | ---: | ---: |
+| Hakutaku / tday 31 背景 | 237.794 ms | 195.649 ms | −17.7% |
+| Hakutaku / tday 4 立绘 | 92.100 ms | 88.872 ms | −3.5% |
+| Hakutaku / Narcissu 40 背景 | 234.790 ms | 212.245 ms | −9.6% |
+| 散文件 / tday 31 背景 | 232.366 ms | 200.474 ms | −13.7% |
+| 散文件 / tday 4 立绘 | 93.594 ms | 89.058 ms | −4.8% |
+| 散文件 / Narcissu 40 背景 | 242.402 ms | 213.264 ms | −12.0% |
+
+Hakutaku 三组读取合计分别为 3.840 → 3.733、3.020 → 2.958、6.542 → 6.666 ms，
+不是物理 SSD 时间，不能宣称读取加速。对应读取+解码+取色合计为
+242.127 → 199.861、95.156 → 91.988、241.606 → 219.101 ms。
+75 张图在所有后端/遍次/前后版本中输出尺寸、完整 RGBA hash 相同；231 个源 WebP
+的 SHA-256 未变。另一个省掉 RGBA 初始化清零的候选在反序后收益不足且立绘略慢，
+已撤回。未测冷存储、GPU 上传、AssetServer 调度、实际呈现延迟或其他平台；不把这组
+CPU 结果解释为帧率、峰值内存或发行版加载性能变化。
+
+```sh
+KEINE_IMAGE_BENCH=/path/to/read-only/images \
+  cargo test --locked -p keine --all-features --lib \
+  scene::images::benchmark::mounted_image_reads -- --ignored --nocapture --test-threads=1
+```
+
+可复用入口位于 `tests/bench/runtime/images.rs`。原始 binary、逐图日志、候选 diff、
+输入/二进制 SHA-256、命令和汇总器保存在本机 `target/performance/image-reads/`；
+保留方案的六轮对照位于其 `codec-o3/` 子目录，当前命令测优化后的 dev/test 配置。
+保留版本通过 fmt、workspace all-targets/all-features check/Clippy、全功能及
+no-default-features + publisher 两组串行工作区测试；IPC 测试在允许本地 socket 的
+环境运行。这不包含窗口视觉、GPU 或其他平台的验收。
+
+#### Release 图片读取与解码
+
+同日、同 checkout 和 75 张素材，用 `--release` 重新构建生产读取/解码路径：
+opt-level=3、LTO、codegen-units=1，libwebp 原生代码也为 opt-level=3。
+这是 release profile 的测试 harness，非正式游戏包启动；依据
+[Cargo 测试合同](https://doc.rust-lang.org/cargo/reference/profiles.html#panic)，测试使用
+unwind，而非 shipping 的 panic=abort。前述 dev-only codec override 不影响本组结果。
+仍为热宿主文件缓存、每遍新开 package、每进程五遍、六对进程且后三对反序；
+计时期间没有并行编译。初步单次运行发生过整机波动，原始日志保留但不混入配对统计。
+
+| Hakutaku 路径 / 图片组 | 原实现读取 | 原实现解码 | 关闭 codec 内部线程后解码 | 解码变化 |
+| --- | ---: | ---: | ---: | ---: |
+| tday 31 张 1080p 有损背景 | 3.396 ms | 185.944 ms | 252.134 ms | +35.6% |
+| tday 4 张无损立绘，1024×1536 → 720×1080 | 2.805 ms | 84.377 ms | 84.392 ms | +0.02% |
+| Narcissu 40 张 1080p 无损背景 | 6.272 ms | 207.244 ms | 207.711 ms | +0.23% |
+
+均为整组时间的中位数，不是单张 P95。原实现读取+解码+取色合计分别为
+189.777 / 87.253 / 213.704 ms；读取仅占约 1.8% / 3.2% / 2.9%，不是物理 SSD 时间。
+散文件的有损背景解码也从 185.549 增至 252.667 ms（+36.2%）；两组无损对照变化
+均小于 0.4%。锁定 libwebp 的 `VP8GetThreadMethod` 只为满足宽度条件的有损 VP8
+启用工作线程，无损 VP8L 不走该分支，观察与源码一致。
+
+候选仅修改 `config.options.use_threads = 1` 为 `0`，已撤回；没有保留新的发行版
+生产代码改动，也没有改变像素质量、尺寸、安全限制、缓存或认证链。
+当前主要成本为原生解码，未发现值得增加复杂度的重复读取或整图复制；这不证明
+没有任何优化空间，也不覆盖冷存储、GPU 上传、AssetServer 调度或其他硬件。
+75 张图片所有版本/后端/遍次输出尺寸和完整 RGBA hash 相同，231 个源 WebP 的
+SHA-256 未变。原始构建日志、两个 binary、24 份正式逐图日志、初测、候选 patch、
+输入验证、二进制 SHA-256 和命令位于本机 `target/performance/image-release/`；
+复用 `target/performance/image-reads/summarize.mjs` 汇总。
+撤回后通过 fmt、workspace all-targets/all-features check/Clippy、两组串行工作区
+测试（all-features / no-default-features + publisher），以及 release 下 12 项图片
+回归和 7 项 media 回归；没有执行本轮窗口/GPU 或其他平台验收。
+
+```sh
+KEINE_IMAGE_BENCH=/path/to/read-only/images \
+  cargo test --locked --release -p keine --all-features --lib \
+  scene::images::benchmark::mounted_image_reads -- --ignored --nocapture --test-threads=1
+```
+
+#### 真实语音首读与连续解码
+
+2026-10-23，在 `3187648`、Rust 1.99.0、macOS arm64 / M5 Pro / 24 GiB 上，
+从本机 Narcissu 的 2,096 段 Opus 按文件大小分层抽取 96 段，共 3,521,091 B。
+使用锁定的 Hakutaku revision，不包含相邻 Hakutaku worktree 的未提交修改。
+实际路径为 `OpusSource → StreamingAudioFile → ContentFile → AssetCursor`；
+每个播放流持有 cursor，不是反复使用一次性的 `Asset::read_at()`。
+AssetLoader 当前初始化一次流以验证输入及取得时长，Decodable 播放时再独立打开。
+
+专项以相同流程测量散文件和资源包，不创建音频设备或窗口。六对进程，前三对
+before/after，后三对 after/before；每个进程五遍，先取进程内中位数再取六轮中位数。
+每遍重新打开 package，宿主文件系统缓存保持热；dev/test opt-level=1，不是 shipping
+LTO。打包、打开 package 与构造目录不计时；读取计数器有相同的计时开销，桌面负载
+未隔离。下表均为 96 段合计，首段 PCM 为每段 20 ms，连续解码按最快速度消费剩余
+sample，并计算校验和，不包含 Rodio mixer、设备缓冲、帧调度或实际听觉延迟。
+
+| Hakutaku 路径 | 原实现 | 候选 | 结果 |
+| --- | ---: | ---: | --- |
+| 加载探测 + 初始化播放并产出首段 PCM | 18.214 ms | 18.516 ms | +1.7%，无稳定收益 |
+| 剩余内容连续解码/消费 | 350.539 ms | 356.031 ms | +1.6%，无稳定收益 |
+| 全流程 ContentFile 读取累计 | 6.099 ms | 6.329 ms | 非物理 SSD 计时 |
+
+候选仅复用 codec registry、预分配 Ogg 最终的 128 KiB ring buffer、通过独占
+`Mutex::get_mut()` 避免每次 Read/Seek 加锁。初轮看似改善，反序后不成立，已全部撤回；
+没有改动生产读取策略、缓存预算、块大小或认证链。原实现平均首段准备约 0.190 ms/文件，
+这是批量均值而非 P95。读取累计仅占完整解码流程约 1.7%，当前测量不足以支持
+为了消除双重探测而保留预取 decoder、增加长期内存和生命周期状态。
+
+两种后端、全部原版/候选遍次均产出 26,692,901 个 sample，相同 PCM bit checksum。
+每遍逻辑 ContentFile 返回 14,548,830 B / 2,812 次 read（含 EOF），约为素材大小的
+4.13 倍；这是 Ogg 首尾探测与重新打开产生的逻辑读取，**不是** Hakutaku segment
+物理读取放大。散文件首段准备为 30.846 → 29.097 ms，受路径校验及宿主状态影响，
+不能外推为存储后端排名。没有测冷缓存、低端设备、长时硬件播放或真实掉音。
+
+```sh
+KEINE_VOICE_BENCH=/path/to/read-only/voices \
+  cargo test --locked -p keine --all-features --lib \
+  runtime::audio::benchmark::mounted_voice_reads -- --ignored --nocapture --test-threads=1
+```
+
+可复用测量位于 `tests/bench/runtime/audio.rs`；临时打包只使用内存中生成的测试身份，
+不修改源素材。原始 before/after binaries、12 份逐遍日志、输入 SHA-256、构建日志及
+汇总器位于本机 `target/performance/voice-reads/`。候选已撤回，当前命令只复现原实现。
+保留版本通过 fmt、workspace all-targets/all-features check/Clippy、串行工作区全功能
+测试及显式语音基准；2,096 个源文件 SHA-256 未变。并行测试中一次 Editor 导出失败
+单独重跑及串行套件均通过，沙箱 IPC 拒绝另在沙箱外重跑，不计作代码修复。
+
+#### 格式与既有集成证据
+
 独立库的格式、完整配对命令和测试 owner 位于锁定版本的
 [FORMAT](https://github.com/maincoretech/hakutaku/blob/8d637d5629b84f99251fd445366892bdb3c7cf2b/docs/FORMAT.md)、
 [PERFORMANCE](https://github.com/maincoretech/hakutaku/blob/8d637d5629b84f99251fd445366892bdb3c7cf2b/docs/PERFORMANCE.md)。

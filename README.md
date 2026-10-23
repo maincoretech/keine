@@ -42,7 +42,7 @@ in the Editor, and conversion preserves the original project.
 
 Tested on **Apple M5 Pro (15 logical CPUs), 24 GiB RAM, macOS 27.0.1** on
 October 16, 2026. These results use 0.16.3 with the parser improvements later
-released in 0.16.4; they have not been rerun for 0.17.0.
+released in 0.16.4; they have not been rerun for 0.17.1.
 
 In the Criterion benchmark, those changes reduced parsing time from
 **85.26 to 75.09 ms** for 100,000 text statements, and from **2.27 to 2.13 ms**
@@ -84,7 +84,7 @@ dev/scripts/  build and release scripts
 - [Android](dev/docs/android.md)
 - [Project compatibility](dev/docs/compatibility.md)
 
-Current version: **0.17.0**. Recent manual testing has focused on macOS;
+Current version: **0.17.1**. Recent manual testing has focused on macOS;
 Windows and Linux still need a fresh runtime check. CI results alone do not confirm
 that input, display and media playback work correctly on a device.
 
