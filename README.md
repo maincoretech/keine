@@ -38,6 +38,32 @@ Small test projects live in `tests/fixtures/`. To convert an existing project,
 see [migration commands](dev/docs/release.md#cli); compatibility JSON is read-only
 in the Editor, and conversion preserves the original project.
 
+## Architecture
+
+```mermaid
+flowchart LR
+    Project["Scripts & assets<br/>Source project / Hakutaku package"] --> Loader["Loader<br/>Parse & validate"]
+    Loader -->|Program| Core["Core<br/>Script execution"]
+    Core -->|State| Engine["Runtime · Bevy<br/>Scene, UI & media"]
+    Engine -->|Input & timing| Core
+    Editor["Editor · GPUI<br/>Text, blocks & Inspector"] <-->|Authoring IPC · Preview| Engine
+```
+
+Core and Loader are independent of Bevy. The Editor shares their script model
+and runs previews in a separate Engine process. See [architecture](dev/docs/architecture.md)
+for module boundaries and [benchmark notes](dev/docs/testing.md#0163-解析优化与四引擎脚本对照)
+for performance measurements.
+
+## Repository
+
+```text
+crates/       core, loader, authoring protocol, Editor, media
+src/          engine; all embedded resources in src/assets/
+tests/        integration tests, fixtures, benchmarks, fuzzing and video tests
+dev/docs/     guides and reference
+dev/scripts/  build and release scripts
+```
+
 ## Script performance
 
 Tested on **Apple M5 Pro (15 logical CPUs), 24 GiB RAM, macOS 27.0.1** on
@@ -63,16 +89,6 @@ other game systems were excluded. The parsers perform different checks, so these
 figures won't tell you which engine starts a game faster or runs it more smoothly.
 Suika3's NoctLang/JIT was not tested. See the [benchmark notes](dev/docs/testing.md#0163-解析优化与四引擎脚本对照)
 for the test setup, limitations, raw results and commands.
-
-## Repository
-
-```text
-crates/       core, loader, authoring protocol, Editor, media
-src/          engine; all embedded resources in src/assets/
-tests/        integration tests, fixtures, benchmarks, fuzzing and video tests
-dev/docs/     guides and reference
-dev/scripts/  build and release scripts
-```
 
 ## Documentation
 
