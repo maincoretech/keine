@@ -231,12 +231,14 @@ Settings 收敛为 Project / Extra / Editor：fmt、工作区全功能 check/Cli
 测试包 `target/editor-ux-refinement/settings-final-package/` 签名/native-smoke 通过；
 日志和实拍 `settings-*` 位于同目录上级。未替换本机安装、未测 Windows/Linux 原生交互。
 
-Editor 三语界面：fmt、工作区全功能 check/Clippy 及测试通过（1127 passed、25 ignored）。
-回归覆盖三语词表完整性、占位符一致性、插入内容原样保留，以及语言偏好往返和旧配置兼容。
-原生 macOS 验证三语即时切换、设置/工作台/右键菜单布局、中文区块搜索、重新载入提示及重启记住语言；
-原有源码和项目名称保留。测试草稿已丢弃，语言恢复原来的英文，窗口关闭。
-`target/editor-i18n/package/` 配对测试包签名/native-smoke 通过；日志为 `target/editor-i18n-*.log`，
-实拍为 `target/editor-i18n/settings-zh-CN.png`。未替换本机安装；Windows/Linux 原生布局未验收。
+Editor 四语界面（简中、繁中、英文、日文）：fmt、工作区全功能 check/Clippy 及测试通过。
+回归覆盖词表完整性、占位符、原文保留、语言偏好往返和旧配置兼容；日语覆盖全部 803 条 Editor 文案，
+并通过 GPUI 现有翻译扩展接口补充常用组件。复用锁定的 `rust-i18n-support`，没有引入新包或升级依赖。
+原生 macOS 已验证日语设置、工作台、时间轴、配音对话框、输入框菜单、重启保留语言，以及切回英文时刷新输入提示；
+输出标签按文字宽度展开，避免日语折行。既有三语切换与中文区块搜索验收保留在 `target/editor-i18n/`。
+日语配对测试包 `target/editor-ja-verified/` 签名/native-smoke 通过；日志为 `target/editor-ja-*.log`，
+实拍为 `target/editor-ja-settings.png`、`target/editor-ja-workbench.png`。偏好已恢复英文，窗口已关闭。
+本轮机器未安装 cargo-deny，未重跑依赖审计；未替换本机安装，Windows/Linux 日语原生布局未验收。
 
 0.16.6 收尾：同次 dev/all-features 构建的 Editor/Engine 已配对更新到原本机应用位置，
 签名、版本与 native-smoke 校验及 5 项 authoring-process 测试通过，安装后设置页原生启动正常。
@@ -283,6 +285,18 @@ actionlint 通过。45 个 Bevy 库产物在后续测试中复用，仅额外编
 新工作流尚未远端复跑，本机耗时不能作为 hosted runner 的加速比例。
 
 这些状态不证明新版游戏的三平台运行、Moto 操作或正式发行包已验收。
+
+### Editor 工程创建、配音与演出时间轴
+
+当前工作区在 macOS arm64 完成 fmt、all-targets/all-features check/Clippy、
+all-features 与 no-default-features/publisher 工作区测试，以及配对打包和 native-smoke validate。
+IPC 测试在沙箱外执行；原始日志在 `target/editor-features-*.log`。
+
+配对应用在 `target/EditorFeatureNew` 临时工程完成原生界面验证：新建后自动打开、
+入口场景写回配置、唯一配音匹配与缺失提示、应用后一次撤销、Preview 标量由 1 改为 10
+且源码不变；时间轴拖动 500ms → 850ms、一次撤销恢复、Inspector 预置同步时间轴。
+首次布局与拖动起点在实测后修正。协议为 v13，Editor/Engine 必须配对。
+这些操作未覆盖 Windows/Linux 原生界面、超长脚本滚动或复杂并行演出的完整播放验收。
 
 ### Editor 源码反馈与替换验收
 

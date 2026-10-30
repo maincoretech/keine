@@ -153,6 +153,7 @@ impl WorkbenchPanel {
                     display_selects: Vec::new(),
                 },
                 document: crate::app::document::DocumentState {
+                    timeline: Default::default(),
                     document_mode: saved_view.map_or(DocumentMode::Text, |view| view.mode),
                     last_text_cursor: None,
                     text_scroll_pending: saved_view
@@ -288,7 +289,7 @@ impl WorkbenchPanel {
                     .push(cx.observe(editor, move |panel, _, cx| {
                         // Blocks mode owns the source selection; the hidden
                         // text editor's stale caret must not seek Preview.
-                        if panel.document.document_mode == DocumentMode::Block {
+                        if panel.document.document_mode != DocumentMode::Text {
                             return;
                         }
                         use gpui_kit::EntityInputHandler;
@@ -604,7 +605,7 @@ impl WorkbenchPanel {
                     position.line as usize,
                     position.character as usize,
                 );
-                if view.mode == DocumentMode::Block {
+                if view.mode != DocumentMode::Text {
                     let source = editor.read(cx).value().to_string();
                     let projection = EiyashouProjection::parse(&source);
                     if let Some((_, block)) = block_at_position(

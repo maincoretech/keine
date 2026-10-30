@@ -89,7 +89,12 @@ pub(super) fn render(
                     .into_any_element();
             }
         };
-        let original = vec![config.title, config.title_background, config.project.icon];
+        let original = vec![
+            config.title,
+            config.title_background,
+            config.project.icon,
+            config.script.entry,
+        ];
         let inputs = original
             .iter()
             .map(|value| {
@@ -168,9 +173,14 @@ pub(super) fn render(
         .gap_3()
         .p_3();
     if panel.settings_tab == settings::SettingsTab::Project {
-        for (field, label) in ["Title", "Title background", "Application icon"]
-            .into_iter()
-            .enumerate()
+        for (field, label) in [
+            "Title",
+            "Title background",
+            "Application icon",
+            "Entry scene",
+        ]
+        .into_iter()
+        .enumerate()
         {
             let value = state.inputs[field].read(cx).value().to_string();
             let mut control = div().w_full().min_w_0().flex().flex_col().gap_2().child(
@@ -200,6 +210,25 @@ pub(super) fn render(
                 input_row = input_row.child(resource_trigger(
                     root,
                     ResourceTarget::ProjectBackground,
+                    options,
+                    value.clone(),
+                    false,
+                    cx,
+                ));
+            } else if field == 3 {
+                let options = index
+                    .scenes
+                    .iter()
+                    .map(|scene| SourceOption {
+                        localize: false,
+                        value: scene.name.clone(),
+                        title: scene.name.clone().into(),
+                        asset: None,
+                    })
+                    .collect();
+                input_row = div().child(resource_trigger(
+                    root,
+                    ResourceTarget::ProjectEntry,
                     options,
                     value.clone(),
                     false,
@@ -601,14 +630,15 @@ pub(super) fn refresh_drag(panel: &mut WorkbenchPanel, window: &mut Window, cx: 
     }
 }
 
-pub(super) fn select_background(
+pub(super) fn select_field(
+    field: usize,
     panel: &mut WorkbenchPanel,
     value: String,
     window: &mut Window,
     cx: &mut Context<WorkbenchPanel>,
 ) {
     if let Some(state) = &mut panel.project_settings {
-        state.inputs[1].update(cx, |input, cx| input.set_value(value, window, cx));
+        state.inputs[field].update(cx, |input, cx| input.set_value(value, window, cx));
     }
     cx.notify();
 }
@@ -675,8 +705,18 @@ fn apply(
             return Err((Some(2), crate::i18n::tr("Choose a square icon").into()));
         }
     }
+    if values[3] != state.original[3]
+        && !cx
+            .global::<EditorDocuments>()
+            .authoring(root)
+            .scenes
+            .iter()
+            .any(|scene| scene.name == values[3])
+    {
+        return Err((Some(3), crate::i18n::tr("Choose an existing scene").into()));
+    }
     let mut changes = Vec::new();
-    for (i, path) in ["title", "title_background", "project.icon"]
+    for (i, path) in ["title", "title_background", "project.icon", "script.entry"]
         .iter()
         .enumerate()
     {

@@ -41,6 +41,7 @@ pub struct PreviewSnapshot {
     pub audition_paused: bool,
     pub audition_gain_db: f32,
     pub audition_error: Option<String>,
+    pub variable_error: Option<String>,
 }
 
 impl Default for PreviewSnapshot {
@@ -56,6 +57,7 @@ impl Default for PreviewSnapshot {
             audition_paused: false,
             audition_gain_db: 0.0,
             audition_error: None,
+            variable_error: None,
         }
     }
 }
@@ -80,6 +82,7 @@ impl PreviewSnapshot {
         self.runtime_position = None;
         self.runtime = None;
         self.diagnostics.clear();
+        self.variable_error = None;
         if let Some(keine_authoring::PreviewReload::Rejected {
             diagnostic: Some(diagnostic),
             ..
@@ -93,6 +96,13 @@ impl PreviewSnapshot {
 
 enum PreviewCommand {
     Start,
+    SetVariable {
+        revision: u64,
+        name: String,
+        global: bool,
+        expected: String,
+        value: String,
+    },
     Stop,
     Show,
     ToggleAudition(PathBuf, f32),
@@ -168,6 +178,15 @@ impl PendingCommands {
                 // Lifecycle, visibility and audition each need at most one
                 // pending intent. Stop/Shutdown always precede source work.
                 self.control.retain(|old| {
+                    if matches!(
+                        (old, &command),
+                        (
+                            PreviewCommand::SetVariable { name: a, global: ag, .. },
+                            PreviewCommand::SetVariable { name: b, global: bg, .. }
+                        ) if a == b && ag == bg
+                    ) {
+                        return false;
+                    }
                     !matches!(
                         (old, &command),
                         (PreviewCommand::Start, PreviewCommand::Start)
@@ -319,6 +338,23 @@ impl PreviewController {
         self.commands.send(PreviewCommand::StopAudition);
     }
 
+    pub fn set_variable(
+        &self,
+        revision: u64,
+        name: String,
+        global: bool,
+        expected: String,
+        value: String,
+    ) {
+        self.commands.send(PreviewCommand::SetVariable {
+            revision,
+            name,
+            global,
+            expected,
+            value,
+        });
+    }
+
     pub fn apply_snapshot(&self, path: PathBuf, contents: Vec<u8>) {
         self.commands
             .send(PreviewCommand::Snapshot { path, contents });
@@ -415,6 +451,25 @@ impl Worker {
         let restart = matches!(command, PreviewCommand::RestartAudition(..));
         let result = match command {
             PreviewCommand::Start => self.start(),
+            PreviewCommand::SetVariable {
+                revision,
+                name,
+                global,
+                expected,
+                value,
+            } => {
+                let result = self
+                    .engine
+                    .as_mut()
+                    .ok_or_else(|| io::Error::other("Preview is not running"))
+                    .and_then(|engine| {
+                        engine.set_preview_variable(revision, name, global, expected, value)
+                    });
+                self.mutate(|snapshot| {
+                    snapshot.variable_error = result.err().map(|e| e.to_string())
+                });
+                Ok(())
+            }
             PreviewCommand::Stop => {
                 self.stop();
                 Ok(())

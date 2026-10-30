@@ -98,7 +98,7 @@ Core 的 `visit_presentation_blocks` 提供类型化、无分配且可提前停�
 | Eiyashou 配置 | `script.version: 2` | Loader Native adapter；[语言指南](language.md) |
 | 编译 Program | envelope 1 / IR 7 | [`compiled.rs`](../../crates/loader/src/compiled.rs) |
 | 存档 / 设置 / 窗口 | 11 / 4 / 1 | Loader Store adapter / Storage / Runtime window |
-| Editor–Engine IPC | 12 | [`authoring`](../../crates/authoring/src/lib.rs)；两端成对更新 |
+| Editor–Engine IPC | 13 | [`authoring`](../../crates/authoring/src/lib.rs)；两端成对更新 |
 | Hakutaku | 库 0.2.0 / wire v2 | 固定 Git revision；[发行指南](release.md#hakutaku-020--v2) |
 
 ## 内容与资源

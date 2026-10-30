@@ -112,7 +112,7 @@ fn capture(root: &Path, cx: &App) -> Option<Location> {
     let editor = editor.read(cx);
     let mut blocks: Vec<_> = panel.document.selected_blocks.iter().copied().collect();
     blocks.sort_unstable();
-    let cursor = if panel.document.document_mode == DocumentMode::Block {
+    let cursor = if panel.document.document_mode != DocumentMode::Text {
         cx.global::<EditorDocuments>()
             .selection(root)
             .filter(|(selected, _, _)| *selected == path)
@@ -258,7 +258,7 @@ pub(super) fn travel(root: &Path, back: bool, window: &mut Window, cx: &mut App)
                         editor.set_scroll_offset(target.text_scroll, cx);
                     }
                 });
-                if target.mode == DocumentMode::Block && unchanged {
+                if target.mode != DocumentMode::Text && unchanged {
                     cx.global_mut::<EditorDocuments>().set_block_selection(
                         &root,
                         target.path.clone(),

@@ -2,6 +2,8 @@
 pub mod app_data;
 pub(crate) mod audio_calibration;
 pub(crate) mod build;
+#[path = "workspace/project/create.rs"]
+pub(crate) mod create;
 pub mod document;
 #[path = "workspace/file/ops.rs"]
 pub(crate) mod file_ops;

@@ -17,6 +17,8 @@ anyhow = { workspace = true }
 noyalib = { workspace = true }
 lsp-types = { version = "=0.97.0", features = ["proposed"] }
 gpui-kit = { workspace = true }
+# Reuse GPUI's existing localization runtime for component translations.
+rust-i18n-support = { version = "=4.2.4", default-features = false }
 # Match the static image formats accepted by the resource importer.
 image = { workspace = true, features = ["bmp", "gif", "jpeg", "png", "tiff", "webp"] }
 keine-authoring = { workspace = true }

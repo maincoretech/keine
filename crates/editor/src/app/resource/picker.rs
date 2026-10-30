@@ -151,6 +151,7 @@ pub(in crate::app) fn voice_resource_options(
 pub(in crate::app) enum ResourceTarget {
     Reference,
     ProjectBackground,
+    ProjectEntry,
     Source(SourceInspectorKey, usize),
     Voice(InspectorEditKey),
     Speaker(InspectorEditKey),
@@ -181,7 +182,9 @@ impl ResourcePicker {
         }
         let documents = cx.global::<EditorDocuments>();
         let (path, start) = match &self.target {
-            ResourceTarget::Reference | ResourceTarget::ProjectBackground => return true,
+            ResourceTarget::Reference
+            | ResourceTarget::ProjectBackground
+            | ResourceTarget::ProjectEntry => return true,
             ResourceTarget::Source(key, _) => (&key.path, key.block_start),
             ResourceTarget::Voice(key) | ResourceTarget::Speaker(key) => {
                 (&key.path, key.block_start)
@@ -200,7 +203,9 @@ impl ResourcePicker {
         };
         let projection = documents.projection(&self.root, path, &source);
         match &self.target {
-            ResourceTarget::Reference | ResourceTarget::ProjectBackground => true,
+            ResourceTarget::Reference
+            | ResourceTarget::ProjectBackground
+            | ResourceTarget::ProjectEntry => true,
             ResourceTarget::Source(key, _) => projection
                 .scenes
                 .iter()
@@ -248,6 +253,7 @@ pub(in crate::app) fn resource_trigger(
     let id = match &target {
         ResourceTarget::Reference => "asset-reference-picker".into(),
         ResourceTarget::ProjectBackground => "project-background-picker".into(),
+        ResourceTarget::ProjectEntry => "project-entry-picker".into(),
         ResourceTarget::Source(key, position) => format!("resource-{}-{position}", key.block_start),
         ResourceTarget::Voice(key) => format!("voice-resource-{}", key.block_start),
         ResourceTarget::Speaker(key) => format!("speaker-resource-{}", key.block_start),
@@ -578,7 +584,11 @@ impl WorkbenchPanel {
         self.close_resource_picker(true, window, cx);
         match target {
             ResourceTarget::ProjectBackground => {
-                project_settings::select_background(self, option.value, window, cx);
+                project_settings::select_field(1, self, option.value, window, cx);
+                return;
+            }
+            ResourceTarget::ProjectEntry => {
+                project_settings::select_field(3, self, option.value, window, cx);
                 return;
             }
             ResourceTarget::Reference => {

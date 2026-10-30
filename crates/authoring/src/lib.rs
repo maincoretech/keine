@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-pub const PROTOCOL_VERSION: u32 = 12;
+pub const PROTOCOL_VERSION: u32 = 13;
 pub const MAX_MESSAGE_BYTES: usize = 256 * 1024;
 pub const MAX_DOCUMENT_BYTES: usize = 1024 * 1024;
 pub const SNAPSHOT_CHUNK_BYTES: usize = 128 * 1024;
@@ -85,6 +85,13 @@ pub enum ClientCommand {
     PauseAudition {
         paused: bool,
     },
+    SetPreviewVariable {
+        document_revision: u64,
+        name: String,
+        global: bool,
+        expected: String,
+        value: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -105,6 +112,8 @@ pub struct RuntimeSnapshot {
     pub cursor: usize,
     pub waiting: Vec<String>,
     pub variables: Vec<(String, String)>,
+    /// Indices with complete scalar values and names (arrays/truncated rows stay read-only).
+    pub editable_variables: Vec<usize>,
     pub omitted_variables: usize,
     pub checkpoint: Option<(PathBuf, usize, usize)>,
     pub checkpoint_is_live: bool,

@@ -175,6 +175,51 @@ fn state_location_at(
     Some((path, span.line, span.column))
 }
 
+/// Preview-only scalar edits preserve the existing variable type. No source writes.
+pub(crate) fn set_variable(
+    world: &mut World,
+    name: &str,
+    global: bool,
+    expected: &str,
+    value: &str,
+) -> Result<(), String> {
+    use keine_core::Value;
+    if name.len() > 128 || value.len() > 512 {
+        return Err("Variable value is too long".into());
+    }
+    let mut state = world
+        .get_resource_mut::<GameState>()
+        .ok_or("Preview is not running")?;
+    let variables = if global {
+        &mut state.global_vars
+    } else {
+        &mut state.vars
+    };
+    let current = variables.get_mut(name).ok_or("Variable no longer exists")?;
+    let displayed = match &*current {
+        Value::Str(s) => s.clone(),
+        value => value.display(),
+    };
+    if displayed != expected {
+        return Err("Variable changed; reopen its editor".into());
+    }
+    let invalid = || "Enter a value of the same type".to_string();
+    *current = match current {
+        Value::Bool(_) => Value::Bool(value.parse().map_err(|_| invalid())?),
+        Value::Int(_) => Value::Int(value.parse().map_err(|_| invalid())?),
+        Value::Float(_) => {
+            let number: f64 = value.parse().map_err(|_| invalid())?;
+            if !number.is_finite() {
+                return Err(invalid());
+            }
+            Value::Float(number)
+        }
+        Value::Str(_) => Value::Str(value.into()),
+        Value::Array(_) => return Err("Array editing is not supported".into()),
+    };
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -184,6 +229,28 @@ mod tests {
     use keine_loader::SourceSpan;
 
     use super::*;
+
+    #[test]
+    fn preview_variable_edits_preserve_types_and_reject_stale_values() {
+        use keine_core::Value;
+        let mut world = World::new();
+        let mut state = State::new();
+        state.vars.insert("score".into(), Value::Int(1));
+        state
+            .global_vars
+            .insert("ending".into(), Value::Bool(false));
+        world.insert_resource(GameState(state));
+        set_variable(&mut world, "score", false, "1", "10").unwrap();
+        assert_eq!(world.resource::<GameState>().vars["score"], Value::Int(10));
+        assert!(set_variable(&mut world, "score", false, "1", "20").is_err());
+        assert!(set_variable(&mut world, "score", false, "10", "1.5").is_err());
+        set_variable(&mut world, "ending", true, "false", "true").unwrap();
+        assert_eq!(
+            world.resource::<GameState>().global_vars["ending"],
+            Value::Bool(true)
+        );
+        assert!(set_variable(&mut world, "missing", false, "", "1").is_err());
+    }
 
     #[test]
     fn source_location_follows_the_executed_action_in_its_script() {

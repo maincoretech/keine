@@ -2,6 +2,8 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU8, Ordering};
 
+mod components;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Language {
     #[default]
@@ -11,19 +13,23 @@ pub enum Language {
     SimplifiedChinese,
     #[serde(rename = "zh-TW")]
     TraditionalChinese,
+    #[serde(rename = "ja")]
+    Japanese,
 }
 
 impl Language {
-    pub const ALL: [Self; 3] = [
+    pub const ALL: [Self; 4] = [
         Self::SimplifiedChinese,
         Self::TraditionalChinese,
         Self::English,
+        Self::Japanese,
     ];
     pub const fn code(self) -> &'static str {
         match self {
             Self::English => "en",
             Self::SimplifiedChinese => "zh-CN",
             Self::TraditionalChinese => "zh-TW",
+            Self::Japanese => "ja",
         }
     }
     pub const fn name(self) -> &'static str {
@@ -31,6 +37,7 @@ impl Language {
             Self::English => "English",
             Self::SimplifiedChinese => "简体中文",
             Self::TraditionalChinese => "繁體中文",
+            Self::Japanese => "日本語",
         }
     }
 }
@@ -41,10 +48,12 @@ pub fn language() -> Language {
     match LANGUAGE.load(Ordering::Relaxed) {
         1 => Language::SimplifiedChinese,
         2 => Language::TraditionalChinese,
+        3 => Language::Japanese,
         _ => Language::English,
     }
 }
 pub(crate) fn set_language(language: Language) {
+    components::init();
     LANGUAGE.store(language as u8, Ordering::Relaxed);
     gpui_kit::component::set_locale(language.code());
 }
@@ -56,15 +65,20 @@ pub(crate) fn text(message: &str) -> gpui_kit::SharedString {
 }
 
 macro_rules! catalog {
-    ($( $en:literal => ($cn:literal, $tw:literal), )*) => {
+    ($( $en:literal => ($cn:literal, $tw:literal, $ja:literal), )*) => {
         pub fn translate(language: Language, message: &str) -> &str {
             if language == Language::English { return message; }
             match message {
-                $($en => if language == Language::SimplifiedChinese { $cn } else { $tw },)*
+                $($en => match language {
+                    Language::English => $en,
+                    Language::SimplifiedChinese => $cn,
+                    Language::TraditionalChinese => $tw,
+                    Language::Japanese => $ja,
+                },)*
                 _ => message,
             }
         }
-        const MESSAGES: &[(&str, &str, &str)] = &[$(($en, $cn, $tw)),*];
+        const MESSAGES: &[(&str, &str, &str, &str)] = &[$(($en, $cn, $tw, $ja)),*];
     };
 }
 
@@ -103,9 +117,7 @@ pub(crate) fn refresh_input(
     let previous = presentation.placeholder();
     let key = MESSAGES
         .iter()
-        .find(|(en, cn, tw)| {
-            *en == previous.as_ref() || *cn == previous.as_ref() || *tw == previous.as_ref()
-        })
+        .find(|(en, cn, tw, ja)| [*en, *cn, *tw, *ja].contains(&previous.as_ref()))
         .map(|row| row.0);
     if let Some(key) = key {
         let next = tr(key);
@@ -120,6 +132,19 @@ mod tests {
     use super::*;
     #[test]
     fn catalog_is_complete_and_preserves_fields() {
+        components::init();
+        assert_eq!(
+            gpui_kit::component::_rust_i18n_translate("ja", "Dialog.cancel"),
+            "キャンセル"
+        );
+        assert_eq!(
+            gpui_kit::component::_rust_i18n_translate("ja", "Input.Copy"),
+            "コピー"
+        );
+        assert_eq!(
+            gpui_kit::component::_rust_i18n_translate("en", "Dialog.cancel"),
+            "Cancel"
+        );
         let mut keys = std::collections::HashSet::new();
         fn fields(s: &str) -> Vec<&str> {
             let mut fields = s
@@ -130,15 +155,20 @@ mod tests {
             fields.sort_unstable();
             fields
         }
-        for &(en, cn, tw) in MESSAGES {
+        for &(en, cn, tw, ja) in MESSAGES {
             assert!(keys.insert(en), "duplicate: {en}");
-            assert!(!cn.is_empty() && !tw.is_empty(), "missing: {en}");
+            assert!(
+                !cn.is_empty() && !tw.is_empty() && !ja.is_empty(),
+                "missing: {en}"
+            );
             assert_eq!(fields(en), fields(cn), "Simplified Chinese: {en}");
             assert_eq!(fields(en), fields(tw), "Traditional Chinese: {en}");
+            assert_eq!(fields(en), fields(ja), "Japanese: {en}");
             for (language, expected) in [
                 (Language::English, en),
                 (Language::SimplifiedChinese, cn),
                 (Language::TraditionalChinese, tw),
+                (Language::Japanese, ja),
             ] {
                 assert_eq!(translate(language, en), expected);
                 assert_eq!(
@@ -146,6 +176,14 @@ mod tests {
                     "characters/我的角色.webp"
                 );
             }
+        }
+        for language in Language::ALL {
+            let serialized = serde_json::to_string(&language).unwrap();
+            assert_eq!(serialized, format!("\"{}\"", language.code()));
+            assert_eq!(
+                serde_json::from_str::<Language>(&serialized).unwrap(),
+                language
+            );
         }
         for kind in crate::authoring::commands::InsertKind::ALL {
             assert!(

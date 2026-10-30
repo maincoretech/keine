@@ -389,6 +389,27 @@ impl EngineProcess {
         }
     }
 
+    pub fn set_preview_variable(
+        &mut self,
+        document_revision: u64,
+        name: String,
+        global: bool,
+        expected: String,
+        value: String,
+    ) -> io::Result<()> {
+        match self.request_raw(ClientCommand::SetPreviewVariable {
+            document_revision,
+            name,
+            global,
+            expected,
+            value,
+        })? {
+            ServerResponse::Pong => Ok(()),
+            ServerResponse::Error { message, .. } => Err(io::Error::other(message)),
+            other => Err(unexpected("variable acknowledgement", &other)),
+        }
+    }
+
     fn request(&mut self, command: ClientCommand) -> io::Result<ServerResponse> {
         match self.request_raw(command)? {
             ServerResponse::Error { code, message } => Err(io::Error::other(format!(

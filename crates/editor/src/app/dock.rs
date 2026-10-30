@@ -387,6 +387,8 @@ impl EditorTabGroupSkin {
         }
         let scene_panel = panel.clone();
         let text_panel = panel.clone();
+        let timeline_panel = panel.clone();
+        let voice_panel = panel.clone();
         Some(
             div()
                 .flex_none()
@@ -396,6 +398,26 @@ impl EditorTabGroupSkin {
                 .pr_2()
                 .child(navigation)
                 .child(reload)
+                .child(
+                    file_action_icon("match-voices", AssetIconName::Mic, "Match dialogue voices")
+                        .on_click(move |_, window, cx| {
+                            if let PanelContent::Document { root, .. } =
+                                &voice_panel.read(cx).content
+                            {
+                                let root = root.clone();
+                                super::document::voices::open(&root, window, cx);
+                            }
+                        }),
+                )
+                .child(
+                    document_mode_button("Timeline", mode == DocumentMode::Timeline).on_click(
+                        move |_, window, cx| {
+                            timeline_panel.update(cx, |panel, cx| {
+                                panel.switch_document_mode(DocumentMode::Timeline, window, cx)
+                            });
+                        },
+                    ),
+                )
                 .when(mode == DocumentMode::Block, |controls| {
                     controls.child(
                         file_action_icon("scene-new", AssetIconName::Plus, "Add scene").on_click(

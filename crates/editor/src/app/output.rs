@@ -68,7 +68,7 @@ impl WorkbenchPanel {
     }
 }
 
-/// Same read-only presentation in Inspector and Output; source navigation uses
+/// Shared inspection presentation in Inspector and Output; source navigation uses
 /// the normal document owner and never issues a Replay/seek command.
 pub(super) fn runtime_inspection(
     root: &Path,
@@ -152,7 +152,7 @@ pub(super) fn runtime_inspection(
         };
     }
     if variables {
-        content = content.child(section_label("VARIABLES · READ ONLY"));
+        content = content.child(section_label("Preview variables"));
         if runtime.variables.is_empty() {
             content = content.child(
                 div()
@@ -161,19 +161,101 @@ pub(super) fn runtime_inspection(
                     .child(crate::i18n::tr("No variables")),
             );
         }
-        content = content.children(runtime.variables.into_iter().map(|(name, value)| {
+        if let Some(error) = preview.variable_error {
+            content = content.child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(0xdb7780))
+                    .child(crate::i18n::text(&error)),
+            );
+        }
+        content = content.child(
             div()
-                .flex()
-                .flex_col()
-                .gap_1()
                 .text_xs()
-                .child(div().text_color(rgb(PRIMARY)).child(name))
-                .child(div().text_color(rgb(INK)).child(value))
-        }));
+                .text_color(rgb(MUTED))
+                .child(crate::i18n::tr("Changes affect this Preview session only.")),
+        );
+        let editable = runtime.editable_variables;
+        content = content.children(runtime.variables.into_iter().enumerate().map(
+            |(row, (name, value))| {
+                let root = root.to_owned();
+                let revision = preview.revision;
+                let edit_name = name.clone();
+                let edit_value = value.clone();
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .text_xs()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().text_color(rgb(PRIMARY)).child(name))
+                            .child(div().text_color(rgb(INK)).child(value)),
+                    )
+                    .when(editable.contains(&row), |row_view| {
+                        row_view.child(
+                            file_action_icon(
+                                ("preview-variable", row),
+                                AssetIconName::Pencil,
+                                "Edit variable",
+                            )
+                            .on_click(move |_, window, cx| {
+                                edit_variable(&root, revision, &edit_name, &edit_value, window, cx)
+                            }),
+                        )
+                    })
+            },
+        ));
         if runtime.omitted_variables > 0 {
             content = content.child(div().text_xs().text_color(rgb(MUTED))
                 .child(crate::i18n::format("{0} more variables; first 128 shown. Strings limited to 512 bytes; arrays show item count.", &[("0", (runtime.omitted_variables).to_string())])));
         }
     }
     Some(content.into_any_element())
+}
+
+fn edit_variable(
+    root: &Path,
+    revision: u64,
+    name: &str,
+    expected: &str,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let input = cx.new(|cx| InputState::new(window, cx).default_value(expected));
+    let focus = input.clone();
+    let root = root.to_owned();
+    let title = name.to_owned();
+    let (global, name) = name
+        .strip_prefix("global.")
+        .map_or((false, name), |name| (true, name));
+    let name = name.to_owned();
+    let expected = expected.to_owned();
+    window.open_alert_dialog(cx, move |dialog, _, _| {
+        let root = root.clone();
+        let name = name.clone();
+        let expected = expected.clone();
+        let value = input.clone();
+        dialog
+            .title(title.clone())
+            .width(px(420.))
+            .child(tool_input(&input))
+            .button_props(
+                gpui_kit::component::dialog::DialogButtonProps::default()
+                    .ok_text(crate::i18n::tr("Apply"))
+                    .cancel_text(crate::i18n::tr("Cancel"))
+                    .show_cancel(true),
+            )
+            .on_ok(move |_, _, cx| {
+                let value = value.read(cx).value().to_string();
+                if let Ok(preview) = cx.global_mut::<EditorDocuments>().preview(&root) {
+                    preview.set_variable(revision, name.clone(), global, expected.clone(), value);
+                }
+                true
+            })
+    });
+    focus.read(cx).focus_handle(cx).focus(window, cx);
 }

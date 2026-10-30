@@ -187,8 +187,9 @@ pub(super) fn output_line(label: &'static str, color: u32, value: String) -> imp
         .gap_3()
         .child(
             div()
-                .w(px(44.))
+                .min_w(px(44.))
                 .flex_none()
+                .whitespace_nowrap()
                 .text_color(rgb(color))
                 .child(crate::i18n::text(label)),
         )
@@ -203,10 +204,10 @@ pub(super) fn output_line(label: &'static str, color: u32, value: String) -> imp
 
 pub(super) fn document_mode_button(label: &'static str, selected: bool) -> Stateful<Div> {
     div()
-        .id(if label == "Text" {
-            "document-mode-text"
-        } else {
-            "document-mode-block"
+        .id(match label {
+            "Text" => "document-mode-text",
+            "Timeline" => "document-mode-timeline",
+            _ => "document-mode-block",
         })
         .when(cfg!(test), |button| {
             button.debug_selector(move || format!("document-mode-{label}"))

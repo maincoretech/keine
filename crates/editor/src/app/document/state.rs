@@ -2,6 +2,7 @@
 use crate::app::*;
 
 pub(in crate::app) struct DocumentState {
+    pub(in crate::app) timeline: super::timeline::TimelineState,
     pub(in crate::app) document_mode: DocumentMode,
     pub(in crate::app) last_text_cursor: Option<(usize, usize)>,
     pub(in crate::app) text_scroll_pending: bool,

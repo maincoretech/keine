@@ -5822,6 +5822,7 @@ dependencies = [
  "noyalib",
  "objc2-foundation 0.3.2",
  "postcard",
+ "rust-i18n-support",
  "serde",
  "serde_json",
  "windows 0.62.2",

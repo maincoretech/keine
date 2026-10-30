@@ -407,6 +407,7 @@ pub(super) enum DocumentMode {
     #[default]
     Text,
     Block,
+    Timeline,
 }
 
 pub(super) struct BlockTextEditor {
@@ -719,7 +720,7 @@ impl BasePanel for WorkbenchPanel {
             && let PanelContent::Document { editor, .. } = &self.content
         {
             let editor = editor.read(cx);
-            let position = if self.document.document_mode == DocumentMode::Block {
+            let position = if self.document.document_mode != DocumentMode::Text {
                 self.document
                     .block_selection_anchor
                     .map(|offset| {

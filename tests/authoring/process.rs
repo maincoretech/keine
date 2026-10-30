@@ -22,6 +22,13 @@ fn project() -> PathBuf {
 fn editor_and_engine_complete_the_control_handshake() {
     let mut process = EngineProcess::launch(&engine(), &project(), 41).unwrap();
     process.ping().unwrap();
+    // Editing requires a live Preview and must not poison the control channel.
+    assert!(
+        process
+            .set_preview_variable(0, "score".into(), false, "0".into(), "1".into())
+            .is_err()
+    );
+    process.ping().unwrap();
     let report = process.validate().unwrap();
     assert_eq!(report.errors, 0, "{:#?}", report.diagnostics);
     assert!(report.scenes > 0);

@@ -23,6 +23,9 @@ impl Render for WorkbenchPanel {
             }
             self.refresh_search_language(window, cx);
         }
+        if !window.is_window_active() {
+            document::timeline::cancel_drag(self, window, cx);
+        }
         self.prepare_document_view(window, cx);
         self.refresh_block_drag(window, cx);
         self.refresh_picker_drag(window, cx);
@@ -103,6 +106,12 @@ impl Render for WorkbenchPanel {
             .capture_key_down(
                 cx.listener(|this, event: &gpui_kit::KeyDownEvent, window, cx| {
                     if event.keystroke.key == "escape"
+                        && document::timeline::cancel_drag(this, window, cx)
+                    {
+                        cx.notify();
+                        cx.stop_propagation();
+                    }
+                    if event.keystroke.key == "escape"
                         && project_settings::cancel_drag(this, window, cx)
                     {
                         cx.notify();
@@ -127,8 +136,7 @@ impl Render for WorkbenchPanel {
                 this.key_context("KeineResourcePicker")
             })
             .when(
-                self.document.document_mode == DocumentMode::Block
-                    && self.resource_picker.is_none(),
+                self.document.document_mode != DocumentMode::Text && self.resource_picker.is_none(),
                 |this| this.key_context("KeineBlockView"),
             )
             .when(

@@ -150,6 +150,8 @@ gpui_kit::assets::icon_assets!(
         MessageSquareText,
         Move,
         Music,
+        Mic,
+        Pencil,
         PersonStanding,
         Repeat2,
         RotateCcw,
@@ -227,6 +229,7 @@ actions!(
     keine_editor,
     [
         OpenFolder,
+        NewProject,
         ShowQuickOpen,
         NavigateBack,
         NavigateForward,

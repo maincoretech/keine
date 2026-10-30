@@ -31,10 +31,11 @@ use super::panel::{ToolKind, WorkbenchPanel};
 use super::prompt_answer;
 use super::{
     ACTIVITY_BRAND_SIZE_PX, ACTIVITY_ITEM_SIZE_PX, ACTIVITY_RAIL_WIDTH_PX, ASSET_PREVIEW_PANEL,
-    CANVAS, CHROME, EXPLORER_PANEL, INK, INSPECTOR_PANEL, MUTED, MigrateEiyashou, OpenFolder,
-    PRIMARY, PRIMARY_DIM, PROBLEMS_PANEL, RedoSources, ResetLayout, SURFACE_HOVER, Save, SaveAll,
-    ShowAssetPreview, ShowAssets, ShowOutput, ShowProblems, ShowSearch, ToggleEngine, UndoSources,
-    VIEW_INSET_PX, VIEW_RADIUS_PX, activity_divider, activity_tool, dock, icon_hint,
+    CANVAS, CHROME, EXPLORER_PANEL, INK, INSPECTOR_PANEL, MUTED, MigrateEiyashou, NewProject,
+    OpenFolder, PRIMARY, PRIMARY_DIM, PROBLEMS_PANEL, RedoSources, ResetLayout, SURFACE_HOVER,
+    Save, SaveAll, ShowAssetPreview, ShowAssets, ShowOutput, ShowProblems, ShowSearch,
+    ToggleEngine, UndoSources, VIEW_INSET_PX, VIEW_RADIUS_PX, activity_divider, activity_tool,
+    dock, icon_hint,
 };
 
 struct WindowRegistry<W> {
@@ -570,6 +571,35 @@ impl WorkbenchWindow {
         if let Ok(preview) = cx.global_mut::<EditorDocuments>().preview(&root) {
             preview.stop();
         }
+    }
+
+    fn new_project(&mut self, _: &NewProject, window: &mut Window, cx: &mut Context<Self>) {
+        let initial = std::env::current_dir().unwrap_or_default();
+        let receiver = cx.prompt_for_new_path(&initial, Some(crate::i18n::tr("New project")));
+        cx.spawn_in(window, async move |this, cx| {
+            let selected = receiver.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let result = match selected {
+                    Ok(Ok(Some(path))) => {
+                        crate::workspace::create::create(&path).map(|()| Some(path))
+                    }
+                    Ok(Ok(None)) => Ok(None),
+                    Ok(Err(error)) => Err(io::Error::other(error)),
+                    Err(_) => return,
+                };
+                match result {
+                    Ok(Some(path)) => {
+                        let editor = this.editor.clone();
+                        cx.defer(move |cx| open_paths(&editor, vec![path], cx));
+                    }
+                    Ok(None) => (),
+                    Err(error) => {
+                        window.push_notification(Notification::error(error.to_string()), cx)
+                    }
+                }
+            });
+        })
+        .detach();
     }
 
     fn open_folder(&mut self, _: &OpenFolder, _: &mut Window, cx: &mut Context<Self>) {
@@ -1142,6 +1172,7 @@ impl WorkbenchWindow {
                     .dropdown_menu(move |menu, _, _| {
                         menu.action_context(focus.clone())
                             .menu("Open folder", Box::new(OpenFolder))
+                            .menu(crate::i18n::tr("New project"), Box::new(NewProject))
                             .separator()
                             .menu("Migrate project", Box::new(MigrateEiyashou))
                     }),
@@ -1204,26 +1235,43 @@ impl WorkbenchWindow {
                     )
                     .child(
                         div()
-                            .id("open-folder")
-                            .h(px(34.))
-                            .w(px(148.))
                             .flex()
                             .items_center()
-                            .justify_center()
                             .gap_2()
-                            .rounded(px(7.))
-                            .bg(rgb(PRIMARY_DIM))
-                            .text_sm()
-                            .text_color(rgb(PRIMARY))
-                            .cursor_pointer()
-                            .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-                            .on_click(move |_, _, cx| prompt_open_folder(editor.clone(), cx))
                             .child(
-                                Icon::new(IconName::FolderOpen)
-                                    .small()
-                                    .text_color(rgb(PRIMARY)),
+                                div()
+                                    .id("open-folder")
+                                    .h(px(34.))
+                                    .w(px(148.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .gap_2()
+                                    .rounded(px(7.))
+                                    .bg(rgb(PRIMARY_DIM))
+                                    .text_sm()
+                                    .text_color(rgb(PRIMARY))
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                                    .on_click(move |_, _, cx| {
+                                        prompt_open_folder(editor.clone(), cx)
+                                    })
+                                    .child(
+                                        Icon::new(IconName::FolderOpen)
+                                            .small()
+                                            .text_color(rgb(PRIMARY)),
+                                    )
+                                    .child(crate::i18n::tr("Open Folder")),
                             )
-                            .child(crate::i18n::tr("Open Folder")),
+                            .child(
+                                div().w(px(148.)).child(
+                                    super::tool_action("New project")
+                                        .child(Icon::new(AssetIconName::Plus).small())
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.new_project(&NewProject, window, cx)
+                                        })),
+                                ),
+                            ),
                     )
                     .when(!recents.is_empty(), |this| {
                         this.child(
@@ -1354,6 +1402,7 @@ impl Render for WorkbenchWindow {
             .key_context("KeineWorkbench")
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::open_folder))
+            .on_action(cx.listener(Self::new_project))
             .on_action(cx.listener(|this, _: &super::ShowSettings, window, cx| {
                 if this.workspace.is_some() {
                     this.show_tool(ToolKind::Project, window, cx);

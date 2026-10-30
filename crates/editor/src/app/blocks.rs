@@ -273,7 +273,7 @@ impl WorkbenchPanel {
                     });
                 }
             }
-        } else {
+        } else if mode == DocumentMode::Block {
             self.rebuild_visual_editors(window, cx);
             self.document.block_scroll_pending = true;
             if let PanelContent::Document { root, relative, .. } = &self.content {
@@ -2042,7 +2042,7 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.document.document_mode != DocumentMode::Block || !self.focus.is_focused(window) {
+        if self.document.document_mode == DocumentMode::Text || !self.focus.is_focused(window) {
             return;
         }
         self.replay_block_source(true, window, cx);
@@ -2054,7 +2054,7 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.document.document_mode != DocumentMode::Block || !self.focus.is_focused(window) {
+        if self.document.document_mode == DocumentMode::Text || !self.focus.is_focused(window) {
             return;
         }
         self.replay_block_source(false, window, cx);

@@ -676,6 +676,26 @@ fn handle(
                 column: *column,
             })
         }
+        ClientCommand::SetPreviewVariable {
+            document_revision,
+            name,
+            global,
+            expected,
+            value,
+        } => {
+            require_revision(session, *document_revision)?;
+            let runtime =
+                runtime.ok_or((ErrorCode::InvalidRequest, "Preview is not running".into()))?;
+            if super::preview::document_revision(runtime) != Some(*document_revision) {
+                return Err((
+                    ErrorCode::InvalidRequest,
+                    "Fix script errors before changing variables".into(),
+                ));
+            }
+            super::preview::set_variable(runtime, name, *global, expected, value)
+                .map_err(|message| (ErrorCode::InvalidRequest, message))?;
+            Ok(ServerResponse::Pong)
+        }
         ClientCommand::Ping => Ok(ServerResponse::Pong),
         ClientCommand::Shutdown => Ok(ServerResponse::Bye),
     }

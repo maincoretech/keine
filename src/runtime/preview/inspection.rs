@@ -81,7 +81,17 @@ pub(crate) fn runtime_snapshot(world: &World) -> RuntimeSnapshot {
     snapshot.variables = variables
         .into_iter()
         .take(MAX_VARIABLES)
-        .map(|(global, name, value)| {
+        .enumerate()
+        .map(|(index, (global, name, value))| {
+            if name.len() <= MAX_NAME_BYTES
+                && match value {
+                    Value::Array(_) => false,
+                    Value::Str(s) => s.len() <= MAX_VALUE_BYTES,
+                    _ => true,
+                }
+            {
+                snapshot.editable_variables.push(index);
+            }
             let name = bounded(name, MAX_NAME_BYTES);
             (
                 if global {

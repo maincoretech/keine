@@ -16,6 +16,9 @@ impl WorkbenchPanel {
         else {
             return Empty.into_any_element();
         };
+        if self.document.document_mode == DocumentMode::Timeline {
+            return super::timeline::render(self, cx);
+        }
         let mono = Theme::global(cx).mono_font_family.clone();
         let preferences = cx.global::<EditorDocuments>().editor_preferences;
 

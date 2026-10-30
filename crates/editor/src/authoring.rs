@@ -4,6 +4,8 @@ pub(crate) mod fields;
 mod index;
 pub mod projection;
 pub mod syntax;
+pub(crate) mod timeline;
+pub(crate) mod voices;
 
 pub use commands::{InsertKind, insertion_statement};
 pub use edit::{
