@@ -7,6 +7,73 @@ pub(super) use controls::*;
 pub(super) use view::*;
 
 impl WorkbenchPanel {
+    pub(super) fn cancel_property_edit(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        use gpui_kit::EntityInputHandler;
+        macro_rules! restore {
+            ($input:expr, $value:expr) => {
+                if $input.read(cx).focus_handle(cx).is_focused(window) {
+                    return $input.update(cx, |input, cx| {
+                        if input.marked_text_range(window, cx).is_some() {
+                            return false;
+                        }
+                        input.set_value($value, window, cx);
+                        true
+                    });
+                }
+            };
+        }
+        if self.resource_picker.is_some() {
+            return false;
+        }
+        if let Some(key) = &self.inspector.source_inspector_key {
+            for (input, field) in self
+                .inspector
+                .source_inspector_inputs
+                .iter()
+                .zip(&key.fields)
+            {
+                restore!(input, source_input_value(key, field));
+            }
+            for (input, field) in self
+                .inspector
+                .source_inspector_texts
+                .iter()
+                .zip(&key.fields)
+            {
+                restore!(input, field.value.clone());
+            }
+        }
+        if let Some(key) = &self.inspector.inspector_key {
+            for (input, value) in self
+                .inspector
+                .inspector_inputs
+                .iter()
+                .zip(text_inspector_values(&key.metadata))
+            {
+                restore!(input, value);
+            }
+            let lifetime = &key.lifetime;
+            for (input, value) in self
+                .inspector
+                .text_lifetime_inputs
+                .iter()
+                .zip([&lifetime.target, &lifetime.transition])
+            {
+                restore!(input, value.clone());
+            }
+        }
+        for control in self.document.inline_block_controls.values() {
+            if let Some(field) = control.key.fields.get(control.position) {
+                restore!(control.input, source_input_value(&control.key, field));
+            }
+        }
+        false
+    }
+
     pub(super) fn apply_batch_block_field(
         &mut self,
         root: &Path,
@@ -208,6 +275,12 @@ impl WorkbenchPanel {
                         let key = control.key.clone();
                         let draft = input.read(cx).value().to_string();
                         let _ = cx.update_window(window_handle, |_, window, cx| {
+                            if input.update(cx, |input, cx| {
+                                use gpui_kit::EntityInputHandler;
+                                input.marked_text_range(window, cx).is_some()
+                            }) {
+                                return;
+                            }
                             if (draft != initial_draft
                                 || matches!(event, InputEvent::PressEnter { .. }))
                                 && !panel.commit_wait_mode(&root, &key, Some(&draft), window, cx)
@@ -297,6 +370,12 @@ impl WorkbenchPanel {
                             input.read(cx).value().to_string(),
                         );
                         let _ = cx.update_window(window_handle, |_, window, cx| {
+                            if input.update(cx, |input, cx| {
+                                use gpui_kit::EntityInputHandler;
+                                input.marked_text_range(window, cx).is_some()
+                            }) {
+                                return;
+                            }
                             if !panel.commit_source_field(
                                 &input_root,
                                 &key,
@@ -614,6 +693,12 @@ impl WorkbenchPanel {
                             }
                             let draft = input.read(cx).value().to_string();
                             let _ = cx.update_window(window_handle, |_, window, cx| {
+                                if input.update(cx, |input, cx| {
+                                    use gpui_kit::EntityInputHandler;
+                                    input.marked_text_range(window, cx).is_some()
+                                }) {
+                                    return;
+                                }
                                 if !panel.commit_source_field(
                                     &input_root,
                                     &key,
@@ -710,6 +795,12 @@ impl WorkbenchPanel {
                         }
                         let draft = input.read(cx).value().to_string();
                         let _ = cx.update_window(window_handle, |_, window, cx| {
+                            if input.update(cx, |input, cx| {
+                                use gpui_kit::EntityInputHandler;
+                                input.marked_text_range(window, cx).is_some()
+                            }) {
+                                return;
+                            }
                             if (draft != initial_draft
                                 || matches!(event, InputEvent::PressEnter { .. }))
                                 && !panel.commit_wait_mode(&root, &key, Some(&draft), window, cx)
@@ -753,6 +844,12 @@ impl WorkbenchPanel {
                             input.read(cx).value().to_string(),
                         );
                         let _ = cx.update_window(window_handle, |_, window, cx| {
+                            if input.update(cx, |input, cx| {
+                                use gpui_kit::EntityInputHandler;
+                                input.marked_text_range(window, cx).is_some()
+                            }) {
+                                return;
+                            }
                             if !panel.commit_source_field(&root, &key, position, value, window, cx)
                             {
                                 input.update(cx, |input, cx| {
@@ -791,49 +888,29 @@ impl WorkbenchPanel {
                     .source_inspector_subscriptions
                     .push(
                         cx.subscribe(&state, move |panel, slider, event: &SliderEvent, cx| {
-                            let (SliderEvent::Change(value) | SliderEvent::Release(value)) = event;
-                            if panel
-                                .inspector
-                                .source_inspector_sliders
-                                .get(&field_name)
-                                .is_none_or(|active| active.entity_id() != slider.entity_id())
+                            let SliderEvent::Release(value) = event else {
+                                return;
+                            };
+                            if panel.inspector.source_inspector_sliders.get(&field_name)
+                                != Some(&slider)
                             {
                                 return;
                             }
-                            let Some(mut key) = panel.inspector.source_inspector_key.clone() else {
+                            let Some(key) = panel.inspector.source_inspector_key.clone() else {
                                 return;
                             };
-                            // Pointer events may arrive before the next Inspector render.
-                            // Read this command's current bounded fields for each update.
-                            let Some(source) =
-                                cx.global::<EditorDocuments>().source(&root, &key.path)
-                            else {
-                                return;
-                            };
-                            let projection = EiyashouProjection::parse(&source);
-                            let Some(block) = projection
-                                .scenes
-                                .iter()
-                                .flat_map(|scene| &scene.blocks)
-                                .find(|block| {
-                                    block.source_range.start == key.block_start
-                                        && block.kind == key.kind
-                                        && block.summary.split('(').next().map(str::trim)
-                                            == Some(key.command.as_str())
-                                })
-                            else {
-                                return;
-                            };
-                            let Some(fields) = projection.source_fields_for_block(&source, block)
-                            else {
-                                return;
-                            };
-                            key.fields = fields;
                             let Some(position) =
                                 key.fields.iter().position(|field| field.key == field_name)
                             else {
                                 return;
                             };
+                            let original = control
+                                .parse(&key.fields[position].value)
+                                .unwrap_or(control.default)
+                                .clamp(control.min, control.max);
+                            if value.start() == original {
+                                return;
+                            }
                             let value = control.source(value.start());
                             let _ = cx.update_window(window_handle, |_, window, cx| {
                                 if !panel
@@ -1041,6 +1118,12 @@ impl WorkbenchPanel {
                             .any(|active| active.entity_id() == input.entity_id())
                     {
                         let _ = cx.update_window(lifetime_window, |_, window, cx| {
+                            if input.update(cx, |input, cx| {
+                                use gpui_kit::EntityInputHandler;
+                                input.marked_text_range(window, cx).is_some()
+                            }) {
+                                return;
+                            }
                             panel.commit_text_lifetime(&root, None, false, window, cx)
                         });
                     }
@@ -1087,6 +1170,12 @@ impl WorkbenchPanel {
                             .any(|active| active.entity_id() == input.entity_id())
                     {
                         let _ = cx.update_window(window_handle, |_, window, cx| {
+                            if input.update(cx, |input, cx| {
+                                use gpui_kit::EntityInputHandler;
+                                input.marked_text_range(window, cx).is_some()
+                            }) {
+                                return;
+                            }
                             panel.commit_text_inspector(&root, window, cx)
                         });
                     }
@@ -1272,6 +1361,17 @@ impl WorkbenchPanel {
             voice: (!values[1].trim().is_empty()).then(|| values[1].trim().to_owned()),
             stable_id: (!values[2].trim().is_empty()).then(|| values[2].trim().to_owned()),
         };
+        self.commit_text_metadata(root, &key, metadata, window, cx);
+    }
+
+    pub(super) fn commit_text_metadata(
+        &mut self,
+        root: &Path,
+        key: &InspectorEditKey,
+        metadata: TextBlockMetadata,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         if metadata == key.metadata {
             return;
         }

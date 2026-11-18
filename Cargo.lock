@@ -4952,8 +4952,8 @@ dependencies = [
 
 [[package]]
 name = "hakutaku-core"
-version = "0.2.0"
-source = "git+https://github.com/maincoretech/hakutaku?rev=8d637d5629b84f99251fd445366892bdb3c7cf2b#8d637d5629b84f99251fd445366892bdb3c7cf2b"
+version = "0.2.3"
+source = "git+https://github.com/maincoretech/hakutaku?rev=fd231fb2bf6e7eb4c7f7c30a3dd98c17b6d50827#fd231fb2bf6e7eb4c7f7c30a3dd98c17b6d50827"
 dependencies = [
  "blake3",
  "ring",
@@ -4963,8 +4963,8 @@ dependencies = [
 
 [[package]]
 name = "hakutaku-pack"
-version = "0.2.0"
-source = "git+https://github.com/maincoretech/hakutaku?rev=8d637d5629b84f99251fd445366892bdb3c7cf2b#8d637d5629b84f99251fd445366892bdb3c7cf2b"
+version = "0.2.3"
+source = "git+https://github.com/maincoretech/hakutaku?rev=fd231fb2bf6e7eb4c7f7c30a3dd98c17b6d50827#fd231fb2bf6e7eb4c7f7c30a3dd98c17b6d50827"
 dependencies = [
  "blake3",
  "fastcdc",
@@ -5740,7 +5740,7 @@ dependencies = [
 
 [[package]]
 name = "keine"
-version = "0.17.1"
+version = "0.17.2"
 dependencies = [
  "anyhow",
  "bevy",
@@ -5787,7 +5787,7 @@ dependencies = [
 
 [[package]]
 name = "keine-authoring"
-version = "0.17.1"
+version = "0.17.2"
 dependencies = [
  "postcard",
  "serde",
@@ -5795,7 +5795,7 @@ dependencies = [
 
 [[package]]
 name = "keine-core"
-version = "0.17.1"
+version = "0.17.2"
 dependencies = [
  "criterion",
  "log",
@@ -5807,7 +5807,7 @@ dependencies = [
 
 [[package]]
 name = "keine-editor"
-version = "0.17.1"
+version = "0.17.2"
 dependencies = [
  "anyhow",
  "bevy",
@@ -5833,7 +5833,7 @@ dependencies = [
 
 [[package]]
 name = "keine-loader"
-version = "0.17.1"
+version = "0.17.2"
 dependencies = [
  "anyhow",
  "crc32fast",
@@ -5852,7 +5852,7 @@ dependencies = [
 
 [[package]]
 name = "keine-media"
-version = "0.17.1"
+version = "0.17.2"
 dependencies = [
  "image",
  "libwebp-sys",

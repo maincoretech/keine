@@ -156,8 +156,15 @@ pub(in crate::app) fn picker_kinds(
         .collect::<Vec<_>>();
     kinds.sort_by_key(|kind| {
         if selected_category == Some("Favorites") && query.is_empty() {
-            return (0, preference_rank(&preferences.favorites, kind.label(), 0));
+            return (
+                false,
+                0,
+                preference_rank(&preferences.favorites, kind.label(), 0),
+            );
         }
+        let exact = kind.label().eq_ignore_ascii_case(query)
+            || crate::i18n::tr(kind.label()).to_lowercase() == query
+            || kind.source_name().is_some_and(|name| name == query);
         let category_rank = categories
             .iter()
             .position(|category| *category == kind.category())
@@ -167,6 +174,7 @@ pub(in crate::app) fn picker_kinds(
             .position(|candidate| candidate == kind)
             .unwrap_or(usize::MAX / 2);
         (
+            !exact,
             category_rank,
             preference_rank(&preferences.item_order, kind.label(), item_fallback),
         )
@@ -244,13 +252,12 @@ pub(in crate::app) fn render_block_picker(
     let customize = panel.picker.block_picker_customize;
     let closing = panel.picker.block_picker_closing;
     let epoch = panel.picker.block_picker_epoch;
-    let favorites_view =
-        selected_category == Some("Favorites") && input.read(cx).value().is_empty();
+    let grouped = selected_category != Some("Favorites") && input.read(cx).value().is_empty();
     let mut rows = Vec::new();
     let mut previous_category = None;
     for (index, kind) in kinds.iter().copied().enumerate() {
         let category = kind.category();
-        if previous_category != Some(category) && !favorites_view {
+        if previous_category != Some(category) && grouped {
             rows.push(
                 div()
                     .w_full()
@@ -306,8 +313,6 @@ pub(in crate::app) fn render_block_picker(
                     }
                     this.close_block_picker(&CloseBlockPicker, window, cx);
                     this.insert_from_palette(kind, window, cx);
-                    this.rebuild_visual_editors(window, cx);
-                    this.focus.focus(window, cx);
                     cx.notify();
                 }))
                 .when(customize && input.read(cx).value().is_empty(), |row| {
@@ -779,6 +784,24 @@ pub(in crate::app) fn render_block_context_menu(
         ),
     ];
     if let Some(block) = &block
+        && !block.disabled
+        && !block.read_only
+        && matches!(
+            block.kind,
+            BlockKind::Narration | BlockKind::Dialogue { .. }
+        )
+    {
+        items.insert(
+            1,
+            (
+                BlockMenuAction::MatchVoice,
+                AssetIconName::Mic,
+                "Match voice for this line",
+                false,
+            ),
+        );
+    }
+    if let Some(block) = &block
         && !matches!(
             block.kind,
             BlockKind::Narration | BlockKind::Dialogue { .. } | BlockKind::Else | BlockKind::ElseIf
@@ -807,7 +830,7 @@ pub(in crate::app) fn render_block_context_menu(
                 div()
                     .id("block-context-menu")
                     .occlude()
-                    .w(px(188.))
+                    .w(px(214.))
                     .p_1()
                     .rounded(px(5.))
                     .border_1()
@@ -881,6 +904,7 @@ pub(in crate::app) fn render_scene_context_menu(
 ) -> AnyElement {
     let start = menu.start;
     let name = menu.name.clone();
+    let voice_scene = name.clone();
     let closing = menu.closing;
     let motion_duration = if closing { 90 } else { 120 };
     let surface = div()
@@ -896,6 +920,26 @@ pub(in crate::app) fn render_scene_context_menu(
         .shadow_lg()
         .flex()
         .flex_col()
+        .child(
+            file_context_menu_item(
+                "scene-context-voices",
+                AssetIconName::Mic,
+                "Match scene voices",
+                false,
+            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.close_scene_context_menu(window, cx);
+                if let PanelContent::Document { root, relative, .. } = &this.content {
+                    super::super::document::voices::open_scene(
+                        root,
+                        relative,
+                        &voice_scene,
+                        window,
+                        cx,
+                    );
+                }
+            })),
+        )
         .child(
             file_context_menu_item("scene-context-new", AssetIconName::Plus, "New", false)
                 .on_click(cx.listener(|this, _, window, cx| {

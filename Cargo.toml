@@ -87,9 +87,9 @@ video-native = [
 
 [workspace.package]
 license-file = "LICENSE"
-version = "0.17.1"
+version = "0.17.2"
 edition = "2024"
-rust-version = "1.99.0"
+rust-version = "1.100.0"
 
 # Disable icu_provider's debug eprintln! fallback in dev builds.
 # Without this, icu_provider prints "ICU4X data error: ..." to stderr
@@ -144,8 +144,8 @@ criterion = "0.8.2"
 crossbeam-channel = "0.5"
 notify = "8.2"
 noyalib = { version = "0.0.58", default-features = false, features = ["std", "fast-int", "fast-float"] }
-hakutaku-core = { git = "https://github.com/maincoretech/hakutaku", rev = "8d637d5629b84f99251fd445366892bdb3c7cf2b", version = "=0.2.0" }
-hakutaku-pack = { git = "https://github.com/maincoretech/hakutaku", rev = "8d637d5629b84f99251fd445366892bdb3c7cf2b", version = "=0.2.0" }
+hakutaku-core = { git = "https://github.com/maincoretech/hakutaku", rev = "fd231fb2bf6e7eb4c7f7c30a3dd98c17b6d50827", version = "=0.2.3" }
+hakutaku-pack = { git = "https://github.com/maincoretech/hakutaku", rev = "fd231fb2bf6e7eb4c7f7c30a3dd98c17b6d50827", version = "=0.2.3" }
 libc = "0.2"
 windows-sys = { version = "0.61.2", default-features = false, features = ["Win32_System_Diagnostics_Debug", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading"] }
 bevy = { version = "0.20.0", default-features = false }

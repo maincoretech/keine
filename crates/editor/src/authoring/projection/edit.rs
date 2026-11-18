@@ -667,7 +667,12 @@ impl EiyashouProjection {
         let mut edited = source.to_owned();
         let (insertion, text, statement_offset) = if bytes.get(separator) == Some(&b',') {
             let after_comma = separator + 1;
-            if let Some(newline) = source[after_comma..].find('\n') {
+            if let Some(newline) = source[after_comma..].find('\n')
+                && {
+                    let tail = source[after_comma..after_comma + newline].trim_start();
+                    tail.is_empty() || tail.starts_with("//")
+                }
+            {
                 let insertion = after_comma + newline + 1;
                 let text = format!("{indent}{statement},\n");
                 (insertion, text, indent.len())
@@ -699,7 +704,7 @@ impl EiyashouProjection {
             .iter()
             .find(|scene| scene.source_range.start == scene_start)
             .ok_or(BlockEditError::MissingSelection)?;
-        if let Some(last) = scene.blocks.last() {
+        if let Some(last) = scene.blocks.iter().rfind(|block| block.depth == 0) {
             return self.insert_block_after(source, last.source_range.start, statement);
         }
         let scene_source = source
@@ -709,16 +714,13 @@ impl EiyashouProjection {
             .rfind('}')
             .map(|offset| scene.source_range.start + offset)
             .ok_or(BlockEditError::StaleRange)?;
-        let close_line = source[..close].rfind('\n').map_or(close, |index| index + 1);
-        let close_indent = source
-            .get(close_line..close)
-            .filter(|prefix| prefix.trim().is_empty())
-            .unwrap_or("");
-        let indent = format!("{close_indent}  ");
-        let (insertion, text, statement_offset) = if close_line < close {
-            (close, format!(" {statement} "), 1)
-        } else {
+        let close_line = source[..close].rfind('\n').map_or(0, |index| index + 1);
+        let close_prefix = &source[close_line..close];
+        let (insertion, text, statement_offset) = if close_prefix.trim().is_empty() {
+            let indent = format!("{close_prefix}  ");
             (close_line, format!("{indent}{statement}\n"), indent.len())
+        } else {
+            (close, format!(" {statement} "), 1)
         };
         let mut edited = source.to_owned();
         edited.insert_str(insertion, &text);

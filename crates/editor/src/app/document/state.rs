@@ -2,7 +2,7 @@
 use crate::app::*;
 
 pub(in crate::app) struct DocumentState {
-    pub(in crate::app) timeline: super::timeline::TimelineState,
+    pub(in crate::app) find: Option<super::find::DocumentFind>,
     pub(in crate::app) document_mode: DocumentMode,
     pub(in crate::app) last_text_cursor: Option<(usize, usize)>,
     pub(in crate::app) text_scroll_pending: bool,
@@ -24,6 +24,7 @@ pub(in crate::app) struct DocumentState {
     pub(in crate::app) recovery_epoch: u64,
     pub(in crate::app) syntax_check: Option<gpui_kit::Task<()>>,
     pub(in crate::app) diagnostic_index: std::sync::Weak<crate::authoring::AuthoringIndex>,
+    pub(in crate::app) execution_mark: Option<gpui_kit::base::input::TextDecorationCollection>,
     pub(in crate::app) syntax_marks: Option<gpui_kit::base::input::TextDecorationCollection>,
     pub(in crate::app) visual_subscriptions: Vec<Subscription>,
     pub(in crate::app) inline_block_controls: HashMap<usize, InlineBlockControl>,
@@ -32,6 +33,7 @@ pub(in crate::app) struct DocumentState {
     pub(in crate::app) block_layout: RefCell<crate::app::blocks::layout::Cache>,
     pub(in crate::app) block_height_revision: u64,
     pub(in crate::app) block_text_refresh_pending: bool,
+    pub(in crate::app) block_text_before: Option<String>,
     pub(in crate::app) scene_edit: Option<SceneEditMode>,
     pub(in crate::app) scene_name_input: Entity<InputState>,
     pub(in crate::app) scene_context_menu: Option<SceneContextMenu>,

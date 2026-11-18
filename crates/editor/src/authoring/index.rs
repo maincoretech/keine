@@ -16,7 +16,10 @@ use crate::workspace::WorkspaceFile;
 
 const MAX_INDEXED_SOURCE_BYTES: u64 = crate::workspace::MAX_DOCUMENT_BYTES;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum AssetKind {
     Background,
     Figure,

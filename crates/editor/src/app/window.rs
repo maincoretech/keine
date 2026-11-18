@@ -11,9 +11,9 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{Icon, IconName, Root, Sizable as _, WindowExt as _};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    App, Bounds, Context, Entity, FocusHandle, Global, IntoElement, PathPromptOptions, Pixels,
-    Point, PromptButton, PromptLevel, Render, Subscription, WeakEntity, Window, WindowBounds,
-    WindowHandle, WindowOptions, div, px, rgb, size,
+    App, Bounds, Context, Entity, FocusHandle, Focusable, Global, IntoElement, PathPromptOptions,
+    Pixels, Point, PromptButton, PromptLevel, Render, Subscription, WeakEntity, Window,
+    WindowBounds, WindowHandle, WindowOptions, div, px, rgb, size,
 };
 
 use crate::app_data::APP_ID;
@@ -699,15 +699,28 @@ impl WorkbenchWindow {
     }
 
     fn show_tool(&mut self, kind: ToolKind, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_tool(kind, false, window, cx);
+    }
+
+    fn open_tool(
+        &mut self,
+        kind: ToolKind,
+        another: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(workspace) = self.workspace.as_ref() else {
             return;
         };
         let root = workspace.session.root().to_owned();
-        let name = kind.panel_name();
-        if let Some(panel) = cx.global::<EditorDocuments>().tool_panel(&root, name) {
-            workspace
-                .dock
-                .update(cx, |dock, cx| dock.select_panel(panel, window, cx));
+        let existing = cx
+            .global::<EditorDocuments>()
+            .tool_panel(&root, kind.panel_name());
+        if let Some(panel) = existing.filter(|_| !another || !kind.can_open_another()) {
+            workspace.dock.update(cx, |dock, cx| {
+                dock::reveal_panel_dock(dock, panel, window, cx);
+                dock.select_panel(panel, window, cx);
+            });
             if let Some(panel) = workspace.dock.read(cx).panel(panel) {
                 panel.focus_handle(cx).focus(window, cx);
             }
@@ -728,24 +741,23 @@ impl WorkbenchWindow {
             }
         };
         let panel_id = PanelId::from(panel.entity_id());
-        let focus = panel.read(cx).focus.clone();
-        let is_asset = matches!(kind, ToolKind::Assets | ToolKind::Search);
-        let tab_anchor = if is_asset {
-            cx.global::<EditorDocuments>()
-                .tool_panel(&root, EXPLORER_PANEL)
-        } else if matches!(
+        let focus = panel.read(cx).focus_handle(cx);
+        let is_left_tool = matches!(
             kind,
-            ToolKind::Explorer | ToolKind::Output | ToolKind::Project
-        ) {
-            None
-        } else {
-            cx.global::<EditorDocuments>()
-                .tool_panel(&root, INSPECTOR_PANEL)
-                .or_else(|| {
-                    cx.global::<EditorDocuments>()
-                        .tool_panel(&root, PROBLEMS_PANEL)
-                })
-        };
+            ToolKind::Explorer | ToolKind::Assets | ToolKind::Search | ToolKind::Scenes
+        );
+        let documents = cx.global::<EditorDocuments>();
+        let tab_anchor = existing.or_else(|| {
+            if is_left_tool {
+                documents.tool_panel(&root, EXPLORER_PANEL)
+            } else if matches!(kind, ToolKind::Output | ToolKind::Project) {
+                None
+            } else {
+                documents
+                    .tool_panel(&root, INSPECTOR_PANEL)
+                    .or_else(|| documents.tool_panel(&root, PROBLEMS_PANEL))
+            }
+        });
         let document_panels = cx.global::<EditorDocuments>().document_panels(&root);
         workspace.dock.update(cx, |dock, cx| {
             let output_target = matches!(kind, ToolKind::Output | ToolKind::Project)
@@ -762,20 +774,10 @@ impl WorkbenchWindow {
             });
             dock.add_panel_view(
                 panel_handle(panel),
-                if matches!(kind, ToolKind::Output | ToolKind::Project) {
+                if tab_node.is_some() || output_target.is_some() {
                     DockPlacement::Center
-                } else if matches!(kind, ToolKind::Explorer) {
+                } else if is_left_tool {
                     DockPlacement::Left
-                } else if is_asset {
-                    if tab_node.is_some() {
-                        DockPlacement::Center
-                    } else {
-                        DockPlacement::Left
-                    }
-                } else if tab_node.is_some() {
-                    // Register inside the existing tree before moving to the
-                    // target group; a temporary Right dock leaves an empty column.
-                    DockPlacement::Center
                 } else {
                     DockPlacement::Right
                 },
@@ -797,6 +799,7 @@ impl WorkbenchWindow {
                     cx,
                 );
             }
+            dock::reveal_panel_dock(dock, panel_id, window, cx);
             dock.select_panel(panel_id, window, cx);
         });
         focus.focus(window, cx);
@@ -813,12 +816,16 @@ impl WorkbenchWindow {
             return;
         };
         let root = workspace.session.root();
-        if cx
+        if let Some(panel) = cx
             .global::<EditorDocuments>()
             .tool_panel(root, ASSET_PREVIEW_PANEL)
-            .is_none()
         {
-            dock::install_asset_preview(&workspace.dock, root, window, cx);
+            workspace.dock.update(cx, |dock, cx| {
+                dock::reveal_panel_dock(dock, panel, window, cx);
+                dock.select_panel(panel, window, cx);
+            });
+        } else {
+            dock::install_asset_preview(&workspace.dock, root, None, window, cx);
             cx.refresh_windows();
         }
     }
@@ -1074,7 +1081,7 @@ impl WorkbenchWindow {
         .detach();
     }
 
-    fn render_activity_rail(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_activity_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
         use gpui_kit::component::button::{Button, ButtonVariants as _};
         use gpui_kit::component::menu::DropdownMenu as _;
         let dirty = self.workspace.as_ref().is_some_and(|workspace| {
@@ -1140,12 +1147,9 @@ impl WorkbenchWindow {
                     let panel = cx
                         .global::<EditorDocuments>()
                         .tool_panel(workspace.session.root(), kind.panel_name());
-                    let active = panel
-                        .and_then(|id| workspace.dock.read(cx).panel(id))
-                        .is_some_and(|panel| panel.focus_handle(cx).contains_focused(window, cx));
                     rail = rail.child(
-                        activity_tool(kind.panel_name(), icon, active, hint)
-                            .when(panel.is_some() && !active, |this| {
+                        activity_tool(kind.panel_name(), icon, hint)
+                            .when(panel.is_some(), |this| {
                                 this.child(
                                     div()
                                         .absolute()
@@ -1157,7 +1161,7 @@ impl WorkbenchWindow {
                                 )
                             })
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                this.show_tool(kind, window, cx)
+                                this.open_tool(kind, true, window, cx)
                             })),
                     );
                 }
@@ -1174,6 +1178,15 @@ impl WorkbenchWindow {
                             .menu("Open folder", Box::new(OpenFolder))
                             .menu(crate::i18n::tr("New project"), Box::new(NewProject))
                             .separator()
+                            .menu(
+                                crate::i18n::tr("Go to file or scene"),
+                                Box::new(super::ShowQuickOpen),
+                            )
+                            .menu(
+                                crate::i18n::tr("Match dialogue voices"),
+                                Box::new(super::MatchDialogueVoices),
+                            )
+                            .menu(crate::i18n::tr("Scenes"), Box::new(super::OpenScenes))
                             .menu("Migrate project", Box::new(MigrateEiyashou))
                     }),
             );
@@ -1183,7 +1196,6 @@ impl WorkbenchWindow {
                 activity_tool(
                     "editor-settings",
                     AssetIconName::Settings,
-                    false,
                     "Editor settings",
                 )
                 .on_click(|_, window, cx| super::settings::open_without_project(window, cx)),
@@ -1384,7 +1396,7 @@ impl WorkbenchWindow {
 }
 
 impl Render for WorkbenchWindow {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let main = if let Some(workspace) = &self.workspace {
             div()
                 .id("dock-host")
@@ -1403,6 +1415,17 @@ impl Render for WorkbenchWindow {
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::open_folder))
             .on_action(cx.listener(Self::new_project))
+            .on_action(cx.listener(|this, _: &super::ShowInspector, window, cx| {
+                this.show_tool(ToolKind::Inspector, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &super::PreviewSelection, _, cx| {
+                if let Some(workspace) = &this.workspace {
+                    let root = workspace.session.root().to_owned();
+                    if let Some(path) = super::navigation::active_path(&root, cx) {
+                        super::replay_selection(&root, &path, cx);
+                    }
+                }
+            }))
             .on_action(cx.listener(|this, _: &super::ShowSettings, window, cx| {
                 if this.workspace.is_some() {
                     this.show_tool(ToolKind::Project, window, cx);
@@ -1422,6 +1445,13 @@ impl Render for WorkbenchWindow {
                     super::settings::open_without_project(window, cx);
                 }
             }))
+            .on_action(
+                cx.listener(|this, _: &super::MatchDialogueVoices, window, cx| {
+                    if let Some(workspace) = &this.workspace {
+                        super::document::voices::open(workspace.session.root(), window, cx);
+                    }
+                }),
+            )
             .on_action(cx.listener(|this, _: &super::ShowQuickOpen, window, cx| {
                 if let Some(workspace) = &this.workspace {
                     super::navigation::open_quick(workspace.session.root(), window, cx);
@@ -1454,6 +1484,26 @@ impl Render for WorkbenchWindow {
                 this.show_tool(ToolKind::Output, window, cx)
             }))
             .on_action(cx.listener(Self::show_asset_preview))
+            .on_action(
+                cx.listener(|this, _: &super::OpenAssetPreview, window, cx| {
+                    if let Some(workspace) = &this.workspace {
+                        let root = workspace.session.root();
+                        if let Some(asset) = cx.global::<EditorDocuments>().asset_preview(root) {
+                            dock::install_asset_preview(
+                                &workspace.dock,
+                                root,
+                                Some(asset),
+                                window,
+                                cx,
+                            );
+                            cx.refresh_windows();
+                        }
+                    }
+                }),
+            )
+            .on_action(cx.listener(|this, _: &super::OpenScenes, window, cx| {
+                this.open_tool(ToolKind::Scenes, true, window, cx);
+            }))
             .on_action(cx.listener(Self::migrate_eiyashou))
             .on_action(cx.listener(Self::undo_sources))
             .on_action(cx.listener(Self::redo_sources))
@@ -1469,7 +1519,7 @@ impl Render for WorkbenchWindow {
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .child(self.render_activity_rail(window, cx))
+                    .child(self.render_activity_rail(cx))
                     .child(main),
             )
     }

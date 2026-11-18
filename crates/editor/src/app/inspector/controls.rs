@@ -86,37 +86,6 @@ pub(in crate::app) fn render_text_ending(
         .into_any_element()
 }
 
-pub(in crate::app) fn run_source_block(root: &Path, path: &Path, start: usize, cx: &mut App) {
-    let Some(source) = cx.global::<EditorDocuments>().source(root, path) else {
-        return;
-    };
-    let projection = EiyashouProjection::parse(&source);
-    let Some(block) = projection
-        .scenes
-        .iter()
-        .flat_map(|scene| &scene.blocks)
-        .find(|block| block.source_range.start == start && !block.read_only)
-    else {
-        return;
-    };
-    let documents = cx.global::<EditorDocuments>().preview_documents(root);
-    let Ok(preview) = cx.global_mut::<EditorDocuments>().preview(root) else {
-        return;
-    };
-    if !preview.apply_sources(documents) {
-        return;
-    }
-    if !matches!(
-        preview.snapshot().lifecycle,
-        PreviewLifecycle::Running | PreviewLifecycle::Starting
-    ) {
-        preview.start();
-    }
-    preview.seek_cursor(path.to_owned(), block.line + 1, block.column + 1);
-    preview.show();
-    cx.refresh_windows();
-}
-
 fn source_property_label(key: &SourceInspectorKey, field: &SourceField) -> impl IntoElement {
     let written = field.insertion.is_none();
     div()
@@ -551,7 +520,7 @@ pub(super) fn replay_button(root: &Path, key: &SourceInspectorKey) -> impl IntoE
         .on_click(move |_, _, cx| run_source_block(&root, &path, start, cx))
         .child(Icon::new(AssetIconName::Play).xsmall())
         .tooltip(icon_hint("Rebuild from project entry to this block; unreachable blocks use their scene entry. Player choices are not restored."))
-        .child(crate::i18n::tr("Replay"))
+        .child(crate::i18n::tr("Run to here"))
 }
 
 pub(super) fn render_wait_control(

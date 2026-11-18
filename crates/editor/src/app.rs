@@ -151,6 +151,7 @@ gpui_kit::assets::icon_assets!(
         Move,
         Music,
         Mic,
+        SkipForward,
         Pencil,
         PersonStanding,
         Repeat2,
@@ -207,9 +208,9 @@ const EDITOR_GUTTER_TRIM_PX: f32 = 18.;
 const TAB_MOTION_DURATION: Duration = Duration::from_millis(140);
 const PREVIEW_SOURCE_DEBOUNCE: Duration = Duration::from_millis(100);
 const FILE_CONTEXT_MENU_WIDTH_PX: f32 = 144.;
-const SCENE_CONTEXT_MENU_WIDTH_PX: f32 = 154.;
+const SCENE_CONTEXT_MENU_WIDTH_PX: f32 = 188.;
 const ASSET_FILTER_MENU_WIDTH_PX: f32 = 240.;
-const SCENE_CONTEXT_MENU_HEIGHT_PX: f32 = 143.;
+const SCENE_CONTEXT_MENU_HEIGHT_PX: f32 = 170.;
 
 const EXPLORER_PANEL: &str = "keine.editor.explorer";
 const SEARCH_PANEL: &str = "keine.editor.search";
@@ -231,6 +232,7 @@ actions!(
         OpenFolder,
         NewProject,
         ShowQuickOpen,
+        MatchDialogueVoices,
         NavigateBack,
         NavigateForward,
         QuickOpenNext,
@@ -246,7 +248,11 @@ actions!(
         ShowOutput,
         ShowSearch,
         ShowSettings,
+        ShowInspector,
+        PreviewSelection,
         ShowAssetPreview,
+        OpenAssetPreview,
+        OpenScenes,
         MigrateEiyashou,
         CopyBlocks,
         PasteBlocks,
@@ -265,8 +271,6 @@ actions!(
         CloseResourcePicker,
         MoveBlocksUp,
         MoveBlocksDown,
-        UndoBlocks,
-        RedoBlocks,
         UndoFiles,
         RedoFiles,
         UndoSources,
@@ -374,7 +378,6 @@ fn icon_hint(
 fn activity_tool(
     id: &'static str,
     icon: impl gpui_kit::assets::IconNamed,
-    active: bool,
     hint: &'static str,
 ) -> Stateful<Div> {
     div()
@@ -383,19 +386,19 @@ fn activity_tool(
         .relative()
         .focusable()
         .aria_label(crate::i18n::tr(hint))
-        .focus_visible(|style| style.bg(rgb(PRIMARY_DIM)))
+        .focus_visible(|style| style.bg(rgb(SURFACE_HOVER)))
         .flex()
         .items_center()
         .justify_center()
         .rounded(px(7.))
-        .when(active, |style| style.bg(rgb(SURFACE)))
         .cursor_pointer()
-        .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+        .hover(|style| style.bg(rgb(SURFACE)))
+        .active(|style| style.bg(rgb(SURFACE_HOVER)))
         .tooltip(icon_hint(hint))
         .child(
             Icon::new(icon)
                 .with_size(px(ACTIVITY_ICON_SIZE_PX))
-                .text_color(rgb(if active { PRIMARY } else { MUTED })),
+                .text_color(rgb(MUTED)),
         )
 }
 
@@ -481,6 +484,7 @@ fn ensure_workspace_document(
     if let Some(panel) = existing {
         if activate {
             let _ = dock.update(cx, |dock, cx| dock.select_panel(panel, window, cx));
+            navigation::focus_document(root, relative, window, cx);
         }
         return;
     }
@@ -533,7 +537,9 @@ fn ensure_workspace_document(
             }
         }
     });
-    if !activate && let Some(focus) = focus {
+    if activate {
+        navigation::focus_document(root, relative, window, cx);
+    } else if let Some(focus) = focus {
         focus.focus(window, cx);
     }
 }
@@ -688,6 +694,18 @@ pub fn run() -> ExitCode {
                 KeyBinding::new("ctrl-shift-m", MigrateEiyashou, Some("KeineWorkbench")),
                 KeyBinding::new("cmd-shift-0", ResetLayout, Some("KeineWorkbench")),
                 KeyBinding::new("ctrl-shift-0", ResetLayout, Some("KeineWorkbench")),
+                KeyBinding::new("cmd-enter", PreviewSelection, Some("KeineWorkbench")),
+                KeyBinding::new("ctrl-enter", PreviewSelection, Some("KeineWorkbench")),
+                KeyBinding::new(
+                    "cmd-enter",
+                    PreviewSelection,
+                    Some("KeineSourceEditor > Input"),
+                ),
+                KeyBinding::new(
+                    "ctrl-enter",
+                    PreviewSelection,
+                    Some("KeineSourceEditor > Input"),
+                ),
                 KeyBinding::new("cmd-c", CopyBlocks, Some("KeineBlockView")),
                 KeyBinding::new("ctrl-c", CopyBlocks, Some("KeineBlockView")),
                 KeyBinding::new("cmd-v", PasteBlocks, Some("KeineBlockView")),
@@ -711,10 +729,6 @@ pub fn run() -> ExitCode {
                 KeyBinding::new("delete", DeleteBlocks, Some("KeineBlockView")),
                 KeyBinding::new("alt-up", MoveBlocksUp, Some("KeineBlockView")),
                 KeyBinding::new("alt-down", MoveBlocksDown, Some("KeineBlockView")),
-                KeyBinding::new("cmd-z", UndoBlocks, Some("KeineBlockView")),
-                KeyBinding::new("cmd-shift-z", RedoBlocks, Some("KeineBlockView")),
-                KeyBinding::new("ctrl-z", UndoBlocks, Some("KeineBlockView")),
-                KeyBinding::new("ctrl-y", RedoBlocks, Some("KeineBlockView")),
                 KeyBinding::new("cmd-z", UndoFiles, Some("KeineExplorer")),
                 KeyBinding::new("cmd-shift-z", RedoFiles, Some("KeineExplorer")),
                 KeyBinding::new("ctrl-z", UndoFiles, Some("KeineExplorer")),
@@ -1031,6 +1045,10 @@ mod tests {
         assert!(!picker_kinds(&preferences, "", None, false).contains(&InsertKind::Video));
         assert!(picker_kinds(&preferences, "video", None, false).contains(&InsertKind::Video));
         assert_eq!(
+            picker_kinds(&preferences, "figure", None, false).first(),
+            Some(&InsertKind::Figure)
+        );
+        assert_eq!(
             picker_kinds(&preferences, "", Some("Favorites"), false),
             vec![InsertKind::Wait]
         );
@@ -1097,13 +1115,17 @@ mod tests {
 
     #[test]
     fn preview_transport_icons_are_present_in_the_editor_asset_source() {
-        for running in [false, true] {
-            let icon = preview_transport_icon(running);
+        for icon in [
+            preview_transport_icon(false),
+            preview_transport_icon(true),
+            AssetIconName::SkipForward,
+        ] {
             assert!(
                 gpui_kit::AssetSource::load(&EditorAssets, icon.path().as_ref())
                     .unwrap()
                     .is_some(),
-                "missing Preview transport icon for running={running}"
+                "missing Preview transport icon {}",
+                icon.path()
             );
         }
     }

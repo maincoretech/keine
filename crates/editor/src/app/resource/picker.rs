@@ -155,6 +155,21 @@ pub(in crate::app) enum ResourceTarget {
     Source(SourceInspectorKey, usize),
     Voice(InspectorEditKey),
     Speaker(InspectorEditKey),
+    Insert {
+        kind: InsertKind,
+        at: DraftInsertionTarget,
+        revision: u64,
+    },
+}
+
+impl ResourceTarget {
+    fn source_block(&self) -> Option<(&Path, usize)> {
+        match self {
+            Self::Source(key, _) => Some((&key.path, key.block_start)),
+            Self::Voice(key) | Self::Speaker(key) => Some((&key.path, key.block_start)),
+            _ => None,
+        }
+    }
 }
 
 pub(in crate::app) struct ResourcePicker {
@@ -165,8 +180,7 @@ pub(in crate::app) struct ResourcePicker {
     input: Entity<InputState>,
     return_focus: Option<gpui_kit::FocusHandle>,
     index: usize,
-    trigger: Bounds<Pixels>,
-    width: Pixels,
+    trigger: Option<Bounds<Pixels>>,
     pub window_size: gpui_kit::Size<Pixels>,
     bounds: Rc<RefCell<Bounds<Pixels>>>,
     scroll: ScrollHandle,
@@ -177,18 +191,9 @@ pub(in crate::app) struct ResourcePicker {
 
 impl ResourcePicker {
     pub fn source_is_current(&self, cx: &App) -> bool {
-        if matches!(self.target, ResourceTarget::Reference) {
-            return true;
-        }
         let documents = cx.global::<EditorDocuments>();
-        let (path, start) = match &self.target {
-            ResourceTarget::Reference
-            | ResourceTarget::ProjectBackground
-            | ResourceTarget::ProjectEntry => return true,
-            ResourceTarget::Source(key, _) => (&key.path, key.block_start),
-            ResourceTarget::Voice(key) | ResourceTarget::Speaker(key) => {
-                (&key.path, key.block_start)
-            }
+        let Some((path, start)) = self.target.source_block() else {
+            return true;
         };
         if documents
             .block_selection(&self.root)
@@ -203,9 +208,6 @@ impl ResourcePicker {
         };
         let projection = documents.projection(&self.root, path, &source);
         match &self.target {
-            ResourceTarget::Reference
-            | ResourceTarget::ProjectBackground
-            | ResourceTarget::ProjectEntry => true,
             ResourceTarget::Source(key, _) => projection
                 .scenes
                 .iter()
@@ -222,8 +224,14 @@ impl ResourcePicker {
             ResourceTarget::Voice(key) | ResourceTarget::Speaker(key) => {
                 projection.text_block_metadata(&source, start).as_ref() == Some(&key.metadata)
             }
+            _ => false,
         }
     }
+
+    fn has_media(&self) -> bool {
+        self.trigger.is_none() || self.options.iter().any(|option| option.asset.is_some())
+    }
+
     fn matches(&self, cx: &App) -> Vec<SourceOption> {
         let query = self.input.read(cx).value();
         self.options
@@ -249,7 +257,17 @@ pub(in crate::app) fn resource_trigger(
         .find(|option| option.value == current)
         .map(|option| option.title().to_string())
         .unwrap_or_else(|| current.clone());
-    let icon_only = matches!(target, ResourceTarget::ProjectBackground);
+    let inline_voice = inline && matches!(target, ResourceTarget::Voice(_));
+    let icon_only = inline_voice || matches!(target, ResourceTarget::ProjectBackground);
+    let icon_label = if inline_voice {
+        if current.is_empty() {
+            crate::i18n::tr("Choose voice…").to_owned()
+        } else {
+            label.clone()
+        }
+    } else {
+        crate::i18n::tr("Choose background…").to_owned()
+    };
     let id = match &target {
         ResourceTarget::Reference => "asset-reference-picker".into(),
         ResourceTarget::ProjectBackground => "project-background-picker".into(),
@@ -257,6 +275,7 @@ pub(in crate::app) fn resource_trigger(
         ResourceTarget::Source(key, position) => format!("resource-{}-{position}", key.block_start),
         ResourceTarget::Voice(key) => format!("voice-resource-{}", key.block_start),
         ResourceTarget::Speaker(key) => format!("speaker-resource-{}", key.block_start),
+        ResourceTarget::Insert { .. } => unreachable!("insertion opens the picker directly"),
     };
     let resource = options.iter().any(|option| option.asset.is_some());
     let enabled = match &target {
@@ -265,11 +284,26 @@ pub(in crate::app) fn resource_trigger(
     };
     let bounds = Rc::new(RefCell::new(Bounds::default()));
     let measured = bounds.clone();
-    let keyboard_root = root.clone();
-    let keyboard_target = target.clone();
-    let keyboard_options = options.clone();
-    let keyboard_current = current.clone();
-    let keyboard_bounds = bounds.clone();
+    let voice_assigned = inline_voice && !current.is_empty();
+    let open = Rc::new(
+        move |panel: &mut WorkbenchPanel, window: &mut Window, cx: &mut Context<WorkbenchPanel>| {
+            if matches!(panel.content, PanelContent::Document { .. })
+                && let Some((_, start)) = target.source_block()
+            {
+                panel.select_current_block(start, cx);
+            }
+            panel.open_resource_picker(
+                &root,
+                target.clone(),
+                options.clone(),
+                current.clone(),
+                Some(*bounds.borrow()),
+                window,
+                cx,
+            );
+        },
+    );
+    let keyboard_open = open.clone();
     div()
         .id(id)
         .relative()
@@ -278,9 +312,9 @@ pub(in crate::app) fn resource_trigger(
         .when(icon_only, |this| {
             this.w(px(28.))
                 .flex_shrink_0()
-                .aria_label(crate::i18n::tr("Choose background…"))
+                .aria_label(icon_label.clone())
                 .justify_center()
-                .tooltip(icon_hint("Choose background…"))
+                .tooltip(icon_hint(icon_label))
         })
         .min_w_0()
         .h(px(28.))
@@ -306,20 +340,7 @@ pub(in crate::app) fn resource_trigger(
                 if enabled && matches!(event.keystroke.key.as_str(), "enter" | "space" | "down") {
                     cx.stop_propagation();
                     window.prevent_default();
-                    if matches!(panel.content, PanelContent::Document { .. })
-                        && let ResourceTarget::Source(key, _) = &keyboard_target
-                    {
-                        panel.select_current_block(key.block_start, cx);
-                    }
-                    panel.open_resource_picker(
-                        &keyboard_root,
-                        keyboard_target.clone(),
-                        keyboard_options.clone(),
-                        keyboard_current.clone(),
-                        *keyboard_bounds.borrow(),
-                        window,
-                        cx,
-                    );
+                    keyboard_open(panel, window, cx);
                 }
             }),
         )
@@ -335,9 +356,13 @@ pub(in crate::app) fn resource_trigger(
         )
         .when(resource || icon_only, |this| {
             this.child(
-                Icon::new(AssetIconName::Folder)
-                    .xsmall()
-                    .text_color(rgb(MUTED)),
+                Icon::new(if inline_voice {
+                    AssetIconName::Mic
+                } else {
+                    AssetIconName::Folder
+                })
+                .xsmall()
+                .text_color(rgb(if voice_assigned { PRIMARY } else { MUTED })),
             )
         })
         .when(!icon_only, |this| {
@@ -363,23 +388,9 @@ pub(in crate::app) fn resource_trigger(
         })
         .on_click(cx.listener(move |panel, _, window, cx| {
             cx.stop_propagation();
-            if !enabled {
-                return;
+            if enabled {
+                open(panel, window, cx);
             }
-            if matches!(panel.content, PanelContent::Document { .. })
-                && let ResourceTarget::Source(key, _) = &target
-            {
-                panel.select_current_block(key.block_start, cx);
-            }
-            panel.open_resource_picker(
-                &root,
-                target.clone(),
-                options.clone(),
-                current.clone(),
-                *bounds.borrow(),
-                window,
-                cx,
-            );
         }))
         .into_any_element()
 }
@@ -398,11 +409,7 @@ impl WorkbenchPanel {
         };
         let direction = if forward { 1 } else { count - 1 };
         picker.index = (picker.index + direction) % count;
-        let row_height = if picker.options.iter().any(|option| option.asset.is_some()) {
-            42.
-        } else {
-            28.
-        };
+        let row_height = if picker.has_media() { 42. } else { 28. };
         picker.scroll.set_offset(point(
             px(0.),
             -px((picker.index as f32 * row_height - row_height * 2.).max(0.)),
@@ -457,13 +464,13 @@ impl WorkbenchPanel {
         clippy::too_many_arguments,
         reason = "popup requires source target and measured trigger"
     )]
-    fn open_resource_picker(
+    pub(in crate::app) fn open_resource_picker(
         &mut self,
         root: &Path,
         target: ResourceTarget,
         mut options: Vec<SourceOption>,
         current: String,
-        trigger: Bounds<Pixels>,
+        trigger: Option<Bounds<Pixels>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -507,7 +514,6 @@ impl WorkbenchPanel {
             return_focus,
             index,
             trigger,
-            width: trigger.size.width.max(px(220.)),
             window_size: size,
             bounds: Rc::new(RefCell::new(Bounds::default())),
             scroll: ScrollHandle::new(),
@@ -581,8 +587,16 @@ impl WorkbenchPanel {
         }
         let root = picker.root.clone();
         let target = picker.target.clone();
+        if !picker.source_is_current(cx) {
+            self.close_resource_picker(true, window, cx);
+            return;
+        }
         self.close_resource_picker(true, window, cx);
         match target {
+            ResourceTarget::Insert { kind, at, revision } => {
+                self.insert_palette_resource(kind, at, revision, &option, window, cx);
+                return;
+            }
             ResourceTarget::ProjectBackground => {
                 project_settings::select_field(1, self, option.value, window, cx);
                 return;
@@ -617,6 +631,12 @@ impl WorkbenchPanel {
             }
             ResourceTarget::Voice(ref key) | ResourceTarget::Speaker(ref key) => {
                 let position = usize::from(matches!(target, ResourceTarget::Voice(_)));
+                if position == 1 && matches!(self.content, PanelContent::Document { .. }) {
+                    let mut metadata = key.metadata.clone();
+                    metadata.voice = (!option.value.is_empty()).then(|| option.value.clone());
+                    self.commit_text_metadata(&root, key, metadata, window, cx);
+                    return;
+                }
                 if self.inspector.inspector_key.as_ref() != Some(key) {
                     return;
                 }
@@ -628,7 +648,9 @@ impl WorkbenchPanel {
                 self.commit_text_inspector(&root, window, cx);
             }
         }
-        if let Some((_, kind, path)) = option.asset {
+        if !matches!(self.content, PanelContent::Document { .. })
+            && let Some((_, kind, path)) = option.asset
+        {
             cx.global_mut::<EditorDocuments>().preview_asset(
                 &root,
                 kind,
@@ -653,7 +675,7 @@ impl WorkbenchPanel {
         let measured = bounds.clone();
         let weak = cx.entity().downgrade();
         let epoch = picker.epoch;
-        let resource = picker.options.iter().any(|option| option.asset.is_some());
+        let resource = picker.has_media();
         let row_height = if resource { 42. } else { 28. };
         let height = px((options.len().max(1) as f32 * row_height
             + if resource { 64. } else { 34. })
@@ -673,19 +695,28 @@ impl WorkbenchPanel {
         let end = (first + (visible_height / row_height).ceil() as usize + 7).min(count);
         let scroll_entity = cx.weak_entity();
         let closing = picker.closing;
-        let y = if picker.trigger.origin.y >= height + px(8.) {
-            picker.trigger.origin.y - height
+        let width = picker
+            .trigger
+            .map_or(px(340.), |trigger| trigger.size.width.max(px(220.)));
+        let position = if let Some(trigger) = picker.trigger {
+            let y = if trigger.origin.y >= height + px(8.) {
+                trigger.origin.y - height
+            } else {
+                trigger
+                    .bottom()
+                    .min(picker.window_size.height - height - px(8.))
+                    .max(px(8.))
+            };
+            point(trigger.origin.x, y)
         } else {
-            picker
-                .trigger
-                .bottom()
-                .min(picker.window_size.height - height - px(8.))
-                .max(px(8.))
+            point(
+                (picker.window_size.width - width) / 2.,
+                (picker.window_size.height - height) / 2.,
+            )
         };
-        let position = point(picker.trigger.origin.x, y);
         let surface = div()
             .id(("resource-picker", epoch as usize))
-            .w(picker.width)
+            .w(width)
             .h(height)
             .flex()
             .flex_col()

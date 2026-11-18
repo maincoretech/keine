@@ -10,13 +10,33 @@ pub(crate) struct VoiceMatch {
     pub status: &'static str,
 }
 
-pub(crate) fn match_voices(source: &str, assets: &[AssetEntry]) -> (String, Vec<VoiceMatch>) {
+#[derive(Clone, Copy)]
+pub(crate) enum VoiceScope<'a> {
+    File,
+    Scene(&'a str),
+    Line(usize),
+}
+
+pub(crate) fn match_voices(
+    source: &str,
+    assets: &[AssetEntry],
+    scope: VoiceScope<'_>,
+) -> Option<(String, Vec<VoiceMatch>)> {
     let projection = EiyashouProjection::parse(source);
+    let scenes = match scope {
+        VoiceScope::Scene(name) => {
+            std::slice::from_ref(projection.scenes.iter().find(|scene| scene.name == name)?)
+        }
+        _ => projection.scenes.as_slice(),
+    };
     let mut edited = source.to_owned();
     let mut rows = Vec::new();
     // Later source ranges first, so earlier ranges remain valid.
-    for block in projection.scenes.iter().flat_map(|s| &s.blocks).rev() {
-        if block.disabled || block.read_only {
+    for block in scenes.iter().flat_map(|scene| &scene.blocks).rev() {
+        if block.disabled
+            || block.read_only
+            || matches!(scope, VoiceScope::Line(start) if start != block.source_range.start)
+        {
             continue;
         }
         let Some(mut metadata) = projection.text_block_metadata_for_block(source, block) else {
@@ -78,7 +98,7 @@ pub(crate) fn match_voices(source: &str, assets: &[AssetEntry]) -> (String, Vec<
         });
     }
     rows.reverse();
-    (edited, rows)
+    Some((edited, rows))
 }
 
 #[cfg(test)]
@@ -104,7 +124,9 @@ mod tests {
                 asset("x", "four.opus"),
                 asset("y", "four.opus"),
             ],
-        );
+            VoiceScope::File,
+        )
+        .unwrap();
         let projection = EiyashouProjection::parse(&edited);
         assert!(projection.read_only.is_empty(), "{edited}");
         let voices: Vec<_> = projection.scenes[0]
@@ -132,10 +154,35 @@ mod tests {
         assert_eq!(
             match_voices(
                 &edited,
-                &[asset("one", "one.opus"), asset("v3", "three.opus")]
+                &[asset("one", "one.opus"), asset("v3", "three.opus")],
+                VoiceScope::File,
             )
+            .unwrap()
             .0,
             edited
         );
+    }
+
+    #[test]
+    fn a_scene_or_line_match_leaves_other_dialogue_intact() {
+        let source = "scene first { @a \"A\" }\nscene second { @b \"B\", @c \"C\" }";
+        let assets = ["a", "b", "c"].map(|id| AssetEntry {
+            kind: AssetKind::Voice,
+            id: id.into(),
+            path: format!("{id}.opus").into(),
+            exists: true,
+            tags: vec![],
+            reference_count: 0,
+        });
+        let projection = EiyashouProjection::parse(source);
+        let scene = &projection.scenes[1];
+        let (edited, rows) = match_voices(source, &assets, VoiceScope::Scene("second")).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(edited.starts_with("scene first { @a \"A\" }\n"));
+        let start = scene.blocks[1].source_range.start;
+        let (edited, rows) = match_voices(source, &assets, VoiceScope::Line(start)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].voice.as_deref(), Some("c"));
+        assert!(edited.contains("@b \"B\", @c"));
     }
 }

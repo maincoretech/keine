@@ -1110,16 +1110,8 @@ impl PostProcessBindGroupCache {
     /// If you have anything else that determines if the bind groups need to be
     /// updated you need to do it manually
     pub fn should_update(&self, view_target: &ViewTarget) -> bool {
-        let (texture_a, _) = &self.a;
-        if *texture_a != view_target.main_texture_view().id() {
-            return true;
-        }
-        let (texture_b, _) = &self.b;
-        if *texture_b != view_target.main_texture_other_view().id() {
-            return true;
-        }
-
-        false
+        self.a.0 != view_target.main_texture_view().id()
+            || self.b.0 != view_target.main_texture_other_view().id()
     }
 
     /// Updates the bind group associated with each main textures

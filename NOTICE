@@ -15,7 +15,7 @@ Cargo.lock identifies the exact Rust dependency revisions. deny.toml checks
 their declared licenses, including development and build dependencies.
 
 Major components include Bevy (MIT/Apache-2.0), GPUI (Apache-2.0), Hakutaku
-(MIT/Apache-2.0), Symphonia (MPL-2.0), libwebp (BSD-3-Clause), and Opus
+(MIT), Symphonia (MPL-2.0), libwebp (BSD-3-Clause), and Opus
 (BSD-3-Clause). MPL-covered dependency source remains available from its
 upstream repository at the revision identified in Cargo.lock; modifications
 to those files must be provided under MPL when distributing them.

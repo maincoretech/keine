@@ -1962,14 +1962,55 @@ scene other { wait(7s) }"#;
 
     #[test]
     fn inserts_the_first_block_in_an_empty_scene() {
-        let source = "scene empty {\n}\n";
+        for (source, expected) in [
+            ("scene empty {\n}\n", "scene empty {\n  \"first\"\n}\n"),
+            ("scene empty {}\n", "scene empty { \"first\" }\n"),
+            (
+                "  scene empty {\n  }\n",
+                "  scene empty {\n    \"first\"\n  }\n",
+            ),
+        ] {
+            let projection = EiyashouProjection::parse(source);
+            let (edited, range) = projection
+                .insert_block_in_scene(source, projection.scenes[0].source_range.start, "\"first\"")
+                .unwrap();
+            assert_eq!(edited, expected);
+            assert_eq!(edited.get(range), Some("\"first\""));
+        }
+    }
+
+    #[test]
+    fn inserts_in_compact_scenes_and_keeps_scene_end_outside_the_last_branch() {
+        let source = "scene start { \"first\", if (ready) { \"branch\" }, }\nscene end {}\n";
         let projection = EiyashouProjection::parse(source);
-        let scene_start = projection.scenes[0].source_range.start;
-        let (edited, range) = projection
-            .insert_block_in_scene(source, scene_start, "\"first\"")
+        let scene = &projection.scenes[0];
+        let (edited, _) = projection
+            .insert_block_after(
+                source,
+                scene.blocks[0].source_range.start,
+                "background(day)",
+            )
             .unwrap();
-        assert_eq!(edited, "scene empty {\n  \"first\"\n}\n");
-        assert_eq!(edited.get(range), Some("\"first\""));
+        assert_eq!(
+            edited,
+            "scene start { \"first\", background(day), if (ready) { \"branch\" }, }\nscene end {}\n"
+        );
+        let (edited, range) = projection
+            .insert_block_in_scene(source, scene.source_range.start, "background(day)")
+            .unwrap();
+        assert_eq!(
+            edited,
+            "scene start { \"first\", if (ready) { \"branch\" }, background(day), }\nscene end {}\n"
+        );
+        assert_eq!(edited.get(range), Some("background(day)"));
+        let checked = EiyashouProjection::parse(&edited);
+        assert_eq!(
+            checked.read_only.len(),
+            projection.read_only.len(),
+            "{:?}",
+            checked.read_only
+        );
+        assert_eq!(checked.scenes[0].blocks.last().unwrap().depth, 0);
     }
 
     #[test]

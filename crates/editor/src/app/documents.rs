@@ -48,7 +48,7 @@ pub(super) struct WorkspaceDocuments {
     pub(super) panel_entities: HashMap<PathBuf, WeakEntity<WorkbenchPanel>>,
     editors: HashMap<PathBuf, WeakEntity<EditorState>>,
     pub(super) preview: Arc<PreviewController>,
-    tools: HashMap<&'static str, PanelId>,
+    tools: HashMap<&'static str, Vec<PanelId>>,
     pub(super) file_operation_active: bool,
     pub(super) build: super::build::BuildState,
 }
@@ -151,7 +151,7 @@ pub(super) struct AssetPreviewSelection {
     pub(super) file: Option<PathBuf>,
 }
 
-fn asset_preview_selection(
+pub(super) fn asset_preview_selection(
     root: &Path,
     kind: AssetKind,
     label: String,
@@ -782,20 +782,33 @@ impl EditorDocuments {
 
     pub(super) fn tool_panel(&self, root: &Path, name: &'static str) -> Option<PanelId> {
         let key = ProjectKey::from_path(root).ok()?;
-        self.workspaces.get(key.path())?.tools.get(name).copied()
+        self.workspaces
+            .get(key.path())?
+            .tools
+            .get(name)?
+            .last()
+            .copied()
     }
 
-    pub(super) fn set_tool_panel(
+    pub(super) fn register_tool_panel(&mut self, root: &Path, name: &'static str, panel: PanelId) {
+        if let Ok(workspace) = self.workspace_mut(root) {
+            workspace.tools.entry(name).or_default().push(panel);
+        }
+    }
+
+    pub(super) fn unregister_tool_panel(
         &mut self,
         root: &Path,
         name: &'static str,
-        panel: Option<PanelId>,
+        panel: PanelId,
     ) {
-        if let Ok(workspace) = self.workspace_mut(root) {
-            if let Some(panel) = panel {
-                workspace.tools.insert(name, panel);
-            } else {
-                workspace.tools.remove(name);
+        if let Ok(workspace) = self.workspace_mut(root)
+            && let std::collections::hash_map::Entry::Occupied(mut entry) =
+                workspace.tools.entry(name)
+        {
+            entry.get_mut().retain(|&id| id != panel);
+            if entry.get().is_empty() {
+                entry.remove();
             }
         }
     }

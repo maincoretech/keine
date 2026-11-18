@@ -206,7 +206,6 @@ pub(super) fn document_mode_button(label: &'static str, selected: bool) -> State
     div()
         .id(match label {
             "Text" => "document-mode-text",
-            "Timeline" => "document-mode-timeline",
             _ => "document-mode-block",
         })
         .when(cfg!(test), |button| {
@@ -445,6 +444,20 @@ pub(super) fn preview_window_controls(root: &Path, cx: &mut App) -> Option<State
                         .on_click(move |_, _, _| controller.show()),
                 )
             })
+            .when(
+                navigation::active_path(root, cx).is_some_and(|path| {
+                    path.extension().is_some_and(|ext| ext == "shou")
+                        && preview_selection(root, &path, cx).is_some()
+                }),
+                |this| {
+                    this.child(
+                        tool_icon_action("Preview from here", AssetIconName::SkipForward, true)
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(PreviewSelection), cx);
+                            }),
+                    )
+                },
+            )
             .child(preview_transport_button(running).on_click(|_, window, cx| {
                 window.dispatch_action(Box::new(ToggleEngine), cx);
             })),

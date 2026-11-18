@@ -4,6 +4,7 @@ use gpui_kit::component::dock::PaneRef;
 
 const HISTORY_LIMIT: usize = 64;
 const RESULT_LIMIT: usize = 80;
+const QUICK_ROW_HEIGHT: f32 = 30.;
 
 #[derive(Clone, Debug)]
 struct DocumentStamp {
@@ -159,31 +160,14 @@ pub(super) fn jump(
     });
 }
 
-fn focus_document(root: &Path, path: &Path, window: &mut Window, cx: &mut App) {
-    if let Some(panel) = cx.global::<EditorDocuments>().panel_entity_for(root, path) {
-        let _ = panel.update(cx, |panel, cx| {
-            if panel.document.document_mode == DocumentMode::Text {
-                if let PanelContent::Document { editor, .. } = &panel.content {
-                    editor.update(cx, |editor, cx| editor.focus(window, cx));
-                }
-            } else {
-                panel.focus.focus(window, cx);
-            }
-        });
+pub(super) fn focus_document(root: &Path, path: &Path, window: &mut Window, cx: &mut App) {
+    if let Some(panel) = cx
+        .global::<EditorDocuments>()
+        .panel_entity_for(root, path)
+        .and_then(|panel| panel.upgrade())
+    {
+        panel.read(cx).focus_handle(cx).focus(window, cx);
     }
-}
-
-pub(super) fn can_travel(root: &Path, cx: &App) -> (bool, bool) {
-    cx.global::<EditorDocuments>()
-        .workspaces
-        .get(root)
-        .map(|workspace| {
-            (
-                !workspace.navigation.back.is_empty(),
-                !workspace.navigation.forward.is_empty(),
-            )
-        })
-        .unwrap_or_default()
 }
 
 pub(super) fn travel(root: &Path, back: bool, window: &mut Window, cx: &mut App) {
@@ -316,13 +300,12 @@ fn candidates(files: &[WorkspaceFile], index: &AuthoringIndex) -> Vec<Candidate>
         .collect()
 }
 
-fn matching(candidates: &[Candidate], query: &str) -> (Vec<usize>, usize) {
+fn matching(candidates: &[Candidate], query: &str) -> Vec<usize> {
     let query = query.trim().to_lowercase();
     let scenes_only = query.starts_with('@');
-    let query = query.trim_start_matches('@').trim();
+    let query = query.strip_prefix('@').unwrap_or(&query).trim();
     let words: Vec<_> = query.split_whitespace().collect();
     let mut matches = std::collections::BinaryHeap::new();
-    let mut count = 0;
     for (index, candidate) in candidates.iter().enumerate() {
         if scenes_only && candidate.scene.is_none() {
             continue;
@@ -330,7 +313,6 @@ fn matching(candidates: &[Candidate], query: &str) -> (Vec<usize>, usize) {
         if !words.iter().all(|word| candidate.searchable.contains(word)) {
             continue;
         }
-        count += 1;
         let title = candidate.title.to_lowercase();
         let rank = if title == query {
             0
@@ -346,7 +328,7 @@ fn matching(candidates: &[Candidate], query: &str) -> (Vec<usize>, usize) {
     }
     let mut matches = matches.into_vec();
     matches.sort_unstable();
-    (matches.into_iter().map(|(_, index)| index).collect(), count)
+    matches.into_iter().map(|(_, index)| index).collect()
 }
 
 struct QuickPicker {
@@ -354,7 +336,6 @@ struct QuickPicker {
     input: Entity<InputState>,
     candidates: Arc<Vec<Candidate>>,
     matches: Vec<usize>,
-    count: usize,
     selected: usize,
     loading: bool,
     epoch: u64,
@@ -384,13 +365,12 @@ pub(super) fn open_quick(root: &Path, window: &mut Window, cx: &mut App) {
             .get(&root)
             .map(|workspace| candidates(&workspace.files, &workspace.authoring))
             .unwrap_or_default();
-        let (matches, count) = matching(&entries, "");
+        let matches = matching(&entries, "");
         QuickPicker {
             root,
             input,
             candidates: Arc::new(entries),
             matches,
-            count,
             selected: 0,
             loading: false,
             epoch: 0,
@@ -402,8 +382,10 @@ pub(super) fn open_quick(root: &Path, window: &mut Window, cx: &mut App) {
     let input = picker.read(cx).input.clone();
     window.open_dialog(cx, move |dialog, _, _| {
         dialog
-            .title(crate::i18n::tr("Go to file or scene"))
-            .width(px(560.))
+            .width(px(448.))
+            .p_2()
+            .bg(rgb(PANEL))
+            .close_button(false)
             .child(picker.clone())
     });
     input.read(cx).focus_handle(cx).focus(window, cx);
@@ -421,13 +403,12 @@ impl QuickPicker {
         let query = self.input.read(cx).value().to_string();
         let background = cx.background_executor().clone();
         self.task = Some(cx.spawn(async move |this, cx| {
-            let (matches, count) = background
+            let matches = background
                 .spawn(async move { matching(&candidates, &query) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.epoch == epoch {
                     this.matches = matches;
-                    this.count = count;
                     this.loading = false;
                     cx.notify();
                 }
@@ -445,14 +426,14 @@ impl QuickPicker {
         } else {
             self.selected.saturating_sub(1)
         };
-        let top = self.selected as f32 * 42.;
+        let top = self.selected as f32 * QUICK_ROW_HEIGHT;
         let offset = -f32::from(self.scroll.offset().y);
-        let height = f32::from(self.scroll.bounds().size.height).max(42.);
+        let height = f32::from(self.scroll.bounds().size.height).max(QUICK_ROW_HEIGHT);
         if top < offset {
             self.scroll.set_offset(gpui_kit::point(px(0.), px(-top)));
-        } else if top + 42. > offset + height {
+        } else if top + QUICK_ROW_HEIGHT > offset + height {
             self.scroll
-                .set_offset(gpui_kit::point(px(0.), px(height - top - 42.)));
+                .set_offset(gpui_kit::point(px(0.), px(height - top - QUICK_ROW_HEIGHT)));
         }
         cx.notify();
     }
@@ -474,6 +455,19 @@ impl QuickPicker {
         else {
             return;
         };
+        let Some(name) = &candidate.scene else {
+            window.close_dialog(cx);
+            let root = self.root.clone();
+            window.defer(cx, move |window, cx| {
+                if active_path(&root, cx).as_deref() != Some(candidate.path.as_path()) {
+                    record_departure(&root, cx);
+                    open_workspace_document(&root, &candidate.path, window, cx);
+                } else {
+                    focus_document(&root, &candidate.path, window, cx);
+                }
+            });
+            return;
+        };
         let source = cx
             .global::<EditorDocuments>()
             .source(&self.root, &candidate.path);
@@ -486,29 +480,29 @@ impl QuickPicker {
             );
             return;
         };
-        let line = if let Some(name) = &candidate.scene {
-            let projection =
-                cx.global::<EditorDocuments>()
-                    .projection(&self.root, &candidate.path, &source);
-            let Some(scene) = projection.scenes.iter().find(|scene| scene.name == *name) else {
-                window.push_notification(
-                    Notification::warning(crate::i18n::tr(
-                        "Scene changed; reopen the picker to refresh",
-                    )),
-                    cx,
-                );
-                return;
-            };
-            source[..scene.source_range.start]
-                .bytes()
-                .filter(|&byte| byte == b'\n')
-                .count()
-                + 1
-        } else {
-            1
+        let projection =
+            cx.global::<EditorDocuments>()
+                .projection(&self.root, &candidate.path, &source);
+        let Some(scene) = projection.scenes.iter().find(|scene| scene.name == *name) else {
+            window.push_notification(
+                Notification::warning(crate::i18n::tr(
+                    "Scene changed; reopen the picker to refresh",
+                )),
+                cx,
+            );
+            return;
         };
+        let position =
+            keine_loader::SourceLineIndex::new(&source).span(&source, scene.name_range.start);
         window.close_dialog(cx);
-        jump(&self.root, &candidate.path, line, 1, window, cx);
+        jump(
+            &self.root,
+            &candidate.path,
+            position.line,
+            position.column,
+            window,
+            cx,
+        );
     }
 }
 
@@ -523,87 +517,110 @@ impl Render for QuickPicker {
             .on_action(cx.listener(|this, _: &QuickOpenPrevious, _, cx| this.select(false, cx)))
             .on_action(cx.listener(|this, _: &QuickOpenAccept, window, cx| this.accept(window, cx)))
             .on_action(cx.listener(|_, _: &QuickOpenClose, window, cx| window.close_dialog(cx)))
-            .child(Input::new(&self.input))
             .child(
                 div()
-                    .text_xs()
-                    .text_color(rgb(MUTED))
-                    .child(if self.loading {
-                        crate::i18n::tr("Searching…").to_owned()
-                    } else if self.count == 0 {
-                        crate::i18n::tr("No matching files or scenes").to_owned()
-                    } else if self.count > RESULT_LIMIT {
-                        crate::i18n::format(
-                            "First {RESULT_LIMIT} of {0} results · type to narrow",
-                            &[
-                                ("RESULT_LIMIT", (RESULT_LIMIT).to_string()),
-                                ("0", (self.count).to_string()),
-                            ],
-                        )
-                    } else {
-                        crate::i18n::format(
-                            "{0} results · ↑↓ select · Enter open · Esc close",
-                            &[("0", (self.count).to_string())],
-                        )
-                    }),
-            )
-            .child(
-                div()
-                    .id("quick-results")
-                    .max_h(px(336.))
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll)
-                    .children(self.matches.iter().enumerate().map(|(row, &index)| {
-                        let candidate = &self.candidates[index];
-                        div()
-                            .id(("quick-result", row))
-                            .h(px(42.))
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .rounded(px(6.))
+                    .bg(rgb(SURFACE))
+                    .child(
+                        Icon::new(AssetIconName::Search)
+                            .small()
                             .flex_none()
-                            .px_2()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .rounded(px(5.))
-                            .bg(rgb(if row == self.selected {
-                                SURFACE_HOVER
-                            } else {
-                                SURFACE
-                            }))
-                            .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-                            .cursor_pointer()
-                            .child(
-                                Icon::new(if candidate.scene.is_some() {
-                                    AssetIconName::Film
-                                } else {
-                                    AssetIconName::FileText
-                                })
-                                .small(),
-                            )
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .flex_1()
-                                    .overflow_hidden()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_ellipsis()
-                                            .child(candidate.title.clone()),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(rgb(MUTED))
-                                            .text_ellipsis()
-                                            .child(candidate.path.display().to_string()),
-                                    ),
-                            )
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.selected = row;
-                                this.accept(window, cx);
-                            }))
-                    })),
+                            .text_color(rgb(MUTED)),
+                    )
+                    .child(
+                        Input::new(&self.input)
+                            .appearance(false)
+                            .bordered(false)
+                            .small()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(13.)),
+                    ),
             )
+            .when(self.loading || self.matches.is_empty(), |picker| {
+                picker.child(div().px_2().pb_1().text_xs().text_color(rgb(MUTED)).child(
+                    crate::i18n::tr(if self.loading {
+                        "Searching…"
+                    } else {
+                        "No matching files or scenes"
+                    }),
+                ))
+            })
+            .when(!self.loading && !self.matches.is_empty(), |picker| {
+                picker.child(
+                    div()
+                        .relative()
+                        .child(
+                            div()
+                                .id("quick-results")
+                                .max_h(px(QUICK_ROW_HEIGHT * 8.))
+                                .overflow_y_scroll()
+                                .track_scroll(&self.scroll)
+                                .children(self.matches.iter().enumerate().map(|(row, &index)| {
+                                    let candidate = &self.candidates[index];
+                                    let scene = candidate.scene.is_some();
+                                    let context = if scene {
+                                        Some(candidate.path.as_path())
+                                    } else {
+                                        candidate
+                                            .path
+                                            .parent()
+                                            .filter(|parent| !parent.as_os_str().is_empty())
+                                    };
+                                    div()
+                                        .id(("quick-result", row))
+                                        .h(px(QUICK_ROW_HEIGHT))
+                                        .flex_none()
+                                        .px_2()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .rounded(px(5.))
+                                        .when(row == self.selected, |entry| {
+                                            entry.bg(rgb(PRIMARY_DIM))
+                                        })
+                                        .hover(|style| style.bg(rgb(SURFACE_HOVER)))
+                                        .cursor_pointer()
+                                        .child(
+                                            Icon::new(if scene {
+                                                AssetIconName::Film
+                                            } else {
+                                                AssetIconName::FileText
+                                            })
+                                            .xsmall()
+                                            .flex_none()
+                                            .text_color(rgb(MUTED)),
+                                        )
+                                        .child(
+                                            div()
+                                                .min_w_0()
+                                                .truncate()
+                                                .text_size(px(13.))
+                                                .child(candidate.title.clone()),
+                                        )
+                                        .when_some(context, |entry, context| {
+                                            entry.child(
+                                                div()
+                                                    .min_w_0()
+                                                    .truncate()
+                                                    .text_xs()
+                                                    .text_color(rgb(MUTED))
+                                                    .child(context.display().to_string()),
+                                            )
+                                        })
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.selected = row;
+                                            this.accept(window, cx);
+                                        }))
+                                })),
+                        )
+                        .vertical_scrollbar(&self.scroll),
+                )
+            })
     }
 }
 
@@ -651,9 +668,9 @@ mod tests {
                 searchable: "海边 scripts".into(),
             })
             .collect::<Vec<_>>();
-        assert_eq!(matching(&candidates, "海边").0.len(), RESULT_LIMIT);
-        assert_eq!(matching(&candidates, "@海边").1, 60);
-        assert_eq!(matching(&candidates, "scripts 海边").1, 120);
-        assert_eq!(matching(&candidates, "missing").1, 0);
+        assert_eq!(matching(&candidates, "海边").len(), RESULT_LIMIT);
+        assert_eq!(matching(&candidates, "@海边").len(), 60);
+        assert_eq!(matching(&candidates, "scripts 海边").len(), RESULT_LIMIT);
+        assert_eq!(matching(&candidates, "missing").len(), 0);
     }
 }

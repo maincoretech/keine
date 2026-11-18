@@ -5,7 +5,7 @@
 
 ## 开发环境
 
-- 使用根目录 `rust-toolchain.toml` 的 Rust 1.99.0、Cargo.lock 和本地 Bevy 补丁。
+- 使用根目录 `rust-toolchain.toml` 的 Rust 1.100.0、Cargo.lock 和本地 Bevy 补丁。
 - macOS 需要 Xcode Command Line Tools；`video-native` 使用系统 AVFoundation。
   `video-ffmpeg` 另需 FFmpeg 开发库和 pkg-config。`.cargo/config.toml` 的 `dev`/`perf` 同时启用两个视频 feature，macOS 优先 native；只测 native 时显式传 feature。
 - Linux 需要 ALSA、Fontconfig、udev、Wayland、XKB 开发库；FFmpeg feature 另需
@@ -482,7 +482,7 @@ cargo +1.97.1 bench --locked --offline -p keine-core --bench script-runtime -- '
 保留这一常见路径成本，不宣称普遍提速。纯文字没有测得退化。原始命令、日志、
 两侧 tokenizer、bench 和统计位于 `target/performance/quality-review/`。
 这是暖输入 CPU 扫描证据，不代表整个 Editor、完整对白编译、GPU/FPS 或其他平台。
-上述旧工具链命令须在对应的升级前源码/manifest 上重现，当前 MSRV 已为 1.99.0。
+上述旧工具链命令须在对应的升级前源码/manifest 上重现，当前 MSRV 已为 1.100.0。
 
 ### 热重载与阻塞查询
 
@@ -1223,7 +1223,7 @@ KEINE_VOICE_BENCH=/path/to/read-only/voices \
 
 #### 格式与既有集成证据
 
-独立库的格式、完整配对命令和测试 owner 位于锁定版本的
+独立库的格式、完整配对命令和测试 owner 位于当时锁定版本的
 [FORMAT](https://github.com/maincoretech/hakutaku/blob/8d637d5629b84f99251fd445366892bdb3c7cf2b/docs/FORMAT.md)、
 [PERFORMANCE](https://github.com/maincoretech/hakutaku/blob/8d637d5629b84f99251fd445366892bdb3c7cf2b/docs/PERFORMANCE.md)。
 Kēne 的接入证据在 `target/performance/quality-review/v2-*`；库的原始日志在相邻仓库 `target/v2-review/`。
@@ -1245,7 +1245,7 @@ Kēne 的接入证据在 `target/performance/quality-review/v2-*`；库的原始
 新 wire-format fuzz、其他平台 GUI/游戏运行仍须各自验证。
 
 Kēne 发布端实测序列下限 42、无变化重打包 42、提高下限后 100；非法/零下限拒绝且
-原序列 100 包仍有效。v1 必须从源素材重建 v2；升级流程与客户端回退策略见[发布指南](release.md#hakutaku-020--v2)。
+原序列 100 包仍有效。v1 必须从源素材重建 v2；升级流程与客户端回退策略见[发布指南](release.md#hakutaku-023--v2)。
 
 离线密钥重建的回归入口为 `cargo test --locked -p keine-loader --test runtime_keys`：
 优化/LTO 编译后检查不同拆分还原相同密钥，并验证缺失/短材料拒绝和输入文件重建跟踪。
