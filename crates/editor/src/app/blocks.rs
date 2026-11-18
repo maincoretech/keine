@@ -83,6 +83,11 @@ impl WorkbenchPanel {
         else {
             return;
         };
+        if let Some(before) = self.document.block_text_before.take() {
+            let after = editor.read(cx).value();
+            cx.global_mut::<EditorDocuments>()
+                .record_source_edit(root, relative, &before, &after);
+        }
         self.document.syntax_check = Some(completion::schedule_syntax_check(
             editor.clone(),
             self.document.syntax_marks.clone(),
@@ -251,44 +256,106 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if mode == DocumentMode::Text {
-            if let PanelContent::Document {
-                root,
-                relative,
-                editor,
-                ..
-            } = &self.content
-            {
-                cx.global_mut::<EditorDocuments>()
-                    .clear_asset_selection(root);
-                if let Some((_, line, column)) = cx
-                    .global::<EditorDocuments>()
-                    .selection(root)
-                    .filter(|(path, _, _)| path == relative)
-                {
-                    let position = Position::new(*line as u32, *column as u32);
-                    editor.update(cx, |editor, cx| {
-                        editor.unfold_at(position, cx);
-                        editor.set_cursor_position(position, window, cx)
-                    });
-                }
-            }
-        } else if mode == DocumentMode::Block {
-            self.rebuild_visual_editors(window, cx);
-            self.document.block_scroll_pending = true;
-            if let PanelContent::Document { root, relative, .. } = &self.content {
-                cx.global_mut::<EditorDocuments>().set_block_selection(
-                    root,
-                    relative.clone(),
-                    self.document.selected_blocks.iter().copied().collect(),
-                );
-            }
+        if mode == self.document.document_mode {
+            return;
         }
-        self.document.minimap_navigation = minimap::Navigation::default();
+        self.finish_block_text_edit(window, cx);
+        self.close_document_find(window, cx);
         self.document.document_mode = mode;
+        self.document.minimap_navigation = minimap::Navigation::default();
         self.document.text_scroll_pending = mode == DocumentMode::Text;
+        self.sync_document_selection(window, cx);
+        if mode == DocumentMode::Block {
+            self.rebuild_visual_editors(window, cx);
+        }
+        self.focus_handle(cx).focus(window, cx);
         cx.notify();
         cx.refresh_windows();
+    }
+
+    pub(super) fn sync_document_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let PanelContent::Document {
+            root,
+            relative,
+            editor,
+            document,
+            ..
+        } = &self.content
+        else {
+            return;
+        };
+        let mode = self.document.document_mode;
+        let selection = cx
+            .global::<EditorDocuments>()
+            .selection(root)
+            .filter(|(path, _, _)| path == relative)
+            .map(|(_, line, column)| Position::new(*line as u32, *column as u32));
+        let current = editor.read(cx).cursor_position();
+        let position = selection.unwrap_or_else(|| {
+            if mode != DocumentMode::Text
+                && let Some(offset) = self.document.block_selection_anchor
+            {
+                editor
+                    .read(cx)
+                    .text()
+                    .offset_to_position(offset.min(editor.read(cx).text().len()))
+            } else {
+                current
+            }
+        });
+        if mode == DocumentMode::Text {
+            if position != current {
+                editor.update(cx, |editor, cx| {
+                    editor.unfold_at(position, cx);
+                    editor.set_cursor_position(position, window, cx);
+                });
+            }
+            self.document.last_text_cursor =
+                Some((position.line as usize, position.character as usize));
+            let documents = cx.global_mut::<EditorDocuments>();
+            documents.clear_asset_selection(root);
+            documents.clear_block_selection(root);
+            documents.set_selection(
+                root,
+                relative.clone(),
+                position.line as usize,
+                position.character as usize,
+            );
+            return;
+        }
+        let Some(document) = document else { return };
+        let source = document.borrow();
+        let projection = source.projection();
+        let selected = block_at_position(
+            &projection,
+            source.contents(),
+            position.line as usize,
+            position.character as usize,
+        );
+        if let Some((scene, _)) = &selected {
+            self.document.collapsed_scenes.remove(scene);
+        }
+        let id = selected.map(|(_, block)| block.source_range.start);
+        let previous = cx
+            .global::<EditorDocuments>()
+            .block_selection(root)
+            .filter(|(path, starts)| path == relative && id.is_some_and(|id| starts.contains(&id)))
+            .map(|(_, starts)| starts.iter().copied().collect());
+        self.document.selected_blocks = previous.unwrap_or_else(|| id.into_iter().collect());
+        self.document.block_selection_anchor = id;
+        self.document.block_scroll_pending = true;
+        let documents = cx.global_mut::<EditorDocuments>();
+        documents.set_selection(
+            root,
+            relative.clone(),
+            position.line as usize,
+            position.character as usize,
+        );
+        documents.set_block_selection(
+            root,
+            relative.clone(),
+            self.document.selected_blocks.iter().copied().collect(),
+        );
     }
 
     pub(super) fn accept_source_suggestion(
@@ -576,6 +643,11 @@ impl WorkbenchPanel {
             BlockMenuAction::Run => {
                 if let PanelContent::Document { root, relative, .. } = &self.content {
                     run_source_block(root, relative, row, cx);
+                }
+            }
+            BlockMenuAction::MatchVoice => {
+                if let PanelContent::Document { root, relative, .. } = &self.content {
+                    super::document::voices::open_line(root, relative, row, window, cx);
                 }
             }
             BlockMenuAction::ToggleDisabled => {
@@ -1036,6 +1108,7 @@ impl WorkbenchPanel {
                             });
                         });
                         if result.is_ok() {
+                            panel.document.block_text_before.get_or_insert(source);
                             panel.shift_text_offsets(changed_end, delta);
                         }
                         let notice = match result {
@@ -1107,43 +1180,33 @@ impl WorkbenchPanel {
             }) else {
                 return;
             };
-            match event {
-                InputEvent::Blur => row.wait = None,
-                InputEvent::PressEnter { .. } => {
-                    let focus = panel.focus.clone();
-                    cx.defer(move |cx| {
-                        let _ = cx.update_window(window_handle, |_, window, cx| {
-                            window.focus(&focus, cx);
-                        });
-                    });
-                }
-                InputEvent::Change => {
+            if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+                let _ = cx.update_window(window_handle, |_, window, cx| {
+                    use gpui_kit::EntityInputHandler;
+                    if live_input.update(cx, |input, cx| {
+                        input.marked_text_range(window, cx).is_some()
+                    }) {
+                        return;
+                    }
                     let value = live_input.read(cx).value();
-                    // Empty or incomplete drafts stay in the field, never in script source.
-                    let Ok(milliseconds) = value.parse::<f32>() else {
-                        cx.notify();
-                        return;
-                    };
-                    if !milliseconds.is_finite() || milliseconds < 0. {
-                        cx.notify();
-                        return;
-                    }
                     let source = text.read(cx).value();
-                    let Some(range) = inline_wait_value_range(&source, ordinal) else {
-                        row.wait = None;
-                        cx.notify();
-                        return;
-                    };
-                    if source[range.clone()] != *value {
-                        let _ = cx.update_window(window_handle, |_, window, cx| {
-                            text.update(cx, |text, cx| {
-                                text.set_selected_range(range, cx);
-                                text.replace(value, window, cx);
-                            });
+                    if value
+                        .parse::<f32>()
+                        .is_ok_and(|ms| ms.is_finite() && ms >= 0.)
+                        && let Some(range) = inline_wait_value_range(&source, ordinal)
+                        && source[range.clone()] != *value
+                    {
+                        text.update(cx, |text, cx| {
+                            text.set_selected_range(range, cx);
+                            text.replace(value, window, cx);
                         });
                     }
-                }
-                _ => {}
+                    if matches!(event, InputEvent::Blur) {
+                        row.wait = None;
+                    } else {
+                        window.focus(&panel.focus, cx);
+                    }
+                });
             }
             cx.notify();
         });
@@ -1273,8 +1336,6 @@ impl WorkbenchPanel {
         };
         self.close_block_picker(&CloseBlockPicker, window, cx);
         self.insert_from_palette(kind, window, cx);
-        self.schedule_visual_editors_rebuild(window, cx);
-        self.focus.focus(window, cx);
         cx.notify();
     }
 
@@ -1551,6 +1612,11 @@ impl WorkbenchPanel {
             // preceding write. Match the draft range against the live source.
             let source = source_editor.read(cx).value().to_string();
             let source_len = source.len();
+            let before = panel
+                .document
+                .block_text_before
+                .is_none()
+                .then(|| source.clone());
             let Some(draft) = panel
                 .document
                 .draft_text
@@ -1576,41 +1642,45 @@ impl WorkbenchPanel {
             } else {
                 let statement = format!("\"{escaped}\"");
                 let projection = EiyashouProjection::parse(&source);
-                match draft.target {
-                    DraftInsertionTarget::Before(start) => {
-                        projection.insert_block_before(&source, start, &statement)
-                    }
-                    DraftInsertionTarget::After(start) => {
-                        projection.insert_block_after(&source, start, &statement)
-                    }
-                    DraftInsertionTarget::SceneEnd(start) => {
-                        projection.insert_block_in_scene(&source, start, &statement)
-                    }
-                }
-                .map(|(edited, range)| {
-                    draft.text_range = Some(range.start + 1..range.end - 1);
-                    draft.last_escaped.clone_from(&escaped);
-                    panel.document.selected_blocks.clear();
-                    panel.document.selected_blocks.insert(range.start);
-                    panel.document.block_selection_anchor = Some(range.start);
-                    edited
-                })
-                .map_err(|error| error.to_string())
+                draft
+                    .target
+                    .insert(&projection, &source, &statement)
+                    .map(|(edited, range)| {
+                        draft.text_range = Some(range.start + 1..range.end - 1);
+                        draft.last_escaped.clone_from(&escaped);
+                        panel.document.selected_blocks.clear();
+                        panel.document.selected_blocks.insert(range.start);
+                        panel.document.block_selection_anchor = Some(range.start);
+                        edited
+                    })
+                    .map_err(|error| error.to_string())
             };
             match edit {
                 Ok(edited) => {
                     panel.document.block_text_refresh_pending = true;
                     let delta = edited.len() as isize - source_len as isize;
-                    let changed_end =
+                    let shift_from =
                         changed_end.unwrap_or_else(|| draft.text_range.as_ref().unwrap().start);
-                    panel.shift_text_offsets(changed_end, delta);
+                    if changed_end.is_some() {
+                        panel.shift_text_offsets(shift_from, delta);
+                    }
                     let result = cx.update_window(window_handle, |_, window, cx| {
                         source_editor.update(cx, |editor, cx| {
                             replace_inline_source(editor, &edited, window, cx);
                         });
                     });
                     let notice = match result {
-                        Ok(()) => crate::i18n::tr("Text updated").to_owned(),
+                        Ok(()) => {
+                            if let Some(before) = before {
+                                panel.document.block_text_before = Some(before);
+                            }
+                            if changed_end.is_none()
+                                && let Some(start) = panel.document.block_selection_anchor
+                            {
+                                panel.select_edited_block(&edited, start, cx);
+                            }
+                            crate::i18n::tr("Text updated").to_owned()
+                        }
                         Err(error) => crate::i18n::format(
                             "Text edit failed: {error}",
                             &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
@@ -1671,17 +1741,7 @@ impl WorkbenchPanel {
         let statement = format!("\"{}\"", escape_eiyashou_string(&state.read(cx).value()));
         let inserted = draft
             .filter(|draft| draft.text_range.is_none())
-            .map(|draft| match draft.target {
-                DraftInsertionTarget::Before(start) => {
-                    projection.insert_block_before(&source, start, &statement)
-                }
-                DraftInsertionTarget::After(start) => {
-                    projection.insert_block_after(&source, start, &statement)
-                }
-                DraftInsertionTarget::SceneEnd(start) => {
-                    projection.insert_block_in_scene(&source, start, &statement)
-                }
-            });
+            .map(|draft| draft.target.insert(&projection, &source, &statement));
         let start = match inserted {
             Some(Ok((edited, range))) => {
                 cx.global_mut::<EditorDocuments>()
@@ -2036,49 +2096,6 @@ impl WorkbenchPanel {
         cx.refresh_windows();
     }
 
-    pub(super) fn undo_blocks(
-        &mut self,
-        _: &UndoBlocks,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.document.document_mode == DocumentMode::Text || !self.focus.is_focused(window) {
-            return;
-        }
-        self.replay_block_source(true, window, cx);
-    }
-
-    pub(super) fn redo_blocks(
-        &mut self,
-        _: &RedoBlocks,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.document.document_mode == DocumentMode::Text || !self.focus.is_focused(window) {
-            return;
-        }
-        self.replay_block_source(false, window, cx);
-    }
-
-    fn replay_block_source(&mut self, undo: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let PanelContent::Document { root, .. } = &self.content else {
-            return;
-        };
-        let root = root.clone();
-        match replay_source_history(&root, undo, window, cx) {
-            Ok(true) => {
-                self.document.selected_blocks.clear();
-                self.document.block_selection_anchor = None;
-                self.schedule_visual_editors_rebuild(window, cx);
-                cx.global_mut::<EditorDocuments>()
-                    .clear_block_selection(&root);
-                cx.refresh_windows();
-            }
-            Ok(false) => {}
-            Err(error) => self.set_block_notice(error, cx),
-        }
-    }
-
     pub(super) fn begin_scene_edit(
         &mut self,
         mode: SceneEditMode,
@@ -2403,21 +2420,60 @@ impl WorkbenchPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.finish_block_text_edit(window, cx);
         let PanelContent::Document {
             root,
             relative,
             document: Some(document),
-            editor,
             ..
         } = &self.content
         else {
             return;
         };
-        let source = document.borrow().contents().to_owned();
-        let line = document.borrow().selection().line;
+        let (source, line, revision, projection) = {
+            let document = document.borrow();
+            (
+                document.contents().to_owned(),
+                document.selection().line,
+                document.revision(),
+                document.projection(),
+            )
+        };
         let index = cx.global::<EditorDocuments>().authoring(root);
-        let projection = EiyashouProjection::parse(&source);
         let after = self.document.selected_blocks.iter().copied().max();
+        if let Some(options) = palette_resource_options(root, kind, &index) {
+            let at = after.map(DraftInsertionTarget::After).or_else(|| {
+                let line = cx
+                    .global::<EditorDocuments>()
+                    .selection(root)
+                    .filter(|(path, _, _)| path == relative)
+                    .map_or(line, |(_, line, _)| *line);
+                let lines = keine_loader::SourceLineIndex::new(&source);
+                let offset = lines.offset(&source, line, 0);
+                let scene = projection
+                    .scenes
+                    .iter()
+                    .rev()
+                    .find(|scene| scene.source_range.start <= offset)
+                    .or_else(|| projection.scenes.first())?;
+                Some(DraftInsertionTarget::SceneEnd(scene.source_range.start))
+            });
+            if let Some(at) = at {
+                let root = root.clone();
+                self.open_resource_picker(
+                    &root,
+                    ResourceTarget::Insert { kind, at, revision },
+                    options,
+                    String::new(),
+                    None,
+                    window,
+                    cx,
+                );
+            } else {
+                self.set_block_notice(crate::i18n::tr("No Scene available").into(), cx);
+            }
+            return;
+        }
         let edited = if self.document.document_mode == DocumentMode::Block
             && let Some(after) = after
         {
@@ -2430,43 +2486,194 @@ impl WorkbenchPanel {
             insertion_statement(&source, kind, &index, &indent)
                 .map_err(|error| error.to_string())
                 .and_then(|statement| {
-                    projection
-                        .insert_block_after(&source, after, &statement)
+                    DraftInsertionTarget::After(after)
+                        .insert(&projection, &source, &statement)
+                        .map(|(edited, inserted)| (edited, Some(inserted.start)))
                         .map_err(|error| error.to_string())
                 })
         } else {
             insert_statement(&source, line, kind, &index)
-                .map(|edited| (edited, 0..0))
+                .map(|edited| (edited, None))
                 .map_err(|error| error.to_string())
         };
+        self.finish_palette_insert(kind, edited, window, cx);
+    }
+
+    pub(super) fn insert_palette_resource(
+        &mut self,
+        kind: InsertKind,
+        at: DraftInsertionTarget,
+        revision: u64,
+        option: &SourceOption,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let PanelContent::Document {
+            root,
+            document: Some(document),
+            ..
+        } = &self.content
+        else {
+            return;
+        };
+        let document = document.borrow();
+        if document.revision() != revision {
+            self.set_block_notice(
+                crate::i18n::tr("Source changed; reopen the Block menu").into(),
+                cx,
+            );
+            return;
+        }
+        let source = document.contents();
+        let index = cx.global::<EditorDocuments>().authoring(root);
+        let projection = document.projection();
+        let edited = palette_resource_statement(kind, option, &index)
+            .and_then(|statement| {
+                at.insert(&projection, source, &statement)
+                    .map_err(|e| e.to_string())
+            })
+            .and_then(|(mut edited, mut inserted)| {
+                if edited[inserted.clone()].contains('\n') {
+                    let prefix = &edited[..inserted.start];
+                    let line_prefix = prefix.rsplit('\n').next().unwrap_or("");
+                    if !line_prefix.is_empty() && line_prefix.trim_matches([' ', '\t']).is_empty() {
+                        let fragment =
+                            edited[inserted.clone()].replace('\n', &format!("\n{line_prefix}"));
+                        let end = inserted.start + fragment.len();
+                        edited.replace_range(inserted.clone(), &fragment);
+                        inserted.end = end;
+                    }
+                }
+                let checked = EiyashouProjection::parse(&edited);
+                if checked.read_only.len() > projection.read_only.len() {
+                    return Err("Invalid property value".into());
+                }
+                let selected = checked
+                    .scenes
+                    .iter()
+                    .flat_map(|scene| &scene.blocks)
+                    .filter(|block| inserted.contains(&block.source_range.start))
+                    .find(|block| {
+                        block.summary.split('(').next().map(str::trim) == kind.source_name()
+                    })
+                    .ok_or("Invalid property value")?;
+                Ok((edited, Some(selected.source_range.start)))
+            });
+        drop(document);
+        self.finish_palette_insert(kind, edited, window, cx);
+    }
+
+    fn finish_palette_insert(
+        &mut self,
+        kind: InsertKind,
+        edited: Result<(String, Option<usize>), String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match edited {
             Ok((edited, inserted)) => {
-                cx.global_mut::<EditorDocuments>()
-                    .record_source_edit(root, relative, &source, &edited);
-                editor.update(cx, |editor, cx| {
-                    editor.replace_all(edited.clone(), window, cx)
-                });
-                cx.global_mut::<EditorDocuments>().set_notice(
-                    root,
-                    crate::i18n::format(
-                        "Inserted {0}",
-                        &[("0", (crate::i18n::tr(kind.label())).to_string())],
-                    ),
+                let notice = crate::i18n::format(
+                    "Inserted {0}",
+                    &[("0", crate::i18n::tr(kind.label()).to_owned())],
                 );
-                if !inserted.is_empty() {
-                    self.select_edited_block(&edited, inserted.start, cx);
+                self.apply_block_source(edited.clone(), &notice, window, cx);
+                if let Some(start) = inserted {
+                    self.select_edited_block(&edited, start, cx);
                 }
             }
-            Err(error) => cx.global_mut::<EditorDocuments>().set_notice(
-                root,
+            Err(error) => self.set_block_notice(
                 crate::i18n::format(
                     "Insert blocked: {error}",
-                    &[("error", crate::i18n::tr(&(error).to_string()).to_owned())],
+                    &[("error", crate::i18n::tr(&error).to_owned())],
                 ),
+                cx,
             ),
         }
-        cx.refresh_windows();
     }
+}
+
+fn palette_asset_kind(kind: InsertKind) -> Option<AssetKind> {
+    match kind {
+        InsertKind::Background => Some(AssetKind::Background),
+        InsertKind::Figure => Some(AssetKind::Figure),
+        InsertKind::Bgm => Some(AssetKind::Bgm),
+        InsertKind::Effect => Some(AssetKind::Effect),
+        _ => None,
+    }
+}
+
+fn palette_resource_options(
+    root: &Path,
+    kind: InsertKind,
+    index: &AuthoringIndex,
+) -> Option<Vec<SourceOption>> {
+    let asset_kind = palette_asset_kind(kind)?;
+    let assets = index
+        .assets
+        .iter()
+        .filter(|asset| asset.kind == asset_kind && asset.exists && valid_identifier(&asset.id))
+        .collect::<Vec<_>>();
+    let make_option = |value, title: String, asset: &crate::authoring::AssetEntry| SourceOption {
+        localize: false,
+        value,
+        title: title.into(),
+        asset: Some((root.to_owned(), asset.kind, asset.path.clone())),
+    };
+    let mut rows = Vec::new();
+    if kind == InsertKind::Figure {
+        let by_id = assets
+            .iter()
+            .map(|asset| (asset.id.as_str(), *asset))
+            .collect::<HashMap<_, _>>();
+        for character in &index.characters {
+            for (expression, frames) in &character.expressions {
+                if let Some(first) = frames.first().and_then(|id| by_id.get(id.as_str()))
+                    && frames.iter().all(|id| by_id.contains_key(id.as_str()))
+                {
+                    rows.push(make_option(
+                        format!("{}/{expression}", character.id),
+                        format!("{} · {expression}", character.name),
+                        first,
+                    ));
+                }
+            }
+        }
+    }
+    rows.extend(
+        assets
+            .into_iter()
+            .map(|asset| make_option(asset.id.clone(), asset.id.clone(), asset)),
+    );
+    Some(rows)
+}
+
+fn palette_resource_statement(
+    kind: InsertKind,
+    option: &SourceOption,
+    index: &AuthoringIndex,
+) -> Result<String, String> {
+    if kind == InsertKind::Figure
+        && let Some((id, expression)) = option.value.split_once('/')
+    {
+        let character = index
+            .characters
+            .iter()
+            .find(|entry| entry.id == id)
+            .ok_or("Source changed; reopen the Block menu")?;
+        return super::characters::character_statement(character, expression, "show", index);
+    }
+    let missing = "Source changed; reopen the Block menu";
+    let asset_kind = palette_asset_kind(kind).ok_or(missing)?;
+    let id = &option.value;
+    if !valid_identifier(id)
+        || !index
+            .assets
+            .iter()
+            .any(|asset| asset.kind == asset_kind && asset.id == *id && asset.exists)
+    {
+        return Err(missing.into());
+    }
+    crate::authoring::commands::asset_insert_statement(asset_kind, id).ok_or_else(|| missing.into())
 }
 
 /// Resolve a duration through the runtime tokenizer, then retain the author's tag spelling.

@@ -27,7 +27,7 @@ jobs:
         with:
           ref: ${{ env.RELEASE_SHA }}
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@fb523f40495206854c36b250850817ae0f83e3d1 # 1.99.0
+        uses: dtolnay/rust-toolchain@9522411a9bce8484da960823fc2f46e52f981f71 # 1.100.0
       - name: Check dependencies before building any platform
         uses: ./.github/actions/check-dependencies
 
@@ -50,7 +50,7 @@ jobs:
         with:
           ref: ${{ env.RELEASE_SHA }}
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@fb523f40495206854c36b250850817ae0f83e3d1 # 1.99.0
+        uses: dtolnay/rust-toolchain@9522411a9bce8484da960823fc2f46e52f981f71 # 1.100.0
       - name: Install cross-compilation target
         if: env.KEINE_BUILD_TARGET != ''
         run: rustup target add ${{ env.KEINE_BUILD_TARGET }}
@@ -234,7 +234,7 @@ jobs:
         with:
           ref: ${{ env.RELEASE_SHA }}
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@fb523f40495206854c36b250850817ae0f83e3d1 # 1.99.0
+        uses: dtolnay/rust-toolchain@9522411a9bce8484da960823fc2f46e52f981f71 # 1.100.0
         with:
           targets: aarch64-linux-android
       - name: Set up video dependencies

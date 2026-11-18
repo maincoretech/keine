@@ -359,6 +359,7 @@ fn inline_wait_preview(source: &str, editing: Option<(usize, &str)>) -> WaitPrev
 fn render_block_text(
     state: &Entity<TextareaState>,
     editors: &[BlockTextEditor],
+    editing_draft: bool,
     window: &mut Window,
     cx: &mut Context<WorkbenchPanel>,
 ) -> AnyElement {
@@ -375,7 +376,7 @@ fn render_block_text(
             .zip(value.as_ref())
             .map(|((ordinal, _), value)| (*ordinal, value.as_ref())),
     );
-    if !preview.waits.is_empty() && !state.read(cx).focus_handle(cx).is_focused(window) {
+    if !editing_draft && !state.read(cx).focus_handle(cx).is_focused(window) {
         let color: Hsla = rgb(block_type_color(&BlockKind::Command, "wait(1s)")).into();
         let highlights = preview.waits.iter().map(|(range, _)| {
             (
@@ -447,14 +448,12 @@ fn render_block_text(
             });
         return div()
             .relative()
-            .track_focus(&state.read(cx).focus_handle(cx))
             .w_full()
             .min_w_0()
             .py(px(5.))
             .px_2()
             .text_size(px(13.))
             .text_color(rgb(INK))
-            .cursor_text()
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
@@ -470,6 +469,9 @@ fn render_block_text(
                         // focus back from the duration field to the raw textarea.
                         window.prevent_default();
                         this.edit_inline_wait(&input, ordinal, window, cx);
+                        return;
+                    }
+                    if event.click_count != 2 {
                         return;
                     }
                     input.update(cx, |input, cx| {
@@ -636,25 +638,15 @@ pub(in crate::app) fn render_block_projection(
             .block_at_position(line, column)
             .map(|block| block.source_range.start)
     });
-    let executing_start = cx
-        .global_mut::<EditorDocuments>()
-        .preview(root)
-        .ok()
-        .map(|preview| preview.snapshot())
-        .filter(|snapshot| matches!(snapshot.lifecycle, PreviewLifecycle::Running))
-        .and_then(|snapshot| snapshot.runtime_position)
-        .filter(|(path, _, _)| path == relative)
-        .and_then(|(_, line, column)| {
-            snapshot
-                .block_at_position(line.saturating_sub(1), column.saturating_sub(1))
-                .map(|block| {
-                    if block.is_textbox_ending() {
-                        block.lifetime_owner.unwrap_or(block.source_range.start)
-                    } else {
-                        block.source_range.start
-                    }
-                })
-        });
+    let executing_start = preview_source_position(root, relative, cx).and_then(|(line, column)| {
+        snapshot.block_at_position(line, column).map(|block| {
+            if block.is_textbox_ending() {
+                block.lifetime_owner.unwrap_or(block.source_range.start)
+            } else {
+                block.source_range.start
+            }
+        })
+    });
     let root = root.to_owned();
     let relative = relative.to_owned();
     let mut rows = Vec::new();
@@ -919,6 +911,7 @@ pub(in crate::app) fn render_block_projection(
                             .map(|editor| &editor.state)
                     })
             });
+            let dialogue_text = text_state.is_some_and(|_| !block.read_only);
             let is_structure = matches!(
                 &block.kind,
                 BlockKind::Choice
@@ -1045,7 +1038,7 @@ pub(in crate::app) fn render_block_projection(
                 .cursor_pointer()
                 .anchor_scroll((selected_start == Some(row_id)).then(|| scroll_anchor.clone()))
                 .hover(|style| style.bg(rgb(SURFACE_HOVER)))
-                .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                     cx.stop_propagation();
                     let modifiers = event.modifiers();
                     if modifiers.shift {
@@ -1077,6 +1070,9 @@ pub(in crate::app) fn render_block_projection(
                         this.document.selected_blocks.iter().copied().collect(),
                     );
                     set_authoring_selection(&root, relative.clone(), line, column, cx);
+                    if event.click_count() == 2 && !dialogue_text {
+                        window.dispatch_action(Box::new(ShowInspector), cx);
+                    }
                     cx.notify();
                 }))
                 .on_mouse_down(
@@ -1144,7 +1140,13 @@ pub(in crate::app) fn render_block_projection(
                                 .min_h(px(30.))
                                 .flex_1()
                                 .min_w_0()
-                                .child(render_block_text(state, editors, window, cx)),
+                                .child(render_block_text(
+                                    state,
+                                    editors,
+                                    draft_text.is_some_and(|draft| draft.state == *state),
+                                    window,
+                                    cx,
+                                )),
                         ),
                 )
             } else {
@@ -1268,6 +1270,27 @@ pub(in crate::app) fn render_block_projection(
                 )
             };
             if text_block && !block.read_only {
+                if selected
+                    && selected_blocks.len() <= 1
+                    && !block.disabled
+                    && let Some(metadata) = projection.text_block_metadata_for_block(source, &block)
+                    && let Some(lifetime) = projection.text_lifetime(source, row_id)
+                {
+                    let current = metadata.voice.clone().unwrap_or_default();
+                    row = row.child(resource_trigger(
+                        &source_root,
+                        ResourceTarget::Voice(InspectorEditKey {
+                            path: source_relative.clone(),
+                            block_start: row_id,
+                            metadata,
+                            lifetime,
+                        }),
+                        voice_resource_options(&source_root, &index),
+                        current,
+                        true,
+                        cx,
+                    ));
+                }
                 let hidden = textbox_endings.contains(&row_id);
                 row = row.child(
                     div()
@@ -1544,6 +1567,15 @@ pub(in crate::app) fn render_block_projection(
                         }),
                     ),
                 )
+                .into_any_element(),
+        );
+    } else if projection.scenes.is_empty() {
+        rows.push(
+            file_action_icon("scene-add-empty", AssetIconName::Plus, "Add scene")
+                .aria_label(crate::i18n::tr("Add scene"))
+                .on_click(cx.listener(|panel, _, window, cx| {
+                    panel.begin_scene_edit(SceneEditMode::New, window, cx);
+                }))
                 .into_any_element(),
         );
     }

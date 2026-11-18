@@ -328,7 +328,7 @@ identity 与内嵌 key 不记录、不提交、不缓存，也不传给无需它
 ### 依赖审计与升级
 
 工具链以 [`rust-toolchain.toml`](../../rust-toolchain.toml) 为准，当前六个 Kēne crate
-的 MSRV 为 Rust 1.99.0。依赖与 feature 以 Cargo manifest/lock 为准；不要把某次升级
+的 MSRV 为 Rust 1.100.0。依赖与 feature 以 Cargo manifest/lock 为准；不要把某次升级
 清单当作当前依赖规范。升级工具链时同步 CI；升级 Kēne 版本时同步根目录和 `tests/fuzz/` 的
 `Cargo.lock`，提交前分别运行 `cargo metadata --locked --format-version 1` 和
 `cargo metadata --locked --manifest-path tests/fuzz/Cargo.toml --format-version 1`。随后执行
@@ -345,7 +345,7 @@ Editor 的 `image` 仅请求 BMP/GIF/JPEG/PNG/TIFF/WebP，Media 图标仅请求 
 不要为了方便恢复默认编码器集合。锁文件仍可包含上游可选依赖，实际依赖树须按目标与
 features 查询，不能用锁文件包数推断运行时体积。
 GPUI 的 macOS 依赖链仍含 `block 0.1.6` 的 `uninhabited_static` 未来兼容性警告；
-当前 Rust 1.99 可构建，应随上游 Cocoa/Metal 绑定迁移处理，不新增本地 FFI 替代层。
+在 Rust 1.99 下可构建，应随上游 Cocoa/Metal 绑定迁移处理，不新增本地 FFI 替代层。
 
 证书撤销事件还需检查构建工具和系统信任库，更新 Rust 锁文件不能替代它们。
 2026-10 的 eMudhra 事件对应 [RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382.html)：
@@ -380,19 +380,19 @@ export GIT_SSL_CAINFO="$CURL_CA_BUNDLE"
   宿主运行库保持安全更新；未来 24.04 runner 退役时，优先用受维护的 24.04 容器保留基线。
   提高最低系统要求需单独说明，并重新验收最终包。
 
-### Hakutaku 0.2.0 / v2
+### Hakutaku 0.2.3 / v2
 
 资源包仅接受 Hakutaku v2。v1 没有兼容读取、旧密文复用或自动迁移；旧项目从原始
 资源重新打包到全新输出目录，保留原 publisher identity，并同时分发新 Engine 与
 新资源包。`KEINE_HAKUTAKU_RELEASE_FLOOR` 可设为上次发行序号加一；已有 v2
 目录有变化时继续递增；无变化时可保留原序号，较低下限不会使其回退。该变量只影响资源发布，不改变 Save/IR。
 
-wire layout 与块策略分别见锁定 Hakutaku 的 [FORMAT](https://github.com/maincoretech/hakutaku/blob/8d637d5629b84f99251fd445366892bdb3c7cf2b/docs/FORMAT.md)
-和 [PERFORMANCE](https://github.com/maincoretech/hakutaku/blob/8d637d5629b84f99251fd445366892bdb3c7cf2b/docs/PERFORMANCE.md)。
+wire layout 与块策略分别见锁定 Hakutaku 的 [FORMAT](https://github.com/maincoretech/hakutaku/blob/fd231fb2bf6e7eb4c7f7c30a3dd98c17b6d50827/docs/FORMAT.md)
+和 [PERFORMANCE](https://github.com/maincoretech/hakutaku/blob/fd231fb2bf6e7eb4c7f7c30a3dd98c17b6d50827/docs/PERFORMANCE.md)。
 Kēne 保留编译 Program、资源 allowlist、挂载根目录和 identity 注入的职责，不复制包格式规范。
 
-Core/Pack 固定为 `=0.2.0`，Git revision 为
-`8d637d5629b84f99251fd445366892bdb3c7cf2b`，Cargo.lock 同步固定来源；
+Core/Pack 固定为 `=0.2.3`，Git revision 为
+`fd231fb2bf6e7eb4c7f7c30a3dd98c17b6d50827`，Cargo.lock 同步固定来源；
 检出项目即可构建，无需相邻的 Hakutaku 工作区。
 
 ### 离线保护的停止标准

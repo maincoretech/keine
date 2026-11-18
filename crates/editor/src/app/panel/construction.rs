@@ -16,21 +16,9 @@ impl WorkbenchPanel {
             PanelContent::Document { root, relative, .. } => Some((root.clone(), relative.clone())),
             _ => None,
         };
-        let tool_registration = match &content {
-            PanelContent::Explorer { root, .. } => Some((root.clone(), EXPLORER_PANEL)),
-            PanelContent::Inspector { root, .. } => Some((root.clone(), INSPECTOR_PANEL)),
-            PanelContent::Search { root } => Some((root.clone(), SEARCH_PANEL)),
-            PanelContent::Assets { root } => Some((root.clone(), ASSETS_PANEL)),
-            PanelContent::AssetPreview { root } => Some((root.clone(), ASSET_PREVIEW_PANEL)),
-            PanelContent::Characters { root } => Some((root.clone(), CHARACTERS_PANEL)),
-            PanelContent::Scenes { root } => Some((root.clone(), SCENES_PANEL)),
-            PanelContent::Problems { root } => Some((root.clone(), PROBLEMS_PANEL)),
-            PanelContent::Performance { root, .. } => Some((root.clone(), PERFORMANCE_PANEL)),
-            PanelContent::Project { root } => Some((root.clone(), PROJECT_PANEL)),
-            PanelContent::Build { root } => Some((root.clone(), BUILD_PANEL)),
-            PanelContent::Output { root, .. } => Some((root.clone(), OUTPUT_PANEL)),
-            _ => None,
-        };
+        let tool_registration = content
+            .tool_root()
+            .map(|root| (root.to_owned(), content.panel_name()));
         let panel = cx.new(|cx| {
             let block_picker_input = cx.new(|cx| {
                 InputState::new(window, cx).placeholder(crate::i18n::tr("Search blocks"))
@@ -53,6 +41,14 @@ impl WorkbenchPanel {
                     .extension()
                     .is_some_and(|extension| extension == "shou") =>
                 {
+                    Some(editor.update(cx, |editor, cx| {
+                        editor.create_decorations_collection(Vec::new(), cx)
+                    }))
+                }
+                _ => None,
+            };
+            let execution_mark = match &content {
+                PanelContent::Document { editor, .. } if syntax_marks.is_some() => {
                     Some(editor.update(cx, |editor, cx| {
                         editor.create_decorations_collection(Vec::new(), cx)
                     }))
@@ -153,7 +149,7 @@ impl WorkbenchPanel {
                     display_selects: Vec::new(),
                 },
                 document: crate::app::document::DocumentState {
-                    timeline: Default::default(),
+                    find: None,
                     document_mode: saved_view.map_or(DocumentMode::Text, |view| view.mode),
                     last_text_cursor: None,
                     text_scroll_pending: saved_view
@@ -177,6 +173,7 @@ impl WorkbenchPanel {
                     syntax_check: None,
                     diagnostic_index: Default::default(),
                     syntax_marks,
+                    execution_mark,
                     visual_subscriptions: Vec::new(),
                     inline_block_controls: HashMap::new(),
                     block_visible: HashSet::new(),
@@ -184,6 +181,7 @@ impl WorkbenchPanel {
                     block_layout: RefCell::new(crate::app::blocks::layout::Cache::default()),
                     block_height_revision: 0,
                     block_text_refresh_pending: false,
+                    block_text_before: None,
                     scene_edit: None,
                     scene_name_input: scene_name_input.clone(),
 
@@ -281,14 +279,51 @@ impl WorkbenchPanel {
                 let root = root.clone();
                 let relative = relative.clone();
                 let editor_for_selection = editor.clone();
+                panel._subscriptions.push(cx.on_focus_in(
+                    &panel.focus,
+                    window,
+                    |panel, window, cx| {
+                        let PanelContent::Document {
+                            root,
+                            relative,
+                            editor,
+                            ..
+                        } = &panel.content
+                        else {
+                            return;
+                        };
+                        if cx
+                            .global::<EditorDocuments>()
+                            .selection(root)
+                            .is_some_and(|(path, _, _)| path == relative)
+                        {
+                            return;
+                        }
+                        let position = panel
+                            .document
+                            .block_selection_anchor
+                            .filter(|_| panel.document.document_mode != DocumentMode::Text)
+                            .map_or_else(
+                                || editor.read(cx).cursor_position(),
+                                |offset| editor.read(cx).text().offset_to_position(offset),
+                            );
+                        cx.global_mut::<EditorDocuments>().set_selection(
+                            root,
+                            relative.clone(),
+                            position.line as usize,
+                            position.character as usize,
+                        );
+                        panel.sync_document_selection(window, cx);
+                        cx.refresh_windows();
+                    },
+                ));
                 let root_for_selection = root.clone();
                 let relative_for_selection = relative.clone();
                 let selection_window = window.window_handle();
                 panel
                     ._subscriptions
                     .push(cx.observe(editor, move |panel, _, cx| {
-                        // Blocks mode owns the source selection; the hidden
-                        // text editor's stale caret must not seek Preview.
+                        // Only Text owns the caret while that view is active.
                         if panel.document.document_mode != DocumentMode::Text {
                             return;
                         }
@@ -296,10 +331,11 @@ impl WorkbenchPanel {
                         let composing = cx
                             .update_window(selection_window, |_, window, cx| {
                                 editor_for_selection.update(cx, |editor, cx| {
-                                    editor.marked_text_range(window, cx).is_some()
+                                    !editor.focus_handle(cx).is_focused(window)
+                                        || editor.marked_text_range(window, cx).is_some()
                                 })
                             })
-                            .unwrap_or(false);
+                            .unwrap_or(true);
                         if composing {
                             return;
                         }
@@ -317,29 +353,6 @@ impl WorkbenchPanel {
                         );
                         cx.global_mut::<EditorDocuments>()
                             .clear_block_selection(&root_for_selection);
-                        let disabled = cx
-                            .global::<EditorDocuments>()
-                            .source(&root_for_selection, &relative_for_selection)
-                            .and_then(|source| {
-                                let projection = cx.global::<EditorDocuments>().projection(
-                                    &root_for_selection,
-                                    &relative_for_selection,
-                                    &source,
-                                );
-                                block_at_position(&projection, &source, cursor.0, cursor.1)
-                            })
-                            .is_some_and(|(_, block)| block.disabled);
-                        if !disabled
-                            && let Ok(preview) = cx
-                                .global_mut::<EditorDocuments>()
-                                .preview(&root_for_selection)
-                        {
-                            preview.set_cursor(
-                                relative_for_selection.clone(),
-                                cursor.0 + 1,
-                                cursor.1 + 1,
-                            );
-                        }
                         cx.refresh_windows();
                     }));
                 if let Some(document) = document {
@@ -394,12 +407,6 @@ impl WorkbenchPanel {
                             };
                             if !panel.document.block_text_refresh_pending {
                                 document_for_change.borrow_mut().set_selection(
-                                    position.line as usize,
-                                    position.character as usize,
-                                );
-                                cx.global_mut::<EditorDocuments>().set_selection(
-                                    &root,
-                                    relative.clone(),
                                     position.line as usize,
                                     position.character as usize,
                                 );
@@ -665,10 +672,10 @@ impl WorkbenchPanel {
             }
         }
         if let Some((root, name)) = tool_registration {
-            cx.global_mut::<EditorDocuments>().set_tool_panel(
+            cx.global_mut::<EditorDocuments>().register_tool_panel(
                 &root,
                 name,
-                Some(PanelId::from(panel.entity_id())),
+                PanelId::from(panel.entity_id()),
             );
         }
         Ok(panel)

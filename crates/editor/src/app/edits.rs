@@ -340,20 +340,6 @@ pub(super) fn asset_drop_edit_at(
     let mut edited = source.to_owned();
     let mut after_start = target_start;
     for (position, asset) in assets.iter().enumerate() {
-        let statement = match asset.kind {
-            AssetKind::Background => format!("background({})", asset.id),
-            AssetKind::Figure => {
-                format!("sprite({}_slot, {}, position: center)", asset.id, asset.id)
-            }
-            AssetKind::Bgm => format!("bgm({})", asset.id),
-            AssetKind::Effect => format!("se({})", asset.id),
-            AssetKind::Video => format!("video({})", asset.id),
-            AssetKind::Particle => format!(
-                "particle.show({}_emitter, LIGHT_SNOW, texture: {})",
-                asset.id, asset.id
-            ),
-            AssetKind::Voice => unreachable!(),
-        };
         if insertion.is_none()
             && position == 0
             && assets.len() == 1
@@ -394,13 +380,17 @@ pub(super) fn asset_drop_edit_at(
             )
             .into());
         }
+        let statement = crate::authoring::commands::asset_insert_statement(asset.kind, &asset.id)
+            .ok_or("Voice requires a Text block")?;
         let projection = EiyashouProjection::parse(&edited);
-        let (next, inserted) = if position == 0 && insertion == Some(false) {
-            projection.insert_block_before(&edited, after_start, &statement)
+        let target = if position == 0 && insertion == Some(false) {
+            DraftInsertionTarget::Before(after_start)
         } else {
-            projection.insert_block_after(&edited, after_start, &statement)
-        }
-        .map_err(|error| error.to_string())?;
+            DraftInsertionTarget::After(after_start)
+        };
+        let (next, inserted) = target
+            .insert(&projection, &edited, &statement)
+            .map_err(|error| error.to_string())?;
         edited = next;
         after_start = inserted.start;
     }
@@ -437,6 +427,85 @@ pub(super) fn select_asset_keys(
     vec![target.clone()]
 }
 
+pub(super) fn preview_source_position(
+    root: &Path,
+    relative: &Path,
+    cx: &mut App,
+) -> Option<(usize, usize)> {
+    let snapshot = cx
+        .global_mut::<EditorDocuments>()
+        .preview(root)
+        .ok()?
+        .snapshot();
+    let (path, line, column) = snapshot.runtime_position?;
+    (matches!(snapshot.lifecycle, PreviewLifecycle::Running) && path == relative)
+        .then_some((line.saturating_sub(1), column.saturating_sub(1)))
+}
+
+pub(super) fn preview_selection(
+    root: &Path,
+    relative: &Path,
+    cx: &App,
+) -> Option<keine_loader::SourceSpan> {
+    let docs = cx.global::<EditorDocuments>();
+    let (_, line, column) = docs
+        .selection(root)
+        .filter(|(path, _, _)| path == relative)?;
+    let editor = docs.editor_for(root, relative)?.upgrade()?;
+    let offset = editor
+        .read(cx)
+        .text()
+        .position_to_offset(&gpui_kit::base::input::Position::new(
+            *line as u32,
+            *column as u32,
+        ));
+    let document = docs.workspaces.get(root)?.manager.document(relative)?;
+    let projection = document.borrow().projection();
+    let (_, block) = block_at_offset(&projection, offset)?;
+    preview_block_span(block)
+}
+
+pub(super) fn replay_selection(root: &Path, relative: &Path, cx: &mut App) {
+    if let Some(span) = preview_selection(root, relative, cx) {
+        replay_source(root, relative, span, cx);
+    }
+}
+
+pub(super) fn run_source_block(root: &Path, path: &Path, start: usize, cx: &mut App) {
+    let docs = cx.global::<EditorDocuments>();
+    let Some(source) = docs.source(root, path) else {
+        return;
+    };
+    let projection = docs.projection(root, path, &source);
+    if let Some(span) = projection
+        .scenes
+        .iter()
+        .flat_map(|scene| &scene.blocks)
+        .find(|block| block.source_range.start == start)
+        .and_then(preview_block_span)
+    {
+        replay_source(root, path, span, cx);
+    }
+}
+
+fn preview_block_span(block: &crate::projection::BlockCard) -> Option<keine_loader::SourceSpan> {
+    (!block.read_only && !block.disabled).then_some(keine_loader::SourceSpan {
+        line: block.line + 1,
+        column: block.column + 1,
+    })
+}
+
+fn replay_source(root: &Path, path: &Path, span: keine_loader::SourceSpan, cx: &mut App) {
+    let documents = cx.global::<EditorDocuments>().preview_documents(root);
+    let Ok(preview) = cx.global_mut::<EditorDocuments>().preview(root) else {
+        return;
+    };
+    if preview.apply_sources(documents) {
+        preview.replay(path.to_owned(), span.line, span.column);
+        cx.refresh_windows();
+    }
+}
+
 pub(super) fn set_authoring_selection(
     root: &Path,
     relative: PathBuf,
@@ -444,16 +513,9 @@ pub(super) fn set_authoring_selection(
     column: usize,
     cx: &mut App,
 ) {
-    cx.global_mut::<EditorDocuments>()
-        .set_selection(root, relative.clone(), line, column);
-    let disabled = cx
-        .global::<EditorDocuments>()
-        .source(root, &relative)
-        .and_then(|source| projected_block_at(&source, line, column))
-        .is_some_and(|(_, block)| block.disabled);
-    if !disabled && let Ok(preview) = cx.global_mut::<EditorDocuments>().preview(root) {
-        preview.seek_cursor(relative, line + 1, column + 1);
-    }
+    let documents = cx.global_mut::<EditorDocuments>();
+    documents.clear_asset_selection(root);
+    documents.set_selection(root, relative, line, column);
     cx.refresh_windows();
 }
 
@@ -484,6 +546,7 @@ pub(super) fn follow_preview_position(
         open_workspace_document(root, relative, window, cx);
     }
     let documents = cx.global_mut::<EditorDocuments>();
+    documents.clear_asset_selection(root);
     documents.set_selection(root, relative.to_owned(), line, column);
     if let Some((_, block)) = &block {
         documents.set_block_selection(root, relative.to_owned(), vec![block.source_range.start]);
@@ -1233,17 +1296,43 @@ fn apply_prepared_edits_impl(
             }
         }
     }
-    for ((_, source), editor) in edits.iter().zip(editors) {
-        editor.update(cx, |editor, cx| {
+    for ((path, source), editor) in edits.iter().zip(editors) {
+        let selected = cx
+            .global::<EditorDocuments>()
+            .selection(root)
+            .filter(|(selected, _, _)| selected == path)
+            .map(|(_, line, column)| (*line, *column));
+        let selected = editor.update(cx, |editor, cx| {
             let selection = editor.selected_range();
             let scroll = editor.scroll_offset();
             let before = editor.text().to_string();
             let map = replacement_offsets(&before, source);
             let selection = map(selection.start)..map(selection.end);
+            let selected = selected.map(|(line, column)| {
+                let offset =
+                    keine_loader::SourceLineIndex::new(&before).offset(&before, line, column);
+                keine_loader::SourceLineIndex::new(source).span(source, map(offset))
+            });
             editor.replace_all(source.clone(), window, cx);
             editor.set_selected_range(selection, cx);
             editor.set_scroll_offset(scroll, cx);
+            selected
         });
+        if let Some(position) = selected {
+            let docs = cx.global_mut::<EditorDocuments>();
+            docs.set_selection(root, path.clone(), position.line - 1, position.column - 1);
+            docs.clear_block_selection(root);
+            if let Some(panel) = docs.panel_entity_for(root, path) {
+                window.defer(cx, move |window, cx| {
+                    let _ = panel.update(cx, |panel, cx| {
+                        if panel.document.document_mode != DocumentMode::Text {
+                            panel.sync_document_selection(window, cx);
+                            panel.schedule_visual_editors_rebuild(window, cx);
+                        }
+                    });
+                });
+            }
+        }
     }
     if record {
         cx.global_mut::<EditorDocuments>()

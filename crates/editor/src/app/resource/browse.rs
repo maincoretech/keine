@@ -68,6 +68,21 @@ pub(in crate::app) fn render_assets(
                 ),
         )
         .child(
+            file_action_icon(
+                "open-asset-preview",
+                AssetIconName::Image,
+                "Open in new preview",
+            )
+            .aria_label(crate::i18n::tr("Open in new preview"))
+            .when(
+                cx.global::<EditorDocuments>().asset_preview(root).is_none(),
+                |button| button.opacity(0.4).cursor_default().tab_stop(false),
+            )
+            .on_click(|_, window, cx| {
+                window.dispatch_action(Box::new(OpenAssetPreview), cx);
+            }),
+        )
+        .child(
             div()
                 .id("asset-filter-button")
                 .size(px(28.))
@@ -246,6 +261,10 @@ pub(in crate::app) fn render_assets(
                             cx.refresh_windows();
                             menu.action_context(menu_focus.clone())
                                 .menu("Preview", Box::new(ShowAssetPreview))
+                                .menu(
+                                    crate::i18n::tr("Open in new preview"),
+                                    Box::new(OpenAssetPreview),
+                                )
                         })
                 }))
         }))

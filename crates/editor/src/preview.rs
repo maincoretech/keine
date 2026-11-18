@@ -5,7 +5,7 @@ pub mod performance;
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -112,11 +112,10 @@ enum PreviewCommand {
         path: PathBuf,
         contents: Vec<u8>,
     },
-    SetCursor {
+    Replay {
         path: PathBuf,
         line: usize,
         column: usize,
-        force: bool,
     },
     Shutdown,
     Fail(String),
@@ -128,7 +127,7 @@ const PREVIEW_PENDING_BYTES: usize = 16 * 1024 * 1024;
 struct PendingCommands {
     control: VecDeque<PreviewCommand>,
     sources: BTreeMap<PathBuf, Vec<u8>>,
-    cursor: Option<PreviewCommand>,
+    replay: Option<PreviewCommand>,
     bytes: usize,
     failed: bool,
 }
@@ -137,7 +136,7 @@ impl PendingCommands {
     fn fail_budget(&mut self) {
         self.sources.clear();
         self.bytes = 0;
-        self.cursor = None;
+        self.replay = None;
         self.control.clear();
         self.failed = true;
         self.control.push_front(PreviewCommand::Fail(
@@ -159,16 +158,16 @@ impl PendingCommands {
                     self.bytes = bytes;
                 }
             }
-            command @ PreviewCommand::SetCursor { .. } => {
+            command @ PreviewCommand::Replay { .. } => {
                 if !self.failed {
-                    self.cursor = Some(command);
+                    self.replay = Some(command);
                 }
             }
             command @ (PreviewCommand::Shutdown
             | PreviewCommand::Stop
             | PreviewCommand::Fail(_)) => {
                 self.control.clear();
-                self.cursor = None;
+                self.replay = None;
                 self.control.push_front(command);
             }
             command => {
@@ -218,7 +217,7 @@ impl PendingCommands {
             self.bytes -= contents.len();
             return Some(PreviewCommand::Snapshot { path, contents });
         }
-        self.control.pop_front().or_else(|| self.cursor.take())
+        self.control.pop_front().or_else(|| self.replay.take())
     }
 }
 
@@ -360,21 +359,9 @@ impl PreviewController {
             .send(PreviewCommand::Snapshot { path, contents });
     }
 
-    pub fn set_cursor(&self, path: PathBuf, line: usize, column: usize) {
-        self.send_cursor(path, line, column, false);
-    }
-
-    pub fn seek_cursor(&self, path: PathBuf, line: usize, column: usize) {
-        self.send_cursor(path, line, column, true);
-    }
-
-    fn send_cursor(&self, path: PathBuf, line: usize, column: usize, force: bool) {
-        self.commands.send(PreviewCommand::SetCursor {
-            path,
-            line,
-            column,
-            force,
-        });
+    pub fn replay(&self, path: PathBuf, line: usize, column: usize) {
+        self.commands
+            .send(PreviewCommand::Replay { path, line, column });
     }
 }
 
@@ -392,8 +379,6 @@ struct Worker {
     last_audition_poll: Option<Instant>,
     sources: BTreeMap<PathBuf, Vec<u8>>,
     revision: u64,
-    cursor: Option<(PathBuf, usize, usize)>,
-    applied_cursor: Option<(PathBuf, usize, u64)>,
     last_position_poll: Option<Instant>,
     shared: Arc<Mutex<PreviewSnapshot>>,
     performance: Arc<Mutex<performance::PerformanceState>>,
@@ -414,8 +399,6 @@ fn worker(
         last_audition_poll: None,
         sources: BTreeMap::new(),
         revision: 0,
-        cursor: None,
-        applied_cursor: None,
         last_position_poll: None,
         shared,
         performance,
@@ -491,12 +474,7 @@ impl Worker {
                 Ok(())
             }
             PreviewCommand::Snapshot { path, contents } => self.apply_snapshot(path, contents),
-            PreviewCommand::SetCursor {
-                path,
-                line,
-                column,
-                force,
-            } => self.set_cursor(path, line, column, force),
+            PreviewCommand::Replay { path, line, column } => self.replay(&path, line, column),
             PreviewCommand::Shutdown => unreachable!(),
             PreviewCommand::Fail(message) => Err(io::Error::other(message)),
         };
@@ -605,7 +583,6 @@ impl Worker {
             .expect("preview performance lock poisoned")
             .begin_process(engine.id());
         self.engine = Some(engine);
-        self.applied_cursor = None;
         self.last_position_poll = None;
         let revision = self.revision;
         self.mutate(|snapshot| {
@@ -615,7 +592,6 @@ impl Worker {
             snapshot.runtime_position = None;
             snapshot.runtime = None;
         });
-        self.sync_cursor()?;
         Ok(())
     }
 
@@ -630,7 +606,6 @@ impl Worker {
             .lock()
             .expect("preview performance lock poisoned")
             .end_process();
-        self.applied_cursor = None;
         self.last_position_poll = None;
         self.mutate(|snapshot| {
             snapshot.lifecycle = PreviewLifecycle::Off;
@@ -661,52 +636,21 @@ impl Worker {
         };
         let revision = self.revision;
         self.mutate(|snapshot| snapshot.apply_reload(revision, reload));
-        self.applied_cursor = None;
         self.last_position_poll = None;
 
         Ok(())
     }
 
-    fn set_cursor(
-        &mut self,
-        path: PathBuf,
-        line: usize,
-        column: usize,
-        force: bool,
-    ) -> io::Result<()> {
-        if path.extension().and_then(|extension| extension.to_str()) != Some("shou") {
-            return Ok(());
-        }
-        self.cursor = Some((path, line, column));
-        if force {
-            self.applied_cursor = None;
-        }
-        self.last_position_poll = None;
-        self.sync_cursor()
-    }
-
-    fn sync_cursor(&mut self) -> io::Result<()> {
-        let Some((path, line, column)) = self.cursor.as_ref() else {
-            return Ok(());
-        };
+    fn replay(&mut self, path: &Path, line: usize, column: usize) -> io::Result<()> {
+        self.start()?;
         let Some(engine) = self.engine.as_mut() else {
             return Ok(());
         };
-        if self
-            .applied_cursor
-            .as_ref()
-            .is_some_and(|(applied_path, applied_line, revision)| {
-                applied_path == path && applied_line == line && *revision == self.revision
-            })
-        {
-            return Ok(());
-        }
-        let position = engine.set_execution_cursor(self.revision, path, *line, *column)?;
-        self.applied_cursor = Some((path.clone(), *line, self.revision));
+        let position = engine.set_execution_cursor(self.revision, path, line, column)?;
+        engine.show_preview()?;
+        self.last_position_poll = None;
         if let Some(position) = position {
-            self.mutate(|snapshot| {
-                snapshot.runtime_position = Some(position);
-            });
+            self.mutate(|snapshot| snapshot.runtime_position = Some(position));
         }
         Ok(())
     }
@@ -726,15 +670,6 @@ impl Worker {
             return Ok(());
         };
         self.last_position_poll = Some(Instant::now());
-        if self.applied_cursor.as_ref().is_some_and(|(path, line, _)| {
-            position
-                .as_ref()
-                .is_none_or(|(current_path, current_line, _)| {
-                    current_path != path || current_line != line
-                })
-        }) {
-            self.applied_cursor = None;
-        }
         self.mutate(|snapshot| {
             snapshot.runtime = Some(runtime);
             if snapshot.runtime_position != position {
@@ -888,11 +823,10 @@ mod tests {
                 path: "scripts/main.shou".into(),
                 contents: vec![value; 1024],
             });
-            pending.push(PreviewCommand::SetCursor {
+            pending.push(PreviewCommand::Replay {
                 path: "scripts/main.shou".into(),
                 line: value as usize + 1,
                 column: 1,
-                force: false,
             });
         }
         assert_eq!(pending.bytes, 1024);

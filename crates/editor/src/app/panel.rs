@@ -34,7 +34,9 @@ use crate::projection::{EiyashouProjection, TextBlockMetadata, TextLifetime};
 use crate::syntax::editor_highlighter_factory;
 use crate::workspace::WorkspaceFile;
 
-use super::documents::{EditorDocuments, schedule_authoring_refresh};
+use super::documents::{
+    AssetPreviewSelection, EditorDocuments, asset_preview_selection, schedule_authoring_refresh,
+};
 use super::edits::block_at_position;
 use super::files::FileHistory;
 use super::resource::ResourcePicker;
@@ -73,6 +75,8 @@ pub(super) enum PanelPayload {
     },
     AssetPreview {
         root: PathBuf,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pinned: Option<PinnedAsset>,
     },
     Characters {
         root: PathBuf,
@@ -94,6 +98,23 @@ pub(super) enum PanelPayload {
     },
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(super) struct PinnedAsset {
+    pub kind: AssetKind,
+    pub label: String,
+    pub path: PathBuf,
+}
+
+impl From<AssetPreviewSelection> for PinnedAsset {
+    fn from(asset: AssetPreviewSelection) -> Self {
+        Self {
+            kind: asset.kind,
+            label: asset.label,
+            path: asset.path,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub(super) struct DocumentView {
     mode: DocumentMode,
@@ -104,6 +125,7 @@ pub(super) struct DocumentView {
 #[derive(Clone, Copy)]
 pub(super) enum ToolKind {
     Explorer,
+    Scenes,
     Search,
     Assets,
     Characters,
@@ -116,9 +138,14 @@ pub(super) enum ToolKind {
 }
 
 impl ToolKind {
+    pub(super) fn can_open_another(self) -> bool {
+        matches!(self, Self::Explorer | Self::Search | Self::Scenes)
+    }
+
     pub(super) fn panel_name(self) -> &'static str {
         match self {
             Self::Explorer => EXPLORER_PANEL,
+            Self::Scenes => SCENES_PANEL,
             Self::Search => SEARCH_PANEL,
             Self::Assets => ASSETS_PANEL,
             Self::Characters => CHARACTERS_PANEL,
@@ -137,6 +164,7 @@ impl ToolKind {
                 root,
                 expanded: Vec::new(),
             },
+            Self::Scenes => PanelPayload::Scenes { root },
             Self::Search => PanelPayload::Search { root },
             Self::Assets => PanelPayload::Assets { root },
             Self::Characters => PanelPayload::Characters { root },
@@ -179,6 +207,7 @@ pub(super) enum PanelContent {
     },
     AssetPreview {
         root: PathBuf,
+        pinned: Option<AssetPreviewSelection>,
     },
     Characters {
         root: PathBuf,
@@ -202,6 +231,27 @@ pub(super) enum PanelContent {
 }
 
 impl PanelContent {
+    fn tool_root(&self) -> Option<&Path> {
+        match self {
+            Self::Document { .. }
+            | Self::AssetPreview {
+                pinned: Some(_), ..
+            } => None,
+            Self::Explorer { root, .. }
+            | Self::Inspector { root, .. }
+            | Self::Output { root, .. }
+            | Self::Search { root }
+            | Self::Assets { root }
+            | Self::AssetPreview { root, .. }
+            | Self::Characters { root }
+            | Self::Scenes { root }
+            | Self::Problems { root }
+            | Self::Performance { root, .. }
+            | Self::Build { root }
+            | Self::Project { root } => Some(root),
+        }
+    }
+
     fn from_payload(payload: PanelPayload, window: &mut Window, cx: &mut App) -> io::Result<Self> {
         match payload {
             PanelPayload::Explorer { root, expanded } => {
@@ -239,6 +289,7 @@ impl PanelContent {
                 let editor = cx.new(|cx| {
                     let mut editor = EditorState::new(window, cx)
                         .default_value(contents)
+                        .searchable(false)
                         .language(language)
                         .folding(language == "eiyashou")
                         .auto_close(true)
@@ -288,7 +339,12 @@ impl PanelContent {
             }
             PanelPayload::Search { root } => Ok(Self::Search { root }),
             PanelPayload::Assets { root } => Ok(Self::Assets { root }),
-            PanelPayload::AssetPreview { root } => Ok(Self::AssetPreview { root }),
+            PanelPayload::AssetPreview { root, pinned } => {
+                let pinned = pinned.map(|asset| {
+                    asset_preview_selection(&root, asset.kind, asset.label, asset.path)
+                });
+                Ok(Self::AssetPreview { root, pinned })
+            }
             PanelPayload::Characters { root } => Ok(Self::Characters { root }),
             PanelPayload::Scenes { root } => Ok(Self::Scenes { root }),
             PanelPayload::Problems { root } => Ok(Self::Problems { root }),
@@ -320,7 +376,10 @@ impl PanelContent {
             Self::Output { root, .. } => PanelPayload::Output { root: root.clone() },
             Self::Search { root } => PanelPayload::Search { root: root.clone() },
             Self::Assets { root } => PanelPayload::Assets { root: root.clone() },
-            Self::AssetPreview { root } => PanelPayload::AssetPreview { root: root.clone() },
+            Self::AssetPreview { root, pinned } => PanelPayload::AssetPreview {
+                root: root.clone(),
+                pinned: pinned.clone().map(PinnedAsset::from),
+            },
             Self::Characters { root } => PanelPayload::Characters { root: root.clone() },
             Self::Scenes { root } => PanelPayload::Scenes { root: root.clone() },
             Self::Problems { root } => PanelPayload::Problems { root: root.clone() },
@@ -371,7 +430,10 @@ impl PanelContent {
             Self::Output { .. } => crate::i18n::tr("Output").into(),
             Self::Search { .. } => crate::i18n::tr("Search").into(),
             Self::Assets { .. } => crate::i18n::tr("Assets").into(),
-            Self::AssetPreview { .. } => crate::i18n::tr("Asset Preview").into(),
+            Self::AssetPreview { pinned, .. } => pinned.as_ref().map_or_else(
+                || crate::i18n::tr("Asset Preview").into(),
+                |asset| asset.label.clone().into(),
+            ),
             Self::Characters { .. } => crate::i18n::tr("Characters").into(),
             Self::Scenes { .. } => crate::i18n::tr("Scenes").into(),
             Self::Problems { .. } => crate::i18n::tr("Problems").into(),
@@ -405,9 +467,9 @@ pub(super) struct WorkbenchPanel {
 #[serde(rename_all = "snake_case")]
 pub(super) enum DocumentMode {
     #[default]
+    #[serde(alias = "timeline")]
     Text,
     Block,
-    Timeline,
 }
 
 pub(super) struct BlockTextEditor {
@@ -693,9 +755,25 @@ pub(super) enum DraftInsertionTarget {
     SceneEnd(usize),
 }
 
+impl DraftInsertionTarget {
+    pub(super) fn insert(
+        self,
+        projection: &EiyashouProjection,
+        source: &str,
+        statement: &str,
+    ) -> Result<(String, Range<usize>), crate::projection::BlockEditError> {
+        match self {
+            Self::Before(start) => projection.insert_block_before(source, start, statement),
+            Self::After(start) => projection.insert_block_after(source, start, statement),
+            Self::SceneEnd(start) => projection.insert_block_in_scene(source, start, statement),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) enum BlockMenuAction {
     Run,
+    MatchVoice,
     Copy,
     Duplicate,
     Cut,
@@ -749,60 +827,23 @@ impl BasePanel for WorkbenchPanel {
 
     fn on_removed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_resource_picker(false, window, cx);
-        if let PanelContent::AssetPreview { root } = &self.content
-            && let Ok(preview) = cx.global_mut::<EditorDocuments>().preview(root)
-        {
-            preview.stop_audition();
+        if let PanelContent::AssetPreview { root, pinned } = &self.content {
+            let documents = cx.global_mut::<EditorDocuments>();
+            let asset = pinned.clone().or_else(|| documents.asset_preview(root));
+            if let Some(asset) = asset
+                && let Ok(preview) = documents.preview(root)
+                && preview.snapshot().audition_path.as_ref() == Some(&asset.path)
+            {
+                preview.stop_audition();
+            }
         }
-        match &self.content {
-            PanelContent::Document { root, relative, .. } => {
-                let panel = PanelId::from(cx.entity_id());
-                let documents = cx.global_mut::<EditorDocuments>();
-                documents.unregister_panel(root, relative, panel);
-                documents.clear_document_node(root);
-            }
-            PanelContent::Project { root } => {
-                cx.global_mut::<EditorDocuments>()
-                    .set_tool_panel(root, PROJECT_PANEL, None)
-            }
-            PanelContent::Inspector { root, .. } => cx
-                .global_mut::<EditorDocuments>()
-                .set_tool_panel(root, INSPECTOR_PANEL, None),
-            PanelContent::Search { root } => {
-                cx.global_mut::<EditorDocuments>()
-                    .set_tool_panel(root, SEARCH_PANEL, None)
-            }
-            PanelContent::Assets { root } => {
-                cx.global_mut::<EditorDocuments>()
-                    .set_tool_panel(root, ASSETS_PANEL, None)
-            }
-            PanelContent::AssetPreview { root } => cx
-                .global_mut::<EditorDocuments>()
-                .set_tool_panel(root, ASSET_PREVIEW_PANEL, None),
-            PanelContent::Characters { root } => {
-                cx.global_mut::<EditorDocuments>()
-                    .set_tool_panel(root, CHARACTERS_PANEL, None)
-            }
-            PanelContent::Scenes { root } => {
-                cx.global_mut::<EditorDocuments>()
-                    .set_tool_panel(root, SCENES_PANEL, None)
-            }
-            PanelContent::Problems { root } => {
-                cx.global_mut::<EditorDocuments>()
-                    .set_tool_panel(root, PROBLEMS_PANEL, None)
-            }
-            PanelContent::Build { root } => {
-                cx.global_mut::<EditorDocuments>()
-                    .set_tool_panel(root, BUILD_PANEL, None)
-            }
-            PanelContent::Performance { root, .. } => cx
-                .global_mut::<EditorDocuments>()
-                .set_tool_panel(root, PERFORMANCE_PANEL, None),
-            PanelContent::Output { root, .. } => {
-                cx.global_mut::<EditorDocuments>()
-                    .set_tool_panel(root, OUTPUT_PANEL, None)
-            }
-            _ => {}
+        let panel = PanelId::from(cx.entity_id());
+        let documents = cx.global_mut::<EditorDocuments>();
+        if let PanelContent::Document { root, relative, .. } = &self.content {
+            documents.unregister_panel(root, relative, panel);
+            documents.clear_document_node(root);
+        } else if let Some(root) = self.content.tool_root() {
+            documents.unregister_tool_panel(root, self.content.panel_name(), panel);
         }
     }
 }
@@ -819,8 +860,16 @@ impl Panel for WorkbenchPanel {
 impl EventEmitter<PanelEvent> for WorkbenchPanel {}
 
 impl Focusable for WorkbenchPanel {
-    fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.focus.clone()
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        match &self.content {
+            PanelContent::Document { editor, .. }
+                if self.document.document_mode == DocumentMode::Text =>
+            {
+                editor.read(cx).focus_handle(cx)
+            }
+            PanelContent::Assets { .. } => self.assets.asset_search.read(cx).focus_handle(cx),
+            _ => self.focus.clone(),
+        }
     }
 }
 
@@ -891,6 +940,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn asset_preview_layout_keeps_pin_and_accepts_legacy_live_preview() {
+        let live = serde_json::json!({"kind": "asset_preview", "root": "project"});
+        assert!(matches!(
+            serde_json::from_value::<PanelPayload>(live.clone()).unwrap(),
+            PanelPayload::AssetPreview { pinned: None, .. }
+        ));
+
+        let mut pinned = live;
+        pinned["pinned"] = serde_json::json!({
+            "kind": "background",
+            "label": "room",
+            "path": "background/room.webp"
+        });
+        let panel = serde_json::from_value::<PanelPayload>(pinned.clone()).unwrap();
+        assert_eq!(serde_json::to_value(panel).unwrap(), pinned);
+    }
+
+    #[test]
     fn document_layout_restores_mode_and_position_and_accepts_old_layouts() {
         let legacy: PanelPayload = serde_json::from_value(serde_json::json!({
             "kind": "document", "root": "project", "relative": "scripts/main.shou"
@@ -898,6 +965,15 @@ mod tests {
         .unwrap();
         assert!(
             matches!(legacy, PanelPayload::Document { view, .. } if view == DocumentView::default())
+        );
+        let retired_timeline: PanelPayload = serde_json::from_value(serde_json::json!({
+            "kind": "document", "root": "project", "relative": "scripts/main.shou",
+            "view": {"mode": "timeline", "line": 12, "column": 3}
+        }))
+        .unwrap();
+        assert!(
+            matches!(retired_timeline, PanelPayload::Document { view, .. }
+            if view == DocumentView { mode: DocumentMode::Text, line: 12, column: 3 })
         );
         let payload = PanelPayload::Document {
             root: "project".into(),

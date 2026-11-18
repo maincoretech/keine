@@ -68,7 +68,7 @@ jobs:
           actionlint -shellcheck= -pyflakes= -config-file "$RUNNER_TEMP/actionlint.yaml" \
             -ignore 'property "workflow_(ref|repository|sha)" is not defined in object type' "${workflows[@]}"
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@fb523f40495206854c36b250850817ae0f83e3d1 # 1.99.0
+        uses: dtolnay/rust-toolchain@9522411a9bce8484da960823fc2f46e52f981f71 # 1.100.0
         with:
           components: rustfmt
       - name: Check formatting
@@ -97,7 +97,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@fb523f40495206854c36b250850817ae0f83e3d1 # 1.99.0
+        uses: dtolnay/rust-toolchain@9522411a9bce8484da960823fc2f46e52f981f71 # 1.100.0
         with:
           components: ${{ matrix.platform == 'Linux x64' && 'clippy' || '' }}
       - name: Restore Rust build cache
@@ -208,7 +208,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@fb523f40495206854c36b250850817ae0f83e3d1 # 1.99.0
+        uses: dtolnay/rust-toolchain@9522411a9bce8484da960823fc2f46e52f981f71 # 1.100.0
         with:
           targets: aarch64-linux-android
           components: clippy

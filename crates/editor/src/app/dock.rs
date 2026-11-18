@@ -126,7 +126,7 @@ struct EditorDockSkin {
     root: PathBuf,
     dock: Rc<RefCell<Option<WeakEntity<DockArea>>>>,
     drop_overlays: Rc<RefCell<HashMap<NodeId, Entity<EditorDropOverlay>>>>,
-    tab_scrolls: Rc<RefCell<HashMap<NodeId, ScrollHandle>>>,
+    tab_scrolls: Rc<RefCell<HashMap<NodeId, TabBarScroll>>>,
     tab_motion: Entity<EditorTabMotion>,
 }
 
@@ -236,8 +236,14 @@ struct EditorTabGroupSkin {
     root: PathBuf,
     dock: Rc<RefCell<Option<WeakEntity<DockArea>>>>,
     drop_overlays: Rc<RefCell<HashMap<NodeId, Entity<EditorDropOverlay>>>>,
-    tab_scrolls: Rc<RefCell<HashMap<NodeId, ScrollHandle>>>,
+    tab_scrolls: Rc<RefCell<HashMap<NodeId, TabBarScroll>>>,
     tab_motion: Entity<EditorTabMotion>,
+}
+
+#[derive(Default)]
+struct TabBarScroll {
+    handle: ScrollHandle,
+    active: Option<(PanelId, usize, Pixels)>,
 }
 
 impl EditorTabGroupSkin {
@@ -262,12 +268,17 @@ impl EditorTabGroupSkin {
             .flatten()
     }
 
-    fn tab_scroll(&self, node: NodeId) -> ScrollHandle {
-        self.tab_scrolls
-            .borrow_mut()
-            .entry(node)
-            .or_default()
-            .clone()
+    fn tab_scroll(&self, node: NodeId, active: Option<(PanelId, usize, Pixels)>) -> ScrollHandle {
+        let mut scrolls = self.tab_scrolls.borrow_mut();
+        let scroll = scrolls.entry(node).or_default();
+        // Follow a new tab as it expands, then leave manual scrolling alone.
+        if scroll.active != active {
+            scroll.active = active;
+            if let Some((_, ix, _)) = active {
+                scroll.handle.scroll_to_item(ix);
+            }
+        }
+        scroll.handle.clone()
     }
 
     fn drop_overlay(&self, node: NodeId, cx: &mut App) -> Entity<EditorDropOverlay> {
@@ -292,103 +303,13 @@ impl EditorTabGroupSkin {
             .downcast::<WorkbenchPanel>()
             .ok()?;
         let state = panel.read(cx);
-        if !matches!(
-            &state.content,
-            PanelContent::Document {
-                document: Some(_),
-                ..
-            }
-        ) {
+        if !matches!(&state.content, PanelContent::Document {
+            relative, document: Some(_), ..
+        } if relative.extension().is_some_and(|extension| extension == "shou"))
+        {
             return None;
         }
         let mode = state.document.document_mode;
-        let shou = matches!(&state.content, PanelContent::Document { relative, .. } if relative.extension().is_some_and(|extension| extension == "shou"));
-        let reload_panel = panel.clone();
-        let reload = file_action_icon(
-            "document-reload",
-            AssetIconName::RotateCw,
-            "Reload from disk (⌥⌘R)",
-        )
-        .on_click(move |_, window, cx| {
-            reload_panel.update(cx, |panel, cx| {
-                panel.reload_document(&ReloadDocument, window, cx)
-            });
-        });
-        let back_root = self.root.clone();
-        let forward_root = self.root.clone();
-        let quick_root = self.root.clone();
-        let (back, forward) = super::navigation::can_travel(&self.root, cx);
-        let navigation = div()
-            .flex()
-            .items_center()
-            .gap_1()
-            .child(
-                file_action_icon(
-                    "navigate-back",
-                    AssetIconName::ArrowLeft,
-                    if !back {
-                        "No previous source location"
-                    } else if cfg!(target_os = "macos") {
-                        "Back (⌘[)"
-                    } else {
-                        "Back (Alt+←)"
-                    },
-                )
-                .when(!back, |this| {
-                    this.opacity(0.35).cursor_default().tab_stop(false)
-                })
-                .on_click(move |_, window, cx| {
-                    super::navigation::travel(&back_root, true, window, cx)
-                }),
-            )
-            .child(
-                file_action_icon(
-                    "navigate-forward",
-                    AssetIconName::ArrowRight,
-                    if !forward {
-                        "No next source location"
-                    } else if cfg!(target_os = "macos") {
-                        "Forward (⌘])"
-                    } else {
-                        "Forward (Alt+→)"
-                    },
-                )
-                .when(!forward, |this| {
-                    this.opacity(0.35).cursor_default().tab_stop(false)
-                })
-                .on_click(move |_, window, cx| {
-                    super::navigation::travel(&forward_root, false, window, cx)
-                }),
-            )
-            .child(
-                file_action_icon(
-                    "quick-open",
-                    AssetIconName::Search,
-                    if cfg!(target_os = "macos") {
-                        "Go to file or scene (⌘P)"
-                    } else {
-                        "Go to file or scene (Ctrl+P)"
-                    },
-                )
-                .on_click(move |_, window, cx| {
-                    super::navigation::open_quick(&quick_root, window, cx)
-                }),
-            );
-        if !shou {
-            return Some(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .pr_2()
-                    .child(navigation)
-                    .child(reload),
-            );
-        }
-        let scene_panel = panel.clone();
-        let text_panel = panel.clone();
-        let timeline_panel = panel.clone();
-        let voice_panel = panel.clone();
         Some(
             div()
                 .flex_none()
@@ -396,56 +317,20 @@ impl EditorTabGroupSkin {
                 .items_center()
                 .gap_1()
                 .pr_2()
-                .child(navigation)
-                .child(reload)
-                .child(
-                    file_action_icon("match-voices", AssetIconName::Mic, "Match dialogue voices")
-                        .on_click(move |_, window, cx| {
-                            if let PanelContent::Document { root, .. } =
-                                &voice_panel.read(cx).content
-                            {
-                                let root = root.clone();
-                                super::document::voices::open(&root, window, cx);
-                            }
-                        }),
-                )
-                .child(
-                    document_mode_button("Timeline", mode == DocumentMode::Timeline).on_click(
-                        move |_, window, cx| {
-                            timeline_panel.update(cx, |panel, cx| {
-                                panel.switch_document_mode(DocumentMode::Timeline, window, cx)
-                            });
-                        },
-                    ),
-                )
-                .when(mode == DocumentMode::Block, |controls| {
-                    controls.child(
-                        file_action_icon("scene-new", AssetIconName::Plus, "Add scene").on_click(
-                            move |_, window, cx| {
-                                scene_panel.update(cx, |panel, cx| {
-                                    panel.begin_scene_edit(SceneEditMode::New, window, cx);
-                                })
-                            },
-                        ),
-                    )
-                })
-                .child(
-                    document_mode_button("Text", mode == DocumentMode::Text).on_click(
-                        move |_, window, cx| {
-                            text_panel.update(cx, |panel, cx| {
-                                panel.switch_document_mode(DocumentMode::Text, window, cx);
-                            })
-                        },
-                    ),
-                )
-                .child(
-                    document_mode_button("Blocks", mode == DocumentMode::Block).on_click(
-                        move |_, window, cx| {
+                .children(
+                    [
+                        ("Text", DocumentMode::Text),
+                        ("Blocks", DocumentMode::Block),
+                    ]
+                    .into_iter()
+                    .map(|(label, view)| {
+                        let panel = panel.clone();
+                        document_mode_button(label, view == mode).on_click(move |_, window, cx| {
                             panel.update(cx, |panel, cx| {
-                                panel.switch_document_mode(DocumentMode::Block, window, cx);
-                            })
-                        },
-                    ),
+                                panel.switch_document_mode(view, window, cx)
+                            });
+                        })
+                    }),
                 ),
         )
     }
@@ -465,7 +350,8 @@ impl EditorTabGroupSkin {
         }
         let is_closable_tool = matches!(
             panel_name,
-            ASSETS_PANEL
+            EXPLORER_PANEL
+                | ASSETS_PANEL
                 | ASSET_PREVIEW_PANEL
                 | SEARCH_PANEL
                 | CHARACTERS_PANEL
@@ -918,7 +804,7 @@ fn tab_overflow_fade(scroll: ScrollHandle, left: bool) -> AnyElement {
     .absolute()
     .top_0()
     .h_full()
-    .w(px(48.));
+    .w(px(8.));
     if left {
         fade.left_0().into_any_element()
     } else {
@@ -1113,9 +999,11 @@ impl TabGroupRenderer for EditorTabGroupSkin {
                 .map(|(ix, _, _)| *ix)
         });
         let single_self_hover = visible_panels.len() == 1 && source_ix.is_some() && hover_here;
+        let mut active_tab = None;
         let tabs = visible_panels
             .into_iter()
-            .map(|(ix, panel, title)| {
+            .enumerate()
+            .map(|(visible_ix, (ix, panel, title))| {
                 let panel_id = panel.panel_id(cx);
                 let drag_title = title.clone();
                 let drag = group
@@ -1187,6 +1075,9 @@ impl TabGroupRenderer for EditorTabGroupSkin {
                     window,
                     cx,
                 );
+                if selected && !cx.has_active_drag() {
+                    active_tab = Some((panel_id, visible_ix, tab_width));
+                }
                 let before_gap = transition(
                     (("editor-tab-motion", key), "before-gap"),
                     if hovering && source_ix.is_none_or(|source| source > ix) {
@@ -1241,7 +1132,13 @@ impl TabGroupRenderer for EditorTabGroupSkin {
                             .whitespace_nowrap()
                             .child(title),
                     )
-                    .on_click(move |_, window, cx| select_group.select_tab(ix, window, cx))
+                    .on_click({
+                        let panel = panel.clone();
+                        move |_, window, cx| {
+                            select_group.select_tab(ix, window, cx);
+                            panel.focus_handle(cx).focus(window, cx);
+                        }
+                    })
                     .when(closable, |this| {
                         this.on_mouse_down(MouseButton::Middle, move |_, window, cx| {
                             cx.stop_propagation();
@@ -1395,7 +1292,7 @@ impl TabGroupRenderer for EditorTabGroupSkin {
                 })
             });
 
-        let scroll = self.tab_scroll(node);
+        let scroll = self.tab_scroll(node, active_tab);
         let drag_scroll = scroll.clone();
         let hover_motion = self.tab_motion.clone();
         let drop_motion = self.tab_motion.clone();
@@ -1604,6 +1501,13 @@ impl ProjectWorkspace {
         if !load_succeeded {
             install_default_layout(&dock, &session, window, cx);
         }
+        let documents = cx.global::<EditorDocuments>();
+        if let Some(path) = selected_panels(dock.read(cx))
+            .into_iter()
+            .find_map(|panel| documents.path_for_panel(session.root(), panel))
+        {
+            navigation::focus_document(session.root(), &path, window, cx);
+        }
 
         let project = session.key().clone();
         let persistence = persistence.clone();
@@ -1692,6 +1596,7 @@ pub(super) fn install_default_layout(
     let asset_preview = WorkbenchPanel::from_payload(
         PanelPayload::AssetPreview {
             root: session.root().to_owned(),
+            pinned: None,
         },
         window,
         cx,
@@ -1736,15 +1641,43 @@ pub(super) fn install_default_layout(
     dock.update(cx, |dock, cx| dock.set_center(layout, window, cx));
 }
 
+pub(super) fn reveal_panel_dock(
+    dock: &mut DockArea,
+    panel: PanelId,
+    window: &mut Window,
+    cx: &mut Context<DockArea>,
+) {
+    for placement in [
+        DockPlacement::Left,
+        DockPlacement::Right,
+        DockPlacement::Bottom,
+    ] {
+        if !dock.is_dock_open(placement)
+            && dock
+                .layout(placement)
+                .is_some_and(|tree| tree.find_panel_node(panel).is_some())
+        {
+            dock.toggle_dock(placement, window, cx);
+            break;
+        }
+    }
+}
+
 pub(super) fn install_asset_preview(
     dock: &Entity<DockArea>,
     root: &Path,
+    pinned: Option<AssetPreviewSelection>,
     window: &mut Window,
     cx: &mut App,
 ) -> bool {
+    let live = cx
+        .global::<EditorDocuments>()
+        .tool_panel(root, ASSET_PREVIEW_PANEL);
+    let activate = pinned.is_some();
     let Ok(panel) = WorkbenchPanel::from_payload(
         PanelPayload::AssetPreview {
             root: root.to_owned(),
+            pinned: pinned.map(super::panel::PinnedAsset::from),
         },
         window,
         cx,
@@ -1756,7 +1689,7 @@ pub(super) fn install_asset_preview(
         .global::<EditorDocuments>()
         .tool_panel(root, INSPECTOR_PANEL);
     dock.update(cx, |dock, cx| {
-        let inspector_node = inspector.and_then(|inspector| {
+        let pane_node = |id| {
             [
                 DockPlacement::Center,
                 DockPlacement::Left,
@@ -1764,11 +1697,27 @@ pub(super) fn install_asset_preview(
                 DockPlacement::Bottom,
             ]
             .into_iter()
-            .find_map(|placement| dock.layout(placement)?.find_panel_node(inspector))
-        });
+            .find_map(|placement| dock.layout(placement)?.find_panel_node(id))
+        };
+        let target = live
+            .and_then(pane_node)
+            .map(|node| InsertTarget::Tabs {
+                node,
+                ix: None,
+                activate,
+            })
+            .or_else(|| {
+                inspector
+                    .and_then(pane_node)
+                    .map(|node| InsertTarget::Split {
+                        node,
+                        placement: Placement::Top,
+                        size: Some(px(280.)),
+                    })
+            });
         dock.add_panel_view(
             panel_handle(panel),
-            if inspector_node.is_some() {
+            if target.is_some() {
                 DockPlacement::Center
             } else {
                 DockPlacement::Right
@@ -1777,18 +1726,10 @@ pub(super) fn install_asset_preview(
             window,
             cx,
         );
-        if let Some(node) = inspector_node {
-            dock.move_panel(
-                panel_id,
-                InsertTarget::Split {
-                    node,
-                    placement: Placement::Top,
-                    size: Some(px(280.)),
-                },
-                window,
-                cx,
-            );
+        if let Some(target) = target {
+            dock.move_panel(panel_id, target, window, cx);
         }
+        reveal_panel_dock(dock, panel_id, window, cx);
     });
     true
 }

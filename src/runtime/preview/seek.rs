@@ -81,21 +81,34 @@ fn sync_editor_position(
         log::warn!("editor selected unknown fragment {scene_name:?}");
         return false;
     };
+    replay_source_position(state, scene, scene_name, source_step, None, initial)
+}
+
+fn replay_source_position(
+    state: &mut State,
+    scene: &crate::runtime::resources::LocalSceneAssets,
+    scene_name: &str,
+    source_step: usize,
+    to_column: Option<usize>,
+    initial: keine_loader::ProjectInitialState,
+) -> bool {
     // A scene header names a fragment but is not itself an action. Replaying
     // zero actions would clear the visible stage when that header is selected.
     let source_step = scene
         .action_spans
         .first()
         .map_or(source_step, |first| source_step.max(first.line));
+    let point = |span: &keine_loader::SourceSpan| (span.line, to_column.map_or(0, |_| span.column));
+    let requested = (source_step, to_column.unwrap_or(0));
     let selected_start = scene
         .action_spans
         .iter()
-        .position(|span| span.line >= source_step)
+        .position(|span| point(span) >= requested)
         .unwrap_or(scene.action_spans.len());
     let target = scene
         .action_spans
         .iter()
-        .position(|span| span.line > source_step)
+        .position(|span| point(span) > requested)
         .unwrap_or(scene.action_spans.len());
     let new_preview = || State {
         program: state.program.clone(),
@@ -161,6 +174,7 @@ pub(crate) fn sync_editor_source_position(
     asset_manifest: &LocalAssetManifest,
     source_path: &std::path::Path,
     source_line: usize,
+    source_column: usize,
 ) -> bool {
     let logical = source_path.strip_prefix("scripts").unwrap_or(source_path);
     let candidate = asset_manifest
@@ -171,17 +185,20 @@ pub(crate) fn sync_editor_source_position(
                 || source_path.ends_with(&scene.source_path)
                 || scene.source_path.ends_with(logical)
         })
-        .filter_map(|(name, scene)| {
-            let distance = scene
+        .flat_map(|(name, scene)| {
+            scene
                 .action_spans
                 .iter()
-                .map(|span| span.line.abs_diff(source_line))
-                .min()?;
-            Some((distance, name.as_str()))
+                .map(move |span| (name, scene, span))
         })
-        .min_by_key(|(distance, _)| *distance)
-        .map(|(_, name)| name);
-    let Some(scene_name) = candidate else {
+        .min_by_key(|(name, _, span)| {
+            (
+                span.line.abs_diff(source_line),
+                span.column.abs_diff(source_column),
+                *name,
+            )
+        });
+    let Some((scene_name, scene, span)) = candidate else {
         log::warn!(
             "editor selected source {} with no runtime scene",
             source_path.display()
@@ -191,7 +208,14 @@ pub(crate) fn sync_editor_source_position(
     let Ok(initial) = content.initial_state() else {
         return false;
     };
-    sync_editor_position(state, asset_manifest, scene_name, source_line, initial)
+    replay_source_position(
+        state,
+        scene,
+        scene_name,
+        span.line,
+        Some(span.column),
+        initial,
+    )
 }
 
 const MAX_EDITOR_REPLAY_STEPS: usize = 65_536;
@@ -859,6 +883,50 @@ mod tests {
         ));
         assert_eq!(state.current_scene, "main");
         assert_eq!(state.cursor, 0);
+    }
+
+    #[test]
+    fn editor_replay_distinguishes_actions_on_the_same_line() {
+        let mut state = State::new();
+        state.install_program(Program::from_scenes([(
+            "main".into(),
+            ["first", "second"]
+                .into_iter()
+                .map(|text| Action::Say {
+                    speaker: String::new(),
+                    text: text.into(),
+                    options: Default::default(),
+                })
+                .collect(),
+        )]));
+        state.script_entry = Some("main".into());
+        let scene = LocalSceneAssets {
+            action_spans: vec![
+                keine_loader::SourceSpan {
+                    line: 1,
+                    column: 14,
+                },
+                keine_loader::SourceSpan {
+                    line: 1,
+                    column: 23,
+                },
+            ],
+            ..default()
+        };
+        for (column, text) in [(14, "first"), (23, "second")] {
+            assert!(replay_source_position(
+                &mut state,
+                &scene,
+                "main",
+                1,
+                Some(column),
+                Default::default()
+            ));
+            assert_eq!(
+                state.dialogue.as_ref().map(|line| line.text.as_str()),
+                Some(text)
+            );
+        }
     }
 
     #[test]

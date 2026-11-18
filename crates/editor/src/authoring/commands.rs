@@ -321,6 +321,19 @@ impl InsertKind {
     }
 }
 
+/// The command used when placing a raw asset from the palette or by dragging it.
+pub(crate) fn asset_insert_statement(kind: AssetKind, id: &str) -> Option<String> {
+    Some(match kind {
+        AssetKind::Background => format!("background({id})"),
+        AssetKind::Figure => format!("sprite({id}_slot, {id}, position: center)"),
+        AssetKind::Bgm => format!("bgm({id})"),
+        AssetKind::Effect => format!("se({id})"),
+        AssetKind::Video => format!("video({id})"),
+        AssetKind::Particle => format!("particle.show({id}_emitter, LIGHT_SNOW, texture: {id})"),
+        AssetKind::Voice => return None,
+    })
+}
+
 pub fn insertion_statement(
     source: &str,
     kind: InsertKind,

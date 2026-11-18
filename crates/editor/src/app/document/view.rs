@@ -16,9 +16,6 @@ impl WorkbenchPanel {
         else {
             return Empty.into_any_element();
         };
-        if self.document.document_mode == DocumentMode::Timeline {
-            return super::timeline::render(self, cx);
-        }
         let mono = Theme::global(cx).mono_font_family.clone();
         let preferences = cx.global::<EditorDocuments>().editor_preferences;
 
@@ -53,9 +50,31 @@ impl WorkbenchPanel {
                 cx,
             )
         } else {
+            if let Some(mark) = &self.document.execution_mark {
+                let decoration =
+                    preview_source_position(root, relative, cx).and_then(|(line, _)| {
+                        let text = editor.read(cx).text();
+                        if line >= text.lines_len() {
+                            return None;
+                        }
+                        let range = text.line_start_offset(line)..text.line_end_offset(line);
+                        Some(gpui_kit::base::input::TextDecoration::new(
+                            range,
+                            gpui_kit::HighlightStyle {
+                                background_color: Some(
+                                    gpui_kit::Hsla::from(rgb(PRIMARY)).opacity(0.23),
+                                ),
+                                ..Default::default()
+                            },
+                        ))
+                    });
+                mark.set(decoration.into_iter().collect(), cx);
+            }
             let editor_for_fade = editor.clone();
             let selection_root = root.clone();
             let code = div()
+                .id("source-editor")
+                .key_context("KeineSourceEditor")
                 .absolute()
                 .top_0()
                 .right_0()
@@ -90,7 +109,11 @@ impl WorkbenchPanel {
                         .is_some_and(|visible| visible.end < row_count)
                 }))
                 .into_any_element();
-            div()
+            let find =
+                self.document.find.as_ref().and_then(|find| {
+                    super::find::render(find, editor, document.is_some(), window, cx)
+                });
+            let source = div()
                 .size_full()
                 .flex()
                 .min_w_0()
@@ -102,7 +125,8 @@ impl WorkbenchPanel {
                         .h_full()
                         .min_w_0()
                         .overflow_hidden()
-                        .child(code),
+                        .child(code)
+                        .children(find),
                 )
                 .when(preferences.show_minimap, |view| {
                     view.child(text_minimap::render(
@@ -113,8 +137,8 @@ impl WorkbenchPanel {
                         window,
                         cx,
                     ))
-                })
-                .into_any_element()
+                });
+            super::find::shortcut_scope(source, cx).into_any_element()
         };
         let picker = (eiyashou && mode == DocumentMode::Block && self.picker.block_picker_open)
             .then(|| {
@@ -197,7 +221,10 @@ impl WorkbenchPanel {
                         .enumerate()
                         .map(|(row, scene)| {
                             let root = root_for_rows.clone();
+                            let voice_root = root.clone();
                             let path = scene.path.clone();
+                            let voice_path = path.clone();
+                            let voice_scene = scene.name.clone();
                             let line = scene.line;
                             div()
                                 .id(("scene-row", row))
@@ -209,12 +236,45 @@ impl WorkbenchPanel {
                                 .on_click(move |_, window, cx| {
                                     navigate_source(&root, &path, line, 1, window, cx)
                                 })
-                                .child(div().text_sm().text_color(rgb(INK)).child(scene.name))
-                                .child(div().text_xs().text_color(rgb(MUTED)).child(format!(
-                                    "{}:{}",
-                                    scene.path.display(),
-                                    scene.line
-                                )))
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .overflow_hidden()
+                                        .child(
+                                            div().text_sm().text_color(rgb(INK)).child(scene.name),
+                                        )
+                                        .child(div().text_xs().text_color(rgb(MUTED)).child(
+                                            format!("{}:{}", scene.path.display(), scene.line),
+                                        )),
+                                )
+                                .when(
+                                    voice_path.extension().is_some_and(|ext| ext == "shou"),
+                                    |row| {
+                                        row.child(
+                                            tool_icon_action(
+                                                "Match scene voices",
+                                                AssetIconName::Mic,
+                                                true,
+                                            )
+                                            .on_click(
+                                                move |_, window, cx| {
+                                                    cx.stop_propagation();
+                                                    super::voices::open_scene(
+                                                        &voice_root,
+                                                        &voice_path,
+                                                        &voice_scene,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                },
+                                            ),
+                                        )
+                                    },
+                                )
                         }),
                 ),
             );

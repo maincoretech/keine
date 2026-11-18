@@ -965,7 +965,7 @@ impl WorkbenchPanel {
                     .set_notice(&root, "Saved preset applied; save the script to keep it");
                 // Document Change delivery updates the shared source first.
                 // Reuse the normal Inspector Preview path and current overlays.
-                cx.defer(move |cx| super::inspector::run_source_block(&root, &path, start, cx));
+                cx.defer(move |cx| run_source_block(&root, &path, start, cx));
             }
             Err(error) => {
                 window.push_notification(Notification::error(crate::i18n::text(&error)), cx)
@@ -1134,7 +1134,7 @@ fn apply_character_display(
     Ok((edited, start))
 }
 
-fn character_statement(
+pub(super) fn character_statement(
     character: &CharacterEntry,
     name: &str,
     mode: &str,

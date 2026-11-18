@@ -99,7 +99,7 @@ Core 的 `visit_presentation_blocks` 提供类型化、无分配且可提前停�
 | 编译 Program | envelope 1 / IR 7 | [`compiled.rs`](../../crates/loader/src/compiled.rs) |
 | 存档 / 设置 / 窗口 | 11 / 4 / 1 | Loader Store adapter / Storage / Runtime window |
 | Editor–Engine IPC | 13 | [`authoring`](../../crates/authoring/src/lib.rs)；两端成对更新 |
-| Hakutaku | 库 0.2.0 / wire v2 | 固定 Git revision；[发行指南](release.md#hakutaku-020--v2) |
+| Hakutaku | 库 0.2.3 / wire v2 | 固定 Git revision；[发行指南](release.md#hakutaku-023--v2) |
 
 ## 内容与资源
 
@@ -231,7 +231,7 @@ release/
 
 编译 Program envelope v1 / IR schema v7 保存 typed 内容；发行资源由 allowlist 重建。
 包中不包含 `.shou`、WebGAL 脚本、LetsGal 作者工程或 publisher identity。
-Hakutaku 的字节布局以[锁定依赖的格式规范](https://github.com/maincoretech/hakutaku/blob/8d637d5629b84f99251fd445366892bdb3c7cf2b/docs/FORMAT.md)为准；Kēne 不维护第二套 wire spec。
+Hakutaku 的字节布局以[锁定依赖的格式规范](https://github.com/maincoretech/hakutaku/blob/fd231fb2bf6e7eb4c7f7c30a3dd98c17b6d50827/docs/FORMAT.md)为准；Kēne 不维护第二套 wire spec。
 每个文件直接引用物理块；快照更新复用旧块并原子切换。随机读取不先解密整包到磁盘。
 签名和 AEAD 保证身份与完整性；离线内嵌密钥不承诺抵抗能调试客户端的攻击者。
 Loader 将 publisher 的随机密钥拆分转换成每次 bundle 变化的逐字重建代码，

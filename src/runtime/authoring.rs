@@ -663,7 +663,7 @@ fn handle(
                         .into(),
                 ));
             }
-            if !super::preview::seek_source(runtime, path, *line) {
+            if !super::preview::seek_source(runtime, path, *line, *column) {
                 return Err((
                     ErrorCode::InvalidRequest,
                     "source position does not resolve to an executable action".into(),

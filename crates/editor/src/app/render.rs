@@ -22,9 +22,7 @@ impl Render for WorkbenchPanel {
                 crate::i18n::refresh_input(input, window, cx);
             }
             self.refresh_search_language(window, cx);
-        }
-        if !window.is_window_active() {
-            document::timeline::cancel_drag(self, window, cx);
+            self.refresh_document_find_language(window, cx);
         }
         self.prepare_document_view(window, cx);
         self.refresh_block_drag(window, cx);
@@ -66,10 +64,16 @@ impl Render for WorkbenchPanel {
                 let index = cx.global::<EditorDocuments>().authoring(&root);
                 render_assets(&root, &index, self, window, cx)
             }
-            PanelContent::AssetPreview { root } => {
-                let documents = cx.global::<EditorDocuments>();
-                let selection = documents.asset_preview(root);
-                let count = documents.asset_selection(root).len();
+            PanelContent::AssetPreview { root, pinned } => {
+                let (selection, count) = if let Some(asset) = pinned {
+                    (Some(asset.clone()), 1)
+                } else {
+                    let documents = cx.global::<EditorDocuments>();
+                    (
+                        documents.asset_preview(root),
+                        documents.asset_selection(root).len(),
+                    )
+                };
                 {
                     let root = root.clone();
                     let calibration = selection
@@ -105,11 +109,10 @@ impl Render for WorkbenchPanel {
             .track_focus(&self.focus)
             .capture_key_down(
                 cx.listener(|this, event: &gpui_kit::KeyDownEvent, window, cx| {
-                    if event.keystroke.key == "escape"
-                        && document::timeline::cancel_drag(this, window, cx)
-                    {
+                    if event.keystroke.key == "escape" && this.cancel_property_edit(window, cx) {
                         cx.notify();
                         cx.stop_propagation();
+                        return;
                     }
                     if event.keystroke.key == "escape"
                         && project_settings::cancel_drag(this, window, cx)
@@ -136,7 +139,8 @@ impl Render for WorkbenchPanel {
                 this.key_context("KeineResourcePicker")
             })
             .when(
-                self.document.document_mode != DocumentMode::Text && self.resource_picker.is_none(),
+                self.document.document_mode == DocumentMode::Block
+                    && self.resource_picker.is_none(),
                 |this| this.key_context("KeineBlockView"),
             )
             .when(
@@ -160,8 +164,6 @@ impl Render for WorkbenchPanel {
             .on_action(cx.listener(Self::delete_selected_blocks))
             .on_action(cx.listener(Self::move_selected_blocks_up))
             .on_action(cx.listener(Self::move_selected_blocks_down))
-            .on_action(cx.listener(Self::undo_blocks))
-            .on_action(cx.listener(Self::redo_blocks))
             .on_action(cx.listener(Self::undo_files))
             .on_action(cx.listener(Self::redo_files))
             .on_action(cx.listener(Self::reload_document))

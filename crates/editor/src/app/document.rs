@@ -2,7 +2,7 @@
 mod state;
 pub(in crate::app) use state::DocumentState;
 
+mod find;
 mod view;
 
-pub(in crate::app) mod timeline;
 pub(in crate::app) mod voices;

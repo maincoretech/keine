@@ -113,7 +113,7 @@ pub(crate) fn reload_source(world: &mut World, revision: u64) -> Result<bool> {
     Ok(restarted)
 }
 
-pub(crate) fn seek_source(world: &mut World, path: &Path, line: usize) -> bool {
+pub(crate) fn seek_source(world: &mut World, path: &Path, line: usize, column: usize) -> bool {
     let Some(content) = world
         .get_resource::<ContentProjectResource>()
         .map(|content| content.0.clone())
@@ -135,6 +135,7 @@ pub(crate) fn seek_source(world: &mut World, path: &Path, line: usize) -> bool {
         &LocalAssetManifest(manifest),
         path,
         line,
+        column,
     );
     if accepted {
         keep_loading_frames_alive(world);
