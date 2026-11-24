@@ -36,15 +36,19 @@ macOS `.app` 的打包、签名和公证见 [macOS](#macos)；使用 GitHub 构�
 
 | 用途 | 下载标签 | 触发方式 | 内容 |
 | --- | --- | --- | --- |
-| 作者开发 | `editor-latest` | main 的 CI 桌面检查通过后自动；也可手动 | 三平台独立 Editor + 同版本 Preview Engine，无游戏素材 |
-| tday 试玩 | `tday-latest` | **仅手动** | 三平台 ZIP + Android ARM64 APK，含 shiftz 素材版权说明 |
+| 可视化开发 | `editor-latest` | main 的 CI 桌面检查通过后自动，也可手动 | Editor 与配套 Preview Engine |
+| 命令行开发 | `engine-latest` | 与 Editor 同一次构建 | 独立 Engine，可运行和校验工程 |
 
-两个渠道都是预发布，互不覆盖。Editor 和 tday 使用 release 优化。
+两个渠道都是预发布，使用同一提交的 release 构建，不含游戏内容。
+Engine 解压后从终端执行 `./keine dev /path/to/project` 或 `./keine validate /path/to/project`，
+Windows 使用 `keine.exe`。正式发行游戏仍使用下文的 publisher 构建流程。
 benchmark 的 CI 构建、发布和独立采集器门禁已取消；开发者仍可在本地用 `perf`
 或 `bundle --benchmark` 排查具体问题，旧 `benchmark-latest` 不再更新。
 当前 macOS 下载面向 Apple Silicon，Linux/Windows 面向 x64，暂不提供 Intel Mac 构建。
 macOS Editor 下载是一个 `Kēne Editor.app`，内部带
 Preview Engine；Windows/Linux 包含 Editor、Engine 和运行库，须完整解压。
+Android 引擎测试 APK 从 [Android CI](android.md#构建与-ci) 下载。
+`projects/tday` 保留为封存示例。
 
 ## 应用图标
 
@@ -108,12 +112,12 @@ perf <project> [--startup]  开发测量
 ```sh
 cargo build --release --locked -p keine-editor --bin editor
 cargo build --release --locked -p keine --bin keine --no-default-features --features audio-all,ui-sounds,video-native
-python3 dev/scripts/package-authoring.py target/release/editor target/release/keine /path/to/fresh-output
+python3 dev/scripts/package-authoring.py target/release/editor target/release/keine /path/to/fresh-output --engine-output /path/to/engine-output
 bash dev/scripts/bundle-macos.sh <project> <app-name> <reverse-dns-bundle-id>
 ```
 
 第一条打包脚本使用预构建二进制，产出一个 `Kēne Editor.app`，同版本 Engine 内置于
-`Contents/MacOS/keine`；目标必须是新目录。各平台与 CI 共用此入口，
+`Contents/MacOS/keine`。指定 `--engine-output` 会另外生成独立 Engine 包，两个目标都必须是新目录。各平台与 CI 共用此入口，
 记录 SHA/features，检查实际安装 runtime 并校验 native-smoke；不能混用不同提交的二进制。
 Editor 导入图片无需外部工具；导入非规范音视频需要可执行的 FFmpeg（libopus/libx264），
 可安装到 PATH 或放在 Editor executable 旁/Resources 内。当前打包脚本不附带 FFmpeg；
@@ -246,7 +250,7 @@ GLIBC 版本基线依据 [Ubuntu 24.04 的 libc6](https://packages.ubuntu.com/no
 
 ### 默认图标维护
 
-维护者只维护 `src/assets/icons/keine.png`。Release Editor / CI 的 Android job 在构建前自动派生，
+维护者只维护 `src/assets/icons/keine.png`。桌面发布和 CI 的 Android job 在构建前自动派生，
 项目发行直接调用同一 Rust 生成器；现有 `image` PNG 与 `keine-media` WebP 解码器复用，无额外图片工具。
 手动生成到新目录：`cargo run --features publisher -- icons path/to/icon.webp target/my-icons`。
 提交默认图标变更时同步生成 `src/assets/icons` 与 Android `icon-res` 回退资源，并运行
@@ -264,19 +268,17 @@ Rust 原生构建缓存按 runner image / architecture 隔离，
 
 维护者操作：
 
-1. 推送 main 后查看 **CI**；桌面检查通过后，在同一次运行中调用 **Release Editor** 更新 Editor。
-2. 发布 tday：Actions → **Build tday** → **Run workflow** → 选目标 ref；此 workflow 仅构建 tday。
-   同一次触发并行构建桌面三平台和安卓 release APK，游戏资源已内置；普通推送和自动 CI 完成不会触发 tday 打包。此渠道只用隔离临时 identity，不读正式发行密钥。安卓使用测试应用签名，见 [Android](android.md)。
-3. 手动补发 Editor：运行 **Release Editor**。只重跑检查用 **CI** 的 `checks` 选择
-   `all`、`android`、`media` 或 `dependencies`；不会发布 Editor 或 tday。
-4. 下载更新完成后核对标签对应的 SHA、三个桌面 ZIP、tday 的安卓 APK 和包内 provenance；代码推送、CI 成功、
-   Release 附件更新分别确认。正式游戏发行继续使用 [Project CI](#project-ci) 或 [CLI](#cli)，并复用稳定的发布身份。
+1. 推送 main 后查看 **CI**。桌面检查通过后，同一次运行会调用 **Release Editor and Engine**。
+2. 手动补发时，在 Actions 运行 **Release Editor and Engine** 并选择目标 ref。手动 **CI** 的
+   `checks` 只运行所选检查。
+3. 下载更新完成后，核对两个标签和包内 `BUILD.json` 的 SHA，以及每个 Release 的三个桌面 ZIP。
+   正式游戏发行继续使用 [Project CI](#project-ci) 或 [CLI](#cli)，并复用稳定的发布身份。
 
-Editor 自动构建固定使用通过桌面检查的 main push SHA；PR、fork、失败的桌面检查、
-定时审计和手动检查不发布，也不创建独立的全跳过 Release Editor 记录。新 main 已出现时，
+自动发布固定使用通过桌面检查的 main push SHA。PR、fork、失败的桌面检查、
+定时审计和手动检查不会调用发布。新 main 已出现时，
 尚未开始的旧自动构建在安装工具链/编译前跳过；编译期间出现新 main 的运行只保留
-Actions artifact，不覆盖滚动下载。三个 ZIP 在原平台打好再上传，保留
-Unix executable 权限；tday 须四个平台成功后才发布。标签/附件更新失败会让发布 job 失败。
+Actions artifact，不覆盖滚动下载。每个平台编译一次 Engine，分别生成含 Preview 的 Editor
+ZIP 和独立 Engine ZIP，在原平台打包后上传，保留 Unix 可执行权限。
 
 ### CI 成本与失败重试
 
@@ -307,7 +309,7 @@ Unix executable 权限；tday 须四个平台成功后才发布。标签/附件�
 
 缓存的不可变条目及默认仓库容量仍可能导致驱逐；工具链/依赖/profile 首次变化会冷编译。
 没有增加付费缓存容量，也不保证每次满命中。验包失败先用验包脚本复核已有包，
-不为检查脚本反复启动四平台发布。
+不为检查脚本反复启动发布构建。
 macOS 包是开发签名，未做 Apple 公证；完整跨平台运行验收与硬件性能测试仍是独立关卡。
 
 默认 native-benchmark 三平台使用同一套真实负载，包含媒体。缺少必测时间轴时返回
@@ -317,7 +319,7 @@ INCOMPLETE 并保留报告，不能当作完整跑分。包内 `lib/profile-runt
 
 游戏打包保存 Cargo 缓存前清理 Engine/Loader 的 release/profiling 密钥产物，保留依赖
 与不含密钥的 publisher runner；必要时补写 `target/CACHEDIR.TAG`，清理失败阻止缓存保存
-和发布。Editor 使用独立 `target/authoring` 缓存，不启用 publisher/hardened，也不接收 identity。
+和发布。桌面工具包使用独立 `target/authoring` 缓存，不启用 publisher/hardened，也不接收 identity。
 发布复用依据见 [workflow_call](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows)
 与 [Release 上传 action](https://github.com/softprops/action-gh-release)。
 
@@ -373,7 +375,7 @@ export GIT_SSL_CAINFO="$CURL_CA_BUNDLE"
   关闭自动 rebase 和自动合并，减少重复 CI；需要时手动更新分支并运行正常验收。
   仓库已启用 Dependabot 告警和安全更新；普通依赖升级由维护者按需要提出，仍须经过
   CI、许可审查与必要的运行验证。
-- 桌面 CI、每日审计、手动 Build tday、Release Editor 与正式 Project 发布复用
+- 桌面 CI、每日审计、Release Editor and Engine 与正式 Project 发布复用
   `check-dependencies` action；按实际发行的源提交执行完整的 locked/all-features 四项审计。
   审计失败先阻止后续编译/密钥恢复/上传；不放宽 deny.toml，也不重跑旧源码冒充修复。
 - GLIBC 2.39 是发行合同，更新 runner、原生 SDK、Rust 或依赖时都不能静默抬高。

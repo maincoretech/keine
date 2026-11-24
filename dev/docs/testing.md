@@ -107,8 +107,7 @@ cargo test --workspace --locked --all-features metal_cache_follows_replacement_d
 | Workflow | 责任与触发 |
 | --- | --- |
 | [CI](../../.github/workflows/ci.yml) | push/PR；依赖/打包合同先行；桌面三平台、Android 与相关媒体安全并行；每日依赖审计、每周媒体安全；手动可选择检查范围 |
-| [Release Editor](../../.github/workflows/editor-release.yml) | main 的 CI 桌面检查通过后在同次运行内调用，或手动；同 SHA Editor 与 Preview |
-| [Build tday](../../.github/workflows/release.yml) | 仅手动 tday 四平台打包，保持无额外参数 |
+| [Release Editor and Engine](../../.github/workflows/editor-release.yml) | main 的桌面 CI 通过后在同次运行内调用，也可手动。分发同 SHA 的 Editor 配套包和独立 Engine |
 | [Release Project](../../.github/workflows/project-release.yml) | 游戏仓库按完整 Engine SHA 调用；当前 Linux x64 |
 
 纯 README、`dev/docs`、AGENTS 与 Dependabot 配置变更跳过桌面/Android 全编译。

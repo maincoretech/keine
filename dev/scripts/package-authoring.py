@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package prebuilt Editor + Preview executables, without game content or keys."""
+"""Package the prebuilt Editor and Engine for desktop downloads."""
 import argparse
 import filecmp
 import json
@@ -112,40 +112,47 @@ def macos_app(editor, engine, output):
 
 def package(editor, engine, output):
     system = platform.system()
-    editor, engine, output = editor.resolve(strict=True), engine.resolve(strict=True), output.absolute()
+    engine, output = engine.resolve(strict=True), output.absolute()
     if output.exists() or output.is_symlink():
         raise RuntimeError('Choose a fresh output directory')
-    if not editor.is_file() or not engine.is_file():
-        raise RuntimeError('Both executables are required')
+    binaries = [('keine', engine)]
+    if editor is not None:
+        editor = editor.resolve(strict=True)
+        binaries.insert(0, ('editor', editor))
+    if any(not source.is_file() for _, source in binaries):
+        raise RuntimeError('Expected prebuilt executables')
     output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='.keine-editor-', dir=output.parent) as temporary:
+    with tempfile.TemporaryDirectory(prefix='.keine-authoring-', dir=output.parent) as temporary:
         staging = Path(temporary) / 'package'
-        if system == 'Darwin':
+        if system == 'Darwin' and editor is not None:
             macos_app(editor, engine, staging)
+            runtime = staging / 'Kēne Editor.app/Contents/MacOS/keine'
         else:
+            if system not in ('Linux', 'Windows', 'Darwin'):
+                raise RuntimeError(f'Unsupported authoring platform: {system}')
             staging.mkdir()
             suffix = '.exe' if system == 'Windows' else ''
             shipped = []
-            for name, source in [('editor', editor), ('keine', engine)]:
+            for name, source in binaries:
                 target = staging / (name + suffix)
                 shutil.copy2(source, target)
                 shipped.append(target)
+            runtime = staging / ('keine' + suffix)
             write(staging / 'NOTICE', cargo_metadata())
             if system == 'Linux':
                 linux_libraries(shipped, staging)
-                icons = Path(os.environ.get('KEINE_APP_ICON_DIR', REPO / 'src/assets/icons'))
-                shutil.copy2(icons / 'keine-512.png', staging / 'keine.png')
-                shutil.copy2(REPO / 'dev/scripts/install-desktop.py', staging / 'install-desktop.py')
-                (staging / 'DESKTOP.json').write_text(json.dumps({
-                    'id': 'moe.maincore.keine-editor', 'name': 'Kēne Editor',
-                    'executable': 'editor', 'category': 'Development',
-                }) + '\n', encoding='utf-8')
+                if editor is not None:
+                    icons = Path(os.environ.get('KEINE_APP_ICON_DIR', REPO / 'src/assets/icons'))
+                    shutil.copy2(icons / 'keine-512.png', staging / 'keine.png')
+                    shutil.copy2(REPO / 'dev/scripts/install-desktop.py', staging / 'install-desktop.py')
+                    (staging / 'DESKTOP.json').write_text(json.dumps({
+                        'id': 'moe.maincore.keine-editor', 'name': 'Kēne Editor',
+                        'executable': 'editor', 'category': 'Development',
+                    }) + '\n', encoding='utf-8')
             elif system == 'Windows':
                 windows_libraries(staging)
-            else:
-                raise RuntimeError(f'Unsupported authoring platform: {system}')
-        runtime = staging / ('Kēne Editor.app/Contents/MacOS/keine' if system == 'Darwin'
-                             else 'keine.exe' if system == 'Windows' else 'keine')
+            elif system == 'Darwin':
+                subprocess.run(['codesign', '--verify', '--strict', str(runtime)], check=True)
         runtime_env = os.environ.copy()
         if system == 'Windows':
             runtime_env['PATH'] = os.pathsep.join([str(Path(os.environ['SystemRoot']) / 'System32'), os.environ['SystemRoot']])
@@ -157,7 +164,7 @@ def package(editor, engine, output):
             'platform': system, 'architecture': platform.machine(),
             'features': os.environ.get('KEINE_AUTHORING_FEATURES', ''),
         }, indent=2) + '\n', encoding='utf-8')
-        (staging / 'START.txt').write_text(
+        instructions = (
             'Kēne Editor development package\n'
             'macOS: open Kēne Editor.app. Windows: editor.exe. Linux: ./editor.\n'
             'Linux optional launcher: python3 install-desktop.py --install (after unpacking at its final location).\n'
@@ -167,7 +174,17 @@ def package(editor, engine, output):
             'Image import is built in. Noncanonical audio/video conversion needs an external\n'
             'FFmpeg executable with libopus/libx264 on PATH. It is not included here.\n'
             'Linux: requires a graphical desktop, audio/graphics drivers and compatible host libc.\n'
-            'macOS: ad hoc development signature, not Apple notarized.\n', encoding='utf-8')
+            'macOS: ad hoc development signature, not Apple notarized.\n'
+        ) if editor is not None else (
+            'Kēne Engine development package\n'
+            'After extracting the ZIP, run ./keine dev /path/to/project from a terminal.\n'
+            'Windows: .\\keine.exe dev "C:\\path\\to\\project"\n'
+            'Use validate instead of dev to check a project without opening a window.\n'
+            'Keep the entire package together. No game or Editor files are included.\n'
+            'See the publishing guide to build a distributable game.\n'
+            'https://github.com/maincoretech/keine/blob/main/dev/docs/release.md\n'
+        )
+        (staging / 'START.txt').write_text(instructions, encoding='utf-8')
         staging.rename(output)
 
 
@@ -176,5 +193,8 @@ if __name__ == '__main__':
     parser.add_argument('editor', type=Path)
     parser.add_argument('engine', type=Path)
     parser.add_argument('output', type=Path)
+    parser.add_argument('--engine-output', type=Path, help='Also stage a standalone Engine package')
     args = parser.parse_args()
     package(args.editor, args.engine, args.output)
+    if args.engine_output is not None:
+        package(None, args.engine, args.engine_output)

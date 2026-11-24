@@ -395,8 +395,8 @@ jobs:
           done
           cargo "${cargo_args[@]}" --expect-error tests/fixtures/video/damaged-header.mp4
 
-  editor:
-    name: Editor release
+  release:
+    name: Editor and Engine release
     needs: desktop
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:

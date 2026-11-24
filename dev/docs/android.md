@@ -55,17 +55,10 @@ Android 与桌面/媒体 job 在前置检查通过后并行，不等待桌面编
 [AGP 9.4 构建要求](https://developer.android.com/build/releases/agp-9-4-0-release-notes)、
 [Android 16 KB 对齐要求](https://developer.android.com/guide/practices/page-sizes)。
 
-`Build tday` → `Run workflow`（仅 tday） 同时生成三平台 ZIP 和
-`tday-android-arm64-test.apk`，四个平台全部通过后更新 `tday-latest`。
-安卓 job 使用隔离临时内容 identity，构建 `hardened,ui-sounds` release 原生库，
-校验 release APK 的内容、入口、签名和 16 KB 对齐；含密钥的编译输出不会进入缓存。
-Gradle release 目前使用测试签名、关闭 debuggable；不同云端运行的测试签名不保证相同，
-覆盖安装可能需要先导出存档，再卸载旧试玩包。正式应用更新需要稳定签名另行配置。
-
-本地复用同一打包入口（publisher 在桌面运行）：
+测试自己的游戏时，在桌面运行 publisher：
 
 ```sh
-KEINE_BUILD_TARGET=aarch64-linux-android cargo bundle projects/tday --output target/tday-android
+KEINE_BUILD_TARGET=aarch64-linux-android cargo bundle /path/to/project --output target/game-android
 ```
 
 有效无视频工程通过校验后才创建/加载内容 identity；按需设置
@@ -244,5 +237,4 @@ python3 target/android-test-benchmark/benchmark-android.py --apk target/android-
 ```
 
 派生 fixture 只调整 Android 不支持的内容与独立身份，不修改桌面 fixture 或作者工程。
-Build tday 仅手动生成 tday 三平台 ZIP 与 Android APK；benchmark 不再由 Actions 构建或更新下载。
 云端 APK 编译/验证仍不代表 Moto 或其他真机已经通过完整运行测试。

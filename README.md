@@ -13,7 +13,7 @@ WebGAL support is limited to the [documented compatibility features](dev/docs/co
 ## Downloads
 
 - [Editor](https://github.com/maincoretech/keine/releases/tag/editor-latest) — includes the matching Engine for previews. Updated after Desktop CI passes on `main`.
-- [tday demo](https://github.com/maincoretech/keine/releases/tag/tday-latest) — a playable sample. New builds are published manually through **Build tday**.
+- [Engine](https://github.com/maincoretech/keine/releases/tag/engine-latest) — run or validate a project from the terminal. Published alongside the Editor for macOS, Windows and Linux.
 
 To package your own game, see the [publishing guide](dev/docs/release.md).
 

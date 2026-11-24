@@ -1,4 +1,4 @@
-name: Release Editor
+name: Release Editor and Engine
 
 on:
   workflow_call:
@@ -55,7 +55,7 @@ jobs:
     env:
       RUNNER_IMAGE: ${{ matrix.platform == 'Linux x64' && 'ubuntu-24.04' || matrix.platform == 'macOS arm64' && 'macos-26' || 'windows-2025' }}
       BUILD_TARGET: ${{ matrix.platform == 'Windows x64' && 'x86_64-pc-windows-msvc' || '' }}
-      ARTIFACT: ${{ matrix.platform == 'Linux x64' && 'keine-editor-linux-x64' || matrix.platform == 'macOS arm64' && 'keine-editor-macos-arm64' || 'keine-editor-windows-x64' }}
+      PACKAGE_PLATFORM: ${{ matrix.platform == 'Linux x64' && 'linux-x64' || matrix.platform == 'macOS arm64' && 'macos-arm64' || 'windows-x64' }}
       KEINE_AUTHORING_FEATURES: ${{ matrix.platform == 'macOS arm64' && 'audio-all,ui-sounds,hot-reload,video-native' || 'audio-all,ui-sounds,hot-reload,video-ffmpeg' }}
     steps:
       - name: Check out source
@@ -111,28 +111,39 @@ jobs:
           binary_dir="target/authoring/${BUILD_TARGET:+$BUILD_TARGET/}release"
           suffix=''
           if [[ "$RUNNER_OS" == 'Windows' ]]; then suffix='.exe'; fi
-          python3 dev/scripts/package-authoring.py "$binary_dir/editor$suffix" "$binary_dir/keine$suffix" "target/${{ env.ARTIFACT }}"
-      - name: Archive complete package
+          python3 dev/scripts/package-authoring.py "$binary_dir/editor$suffix" "$binary_dir/keine$suffix" \
+            "target/keine-editor-$PACKAGE_PLATFORM" --engine-output "target/keine-engine-$PACKAGE_PLATFORM"
+      - name: Archive desktop packages
         shell: bash
         run: |
           mkdir -p downloads
-          if [[ "$RUNNER_OS" == 'macOS' ]]; then
-            ditto -c -k --keepParent "target/${{ env.ARTIFACT }}" "downloads/${{ env.ARTIFACT }}.zip"
-          else
-            python3 - <<'PY'
+          for product in editor engine; do
+            package="keine-$product-$PACKAGE_PLATFORM"
+            if [[ "$RUNNER_OS" == 'macOS' ]]; then
+              ditto -c -k --keepParent "target/$package" "downloads/$package.zip"
+            else
+              python3 - "$package" <<'PY'
           import shutil
-          shutil.make_archive('downloads/${{ env.ARTIFACT }}', 'zip', 'target/${{ env.ARTIFACT }}')
+          import sys
+          package = sys.argv[1]
+          shutil.make_archive('downloads/' + package, 'zip', 'target/' + package)
           PY
-          fi
-      - name: Verify final Linux archive
+            fi
+          done
+      - name: Verify Editor Linux archive
         if: runner.os == 'Linux'
         uses: ./.github/actions/verify-linux-package
         with:
-          package: downloads/${{ env.ARTIFACT }}.zip
+          package: downloads/keine-editor-linux-x64.zip
+      - name: Verify Engine Linux archive
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/verify-linux-package
+        with:
+          package: downloads/keine-engine-linux-x64.zip
       - name: Upload artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ${{ env.ARTIFACT }}
+          name: keine-desktop-${{ env.PACKAGE_PLATFORM }}
           path: downloads/*.zip
           if-no-files-found: error
           retention-days: 14
@@ -149,7 +160,7 @@ jobs:
           key: ${{ steps.rust-cache.outputs.cache-primary-key }}
 
   publish:
-    name: Publish Editor
+    name: Publish Editor and Engine
     needs: build
     runs-on: ubuntu-26.04
     permissions:
@@ -164,25 +175,29 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: keine-editor-*
+          pattern: keine-desktop-*
           path: downloads
           merge-multiple: true
-      - name: Move Editor rolling tag
+      - name: Move desktop release tags
         id: release
         shell: bash
         run: |
-          shopt -s nullglob
-          packages=(downloads/keine-editor-*.zip)
-          [[ "${#packages[@]}" -eq 3 ]] || { echo 'Expected three Editor downloads' >&2; exit 1; }
+          for product in editor engine; do
+            for platform in linux-x64 macos-arm64 windows-x64; do
+              package="downloads/keine-$product-$platform.zip"
+              [[ -s "$package" ]] || { echo "Missing package: $package" >&2; exit 1; }
+            done
+          done
           if [[ "$GITHUB_EVENT_NAME" == 'push' ]]; then
             current_main="$(git ls-remote origin refs/heads/main | cut -f1)"
             if [[ "$current_main" != "$RELEASE_SHA" ]]; then
-              echo 'Newer main exists; retain artifacts without replacing editor-latest.'
+              echo 'Newer main exists; retain artifacts without updating the release tags.'
               exit 0
             fi
           fi
           git tag --force editor-latest "$RELEASE_SHA"
-          git push --force origin refs/tags/editor-latest
+          git tag --force engine-latest "$RELEASE_SHA"
+          git push --atomic --force origin refs/tags/editor-latest refs/tags/engine-latest
           echo "short_sha=${RELEASE_SHA::7}" >> "$GITHUB_OUTPUT"
           echo 'publish=true' >> "$GITHUB_OUTPUT"
       - name: Publish Editor release
@@ -200,6 +215,23 @@ jobs:
             Noncanonical audio/video conversion requires an external FFmpeg executable.
           prerelease: true
           make_latest: false
-          files: downloads/*.zip
+          files: downloads/keine-editor-*.zip
+          fail_on_unmatched_files: true
+          overwrite_files: true
+      - name: Publish Engine release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        if: steps.release.outputs.publish == 'true'
+        with:
+          tag_name: engine-latest
+          target_commitish: ${{ env.RELEASE_SHA }}
+          name: Kēne Engine ${{ steps.release.outputs.short_sha }}
+          body: |
+            Standalone desktop Engine built from ${{ env.RELEASE_SHA }}.
+            Download and extract the complete package. Run ./keine dev /path/to/project
+            (keine.exe on Windows) or use validate to check a project.
+            The macOS binary is for Apple Silicon and has an ad hoc signature.
+          prerelease: true
+          make_latest: false
+          files: downloads/keine-engine-*.zip
           fail_on_unmatched_files: true
           overwrite_files: true

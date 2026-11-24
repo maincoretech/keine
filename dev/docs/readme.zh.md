@@ -12,7 +12,7 @@ Kēne 是一款视觉小说引擎，附带原生桌面编辑器。使用 Eiyasho
 ## 下载
 
 - [Editor](https://github.com/maincoretech/keine/releases/tag/editor-latest)：附带配套的预览 Engine，`main` 的桌面 CI 通过后更新。
-- [tday 试玩](https://github.com/maincoretech/keine/releases/tag/tday-latest)：可直接运行的示例游戏，通过 **Build tday** 手动发布新构建。
+- [Engine](https://github.com/maincoretech/keine/releases/tag/engine-latest)：在终端运行或校验工程，与 Editor 一起发布 macOS、Windows 和 Linux 下载包。
 
 打包自己的游戏，请参阅[发布指南](release.md)。
 
